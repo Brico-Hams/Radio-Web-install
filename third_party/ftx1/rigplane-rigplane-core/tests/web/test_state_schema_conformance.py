@@ -1,0 +1,517 @@
+"""Conformance gate: real public payloads validate against ServerStatePublic.
+
+This keeps the dict producers (``runtime_helpers.build_public_state_payload`` /
+``build_public_state_payload_from_snapshot``) in lockstep with the canonical
+pydantic schema (``state_schema.ServerStatePublic``) that drives TypeScript
+codegen (MOR-881). The producers are NOT changed to return the model — this
+test is the tie-in. If a producer emits a field the schema does not allow (or
+omits a required field), ``model_validate`` fails here.
+
+``pydantic`` is a dev/optional dependency; skip cleanly when absent so the
+core runtime install (which excludes pydantic) is unaffected.
+"""
+
+from __future__ import annotations
+
+import json
+from typing import Any, get_args
+
+import pytest
+
+pytest.importorskip("pydantic")
+
+from rigplane.core.radio_state import RadioState  # noqa: E402
+from rigplane.core.state_pipeline_contracts import (  # noqa: E402
+    FieldFamily,
+    FieldPath,
+    Observation,
+    SourceMetadata,
+)
+from rigplane.core.state_store import FreshnessClock, StateStore  # noqa: E402
+from rigplane.core.types import ToneSquelchType  # noqa: E402
+from rigplane.profiles import get_radio_profile  # noqa: E402
+from rigplane.web.runtime_helpers import (  # noqa: E402
+    build_public_state_payload,
+    build_public_state_payload_from_snapshot,
+    snapshot_field_status_inputs,
+)
+from rigplane.web.state_schema import (  # noqa: E402
+    ReceiverStatePublic,
+    ServerStatePublic,
+)
+
+
+def _source() -> SourceMetadata:
+    return SourceMetadata(
+        source="poll_response",
+        provider="test",
+        transport="fake",
+        native_id="test",
+    )
+
+
+def _observation(path: FieldPath, value: Any, *, at: float) -> Observation:
+    return Observation(
+        path=path,
+        value=value,
+        source=_source(),
+        timestamp_monotonic=at,
+        max_age=None,
+        quality=("confirmed",),
+    )
+
+
+@pytest.mark.parametrize("receiver_count", [1, 2])
+def test_dataclass_path_conforms(receiver_count: int) -> None:
+    """``build_public_state_payload`` (RadioState/to_dict path) validates."""
+    payload = build_public_state_payload(
+        RadioState(),
+        radio=None,
+        revision=7,
+        receiver_count=receiver_count,
+    )
+    # Single-receiver payloads drop ``sub`` (runtime_helpers L940).
+    assert ("sub" in payload) == (receiver_count >= 2)
+    ServerStatePublic.model_validate(payload)
+
+
+def test_public_tx_target_is_required_after_producer_parity() -> None:
+    payload = build_public_state_payload(
+        RadioState(),
+        radio=None,
+        revision=7,
+        receiver_count=2,
+    )
+    assert payload.pop("txTarget") == {
+        "status": "unknown",
+        "reason": "not-observed",
+    }
+
+    with pytest.raises(ValueError):
+        ServerStatePublic.model_validate(payload)
+
+
+@pytest.mark.parametrize(
+    "tx_target",
+    [
+        {
+            "status": "known",
+            "receiver": "MAIN",
+            "slot": None,
+            "frequencyHz": None,
+        },
+        {
+            "status": "known",
+            "receiver": "SUB",
+            "slot": "B",
+            "frequencyHz": 14_074_000,
+        },
+        {"status": "unknown", "reason": "not-observed"},
+        {"status": "unknown", "reason": "stale"},
+        {"status": "unknown", "reason": "unsupported"},
+        {"status": "unknown", "reason": "contradiction"},
+    ],
+)
+def test_public_tx_target_schema_accepts_exact_canonical_shapes(
+    tx_target: dict[str, object],
+) -> None:
+    payload = build_public_state_payload(
+        RadioState(),
+        radio=None,
+        revision=7,
+        receiver_count=2,
+    )
+    payload["txTarget"] = tx_target
+
+    validated = ServerStatePublic.model_validate(payload)
+
+    assert validated.txTarget is not None
+    assert validated.txTarget.model_dump() == tx_target
+
+
+@pytest.mark.parametrize(
+    "tx_target",
+    [
+        None,
+        {"status": "other"},
+        {
+            "status": "known",
+            "receiver": "main",
+            "slot": None,
+            "frequencyHz": None,
+        },
+        {
+            "status": "known",
+            "receiver": "MAIN",
+            "slot": "a",
+            "frequencyHz": None,
+        },
+        {
+            "status": "known",
+            "receiver": "MAIN",
+            "slot": None,
+            "frequencyHz": True,
+        },
+        {
+            "status": "known",
+            "receiver": "MAIN",
+            "slot": None,
+            "frequencyHz": 0,
+        },
+        {
+            "status": "known",
+            "receiver": "MAIN",
+            "slot": None,
+            "frequencyHz": -1,
+        },
+        {
+            "status": "known",
+            "receiver": "MAIN",
+            "slot": None,
+            "frequencyHz": 14_074_000.0,
+        },
+        {
+            "status": "known",
+            "receiver": "MAIN",
+            "slot": None,
+            "frequencyHz": float("nan"),
+        },
+        {
+            "status": "known",
+            "receiver": "MAIN",
+            "slot": None,
+            "frequencyHz": float("inf"),
+        },
+        {
+            "status": "known",
+            "receiver": "MAIN",
+            "slot": None,
+            "frequencyHz": None,
+            "backend": "icom",
+        },
+        {"status": "unknown", "reason": "missing"},
+        {"status": "unknown", "reason": "stale", "receiver": "MAIN"},
+    ],
+)
+def test_public_tx_target_schema_rejects_noncanonical_shapes(
+    tx_target: object,
+) -> None:
+    payload = build_public_state_payload(
+        RadioState(),
+        radio=None,
+        revision=7,
+        receiver_count=2,
+    )
+    payload["txTarget"] = tx_target
+
+    with pytest.raises(ValueError):
+        ServerStatePublic.model_validate(payload)
+
+
+@pytest.mark.parametrize("receiver_count", [1, 2])
+def test_snapshot_path_conforms(receiver_count: int) -> None:
+    """``build_public_state_payload_from_snapshot`` validates.
+
+    Exercises the path-specific fields (``fieldStatus``, ``dcd`` + its
+    deprecated ``sMeterSqlOpen`` alias, observed ``quality``) that only the
+    snapshot path emits.
+    """
+    clock = FreshnessClock()
+    store = StateStore(freshness_clock=clock)
+    store.apply(
+        _observation(
+            FieldPath.active("0", "freq_mode", "freq_hz"),
+            14_074_000,
+            at=clock.now(),
+        )
+    )
+    store.apply(
+        _observation(
+            FieldPath.receiver("0", "operator_toggles", "dcd"),
+            True,
+            at=clock.now(),
+        )
+    )
+    store.apply(
+        _observation(
+            FieldPath.receiver("0", "meters", "s_meter"),
+            120,
+            at=clock.now(),
+        )
+    )
+    payload = build_public_state_payload_from_snapshot(
+        store.snapshot(),
+        radio=None,
+        receiver_count=receiver_count,
+    )
+
+    # Snapshot-path-only fields really emitted.
+    assert "fieldStatus" in payload
+    assert payload["main"]["dcd"] is True
+    assert payload["main"]["sMeterSqlOpen"] is True
+    # The observed entry carries the ``quality`` string[] absent from old TS.
+    observed = next(v for v in payload["fieldStatus"].values() if v.get("observed"))
+    assert isinstance(observed["quality"], list)
+
+    ServerStatePublic.model_validate(payload)
+
+
+def test_snapshot_path_normalized_level_fields_conform() -> None:
+    """Snapshot path normalizes af/rf/squelch/powerLevel to float in [0, 1].
+
+    The four fields are normalized by ``_normalize_public_level_snapshot_value``
+    in runtime_helpers.py before being stored in the payload dict.  Prior to
+    MOR-881 fix they were typed ``int`` in state_schema, causing
+    ``model_validate`` to raise ``int_from_float`` errors on real snapshots.
+
+    This case would FAIL against the old ``int`` typing because pydantic
+    strict validation rejects float→int coercion (lax mode allows int→float,
+    not the reverse).  We drive the snapshot producer with raw integer
+    observations (as a hardware driver would emit), which the snapshot path
+    converts to float before we validate the payload.
+    """
+    clock = FreshnessClock()
+    store = StateStore(freshness_clock=clock)
+
+    # Receiver-scoped normalized fields: af_level, rf_gain, squelch.
+    for field_name in ("af_level", "rf_gain", "squelch"):
+        store.apply(
+            Observation(
+                path=FieldPath.receiver("0", FieldFamily.OPERATOR_CONTROLS, field_name),
+                # Raw integer value as produced by a hardware driver (0-255).
+                value=128,
+                source=SourceMetadata(
+                    source="poll_response",
+                    provider="test",
+                    transport="fake",
+                    native_id="test",
+                ),
+                timestamp_monotonic=clock.now(),
+                max_age=None,
+                quality=("confirmed",),
+            )
+        )
+
+    # Global normalized field: power_level.
+    store.apply(
+        Observation(
+            path=FieldPath.global_(FieldFamily.OPERATOR_CONTROLS, "power_level"),
+            # Raw integer value as produced by a hardware driver (0-255).
+            value=200,
+            source=SourceMetadata(
+                source="poll_response",
+                provider="test",
+                transport="fake",
+                native_id="test",
+            ),
+            timestamp_monotonic=clock.now(),
+            max_age=None,
+            quality=("confirmed",),
+        )
+    )
+
+    payload = build_public_state_payload_from_snapshot(
+        store.snapshot(),
+        radio=None,
+        receiver_count=1,
+    )
+
+    # The snapshot producer normalizes the raw ints to float in [0, 1].
+    main = payload["main"]
+    assert isinstance(main["afLevel"], float), (
+        f"expected float, got {type(main['afLevel'])}"
+    )
+    assert isinstance(main["rfGain"], float), (
+        f"expected float, got {type(main['rfGain'])}"
+    )
+    assert isinstance(main["squelch"], float), (
+        f"expected float, got {type(main['squelch'])}"
+    )
+    assert isinstance(payload["powerLevel"], float), (
+        f"expected float, got {type(payload['powerLevel'])}"
+    )
+
+    # All four values must be in [0, 1].
+    assert 0.0 <= main["afLevel"] <= 1.0
+    assert 0.0 <= main["rfGain"] <= 1.0
+    assert 0.0 <= main["squelch"] <= 1.0
+    assert 0.0 <= payload["powerLevel"] <= 1.0
+
+    # The payload must validate against ServerStatePublic (would raise
+    # int_from_float ValidationError under old int typing).
+    ServerStatePublic.model_validate(payload)
+
+
+@pytest.mark.parametrize(
+    ("name", "public_key", "value"),
+    [
+        ("comp", "compMeter", 3.5),
+        ("vd", "vdMeter", 13.4),
+        ("id", "idMeter", 1.25),
+        ("power", "powerMeter", 62.5),
+        ("swr", "swrMeter", 2.375),
+        ("alc", "alcMeter", 0.4),
+    ],
+)
+def test_snapshot_path_float_meter_leaves_conform_strictly(
+    name: str, public_key: str, value: float
+) -> None:
+    """MOR-4515: calibrated global meters (volts, amps, W, SWR, dB) are floats.
+
+    Each leaf is observed with a float through the snapshot producer and the
+    JSON the server would send must parse under ``strict=True``. Reverting
+    that one declaration to ``int | None`` fails only its own case.
+    """
+    clock = FreshnessClock()
+    store = StateStore(freshness_clock=clock)
+    store.apply(_observation(FieldPath.global_("meters", name), value, at=clock.now()))
+    payload = build_public_state_payload_from_snapshot(
+        store.snapshot(), radio=None, receiver_count=1
+    )
+    assert payload[public_key] == value, payload.get(public_key)
+
+    state = ServerStatePublic.model_validate_json(json.dumps(payload), strict=True)
+    assert getattr(state, public_key) == value
+
+
+def test_snapshot_path_unobserved_null_leaves_conform() -> None:
+    """Unobserved leaves publish ``null`` and still validate (MOR-2513).
+
+    Every key stays present; the schema types the nullable leaves as
+    ``| None`` so the honest payload is conformant by construction.
+    """
+
+    payload = build_public_state_payload_from_snapshot(
+        StateStore().snapshot(),
+        radio=None,
+        receiver_count=1,
+    )
+
+    assert payload["main"]["freqHz"] is None
+    assert payload["main"]["mode"] is None
+    assert payload["powerOn"] is None
+    assert payload["scopeControls"]["fixedEdge"] is None
+    assert payload["txBandEdges"] is None
+
+    ServerStatePublic.model_validate(payload)
+
+
+def test_profile_gated_field_status_conforms() -> None:
+    """A profile-gated payload emits — and validates — the two new literals.
+
+    On an empty snapshot ``rigs/ic7300.toml`` gives one of each: its
+    ``global.meters.power`` clause on ``global.tx_state.ptt`` resolves to
+    ``None`` with nothing observed, it names ``global.operator_controls.
+    drive_gain`` nowhere under ``[state_acquisition]`` ("no drive_gain on
+    IC-7300"), and ``global.meters.vd`` is declared with no
+    ``available_when``.
+    """
+
+    acquisition = get_radio_profile("IC-7300").state_acquisition
+    assert acquisition is not None
+    snapshot = StateStore().snapshot()
+    availability, declared = snapshot_field_status_inputs(acquisition, snapshot)
+    payload = build_public_state_payload_from_snapshot(
+        snapshot,
+        radio=None,
+        receiver_count=1,
+        availability=availability,
+        declared=declared,
+    )
+    field_status = payload["fieldStatus"]
+    assert field_status["powerMeter"]["availability"] == "unavailable"
+    assert field_status["driveGain"]["availability"] == "undeclared"
+    assert field_status["vdMeter"]["availability"] == "missing"
+
+    ServerStatePublic.model_validate(payload)
+
+
+def _payload_with_observed_tone_squelch_types(
+    types_by_receiver: dict[str, str],
+) -> dict[str, Any]:
+    """Snapshot-path payload with ``tone_squelch_type`` observed per receiver.
+
+    The value is the plain ``ToneSquelchType`` member string the observation
+    adapters publish (``backends/yaesu_cat/observations.py:
+    poll_slow_controls`` for FTX-1, ``runtime/_civ_rx.py:
+    _observations_from_frame`` for IC-705 — both emit
+    ``tone_squelch_type.value``, or ``None`` for a selector code outside the
+    profile's ``[tone_squelch_types]`` table).
+    """
+    clock = FreshnessClock()
+    store = StateStore(freshness_clock=clock)
+    for receiver_id, tone_type in types_by_receiver.items():
+        store.apply(
+            _observation(
+                FieldPath.receiver(
+                    receiver_id, "operator_controls", "tone_squelch_type"
+                ),
+                tone_type,
+                at=clock.now(),
+            )
+        )
+    return build_public_state_payload_from_snapshot(
+        store.snapshot(),
+        radio=None,
+        receiver_count=2 if "sub" in types_by_receiver else 1,
+    )
+
+
+@pytest.mark.parametrize(
+    ("profile_name", "expected_by_receiver"),
+    [
+        pytest.param("FTX-1", {"main": "tone", "sub": "dtcs"}, id="ftx1-main-sub"),
+        pytest.param("IC-705", {"main": "dtcs_t"}, id="ic705-main"),
+    ],
+)
+def test_observed_tone_squelch_type_conforms(
+    profile_name: str,
+    expected_by_receiver: dict[str, str],
+) -> None:
+    """An observed ``toneSquelchType`` validates against ``ServerStatePublic``.
+
+    FTX-1 declares ``operator_controls.tone_squelch_type`` on MAIN and SUB and
+    IC-705 on MAIN (``rigs/ftx1.toml`` / ``rigs/ic705.toml``
+    ``[state_acquisition]`` field policies); the projection carries the
+    observation into the public payload as ``toneSquelchType`` under each
+    receiver, so the strict schema must allow it.
+    """
+    table = get_radio_profile(profile_name).tone_squelch_types
+    assert table is not None
+    assert set(expected_by_receiver.values()) <= {t.value for t in table.values()}
+
+    payload = _payload_with_observed_tone_squelch_types(expected_by_receiver)
+
+    for receiver_key, expected in expected_by_receiver.items():
+        assert payload[receiver_key]["toneSquelchType"] == expected
+
+    ServerStatePublic.model_validate(payload)
+
+
+@pytest.mark.parametrize("tone_type", list(ToneSquelchType))
+def test_every_tone_squelch_type_value_conforms(tone_type: ToneSquelchType) -> None:
+    """Every ``ToneSquelchType`` member value validates as ``toneSquelchType``.
+
+    Pins the schema's ``toneSquelchType`` Literal to the enum
+    (``core/types.py: ToneSquelchType``): a member the schema Literal omits
+    fails here.
+    """
+
+    payload = _payload_with_observed_tone_squelch_types({"main": tone_type.value})
+
+    assert payload["main"]["toneSquelchType"] == tone_type.value
+    ServerStatePublic.model_validate(payload)
+
+
+def test_tone_squelch_type_literal_members_equal_the_enum() -> None:
+    """The schema Literal's members and the enum values are the same set.
+
+    The reverse direction of ``test_every_tone_squelch_type_value_conforms``:
+    a member the Literal omits fails that test, and a Literal member the
+    enum lacks fails this one.
+    """
+    annotation = ReceiverStatePublic.model_fields["toneSquelchType"].annotation
+    non_none = [arg for arg in get_args(annotation) if arg is not type(None)]
+    assert len(non_none) == 1
+
+    assert set(get_args(non_none[0])) == {member.value for member in ToneSquelchType}

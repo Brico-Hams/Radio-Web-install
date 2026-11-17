@@ -183,6 +183,7 @@ See [features, permissions, build, and limitations](docs/i18n/en/ANDROID.md).
 | [docs/DECISIONS.md](docs/i18n/en/DECISIONS.md) | Architecture decisions and why each technology was chosen |
 | [docs/DEPLOYMENT.md](docs/i18n/en/DEPLOYMENT.md) | Installation, configuration, updates, and unsupported deployments |
 | [docs/BRANDING.md](docs/i18n/en/BRANDING.md) | Bricohams brand: logo, palette, typography, and tone |
+| [docs/FTX1-KNOWLEDGE.md](docs/i18n/en/FTX1-KNOWLEDGE.md) | Yaesu FTX-1 knowledge: CAT commands and limits |
 | [AUTHORS.md](AUTHORS.en.md) | Authors |
 | [ACKNOWLEDGEMENTS.md](ACKNOWLEDGEMENTS.en.md) | Acknowledgments, sources, and third-party licenses |
 | [SUPPORT.md](SUPPORT.en.md) / [SECURITY.md](SECURITY.en.md) | Support and private vulnerability reporting |

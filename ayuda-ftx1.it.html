@@ -24,7 +24,7 @@
       <nav aria-label="Aiuto"><a href="ayuda-referencias.it.html">Documentazione e riferimenti</a> · <a href="ayuda-firmwares.it.html">Libreria firmware</a> · <a href="ayuda-atlas-uv-k5-v3.it.html">Atlas UV-K5 V3</a> · <a href="quansheng.html">Quansheng</a> · <a href="opengd77.html">OpenGD77</a></nav>
       <nav class="languages" aria-label="Lingua"><a href="ayuda-ftx1.html" hreflang="es" lang="es">Español</a> · <a href="ayuda-ftx1.en.html" hreflang="en-US" lang="en-US">English (US)</a> · <a href="ayuda-ftx1.de.html" hreflang="de" lang="de">Deutsch</a> · <a href="ayuda-ftx1.it.html" hreflang="it" lang="it" aria-current="page">Italiano</a> · <a href="ayuda-ftx1.fr.html" hreflang="fr" lang="fr">Français</a></nav>
     </header>
-    <nav class="panel" aria-label="Contenuto di questa guida"><h2>In questa guida</h2><ul><li><a href="#requisitos-y-conexion">Requisiti e connessione</a></li><li><a href="#memorias">Memorie</a></li><li><a href="#configuracion-del-equipo-menu">Configurazione della radio (menu)</a></li><li><a href="#copia-simulacion-y-escritura">Copia, simulazione e scrittura</a></li><li><a href="#control-remoto-cat">Controllo remoto (CAT)</a></li><li><a href="#limites">Limiti</a></li></ul></nav>
+    <nav class="panel" aria-label="Contenuto di questa guida"><h2>In questa guida</h2><ul><li><a href="#requisitos-y-conexion">Requisiti e connessione</a></li><li><a href="#memorias">Memorie</a></li><li><a href="#configuracion-del-equipo-menu">Configurazione della radio (menu)</a></li><li><a href="#copia-simulacion-y-escritura">Copia, simulazione e scrittura</a></li><li><a href="#control-remoto-cat">Controllo remoto (CAT)</a></li><li><a href="#vfo">VFO</a></li><li><a href="#limites">Limiti</a></li></ul></nav>
     <article class="panel"><h1 id="guia-yaesu-ftx-1-memorias-y-configuracion">Guida Yaesu FTX-1: memorie e configurazione</h1>
 <p>L&#39;editor web FTX-1 Beta legge, modifica, copia e scrive le memorie e le impostazioni del menu dello Yaesu FTX-1 dal browser, tramite la porta CAT USB e Web Serial. Usa solo i comandi documentati nel manuale ufficiale Yaesu &quot;CAT Operation Reference Manual&quot; dell&#39;FTX-1. Non sostituisce ADMS né il software Yaesu e non invia dati a nessun server.</p>
 <h2 id="requisitos-y-conexion">Requisiti e connessione</h2>
@@ -73,6 +73,23 @@
 <tr><td><code>PC P1 P2P2P2;</code></td><td>Potenza: 1 = testa FTX-1 (5-10 W), 2 = SPA-1 (5-100 W); l&#39;intervallo deriva dalla risposta della radio</td></tr>
 </tbody></table></div>
 <p>L&#39;elenco delle funzioni si ispira a cat-ftx1 (rzochowski, licenza MIT secondo il suo autore; il file LICENSE è ancora in sospeso in quel repository). Non è stato copiato codice.</p>
+<h3 id="controles-de-recepcion-adicionales">Controlli di ricezione aggiuntivi</h3>
+<p>Anch&#39;essi per lato (MAIN/SUB), solo ricezione, verificati con la rilettura e rifiutati prima dell&#39;invio se fuori intervallo:</p>
+<div class="table-scroll"><table><thead><tr><th scope="col">Comando</th><th scope="col">Uso</th></tr></thead><tbody>
+<tr><td><code>NL P1 P2P2P2;</code></td><td>Noise blanker NB, 0 (OFF) o 1-10</td></tr>
+<tr><td><code>RL P1 P2P2;</code></td><td>Riduzione del rumore DNR, 0 (OFF) o 1-10</td></tr>
+<tr><td><code>BC P1 P2;</code></td><td>Notch automatico, OFF/ON</td></tr>
+<tr><td><code>BP P1 0 P3P3P3;</code></td><td>Notch manuale OFF/ON (000/001)</td></tr>
+<tr><td><code>BP P1 1 P3P3P3;</code></td><td>Frequenza del notch manuale, 001-320 (x10 Hz: 10-3200 Hz)</td></tr>
+<tr><td><code>NA P1 P2;</code></td><td>Filtro stretto (NAR), OFF/ON</td></tr>
+<tr><td><code>CF P1 0 0 P3 P4 000;</code></td><td>Clarifier: la pagina attiva quello di ricezione e lascia spento quello di TX</td></tr>
+<tr><td><code>CF P1 0 1 P3 P4P4P4P4;</code></td><td>Offset del clarifier, -9999..+9999 Hz</td></tr>
+<tr><td><code>KS P1P1P1;</code></td><td>Velocità CW, 4-60 WPM (senza lato)</td></tr>
+<tr><td><code>LK P1;</code></td><td>Blocco del pannello, OFF/ON (senza lato)</td></tr>
+</tbody></table></div>
+<p>In FM la radio risponde al notch manuale con un valore non numerico (per esempio <code>BP01F35;</code>): la pagina lo considera non disponibile e lascia il campo vuoto.</p>
+<h2 id="vfo">VFO</h2>
+<p>Il pannello «5. VFO» (premi prima «Leggi VFO») imposta la frequenza del VFO A (<code>FA</code>) e del VFO B (<code>FB</code>) tra 0.030000 e 470.000000 MHz, il modo di MAIN (<code>MD0 m</code>, solo i modi documentati) e lo split (<code>ST0</code>/<code>ST1</code>). Ogni modifica viene riletta e confrontata. Niente di tutto ciò trasmette. Secondo il manuale, <code>ST1</code> spegne il doppio display (<code>FR01</code>).</p>
 <h2 id="limites">Limiti</h2>
 <ul>
 <li>Solo canali di memoria 1-999. PMS, 5 MHz, canale di emergenza e memorie split (<code>MZ</code>) non vengono modificati.</li>

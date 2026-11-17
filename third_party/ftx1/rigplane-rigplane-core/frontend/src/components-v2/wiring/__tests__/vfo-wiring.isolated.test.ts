@@ -1,0 +1,364 @@
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+
+vi.mock('$lib/transport/ws-client', () => ({
+  sendCommand: vi.fn(),
+}));
+vi.mock('$lib/runtime/commands/radio-intents', async () => {
+  const { sendCommand } = await import('$lib/transport/ws-client');
+  return {
+    dispatchRadioIntent: ({ name, params }: { name: string; params: Record<string, unknown> }) => sendCommand(name, params),
+    currentControlSessionEpoch: () => 0,
+  };
+});
+
+vi.mock('$lib/stores/radio.svelte', () => ({
+  getActiveReceiver: vi.fn(() => null),
+  getRadioState: vi.fn(() => null),
+}));
+
+vi.mock('$lib/stores/capabilities.svelte', () => ({
+  getCapabilities: vi.fn(() => ({
+    receivers: 2, vfoScheme: 'main_sub',
+    capabilities: ['rit', 'xit', 'split', 'dual_rx', 'dual_watch', 'main_sub_tracking', 'vfo_swap', 'vfo_equalize'],
+  })),
+  capabilitiesMatchGeneration: vi.fn(() => true),
+  getControlRange: vi.fn(() => null),
+}));
+
+vi.mock('$lib/audio/audio-manager', () => ({
+  audioManager: {
+    setAudioConfig: vi.fn(),
+    setOperatorNotifier: vi.fn(),
+    startRx: vi.fn(),
+    stopRx: vi.fn(),
+    setRxVolume: vi.fn(),
+    rxEnabled: false,
+  },
+}));
+
+import { sendCommand } from '$lib/transport/ws-client';
+import {
+  getActiveReceiver, getRadioState,
+} from '$lib/stores/radio.svelte';
+import { audioManager } from '$lib/audio/audio-manager';
+import { toVfoOpsProps } from '$lib/runtime/props/panel-props';
+import { makeBandHandlers, makeFilterHandlers, makeModeHandlers, makeRitXitHandlers, makeVfoHandlers } from '$lib/runtime/commands/panel-commands';
+import { recordModeFilter, _resetModeFilterMemory } from '$lib/radio/mode-filter-memory';
+
+const originalDocumentQuerySelector = document.querySelector.bind(document);
+
+function receiverState(active: 'MAIN' | 'SUB') {
+  return {
+    stateContractVersion: 1,
+    providerGeneration: 1,
+    active,
+    main: { freqHz: 14_074_000, mode: 'USB', dataMode: 1, filter: 2, filterShape: 0, filterWidth: 2400 },
+    sub: { freqHz: 7_074_000, mode: 'CW', dataMode: 0, filter: 1, filterShape: 0, filterWidth: 500 },
+    split: false,
+    dualWatch: false,
+    mainSubTracking: false,
+  } as any;
+}
+
+describe('toVfoOpsProps', () => {
+  // TX follows split, not the active receiver.  IC-7610 manual p. 3-2:
+  // "you can transmit on only the Main band (except in Split
+  // Frequency operation)."  Under split RX=MAIN, TX=SUB.  This is
+  // independent of which receiver is currently "selected".
+  it('reports txVfo=main when split is off regardless of active receiver', () => {
+    expect(
+      toVfoOpsProps(
+        { active: 'MAIN', split: false, dualWatch: false, mainSubTracking: false } as any,
+        null,
+      ).txVfo,
+    ).toBe('main');
+
+    expect(
+      toVfoOpsProps(
+        { active: 'SUB', split: false, dualWatch: false, mainSubTracking: false } as any,
+        null,
+      ).txVfo,
+    ).toBe('main');
+  });
+
+  it('reports txVfo=sub when split is on regardless of active receiver', () => {
+    expect(
+      toVfoOpsProps(
+        { active: 'MAIN', split: true, dualWatch: false, mainSubTracking: false } as any,
+        null,
+      ).txVfo,
+    ).toBe('sub');
+
+    expect(
+      toVfoOpsProps(
+        { active: 'SUB', split: true, dualWatch: false, mainSubTracking: false } as any,
+        null,
+      ).txVfo,
+    ).toBe('sub');
+  });
+});
+
+describe('makeVfoHandlers', () => {
+  beforeEach(() => {
+    vi.mocked(sendCommand).mockClear();
+    vi.mocked(audioManager.setAudioConfig).mockClear();
+    vi.mocked(getRadioState).mockReturnValue(receiverState('MAIN'));
+  });
+
+  afterEach(() => {
+    document.querySelector = originalDocumentQuerySelector;
+  });
+
+  it('sends explicit split=false when toggling from active split state', () => {
+    vi.mocked(getRadioState).mockReturnValue({ ...receiverState('MAIN'), split: true } as any);
+
+    makeVfoHandlers().onSplitToggle();
+
+    expect(sendCommand).toHaveBeenCalledWith('set_split', { on: false });
+  });
+
+  it('sends explicit split=true when toggling from inactive split state', () => {
+    vi.mocked(getRadioState).mockReturnValue({ ...receiverState('MAIN'), split: false } as any);
+
+    makeVfoHandlers().onSplitToggle();
+
+    expect(sendCommand).toHaveBeenCalledWith('set_split', { on: true });
+  });
+
+  it('selects MAIN and scrolls the mode panel when the main mode badge is clicked', () => {
+    const scrollIntoView = vi.fn();
+    const modePanel = document.createElement('div');
+    modePanel.scrollIntoView = scrollIntoView;
+    document.querySelector = vi.fn((selector: string) => {
+      if (selector === '[data-mode-panel="true"]') {
+        return modePanel;
+      }
+      return originalDocumentQuerySelector(selector);
+    }) as typeof document.querySelector;
+
+    makeVfoHandlers().onMainModeClick();
+
+    expect(sendCommand).toHaveBeenCalledWith('set_vfo', { vfo: 'MAIN' });
+    expect(scrollIntoView).toHaveBeenCalled();
+  });
+
+  it('selects SUB and scrolls the mode panel when the sub mode badge is clicked', () => {
+    const scrollIntoView = vi.fn();
+    const modePanel = document.createElement('div');
+    modePanel.scrollIntoView = scrollIntoView;
+    document.querySelector = vi.fn((selector: string) => {
+      if (selector === '[data-mode-panel="true"]') {
+        return modePanel;
+      }
+      return originalDocumentQuerySelector(selector);
+    }) as typeof document.querySelector;
+
+    makeVfoHandlers().onSubModeClick();
+
+    expect(sendCommand).toHaveBeenCalledWith('set_vfo', { vfo: 'SUB' });
+    expect(scrollIntoView).toHaveBeenCalled();
+  });
+
+  it('sends set_main_sub_tracking with the on flag', () => {
+    makeVfoHandlers().onTrackingToggle(true);
+    expect(sendCommand).toHaveBeenCalledWith('set_main_sub_tracking', { on: true });
+
+    makeVfoHandlers().onTrackingToggle(false);
+    expect(sendCommand).toHaveBeenCalledWith('set_main_sub_tracking', { on: false });
+  });
+
+  // State remains observation-owned while audio focus follows valid MAIN/SUB actions.
+  describe('observed truth + audio focus', () => {
+    beforeEach(() => {
+      vi.mocked(audioManager.setAudioConfig).mockClear();
+    });
+
+    it('onEqual leaves observed receiver truth untouched', () => {
+      vi.mocked(getRadioState).mockReturnValue({
+        stateContractVersion: 1, providerGeneration: 1, active: 'MAIN',
+        main: { freqHz: 14_074_000, mode: 'USB', filter: 2 },
+        sub: { freqHz: 28_500_000, mode: 'AM', filter: 3 },
+      } as any);
+
+      makeVfoHandlers().onEqual();
+
+      expect(sendCommand).toHaveBeenCalledWith('vfo_equalize', {});
+    });
+
+    it('onSwap leaves observed receiver truth untouched', () => {
+      vi.mocked(getRadioState).mockReturnValue({
+        stateContractVersion: 1, providerGeneration: 1, active: 'MAIN',
+        main: { freqHz: 14_074_000, mode: 'USB', filter: 2 },
+        sub: { freqHz: 28_500_000, mode: 'AM', filter: 3 },
+      } as any);
+
+      makeVfoHandlers().onSwap();
+
+      expect(sendCommand).toHaveBeenCalledWith('vfo_swap', {});
+    });
+
+    it('onEqual without current state emits no command', () => {
+      vi.mocked(getRadioState).mockReturnValue(null);
+      makeVfoHandlers().onEqual();
+      expect(sendCommand).not.toHaveBeenCalled();
+    });
+
+    it('onMainVfoClick couples audio focus to MAIN', () => {
+      makeVfoHandlers().onMainVfoClick();
+      expect(sendCommand).toHaveBeenCalledWith('set_vfo', { vfo: 'MAIN' });
+      expect(audioManager.setAudioConfig).toHaveBeenCalledWith({ focus: 'main' });
+    });
+
+    it('onSubVfoClick couples audio focus to SUB', () => {
+      makeVfoHandlers().onSubVfoClick();
+      expect(sendCommand).toHaveBeenCalledWith('set_vfo', { vfo: 'SUB' });
+      expect(audioManager.setAudioConfig).toHaveBeenCalledWith({ focus: 'sub' });
+    });
+  });
+
+  // MOR-1065 — the semantic VFO surface's selection intent.
+  describe('onVfoSelect', () => {
+    beforeEach(() => {
+      vi.mocked(audioManager.setAudioConfig).mockClear();
+    });
+
+    it('activates the receiver and the addressed A/B slot', () => {
+      vi.mocked(getRadioState).mockReturnValue(receiverState('MAIN'));
+
+      makeVfoHandlers().onVfoSelect('SUB', 'B');
+
+      expect(audioManager.setAudioConfig).toHaveBeenCalledWith({ focus: 'sub' });
+      expect(sendCommand).toHaveBeenCalledWith('set_vfo', { vfo: 'SUB' });
+      expect(sendCommand).toHaveBeenCalledWith('set_vfo', { vfo: 'B' });
+    });
+
+    // MUTATION KILLED: defaulting an unslotted position to `vfo: 'A'` — the
+    // topology has no A/B to address and the radio would be re-slotted behind
+    // the operator's back.
+    it('sends no slot command for an unslotted position', () => {
+      vi.mocked(getRadioState).mockReturnValue(receiverState('MAIN'));
+
+      makeVfoHandlers().onVfoSelect('SUB', null);
+
+      expect(sendCommand).toHaveBeenCalledWith('set_vfo', { vfo: 'SUB' });
+      expect(sendCommand).not.toHaveBeenCalledWith('set_vfo', { vfo: 'A' });
+      expect(sendCommand).toHaveBeenCalledTimes(1);
+    });
+
+    it('switches slot without re-selecting the receiver already in use', () => {
+      vi.mocked(getRadioState).mockReturnValue(receiverState('MAIN'));
+
+      makeVfoHandlers().onVfoSelect('MAIN', 'B');
+
+      expect(sendCommand).toHaveBeenCalledTimes(1);
+      expect(sendCommand).toHaveBeenCalledWith('set_vfo', { vfo: 'B' });
+    });
+  });
+});
+
+describe('makeModeHandlers', () => {
+  beforeEach(() => {
+    vi.mocked(sendCommand).mockClear();
+    _resetModeFilterMemory();
+  });
+
+  it('emits set_mode for the active receiver', () => {
+    vi.mocked(getRadioState).mockReturnValue(receiverState('SUB'));
+
+    makeModeHandlers().onModeChange('CW');
+
+    expect(sendCommand).toHaveBeenCalledWith('set_mode', { mode: 'CW', receiver: 1 });
+  });
+
+  it('recalls the remembered filter for a previously-observed mode (MOR-495)', () => {
+    // The radio kept USB on FIL1; switching back to USB must re-send that
+    // filter (2-byte 0x06) instead of letting the radio apply its USB default.
+    vi.mocked(getRadioState).mockReturnValue(receiverState('MAIN'));
+    recordModeFilter('USB', 1);
+
+    makeModeHandlers().onModeChange('USB');
+
+    expect(sendCommand).toHaveBeenCalledWith('set_mode', { mode: 'USB', filter: 1, receiver: 0 });
+  });
+
+  it('emits mode-only set_mode for an unseen mode (MOR-495)', () => {
+    vi.mocked(getRadioState).mockReturnValue(receiverState('MAIN'));
+
+    makeModeHandlers().onModeChange('AM');
+
+    expect(sendCommand).toHaveBeenCalledWith('set_mode', { mode: 'AM', receiver: 0 });
+  });
+
+  it('emits numeric set_data_mode values for the active receiver', () => {
+    vi.mocked(getRadioState).mockReturnValue(receiverState('MAIN'));
+
+    makeModeHandlers().onDataModeChange(3);
+
+    expect(sendCommand).toHaveBeenCalledWith('set_data_mode', { mode: 3, receiver: 0 });
+  });
+});
+
+describe('makeBandHandlers', () => {
+  beforeEach(() => {
+    vi.mocked(sendCommand).mockClear();
+    vi.mocked(getRadioState).mockReturnValue({
+      active: 'MAIN', main: { freqHz: 14_074_000 }, sub: { freqHz: 7_074_000 },
+    } as any);
+  });
+
+  it('emits set_band when bsrCode is provided', () => {
+    makeBandHandlers().onBandSelect('20m', 14_225_000, 5);
+
+    expect(sendCommand).toHaveBeenCalledWith('set_band', { band: 5 });
+  });
+
+  it('falls back to set_freq when bsrCode is missing (e.g. 60m band)', () => {
+    makeBandHandlers().onBandSelect('60m', 5_357_000);
+
+    expect(sendCommand).toHaveBeenCalledWith('set_freq', { freq: 5_357_000, receiver: 0 });
+  });
+});
+
+describe('makeRitXitHandlers', () => {
+  beforeEach(() => {
+    vi.mocked(sendCommand).mockClear();
+    vi.mocked(getRadioState).mockReturnValue({
+      active: 'MAIN', main: { freqHz: 14_074_000 }, sub: { freqHz: 7_074_000 }, ritFreq: 250,
+    } as any);
+  });
+
+  it('emits set_rit_frequency for RIT offset changes', () => {
+    makeRitXitHandlers().onRitOffsetChange(350);
+
+    expect(sendCommand).toHaveBeenCalledWith('set_rit_frequency', { freq: 350 });
+  });
+
+  it('emits set_rit_frequency for XIT offset changes', () => {
+    makeRitXitHandlers().onXitOffsetChange(-450);
+
+    expect(sendCommand).toHaveBeenCalledWith('set_rit_frequency', { freq: -450 });
+  });
+});
+
+describe('makeFilterHandlers', () => {
+  beforeEach(() => {
+    vi.mocked(sendCommand).mockClear();
+  });
+
+  it('emits set_filter_shape for the active receiver without optimistic state', () => {
+    vi.mocked(getRadioState).mockReturnValue(receiverState('SUB'));
+
+    makeFilterHandlers().onFilterShapeChange?.(1);
+
+    expect(sendCommand).toHaveBeenCalledWith('set_filter_shape', { shape: 1, receiver: 1 });
+  });
+
+  it('restores the active filter width after resetting defaults', () => {
+    vi.mocked(getRadioState).mockReturnValue(receiverState('MAIN'));
+    vi.mocked(getActiveReceiver).mockReturnValue({ filter: 2 } as any);
+
+    makeFilterHandlers().onFilterDefaults?.([3000, 2400, 1800]);
+
+    expect(sendCommand).toHaveBeenCalledWith('set_filter', { filter: 2, receiver: 0 });
+  });
+});

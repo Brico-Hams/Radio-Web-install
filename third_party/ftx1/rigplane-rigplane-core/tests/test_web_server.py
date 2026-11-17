@@ -1,0 +1,4232 @@
+"""Tests for src/rigplane/web/ — WebSocket server, protocol, and handlers.
+
+Strategy
+--------
+- Test binary frame encoding functions directly (no network required).
+- Test HTTP endpoints by starting a real server on port 0.
+- Test WebSocket handshake, hello, subscribe, commands by connecting via
+  asyncio.open_connection and performing the RFC 6455 handshake manually.
+- Inject a mock IcomRadio to avoid needing a real radio.
+- asyncio_mode = "auto" (pyproject.toml) — no @pytest.mark.asyncio needed.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import base64
+import contextlib
+import errno
+import hashlib
+import http.client
+import json
+import logging
+import socket
+import struct
+import time
+from pathlib import Path
+from dataclasses import replace
+from types import SimpleNamespace
+from typing import Any
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+
+from serial_stub import SerialMockRadio
+from rigplane.core.state_pipeline_contracts import (
+    FieldPath,
+    Observation,
+    SourceMetadata,
+)
+from rigplane.core.state_store import StateStore
+from rigplane.profiles import resolve_radio_profile
+from rigplane.radio_state import RadioState
+from rigplane.rig_loader import load_rig
+from rigplane.rigctld.state_cache import StateCache
+from rigplane.web.protocol import (
+    decode_json,
+    encode_json,
+)
+from rigplane.web.api_contract import RESPONSE_FIELD_CONTRACTS
+from rigplane.web.server import _DEFAULT_STATIC_DIR, WebConfig, WebServer
+from rigplane.ws import (
+    WS_MAGIC,
+    WS_OP_BINARY,
+    WS_OP_PING,
+    WS_OP_TEXT,
+    WebSocketConnection,
+    make_accept_key,
+    make_frame,
+)
+from rigplane.testing.timing import await_until
+
+# ---------------------------------------------------------------------------
+# Frontend static build guard
+# ---------------------------------------------------------------------------
+
+# The web server serves `index.html` from `src/rigplane/web/static/` at `GET /`.
+# In a fresh checkout without a frontend build, that directory is absent and
+# any test relying on the root route would fail deterministically. Skip such
+# tests when the built frontend is not present (see issue #953).
+_STATIC_INDEX_MISSING = not (_DEFAULT_STATIC_DIR / "index.html").is_file()
+_requires_static_index = pytest.mark.skipif(
+    _STATIC_INDEX_MISSING,
+    reason="frontend build not present (src/rigplane/web/static/index.html missing)",
+)
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _addr(server: WebServer) -> tuple[str, int]:
+    assert server._server is not None
+    return server._server.sockets[0].getsockname()
+
+
+def _seed_fresh_rx(store: StateStore) -> None:
+    store.apply(
+        Observation(
+            path=FieldPath.global_("tx_state", "ptt"),
+            value=False,
+            source=SourceMetadata(source="poll_response", provider="test"),
+            timestamp_monotonic=store.snapshot().generated_at_monotonic,
+            max_age=5.0,
+            provider_generation=store.provider_generation,
+        )
+    )
+
+
+def _ws_accept(key: str) -> str:
+    raw = (key + WS_MAGIC).encode("ascii")
+    return base64.b64encode(hashlib.sha1(raw).digest()).decode("ascii")
+
+
+async def _read_http_response(
+    reader: asyncio.StreamReader,
+) -> tuple[int, dict[str, str], bytes]:
+    """Read one complete HTTP response from ``reader``.
+
+    A single ``reader.read(n)`` returns whatever one TCP segment happened to
+    carry, so bodies larger than a segment (``/api/v1/state`` is ~32 KiB) were
+    silently truncated mid-JSON. Read the headers up to the blank line, then
+    take either ``Content-Length`` body bytes or everything until EOF (callers
+    send ``Connection: close``, and the server always sets ``Content-Length``).
+    """
+    header_bytes = (await reader.readuntil(b"\r\n\r\n"))[:-4]
+
+    lines = header_bytes.decode("ascii", errors="replace").split("\r\n")
+    status_code = int(lines[0].split(" ", 2)[1])
+    headers: dict[str, str] = {}
+    for line in lines[1:]:
+        if ":" in line:
+            k, _, v = line.partition(":")
+            headers[k.strip().lower()] = v.strip()
+
+    raw_length = headers.get("content-length")
+    if raw_length is None:
+        body = await reader.read()  # until EOF
+    else:
+        body = await reader.readexactly(int(raw_length))
+
+    return status_code, headers, body
+
+
+async def _http_get(
+    host: str, port: int, path: str
+) -> tuple[int, dict[str, str], bytes]:
+    """Minimal synchronous-style HTTP GET over asyncio."""
+    reader, writer = await asyncio.open_connection(host, port)
+    try:
+        request = (
+            f"GET {path} HTTP/1.1\r\nHost: {host}:{port}\r\nConnection: close\r\n\r\n"
+        )
+        writer.write(request.encode())
+        await writer.drain()
+
+        return await asyncio.wait_for(_read_http_response(reader), timeout=5.0)
+    finally:
+        writer.close()
+        try:
+            await writer.wait_closed()
+        except Exception:
+            pass
+
+
+async def _ws_connect(
+    host: str, port: int, path: str, key: str = "dGhlIHNhbXBsZSBub25jZQ=="
+) -> tuple[asyncio.StreamReader, asyncio.StreamWriter, str]:
+    """Perform WebSocket HTTP Upgrade handshake.
+
+    Returns:
+        (reader, writer, accept_key) after successful upgrade.
+    """
+    reader, writer = await asyncio.open_connection(host, port)
+    request = (
+        f"GET {path} HTTP/1.1\r\n"
+        f"Host: {host}:{port}\r\n"
+        "Upgrade: websocket\r\n"
+        "Connection: Upgrade\r\n"
+        f"Sec-WebSocket-Key: {key}\r\n"
+        "Sec-WebSocket-Version: 13\r\n"
+        "\r\n"
+    )
+    writer.write(request.encode())
+    await writer.drain()
+
+    # Read exactly up to the end of the HTTP headers.  Using readuntil() instead
+    # of read(N) ensures that any WebSocket frames the server sends immediately
+    # after the 101 (e.g. the "hello" message) stay in the reader buffer and are
+    # not accidentally consumed here.
+    resp = await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), timeout=5.0)
+
+    assert b"101" in resp, f"Expected 101, got: {resp[:200]}"
+    accept = make_accept_key(key)
+    assert accept.encode() in resp, "Invalid Sec-WebSocket-Accept"
+    return reader, writer, accept
+
+
+async def _ws_send_text(writer: asyncio.StreamWriter, text: str) -> None:
+    """Send a masked text frame (client→server)."""
+    payload = text.encode("utf-8")
+    mask = b"\xde\xad\xbe\xef"
+    masked = bytes(b ^ mask[i % 4] for i, b in enumerate(payload))
+    length = len(payload)
+    if length <= 125:
+        header = bytes([0x81, 0x80 | length]) + mask
+    elif length <= 65535:
+        header = struct.pack("!BBH", 0x81, 0x80 | 126, length) + mask
+    else:
+        header = struct.pack("!BBQ", 0x81, 0x80 | 127, length) + mask
+    writer.write(header + masked)
+    await writer.drain()
+
+
+async def _ws_recv_frame(
+    reader: asyncio.StreamReader,
+    timeout: float = 10.0,
+) -> tuple[int, bytes]:
+    """Read one (unmasked) server→client WebSocket frame, skipping ping/pong."""
+    while True:
+        header = await asyncio.wait_for(reader.readexactly(2), timeout=timeout)
+        byte0, byte1 = header[0], header[1]
+        opcode = byte0 & 0x0F
+        payload_len = byte1 & 0x7F
+
+        if payload_len == 126:
+            ext = await reader.readexactly(2)
+            payload_len = struct.unpack("!H", ext)[0]
+        elif payload_len == 127:
+            ext = await reader.readexactly(8)
+            payload_len = struct.unpack("!Q", ext)[0]
+
+        payload = await reader.readexactly(payload_len)
+        # Skip control frames (ping=0x9, pong=0xA)
+        if opcode in (0x9, 0xA):
+            continue
+        return opcode, payload
+
+
+async def _ws_skip_handshake(
+    reader: asyncio.StreamReader,
+    timeout: float = 5.0,
+) -> None:
+    """Skip hello + optional initial state_update pushed by server on connect.
+
+    Reads frames until we stop seeing handshake messages (hello / state_update).
+    Uses a short per-frame timeout so we don't block if no more frames arrive.
+    """
+    for _ in range(5):  # at most 5 handshake frames
+        try:
+            _, payload = await _ws_recv_frame(reader, timeout=timeout)
+        except (asyncio.TimeoutError, TimeoutError):
+            return
+        try:
+            msg = json.loads(payload)
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            return
+        msg_type = msg.get("type")
+        if msg_type in ("hello", "state_update"):
+            timeout = 0.5  # subsequent frames: short timeout
+            continue
+        # Non-handshake frame — can't un-read, but shouldn't happen in practice.
+        return
+
+
+async def _ws_recv_cmd_response(
+    reader: asyncio.StreamReader,
+    timeout: float = 10.0,
+) -> dict[str, Any]:
+    """Read WS frames until we get a command response (has 'ok' or 'error' key).
+
+    Skips hello, state_update, and other broadcast messages.
+    """
+    deadline = asyncio.get_event_loop().time() + timeout
+    while True:
+        remaining = deadline - asyncio.get_event_loop().time()
+        if remaining <= 0:
+            raise asyncio.TimeoutError("no cmd response within timeout")
+        _, payload = await _ws_recv_frame(reader, timeout=remaining)
+        try:
+            msg = json.loads(payload)
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            continue
+        # Command responses have 'ok' or 'error' at top level
+        if "ok" in msg or "error" in msg:
+            return msg
+        # Skip state_update, hello, etc.
+
+
+async def _close_ws(writer: asyncio.StreamWriter) -> None:
+    # Send masked close frame
+    mask = b"\x00\x00\x00\x00"
+    close_payload = struct.pack("!H", 1000)
+    masked_close = bytes(b ^ mask[i % 4] for i, b in enumerate(close_payload))
+    writer.write(bytes([0x88, 0x80 | 2]) + mask + masked_close)
+    try:
+        await writer.drain()
+        writer.close()
+        await asyncio.wait_for(writer.wait_closed(), timeout=2.0)
+    except Exception:
+        pass
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _del_poller_factory_attrs(radio: MagicMock) -> MagicMock:
+    """Make a MagicMock radio fail ObservationPollable/StatePollable checks.
+
+    Python 3.11's runtime-checkable Protocol ``isinstance()`` uses
+    ``hasattr()``, which a bare MagicMock always satisfies, so
+    ``start_web_server`` would take the observation-poller branch and try to
+    spawn the auto-generated MagicMock ``poller.start()`` as a coroutine
+    (``TypeError: a coroutine was expected``). Python 3.12+ uses
+    ``inspect.getattr_static()`` (gh-102433) and is immune. Deleting the
+    factory attributes makes both interpreters take the RadioPoller branch.
+    """
+    del radio.create_observation_poller
+    del radio.create_state_poller
+    return radio
+
+
+def _add_scope_capable_attrs(radio: MagicMock) -> MagicMock:
+    """Explicitly set all ScopeCapable protocol attrs on a MagicMock.
+
+    Python 3.12+ runtime_checkable Protocol uses inspect.getattr_static which
+    bypasses MagicMock.__getattr__, so all attrs must be set in __dict__.
+
+    NOTE: Keep this in sync with `ScopeCapable` Protocol in `radio_protocol.py`.
+    """
+    raw_capabilities = radio.__dict__.get("capabilities")
+    radio.capabilities = (
+        {*raw_capabilities, "scope"} if isinstance(raw_capabilities, set) else {"scope"}
+    )
+    raw_model = radio.__dict__.get("model")
+    model = raw_model if isinstance(raw_model, str) else "IC-7300"
+    radio.profile = resolve_radio_profile(model=model)
+    radio.model = radio.profile.model
+    radio.on_scope_data = MagicMock()
+    radio.scope_stream = MagicMock()
+    radio.enable_scope = AsyncMock()
+    radio.disable_scope = AsyncMock()
+    radio.get_scope_session_state = AsyncMock(return_value=(False, False))
+    radio.restore_scope_session_state = AsyncMock()
+    radio.capture_scope_frame = AsyncMock()
+    radio.capture_scope_frames = AsyncMock()
+    radio.get_scope_during_tx = AsyncMock(return_value=False)
+    radio.set_scope_during_tx = AsyncMock()
+    radio.get_scope_center_type = AsyncMock(return_value=0)
+    radio.set_scope_center_type = AsyncMock()
+    radio.get_scope_fixed_edge = AsyncMock()
+    radio.set_scope_fixed_edge = AsyncMock()
+    radio.get_scope_edge = AsyncMock(return_value=1)
+    radio.set_scope_edge = AsyncMock()
+    radio.get_scope_rbw = AsyncMock(return_value=0)
+    radio.set_scope_rbw = AsyncMock()
+    radio.get_scope_vbw = AsyncMock(return_value=False)
+    radio.set_scope_vbw = AsyncMock()
+
+    # Scope control settings (0x27 sub-commands)
+    radio.get_scope_receiver = AsyncMock(return_value=0)
+    radio.set_scope_receiver = AsyncMock()
+    radio.get_scope_dual = AsyncMock(return_value=False)
+    radio.set_scope_dual = AsyncMock()
+    radio.get_scope_mode = AsyncMock(return_value=0)
+    radio.set_scope_mode = AsyncMock()
+    radio.get_scope_span = AsyncMock(return_value=0)
+    radio.set_scope_span = AsyncMock()
+    radio.get_scope_speed = AsyncMock(return_value=0)
+    radio.set_scope_speed = AsyncMock()
+    radio.get_scope_ref = AsyncMock(return_value=0.0)
+    radio.set_scope_ref = AsyncMock()
+    radio.get_scope_hold = AsyncMock(return_value=False)
+    radio.set_scope_hold = AsyncMock()
+
+    from _scope_session_fake import attach_scope_session
+
+    attach_scope_session(radio)
+    return radio
+
+
+async def _drive_scope_pipeline(server: WebServer, awaitable: Any) -> list[Any]:
+    """Drive the real ordered queue/poller path for direct WebServer unit tests.
+
+    Production starts ``RadioPoller`` with the server.  The narrow lifecycle
+    tests below construct ``WebServer`` directly, so this harness services the
+    same queue entries and futures without inventing a runtime fallback path.
+    The poller is retained on the server so its captured scope-session state
+    survives from enable through restore.
+    """
+    from rigplane.web.radio_poller import RadioPoller
+
+    poller = server._radio_poller  # noqa: SLF001
+    if poller is None:
+        poller = RadioPoller(
+            server._radio,  # type: ignore[arg-type]  # noqa: SLF001
+            server._command_queue,  # noqa: SLF001
+            radio_state=server._radio_state,  # noqa: SLF001
+        )
+        server._radio_poller = poller  # noqa: SLF001
+
+    task = asyncio.ensure_future(awaitable)
+    executed: list[Any] = []
+    deadline = asyncio.get_running_loop().time() + 2.0
+    while asyncio.get_running_loop().time() < deadline:
+        await asyncio.sleep(0.001)
+        for entry in server._command_queue.drain_entries():  # noqa: SLF001
+            executed.append(entry.command)
+            try:
+                await poller._execute(entry.command)  # noqa: SLF001
+            except Exception as exc:
+                if entry.future is not None and not entry.future.done():
+                    entry.future.set_exception(exc)
+            else:
+                if entry.future is not None and not entry.future.done():
+                    entry.future.set_result(None)
+        if task.done() and not server._command_queue.has_commands:  # noqa: SLF001
+            await task
+            return executed
+    task.cancel()
+    raise AssertionError("scope pipeline did not settle")
+
+
+# ---------------------------------------------------------------------------
+# Fixtures
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def mock_radio() -> MagicMock:
+    radio = MagicMock(name="radio")
+    radio.connected = True
+    radio.radio_ready = True
+    radio.control_connected = True
+    radio.model = "IC-7610"
+    radio.capabilities = {
+        "audio",
+        "scope",
+        "dual_rx",
+        "meters",
+        "tx",
+        "cw",
+        "attenuator",
+        "preamp",
+        "rf_gain",
+        "af_level",
+        "squelch",
+        "nb",
+        "nr",
+        "digisel",
+        "ip_plus",
+    }
+    _add_scope_capable_attrs(radio)
+    _del_poller_factory_attrs(radio)
+    # No managed TX runtime: this fixture drives the poller's legacy
+    # ``set_ptt`` for every PTT a control session issues — the explicit
+    # ``test_command_ptt`` key and, far more often, the teardown unkey. Stated
+    # explicitly because a bare Mock satisfies the runtime-checkable
+    # ``ManagedTxCapable`` on 3.11 (hasattr) but not on 3.12+ (getattr_static,
+    # gh-102433), and the per-PR gate pins 3.11 while dev runs newer. ``None``
+    # still passes isinstance on both — ``managed_tx`` is a non-callable
+    # protocol member — but ``ManagedTxApi.bind`` then returns ``None`` on
+    # both, and bind, not a bare isinstance, is the gate managed ingress uses.
+    radio.managed_tx = None
+    radio.get_freq = AsyncMock(return_value=14_074_000)
+    radio.get_mode = AsyncMock(return_value=MagicMock(name="USB"))
+    radio.get_mode.return_value.name = "USB"
+    _mode_mock = MagicMock(name="USB")
+    _mode_mock.name = "USB"
+    radio.get_mode_info = AsyncMock(return_value=(_mode_mock, 1))
+    radio.get_rf_power = AsyncMock(return_value=100)
+    radio.get_filter = AsyncMock(return_value=1)
+    radio.get_s_meter = AsyncMock(return_value=42)
+    radio.get_swr = AsyncMock(return_value=10)
+    radio.get_rf_gain = AsyncMock(return_value=200)
+    radio.get_af_level = AsyncMock(return_value=180)
+    radio.get_attenuator_level = AsyncMock(return_value=0)
+    radio.get_preamp = AsyncMock(return_value=1)
+    radio.get_data_mode = AsyncMock(return_value=False)
+    radio.set_freq = AsyncMock()
+    radio.set_mode = AsyncMock()
+    radio.set_filter = AsyncMock()
+    radio.set_rf_power = AsyncMock()
+    radio.set_ptt = AsyncMock()
+    # This fixture declares ``audio``, so the poller arms the TX leg before
+    # every key. Bare ``MagicMock`` attributes are not awaitable, which the arm
+    # read as a failed TX-audio arm — harmless while that failure was swallowed,
+    # and a refused key once it stopped being (MOR-1178).
+    radio.start_tx = AsyncMock()
+    radio.stop_tx = AsyncMock()
+    radio.set_rf_gain = AsyncMock()
+    radio.set_af_level = AsyncMock()
+    radio.set_attenuator_level = AsyncMock()
+    radio.set_preamp = AsyncMock()
+    radio.set_vfo = AsyncMock()
+    # Canonical dual-RX VFO methods on ``DualReceiverCapable`` (post-#1114);
+    # the radio_poller invokes these directly.
+    radio.swap_main_sub = AsyncMock()
+    radio.equalize_main_sub = AsyncMock()
+    radio.set_main_sub_tracking = AsyncMock()
+    radio.get_main_sub_tracking = AsyncMock(return_value=False)
+    # ScopeCapable protocol attrs (all required for isinstance check in Python 3.12+)
+    radio.on_scope_data = MagicMock()
+    radio.scope_stream = MagicMock()
+    radio.enable_scope = AsyncMock()
+    radio.disable_scope = AsyncMock()
+    radio.get_scope_during_tx = AsyncMock(return_value=False)
+    radio.set_scope_during_tx = AsyncMock()
+    radio.get_scope_center_type = AsyncMock(return_value=0)
+    radio.set_scope_center_type = AsyncMock()
+    radio.get_scope_fixed_edge = AsyncMock()
+    radio.set_scope_fixed_edge = AsyncMock()
+    radio.get_scope_edge = AsyncMock(return_value=1)
+    radio.set_scope_edge = AsyncMock()
+    radio.get_scope_rbw = AsyncMock(return_value=0)
+    radio.set_scope_rbw = AsyncMock()
+    radio.get_scope_vbw = AsyncMock(return_value=False)
+    radio.set_scope_vbw = AsyncMock()
+    radio.capture_scope_frame = AsyncMock()
+    radio.capture_scope_frames = AsyncMock()
+    # AudioCapable protocol attrs (all required for isinstance check in Python 3.12+)
+    radio.audio_bus = MagicMock()
+    radio.start_audio_rx_opus = AsyncMock()
+    radio.stop_audio_rx_opus = AsyncMock()
+    radio.push_audio_tx_opus = AsyncMock()
+    radio.start_audio_rx_pcm = AsyncMock()
+    radio.stop_audio_rx_pcm = AsyncMock()
+    radio.start_audio_tx_pcm = AsyncMock()
+    radio.push_audio_tx_pcm = AsyncMock()
+    radio.stop_audio_tx_pcm = AsyncMock()
+    radio.get_audio_stats = AsyncMock(return_value={})
+    radio.start_audio_tx_opus = AsyncMock()
+    radio.stop_audio_tx_opus = AsyncMock()
+    radio.audio_codec = None
+    radio.audio_sample_rate = 48000
+    # State cache shared between radio and server
+    radio.state_cache = StateCache()
+    # Methods used by WebServer.stop() and RadioPoller
+    radio.soft_disconnect = AsyncMock()
+    radio.disconnect = AsyncMock()
+    radio.send_civ = AsyncMock()
+    return radio
+
+
+@pytest.fixture
+async def server(mock_radio: MagicMock) -> WebServer:
+    # keepalive_interval=9999 disables keepalive pings during tests to prevent
+    # spurious ping frames from interfering with test assertions. (#45)
+    config = WebConfig(host="127.0.0.1", port=0, keepalive_interval=9999.0)
+    srv = WebServer(mock_radio, config)
+    await srv.start()
+    yield srv
+    await srv.stop()
+
+
+@pytest.fixture
+async def server_no_radio() -> WebServer:
+    config = WebConfig(
+        host="127.0.0.1", port=0, keepalive_interval=9999.0, radio_model="IC-7610"
+    )
+    srv = WebServer(None, config)
+    await srv.start()
+    yield srv
+    await srv.stop()
+
+
+@pytest.fixture
+async def server_serial_radio() -> tuple[WebServer, SerialMockRadio]:
+    """WebServer running on top of a real SerialMockRadio core."""
+    radio = SerialMockRadio()
+    await radio.connect()
+    # Seed legacy RadioState, then ingest it before delivery snapshots.
+    radio.radio_state.main.freq = 14_074_000
+    radio.radio_state.main.mode = "USB"
+
+    config = WebConfig(host="127.0.0.1", port=0, keepalive_interval=9999.0)
+    srv = WebServer(radio, config)
+    srv.sync_state_store_from_radio_state(radio.radio_state)
+    await srv.start()
+    try:
+        yield srv, radio
+    finally:
+        await srv.stop()
+
+
+# ---------------------------------------------------------------------------
+# Protocol unit tests (no network)
+# ---------------------------------------------------------------------------
+
+
+class TestProtocolEncoding:
+    def test_encode_decode_json_roundtrip(self) -> None:
+        msg = {"type": "hello", "proto": 1, "version": "0.7.0"}
+        assert decode_json(encode_json(msg)) == msg
+
+    def test_decode_json_invalid(self) -> None:
+        with pytest.raises(ValueError):
+            decode_json("not json {{{")
+
+    def test_decode_json_non_object(self) -> None:
+        with pytest.raises(ValueError):
+            decode_json("[1, 2, 3]")
+
+    def test_make_accept_key(self) -> None:
+        # RFC 6455 §1.3 example
+        key = "dGhlIHNhbXBsZSBub25jZQ=="
+        expected = "s3pPLMBiTxaQ9kYGzzhZRbK+xOo="
+        assert make_accept_key(key) == expected
+
+    def test_make_frame_text_small(self) -> None:
+        frame = make_frame(WS_OP_TEXT, b"hello")
+        assert frame[0] == 0x81  # FIN + TEXT
+        assert frame[1] == 5  # length, no mask
+        assert frame[2:] == b"hello"
+
+    def test_make_frame_binary_126(self) -> None:
+        payload = b"x" * 126
+        frame = make_frame(WS_OP_BINARY, payload)
+        assert frame[0] == 0x82  # FIN + BINARY
+        assert frame[1] == 126
+        length = struct.unpack("!H", frame[2:4])[0]
+        assert length == 126
+        assert frame[4:] == payload
+
+    def test_make_frame_binary_large(self) -> None:
+        payload = b"x" * 70000
+        frame = make_frame(WS_OP_BINARY, payload)
+        assert frame[0] == 0x82
+        assert frame[1] == 127
+        length = struct.unpack("!Q", frame[2:10])[0]
+        assert length == 70000
+
+
+# ---------------------------------------------------------------------------
+# HTTP endpoint tests
+# ---------------------------------------------------------------------------
+
+
+class TestHttpEndpoints:
+    @pytest.mark.parametrize(
+        "backend,usb,count,lan_input,supports,connected,expected",
+        [
+            (
+                "icom_serial",
+                False,
+                1,
+                False,
+                False,
+                True,
+                {
+                    "radio_transport": "serial",
+                    "tx_audio_source": "usb",
+                    "rx_audio_source": "usb",
+                    "data_mode_policy": "data1_usb",
+                    "bridge_required": True,
+                },
+            ),
+            (
+                "yaesu_cat",
+                False,
+                1,
+                False,
+                False,
+                True,
+                {
+                    "radio_transport": "serial",
+                    "tx_audio_source": "usb",
+                    "rx_audio_source": "usb",
+                    "data_mode_policy": "data1_usb",
+                    "bridge_required": True,
+                },
+            ),
+            (
+                None,
+                True,
+                1,
+                False,
+                False,
+                True,
+                {
+                    "radio_transport": "serial",
+                    "tx_audio_source": "usb",
+                    "rx_audio_source": "usb",
+                    "data_mode_policy": "data1_usb",
+                    "bridge_required": True,
+                },
+            ),
+            (
+                "rigplane",
+                True,
+                3,
+                False,
+                False,
+                True,
+                {
+                    "radio_transport": "lan",
+                    "tx_audio_source": "lan",
+                    "rx_audio_source": "lan",
+                    "data_mode_policy": "data2_lan",
+                    "bridge_required": False,
+                },
+            ),
+            (
+                "rigplane",
+                False,
+                1,
+                True,
+                True,
+                True,
+                {
+                    "radio_transport": "lan",
+                    "tx_audio_source": "lan",
+                    "rx_audio_source": "lan",
+                    "data_mode_policy": "data1_lan",
+                    "bridge_required": False,
+                },
+            ),
+            (
+                "rigplane",
+                False,
+                1,
+                True,
+                False,
+                True,
+                {
+                    "radio_transport": "lan",
+                    "tx_audio_source": "lan",
+                    "rx_audio_source": "lan",
+                    "data_mode_policy": "legacy",
+                    "bridge_required": False,
+                },
+            ),
+            (
+                "rigplane",
+                False,
+                1,
+                False,
+                True,
+                True,
+                {
+                    "radio_transport": "lan",
+                    "tx_audio_source": "lan",
+                    "rx_audio_source": "lan",
+                    "data_mode_policy": "legacy",
+                    "bridge_required": False,
+                },
+            ),
+            (
+                None,
+                False,
+                3,
+                True,
+                True,
+                True,
+                {
+                    "radio_transport": "unknown",
+                    "tx_audio_source": "unavailable",
+                    "rx_audio_source": "unavailable",
+                    "data_mode_policy": "legacy",
+                    "bridge_required": False,
+                },
+            ),
+            (
+                "icom_serial",
+                False,
+                1,
+                False,
+                False,
+                False,
+                {
+                    "radio_transport": "serial",
+                    "tx_audio_source": "usb",
+                    "rx_audio_source": "usb",
+                    "data_mode_policy": "data1_usb",
+                    "bridge_required": True,
+                },
+            ),
+        ],
+        ids=[
+            "icom",
+            "yaesu",
+            "usb",
+            "lan-multi",
+            "lan-single",
+            "lan-no-command",
+            "lan-no-input",
+            "unknown",
+            "disconnected",
+        ],
+    )
+    async def test_info_declares_audio_route(
+        self,
+        server: WebServer,
+        backend: str | None,
+        usb: bool,
+        count: int,
+        lan_input: bool,
+        supports: bool,
+        connected: bool,
+        expected: dict[str, object],
+    ) -> None:
+        radio = server._radio
+        radio.backend_id = backend
+        radio.has_usb_audio = usb
+        radio.profile = replace(
+            resolve_radio_profile(model="IC-7610"),
+            data_mode_count=count,
+            data_mode_inputs=((5, "LAN"),) if lan_input else (),
+        )
+        radio.supports_command = lambda command, *, receiver=None: (
+            supports and command == "set_data1_mod_input"
+        )
+        radio.connected = connected
+        radio.control_connected = connected
+        radio.radio_ready = connected
+        host, port = _addr(server)
+        status, _, body = await _http_get(host, port, "/api/v1/info")
+        data = json.loads(body)
+        assert status == 200
+        assert data["audioRoute"] == expected
+        assert data["server"] == "rigplane"
+        assert isinstance(data["version"], str)
+        assert data["proto"] == 1
+        assert data["radio"] == data["model"] == "IC-7610"
+        assert data["capabilities"]["dataModeCount"] == count
+        assert data["connection"]["rigConnected"] is connected
+        assert data["connection"]["controlConnected"] is connected
+        assert data["connection"]["radioReady"] is connected
+        assert "audioReceive" in data
+        assert "backend" not in data and "audio_route" not in data
+
+    async def test_info_audio_route_null_without_radio(self, server: WebServer) -> None:
+        server._radio = None
+        host, port = _addr(server)
+        status, _, body = await _http_get(host, port, "/api/v1/info")
+        data = json.loads(body)
+        assert status == 200
+        assert data["audioRoute"] is None
+        assert data["proto"] == 1
+        assert data["connection"]["rigConnected"] is False
+        assert data["connection"]["radioReady"] is False
+
+    async def test_info_endpoint_status(self, server: WebServer) -> None:
+        host, port = _addr(server)
+        status, _, _ = await _http_get(host, port, "/api/v1/info")
+        assert status == 200
+
+    async def test_info_endpoint_content_type(self, server: WebServer) -> None:
+        host, port = _addr(server)
+        _, headers, _ = await _http_get(host, port, "/api/v1/info")
+        assert "json" in headers.get("content-type", "")
+
+    async def test_info_endpoint_json_fields(self, server: WebServer) -> None:
+        host, port = _addr(server)
+        _, _, body = await _http_get(host, port, "/api/v1/info")
+        data = json.loads(body)
+        assert "server" in data
+        assert data["server"] == "rigplane"
+        assert "version" in data
+        assert "proto" in data
+        assert data["proto"] == 1
+        assert "radio" in data
+
+    async def test_info_endpoint_identity_null_for_mock_radio(
+        self, server: WebServer
+    ) -> None:
+        """MOR-3071: only a real ``RadioIdentity`` is serialised.
+
+        A ``MagicMock`` radio answers ``connection_identity`` with a Mock;
+        the info endpoint must serve ``identity: null`` instead of failing
+        to serialise it into a 500.
+        """
+        host, port = _addr(server)
+        status, _, body = await _http_get(host, port, "/api/v1/info")
+        assert status == 200
+        data = json.loads(body)
+        assert data["connection"]["identity"] is None
+
+    async def test_capabilities_endpoint_status(self, server: WebServer) -> None:
+        host, port = _addr(server)
+        status, _, _ = await _http_get(host, port, "/api/v1/capabilities")
+        assert status == 200
+
+    async def test_capabilities_endpoint_json_fields(self, server: WebServer) -> None:
+        host, port = _addr(server)
+        _, _, body = await _http_get(host, port, "/api/v1/capabilities")
+        data = json.loads(body)
+        assert "scope" in data
+        assert "audio" in data
+        assert "modes" in data
+        assert isinstance(data["modes"], list)
+        # MOR-1447 leg 2: RF/SQL control-model declaration always present,
+        # defaulting to "separate" unless the profile declares "combined".
+        assert data["rfSqlControlModel"] in ("separate", "combined")
+
+    async def test_state_endpoint_contains_radio_ready(self, server: WebServer) -> None:
+        host, port = _addr(server)
+        _, _, body = await _http_get(host, port, "/api/v1/state")
+        data = json.loads(body)
+        assert "connection" in data
+        assert isinstance(data["connection"]["radioReady"], bool)
+
+    @_requires_static_index
+    async def test_root_returns_html(self, server: WebServer) -> None:
+        host, port = _addr(server)
+        status, headers, body = await _http_get(host, port, "/")
+        assert status == 200
+        assert "html" in headers.get("content-type", "").lower()
+        assert b"<!DOCTYPE html>" in body or b"<!doctype html>" in body.lower()
+
+    async def test_unknown_path_404(self, server: WebServer) -> None:
+        host, port = _addr(server)
+        status, _, _ = await _http_get(host, port, "/api/v1/nonexistent")
+        assert status == 404
+
+    async def test_response_says_connection_close(self, server: WebServer) -> None:
+        """Every plain response carries ``Connection: close`` (MOR-2680).
+
+        The server closes the socket after each request, so the raw
+        response bytes must tell HTTP/1.1 clients not to reuse it.
+        """
+        host, port = _addr(server)
+        reader, writer = await asyncio.open_connection(host, port)
+        try:
+            writer.write(f"GET /api/v1/info HTTP/1.1\r\nHost: {host}\r\n\r\n".encode())
+            await writer.drain()
+            raw = await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), timeout=5.0)
+        finally:
+            writer.close()
+            with contextlib.suppress(Exception):
+                await writer.wait_closed()
+        assert raw.startswith(b"HTTP/1.1 200 ")
+        assert b"\r\nConnection: close\r\n" in raw
+
+    async def test_pooled_client_gets_two_complete_responses(
+        self, server: WebServer
+    ) -> None:
+        """A connection-reusing client gets two full 200s (MOR-2680).
+
+        One ``http.client.HTTPConnection`` (which pools like Pro's aiohttp
+        proxy) makes two GETs in a row. On the old code the second
+        ``getresponse()`` fails because the server already closed a socket
+        the client believed was keep-alive.
+        """
+        host, port = _addr(server)
+
+        def _two_sequential_gets() -> tuple[tuple[int, bytes], tuple[int, bytes]]:
+            conn = http.client.HTTPConnection(host, port, timeout=5)
+            try:
+                conn.request("GET", "/api/v1/info")
+                first = conn.getresponse()
+                first_result = (first.status, first.read())
+                conn.request("GET", "/api/v1/info")
+                second = conn.getresponse()
+                second_result = (second.status, second.read())
+                return first_result, second_result
+            finally:
+                conn.close()
+
+        (status1, body1), (status2, body2) = await asyncio.to_thread(
+            _two_sequential_gets
+        )
+        assert status1 == 200
+        assert status2 == 200
+        assert json.loads(body1)["server"] == "rigplane"
+        assert json.loads(body2)["server"] == "rigplane"
+
+    async def test_info_and_state_flow_from_serial_mock_radio(
+        self, server_serial_radio: tuple[WebServer, SerialMockRadio]
+    ) -> None:
+        """SerialMockRadio model/connection and basic state flow through HTTP."""
+        server, radio = server_serial_radio
+        host, port = _addr(server)
+
+        # /api/v1/info reflects runtime model and connection flags.
+        _, _, body = await _http_get(host, port, "/api/v1/info")
+        info = json.loads(body)
+        assert info["model"] == radio.model
+        assert info["connection"]["rigConnected"] is True
+        assert info["connection"]["radioReady"] is True
+
+        # /api/v1/state exposes seeded freq/mode from RadioState via camelCase JSON.
+        _, _, body_state = await _http_get(host, port, "/api/v1/state")
+        state = json.loads(body_state)
+        main = state["main"]
+        assert main["freqHz"] == 14_074_000
+        assert main["mode"] == "USB"
+
+
+# ---------------------------------------------------------------------------
+# WebSocket handshake tests
+# ---------------------------------------------------------------------------
+
+
+class TestWebSocketHandshake:
+    async def test_upgrade_control_channel(self, server: WebServer) -> None:
+        host, port = _addr(server)
+        reader, writer, _ = await _ws_connect(host, port, "/api/v1/ws")
+        await _close_ws(writer)
+
+    async def test_upgrade_scope_channel(self, server: WebServer) -> None:
+        host, port = _addr(server)
+        reader, writer, _ = await _ws_connect(host, port, "/api/v1/scope")
+        await _close_ws(writer)
+
+    async def test_upgrade_audio_channel(self, server: WebServer) -> None:
+        host, port = _addr(server)
+        reader, writer, _ = await _ws_connect(host, port, "/api/v1/audio")
+        await _close_ws(writer)
+
+    async def test_accept_key_correct(self, server: WebServer) -> None:
+        host, port = _addr(server)
+        key = "dGhlIHNhbXBsZSBub25jZQ=="
+        reader, writer, accept = await _ws_connect(host, port, "/api/v1/ws", key)
+        assert accept == "s3pPLMBiTxaQ9kYGzzhZRbK+xOo="
+        await _close_ws(writer)
+
+
+# ---------------------------------------------------------------------------
+# Control channel protocol tests
+# ---------------------------------------------------------------------------
+
+
+class TestControlChannel:
+    async def test_hello_on_connect(self, server: WebServer) -> None:
+        host, port = _addr(server)
+        reader, writer, _ = await _ws_connect(host, port, "/api/v1/ws")
+        try:
+            opcode, payload = await _ws_recv_frame(reader)
+            assert opcode == WS_OP_TEXT
+            msg = json.loads(payload)
+            assert msg["type"] == "hello"
+            assert msg["proto"] == 1
+            assert msg["server"] == "rigplane"
+            assert "version" in msg
+            assert "radio" in msg
+            assert "capabilities" in msg
+            assert "radio_ready" in msg
+        finally:
+            await _close_ws(writer)
+
+    async def test_hello_capabilities_list(self, server: WebServer) -> None:
+        host, port = _addr(server)
+        reader, writer, _ = await _ws_connect(host, port, "/api/v1/ws")
+        try:
+            _, payload = await _ws_recv_frame(reader)
+            msg = json.loads(payload)
+            caps = msg["capabilities"]
+            assert isinstance(caps, list)
+            assert "scope" in caps
+        finally:
+            await _close_ws(writer)
+
+    async def test_subscribe_triggers_state(self, server: WebServer) -> None:
+        host, port = _addr(server)
+        reader, writer, _ = await _ws_connect(host, port, "/api/v1/ws")
+        try:
+            # Consume hello
+            await _ws_recv_frame(reader)
+            # Send subscribe
+            sub = {"type": "subscribe", "streams": ["scope"]}
+            await _ws_send_text(writer, json.dumps(sub))
+            # Should receive state snapshot
+            opcode, payload = await _ws_recv_frame(reader)
+            assert opcode == WS_OP_TEXT
+            msg = json.loads(payload)
+            assert msg["type"] == "state_update"
+            assert "data" in msg
+        finally:
+            await _close_ws(writer)
+
+    async def test_state_snapshot_fields(self, server: WebServer) -> None:
+        host, port = _addr(server)
+        reader, writer, _ = await _ws_connect(host, port, "/api/v1/ws")
+        try:
+            await _ws_skip_handshake(reader)
+            await _ws_send_text(
+                writer, json.dumps({"type": "subscribe", "streams": []})
+            )
+            _, payload = await _ws_recv_frame(reader)
+            data = json.loads(payload)["data"]["data"]
+            assert "active" in data
+            assert "main" in data
+            assert "ptt" in data
+            assert "connection" in data
+        finally:
+            await _close_ws(writer)
+
+    async def test_command_set_freq(
+        self, server: WebServer, mock_radio: MagicMock
+    ) -> None:
+        host, port = _addr(server)
+        reader, writer, _ = await _ws_connect(host, port, "/api/v1/ws")
+        try:
+            await _ws_skip_handshake(reader)
+            mock_radio.get_filter.return_value = 2
+            cmd = {
+                "type": "cmd",
+                "id": "test-1",
+                "name": "set_freq",
+                "params": {"vfo": "A", "freq": 14_074_000},
+            }
+            await _ws_send_text(writer, json.dumps(cmd))
+            opcode, payload = await _ws_recv_frame(reader)
+            assert opcode == WS_OP_TEXT
+            resp = json.loads(payload)
+            assert resp["type"] == "response"
+            assert resp["id"] == "test-1"
+            assert resp["ok"] is True
+            assert resp["result"]["freq"] == 14_074_000
+        finally:
+            await _close_ws(writer)
+
+    async def test_command_set_mode(
+        self, server: WebServer, mock_radio: MagicMock
+    ) -> None:
+        host, port = _addr(server)
+        reader, writer, _ = await _ws_connect(host, port, "/api/v1/ws")
+        try:
+            await _ws_skip_handshake(reader)
+            cmd = {
+                "type": "cmd",
+                "id": "test-2",
+                "name": "set_mode",
+                "params": {"mode": "LSB"},
+            }
+            await _ws_send_text(writer, json.dumps(cmd))
+            _, payload = await _ws_recv_frame(reader)
+            resp = json.loads(payload)
+            assert resp["ok"] is True
+            assert resp["result"]["mode"] == "LSB"
+        finally:
+            await _close_ws(writer)
+
+    async def test_command_ptt(self, server: WebServer, mock_radio: MagicMock) -> None:
+        host, port = _addr(server)
+        reader, writer, _ = await _ws_connect(host, port, "/api/v1/ws")
+        try:
+            await _ws_skip_handshake(reader)
+            cmd = {
+                "type": "cmd",
+                "id": "ptt-1",
+                "name": "ptt",
+                "params": {"state": True},
+            }
+            await _ws_send_text(writer, json.dumps(cmd))
+            _, payload = await _ws_recv_frame(reader)
+            resp = json.loads(payload)
+            assert resp["ok"] is False
+            assert resp["error"] == "radio_nak"
+            mock_radio.set_ptt.assert_not_awaited()
+        finally:
+            await _close_ws(writer)
+
+    async def test_command_unknown_returns_error(self, server: WebServer) -> None:
+        host, port = _addr(server)
+        reader, writer, _ = await _ws_connect(host, port, "/api/v1/ws")
+        try:
+            await _ws_skip_handshake(reader)
+            cmd = {
+                "type": "cmd",
+                "id": "bad-1",
+                "name": "hack_the_radio",
+                "params": {},
+            }
+            await _ws_send_text(writer, json.dumps(cmd))
+            _, payload = await _ws_recv_frame(reader)
+            resp = json.loads(payload)
+            assert resp["type"] == "response"
+            assert resp["ok"] is False
+            assert resp["id"] == "bad-1"
+        finally:
+            await _close_ws(writer)
+
+    async def test_unsubscribe_removes_stream(self, server: WebServer) -> None:
+        host, port = _addr(server)
+        reader, writer, _ = await _ws_connect(host, port, "/api/v1/ws")
+        try:
+            await _ws_skip_handshake(reader)
+            # subscribe
+            await _ws_send_text(
+                writer,
+                json.dumps({"type": "subscribe", "streams": ["scope"]}),
+            )
+            await _ws_recv_frame(reader)  # state
+            # unsubscribe
+            await _ws_send_text(
+                writer,
+                json.dumps({"type": "unsubscribe", "streams": ["scope"]}),
+            )
+            # no response expected for unsubscribe; just check no error
+        finally:
+            await _close_ws(writer)
+
+    async def test_command_no_radio_returns_error(
+        self, server_no_radio: WebServer
+    ) -> None:
+        host, port = _addr(server_no_radio)
+        reader, writer, _ = await _ws_connect(host, port, "/api/v1/ws")
+        try:
+            await _ws_skip_handshake(reader)
+            cmd = {
+                "type": "cmd",
+                "id": "nr-1",
+                "name": "set_freq",
+                "params": {"freq": 14_074_000},
+            }
+            await _ws_send_text(writer, json.dumps(cmd))
+            _, payload = await _ws_recv_frame(reader)
+            resp = json.loads(payload)
+            assert resp["ok"] is False
+            assert "no_radio" in resp.get("error", "")
+        finally:
+            await _close_ws(writer)
+
+    async def test_vfo_swap_command(
+        self, server: WebServer, mock_radio: MagicMock
+    ) -> None:
+        _seed_fresh_rx(server.command_state_store)
+        host, port = _addr(server)
+        reader, writer, _ = await _ws_connect(host, port, "/api/v1/ws")
+        try:
+            await _ws_skip_handshake(reader)
+            cmd = {"type": "cmd", "id": "vs-1", "name": "vfo_swap", "params": {}}
+            await _ws_send_text(writer, json.dumps(cmd))
+            _, payload = await _ws_recv_frame(reader)
+            resp = json.loads(payload)
+            assert resp["ok"] is True
+            # vfo_swap goes through command queue; wait for poller to drain it
+            await asyncio.sleep(0.05)
+            # #1114: the poller dispatches to ``swap_main_sub`` directly on
+            # dual-RX rigs; the deprecated wrapper has been removed.
+            mock_radio.swap_main_sub.assert_awaited_once()
+        finally:
+            await _close_ws(writer)
+
+
+# ---------------------------------------------------------------------------
+# Binary scope frame format tests (RFC conformance)
+# ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# Backpressure tests
+# ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# Server config and lifecycle
+# ---------------------------------------------------------------------------
+
+
+class TestAudioFrameFormat:
+    def test_audio_frame_header_size(self) -> None:
+        from rigplane.web.protocol import AUDIO_HEADER_SIZE, encode_audio_frame
+
+        frame = encode_audio_frame(0x10, 0x01, 0, 480, 1, 20, b"")
+        assert len(frame) == AUDIO_HEADER_SIZE
+
+    def test_audio_rx_msg_type(self) -> None:
+        from rigplane.web.protocol import encode_audio_frame
+
+        frame = encode_audio_frame(0x10, 0x01, 42, 480, 1, 20, b"\x00" * 100)
+        assert frame[0] == 0x10
+
+    def test_audio_tx_msg_type(self) -> None:
+        from rigplane.web.protocol import encode_audio_frame
+
+        frame = encode_audio_frame(0x11, 0x01, 0, 480, 1, 20, b"\x00" * 50)
+        assert frame[0] == 0x11
+
+    def test_audio_codec_byte(self) -> None:
+        from rigplane.web.protocol import AUDIO_CODEC_OPUS, encode_audio_frame
+
+        frame = encode_audio_frame(0x10, AUDIO_CODEC_OPUS, 0, 480, 1, 20, b"\x01")
+        assert frame[1] == AUDIO_CODEC_OPUS
+
+    def test_audio_sequence_le(self) -> None:
+        import struct
+
+        from rigplane.web.protocol import encode_audio_frame
+
+        frame = encode_audio_frame(0x10, 0x01, 0x1234, 480, 1, 20, b"")
+        seq = struct.unpack_from("<H", frame, 2)[0]
+        assert seq == 0x1234
+
+    def test_audio_sample_rate_le(self) -> None:
+        import struct
+
+        from rigplane.web.protocol import encode_audio_frame
+
+        frame = encode_audio_frame(0x10, 0x01, 0, 480, 1, 20, b"")
+        sr = struct.unpack_from("<H", frame, 4)[0]
+        assert sr == 480
+
+    def test_audio_channels_and_frame_ms(self) -> None:
+        from rigplane.web.protocol import encode_audio_frame
+
+        frame = encode_audio_frame(0x10, 0x01, 0, 480, 1, 20, b"")
+        assert frame[6] == 1  # mono
+        assert frame[7] == 20  # 20ms
+
+    def test_audio_payload_appended(self) -> None:
+        from rigplane.web.protocol import AUDIO_HEADER_SIZE, encode_audio_frame
+
+        payload = b"\xaa\xbb\xcc\xdd"
+        frame = encode_audio_frame(0x10, 0x01, 0, 480, 1, 20, payload)
+        assert frame[AUDIO_HEADER_SIZE:] == payload
+        assert len(frame) == AUDIO_HEADER_SIZE + len(payload)
+
+    def test_audio_sequence_wraps(self) -> None:
+        import struct
+
+        from rigplane.web.protocol import encode_audio_frame
+
+        frame = encode_audio_frame(0x10, 0x01, 0x10000, 480, 1, 20, b"")
+        seq = struct.unpack_from("<H", frame, 2)[0]
+        assert seq == 0  # wrapped
+
+
+class TestProtocolConformance:
+    """RFC-level protocol conformance tests."""
+
+    # --- Scope frame edge cases ---
+
+    # --- Audio frame edge cases ---
+
+    def test_audio_opus_typical_frame(self) -> None:
+        """Typical Opus frame: 48kHz, mono, 20ms, ~80-120 bytes payload."""
+        from rigplane.web.protocol import (
+            AUDIO_CODEC_OPUS,
+            AUDIO_HEADER_SIZE,
+            MSG_TYPE_AUDIO_RX,
+            encode_audio_frame,
+        )
+
+        payload = bytes(range(100))  # ~100 bytes typical Opus
+        frame = encode_audio_frame(
+            MSG_TYPE_AUDIO_RX, AUDIO_CODEC_OPUS, 42, 480, 1, 20, payload
+        )
+        assert len(frame) == AUDIO_HEADER_SIZE + 100
+        assert frame[0] == MSG_TYPE_AUDIO_RX
+        assert frame[1] == AUDIO_CODEC_OPUS
+        assert frame[AUDIO_HEADER_SIZE:] == payload
+
+    # --- JSON message conformance ---
+
+    def test_hello_message_schema(self) -> None:
+        """hello message must have all required fields per RFC."""
+        msg = json.loads(
+            encode_json(
+                {
+                    "type": "hello",
+                    "proto": 1,
+                    "server": "rigplane",
+                    "version": "0.8.0",
+                    "radio": "IC-7610",
+                    "capabilities": ["scope", "audio", "tx"],
+                }
+            )
+        )
+        assert msg["type"] == "hello"
+        assert isinstance(msg["proto"], int)
+        assert isinstance(msg["capabilities"], list)
+
+    def test_state_message_schema(self) -> None:
+        msg = {
+            "type": "state",
+            "data": {
+                "freq_a": 14074000,
+                "freq_b": 7074000,
+                "mode": "USB",
+                "filter": "FIL1",
+                "ptt": False,
+            },
+        }
+        text = encode_json(msg)
+        parsed = json.loads(text)
+        assert parsed["type"] == "state"
+        assert isinstance(parsed["data"]["freq_a"], int)
+        assert isinstance(parsed["data"]["ptt"], bool)
+
+    def test_event_message_schema(self) -> None:
+        msg = {
+            "type": "event",
+            "name": "freq_changed",
+            "data": {"vfo": "A", "freq": 14074500},
+        }
+        text = encode_json(msg)
+        parsed = json.loads(text)
+        assert parsed["name"] == "freq_changed"
+
+    def test_command_message_schema(self) -> None:
+        msg = {
+            "type": "cmd",
+            "id": "a1b2",
+            "name": "set_freq",
+            "params": {"vfo": "A", "freq": 14074000},
+        }
+        text = encode_json(msg)
+        parsed = json.loads(text)
+        assert parsed["id"] == "a1b2"
+        assert parsed["name"] == "set_freq"
+
+    def test_response_ok_schema(self) -> None:
+        msg = {
+            "type": "response",
+            "id": "a1b2",
+            "ok": True,
+            "result": {"freq": 14074000},
+        }
+        parsed = json.loads(encode_json(msg))
+        assert parsed["ok"] is True
+
+    def test_response_error_schema(self) -> None:
+        msg = {
+            "type": "response",
+            "id": "a1b3",
+            "ok": False,
+            "error": "invalid_param",
+            "message": "Frequency out of range",
+        }
+        parsed = json.loads(encode_json(msg))
+        assert parsed["ok"] is False
+        assert "error" in parsed
+        assert "message" in parsed
+
+    def test_subscribe_message_schema(self) -> None:
+        msg = {
+            "type": "subscribe",
+            "id": "s1",
+            "streams": ["scope"],
+            "scope_fps": 30,
+            "scope_receiver": 0,
+        }
+        parsed = json.loads(encode_json(msg))
+        assert isinstance(parsed["streams"], list)
+        assert "scope" in parsed["streams"]
+
+    def test_encode_json_compact(self) -> None:
+        """encode_json must produce compact JSON (no extra spaces)."""
+        text = encode_json({"type": "hello", "proto": 1})
+        assert " " not in text  # no spaces in compact JSON
+
+    def test_decode_json_rejects_array(self) -> None:
+        with pytest.raises(ValueError, match="expected a JSON object"):
+            decode_json("[1,2,3]")
+
+    def test_decode_json_rejects_invalid(self) -> None:
+        with pytest.raises(ValueError, match="invalid JSON"):
+            decode_json("not json")
+
+
+class TestServerConfig:
+    async def test_port_zero_assigns_ephemeral(self) -> None:
+        config = WebConfig(host="127.0.0.1", port=0)
+        srv = WebServer(None, config)
+        await srv.start()
+        try:
+            assert srv.port > 0
+        finally:
+            await srv.stop()
+
+    async def test_start_stop(self) -> None:
+        config = WebConfig(host="127.0.0.1", port=0)
+        srv = WebServer(None, config)
+        await srv.start()
+        await srv.stop()
+        # Should not raise
+
+    async def test_context_manager(self) -> None:
+        config = WebConfig(host="127.0.0.1", port=0)
+        async with WebServer(None, config) as srv:
+            assert srv.port > 0
+
+    async def test_web_config_defaults(self) -> None:
+        cfg = WebConfig()
+        assert cfg.host == "0.0.0.0"
+        assert cfg.port == 8080
+        assert cfg.max_clients == 100
+
+    async def test_second_web_server_cannot_bind_same_port(self) -> None:
+        """MOR-1572 red-first: a second rigplane instance must not silently
+        share the first instance's web port.
+
+        Before this fix the listener opted into SO_REUSEPORT, so on
+        macOS/BSD a *second full WebServer* using the exact same production
+        start-up path could bind the same (host, port) with no error at
+        all — the two instances then raced for the same radio while the
+        operator saw a half-dead UI (verified locally: reproduces 100% on
+        darwin prior to the fix). On Linux, SO_REUSEPORT requires every
+        participating socket to opt in, so the second start may already
+        fail there for an unrelated reason. Either way, the invariant this
+        test protects is host-independent: starting a second listener on
+        the same (host, port) while the first is still running MUST fail
+        with EADDRINUSE, everywhere.
+        """
+        config = WebConfig(host="127.0.0.1", port=0)
+        srv1 = WebServer(None, config)
+        await srv1.start()
+        srv2: WebServer | None = None
+        try:
+            port = srv1.port
+            srv2 = WebServer(None, WebConfig(host="127.0.0.1", port=port))
+            with pytest.raises(OSError) as exc_info:
+                await srv2.start()
+            assert exc_info.value.errno == errno.EADDRINUSE
+        finally:
+            if srv2 is not None:
+                with contextlib.suppress(Exception):
+                    await srv2.stop()
+            await srv1.stop()
+
+
+# ---------------------------------------------------------------------------
+# AudioHandler codec detection
+# ---------------------------------------------------------------------------
+
+
+class TestAudioHandlerCodecDetection:
+    """AudioHandler must tag web frames with the correct codec type.
+
+    The radio sends PCM by default (PCM_1CH_16BIT = 0x04).  The web frame
+    must carry AUDIO_CODEC_PCM16 (0x02) so the browser can play it as raw
+    PCM instead of trying to Opus-decode it.  When the radio is configured
+    for Opus (OPUS_1CH = 0x40), the web frame must carry AUDIO_CODEC_OPUS.
+    """
+
+    async def _start_rx_and_capture(
+        self, audio_codec: object, sample_rate: int
+    ) -> bytes:
+        """Start RX via AudioBroadcaster (using AudioBus) and return first queued frame."""
+        from rigplane.audio_bus import AudioBus
+        from rigplane.radio_protocol import AudioCapable
+        from rigplane.web.handlers import AudioBroadcaster, AudioHandler
+        from rigplane.ws import WebSocketConnection
+
+        mock_ws = MagicMock(spec=WebSocketConnection)
+        mock_radio = MagicMock(spec=AudioCapable)
+        mock_radio.capabilities = {"audio"}
+        mock_radio.audio_codec = audio_codec
+        mock_radio.audio_sample_rate = sample_rate
+        mock_radio.start_audio_rx_opus = AsyncMock()
+        mock_radio.stop_audio_rx_opus = AsyncMock()
+
+        bus = AudioBus(mock_radio)
+        mock_radio.audio_bus = bus
+
+        broadcaster = AudioBroadcaster(mock_radio)
+        handler = AudioHandler(mock_ws, mock_radio, broadcaster)
+        await handler._start_rx()
+
+        mock_radio.start_audio_rx_opus.assert_awaited_once()
+
+        # Inject a fake AudioPacket through the bus
+        mock_pkt = MagicMock()
+        mock_pkt.data = b"\x00\x01" * 50  # 100 bytes of fake audio
+        bus._on_opus_packet(mock_pkt)
+
+        # Give relay loop a chance to process
+        await asyncio.sleep(0.1)
+
+        # Retrieve the encoded web frame from the handler's queue (assigned by broadcaster)
+        frame = handler._frame_queue.get_nowait()
+        return frame
+
+    async def test_pcm_codec_produces_pcm16_web_frame(self) -> None:
+        from rigplane.types import AudioCodec
+        from rigplane.web.protocol import AUDIO_CODEC_PCM16
+
+        frame = await self._start_rx_and_capture(AudioCodec.PCM_1CH_16BIT, 48000)
+        assert frame[1] == AUDIO_CODEC_PCM16, (
+            f"Expected AUDIO_CODEC_PCM16 (0x{AUDIO_CODEC_PCM16:02x}) "
+            f"but got 0x{frame[1]:02x}"
+        )
+
+    async def test_opus_codec_produces_opus_web_frame(self) -> None:
+        from rigplane.types import AudioCodec
+        from rigplane.web.protocol import AUDIO_CODEC_OPUS
+
+        frame = await self._start_rx_and_capture(AudioCodec.OPUS_1CH, 48000)
+        assert frame[1] == AUDIO_CODEC_OPUS, (
+            f"Expected AUDIO_CODEC_OPUS (0x{AUDIO_CODEC_OPUS:02x}) "
+            f"but got 0x{frame[1]:02x}"
+        )
+
+    async def test_sample_rate_encoded_correctly(self) -> None:
+        import struct
+
+        from rigplane.types import AudioCodec
+
+        frame = await self._start_rx_and_capture(AudioCodec.PCM_1CH_16BIT, 48000)
+        sr_field = struct.unpack_from("<H", frame, 4)[0]
+        assert sr_field == 480, f"Expected 480 (48000//100) but got {sr_field}"
+
+    async def test_unknown_codec_falls_back_to_pcm16(self) -> None:
+        from rigplane.web.protocol import AUDIO_CODEC_PCM16
+
+        # Pass a non-AudioCodec value (e.g. MagicMock) — must default to PCM16
+        frame = await self._start_rx_and_capture(MagicMock(), 48000)
+        assert frame[1] == AUDIO_CODEC_PCM16
+
+    async def test_ic7610_pcm_native_can_emit_browser_opus_by_profile_policy(
+        self,
+    ) -> None:
+        from rigplane.audio_bus import AudioBus
+        from rigplane.radio_protocol import AudioCapable
+        from rigplane.types import AudioCodec
+        from rigplane.web.handlers import AudioBroadcaster, AudioHandler
+        from rigplane.web.protocol import AUDIO_CODEC_OPUS, AUDIO_HEADER_SIZE
+        from rigplane.ws import WebSocketConnection
+
+        mock_ws = MagicMock(spec=WebSocketConnection)
+        mock_radio = MagicMock(spec=AudioCapable)
+        mock_radio.capabilities = {"audio"}
+        mock_radio.audio_codec = AudioCodec.PCM_2CH_16BIT
+        mock_radio.audio_sample_rate = 16000
+        mock_radio.profile = SimpleNamespace(
+            browser_rx_transport="auto",
+            browser_rx_transcode_to_opus=True,
+        )
+        mock_radio.start_audio_rx_opus = AsyncMock()
+        mock_radio.stop_audio_rx_opus = AsyncMock()
+        bus = AudioBus(mock_radio)
+        mock_radio.audio_bus = bus
+
+        pcm_payload = b"\x01\x02" * 640  # 20 ms, 16 kHz, stereo, s16le
+        tap_frames: list[bytes] = []
+
+        class _FakeTranscoder:
+            def pcm_to_opus(self, pcm: bytes) -> bytes:
+                assert pcm == pcm_payload
+                return b"opus-web-frame"
+
+        broadcaster = AudioBroadcaster(mock_radio)
+        broadcaster.set_pcm_tap(tap_frames.append)
+        handler = AudioHandler(mock_ws, mock_radio, broadcaster)
+
+        with patch(
+            "rigplane.web.handlers.audio.create_pcm_opus_transcoder",
+            return_value=_FakeTranscoder(),
+        ) as transcoder_factory:
+            await handler._start_rx()
+            mock_pkt = MagicMock()
+            mock_pkt.data = pcm_payload
+            bus._on_opus_packet(mock_pkt)
+            await asyncio.sleep(0.1)
+
+        frame = handler._frame_queue.get_nowait()
+        assert frame[1] == AUDIO_CODEC_OPUS
+        assert frame[AUDIO_HEADER_SIZE:] == b"opus-web-frame"
+        assert tap_frames == [pcm_payload]
+        transcoder_factory.assert_called_once_with(
+            sample_rate=16000,
+            channels=2,
+            frame_ms=20,
+        )
+
+    async def test_serial_backend_ignores_direct_lan_browser_opus_profile_policy(
+        self,
+    ) -> None:
+        from rigplane.audio_bus import AudioBus
+        from rigplane.radio_protocol import AudioCapable
+        from rigplane.types import AudioCodec
+        from rigplane.web.handlers import AudioBroadcaster, AudioHandler
+        from rigplane.web.protocol import AUDIO_CODEC_PCM16, AUDIO_HEADER_SIZE
+        from rigplane.ws import WebSocketConnection
+
+        mock_ws = MagicMock(spec=WebSocketConnection)
+        mock_radio = MagicMock(spec=AudioCapable)
+        mock_radio.backend_id = "icom_serial"
+        mock_radio.capabilities = {"audio"}
+        mock_radio.audio_codec = AudioCodec.PCM_2CH_16BIT
+        mock_radio.audio_sample_rate = 48000
+        mock_radio.profile = SimpleNamespace(
+            browser_rx_transport="auto",
+            browser_rx_transcode_to_opus=True,
+        )
+        mock_radio.start_audio_rx_opus = AsyncMock()
+        mock_radio.stop_audio_rx_opus = AsyncMock()
+        bus = AudioBus(mock_radio)
+        mock_radio.audio_bus = bus
+
+        broadcaster = AudioBroadcaster(mock_radio)
+        handler = AudioHandler(mock_ws, mock_radio, broadcaster)
+        await handler._start_rx()
+
+        mock_pkt = MagicMock()
+        mock_pkt.data = b"\x01\x02" * 960
+        bus._on_opus_packet(mock_pkt)
+        await asyncio.sleep(0.1)
+
+        frame = handler._frame_queue.get_nowait()
+        assert frame[1] == AUDIO_CODEC_PCM16
+        assert frame[AUDIO_HEADER_SIZE:] == mock_pkt.data
+
+    async def test_browser_opus_policy_falls_back_to_pcm16_when_encoder_unavailable(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        from rigplane.audio_bus import AudioBus
+        from rigplane.radio_protocol import AudioCapable
+        from rigplane.types import AudioCodec
+        from rigplane.web.handlers import AudioBroadcaster, AudioHandler
+        from rigplane.web.protocol import AUDIO_CODEC_PCM16, AUDIO_HEADER_SIZE
+        from rigplane.ws import WebSocketConnection
+
+        mock_ws = MagicMock(spec=WebSocketConnection)
+        mock_radio = MagicMock(spec=AudioCapable)
+        mock_radio.capabilities = {"audio"}
+        mock_radio.audio_codec = AudioCodec.PCM_2CH_16BIT
+        mock_radio.audio_sample_rate = 16000
+        mock_radio.profile = SimpleNamespace(
+            browser_rx_transport="auto",
+            browser_rx_transcode_to_opus=True,
+        )
+        mock_radio.start_audio_rx_opus = AsyncMock()
+        mock_radio.stop_audio_rx_opus = AsyncMock()
+        bus = AudioBus(mock_radio)
+        mock_radio.audio_bus = bus
+
+        pcm_payload = b"\x01\x02" * 640
+        tap_frames: list[bytes] = []
+        broadcaster = AudioBroadcaster(mock_radio)
+        broadcaster.set_pcm_tap(tap_frames.append)
+        handler = AudioHandler(mock_ws, mock_radio, broadcaster)
+
+        with (
+            caplog.at_level("WARNING"),
+            patch(
+                "rigplane.web.handlers.audio.create_pcm_opus_transcoder",
+                side_effect=RuntimeError("opus disabled"),
+            ),
+        ):
+            await handler._start_rx()
+            for _ in range(2):
+                mock_pkt = MagicMock()
+                mock_pkt.data = pcm_payload
+                bus._on_opus_packet(mock_pkt)
+            await asyncio.sleep(0.1)
+
+        frames = [handler._frame_queue.get_nowait() for _ in range(2)]
+        assert [frame[1] for frame in frames] == [AUDIO_CODEC_PCM16, AUDIO_CODEC_PCM16]
+        assert [frame[AUDIO_HEADER_SIZE:] for frame in frames] == [
+            pcm_payload,
+            pcm_payload,
+        ]
+        assert tap_frames == [pcm_payload, pcm_payload]
+        warnings = [
+            record
+            for record in caplog.records
+            if "browser Opus transcode unavailable" in record.message
+        ]
+        assert len(warnings) == 1
+
+    async def test_browser_can_request_pcm16_when_opus_decode_is_unavailable(
+        self,
+    ) -> None:
+        from rigplane.audio_bus import AudioBus
+        from rigplane.radio_protocol import AudioCapable
+        from rigplane.types import AudioCodec
+        from rigplane.web.handlers import AudioBroadcaster, AudioHandler
+        from rigplane.web.protocol import AUDIO_CODEC_PCM16, AUDIO_HEADER_SIZE
+        from rigplane.ws import WebSocketConnection
+
+        mock_ws = MagicMock(spec=WebSocketConnection)
+        mock_radio = MagicMock(spec=AudioCapable)
+        mock_radio.capabilities = {"audio"}
+        mock_radio.audio_codec = AudioCodec.PCM_2CH_16BIT
+        mock_radio.audio_sample_rate = 16000
+        mock_radio.profile = SimpleNamespace(
+            browser_rx_transport="auto",
+            browser_rx_transcode_to_opus=True,
+        )
+        mock_radio.start_audio_rx_opus = AsyncMock()
+        mock_radio.stop_audio_rx_opus = AsyncMock()
+        bus = AudioBus(mock_radio)
+        mock_radio.audio_bus = bus
+
+        pcm_payload = b"\x01\x02" * 640
+        broadcaster = AudioBroadcaster(mock_radio)
+        handler = AudioHandler(mock_ws, mock_radio, broadcaster)
+        await handler._start_rx(preferred_rx_codec=AUDIO_CODEC_PCM16)
+
+        mock_pkt = MagicMock()
+        mock_pkt.data = pcm_payload
+        bus._on_opus_packet(mock_pkt)
+        await asyncio.sleep(0.1)
+
+        frame = handler._frame_queue.get_nowait()
+        assert frame[1] == AUDIO_CODEC_PCM16
+        assert frame[AUDIO_HEADER_SIZE:] == pcm_payload
+
+
+class TestBroadcasterFrameMsInvariant:
+    """Wire-header ``frame_ms`` must match the actual payload size (issue #765).
+
+    Regression guard for the 2026-04-16 companion crash (epic #764): the
+    broadcaster previously hardcoded ``frame_ms=20`` regardless of the radio's
+    real packet size, causing downstream consumers to allocate mis-sized
+    ring buffers. The fix derives the value from ``len(audio_data)`` on emit.
+    """
+
+    async def _capture_with_payload(
+        self, audio_codec: object, sample_rate: int, payload_size: int, channels: int
+    ) -> bytes:
+        from rigplane.audio_bus import AudioBus
+        from rigplane.radio_protocol import AudioCapable
+        from rigplane.web.handlers import AudioBroadcaster, AudioHandler
+        from rigplane.ws import WebSocketConnection
+
+        mock_ws = MagicMock(spec=WebSocketConnection)
+        mock_radio = MagicMock(spec=AudioCapable)
+        mock_radio.capabilities = {"audio"}
+        mock_radio.audio_codec = audio_codec
+        mock_radio.audio_sample_rate = sample_rate
+        mock_radio.start_audio_rx_opus = AsyncMock()
+        mock_radio.stop_audio_rx_opus = AsyncMock()
+
+        bus = AudioBus(mock_radio)
+        mock_radio.audio_bus = bus
+
+        broadcaster = AudioBroadcaster(mock_radio)
+        handler = AudioHandler(mock_ws, mock_radio, broadcaster)
+        await handler._start_rx()
+
+        # Force the broadcaster's channel count — some codecs imply stereo,
+        # some mono; this test explicitly controls payload shape.
+        broadcaster._channels = channels
+
+        mock_pkt = MagicMock()
+        mock_pkt.data = b"\x00\x01" * (payload_size // 2)
+        bus._on_opus_packet(mock_pkt)
+        await asyncio.sleep(0.1)
+
+        return handler._frame_queue.get_nowait()
+
+    @staticmethod
+    def _parse_header(frame: bytes) -> tuple[int, int, int, int]:
+        """Return (sr_hz, channels, frame_ms, payload_len)."""
+        import struct
+
+        from rigplane.web.protocol import AUDIO_HEADER_SIZE
+
+        _, _, _seq, sr100, ch, frame_ms = struct.unpack_from("<BBHHBB", frame, 0)
+        return sr100 * 100, ch, frame_ms, len(frame) - AUDIO_HEADER_SIZE
+
+    async def test_frame_ms_matches_1364_byte_ic7610_packet(self) -> None:
+        """IC-7610 real-world: 1364 B @ 48 kHz mono PCM16 → 14 ms (was 20)."""
+        from rigplane.types import AudioCodec
+
+        frame = await self._capture_with_payload(
+            AudioCodec.PCM_1CH_16BIT, 48000, 1364, channels=1
+        )
+        sr, ch, frame_ms, payload_len = self._parse_header(frame)
+        expected = (payload_len * 1000) // (sr * ch * 2)
+        assert frame_ms == expected, (
+            f"header lies: declared {frame_ms}ms but payload={payload_len}B "
+            f"@ {sr}Hz × {ch}ch needs {expected}ms"
+        )
+        assert frame_ms == 14
+
+    async def test_frame_ms_matches_1920_byte_exact_20ms_packet(self) -> None:
+        """Exactly 20 ms @ 48 kHz mono PCM16 = 1920 B → frame_ms == 20."""
+        from rigplane.types import AudioCodec
+
+        frame = await self._capture_with_payload(
+            AudioCodec.PCM_1CH_16BIT, 48000, 1920, channels=1
+        )
+        _, _, frame_ms, _ = self._parse_header(frame)
+        assert frame_ms == 20
+
+    async def test_frame_ms_matches_3840_byte_stereo_20ms_packet(self) -> None:
+        """Stereo: 3840 B @ 48 kHz × 2ch × 2bytes = 20 ms."""
+        from rigplane.types import AudioCodec
+
+        frame = await self._capture_with_payload(
+            AudioCodec.PCM_2CH_16BIT, 48000, 3840, channels=2
+        )
+        sr, ch, frame_ms, payload_len = self._parse_header(frame)
+        expected = (payload_len * 1000) // (sr * ch * 2)
+        assert frame_ms == expected
+        assert frame_ms == 20
+
+
+class TestBroadcasterCodecInvalidation:
+    """Broadcaster picks up mid-stream codec/channel changes via
+    ``invalidate_codec_state`` (issue #766, unblocks #721 split-stereo)."""
+
+    @staticmethod
+    def _setup(audio_codec: object, sample_rate: int) -> tuple[Any, Any, Any]:
+        from types import SimpleNamespace
+
+        from rigplane.audio_bus import AudioBus
+        from rigplane.radio_protocol import AudioCapable
+        from rigplane.web.handlers import AudioBroadcaster, AudioHandler
+        from rigplane.ws import WebSocketConnection
+
+        mock_ws = MagicMock(spec=WebSocketConnection)
+        mock_ws.send_text = AsyncMock()
+        mock_radio = MagicMock(spec=AudioCapable)
+        mock_radio.capabilities = {"audio", "lan_dual_rx_audio_routing"}
+        mock_radio.audio_codec = audio_codec
+        mock_radio.audio_sample_rate = sample_rate
+        mock_radio.start_audio_rx_opus = AsyncMock()
+        mock_radio.stop_audio_rx_opus = AsyncMock()
+        mock_radio.send_civ = AsyncMock()
+        mock_radio.profile = SimpleNamespace(receiver_count=2)
+
+        bus = AudioBus(mock_radio)
+        mock_radio.audio_bus = bus
+
+        broadcaster = AudioBroadcaster(mock_radio)
+        handler = AudioHandler(mock_ws, mock_radio, broadcaster)
+        return handler, broadcaster, mock_radio
+
+    async def test_invalidate_flag_triggers_refresh_on_next_packet(self) -> None:
+        from rigplane.types import AudioCodec
+
+        handler, broadcaster, mock_radio = self._setup(AudioCodec.PCM_1CH_16BIT, 48000)
+        await handler._start_rx()
+
+        pkt_mono = MagicMock()
+        pkt_mono.data = b"\x00\x01" * 960
+        mock_radio.audio_bus._on_opus_packet(pkt_mono)
+        await asyncio.sleep(0.05)
+        handler._frame_queue.get_nowait()
+        assert broadcaster._channels == 1
+
+        mock_radio.audio_codec = AudioCodec.PCM_2CH_16BIT
+        broadcaster.invalidate_codec_state()
+        assert broadcaster._codec_stale is True
+
+        pkt_stereo = MagicMock()
+        pkt_stereo.data = b"\x00\x01" * 1920
+        mock_radio.audio_bus._on_opus_packet(pkt_stereo)
+        await asyncio.sleep(0.05)
+
+        assert broadcaster._channels == 2
+        assert broadcaster._codec_stale is False
+
+    async def test_handler_invalidates_on_audio_config(self) -> None:
+        from rigplane.types import AudioCodec
+
+        handler, broadcaster, _ = self._setup(AudioCodec.PCM_1CH_16BIT, 48000)
+        assert broadcaster._codec_stale is False
+        await handler._handle_control(
+            {"type": "audio_config", "focus": "both", "split_stereo": True}
+        )
+        assert broadcaster._codec_stale is True
+
+    async def test_static_codec_refreshes_only_on_start(self) -> None:
+        from rigplane.types import AudioCodec
+
+        handler, broadcaster, mock_radio = self._setup(AudioCodec.PCM_1CH_16BIT, 48000)
+        with patch.object(
+            broadcaster,
+            "_refresh_codec_state",
+            wraps=broadcaster._refresh_codec_state,
+        ) as spy:
+            await handler._start_rx()
+            for _ in range(5):
+                pkt = MagicMock()
+                pkt.data = b"\x00\x01" * 100
+                mock_radio.audio_bus._on_opus_packet(pkt)
+                await asyncio.sleep(0.02)
+            assert spy.call_count == 1
+
+
+class TestDspOpusGateWarning:
+    """Issue #762: DSP pipeline + PCM tap registry are gated on PCM16.
+
+    When a radio's native codec is Opus (IC-705), DSP and tap dispatch
+    silently don't run.  The broadcaster logs a one-shot WARNING when
+    this combination is detected so operators aren't mystified.
+    """
+
+    def _pcm_broadcaster(self):
+        from rigplane.types import AudioCodec
+        from rigplane.web.handlers import AudioBroadcaster
+        from rigplane.web.protocol import AUDIO_CODEC_PCM16
+
+        b = AudioBroadcaster(None)
+        b._radio_codec = AudioCodec.PCM_1CH_16BIT
+        b._web_codec = AUDIO_CODEC_PCM16
+        return b
+
+    def _opus_broadcaster(self):
+        from rigplane.types import AudioCodec
+        from rigplane.web.handlers import AudioBroadcaster
+        from rigplane.web.protocol import AUDIO_CODEC_OPUS
+
+        b = AudioBroadcaster(None)
+        b._radio_codec = AudioCodec.OPUS_1CH
+        b._web_codec = AUDIO_CODEC_OPUS
+        return b
+
+    def test_no_warning_when_dsp_set_on_pcm_broadcaster(self, caplog) -> None:
+        import logging
+
+        b = self._pcm_broadcaster()
+        with caplog.at_level(logging.WARNING, logger="rigplane.web.handlers.audio"):
+            b.set_dsp_pipeline(MagicMock())
+        assert not any("native codec is Opus" in r.message for r in caplog.records)
+        assert b._dsp_opus_warned is False
+
+    def test_warning_fires_when_dsp_set_on_opus_broadcaster(self, caplog) -> None:
+        import logging
+
+        b = self._opus_broadcaster()
+        with caplog.at_level(logging.WARNING, logger="rigplane.web.handlers.audio"):
+            b.set_dsp_pipeline(MagicMock())
+        matching = [r for r in caplog.records if "native codec is Opus" in r.message]
+        assert len(matching) == 1, (
+            f"Expected exactly one DSP-Opus warning; got {len(matching)}"
+        )
+        assert b._dsp_opus_warned is True
+
+    def test_warning_fires_at_most_once_per_lifetime(self, caplog) -> None:
+        import logging
+
+        b = self._opus_broadcaster()
+        with caplog.at_level(logging.WARNING, logger="rigplane.web.handlers.audio"):
+            b.set_dsp_pipeline(MagicMock())
+            b.set_dsp_pipeline(MagicMock())
+            b._maybe_warn_dsp_opus_gate()
+        matching = [r for r in caplog.records if "native codec is Opus" in r.message]
+        assert len(matching) == 1
+
+    def test_warning_fires_when_codec_flips_to_opus_mid_stream(self, caplog) -> None:
+        """Operator sets DSP while radio is on PCM; radio later flips to Opus.
+
+        The warning must fire on the codec refresh, not stay silent because
+        the order was unfavourable.
+        """
+        import logging
+        from rigplane.types import AudioCodec
+        from rigplane.web.protocol import AUDIO_CODEC_OPUS
+
+        b = self._pcm_broadcaster()
+        b.set_dsp_pipeline(MagicMock())
+        # No warning yet — we're on PCM.
+        assert b._dsp_opus_warned is False
+
+        # Simulate a codec flip to Opus (e.g. config change mid-stream).
+        b._radio_codec = AudioCodec.OPUS_1CH
+        b._web_codec = AUDIO_CODEC_OPUS
+        with caplog.at_level(logging.WARNING, logger="rigplane.web.handlers.audio"):
+            b._maybe_warn_dsp_opus_gate()
+        matching = [r for r in caplog.records if "native codec is Opus" in r.message]
+        assert len(matching) == 1
+        assert b._dsp_opus_warned is True
+
+    def test_no_warning_when_dsp_is_none(self, caplog) -> None:
+        import logging
+
+        b = self._opus_broadcaster()
+        with caplog.at_level(logging.WARNING, logger="rigplane.web.handlers.audio"):
+            b.set_dsp_pipeline(None)
+            b._maybe_warn_dsp_opus_gate()
+        assert b._dsp_opus_warned is False
+        assert not any("native codec is Opus" in r.message for r in caplog.records)
+
+
+class TestAudioHandlerTxTranscoderRate:
+    """TX transcoder must use the radio's negotiated sample rate (issue #691).
+
+    Previously the transcoder was hard-coded to 48 kHz, which silently broke
+    TX on radios negotiated at a lower rate (e.g. 24 kHz) — PTT keyed up but
+    no RF power was emitted because the radio dropped the mismatched stream.
+    """
+
+    @staticmethod
+    def _make_handler(sample_rate: int | None) -> Any:
+        from rigplane.radio_protocol import AudioCapable
+        from rigplane.types import AudioCodec
+        from rigplane.web.handlers import AudioBroadcaster, AudioHandler
+        from rigplane.ws import WebSocketConnection
+
+        mock_ws = MagicMock(spec=WebSocketConnection)
+        mock_radio = MagicMock(spec=AudioCapable)
+        mock_radio.capabilities = {"audio", "tx"}
+        mock_radio.backend_id = "yaesu_cat"
+        mock_radio.audio_codec = AudioCodec.PCM_1CH_16BIT
+        if sample_rate is None:
+            # Simulate a radio that does not expose audio_sample_rate
+            del mock_radio.audio_sample_rate
+        else:
+            mock_radio.audio_sample_rate = sample_rate
+        mock_radio.start_audio_tx_pcm = AsyncMock()
+        mock_radio.push_audio_tx_pcm = AsyncMock()
+        mock_radio.stop_audio_tx_pcm = AsyncMock()
+
+        broadcaster = AudioBroadcaster(mock_radio)
+        handler = AudioHandler(mock_ws, mock_radio, broadcaster)
+        return handler
+
+    async def _start_tx(self, handler: Any) -> None:
+        await handler._handle_control({"type": "audio_start", "direction": "tx"})
+
+    @staticmethod
+    def _fake_transcoder_factory(captured: list[int]) -> Any:
+        """Return a fake ``create_pcm_opus_transcoder`` that records sample_rate.
+
+        Native libopus may be absent from the dev/CI environment; mock the
+        factory so the test verifies only the rate-plumbing contract.
+        """
+
+        def _factory(*, sample_rate: int, **_kwargs: Any) -> Any:
+            captured.append(sample_rate)
+            fake = MagicMock()
+            fake._fmt.sample_rate = sample_rate
+            return fake
+
+        return _factory
+
+    async def test_tx_transcoder_uses_24khz_rate(self) -> None:
+        handler = self._make_handler(24000)
+        captured: list[int] = []
+        with patch(
+            "rigplane.web.handlers.audio.create_pcm_opus_transcoder",
+            new=self._fake_transcoder_factory(captured),
+        ):
+            await self._start_tx(handler)
+        assert handler._transcoder is not None
+        assert handler._transcoder._fmt.sample_rate == 24000
+        assert captured == [24000]
+
+    async def test_tx_transcoder_uses_48khz_rate(self) -> None:
+        handler = self._make_handler(48000)
+        captured: list[int] = []
+        with patch(
+            "rigplane.web.handlers.audio.create_pcm_opus_transcoder",
+            new=self._fake_transcoder_factory(captured),
+        ):
+            await self._start_tx(handler)
+        assert handler._transcoder is not None
+        assert handler._transcoder._fmt.sample_rate == 48000
+        assert captured == [48000]
+
+    async def test_tx_transcoder_falls_back_when_rate_missing(self) -> None:
+        handler = self._make_handler(None)
+        captured: list[int] = []
+        with patch(
+            "rigplane.web.handlers.audio.create_pcm_opus_transcoder",
+            new=self._fake_transcoder_factory(captured),
+        ):
+            await self._start_tx(handler)
+        assert handler._transcoder is not None
+        assert handler._transcoder._fmt.sample_rate == 48000
+        assert captured == [48000]
+
+    async def test_tx_transcoder_not_created_before_tx_start(self) -> None:
+        handler = self._make_handler(24000)
+        assert handler._transcoder is None
+
+
+class TestAudioConfigRouting:
+    """audio_config WS message → CI-V Phones L/R Mix (issue #752 / #788 / #792).
+
+    Contract (#792): Phones L/R Mix is always kept OFF (0x00) on dual-RX
+    radios so the LAN stream stays separated L=MAIN / R=SUB.  ``focus``
+    and ``split_stereo`` travel on the WS payload for client-side
+    persistence but do not round-trip to CI-V.  Gated on dual-RX profiles;
+    1-Rx radios silently no-op.
+    """
+
+    @staticmethod
+    def _make_handler(
+        receiver_count: int = 2,
+        *,
+        supports_routing: bool = True,
+    ) -> Any:
+        from types import SimpleNamespace
+
+        from rigplane.radio_protocol import AudioCapable
+        from rigplane.web.handlers import AudioBroadcaster, AudioHandler
+        from rigplane.ws import WebSocketConnection
+
+        mock_ws = MagicMock(spec=WebSocketConnection)
+        mock_ws.send_text = AsyncMock()
+        mock_radio = MagicMock(spec=AudioCapable)
+        caps = {"audio"}
+        if supports_routing:
+            caps.add("lan_dual_rx_audio_routing")
+        mock_radio.capabilities = caps
+        mock_radio.profile = SimpleNamespace(receiver_count=receiver_count)
+        mock_radio.send_civ = AsyncMock()
+
+        broadcaster = AudioBroadcaster(mock_radio)
+        handler = AudioHandler(mock_ws, mock_radio, broadcaster)
+        return handler, mock_radio, mock_ws
+
+    async def _apply(self, handler: Any, focus: str, split_stereo: bool) -> None:
+        await handler._handle_control(
+            {"type": "audio_config", "focus": focus, "split_stereo": split_stereo}
+        )
+
+    @staticmethod
+    def _expected_civ_call(phones_byte: int) -> dict[str, Any]:
+        return {
+            "args": (0x1A,),
+            "sub": 0x05,
+            "data": bytes([0x00, 0x72, phones_byte]),
+        }
+
+    async def test_any_focus_split_combo_sends_phones_mix_off(self) -> None:
+        """Every (focus, split_stereo) combination → Phones L/R Mix OFF (0x00).
+
+        #792 contract: the backend must keep Mix OFF whenever a 2-channel
+        codec is active so the LAN stream stays separated L=MAIN/R=SUB.
+        If the radio pre-sums the receivers, the frontend can no longer
+        isolate MAIN or SUB via WebAudio gain — both channels would carry
+        the summed signal.  ``focus`` / ``split_stereo`` now round-trip
+        only as echo-back for client-side persistence.
+        """
+        for focus in ("main", "sub", "both"):
+            for split in (False, True):
+                handler, radio, _ = self._make_handler()
+                await self._apply(handler, focus, split)
+                radio.send_civ.assert_awaited_once_with(
+                    0x1A,
+                    sub=0x05,
+                    data=bytes([0x00, 0x72, 0x00]),
+                    wait_response=False,
+                )
+
+    async def test_only_valid_phones_bytes_are_emitted(self) -> None:
+        """Invariant: Phones L/R Mix only ever receives 0x00.
+
+        Per IC-7610 CI-V reference p. 5, command ``0x1A 05 00 72``
+        accepts only ``{0x00, 0x01}``.  Previous revisions sent
+        ``0x02`` and ``0x03`` (silently rejected by the radio — epic
+        #787) and the #788 pass briefly drove the byte from
+        ``split_stereo``.  Post-#792 the backend is locked to ``0x00``
+        so the frontend graph can always recover the per-receiver
+        channels it needs.
+        """
+        for focus in ("main", "sub", "both"):
+            for split in (False, True):
+                handler, radio, _ = self._make_handler()
+                await self._apply(handler, focus, split)
+                call = radio.send_civ.call_args
+                data = call.kwargs.get("data") or call.args[-1]
+                assert data[:2] == b"\x00\x72", (
+                    f"unexpected Phones sub-command: {data.hex()}"
+                )
+                assert data[2] == 0x00, (
+                    f"out-of-spec phones byte: 0x{data[2]:02X} for "
+                    f"focus={focus} split={split}"
+                )
+
+    async def test_invalid_focus_sends_error_no_civ(self) -> None:
+        handler, radio, ws = self._make_handler()
+        await self._apply(handler, "left", False)
+        radio.send_civ.assert_not_awaited()
+        assert ws.send_text.await_count >= 1
+        sent = ws.send_text.await_args_list[0].args[0]
+        assert "error" in sent
+        assert "invalid focus" in sent
+
+    async def test_single_rx_profile_noops(self) -> None:
+        # IC-7300 / IC-705 / X6100 shape: receiver_count=1, capability absent.
+        handler, radio, ws = self._make_handler(
+            receiver_count=1, supports_routing=False
+        )
+        await self._apply(handler, "main", False)
+        radio.send_civ.assert_not_awaited()
+        ws.send_text.assert_not_awaited()
+
+    async def test_dual_rx_without_routing_capability_is_noop(self) -> None:
+        # IC-9700 shape: receiver_count=2 but menu layout lacks Phones L/R Mix,
+        # so it must NOT receive 0x1A 05 00 72.  Issue #799.
+        handler, radio, ws = self._make_handler(
+            receiver_count=2, supports_routing=False
+        )
+        await self._apply(handler, "main", False)
+        radio.send_civ.assert_not_awaited()
+        ws.send_text.assert_not_awaited()
+
+    async def test_echo_includes_applied_true(self) -> None:
+        import json
+
+        handler, _, ws = self._make_handler()
+        await self._apply(handler, "both", True)
+        ws.send_text.assert_awaited_once()
+        echoed = json.loads(ws.send_text.await_args.args[0])
+        assert echoed == {
+            "type": "audio_config",
+            "focus": "both",
+            "split_stereo": True,
+            "applied": True,
+        }
+
+
+class TestBroadcasterPhonesMixInit:
+    """AudioBroadcaster._apply_phones_mix_off — #792.
+
+    Broadcaster must force Phones L/R Mix = OFF on relay start so the LAN
+    stream begins in separated-stereo state regardless of prior radio
+    configuration.  Dual-RX only; no-op on 1-Rx profiles.
+    """
+
+    @staticmethod
+    def _make_broadcaster(
+        receiver_count: int = 2,
+        *,
+        supports_routing: bool = True,
+    ) -> Any:
+        from types import SimpleNamespace
+
+        from rigplane.radio_protocol import AudioCapable
+        from rigplane.web.handlers import AudioBroadcaster
+
+        mock_radio = MagicMock(spec=AudioCapable)
+        caps = {"audio"}
+        if supports_routing:
+            caps.add("lan_dual_rx_audio_routing")
+        mock_radio.capabilities = caps
+        mock_radio.profile = SimpleNamespace(receiver_count=receiver_count)
+        mock_radio.send_civ = AsyncMock()
+        return AudioBroadcaster(mock_radio), mock_radio
+
+    async def test_routing_capable_sends_mix_off(self) -> None:
+        # IC-7610 shape: capability declared, Mix OFF CI-V emitted.
+        broadcaster, radio = self._make_broadcaster(supports_routing=True)
+        await broadcaster._apply_phones_mix_off()
+        radio.send_civ.assert_awaited_once_with(
+            0x1A, sub=0x05, data=bytes([0x00, 0x72, 0x00]), wait_response=False
+        )
+
+    async def test_single_rx_is_noop(self) -> None:
+        # IC-7300 / IC-705 / X6100 shape: no routing capability, no CI-V.
+        broadcaster, radio = self._make_broadcaster(
+            receiver_count=1, supports_routing=False
+        )
+        await broadcaster._apply_phones_mix_off()
+        radio.send_civ.assert_not_awaited()
+
+    async def test_dual_rx_without_routing_capability_is_noop(self) -> None:
+        # IC-9700 shape: receiver_count=2 but the Phones L/R Mix menu item
+        # does NOT exist on that radio — we must not send 0x1A 05 00 72.
+        # Issue #799.
+        broadcaster, radio = self._make_broadcaster(
+            receiver_count=2, supports_routing=False
+        )
+        await broadcaster._apply_phones_mix_off()
+        radio.send_civ.assert_not_awaited()
+
+    async def test_civ_error_is_swallowed(self) -> None:
+        broadcaster, radio = self._make_broadcaster(supports_routing=True)
+        radio.send_civ.side_effect = RuntimeError("boom")
+        # Must not raise — relay start-up continues even if the init fails.
+        await broadcaster._apply_phones_mix_off()
+        radio.send_civ.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# WebSocket keepalive (server-initiated pings)
+# ---------------------------------------------------------------------------
+
+
+class TestWsKeepalive:
+    """WebSocketConnection.keepalive_loop() sends RFC 6455 ping frames."""
+
+    async def test_keepalive_sends_ping_frame(self) -> None:
+        """keepalive_loop writes a WS PING frame after the interval elapses."""
+        written: list[bytes] = []
+
+        reader = asyncio.StreamReader()
+        writer = MagicMock(spec=asyncio.StreamWriter)
+        writer.is_closing.return_value = False
+        writer.write.side_effect = written.append
+        writer.drain = AsyncMock()
+
+        ws = WebSocketConnection(reader, writer)
+        task = asyncio.create_task(ws.keepalive_loop(interval=0.05))
+        try:
+            # Wait slightly longer than the interval so at least one ping fires.
+            await asyncio.sleep(0.12)
+        finally:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+        assert written, "keepalive_loop must write at least one frame"
+        # Ping frame: FIN|PING (0x89), payload len 2 ("ka")
+        all_bytes = b"".join(written)
+        ping_frame = make_frame(WS_OP_PING, b"ka")
+        assert ping_frame in all_bytes, (
+            f"Expected ping frame {ping_frame!r} in written data {all_bytes!r}"
+        )
+
+    async def test_keepalive_cancels_cleanly(self) -> None:
+        """Cancelling keepalive_loop raises no unhandled exceptions."""
+        reader = asyncio.StreamReader()
+        writer = MagicMock(spec=asyncio.StreamWriter)
+        writer.is_closing.return_value = False
+        writer.write = MagicMock()
+        writer.drain = AsyncMock()
+
+        ws = WebSocketConnection(reader, writer)
+        task = asyncio.create_task(ws.keepalive_loop(interval=60.0))
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass  # expected
+
+    async def test_keepalive_exits_when_connection_closed(self) -> None:
+        """keepalive_loop stops without error if ws.close() is called first."""
+        reader = asyncio.StreamReader()
+        writer = MagicMock(spec=asyncio.StreamWriter)
+        writer.is_closing.return_value = False
+        writer.write = MagicMock()
+        writer.drain = AsyncMock()
+
+        ws = WebSocketConnection(reader, writer)
+        ws._closed = True  # Mark as closed before starting loop
+
+        task = asyncio.create_task(ws.keepalive_loop(interval=0.01))
+        # Should complete quickly since _closed is True
+        await asyncio.wait_for(task, timeout=1.0)
+
+
+# ---------------------------------------------------------------------------
+# MOR-1429: half-open WS session reaping
+# ---------------------------------------------------------------------------
+
+
+class TestHalfOpenWsReaper:
+    """A half-open WS peer (accepted, then silent -- no FIN, no pongs) must
+    not leak in ``_client_tasks`` forever.
+
+    Live incident: a half-open control session was still counted in
+    ``active=``/``wsClients`` 48+ minutes after the peer went silent, even
+    though the 60s pong-timeout keepalive correctly flagged it as dead.
+    Root cause: ``WebSocketConnection.close()`` only wrote a close frame and
+    never closed the transport, so the reader blocked in ``recv()`` never
+    unblocked -- the owning task in ``_client_tasks`` never completed.
+    """
+
+    @staticmethod
+    def _server_ws(server: WebServer, ip: str, path: str) -> WebSocketConnection:
+        conns = server._conn_manager._connections[(ip, path)]  # noqa: SLF001
+        assert len(conns) == 1, f"expected exactly one tracked ws, got {len(conns)}"
+        return conns[0]
+
+    async def test_half_open_peer_reaped_by_zombie_reaper(
+        self,
+        server: WebServer,
+        mock_radio: MagicMock,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """A stale control session is reaped without inventing a legacy OFF."""
+        host, port = _addr(server)
+        reader, writer, _ = await _ws_connect(host, port, "/api/v1/ws")
+        try:
+            await _ws_skip_handshake(reader)
+
+            before = len(server._client_tasks)  # noqa: SLF001
+            assert before >= 1
+
+            ws = self._server_ws(server, "127.0.0.1", "/api/v1/ws")
+            # Fake clock: simulate a peer that stopped answering PONGs long
+            # ago, per the existing keepalive test convention (no real 60s
+            # wait).
+            ws._last_pong = time.monotonic() - 1000.0  # noqa: SLF001
+            ws._pong_timeout = 0.01  # noqa: SLF001
+            assert ws.is_alive() is False
+
+            reaper = asyncio.create_task(
+                server._zombie_reaper(interval=0.01)  # noqa: SLF001
+            )
+            try:
+                with caplog.at_level(logging.INFO):
+                    await asyncio.wait_for(
+                        await_until(
+                            lambda: len(server._client_tasks) < before,  # noqa: SLF001
+                        ),
+                        timeout=2.0,
+                    )
+            finally:
+                reaper.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await reaper
+
+            assert len(server._client_tasks) == before - 1  # noqa: SLF001
+
+            assert not any(
+                "requested PTT OFF on control session teardown" in r.message
+                for r in caplog.records
+            )
+            assert any("ws disconnect" in r.message for r in caplog.records)
+        finally:
+            writer.close()
+            with contextlib.suppress(Exception):
+                await writer.wait_closed()
+
+    async def test_cooperative_close_regression(
+        self,
+        server: WebServer,
+        mock_radio: MagicMock,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """A cooperative close also invents no legacy PTT OFF."""
+        host, port = _addr(server)
+        reader, writer, _ = await _ws_connect(host, port, "/api/v1/ws")
+        await _ws_skip_handshake(reader)
+
+        before = len(server._client_tasks)  # noqa: SLF001
+        with caplog.at_level(logging.INFO):
+            await _close_ws(writer)
+            await await_until(
+                lambda: len(server._client_tasks) < before,  # noqa: SLF001
+            )
+
+        assert len(server._client_tasks) == before - 1  # noqa: SLF001
+        assert not any(
+            "requested PTT OFF on control session teardown" in r.message
+            for r in caplog.records
+        )
+        assert any("ws disconnect" in r.message for r in caplog.records)
+
+    async def test_healthy_client_not_aborted_by_reaper(
+        self, server: WebServer, mock_radio: MagicMock
+    ) -> None:
+        """A connection with a recent pong must survive multiple
+        zombie-reaper passes at a tight interval (no false-positive kill of
+        a healthy, merely slow, client)."""
+        host, port = _addr(server)
+        reader, writer, _ = await _ws_connect(host, port, "/api/v1/ws")
+        try:
+            await _ws_skip_handshake(reader)
+            before = len(server._client_tasks)  # noqa: SLF001
+
+            ws = self._server_ws(server, "127.0.0.1", "/api/v1/ws")
+            ws._last_pong = time.monotonic()  # noqa: SLF001 -- fresh, healthy
+            assert ws.is_alive() is True
+
+            reaper = asyncio.create_task(
+                server._zombie_reaper(interval=0.01)  # noqa: SLF001
+            )
+            try:
+                await asyncio.sleep(0.1)  # let several reaper passes run
+            finally:
+                reaper.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await reaper
+
+            assert len(server._client_tasks) == before  # noqa: SLF001
+            assert ws.closed is False
+        finally:
+            await _close_ws(writer)
+
+    async def test_saturated_peer_reaper_not_wedged(
+        self,
+        server: WebServer,
+        mock_radio: MagicMock,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """A stale connection whose transport write buffer is saturated
+        above the high-water mark, against a peer that has stopped
+        READING (not merely silent), must not wedge the zombie-reaper.
+
+        Regression for the drain-wedge blocker found in PR #2378 review:
+        ``ws.close()`` awaits ``writer.drain()``, which blocks against a
+        saturated transport buffer and a non-reading peer -- exactly the
+        state a half-open peer leaves the reaper in. A MagicMock writer
+        cannot express this; this test uses a real asyncio socket pair,
+        with the client-side reader deliberately never read from.
+        """
+        host, port = _addr(server)
+        reader, writer, _ = await _ws_connect(host, port, "/api/v1/ws")
+        try:
+            await _ws_skip_handshake(reader)
+
+            before = len(server._client_tasks)  # noqa: SLF001
+            assert before >= 1
+
+            ws = self._server_ws(server, "127.0.0.1", "/api/v1/ws")
+            ws._last_pong = time.monotonic() - 1000.0  # noqa: SLF001
+            ws._pong_timeout = 0.01  # noqa: SLF001
+            assert ws.is_alive() is False
+
+            # Saturate the server-side transport write buffer while the
+            # peer (this test's `reader`) never reads again.
+            #
+            # How much of a write() actually backs up in asyncio's
+            # user-space buffer depends on kernel socket buffer sizes:
+            # over loopback, Linux can absorb several MiB into the
+            # sender's autotuned SO_SNDBUF plus the peer's receive window
+            # before the asyncio buffer ever fills (the CI flake on MOR-
+            # 2582), and macOS loopback autotuning can likewise absorb a
+            # payload that only momentarily poked above the mark. Make the
+            # setup deterministic instead:
+            #  1. shrink BOTH kernel buffers to the platform minimum
+            #     (setting SO_RCVBUF also disables Linux receive
+            #     autotuning), bounding what the kernel can absorb;
+            #  2. feed the transport in chunks until get_write_buffer_
+            #     size() stays above the high-water mark for a settle
+            #     window of repeated flush opportunities, topping up
+            #     whenever it dips. The kernel can only drain the asyncio
+            #     buffer into its own finite buffers, so persistence
+            #     across the window -- with the event loop flushing the
+            #     whole time -- proves the kernel side is full and the
+            #     level cannot drop before the reaper's close() runs.
+            # Bounded by a write/iteration cap; skip (not fail) if a
+            # platform still refuses to saturate.
+            transport = ws._writer.transport  # noqa: SLF001
+            high_water = 4096
+            transport.set_write_buffer_limits(high=high_water)
+            server_sock = transport.get_extra_info("socket")
+            client_sock = writer.get_extra_info("socket")
+            for sock, opt in (
+                (server_sock, socket.SO_SNDBUF),
+                (client_sock, socket.SO_RCVBUF),  # also disables autotuning
+            ):
+                if sock is not None:
+                    with contextlib.suppress(OSError):
+                        sock.setsockopt(socket.SOL_SOCKET, opt, 4096)
+
+            chunk = b"\x00" * (256 * 1024)  # >> shrunken kernel buffers
+            max_writes = 256  # bounded: at most 64 MiB attempted
+            settle_needed = 10  # consecutive 50ms checks above the mark
+            max_iterations = max_writes + 10 * settle_needed
+            writes = 0
+            settle_ok = 0
+            saturated = False
+            for _ in range(max_iterations):
+                if transport.get_write_buffer_size() <= high_water:
+                    if writes >= max_writes:
+                        break
+                    transport.write(chunk)
+                    writes += 1
+                    settle_ok = 0  # kernel still absorbing; restart window
+                else:
+                    settle_ok += 1
+                    if settle_ok >= settle_needed:
+                        saturated = True
+                        break
+                # Yield so the loop's _write_ready() flushes whatever the
+                # kernel will take before the next measurement.
+                await asyncio.sleep(0.05)
+            # `reader` is intentionally never read from below -- the peer
+            # stops consuming, so both the OS socket buffers and the
+            # transport's own queue fill and stay full.
+            if not saturated:
+                pytest.skip(
+                    "platform could not saturate the transport write buffer "
+                    f"(size={transport.get_write_buffer_size()} after "
+                    f"{writes} x {len(chunk)}-byte writes against "
+                    f"high-water={high_water}; kernel socket buffers too "
+                    "large or event loop not flushing)"
+                )
+
+            reaper = asyncio.create_task(
+                server._zombie_reaper(interval=0.05)  # noqa: SLF001
+            )
+            try:
+                with caplog.at_level(logging.INFO):
+                    # Bounded budget -- must fail FAST (not hang for
+                    # minutes/TCP-RTO) if the reaper's close() is not
+                    # bounded with an abort() fallback.
+                    await asyncio.wait_for(
+                        await_until(
+                            lambda: len(server._client_tasks) < before,  # noqa: SLF001
+                        ),
+                        timeout=5.0,
+                    )
+                # The reaper task must still be alive and looping -- proof
+                # a second pass runs, i.e. the reaper itself was not
+                # wedged by the saturated close().
+                await asyncio.sleep(0.2)
+                assert not reaper.done(), (
+                    "zombie-reaper task died or is wedged after reaping "
+                    "the saturated-peer connection"
+                )
+            finally:
+                reaper.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await reaper
+
+            assert len(server._client_tasks) == before - 1  # noqa: SLF001
+            assert any(
+                "zombie-reaper: forced abort on stale ws" in r.message
+                for r in caplog.records
+            ), "reaper must have hit the bounded-close abort() fallback"
+        finally:
+            writer.close()
+            with contextlib.suppress(Exception):
+                await writer.wait_closed()
+
+
+# ---------------------------------------------------------------------------
+# Scope enable/disable lifecycle
+# ---------------------------------------------------------------------------
+
+
+class TestScopeLifecycle:
+    """Scope is disabled on the radio when the last handler disconnects."""
+
+    async def test_shutdown_with_pending_scope_and_no_poller_is_fail_open(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A dead executor cannot block the later client-teardown phase."""
+        radio = _add_scope_capable_attrs(MagicMock())
+        server = WebServer(radio)
+        server.scope_hub
+        await server._radio_scope_session.set_output(True)
+        client_teardown = asyncio.Event()
+
+        async def _client() -> None:
+            try:
+                await asyncio.Event().wait()
+            finally:
+                client_teardown.set()
+
+        client = asyncio.create_task(_client())
+        await asyncio.sleep(0)
+        server._client_tasks.add(client)
+
+        with caplog.at_level(logging.WARNING, logger="rigplane.web.web_startup"):
+            await asyncio.wait_for(server.stop(), timeout=0.5)
+
+        assert client_teardown.is_set()
+        assert server._radio_poller is None
+        assert server._radio_scope_session.active  # pending restoration
+        assert not server._command_queue.has_commands
+        assert "radio poller is unavailable" in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# Cache-Control header for static files
+# ---------------------------------------------------------------------------
+
+
+class TestCacheControl:
+    """Static file responses must include Cache-Control: no-cache."""
+
+    @_requires_static_index
+    async def test_static_index_has_cache_control(self, server: WebServer) -> None:
+        host, port = _addr(server)
+        status, headers, _ = await _http_get(host, port, "/")
+        assert status == 200
+        cc = headers.get("cache-control", "")
+        assert "no-cache" in cc, f"Expected no-cache in Cache-Control, got: {cc!r}"
+
+    async def test_static_file_not_found_no_cache_control(
+        self, server: WebServer
+    ) -> None:
+        """404 responses do not need Cache-Control (not a static file)."""
+        host, port = _addr(server)
+        status, headers, _ = await _http_get(host, port, "/nonexistent-file.xyz")
+        assert status == 404
+
+    async def test_api_info_no_cache_control_required(self, server: WebServer) -> None:
+        """JSON API endpoints are not required to have Cache-Control."""
+        host, port = _addr(server)
+        status, _, body = await _http_get(host, port, "/api/v1/info")
+        assert status == 200
+        data = json.loads(body)
+        assert data["server"] == "rigplane"
+
+
+# ---------------------------------------------------------------------------
+# #44 regression: ScopeHandler.push_frame must call enqueue_frame
+# ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# #45 regression: Configurable keepalive interval
+# ---------------------------------------------------------------------------
+
+
+class TestConfigurableKeepalive:
+    """WebConfig.keepalive_interval is honoured by the server (#45)."""
+
+    def test_webconfig_has_keepalive_interval(self) -> None:
+        from rigplane.ws import WS_KEEPALIVE_INTERVAL
+
+        cfg = WebConfig()
+        assert hasattr(cfg, "keepalive_interval")
+        assert cfg.keepalive_interval == WS_KEEPALIVE_INTERVAL
+
+    def test_webconfig_custom_interval(self) -> None:
+        cfg = WebConfig(keepalive_interval=5.0)
+        assert cfg.keepalive_interval == 5.0
+
+    async def test_large_interval_no_pings_during_short_test(self) -> None:
+        """With keepalive_interval=9999, no ping frames arrive in a short test."""
+        config = WebConfig(
+            host="127.0.0.1",
+            port=0,
+            keepalive_interval=9999.0,
+            radio_model="IC-7610",
+        )
+        async with WebServer(None, config) as srv:
+            host, port = _addr(srv)
+            reader, writer, _ = await _ws_connect(host, port, "/api/v1/ws")
+            try:
+                # Collect frames for 100ms — should get hello but no pings
+                frames = []
+                try:
+                    while True:
+                        opcode, payload = await asyncio.wait_for(
+                            _ws_recv_frame(reader), timeout=0.1
+                        )
+                        frames.append((opcode, payload))
+                except asyncio.TimeoutError:
+                    pass
+                # Should have received exactly the hello text frame
+                assert len(frames) >= 1
+                assert frames[0][0] == WS_OP_TEXT
+                msg = json.loads(frames[0][1])
+                assert msg["type"] == "hello"
+            finally:
+                await _close_ws(writer)
+
+
+# ---------------------------------------------------------------------------
+# #46 regression: Atomic scope enable (asyncio.Lock prevents duplicate calls)
+# ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# #47 regression: Scope re-enable after full disconnect/reconnect
+# ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# #72: RadioPoller — single CI-V serialiser
+# ---------------------------------------------------------------------------
+
+
+class TestRadioPoller:
+    """RadioPoller polls all params and executes commands via single task (#72)."""
+
+    def _make_radio(self) -> MagicMock:
+        from rigplane.profiles import resolve_radio_profile
+
+        profile = resolve_radio_profile(model="IC-7610")
+        radio = MagicMock()
+        radio.profile = profile
+        radio.model = profile.model
+        radio.capabilities = set(profile.capabilities)
+        radio._radio_state = SimpleNamespace(active="MAIN")
+        # No managed TX runtime — same reason as the ``mock_radio`` fixture
+        # above. No test in this class keys through a poller yet, but
+        # ``set_ptt`` is wired below: an unmanaged provider states this whether
+        # or not a test happens to key today.
+        radio.managed_tx = None
+        mode_mock = MagicMock()
+        mode_mock.name = "USB"
+        radio.get_freq = AsyncMock(return_value=14074000)
+        radio.get_mode_info = AsyncMock(return_value=(mode_mock, 1))
+        radio.get_s_meter = AsyncMock(return_value=42)
+        radio.get_rf_power = AsyncMock(return_value=100)
+        radio.get_swr = AsyncMock(return_value=10)
+        radio.get_rf_gain = AsyncMock(return_value=128)
+        radio.get_af_level = AsyncMock(return_value=64)
+        radio.get_attenuator_level = AsyncMock(return_value=0)
+        radio.get_preamp = AsyncMock(return_value=0)
+        radio.get_data_mode = AsyncMock(return_value=False)
+        radio.set_freq = AsyncMock()
+        radio.set_mode = AsyncMock()
+        radio.set_ptt = AsyncMock()
+        # Canonical dual-RX VFO methods (DualReceiverCapable post-#1114);
+        # poller calls these directly.
+        radio.swap_main_sub = AsyncMock()
+        radio.equalize_main_sub = AsyncMock()
+        radio.send_civ = AsyncMock()  # RadioPoller now calls send_civ directly
+        radio.state_cache = StateCache()
+        from _scope_session_fake import attach_scope_session
+
+        radio.get_scope_session_state = AsyncMock(return_value=(False, False))
+        attach_scope_session(radio)
+        return radio
+
+    async def test_poller_starts_and_stops(self) -> None:
+        """RadioPoller start/stop lifecycle."""
+        from rigplane.web.radio_poller import CommandQueue, RadioPoller
+
+        radio = self._make_radio()
+        cache = StateCache()
+        queue = CommandQueue()
+        poller = RadioPoller(radio, cache, queue)
+
+        poller.start()
+        assert poller.running
+        await asyncio.sleep(0.05)
+
+        poller.stop()
+        assert not poller.running
+
+    async def test_command_queue_dedup(self) -> None:
+        """Last-write-wins dedup for freq commands; PTT never deduped."""
+        from rigplane.web.radio_poller import CommandQueue, PttOff, PttOn, SetFreq
+
+        queue = CommandQueue()
+        queue.put(SetFreq(14000000))
+        queue.put(SetFreq(14074000))
+        queue.put(PttOn())
+        queue.put(PttOff())
+
+        cmds = queue.drain()
+        freq_cmds = [c for c in cmds if isinstance(c, SetFreq)]
+        ptt_cmds = [c for c in cmds if isinstance(c, (PttOn, PttOff))]
+
+        assert len(freq_cmds) == 1
+        assert freq_cmds[0].freq == 14074000
+        assert len(ptt_cmds) == 2
+
+    async def test_poller_executes_commands(self) -> None:
+        """Commands queued are executed by the poller."""
+        from rigplane.web.radio_poller import CommandQueue, RadioPoller, SetFreq
+
+        radio = self._make_radio()
+        cache = StateCache()
+        queue = CommandQueue()
+        poller = RadioPoller(radio, cache, queue)
+        _seed_fresh_rx(poller._state_store)  # noqa: SLF001
+
+        poller.start()
+        queue.put(SetFreq(7074000))
+        await asyncio.sleep(0.1)
+        poller.stop()
+
+        radio.set_freq.assert_awaited_with(7074000)
+
+    async def test_poller_idempotent_start(self) -> None:
+        """Calling start() twice does not create duplicate tasks."""
+        from rigplane.web.radio_poller import CommandQueue, RadioPoller
+
+        radio = self._make_radio()
+        cache = StateCache()
+        queue = CommandQueue()
+        poller = RadioPoller(radio, cache, queue)
+
+        poller.start()
+        task1 = poller._task
+        poller.start()
+        task2 = poller._task
+
+        assert task1 is task2
+        poller.stop()
+
+    async def test_set_key_speed_updates_radio_and_state(self) -> None:
+        """SetKeySpeed(speed) calls radio.set_key_speed and updates RadioState.key_speed."""
+        from rigplane.web.radio_poller import CommandQueue, RadioPoller, SetKeySpeed
+
+        radio = self._make_radio()
+        radio.set_key_speed = AsyncMock()
+        radio.get_key_speed = AsyncMock(return_value=24)
+        queue = CommandQueue()
+        poller = RadioPoller(radio, StateCache(), queue, radio_state=RadioState())
+
+        poller.start()
+        queue.put(SetKeySpeed(24))
+        await asyncio.sleep(0.03)
+        poller.stop()
+
+        radio.set_key_speed.assert_awaited_once_with(24)
+        assert poller._radio_state is not None
+        assert poller._radio_state.key_speed == 24
+
+    async def test_set_break_in_updates_radio_and_state(self) -> None:
+        """SetBreakIn(mode) calls radio.set_break_in and updates RadioState.break_in."""
+        from rigplane.web.radio_poller import CommandQueue, RadioPoller, SetBreakIn
+
+        radio = self._make_radio()
+        radio.set_break_in = AsyncMock()
+        radio.get_break_in = AsyncMock(return_value=1)
+        queue = CommandQueue()
+        poller = RadioPoller(radio, StateCache(), queue, radio_state=RadioState())
+
+        poller.start()
+        queue.put(SetBreakIn(1))
+        # MOR-2121: a fixed ``asyncio.sleep(0.03)`` here raced the poller
+        # task's own scheduling under ``pytest -n auto`` on a loaded host --
+        # 30ms is not a guaranteed wall-clock budget for the task to run.
+        # Poll for the awaited call instead of assuming a fixed delay covers
+        # it (same idiom as ``TestHalfOpenWsReaper._wait_until`` above).
+        deadline = asyncio.get_running_loop().time() + 2.0
+        while (
+            radio.set_break_in.await_count == 0
+            and asyncio.get_running_loop().time() < deadline
+        ):
+            await asyncio.sleep(0.01)
+        poller.stop()
+
+        radio.set_break_in.assert_awaited_once_with(1)
+        assert poller._radio_state is not None
+        assert poller._radio_state.break_in == 1
+
+
+# ---------------------------------------------------------------------------
+# #92: SUB scope receiver switching
+# ---------------------------------------------------------------------------
+
+
+class TestSwitchScopeReceiver:
+    """SwitchScopeReceiver command sends scope_main_sub CI-V frame."""
+
+    def _make_radio(self) -> MagicMock:
+        from rigplane.profiles import resolve_radio_profile
+
+        profile = resolve_radio_profile(model="IC-7610")
+        radio = MagicMock()
+        radio.profile = profile
+        radio.model = profile.model
+        radio.capabilities = set(profile.capabilities)
+        radio._radio_state = SimpleNamespace(active="MAIN")
+        # No managed TX runtime — same reason as the ``mock_radio`` fixture
+        # above. No test in this class keys through a poller yet, but
+        # ``set_ptt`` is wired below: an unmanaged provider states this whether
+        # or not a test happens to key today.
+        radio.managed_tx = None
+        radio.send_civ = AsyncMock()
+        radio.state_cache = StateCache()
+        radio.enable_scope = AsyncMock()
+        radio.disable_scope = AsyncMock()
+        radio.set_freq = AsyncMock()
+        radio.set_mode = AsyncMock()
+        radio.set_ptt = AsyncMock()
+        radio.set_rf_power = AsyncMock()
+        radio.set_rf_gain = AsyncMock()
+        radio.set_af_level = AsyncMock()
+        radio.set_attenuator_level = AsyncMock()
+        radio.set_preamp = AsyncMock()
+        radio.set_squelch = AsyncMock()
+        radio.set_nb = AsyncMock()
+        radio.set_nr = AsyncMock()
+        radio.set_digisel = AsyncMock()
+        radio.set_ip_plus = AsyncMock()
+        # Canonical dual-RX VFO methods on ``DualReceiverCapable`` (post-#1114).
+        radio.swap_main_sub = AsyncMock()
+        radio.equalize_main_sub = AsyncMock()
+
+        # Receiver-tier methods (issue #1170 / #1172).  Make
+        # ``select_receiver`` mirror the wire-level CI-V the runtime would
+        # emit so existing assertions on ``send_civ(0x07, …)`` still apply.
+        async def _select_receiver(which: object) -> None:
+            name = str(which).strip().upper()
+            code = 0xD1 if name in ("SUB", "1") else 0xD0
+            await radio.send_civ(0x07, data=bytes([code]))
+            radio._radio_state.active = "SUB" if code == 0xD1 else "MAIN"
+
+        radio.select_receiver = AsyncMock(side_effect=_select_receiver)
+        radio.set_vfo_slot = AsyncMock()
+        from _scope_session_fake import attach_scope_session
+
+        radio.get_scope_session_state = AsyncMock(return_value=(False, False))
+        attach_scope_session(radio)
+        return radio
+
+    async def test_switch_scope_receiver_main_sends_civ(self) -> None:
+        """SwitchScopeReceiver(0) sends 0x27/0x12/0x00 CI-V command."""
+        from rigplane.web.radio_poller import (
+            CommandQueue,
+            RadioPoller,
+            SwitchScopeReceiver,
+        )
+
+        radio = self._make_radio()
+        queue = CommandQueue()
+        poller = RadioPoller(radio, StateCache(), queue, radio_state=RadioState())
+
+        poller.start()
+        queue.put(SwitchScopeReceiver(0))
+        await asyncio.sleep(0.03)
+        poller.stop()
+
+        scope_calls = [c for c in radio.send_civ.call_args_list if c[0][0] == 0x27]
+        assert any(
+            c.kwargs.get("sub") == 0x12 and c.kwargs.get("data") == bytes([0x00])
+            for c in scope_calls
+        ), "Expected CI-V 0x27/0x12/0x00 for MAIN scope"
+
+    async def test_switch_scope_receiver_sub_sends_civ(self) -> None:
+        """SwitchScopeReceiver(1) sends 0x27/0x12/0x01 CI-V command."""
+        from rigplane.web.radio_poller import (
+            CommandQueue,
+            RadioPoller,
+            SwitchScopeReceiver,
+        )
+
+        radio = self._make_radio()
+        queue = CommandQueue()
+        poller = RadioPoller(radio, StateCache(), queue)
+
+        poller.start()
+        queue.put(SwitchScopeReceiver(1))
+        await asyncio.sleep(0.03)
+        poller.stop()
+
+        scope_calls = [c for c in radio.send_civ.call_args_list if c[0][0] == 0x27]
+        assert any(
+            c.kwargs.get("sub") == 0x12 and c.kwargs.get("data") == bytes([0x01])
+            for c in scope_calls
+        ), "Expected CI-V 0x27/0x12/0x01 for SUB scope"
+
+    async def test_switch_scope_receiver_rejects_out_of_range_receiver(self) -> None:
+        """Out-of-range receiver value must not be masked into a valid target."""
+        from rigplane.web.radio_poller import (
+            CommandQueue,
+            RadioPoller,
+            SwitchScopeReceiver,
+        )
+
+        radio = self._make_radio()
+        queue = CommandQueue()
+        poller = RadioPoller(radio, StateCache(), queue)
+
+        poller.start()
+        queue.put(SwitchScopeReceiver(0xFF))
+        await asyncio.sleep(0.03)
+        poller.stop()
+
+        scope_calls = [c for c in radio.send_civ.call_args_list if c[0][0] == 0x27]
+        assert not any(c.kwargs.get("sub") == 0x12 for c in scope_calls), (
+            "Expected invalid receiver to be rejected without CI-V send"
+        )
+
+    async def test_select_vfo_sub_sends_receiver_select(self) -> None:
+        """SelectVfo("SUB") goes through ``select_receiver`` (issue #1172).
+
+        Wave 4-C migrated the poller off the raw ``_civ(0x07, [0xD1])``
+        write to the typed ``ReceiverBankCapable.select_receiver`` API.
+        We assert both the public-API call and the wire-level CI-V the
+        mock emits as a side-effect (back-compat with downstream
+        test scaffolding that watches ``send_civ``).
+        """
+        from rigplane.web.radio_poller import CommandQueue, RadioPoller, SelectVfo
+
+        radio = self._make_radio()
+        queue = CommandQueue()
+        poller = RadioPoller(radio, StateCache(), queue)
+        _seed_fresh_rx(poller._state_store)  # noqa: SLF001
+
+        poller.start()
+        queue.put(SelectVfo("SUB"))
+        await asyncio.sleep(0.03)
+        poller.stop()
+
+        # Public API: poller now routes through ``select_receiver``.
+        radio.select_receiver.assert_awaited_once_with("SUB")
+        # Wire level (mock side-effect): CI-V 0x07 0xD1 emitted.
+        sub_select_calls = [
+            c
+            for c in radio.send_civ.call_args_list
+            if c[0][0] == 0x07 and c.kwargs.get("data") == bytes([0xD1])
+        ]
+        assert len(sub_select_calls) >= 1, (
+            "Expected SUB receiver-select (0x07 0xD1) on SelectVfo SUB"
+        )
+        swap_calls = [
+            c
+            for c in radio.send_civ.call_args_list
+            if c[0][0] == 0x07 and c.kwargs.get("data") == bytes([0xB0])
+        ]
+        assert len(swap_calls) == 0, "Must NOT emit swap (0x07 0xB0) on SelectVfo"
+        # Scope follows the selected receiver: 0x27 0x12 0x01 for SUB.
+        scope_calls = [
+            c
+            for c in radio.send_civ.call_args_list
+            if c[0][0] == 0x27
+            and c.kwargs.get("sub") == 0x12
+            and c.kwargs.get("data") == bytes([0x01])
+        ]
+        assert len(scope_calls) >= 1, (
+            "Expected scope to follow selected receiver (0x27 0x12 0x01)"
+        )
+
+    async def test_select_vfo_main_noop_when_already_main(self) -> None:
+        """SelectVfo("MAIN") emits no CI-V when already on MAIN."""
+        from rigplane.web.radio_poller import CommandQueue, RadioPoller, SelectVfo
+
+        radio = self._make_radio()
+        queue = CommandQueue()
+        poller = RadioPoller(radio, StateCache(), queue)
+
+        poller.start()
+        queue.put(SelectVfo("MAIN"))
+        await asyncio.sleep(0.03)
+        poller.stop()
+
+        # Idempotent: no call to the public API when already on the target.
+        radio.select_receiver.assert_not_awaited()
+        select_calls = [
+            c
+            for c in radio.send_civ.call_args_list
+            if c[0][0] == 0x07
+            and c.kwargs.get("data") in (bytes([0xD0]), bytes([0xD1]), bytes([0xB0]))
+        ]
+        assert len(select_calls) == 0, "Should NOT emit 0x07 select when already MAIN"
+
+    async def test_set_split_sends_wire_without_legacy_mirror(self) -> None:
+        """SetSplit(on) sends the wire command; split is observation-backed (0x0F).
+
+        The legacy RadioState.split mirror was removed (MOR-437); read-after-write
+        is owned by CommandService overlays + the 0x0F StateStore observation.
+        """
+        from rigplane.web.radio_poller import CommandQueue, RadioPoller, SetSplit
+
+        radio = self._make_radio()
+        radio.set_split = AsyncMock()
+        queue = CommandQueue()
+        poller = RadioPoller(radio, StateCache(), queue, radio_state=RadioState())
+        _seed_fresh_rx(poller._state_store)  # noqa: SLF001
+
+        poller.start()
+        queue.put(SetSplit(True))
+        await asyncio.sleep(0.03)
+        poller.stop()
+
+        radio.set_split.assert_awaited_once_with(True)
+        assert poller._radio_state is not None
+        assert poller._radio_state.split is False  # no legacy mirror write
+
+    async def test_set_rit_status_updates_radio_and_state(self) -> None:
+        """SetRitStatus(on) calls radio.set_rit_status and updates RadioState.rit_on."""
+        from rigplane.web.radio_poller import CommandQueue, RadioPoller, SetRitStatus
+
+        radio = self._make_radio()
+        radio.set_rit_status = AsyncMock()
+        queue = CommandQueue()
+        poller = RadioPoller(radio, StateCache(), queue, radio_state=RadioState())
+
+        poller.start()
+        queue.put(SetRitStatus(True))
+        await asyncio.sleep(0.03)
+        poller.stop()
+
+        radio.set_rit_status.assert_awaited_once_with(True)
+        assert poller._radio_state is not None
+        assert poller._radio_state.rit_on is True
+
+    async def test_set_rit_tx_status_updates_radio_and_state(self) -> None:
+        """SetRitTxStatus(on) calls radio.set_rit_tx_status and updates RadioState.rit_tx."""
+        from rigplane.web.radio_poller import CommandQueue, RadioPoller, SetRitTxStatus
+
+        radio = self._make_radio()
+        radio.set_rit_tx_status = AsyncMock()
+        queue = CommandQueue()
+        poller = RadioPoller(radio, StateCache(), queue, radio_state=RadioState())
+        _seed_fresh_rx(poller._state_store)  # noqa: SLF001
+
+        poller.start()
+        queue.put(SetRitTxStatus(True))
+        await asyncio.sleep(0.03)
+        poller.stop()
+
+        radio.set_rit_tx_status.assert_awaited_once_with(True)
+        assert poller._radio_state is not None
+        assert poller._radio_state.rit_tx is True
+
+    async def test_set_rit_frequency_updates_radio_and_state(self) -> None:
+        """SetRitFrequency(freq) calls radio.set_rit_frequency and updates RadioState.rit_freq."""
+        from rigplane.web.radio_poller import CommandQueue, RadioPoller, SetRitFrequency
+
+        radio = self._make_radio()
+        radio.set_rit_frequency = AsyncMock()
+        queue = CommandQueue()
+        poller = RadioPoller(radio, StateCache(), queue, radio_state=RadioState())
+        _seed_fresh_rx(poller._state_store)  # noqa: SLF001
+
+        poller.start()
+        queue.put(SetRitFrequency(-200))
+        await asyncio.sleep(0.03)
+        poller.stop()
+
+        radio.set_rit_frequency.assert_awaited_once_with(-200)
+        assert poller._radio_state is not None
+        assert poller._radio_state.rit_freq == -200
+
+    async def test_set_pbt_inner_updates_radio_and_state(self) -> None:
+        """SetPbtInner(level) calls radio.set_pbt_inner and updates receiver state."""
+        from rigplane.web.radio_poller import CommandQueue, RadioPoller, SetPbtInner
+
+        radio = self._make_radio()
+        radio.set_pbt_inner = AsyncMock()
+        queue = CommandQueue()
+        poller = RadioPoller(radio, StateCache(), queue, radio_state=RadioState())
+
+        poller.start()
+        queue.put(SetPbtInner(150, receiver=0))
+        await asyncio.sleep(0.03)
+        poller.stop()
+
+        radio.set_pbt_inner.assert_awaited_once_with(150, receiver=0)
+        assert poller._radio_state is not None
+        assert poller._radio_state.main.pbt_inner == 150
+
+    async def test_set_pbt_outer_updates_radio_and_state(self) -> None:
+        """SetPbtOuter(level) calls radio.set_pbt_outer and updates receiver state."""
+        from rigplane.web.radio_poller import CommandQueue, RadioPoller, SetPbtOuter
+
+        radio = self._make_radio()
+        radio.set_pbt_outer = AsyncMock()
+        queue = CommandQueue()
+        poller = RadioPoller(radio, StateCache(), queue, radio_state=RadioState())
+
+        poller.start()
+        queue.put(SetPbtOuter(200, receiver=0))
+        await asyncio.sleep(0.03)
+        poller.stop()
+
+        radio.set_pbt_outer.assert_awaited_once_with(200, receiver=0)
+        assert poller._radio_state is not None
+        assert poller._radio_state.main.pbt_outer == 200
+
+    async def test_set_nr_level_sends_wire_without_legacy_mirror(self) -> None:
+        """SetNRLevel sends the wire command; nr_level is observation-backed (0x14 0x06).
+
+        The legacy receiver-state mirror was removed (MOR-437).
+        """
+        from rigplane.web.radio_poller import CommandQueue, RadioPoller, SetNRLevel
+
+        radio = self._make_radio()
+        radio.set_nr_level = AsyncMock()
+        queue = CommandQueue()
+        poller = RadioPoller(radio, StateCache(), queue, radio_state=RadioState())
+
+        poller.start()
+        queue.put(SetNRLevel(42, receiver=0))
+        await asyncio.sleep(0.03)
+        poller.stop()
+
+        radio.set_nr_level.assert_awaited_once_with(42, receiver=0)
+        assert poller._radio_state is not None
+        assert poller._radio_state.main.nr_level == 0  # no legacy mirror write
+
+    async def test_set_nb_level_sends_wire_without_legacy_mirror(self) -> None:
+        """SetNBLevel sends the wire command; nb_level is observation-backed (0x14 0x12).
+
+        The legacy receiver-state mirror was removed (MOR-437).
+        """
+        from rigplane.web.radio_poller import CommandQueue, RadioPoller, SetNBLevel
+
+        radio = self._make_radio()
+        radio.set_nb_level = AsyncMock()
+        queue = CommandQueue()
+        poller = RadioPoller(radio, StateCache(), queue, radio_state=RadioState())
+
+        poller.start()
+        queue.put(SetNBLevel(17, receiver=0))
+        await asyncio.sleep(0.03)
+        poller.stop()
+
+        radio.set_nb_level.assert_awaited_once_with(17, receiver=0)
+        assert poller._radio_state is not None
+        assert poller._radio_state.main.nb_level == 0  # no legacy mirror write
+
+    async def test_set_auto_notch_sends_wire_without_legacy_mirror(self) -> None:
+        """SetAutoNotch sends the wire command; auto_notch is observation-backed (0x16 0x41).
+
+        The legacy receiver-state mirror was removed (MOR-437).
+        """
+        from rigplane.web.radio_poller import CommandQueue, RadioPoller, SetAutoNotch
+
+        radio = self._make_radio()
+        radio.set_auto_notch = AsyncMock()
+        queue = CommandQueue()
+        poller = RadioPoller(radio, StateCache(), queue, radio_state=RadioState())
+
+        poller.start()
+        queue.put(SetAutoNotch(True, receiver=0))
+        await asyncio.sleep(0.03)
+        poller.stop()
+
+        radio.set_auto_notch.assert_awaited_once_with(True, receiver=0)
+        assert poller._radio_state is not None
+        assert poller._radio_state.main.auto_notch is False  # no legacy mirror write
+
+    async def test_set_manual_notch_sends_wire_without_legacy_mirror(self) -> None:
+        """SetManualNotch sends the wire command; manual_notch is observation-backed (0x16 0x48).
+
+        The legacy receiver-state mirror was removed (MOR-437).
+        """
+        from rigplane.web.radio_poller import CommandQueue, RadioPoller, SetManualNotch
+
+        radio = self._make_radio()
+        radio.set_manual_notch = AsyncMock()
+        queue = CommandQueue()
+        poller = RadioPoller(radio, StateCache(), queue, radio_state=RadioState())
+
+        poller.start()
+        queue.put(SetManualNotch(True, receiver=0))
+        await asyncio.sleep(0.03)
+        poller.stop()
+
+        radio.set_manual_notch.assert_awaited_once_with(True, receiver=0)
+        assert poller._radio_state is not None
+        assert poller._radio_state.main.manual_notch is False  # no legacy mirror write
+
+    async def test_set_notch_filter_sends_wire_without_legacy_mirror(self) -> None:
+        """SetNotchFilter threads receiver; notch_filter is observation-backed (0x14 0x0D).
+
+        The legacy global-scalar mirror write was removed alongside the
+        MOR-1548 receiver-scoped readback reclassification.
+        """
+        from rigplane.web.radio_poller import CommandQueue, RadioPoller, SetNotchFilter
+
+        radio = self._make_radio()
+        radio.set_notch_filter = AsyncMock()
+        queue = CommandQueue()
+        poller = RadioPoller(radio, StateCache(), queue, radio_state=RadioState())
+
+        poller.start()
+        queue.put(SetNotchFilter(91, receiver=1))
+        await asyncio.sleep(0.03)
+        poller.stop()
+
+        radio.set_notch_filter.assert_awaited_once_with(91, receiver=1)
+        assert poller._radio_state is not None
+        assert poller._radio_state.notch_filter == 0  # no legacy mirror write
+
+    async def test_set_agc_time_constant_sends_wire_without_legacy_mirror(self) -> None:
+        """SetAgcTimeConstant sends the wire command; agc_time_constant is observation-backed (0x1A 0x04).
+
+        The legacy receiver-state mirror was removed (MOR-437).
+        """
+        from rigplane.web.radio_poller import (
+            CommandQueue,
+            RadioPoller,
+            SetAgcTimeConstant,
+        )
+
+        radio = self._make_radio()
+        radio.set_agc_time_constant = AsyncMock()
+        queue = CommandQueue()
+        poller = RadioPoller(radio, StateCache(), queue, radio_state=RadioState())
+
+        poller.start()
+        queue.put(SetAgcTimeConstant(9, receiver=0))
+        await asyncio.sleep(0.03)
+        poller.stop()
+
+        radio.set_agc_time_constant.assert_awaited_once_with(9, receiver=0)
+        assert poller._radio_state is not None
+        assert poller._radio_state.main.agc_time_constant == 0  # no legacy mirror write
+
+    async def test_set_cw_pitch_updates_radio_and_state(self) -> None:
+        """SetCwPitch(value) calls radio.set_cw_pitch and updates RadioState.cw_pitch."""
+        from rigplane.web.radio_poller import CommandQueue, RadioPoller, SetCwPitch
+
+        radio = self._make_radio()
+        radio.set_cw_pitch = AsyncMock()
+        radio.get_cw_pitch = AsyncMock(return_value=600)
+        queue = CommandQueue()
+        poller = RadioPoller(radio, StateCache(), queue, radio_state=RadioState())
+
+        poller.start()
+        reply = asyncio.get_running_loop().create_future()
+        queue.put_ordered(SetCwPitch(600), future=reply)
+        try:
+            await asyncio.wait_for(reply, timeout=2.0)
+        finally:
+            poller.stop()
+
+        radio.set_cw_pitch.assert_awaited_once_with(600)
+        assert poller._radio_state is not None
+        assert poller._radio_state.cw_pitch == 600
+
+    async def test_set_mic_gain_sends_wire_without_legacy_mirror(self) -> None:
+        """SetMicGain sends the wire command; mic_gain is observation-backed (0x14 0x0B).
+
+        The legacy RadioState.mic_gain mirror was removed (MOR-437).
+        """
+        from rigplane.web.radio_poller import CommandQueue, RadioPoller, SetMicGain
+
+        radio = self._make_radio()
+        radio.set_mic_gain = AsyncMock()
+        queue = CommandQueue()
+        poller = RadioPoller(radio, StateCache(), queue, radio_state=RadioState())
+
+        poller.start()
+        queue.put(SetMicGain(123))
+        await asyncio.sleep(0.03)
+        poller.stop()
+
+        radio.set_mic_gain.assert_awaited_once_with(123)
+        assert poller._radio_state is not None
+        assert poller._radio_state.mic_gain == 0  # no legacy mirror write
+
+    async def test_set_vox_sends_wire_without_legacy_mirror(self) -> None:
+        """SetVox sends the wire command; vox_on is observation-backed (0x16 0x46).
+
+        The legacy RadioState.vox_on mirror was removed (MOR-437).
+        """
+        from rigplane.web.radio_poller import CommandQueue, RadioPoller, SetVox
+
+        radio = self._make_radio()
+        radio.set_vox = AsyncMock()
+        queue = CommandQueue()
+        poller = RadioPoller(radio, StateCache(), queue, radio_state=RadioState())
+
+        poller.start()
+        queue.put(SetVox(True))
+        await asyncio.sleep(0.03)
+        poller.stop()
+
+        radio.set_vox.assert_awaited_once_with(True)
+        assert poller._radio_state is not None
+        assert poller._radio_state.vox_on is False  # no legacy mirror write
+
+    async def test_set_compressor_level_sends_wire_without_legacy_mirror(self) -> None:
+        """SetCompressorLevel sends the wire command; compressor_level is observation-backed (0x14 0x0E).
+
+        The legacy RadioState.compressor_level mirror was removed (MOR-437).
+        """
+        from rigplane.web.radio_poller import (
+            CommandQueue,
+            RadioPoller,
+            SetCompressorLevel,
+        )
+
+        radio = self._make_radio()
+        radio.set_compressor_level = AsyncMock()
+        queue = CommandQueue()
+        poller = RadioPoller(radio, StateCache(), queue, radio_state=RadioState())
+
+        poller.start()
+        queue.put(SetCompressorLevel(88))
+        await asyncio.sleep(0.03)
+        poller.stop()
+
+        radio.set_compressor_level.assert_awaited_once_with(88)
+        assert poller._radio_state is not None
+        assert poller._radio_state.compressor_level == 0  # no legacy mirror write
+
+    async def test_set_monitor_sends_wire_without_legacy_mirror(self) -> None:
+        """SetMonitor sends the wire command; monitor_on is observation-backed (0x16 0x45).
+
+        The legacy RadioState.monitor_on mirror was removed (MOR-437).
+        """
+        from rigplane.web.radio_poller import CommandQueue, RadioPoller, SetMonitor
+
+        radio = self._make_radio()
+        radio.set_monitor = AsyncMock()
+        queue = CommandQueue()
+        poller = RadioPoller(radio, StateCache(), queue, radio_state=RadioState())
+
+        poller.start()
+        queue.put(SetMonitor(True))
+        await asyncio.sleep(0.03)
+        poller.stop()
+
+        radio.set_monitor.assert_awaited_once_with(True)
+        assert poller._radio_state is not None
+        assert poller._radio_state.monitor_on is False  # no legacy mirror write
+
+    async def test_set_monitor_gain_sends_wire_without_legacy_mirror(self) -> None:
+        """SetMonitorGain sends the wire command; monitor_gain is observation-backed (0x14 0x15).
+
+        The legacy RadioState.monitor_gain mirror was removed (MOR-437).
+        """
+        from rigplane.web.radio_poller import CommandQueue, RadioPoller, SetMonitorGain
+
+        radio = self._make_radio()
+        radio.set_monitor_gain = AsyncMock()
+        queue = CommandQueue()
+        poller = RadioPoller(radio, StateCache(), queue, radio_state=RadioState())
+
+        poller.start()
+        queue.put(SetMonitorGain(55))
+        await asyncio.sleep(0.03)
+        poller.stop()
+
+        radio.set_monitor_gain.assert_awaited_once_with(55)
+        assert poller._radio_state is not None
+        assert poller._radio_state.monitor_gain == 0  # no legacy mirror write
+
+    async def test_set_dial_lock_updates_radio_and_state(self) -> None:
+        """SetDialLock(on) calls radio.set_dial_lock and updates RadioState.dial_lock."""
+        from rigplane.web.radio_poller import CommandQueue, RadioPoller, SetDialLock
+
+        radio = self._make_radio()
+        radio.set_dial_lock = AsyncMock()
+        queue = CommandQueue()
+        poller = RadioPoller(radio, StateCache(), queue, radio_state=RadioState())
+
+        poller.start()
+        queue.put(SetDialLock(True))
+        await asyncio.sleep(0.03)
+        poller.stop()
+
+        radio.set_dial_lock.assert_awaited_once_with(True)
+        assert poller._radio_state is not None
+        assert poller._radio_state.dial_lock is True
+
+
+class TestSwitchScopeReceiverCommand:
+    """ControlHandler handles 'switch_scope_receiver' command."""
+
+    async def test_switch_scope_receiver_command_ok(
+        self, server: WebServer, mock_radio: MagicMock
+    ) -> None:
+        """switch_scope_receiver command sends CI-V 0x27/0x12/0x01 for SUB."""
+        host, port = _addr(server)
+        reader, writer, _ = await _ws_connect(host, port, "/api/v1/ws")
+        try:
+            await _ws_skip_handshake(reader)
+
+            cmd = json.dumps(
+                {
+                    "type": "cmd",
+                    "id": "ssr1",
+                    "name": "switch_scope_receiver",
+                    "params": {"receiver": 1},
+                }
+            )
+            await _ws_send_text(writer, cmd)
+            _, resp_bytes = await _ws_recv_frame(reader)
+            resp = json.loads(resp_bytes)
+
+            assert resp["ok"] is True
+            assert resp["result"]["receiver"] == 1
+
+            # Allow poller to execute the queued command
+            await asyncio.sleep(0.03)
+
+            scope_calls = [
+                c for c in mock_radio.send_civ.call_args_list if c[0][0] == 0x27
+            ]
+            assert any(
+                c.kwargs.get("sub") == 0x12 and c.kwargs.get("data") == bytes([0x01])
+                for c in scope_calls
+            ), "Expected CI-V 0x27/0x12/0x01 for SUB scope"
+        finally:
+            await _close_ws(writer)
+
+    async def test_switch_scope_receiver_command_main(
+        self, server: WebServer, mock_radio: MagicMock
+    ) -> None:
+        """switch_scope_receiver with receiver=0 sends CI-V 0x27/0x12/0x00."""
+        host, port = _addr(server)
+        reader, writer, _ = await _ws_connect(host, port, "/api/v1/ws")
+        try:
+            await _ws_skip_handshake(reader)
+
+            cmd = json.dumps(
+                {
+                    "type": "cmd",
+                    "id": "ssr2",
+                    "name": "switch_scope_receiver",
+                    "params": {"receiver": 0},
+                }
+            )
+            await _ws_send_text(writer, cmd)
+            _, resp_bytes = await _ws_recv_frame(reader)
+            resp = json.loads(resp_bytes)
+
+            assert resp["ok"] is True
+            assert resp["result"]["receiver"] == 0
+
+            # Allow poller to execute the queued command
+            await asyncio.sleep(0.03)
+
+            scope_calls = [
+                c for c in mock_radio.send_civ.call_args_list if c[0][0] == 0x27
+            ]
+            assert any(
+                c.kwargs.get("sub") == 0x12 and c.kwargs.get("data") == bytes([0x00])
+                for c in scope_calls
+            ), "Expected CI-V 0x27/0x12/0x00 for MAIN scope"
+        finally:
+            await _close_ws(writer)
+
+
+class TestScopeAdvancedCommands:
+    """ControlHandler handles set_scope_during_tx, set_scope_center_type, set_scope_fixed_edge."""
+
+    async def test_set_scope_during_tx_on(
+        self, server: WebServer, mock_radio: MagicMock
+    ) -> None:
+        """set_scope_during_tx with on=true calls radio.set_scope_during_tx(True)."""
+        host, port = _addr(server)
+        reader, writer, _ = await _ws_connect(host, port, "/api/v1/ws")
+        try:
+            await _ws_skip_handshake(reader)
+
+            cmd = json.dumps(
+                {
+                    "type": "cmd",
+                    "id": "sdt1",
+                    "name": "set_scope_during_tx",
+                    "params": {"on": True},
+                }
+            )
+            await _ws_send_text(writer, cmd)
+            _, resp_bytes = await _ws_recv_frame(reader)
+            resp = json.loads(resp_bytes)
+
+            assert resp["ok"] is True
+            assert resp["result"]["on"] is True
+
+            await asyncio.sleep(0.03)
+            mock_radio.set_scope_during_tx.assert_called_once_with(True)
+        finally:
+            await _close_ws(writer)
+
+    async def test_set_scope_during_tx_off(
+        self, server: WebServer, mock_radio: MagicMock
+    ) -> None:
+        """set_scope_during_tx with on=false calls radio.set_scope_during_tx(False)."""
+        host, port = _addr(server)
+        reader, writer, _ = await _ws_connect(host, port, "/api/v1/ws")
+        try:
+            await _ws_skip_handshake(reader)
+
+            cmd = json.dumps(
+                {
+                    "type": "cmd",
+                    "id": "sdt2",
+                    "name": "set_scope_during_tx",
+                    "params": {"on": False},
+                }
+            )
+            await _ws_send_text(writer, cmd)
+            _, resp_bytes = await _ws_recv_frame(reader)
+            resp = json.loads(resp_bytes)
+
+            assert resp["ok"] is True
+            assert resp["result"]["on"] is False
+
+            await asyncio.sleep(0.03)
+            mock_radio.set_scope_during_tx.assert_called_once_with(False)
+        finally:
+            await _close_ws(writer)
+
+    async def test_set_scope_center_type(
+        self, server: WebServer, mock_radio: MagicMock
+    ) -> None:
+        """set_scope_center_type sends center_type to radio."""
+        host, port = _addr(server)
+        reader, writer, _ = await _ws_connect(host, port, "/api/v1/ws")
+        try:
+            await _ws_skip_handshake(reader)
+
+            cmd = json.dumps(
+                {
+                    "type": "cmd",
+                    "id": "sct1",
+                    "name": "set_scope_center_type",
+                    "params": {"center_type": 2},
+                }
+            )
+            await _ws_send_text(writer, cmd)
+            _, resp_bytes = await _ws_recv_frame(reader)
+            resp = json.loads(resp_bytes)
+
+            assert resp["ok"] is True
+            assert resp["result"]["center_type"] == 2
+
+            await asyncio.sleep(0.03)
+            mock_radio.set_scope_center_type.assert_called_once_with(2)
+        finally:
+            await _close_ws(writer)
+
+    async def test_set_scope_fixed_edge(
+        self, server: WebServer, mock_radio: MagicMock
+    ) -> None:
+        """set_scope_fixed_edge sends start_hz and span_hz to radio."""
+        host, port = _addr(server)
+        reader, writer, _ = await _ws_connect(host, port, "/api/v1/ws")
+        try:
+            await _ws_skip_handshake(reader)
+
+            cmd = json.dumps(
+                {
+                    "type": "cmd",
+                    "id": "sfe1",
+                    "name": "set_scope_fixed_edge",
+                    "params": {"edge": 1, "start_hz": 14_000_000, "end_hz": 15_000_000},
+                }
+            )
+            await _ws_send_text(writer, cmd)
+            _, resp_bytes = await _ws_recv_frame(reader)
+            resp = json.loads(resp_bytes)
+
+            assert resp["ok"] is True
+            assert resp["result"]["edge"] == 1
+            assert resp["result"]["start_hz"] == 14_000_000
+            assert resp["result"]["end_hz"] == 15_000_000
+
+            await asyncio.sleep(0.03)
+            mock_radio.set_scope_fixed_edge.assert_called_once_with(
+                edge=1,
+                start_hz=14_000_000,
+                end_hz=15_000_000,
+            )
+        finally:
+            await _close_ws(writer)
+
+
+# ---------------------------------------------------------------------------
+# _get_profile() routing tests (issue #392)
+# ---------------------------------------------------------------------------
+
+
+class TestGetProfileRouting:
+    """Unit tests for WebServer._get_profile()."""
+
+    def _make_server(self, radio=None, radio_model="IC-7610"):
+        config = WebConfig(host="127.0.0.1", port=0, radio_model=radio_model)
+        return WebServer(radio, config)
+
+    def test_resolves_ftx1_from_radio_model(self):
+        """_get_profile() uses radio.model when radio has no .profile property."""
+        from rigplane.profiles import RadioProfile
+
+        radio = SimpleNamespace(
+            model="FTX-1", capabilities={"audio", "scope"}
+        )  # no .profile attribute
+        srv = self._make_server(radio)
+        profile = srv._get_profile()
+
+        assert isinstance(profile, RadioProfile)
+        assert profile.model == "FTX-1"
+        assert profile.controls["nb"]["style"] == "level_is_toggle"
+        assert profile.controls["nr"]["style"] == "level_is_toggle"
+
+    def test_icom_radio_profile_property_takes_precedence(self):
+        """_get_profile() uses radio.profile directly when present (regression)."""
+        from rigplane.profiles import RadioProfile, resolve_radio_profile
+
+        ic7610_profile = resolve_radio_profile(model="IC-7610")
+        # Simulate IcomRadio: has .profile (RadioProfile) but .model would differ
+        radio = SimpleNamespace(
+            profile=ic7610_profile, model="WRONG", capabilities={"audio", "scope"}
+        )
+        srv = self._make_server(radio)
+        profile = srv._get_profile()
+
+        assert isinstance(profile, RadioProfile)
+        assert "IC-7610" in profile.model
+
+    def test_config_fallback_when_no_radio(self):
+        """_get_profile() falls back to config radio_model when radio is None."""
+        from rigplane.profiles import RadioProfile
+
+        srv = self._make_server(radio=None, radio_model="IC-7610")
+        profile = srv._get_profile()
+
+        assert isinstance(profile, RadioProfile)
+        assert "IC-7610" in profile.model
+
+    def test_unresolved_radio_model_refuses_instead_of_guessing(self):
+        """An unknown radio model refuses instead of silently impersonating
+        a default profile (plan §8.1 Q5)."""
+        radio = SimpleNamespace(model="ACME-9000", capabilities=set())
+        srv = self._make_server(radio, radio_model="ACME-9000")
+
+        with pytest.raises(ValueError, match="Cannot resolve a radio profile"):
+            srv._get_profile()
+
+    def test_unresolved_config_model_refuses_when_no_radio(self):
+        """Unresolvable config radio_model (no radio) refuses instead of
+        silently falling back to a guessed profile (plan §8.1 Q5)."""
+        srv = self._make_server(radio=None, radio_model="NOT-A-RADIO")
+
+        with pytest.raises(ValueError, match="Cannot resolve a radio profile"):
+            srv._get_profile()
+
+    def test_default_config_radio_model_is_not_ic7610(self):
+        """WebConfig.radio_model defaults to a neutral sentinel, not a silent
+        IC-7610 (MOR-174)."""
+        assert WebConfig().radio_model != "IC-7610"
+
+    @pytest.mark.parametrize("blank_model", ["", "   "])
+    def test_blank_radio_model_does_not_short_circuit_configured_model(
+        self, blank_model
+    ):
+        """A blank radio.model must not win the candidate loop — the
+        configured radio_model is still a usable candidate."""
+        radio = SimpleNamespace(model=blank_model, capabilities=set())
+        srv = self._make_server(radio, radio_model="FTX-1")
+        profile = srv._get_profile()
+
+        assert profile.vfo_scheme == "ab_shared"
+        assert profile.model == "FTX-1"
+
+    def test_blank_radio_and_config_model_refuses_instead_of_falling_back(self):
+        """When both radio.model and the configured radio_model are blank,
+        _get_profile() now refuses (plan §8.1 Q5) instead of silently
+        falling back to a guessed default profile."""
+        radio = SimpleNamespace(model="", capabilities=set())
+        srv = self._make_server(radio, radio_model="")
+
+        with pytest.raises(ValueError, match="Cannot resolve a radio profile"):
+            srv._get_profile()
+
+
+class TestGetMeterCalPayload:
+    """Unit tests for WebServer._get_meter_cal_payload()."""
+
+    def _make_server(self, radio=None, radio_model="IC-7610"):
+        config = WebConfig(host="127.0.0.1", port=0, radio_model=radio_model)
+        return WebServer(radio, config)
+
+    def test_profile_fallback_includes_calibrations(self):
+        radio = SimpleNamespace(
+            model="IC-7610",
+            capabilities=set(),
+            radio_state=RadioState(),
+        )
+        srv = self._make_server(radio)
+        payload = srv._get_meter_cal_payload()
+        assert "meterCalibrations" in payload
+        assert "s_meter" in payload["meterCalibrations"]
+
+    def test_profile_fallback_includes_redlines(self):
+        radio = SimpleNamespace(
+            model="IC-7610",
+            capabilities=set(),
+            radio_state=RadioState(),
+        )
+        srv = self._make_server(radio)
+        payload = srv._get_meter_cal_payload()
+        assert "meterRedlines" in payload
+        assert "s_meter" in payload["meterRedlines"]
+        assert payload["meterRedlines"]["s_meter"] == 130
+
+    def test_radio_config_takes_precedence(self):
+        fake_config = SimpleNamespace(
+            meter_calibrations={"power": [{"raw": 0, "actual": 0.0, "label": "0W"}]},
+            meter_redlines={"power": 213},
+        )
+        radio = SimpleNamespace(
+            model="IC-7610",
+            capabilities=set(),
+            radio_state=RadioState(),
+            _config=fake_config,
+        )
+        srv = self._make_server(radio)
+        payload = srv._get_meter_cal_payload()
+        assert payload["meterRedlines"]["power"] == 213
+
+    def test_empty_when_no_radio(self):
+        srv = self._make_server(radio=None)
+        payload = srv._get_meter_cal_payload()
+        assert isinstance(payload, dict)
+
+
+# ---------------------------------------------------------------------------
+# MOR-3679: shipped profile -> loader -> WebServer -> real socket
+# ---------------------------------------------------------------------------
+
+_FTX1_RIG = Path(__file__).resolve().parents[1] / "rigs" / "ftx1.toml"
+
+
+async def test_ftx1_mode_families_reach_both_capability_endpoints_over_http() -> None:
+    """The shipped FTX-1 profile publishes its CW family on a live listener.
+
+    No radio: the server gets the profile from ``load_rig`` and answers the
+    two capability endpoints over a real TCP connection on 127.0.0.1.
+    """
+    profile = load_rig(_FTX1_RIG).to_profile()
+    radio = SimpleNamespace(
+        model=profile.model,
+        profile=profile,
+        capabilities=set(profile.capabilities),
+        connected=True,
+        control_connected=True,
+        radio_ready=True,
+    )
+    srv = WebServer(
+        radio, WebConfig(host="127.0.0.1", port=0, keepalive_interval=9999.0)
+    )
+    await srv.start()
+    try:
+        host, port = _addr(srv)
+        for path in ("/api/v1/capabilities", "/api/v1/info"):
+            status, _, body = await _http_get(host, port, path)
+            assert status == 200, path
+            payload = json.loads(body)
+            assert set(RESPONSE_FIELD_CONTRACTS[path]["required"]) <= set(payload)
+            capabilities = (
+                payload["capabilities"] if path == "/api/v1/info" else payload
+            )
+            assert capabilities["modeFamilies"] == {"cw": ["CW-U", "CW-L"]}, path
+    finally:
+        await srv.stop()
+
+
+# MOR-4210: same shipped-profile -> loader -> WebServer -> real socket seam,
+# for the radio's RX audio output-level menu item.
+
+
+@pytest.mark.parametrize(
+    "rig_file",
+    ["ic705.toml", "ic7300.toml", "ic7610.toml"],
+)
+async def test_rx_audio_level_menu_absent_from_capabilities_over_http(
+    rig_file: str,
+) -> None:
+    profile = load_rig(_RIGS_DIR / rig_file).to_profile()
+    radio = SimpleNamespace(
+        model=profile.model,
+        profile=profile,
+        capabilities=set(profile.capabilities),
+        connected=True,
+        control_connected=True,
+        radio_ready=True,
+    )
+    srv = WebServer(
+        radio, WebConfig(host="127.0.0.1", port=0, keepalive_interval=9999.0)
+    )
+    await srv.start()
+    try:
+        host, port = _addr(srv)
+        status, _, body = await _http_get(host, port, "/api/v1/capabilities")
+        assert status == 200
+        payload = json.loads(body)
+        assert "rxAudioLevelMenu" not in payload
+    finally:
+        await srv.stop()
+
+
+# MOR-3632: same shipped-profile -> loader -> WebServer -> real socket seam,
+# for the receive-only band rows the txBands builders must filter out.
+_IC705_RIG = Path(__file__).resolve().parents[1] / "rigs" / "ic705.toml"
+_IC705_RX_ONLY_BANDS = frozenset({"2200m", "630m", "WFM", "Air", "Gen"})
+
+
+async def test_ic705_rx_only_bands_neither_endpoint_tx_band_over_http() -> None:
+    """The IC-705's receive-only band rows never reach txBands on a live listener.
+
+    Before the per-band ``rx_only`` flag the rows counted as TX-allowed,
+    granting transmit permission on broadcast (WFM), airband (Air),
+    general-coverage (Gen) and the two LF/MF rows below every published
+    transmitter range. Both capability endpoints are checked over a real
+    TCP connection, so removing either filter — or breaking the route that
+    serves it — fails here. The rows stay tunable: ``freqRanges`` on the
+    capabilities endpoint still lists them as band-selector entries.
+    """
+    profile = load_rig(_IC705_RIG).to_profile()
+    radio = SimpleNamespace(
+        model=profile.model,
+        profile=profile,
+        capabilities=set(profile.capabilities),
+        connected=True,
+        control_connected=True,
+        radio_ready=True,
+    )
+    srv = WebServer(
+        radio, WebConfig(host="127.0.0.1", port=0, keepalive_interval=9999.0)
+    )
+    await srv.start()
+    try:
+        host, port = _addr(srv)
+        capabilities_payload = None
+        for path in ("/api/v1/capabilities", "/api/v1/info"):
+            status, _, body = await _http_get(host, port, path)
+            assert status == 200, path
+            payload = json.loads(body)
+            capabilities = (
+                payload["capabilities"] if path == "/api/v1/info" else payload
+            )
+            if path == "/api/v1/capabilities":
+                capabilities_payload = capabilities
+            tx_names = {band["name"] for band in capabilities["txBands"]}
+            assert not (_IC705_RX_ONLY_BANDS & tx_names), path
+            # Amateur rows keep their TX classification on both endpoints.
+            assert {"20m", "2m", "70cm"} <= tx_names, path
+        # The receive-only rows remain tunable band-selector entries: the
+        # capabilities freqRanges (the info payload carries no freqRanges)
+        # still lists every one of them.
+        assert capabilities_payload is not None
+        range_band_names = {
+            band["name"]
+            for freq_range in capabilities_payload["freqRanges"]
+            for band in freq_range["bands"]
+        }
+        assert _IC705_RX_ONLY_BANDS <= range_band_names
+    finally:
+        await srv.stop()
+
+
+async def test_ic705_scope_ref_range_reaches_both_capability_endpoints_over_http() -> (
+    None
+):
+    """MOR-3694: the profile's `[scope]` REF range is published on both
+    capability endpoints so the frontend steps REF on the radio's own range
+    instead of a hard-coded one (the IC-705 sent -22 before this)."""
+
+    profile = load_rig(_IC705_RIG).to_profile()
+    radio = SimpleNamespace(
+        model=profile.model,
+        profile=profile,
+        capabilities=set(profile.capabilities),
+        connected=True,
+        control_connected=True,
+        radio_ready=True,
+    )
+    srv = WebServer(
+        radio, WebConfig(host="127.0.0.1", port=0, keepalive_interval=9999.0)
+    )
+    await srv.start()
+    try:
+        host, port = _addr(srv)
+        for path in ("/api/v1/capabilities", "/api/v1/info"):
+            status, _, body = await _http_get(host, port, path)
+            assert status == 200, path
+            payload = json.loads(body)
+            capabilities = (
+                payload["capabilities"] if path == "/api/v1/info" else payload
+            )
+            assert capabilities["ref_min_db"] == -20.0, path
+            assert capabilities["ref_max_db"] == 20.0, path
+            assert capabilities["ref_step_db"] == 0.5, path
+    finally:
+        await srv.stop()
+
+
+# MOR-3634: per-band rated maximum power (``max_power_w`` on a band row) is
+# published as ``txBands[].maxPowerW`` next to the flat ``maxPowerW``; the
+# power slider scales to it. Same shipped-profile -> loader -> WebServer ->
+# real socket seam, for a radio with per-band rows and one with a flat maximum.
+_RIGS_DIR = Path(__file__).resolve().parents[1] / "rigs"
+
+
+async def _capabilities_by_endpoint(
+    rig_file: str, native_power_unit: str | None = None
+) -> dict[str, dict[str, Any]]:
+    profile = load_rig(_RIGS_DIR / rig_file).to_profile()
+    radio = SimpleNamespace(
+        model=profile.model,
+        profile=profile,
+        capabilities=set(profile.capabilities),
+        connected=True,
+        control_connected=True,
+        radio_ready=True,
+    )
+    if native_power_unit is not None:
+        radio.native_power_unit = native_power_unit
+    srv = WebServer(
+        radio, WebConfig(host="127.0.0.1", port=0, keepalive_interval=9999.0)
+    )
+    await srv.start()
+    try:
+        host, port = _addr(srv)
+        out: dict[str, dict[str, Any]] = {}
+        for path in ("/api/v1/capabilities", "/api/v1/info"):
+            status, _, body = await _http_get(host, port, path)
+            assert status == 200, path
+            payload = json.loads(body)
+            out[path] = payload["capabilities"] if path == "/api/v1/info" else payload
+        return out
+    finally:
+        await srv.stop()
+
+
+@pytest.mark.parametrize("unit", ["raw_255", "watts"])
+async def test_ic9700_publishes_per_band_max_power_over_http(unit: str) -> None:
+    """IC-9700 manuals: 144 MHz 100 W, 430 MHz 75 W, 1.2 GHz 10 W, on both endpoints.
+
+    ``powerUnit`` is the attached radio's own ``native_power_unit`` (the value
+    the power-level resolution already uses), so the frontend can tell a level
+    that is a percentage of the current band's maximum (``raw_255``) from one
+    that is a fraction of the flat maximum (``watts``).
+    """
+    served = await _capabilities_by_endpoint("ic9700.toml", unit)
+    for path, capabilities in served.items():
+        assert capabilities["maxPowerW"] == 100, path
+        assert capabilities["powerUnit"] == unit, path
+        per_band = {b["name"]: b.get("maxPowerW") for b in capabilities["txBands"]}
+        assert per_band == {"2m": 100, "70cm": 75, "23cm": 10}, path
+
+
+async def test_radio_that_does_not_declare_a_power_unit_publishes_none() -> None:
+    """No attribute on the radio, no guess: the key is absent, not defaulted."""
+    for path, capabilities in (await _capabilities_by_endpoint("ic9700.toml")).items():
+        assert "powerUnit" not in capabilities, path
+
+
+async def test_flat_maximum_radio_publishes_no_per_band_max_power_over_http() -> None:
+    """The IC-705 declares only the flat maximum: no band row carries maxPowerW.
+
+    The IC-7300 left this list — MOR-4300 gave it exactly one per-band
+    row (4 m, 50 W), so the flat-maximum case is pinned on a radio that
+    is still flat.
+    """
+    served = await _capabilities_by_endpoint("ic705.toml", "raw_255")
+    for path, capabilities in served.items():
+        assert capabilities["maxPowerW"] == 10, path
+        assert capabilities["powerUnit"] == "raw_255", path
+        assert capabilities["txBands"], path
+        assert all("maxPowerW" not in band for band in capabilities["txBands"]), path
+
+
+# MOR-3634 seam twin (frontend:
+# frontend/src/components-v2/wiring/__tests__/power-slider-scale.seam.isolated.test.ts).
+# The shared IC-9700 document below is what the frontend replays through its
+# real client and stores into the rendered power slider; this test serves that
+# same document from the real WebServer and pins the capability payload the
+# slider scale reads (per-band max power, powerUnit). Only the seam is
+# asserted: the fixture carries the validator's structural minimum around it,
+# never a byte copy of the served payload.
+_POWER_SLIDER_SEAM_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "frontend"
+    / "src"
+    / "components-v2"
+    / "wiring"
+    / "__tests__"
+    / "fixtures"
+    / "power-slider-scale.ic9700.seam.json"
+)
+_POWER_SLIDER_SEAM: dict[str, Any] = json.loads(
+    _POWER_SLIDER_SEAM_PATH.read_text(encoding="utf-8")
+)
+
+
+async def test_ic9700_power_slider_seam_document_matches_served_capabilities() -> None:
+    """The shared seam document's capability payload is what the server serves.
+
+    IC-9700 manuals: 144 MHz 100 W, 430 MHz 75 W, 1.2 GHz 10 W; the level is
+    a percentage of the current band's maximum (``raw_255``).
+    """
+    seam_caps = _POWER_SLIDER_SEAM["capabilities"]
+    assert [band["name"] for band in seam_caps["txBands"]] == ["2m", "70cm", "23cm"]
+    for band, tx_band in zip(_POWER_SLIDER_SEAM["bands"], seam_caps["txBands"]):
+        assert tx_band["start"] <= band["freqHz"] <= tx_band["end"], band["name"]
+        assert band["powerLevel"] == 0.8, band["name"]
+    served = await _capabilities_by_endpoint("ic9700.toml", seam_caps["powerUnit"])
+    for path, capabilities in served.items():
+        assert capabilities["maxPowerW"] == seam_caps["maxPowerW"] == 100, path
+        assert capabilities["powerUnit"] == seam_caps["powerUnit"] == "raw_255", path
+        assert capabilities["txBands"] == seam_caps["txBands"], path
+    info_caps = served["/api/v1/capabilities"]
+    assert info_caps["model"] == seam_caps["model"] == "IC-9700"
+    assert info_caps["tx"] is True
+    assert info_caps["scope"] is False
+    assert info_caps["audio"] is False
+    assert info_caps["scopeSource"] is None
+    assert set(seam_caps["capabilities"]) <= set(info_caps["capabilities"])

@@ -1,0 +1,180 @@
+"""LAN simulator: MockIcomRadio answering from the recorded answer table.
+
+Focused raw-UDP tests for the ``recorded_answers`` mount on
+:class:`~rigplane_testkit.icom.MockIcomRadio`, built by
+``tests/testkit/ic7610_fakes.py: ic7610_lan_fake``. They pin the mount's
+answer order at the wire: the opt-in refusal hook NAKs first and is never
+overridden by the table; a native handler's data/ACK answer is kept; a
+native NAK — and a request with no native handler — falls to the recorded
+table; a body the table has no entry for still NAKs; and with no table
+mounted the same requests NAK exactly as before the mount. The at-scale
+measurement of the same order is the conformance answer-class replay
+(``tests/testkit/test_ic7610_conformance.py``).
+"""
+
+from __future__ import annotations
+
+import pytest
+
+from rigplane.core.types import bcd_encode
+from rigplane_testkit.icom import MockIcomRadio
+from rigplane_testkit.icom.replay import RecordedAnswerTable, extract_civ_frame
+
+from testkit.ic7610_fakes import ic7610_lan_fake
+from testkit.test_ic7610_conformance import _civ_packet, _lan_sim
+from testkit.test_simulator_faults import _UdpClient, _is_echo_of
+
+# Recorded LAN facts of the split-frequency command (0x0F), from the
+# ``lan`` rows of tests/fixtures/ic7610/civ_pairs.jsonl: the bare ``0F``
+# read of the probe window is answered with split OFF (``00``), and the
+# ``0F 01`` write of the rx_write_restore window with an ACK.
+_SPLIT_READ = bytes.fromhex("fefe98e00ffd")
+_SPLIT_READ_OFF_REPLY = bytes.fromhex("fefee0980f00fd")
+_SPLIT_WRITE_ON = bytes.fromhex("fefe98e00f01fd")
+_ACK_REPLY = bytes.fromhex("fefee098fbfd")
+_NAK_REPLY = bytes.fromhex("fefee098fafd")
+_SPLIT_READ_ON_REPLY = bytes.fromhex("fefee0980f01fd")
+
+_FREQ_GET = b"\xfe\xfe\x98\xe0\x03\xfd"
+# The recording answers ``03`` with 14,280,600 Hz (probe window,
+# civ_pairs.jsonl) — distinct from any frequency written below, so a reply
+# from the table can never satisfy the native-state assertion.
+_FREQ_SET = b"\xfe\xfe\x98\xe0\x05" + bcd_encode(7_100_000) + b"\xfd"
+_FREQ_SET_REPLY = bcd_encode(7_100_000)
+# Cmd 0x22 appears in no recorded row and has no native handler.
+_UNRECORDED = bytes.fromhex("fefe98e02200fd")
+
+
+async def _ask_frame(
+    client: _UdpClient, port: int, frame: bytes, *, seq: int
+) -> bytes | None:
+    """Send one CI-V frame; assert the LAN echo, return the reply's frame."""
+    pkt = _civ_packet(frame, seq=seq)
+    client.send(pkt, port)
+    echo = await client.recv()
+    assert _is_echo_of(echo, pkt), "the LAN CI-V echo precedes the reply"
+    return extract_civ_frame(await client.recv())
+
+
+async def test_recorded_split_read_and_write_answer_from_the_table() -> None:
+    async with _lan_sim(ic7610_lan_fake()) as (server, client):
+        reply = await _ask_frame(client, server.civ_port, _SPLIT_READ, seq=1)
+        assert reply == _SPLIT_READ_OFF_REPLY
+        reply = await _ask_frame(client, server.civ_port, _SPLIT_WRITE_ON, seq=2)
+        assert reply == _ACK_REPLY
+        reply = await _ask_frame(client, server.civ_port, _SPLIT_READ, seq=3)
+        assert reply == _SPLIT_READ_ON_REPLY
+
+
+async def test_native_state_wins_over_the_recording() -> None:
+    async with _lan_sim(ic7610_lan_fake()) as (server, client):
+        reply = await _ask_frame(client, server.civ_port, _FREQ_SET, seq=1)
+        assert reply == _ACK_REPLY
+        reply = await _ask_frame(client, server.civ_port, _FREQ_GET, seq=2)
+        assert reply is not None
+        assert reply[5:-1] == _FREQ_SET_REPLY
+
+
+async def test_body_neither_native_nor_recorded_still_naks() -> None:
+    async with _lan_sim(ic7610_lan_fake()) as (server, client):
+        reply = await _ask_frame(client, server.civ_port, _UNRECORDED, seq=1)
+        assert reply == _NAK_REPLY
+
+
+async def test_refused_command_still_naks_over_the_table() -> None:
+    sim = ic7610_lan_fake()
+    sim.refused_civ_commands = {(0x0F, None)}
+    async with _lan_sim(sim) as (server, client):
+        reply = await _ask_frame(client, server.civ_port, _SPLIT_READ, seq=1)
+        assert reply == _NAK_REPLY
+        assert sim.refused_count == 1
+
+
+async def test_without_a_table_the_split_read_answers_natively() -> None:
+    # Split is natively modelled (MOR-3907, C22 WSJT-X Split=Rig): the
+    # bare simulator answers the read OFF with no recorded table mounted.
+    # The opt-in refusal hook (test above) still NAKs first when set, and
+    # a body with neither a native handler nor a table entry still NAKs.
+    async with _lan_sim() as (server, client):
+        reply = await _ask_frame(client, server.civ_port, _SPLIT_READ, seq=1)
+        assert reply == _SPLIT_READ_OFF_REPLY
+
+
+async def test_recorded_set_answer_becomes_echo_in_echo_mode() -> None:
+    # A recorded SET whose table answer is a bare FB: in
+    # ``write_confirmation="echo"`` mode the reply must be the addressed
+    # echo of the SET — never the FB. Command 0x22 has no native handler,
+    # so the reply comes from the recorded table, exercising the
+    # native-or-recorded choice the echo applies after.
+    rows = [
+        {
+            "window": "w",
+            "transport": "lan",
+            "t": 0.1,
+            "dir": "c2r",
+            "frame": _UNRECORDED.hex(),
+        },
+        {
+            "window": "w",
+            "transport": "lan",
+            "t": 0.101,
+            "dir": "r2c",
+            "frame": _ACK_REPLY.hex(),
+        },
+    ]
+    table = RecordedAnswerTable.from_civ_pairs(rows, "lan")
+    sim = MockIcomRadio(write_confirmation="echo", recorded_answers=table)
+    async with _lan_sim(sim) as (server, client):
+        reply = await _ask_frame(client, server.civ_port, _UNRECORDED, seq=1)
+    assert reply is not None
+    assert reply != _ACK_REPLY
+    assert reply == bytes.fromhex("fefee0982200fd")
+
+
+# A request row with no reply row is recorded silence: the LAN simulator
+# sends nothing after the echo, unlike a request the recording never saw.
+_SILENT = bytes.fromhex("fefe98e07ffd")
+
+
+def _silent_table() -> RecordedAnswerTable:
+    rows = [
+        {
+            "window": "w",
+            "transport": "lan",
+            "t": 0.1,
+            "dir": "c2r",
+            "frame": _SILENT.hex(),
+        },
+        {
+            "window": "w",
+            "transport": "lan",
+            "t": 0.2,
+            "dir": "c2r",
+            "frame": _SPLIT_READ.hex(),
+        },
+        {
+            "window": "w",
+            "transport": "lan",
+            "t": 0.201,
+            "dir": "r2c",
+            "frame": _SPLIT_READ_OFF_REPLY.hex(),
+        },
+    ]
+    return RecordedAnswerTable.from_civ_pairs(rows, "lan")
+
+
+@pytest.mark.realtime(reason="asserts that nothing arrives on the real clock")
+async def test_recorded_silence_is_not_answered_on_the_lan() -> None:
+    sim = MockIcomRadio(recorded_answers=_silent_table())
+    async with _lan_sim(sim) as (server, client):
+        pkt = _civ_packet(_SILENT, seq=1)
+        client.send(pkt, server.civ_port)
+        assert _is_echo_of(await client.recv(), pkt)
+        await client.expect_silence()
+
+
+async def test_unrecorded_request_beside_recorded_silence_is_naked_on_the_lan() -> None:
+    sim = MockIcomRadio(recorded_answers=_silent_table())
+    async with _lan_sim(sim) as (server, client):
+        reply = await _ask_frame(client, server.civ_port, _UNRECORDED, seq=1)
+        assert reply == _NAK_REPLY

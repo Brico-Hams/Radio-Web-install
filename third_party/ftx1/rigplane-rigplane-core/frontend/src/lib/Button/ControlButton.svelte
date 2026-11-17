@@ -1,0 +1,158 @@
+<script lang="ts">
+  import { untrack } from 'svelte';
+  import type {
+    ButtonSurface,
+    GlowVariant,
+    IndicatorColor,
+    IndicatorStyle,
+  } from './types';
+  // MOR-1536: the shared armed-state CSS seat — see the file's own doc
+  // comment. Imported here (not by every caller) because this is the one
+  // place `data-armed` is ever rendered onto the DOM.
+  // MOR-1541: renamed from `control-button.css` — that basename collided
+  // with `components-v2/controls/control-button.css` (a different file,
+  // the `.v2-control-button` base-style sheet), which made the two easy to
+  // confuse by name alone.
+  import './control-button-armed.css';
+
+  interface Props {
+    active?: boolean;
+    disabled?: boolean;
+    /** Confirmed pressed state (MOR-2978): true / false / undefined renders
+     *  `aria-pressed` "true" / "false" / absent. Never derived from `active`
+     *  — `active` collapses an unread reading to false. */
+    pressed?: boolean;
+    compact?: boolean;
+    surface?: ButtonSurface;
+    indicatorStyle?: IndicatorStyle;
+    indicatorColor?: IndicatorColor;
+    glow?: GlowVariant;
+    title?: string | null;
+    shortcutHint?: string | null;
+    /** MOR-1519 — see `types.ts`'s `BaseButtonProps.armed` doc comment.
+     *  Rendered as `data-armed` on THIS `<button>` element (never a
+     *  wrapper) so both the CSS selector and any AT/test query can target
+     *  the actual interactive element directly. */
+    armed?: boolean;
+    /** Pairs with a caller-rendered `.sr-only` announcement (MOR-1519). */
+    describedBy?: string;
+    ariaLabel?: string;
+    ariaExpanded?: boolean;
+    ariaControls?: string;
+    /** Widget semantics forwarded to the native button. */
+    role?: string;
+    ariaChecked?: boolean | 'true' | 'false' | 'mixed';
+    tabindex?: number;
+    onkeydown?: (event: KeyboardEvent) => void;
+    /** Data attributes rendered on the `<button>` as `data-*`: an entry
+     *  `{ 'vfo-split': true }` renders `data-vfo-split="true"`, and a key
+     *  already carrying the `data-` prefix passes through verbatim;
+     *  undefined and null members are omitted. Pinned data hooks stay on
+     *  the interactive element itself. */
+    data?: Record<string, string | number | boolean | undefined | null>;
+    onclick?: (event: MouseEvent) => void;
+    onpointerdown?: (event: PointerEvent) => void;
+    onpointerup?: (event: PointerEvent) => void;
+    onpointercancel?: (event: PointerEvent) => void;
+    onpointerleave?: (event: PointerEvent) => void;
+    children?: any;
+  }
+
+  let {
+    active = false,
+    disabled = false,
+    pressed,
+    compact = false,
+    surface = 'flat',
+    indicatorStyle,
+    indicatorColor,
+    glow,
+    title = null,
+    shortcutHint = null,
+    armed = false,
+    describedBy,
+    ariaLabel,
+    ariaExpanded,
+    ariaControls,
+    role,
+    ariaChecked,
+    tabindex,
+    onkeydown,
+    data,
+    onclick,
+    onpointerdown,
+    onpointerup,
+    onpointercancel,
+    onpointerleave,
+    children
+  }: Props = $props();
+
+  let localActive = $state(untrack(() => active));
+
+  // Sync prop changes to local state
+  $effect(() => {
+    localActive = active;
+  });
+
+  function handleClick(event: MouseEvent) {
+    if (disabled) return;
+    onclick?.(event);
+  }
+
+  function handlePointerDown(event: PointerEvent) {
+    if (disabled) return;
+    onpointerdown?.(event);
+  }
+
+  function handlePointerUp(event: PointerEvent) {
+    if (disabled) return;
+    onpointerup?.(event);
+  }
+
+  function handlePointerCancel(event: PointerEvent) {
+    if (disabled) return;
+    onpointercancel?.(event);
+  }
+
+  function handlePointerLeave(event: PointerEvent) {
+    if (disabled) return;
+    onpointerleave?.(event);
+  }
+
+  // Compute glow attribute (only 'white' or 'warm', 'color' = omit)
+  const glowAttr = $derived(glow && glow !== 'color' ? glow : undefined);
+</script>
+
+<button
+  type="button"
+  class="v2-control-button"
+  class:v2-control-button--compact={compact}
+  data-active={localActive}
+  data-surface={surface !== 'flat' ? surface : undefined}
+  data-indicator-style={indicatorStyle}
+  data-indicator-color={indicatorColor}
+  data-glow={glowAttr}
+  data-armed={armed || undefined}
+  role={role}
+  aria-checked={ariaChecked}
+  aria-pressed={pressed}
+  tabindex={tabindex}
+  aria-describedby={describedBy}
+  aria-label={ariaLabel}
+  aria-expanded={ariaExpanded}
+  aria-controls={ariaControls}
+  title={title ?? shortcutHint ?? undefined}
+  data-shortcut-hint={shortcutHint ?? undefined}
+  {disabled}
+  onclick={handleClick}
+  onkeydown={onkeydown}
+  onpointerdown={handlePointerDown}
+  onpointerup={handlePointerUp}
+  onpointercancel={handlePointerCancel}
+  onpointerleave={handlePointerLeave}
+  {...Object.fromEntries(Object.entries(data ?? {})
+    .filter(([, value]) => value !== undefined && value !== null)
+    .map(([name, value]) => [name.startsWith('data-') ? name : `data-${name}`, value]))}
+>
+  {@render children?.()}
+</button>

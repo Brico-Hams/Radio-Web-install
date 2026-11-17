@@ -1,0 +1,644 @@
+@import './button-tokens.css';
+
+/* MOR-2545 PR3 round 4 (owner style B): the hosted scope row's keys
+ * (`button.scope-flat-key`) JOIN this family — HOSTED ONLY. The :not()
+ * exclusion lists below carry the conditional form
+ * `.scope-flat-key:not(.spectrum-toolbar.hosted *)`: inside a hosted
+ * toolbar (the desktop-v2/sdr-test one-row mount and its More panel — DOM
+ * descendants of `.spectrum-toolbar.hosted`, fixed positioning included)
+ * the key is admitted; every other mount — the LCD skins, mobile, and the
+ * desktop standalone audio_fft surfaces, which host no toolbar — keeps the
+ * flat grammar, pixel-identical to origin/main. (Round-5 verifier defect:
+ * dropping the name globally leaked the family onto those standalone
+ * surfaces.) `.scope-step-key` stays excluded outright: the stepper's
+ * arrow/cycler keys are transparent glyphs inside the family-styled
+ * stepper shell (scope-capsule.css paints the shell). */
+.v2-control-button,
+.standard-face :where(:is(
+  .semantic-control-panel button,
+  [data-vfo-appearance='standard'] .vfo-select,
+  [data-vfo-operation-appearance='standard'] .fact-toggle,
+  [data-vfo-operation-appearance='standard'] .vfo-op,
+  .reset-order-btn,
+  .status-bar .control-btn,
+  .status-bar .now-playing,
+  .status-bar .managed-tot-trigger,
+  .status-bar .theme-button,
+  .spectrum-toolbar .toolbar-btn
+):not(.panel-header, .drag-handle, .passband-resize-zone, .band-segment, .scope-flat-key:not(.spectrum-toolbar.hosted *), .scope-step-key)),
+.standard-face :where(.band-tab) {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  min-height: var(--btn-min-height);
+  padding: var(--btn-padding-block) var(--btn-padding-inline);
+  appearance: none;
+  -webkit-appearance: none;
+  background: var(--btn-bg-idle);
+  border: 1px solid var(--btn-border-idle);
+  border-radius: var(--btn-border-radius);
+  /* Idle foreground: readable enough to signal "clickable". Do NOT use
+   * --v2-text-dim here — that reads as disabled (see issue #804). */
+  color: var(--v2-text-subdued);
+  font-family: 'Roboto Mono', monospace;
+  font-size: var(--btn-font-size);
+  font-weight: var(--btn-font-weight);
+  letter-spacing: var(--btn-letter-spacing);
+  line-height: 1;
+  text-transform: uppercase;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background-color 150ms ease,
+    border-color 150ms ease,
+    color 150ms ease,
+    box-shadow 150ms ease;
+  box-sizing: border-box;
+  box-shadow: inset 0 1px 0 var(--btn-highlight);
+  margin: 0;
+  text-decoration: none;
+  isolation: isolate;
+  overflow: hidden;
+  --indicator-color: var(--control-accent, var(--indicator-cyan));
+  --indicator-glow: color-mix(in srgb, var(--indicator-color) 58%, transparent);
+  --indicator-dim: color-mix(in srgb, var(--indicator-color) 26%, var(--btn-border-idle));
+  --indicator-dot-reserve: calc(var(--indicator-dot-offset) + var(--indicator-dot-size) + var(--indicator-dot-gap));
+  --glow-color: var(--indicator-color);
+}
+
+/* Standard-face command families use the same label and corner treatment as
+ * the MODE HardwareButton even when their component owns compact geometry. */
+.desktop-control-face.standard-face :is(
+  .semantic-control-panel button,
+  .v2-control-button,
+  [data-vfo-appearance='standard'] .vfo-select,
+  [data-vfo-operation-appearance='standard'] .fact-toggle,
+  [data-vfo-operation-appearance='standard'] .vfo-op,
+  .reset-order-btn,
+  .status-bar .control-btn,
+  .status-bar .now-playing,
+  .status-bar .managed-tot-trigger,
+  .status-bar .theme-button,
+  .spectrum-toolbar .toolbar-btn
+):not(.panel-header, .drag-handle, .passband-resize-zone, .band-segment, .scope-flat-key:not(.spectrum-toolbar.hosted *), .scope-step-key),
+.desktop-control-face.standard-face .band-tab {
+  border-radius: var(--btn-border-radius);
+  font-family: 'Roboto Mono', monospace;
+  font-size: var(--btn-font-size);
+  font-weight: 400;
+  letter-spacing: var(--btn-letter-spacing);
+  line-height: 1.2;
+  text-transform: uppercase;
+}
+
+.v2-control-button:hover,
+.desktop-control-face.standard-face :is(
+  .semantic-control-panel button,
+  [data-vfo-appearance='standard'] .vfo-select,
+  [data-vfo-operation-appearance='standard'] .fact-toggle,
+  [data-vfo-operation-appearance='standard'] .vfo-op,
+  .reset-order-btn,
+  .status-bar .control-btn,
+  .status-bar .now-playing,
+  .status-bar .managed-tot-trigger,
+  .status-bar .theme-button,
+  .spectrum-toolbar .toolbar-btn
+):not(.panel-header, .drag-handle, .passband-resize-zone, .band-segment, .scope-flat-key:not(.spectrum-toolbar.hosted *), .scope-step-key):hover:not(:disabled),
+.desktop-control-face.standard-face .band-tab:hover:not(:disabled) {
+  background-color: var(--btn-bg-hover);
+  color: var(--v2-text-bright);
+}
+
+/* Truly disabled state — must be visually distinct from idle.
+ * Issue #804: idle was being confused with disabled because both looked
+ * muted. Disabled now gets reduced opacity + not-allowed cursor and
+ * suppresses hover/active feedback. */
+.v2-control-button:disabled,
+.v2-control-button[aria-disabled='true'],
+.desktop-control-face.standard-face :is(
+  .semantic-control-panel button,
+  [data-vfo-appearance='standard'] .vfo-select,
+  [data-vfo-operation-appearance='standard'] .fact-toggle,
+  [data-vfo-operation-appearance='standard'] .vfo-op,
+  .reset-order-btn,
+  .status-bar .control-btn,
+  .status-bar .now-playing,
+  .status-bar .managed-tot-trigger,
+  .status-bar .theme-button,
+  .spectrum-toolbar .toolbar-btn
+):not(.panel-header, .drag-handle, .passband-resize-zone, .band-segment, .scope-flat-key:not(.spectrum-toolbar.hosted *), .scope-step-key):is(:disabled, [aria-disabled='true']):not(.active, [data-active='true'], [aria-pressed='true'], [aria-checked='true']),
+.desktop-control-face.standard-face .band-tab:is(:disabled, [aria-disabled='true']):not(.active, [data-active='true'], [aria-pressed='true'], [aria-checked='true']) {
+  opacity: 0.45;
+  cursor: not-allowed;
+  color: var(--v2-text-dim);
+}
+
+.v2-control-button:disabled:hover,
+.v2-control-button[aria-disabled='true']:hover,
+.desktop-control-face.standard-face :is(
+  .semantic-control-panel button,
+  [data-vfo-appearance='standard'] .vfo-select,
+  [data-vfo-operation-appearance='standard'] .fact-toggle,
+  [data-vfo-operation-appearance='standard'] .vfo-op,
+  .reset-order-btn,
+  .status-bar .control-btn,
+  .status-bar .now-playing,
+  .status-bar .managed-tot-trigger,
+  .status-bar .theme-button,
+  .spectrum-toolbar .toolbar-btn
+):not(.panel-header, .drag-handle, .passband-resize-zone, .band-segment, .scope-flat-key:not(.spectrum-toolbar.hosted *), .scope-step-key):is(:disabled, [aria-disabled='true']):not(.active, [data-active='true'], [aria-pressed='true'], [aria-checked='true']):hover,
+.desktop-control-face.standard-face .band-tab:is(:disabled, [aria-disabled='true']):not(.active, [data-active='true'], [aria-pressed='true'], [aria-checked='true']):hover {
+  background: var(--btn-bg-idle);
+  color: var(--v2-text-dim);
+}
+
+/* Muted accent variant (momentary ops like COPY/SWAP).
+ * Keeps a subtle cyan tint on border so the button reads as interactive
+ * even in idle state, without competing visually with toggle buttons. */
+.v2-control-button[data-color='muted'] {
+  --control-accent: var(--v2-accent-cyan);
+  border-color: color-mix(in srgb, var(--v2-accent-cyan) 22%, var(--btn-border-idle));
+}
+
+.v2-control-button[data-color='muted']:hover {
+  border-color: color-mix(in srgb, var(--v2-accent-cyan) 40%, var(--btn-border-idle));
+}
+
+.v2-control-button.active,
+.v2-control-button[data-active='true'],
+.desktop-control-face.standard-face :is(
+  .semantic-control-panel button,
+  [data-vfo-appearance='standard'] .vfo-select,
+  [data-vfo-operation-appearance='standard'] .fact-toggle,
+  [data-vfo-operation-appearance='standard'] .vfo-op,
+  .reset-order-btn,
+  .status-bar .control-btn,
+  .status-bar .now-playing,
+  .status-bar .managed-tot-trigger,
+  .status-bar .theme-button,
+  .spectrum-toolbar .toolbar-btn
+):not(.panel-header, .drag-handle, .passband-resize-zone, .band-segment, .scope-flat-key:not(.spectrum-toolbar.hosted *), .scope-step-key):is(.active, [data-active='true'], [aria-pressed='true'], [aria-checked='true']),
+.desktop-control-face.standard-face .band-tab:is(.active, [data-active='true'], [aria-pressed='true'], [aria-checked='true']) {
+  background-color: color-mix(in srgb, var(--glow-color) var(--btn-active-bg-tint), var(--v2-bg-darker));
+  border-color: color-mix(in srgb, var(--glow-color) var(--glow-border-opacity), transparent);
+  color: var(--control-active-text, var(--v2-text-bright));
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--glow-color) var(--glow-ring-1-opacity), transparent),
+    0 0 var(--glow-blur-tight) color-mix(in srgb, var(--glow-color) var(--glow-ring-2-opacity), transparent),
+    0 0 var(--glow-blur-wide) color-mix(in srgb, var(--glow-color) var(--glow-ring-3-opacity), transparent),
+    inset 0 1px 0 var(--btn-highlight);
+}
+
+.v2-control-button[data-indicator-color='cyan'] {
+  --indicator-color: var(--indicator-cyan);
+}
+
+.v2-control-button[data-indicator-color='green'] {
+  --indicator-color: var(--indicator-green);
+}
+
+.v2-control-button[data-indicator-color='amber'] {
+  --indicator-color: var(--indicator-amber);
+}
+
+.v2-control-button[data-indicator-color='red'] {
+  --indicator-color: var(--indicator-red);
+}
+
+.v2-control-button[data-indicator-color='orange'] {
+  --indicator-color: var(--indicator-orange);
+}
+
+.v2-control-button[data-indicator-color='violet'] {
+  --indicator-color: var(--indicator-violet);
+}
+
+.v2-control-button[data-indicator-color='white'] {
+  --indicator-color: var(--indicator-white);
+}
+
+.v2-control-button[data-indicator-style='ring'].active,
+.v2-control-button[data-indicator-style='ring'][data-active='true'] {
+  border-color: color-mix(in srgb, var(--glow-color) var(--glow-border-opacity), transparent);
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--glow-color) var(--glow-ring-1-opacity), transparent),
+    0 0 var(--glow-blur-medium) color-mix(in srgb, var(--glow-color) var(--glow-ring-2-opacity), transparent),
+    0 0 16px color-mix(in srgb, var(--glow-color) var(--glow-ring-3-opacity), transparent),
+    inset 0 1px 0 var(--btn-highlight);
+}
+
+.v2-control-button[data-indicator-style='dot']::before,
+.v2-control-button[data-indicator-style='edge-bottom']::before,
+.v2-control-button[data-indicator-style='edge-left']::before,
+.v2-control-button[data-indicator-style='edge-sides']::before,
+.desktop-control-face.standard-face :is(
+  .semantic-control-panel button,
+  [data-vfo-appearance='standard'] .vfo-select,
+  [data-vfo-operation-appearance='standard'] .fact-toggle,
+  [data-vfo-operation-appearance='standard'] .vfo-op,
+  .reset-order-btn,
+  .status-bar .control-btn,
+  .status-bar .now-playing,
+  .status-bar .managed-tot-trigger,
+  .status-bar .theme-button,
+  .spectrum-toolbar .toolbar-btn
+):not(.panel-header, .drag-handle, .passband-resize-zone, .band-segment, .scope-flat-key:not(.spectrum-toolbar.hosted *), .scope-step-key)::before,
+.desktop-control-face.standard-face .band-tab::before {
+  content: '';
+  position: absolute;
+  pointer-events: none;
+  transition:
+    opacity 180ms ease,
+    transform 180ms ease,
+    background-color 180ms ease,
+    box-shadow 180ms ease,
+    border-color 180ms ease;
+}
+
+.v2-control-button[data-indicator-style='dot']::before {
+  width: var(--indicator-dot-size);
+  height: var(--indicator-dot-size);
+  left: var(--indicator-dot-offset);
+  top: 50%;
+  border-radius: 999px;
+  transform: translateY(-50%);
+  border: 1px solid color-mix(in srgb, var(--indicator-color) 52%, var(--v2-border-dark));
+  background: transparent;
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--v2-bg-card) 72%, transparent),
+    0 0 0 1px color-mix(in srgb, var(--indicator-color) 10%, transparent);
+  opacity: 0.9;
+}
+
+.v2-control-button[data-indicator-style='dot'] {
+  padding-left: calc(var(--indicator-dot-reserve) + 2px);
+  padding-right: 10px;
+}
+
+.v2-control-button[data-indicator-style='dot'].active::before,
+.v2-control-button[data-indicator-style='dot'][data-active='true']::before {
+  background: var(--indicator-color);
+  border-color: var(--indicator-color);
+  transform: translateY(-50%) scale(1.02);
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--indicator-color) var(--dot-glow-ring-1-opacity), transparent),
+    0 0 var(--dot-glow-blur-tight) color-mix(in srgb, var(--indicator-color) var(--dot-glow-ring-2-opacity), transparent),
+    0 0 var(--dot-glow-blur-medium) color-mix(in srgb, var(--indicator-color) var(--dot-glow-ring-3-opacity), transparent);
+}
+
+/* Glow color variants */
+.v2-control-button[data-glow='white'] {
+  --glow-color: var(--glow-white);
+}
+
+.v2-control-button[data-glow='warm'] {
+  --glow-color: var(--glow-warm);
+}
+
+.v2-control-button[data-indicator-style='edge-bottom']::before {
+  left: 5px;
+  right: 5px;
+  bottom: 0;
+  height: var(--indicator-thickness);
+  border-radius: 999px 999px 0 0;
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--indicator-color) 28%, transparent) 0%,
+    var(--indicator-color) 50%,
+    color-mix(in srgb, var(--indicator-color) 28%, transparent) 100%
+  );
+  opacity: 0;
+  transform: scaleX(0.72);
+}
+
+.v2-control-button[data-indicator-style='edge-left']::before,
+.desktop-control-face.standard-face :is(
+  .semantic-control-panel button,
+  [data-vfo-appearance='standard'] .vfo-select,
+  [data-vfo-operation-appearance='standard'] .fact-toggle,
+  [data-vfo-operation-appearance='standard'] .vfo-op,
+  .reset-order-btn,
+  .status-bar .control-btn,
+  .status-bar .now-playing,
+  .status-bar .managed-tot-trigger,
+  .status-bar .theme-button,
+  .spectrum-toolbar .toolbar-btn
+):not(.panel-header, .drag-handle, .passband-resize-zone, .band-segment, .scope-flat-key:not(.spectrum-toolbar.hosted *), .scope-step-key)::before,
+.desktop-control-face.standard-face .band-tab::before {
+  left: 0;
+  top: 4px;
+  bottom: 4px;
+  width: var(--indicator-thickness);
+  height: auto;
+  border: 0;
+  border-radius: 0 999px 999px 0;
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--indicator-color) 28%, transparent) 0%,
+    var(--indicator-color) 50%,
+    color-mix(in srgb, var(--indicator-color) 28%, transparent) 100%
+  );
+  opacity: 0;
+  transform: scaleY(0.78);
+}
+
+.v2-control-button[data-indicator-style='edge-sides']::before {
+  inset: 4px 0;
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--indicator-color) 28%, transparent) 0%,
+      var(--indicator-color) 50%,
+      color-mix(in srgb, var(--indicator-color) 28%, transparent) 100%
+    ) left / var(--indicator-thickness) 100% no-repeat,
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--indicator-color) 28%, transparent) 0%,
+      var(--indicator-color) 50%,
+      color-mix(in srgb, var(--indicator-color) 28%, transparent) 100%
+    ) right / var(--indicator-thickness) 100% no-repeat;
+  opacity: 0;
+  transform: scaleY(0.8);
+}
+
+.v2-control-button[data-indicator-style='edge-bottom'].active::before,
+.v2-control-button[data-indicator-style='edge-bottom'][data-active='true']::before,
+.v2-control-button[data-indicator-style='edge-left'].active::before,
+.v2-control-button[data-indicator-style='edge-left'][data-active='true']::before,
+.v2-control-button[data-indicator-style='edge-sides'].active::before,
+.v2-control-button[data-indicator-style='edge-sides'][data-active='true']::before,
+.desktop-control-face.standard-face :is(
+  .semantic-control-panel button,
+  [data-vfo-appearance='standard'] .vfo-select,
+  [data-vfo-operation-appearance='standard'] .fact-toggle,
+  [data-vfo-operation-appearance='standard'] .vfo-op,
+  .reset-order-btn,
+  .status-bar .control-btn,
+  .status-bar .now-playing,
+  .status-bar .managed-tot-trigger,
+  .status-bar .theme-button,
+  .spectrum-toolbar .toolbar-btn
+):not(.panel-header, .drag-handle, .passband-resize-zone, .band-segment, .scope-flat-key:not(.spectrum-toolbar.hosted *), .scope-step-key):is(.active, [data-active='true'], [aria-pressed='true'], [aria-checked='true'])::before,
+.desktop-control-face.standard-face .band-tab:is(.active, [data-active='true'], [aria-pressed='true'], [aria-checked='true'])::before {
+  opacity: 1;
+  transform: scale(1);
+  box-shadow:
+    0 0 8px color-mix(in srgb, var(--glow-color) 36%, transparent),
+    0 0 14px color-mix(in srgb, var(--glow-color) 20%, transparent),
+    0 0 22px color-mix(in srgb, var(--glow-color) 10%, transparent);
+}
+
+
+
+.v2-control-button[data-indicator-style='edge-bottom'].active,
+.v2-control-button[data-indicator-style='edge-bottom'][data-active='true'],
+.v2-control-button[data-indicator-style='edge-left'].active,
+.v2-control-button[data-indicator-style='edge-left'][data-active='true'],
+.v2-control-button[data-indicator-style='edge-sides'].active,
+.v2-control-button[data-indicator-style='edge-sides'][data-active='true'],
+.desktop-control-face.standard-face :is(
+  .semantic-control-panel button,
+  [data-vfo-appearance='standard'] .vfo-select,
+  [data-vfo-operation-appearance='standard'] .fact-toggle,
+  [data-vfo-operation-appearance='standard'] .vfo-op,
+  .reset-order-btn,
+  .status-bar .control-btn,
+  .status-bar .now-playing,
+  .status-bar .managed-tot-trigger,
+  .status-bar .theme-button,
+  .spectrum-toolbar .toolbar-btn
+):not(.panel-header, .drag-handle, .passband-resize-zone, .band-segment, .scope-flat-key:not(.spectrum-toolbar.hosted *), .scope-step-key):is(.active, [data-active='true'], [aria-pressed='true'], [aria-checked='true']),
+.desktop-control-face.standard-face .band-tab:is(.active, [data-active='true'], [aria-pressed='true'], [aria-checked='true']) {
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--glow-color) var(--edge-glow-ring-1-opacity), transparent),
+    0 0 var(--edge-glow-blur-tight) color-mix(in srgb, var(--glow-color) var(--edge-glow-ring-2-opacity), transparent),
+    inset 0 0 var(--edge-glow-blur-tight) color-mix(in srgb, var(--glow-color) var(--edge-glow-inset-opacity), transparent),
+    inset 0 1px 0 var(--btn-highlight);
+}
+
+.v2-control-button[data-indicator-style='fill'].active,
+.v2-control-button[data-indicator-style='fill'][data-active='true'] {
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--indicator-color) var(--fill-bg-tint-top), var(--v2-control-button-gradient-top)) 0%,
+      color-mix(in srgb, var(--indicator-color) var(--fill-bg-tint-bottom), var(--v2-control-button-gradient-bottom)) 100%
+    );
+  border-color: color-mix(in srgb, var(--indicator-color) var(--glow-border-opacity), transparent);
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--indicator-color) var(--glow-ring-1-opacity), transparent),
+    0 0 var(--glow-blur-tight) color-mix(in srgb, var(--indicator-color) var(--glow-ring-2-opacity), transparent),
+    0 0 var(--glow-blur-wide) color-mix(in srgb, var(--indicator-color) var(--glow-ring-3-opacity), transparent),
+    inset 0 0 0 1px color-mix(in srgb, var(--indicator-color) var(--fill-inset-ring-opacity), transparent);
+}
+
+.v2-control-button[data-surface='hardware'],
+.desktop-control-face.standard-face :is(
+  .semantic-control-panel button,
+  [data-vfo-appearance='standard'] .vfo-select,
+  [data-vfo-operation-appearance='standard'] .fact-toggle,
+  [data-vfo-operation-appearance='standard'] .vfo-op,
+  .reset-order-btn,
+  .status-bar .control-btn,
+  .status-bar .now-playing,
+  .status-bar .managed-tot-trigger,
+  .status-bar .theme-button,
+  .spectrum-toolbar .toolbar-btn
+):not(.panel-header, .drag-handle, .passband-resize-zone, .band-segment, .scope-flat-key:not(.spectrum-toolbar.hosted *), .scope-step-key),
+.desktop-control-face.standard-face .band-tab {
+  background:
+    linear-gradient(
+      180deg,
+      var(--hw-gradient-top-1) 0%,
+      var(--hw-gradient-top-2) 14%,
+      var(--hw-gradient-mid) 52%,
+      var(--hw-gradient-bottom) 100%
+    );
+  border-color: var(--hw-border);
+  box-shadow:
+    inset 0 1px 0 var(--hw-shadow-top),
+    inset 0 -1px 0 var(--hw-shadow-bottom),
+    inset 1px 0 0 var(--hw-shadow-left),
+    inset -1px 0 0 var(--hw-shadow-right),
+    0 1px 0 var(--hw-shadow-outer-top),
+    0 4px 10px var(--hw-shadow-outer-bottom);
+}
+
+.v2-control-button[data-surface='hardware']:hover,
+.desktop-control-face.standard-face :is(
+  .semantic-control-panel button,
+  [data-vfo-appearance='standard'] .vfo-select,
+  [data-vfo-operation-appearance='standard'] .fact-toggle,
+  [data-vfo-operation-appearance='standard'] .vfo-op,
+  .reset-order-btn,
+  .status-bar .control-btn,
+  .status-bar .now-playing,
+  .status-bar .managed-tot-trigger,
+  .status-bar .theme-button,
+  .spectrum-toolbar .toolbar-btn
+):not(.panel-header, .drag-handle, .passband-resize-zone, .band-segment, .scope-flat-key:not(.spectrum-toolbar.hosted *), .scope-step-key):hover:not(:disabled),
+.desktop-control-face.standard-face .band-tab:hover:not(:disabled) {
+  background:
+    linear-gradient(
+      180deg,
+      var(--hw-gradient-top-1-hover) 0%,
+      var(--hw-gradient-top-2-hover) 16%,
+      var(--hw-gradient-mid-hover) 56%,
+      var(--hw-gradient-bottom-hover) 100%
+    );
+}
+
+.v2-control-button[data-surface='hardware'].active,
+.v2-control-button[data-surface='hardware'][data-active='true'],
+.desktop-control-face.standard-face :is(
+  .semantic-control-panel button,
+  [data-vfo-appearance='standard'] .vfo-select,
+  [data-vfo-operation-appearance='standard'] .fact-toggle,
+  [data-vfo-operation-appearance='standard'] .vfo-op,
+  .reset-order-btn,
+  .status-bar .control-btn,
+  .status-bar .now-playing,
+  .status-bar .managed-tot-trigger,
+  .status-bar .theme-button,
+  .spectrum-toolbar .toolbar-btn
+):not(.panel-header, .drag-handle, .passband-resize-zone, .band-segment, .scope-flat-key:not(.spectrum-toolbar.hosted *), .scope-step-key):is(.active, [data-active='true'], [aria-pressed='true'], [aria-checked='true']),
+.desktop-control-face.standard-face .band-tab:is(.active, [data-active='true'], [aria-pressed='true'], [aria-checked='true']) {
+  background:
+    linear-gradient(
+      180deg,
+      var(--hw-gradient-top-1) 0%,
+      var(--hw-gradient-top-2) 14%,
+      var(--hw-gradient-mid) 52%,
+      var(--hw-gradient-bottom) 100%
+    );
+  border-color: var(--hw-border);
+  color: var(--v2-text-bright);
+  box-shadow:
+    inset 0 1px 0 var(--hw-shadow-top),
+    inset 0 -1px 0 var(--hw-shadow-bottom),
+    inset 1px 0 0 var(--hw-shadow-left),
+    inset -1px 0 0 var(--hw-shadow-right),
+    0 1px 0 var(--hw-shadow-outer-top),
+    0 4px 10px var(--hw-shadow-outer-bottom);
+}
+
+/* Hardware glow variants */
+.v2-control-button[data-surface='hardware'][data-glow='white'].active,
+.v2-control-button[data-surface='hardware'][data-glow='white'][data-active='true'],
+.v2-control-button[data-surface='hardware'][data-glow='warm'].active,
+.v2-control-button[data-surface='hardware'][data-glow='warm'][data-active='true'] {
+  border-color: color-mix(in srgb, var(--glow-color) var(--glow-border-opacity), transparent);
+  box-shadow:
+    inset 0 1px 0 var(--hw-shadow-top),
+    inset 0 -1px 0 var(--hw-shadow-bottom),
+    inset 1px 0 0 var(--hw-shadow-left),
+    inset -1px 0 0 var(--hw-shadow-right),
+    0 0 0 1px color-mix(in srgb, var(--glow-color) var(--glow-ring-1-opacity), transparent),
+    0 0 var(--glow-blur-tight) color-mix(in srgb, var(--glow-color) var(--glow-ring-2-opacity), transparent),
+    0 0 var(--glow-blur-wide) color-mix(in srgb, var(--glow-color) var(--glow-ring-3-opacity), transparent),
+    0 1px 0 var(--hw-shadow-outer-top);
+}
+
+.v2-control-button--compact {
+  min-height: var(--btn-compact-min-height);
+  padding: var(--btn-compact-padding-block) var(--btn-compact-padding-inline);
+  font-size: var(--btn-compact-font-size);
+}
+
+.v2-control-button--compact[data-indicator-style='dot'] {
+  padding-left: calc(var(--indicator-dot-reserve) - 2px);
+  padding-right: 8px;
+}
+
+.v2-control-button--pill {
+  border-radius: 9999px;
+}
+
+.vfo-ops[data-vfo-operation-appearance='standard'] .v2-control-button {
+  width: 100%;
+  height: 100%;
+  min-height: 28px;
+  padding: 0;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+}
+
+/* === StatusIndicator (display-only, non-interactive) ===
+ * CSS-class approach replacing inline style computation from status-badge-style.ts.
+ * Use for read-only status/mode badges (TX state, VFO header mode/filter badges).
+ * For interactive toggles, use FillButton from $lib/Button instead.
+ */
+.v2-status-indicator {
+  display: inline-flex;
+  align-items: center;
+  height: var(--btn-compact-min-height);
+  padding: var(--btn-compact-padding-block) var(--btn-compact-padding-inline);
+  border-radius: var(--btn-border-radius);
+  font-family: 'Roboto Mono', monospace;
+  font-size: var(--btn-compact-font-size);
+  font-weight: var(--btn-font-weight);
+  letter-spacing: var(--btn-letter-spacing);
+  text-transform: uppercase;
+  white-space: nowrap;
+  user-select: none;
+  background: transparent;
+  border: 1px solid var(--v2-badge-inactive-border);
+  color: var(--v2-badge-inactive-text);
+  box-shadow: none;
+  transition:
+    background 150ms ease,
+    border-color 150ms ease,
+    color 150ms ease,
+    box-shadow 150ms ease;
+}
+
+/* XS variant for very compact display contexts (VFO header row) */
+.v2-status-indicator--xs {
+  height: 16px;
+  font-size: 7px;
+  padding: 0 5px;
+}
+
+.v2-status-indicator[data-active='true'][data-color='cyan'] {
+  background: var(--v2-badge-cyan-bg);
+  border-color: var(--v2-badge-cyan-border);
+  color: var(--v2-badge-cyan-text);
+  box-shadow: 0 0 0 1px var(--v2-badge-cyan-glow);
+}
+
+.v2-status-indicator[data-active='true'][data-color='orange'] {
+  background: var(--v2-badge-orange-bg);
+  border-color: var(--v2-badge-orange-border);
+  color: var(--v2-badge-orange-text);
+  box-shadow: 0 0 0 1px var(--v2-badge-orange-glow);
+}
+
+.v2-status-indicator[data-active='true'][data-color='red'] {
+  background: var(--v2-badge-red-bg);
+  border-color: var(--v2-badge-red-border);
+  color: var(--v2-badge-red-text);
+  box-shadow: 0 0 0 1px var(--v2-badge-red-glow);
+}
+
+.v2-status-indicator[data-active='true'][data-color='green'] {
+  background: var(--v2-badge-green-bg);
+  border-color: var(--v2-badge-green-border);
+  color: var(--v2-badge-green-text);
+  box-shadow: 0 0 0 1px var(--v2-badge-green-glow);
+}
+
+.v2-status-indicator[data-active='true'][data-color='amber'] {
+  background: var(--v2-badge-amber-bg);
+  border-color: var(--v2-badge-amber-border);
+  color: var(--v2-badge-amber-text);
+  box-shadow: 0 0 0 1px var(--v2-badge-amber-glow);
+}
+
+.v2-status-indicator[data-active='true'][data-color='muted'] {
+  background: var(--v2-badge-muted-bg);
+  border-color: var(--v2-badge-muted-border);
+  color: var(--v2-badge-muted-text);
+  box-shadow: 0 0 0 1px var(--v2-badge-muted-glow);
+}

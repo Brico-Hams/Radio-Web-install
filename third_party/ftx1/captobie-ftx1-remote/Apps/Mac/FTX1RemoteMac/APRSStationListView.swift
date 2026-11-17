@@ -1,0 +1,95 @@
+import FTX1Core
+import SwiftUI
+
+/// The FM/C4FM menu page's APRS S.LIST button opens this in its own
+/// window (`aprs-stations`, declared in `FTX1RemoteMacApp`) rather than a
+/// sheet — meant to be left open alongside the main window while
+/// operating.
+struct APRSStationListView: View {
+    @EnvironmentObject private var store: APRSStore
+    @State private var sourceFilter: APRSSource?
+    @State private var searchText = ""
+    @State private var heardWindow: APRSHeardWindow = .any
+    @State private var positionOnly = false
+    @State private var compose: APRSComposeTarget?
+
+    var body: some View {
+        VStack(spacing: 0) {
+            stationTable
+            APRSTransmitBar()
+        }
+        .sheet(item: $compose) { target in APRSComposeSheet(to: target.to) }
+    }
+
+    private var stationTable: some View {
+        Table(filteredStations) {
+            TableColumn("common.callsign") { station in
+                Text(station.callsign).fontDesign(.monospaced)
+            }
+            TableColumn("common.source") { station in
+                Text(station.source == .main ? "Main" : "Sub")
+            }
+            TableColumn("common.position") { station in
+                Text(Self.positionString(station))
+            }
+            TableColumn("aprsStationList.symbol") { station in
+                Text([station.symbolTable, station.symbolCode].compactMap { $0 }.joined())
+            }
+            TableColumn("common.comment") { station in
+                Text(station.comment ?? "")
+            }
+            TableColumn("common.lastHeard") { station in
+                Text(station.lastHeardAt, style: .relative)
+            }
+        }
+        .contextMenu(forSelectionType: APRSStation.ID.self) { ids in
+            if let id = ids.first {
+                Button("aprsCompose.messageTo \(id)") { compose = APRSComposeTarget(to: id) }
+            }
+        }
+        .navigationTitle("aprsStationList.aprsStations")
+        .frame(minWidth: 520, minHeight: 300)
+        .toolbar {
+            ToolbarItem {
+                APRSSourcePicker(selection: $sourceFilter)
+            }
+            ToolbarItem {
+                Menu {
+                    Picker("common.heardWithin", selection: $heardWindow) {
+                        ForEach(APRSHeardWindow.allCases, id: \.self) { Text($0.label).tag($0) }
+                    }
+                    Toggle("common.withPositionOnly", isOn: $positionOnly)
+                } label: {
+                    Label("common.filter", systemImage: isFiltering
+                          ? "line.3.horizontal.decrease.circle.fill"
+                          : "line.3.horizontal.decrease.circle")
+                }
+                .help("aprsStationList.filterByTimeHeard")
+            }
+        }
+        .searchable(text: $searchText, prompt: "aprsStationList.callsignOrComment")
+        .overlay {
+            if store.stations.isEmpty {
+                ContentUnavailableView("common.noStationsHeard", systemImage: "antenna.radiowaves.left.and.right", description: Text("aprsStationList.decodedAprsStationsWill"))
+            } else if filteredStations.isEmpty {
+                ContentUnavailableView.search(text: searchText)
+            }
+        }
+    }
+
+    private var isFiltering: Bool { heardWindow != .any || positionOnly }
+
+    private var filteredStations: [APRSStation] {
+        store.stations
+            .filter { sourceFilter == nil || $0.source == sourceFilter }
+            .filter { heardWindow.includes($0.lastHeardAt) }
+            .filter { !positionOnly || ($0.latitude != nil && $0.longitude != nil) }
+            .filter { APRSListFilter.matches(searchText, $0.callsign, $0.comment) }
+            .sorted { $0.lastHeardAt > $1.lastHeardAt }
+    }
+
+    private static func positionString(_ station: APRSStation) -> String {
+        guard let latitude = station.latitude, let longitude = station.longitude else { return "—" }
+        return String(format: "%.4f, %.4f", latitude, longitude)
+    }
+}

@@ -1,0 +1,1015 @@
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { mount, unmount, flushSync } from 'svelte';
+import type { Capabilities } from '$lib/types/capabilities';
+import type { ServerState } from '$lib/types/state';
+
+const mockProps = {
+  nrMode: 0,
+  nrLevel: 5,
+  nbActive: false,
+  nbLevel: 128,
+  notchMode: 'off' as string,
+  notchFreq: 1000,
+  nbDepth: 0,
+  nbWidth: 0,
+  manualNotchWidth: 0,
+  agcTimeConstant: 0,
+  hasNr: true,
+  hasNb: true,
+  hasNbDepth: true,
+  hasNbWidth: true,
+  nbLevelMax: 255,
+  nbLevelPercent: true,
+};
+
+const mockHandlers = {
+  onNrModeChange: vi.fn(),
+  onNrLevelChange: vi.fn(),
+  onNbToggle: vi.fn(),
+  onNbLevelChange: vi.fn(),
+  onNotchModeChange: vi.fn(),
+  onNotchFreqChange: vi.fn(),
+  onNbDepthChange: vi.fn(),
+  onNbWidthChange: vi.fn(),
+  onManualNotchWidthChange: vi.fn(),
+  onAgcTimeChange: vi.fn(),
+};
+
+const runtimeState = vi.hoisted(() => ({
+  state: null as ServerState | null,
+  caps: null as Capabilities | null,
+  session: { state: 'connected' as 'connected' | 'disconnected', epoch: 1 },
+  radioListeners: new Set<(state: ServerState | null) => void>(),
+  notify: () => {},
+}));
+// MOR-2735: the notch-width tests route `deriveDspProps` through the REAL
+// `toDspProps(runtime.state, runtime.caps)` instead of the mockProps bag, so
+// the per-receiver tag decision is exercised end to end.
+const runtimeDsp = vi.hoisted(() => ({ useReal: false }));
+const mockProjection = vi.hoisted(() => ({ notify: () => {} }));
+
+vi.mock('$lib/runtime/frontend-runtime', async () => {
+  const { createSubscriber } = await import('svelte/reactivity');
+  let update = () => {};
+  const subscribe = createSubscriber((notify) => { update = notify; return () => {}; });
+  runtimeState.notify = () => {
+    update();
+    runtimeState.radioListeners.forEach((listener) => listener(runtimeState.state));
+  };
+  return {
+    runtime: {
+      get state() { subscribe(); return runtimeState.state; },
+      get caps() { subscribe(); return runtimeState.caps; },
+      get controlSession() { subscribe(); return runtimeState.session; },
+    },
+  };
+});
+
+vi.mock('$lib/stores/radio.svelte', () => ({
+  getRadioState: () => runtimeState.state,
+  subscribeRadioState: (listener: (state: ServerState | null) => void) => {
+    runtimeState.radioListeners.add(listener);
+    listener(runtimeState.state);
+    return () => runtimeState.radioListeners.delete(listener);
+  },
+}));
+
+vi.mock('$lib/runtime/adapters/panel-adapters', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('$lib/runtime/adapters/panel-adapters')>();
+  const { toDspProps } = await import('$lib/runtime/props/panel-props');
+  const { createSubscriber } = await import('svelte/reactivity');
+  let update = () => {};
+  const subscribe = createSubscriber((notify) => { update = notify; return () => {}; });
+  mockProjection.notify = () => update();
+  return {
+    ...actual,
+    deriveDspProps: () => {
+      subscribe();
+      return runtimeDsp.useReal
+        ? toDspProps(runtimeState.state, runtimeState.caps)
+        : { ...mockProps };
+    },
+    getDspHandlers: () => mockHandlers,
+  };
+});
+
+import DspPanel from '../DspPanel.svelte';
+import {
+  acknowledgeCommand,
+  beginCommand,
+  failCommand,
+  resetCommandLifecycle,
+} from '$lib/stores/commands.svelte';
+import { getDspControlFeedback } from '$lib/runtime/adapters/panel-adapters';
+
+let components: ReturnType<typeof mount>[] = [];
+
+const fresh = (storePath: string, marker = 1) => ({
+  storePath, observed: true, freshness: 'fresh' as const,
+  availability: 'available' as const, lastObservedMonotonic: marker,
+});
+
+function qualifiedState(marker = 1, providerGeneration = 3): ServerState {
+  return {
+    stateContractVersion: 1, providerGeneration, active: 'MAIN',
+    main: {
+      // MOR-2910: raw CAT scale — legacy nr_level contract maps raw 0..255 to
+      // display 0..15, so raw 85 is display 5 (the `mockProps.nrLevel` value).
+      nr: false, nrLevel: 85, nb: mockProps.nbActive, nbLevel: mockProps.nbLevel,
+      autoNotch: false, manualNotch: mockProps.notchMode === 'manual',
+      notchFilter: mockProps.notchFreq, manualNotchWidth: mockProps.manualNotchWidth,
+      agcTimeConstant: mockProps.agcTimeConstant,
+    },
+    // MOR-2910: raw CAT scale — the IC-7610 nb_depth band maps raw 0..9 to
+    // display 1..10, so raw 4 is display 5.
+    sub: {}, nbWidth: mockProps.nbWidth, nbDepth: 4, observationSeq: marker,
+    fieldStatus: {
+      'main.nr': fresh('main.nr', marker),
+      'main.nrLevel': fresh('main.nrLevel', marker),
+      'main.nb': fresh('main.nb', marker),
+      'main.nbLevel': fresh('main.nbLevel', marker),
+      'main.autoNotch': fresh('main.autoNotch', marker),
+      'main.manualNotch': fresh('main.manualNotch', marker),
+      'main.notchFilter': fresh('main.notchFilter', marker),
+      'main.manualNotchWidth': fresh('main.manualNotchWidth', marker),
+      'main.agcTimeConstant': fresh('main.agcTimeConstant', marker),
+      nbWidth: fresh('nbWidth', marker),
+      nbDepth: fresh('nbDepth', marker),
+    },
+  } as unknown as ServerState;
+}
+
+// The IC-7610 shipped nb_depth band (`rigs/ic7610.toml`): raw 0..9 keeps its
+// 1..10 display conversion (`notch-nb-depth-control-domain.isolated.test.ts`).
+const NB_DEPTH_RANGE = { raw_min: 0, raw_max: 9, raw_center: 0, display_min: 1, display_max: 10 };
+
+function qualifiedCaps(providerGeneration = 3): Capabilities {
+  return {
+    model: 'FTX-1', scope: false, audio: false, tx: false,
+    capabilities: ['nr', 'nb', 'notch', 'agc'], receivers: 1, vfoScheme: 'single',
+    freqRanges: [], modes: [], filters: [],
+    audioConfig: { sampleRate: 48_000, channels: 1, codecs: ['pcm'] },
+    webrtc: { available: false, enabled: false }, txBands: null,
+    stateContractVersion: 1, providerGeneration,
+    controls: { nb_depth: NB_DEPTH_RANGE },
+  } as unknown as Capabilities;
+}
+
+function mountPanel(overrides?: Partial<typeof mockProps>) {
+  if (overrides) Object.assign(mockProps, overrides);
+  runtimeState.state = qualifiedState(runtimeState.state?.observationSeq ?? 1);
+  runtimeState.notify();
+  const t = document.createElement('div');
+  document.body.appendChild(t);
+  const component = mount(DspPanel, { target: t });
+  flushSync();
+  components.push(component);
+  return t;
+}
+
+function openLongPressModal(t: HTMLElement, buttonPrefix: string): void {
+  vi.useFakeTimers();
+  const button = Array.from(t.querySelectorAll<HTMLButtonElement>('.dsp-btn-wrap button')).find(
+    (candidate) => candidate.textContent?.trim().startsWith(buttonPrefix),
+  );
+  if (buttonPrefix === 'AGC-T') {
+    button?.click();
+    flushSync();
+    return;
+  }
+  button?.dispatchEvent(new Event('pointerdown', { bubbles: true }));
+  vi.advanceTimersByTime(600);
+  flushSync();
+  vi.useRealTimers();
+}
+
+beforeEach(() => {
+  resetCommandLifecycle();
+  components = [];
+  runtimeDsp.useReal = false;
+  Object.assign(mockProps, {
+    nrMode: 0, nrLevel: 5, nbActive: false, nbLevel: 128,
+    notchMode: 'off', notchFreq: 1000, nbDepth: 0, nbWidth: 0,
+    manualNotchWidth: 0, agcTimeConstant: 0,
+    hasNr: true, hasNb: true,
+    hasNbDepth: true, hasNbWidth: true, nbLevelMax: 255, nbLevelPercent: true,
+  });
+  mockHandlers.onNrModeChange = vi.fn();
+  mockHandlers.onNrLevelChange = vi.fn();
+  mockHandlers.onNbToggle = vi.fn();
+  mockHandlers.onNbLevelChange = vi.fn();
+  mockHandlers.onNotchModeChange = vi.fn();
+  mockHandlers.onNotchFreqChange = vi.fn();
+  mockHandlers.onNbDepthChange = vi.fn();
+  mockHandlers.onNbWidthChange = vi.fn();
+  mockHandlers.onManualNotchWidthChange = vi.fn();
+  mockHandlers.onAgcTimeChange = vi.fn();
+  runtimeState.caps = qualifiedCaps();
+  runtimeState.session = { state: 'connected', epoch: 1 };
+  runtimeState.state = qualifiedState();
+  runtimeState.notify();
+});
+
+afterEach(() => {
+  components.forEach((c) => unmount(c));
+  resetCommandLifecycle();
+  runtimeDsp.useReal = false;
+  runtimeState.state = null;
+  runtimeState.caps = null;
+  runtimeState.session = { state: 'disconnected', epoch: -1 };
+  vi.useRealTimers();
+  document.body.innerHTML = '';
+});
+
+describe('DspPanel component rendering', () => {
+  it('mounts without errors', () => {
+    const t = mountPanel();
+    expect(t.querySelector('.dsp-panel')).not.toBeNull();
+  });
+
+  it('renders NB button', () => {
+    const t = mountPanel();
+    const buttons = Array.from(t.querySelectorAll('button'));
+    expect(buttons.some((b) => b.textContent?.trim().startsWith('NB'))).toBe(true);
+  });
+
+  it('renders NR button', () => {
+    const t = mountPanel();
+    const buttons = Array.from(t.querySelectorAll('button'));
+    expect(buttons.some((b) => b.textContent?.trim().startsWith('NR'))).toBe(true);
+  });
+
+  it('renders NOTCH button', () => {
+    const t = mountPanel();
+    const buttons = Array.from(t.querySelectorAll('button'));
+    expect(buttons.some((b) => b.textContent?.trim() === 'NOTCH')).toBe(true);
+  });
+
+  it('renders A-NOTCH button', () => {
+    const t = mountPanel();
+    const buttons = Array.from(t.querySelectorAll('button'));
+    expect(buttons.some((b) => b.textContent?.trim() === 'A-NOTCH')).toBe(true);
+  });
+
+  it('renders AGC-T button', () => {
+    const t = mountPanel();
+    const buttons = Array.from(t.querySelectorAll('button'));
+    expect(buttons.some((b) => b.textContent?.trim().startsWith('AGC-T'))).toBe(true);
+  });
+
+  it('unmounts cleanly', () => {
+    const t = mountPanel();
+    const comp = components.pop()!;
+    unmount(comp);
+    expect(t.innerHTML).toBe('');
+  });
+});
+
+describe('DspPanel Discrete facade mounts', () => {
+  it.each([
+    ['NR', 'Noise reduction settings', 'NR Level', 'onNrLevelChange', 6],
+    // MOR-2910: NB Depth confirmed truth now arrives through the shared
+    // scalar feedback — raw 4 on the IC-7610 nb_depth band is display 5, so
+    // one ArrowRight step requests display 6 (was: a below-domain mockProps
+    // 0 clamped up to the old raw minimum 1).
+    ['NB', 'Noise blanker settings', 'NB Depth', 'onNbDepthChange', 6],
+    ['AGC-T', 'AGC time settings', 'AGC Time', 'onAgcTimeChange', 1],
+  ] as const)(
+    'renders and dispatches the %s Discrete mount',
+    (button, dialogLabel, controlLabel, handler, expected) => {
+      const t = mountPanel({ nbActive: true });
+      openLongPressModal(t, button);
+      const dialog = t.querySelector<HTMLElement>(`[aria-label="${dialogLabel}"]`)!;
+      const control = dialog.querySelector<HTMLElement>(`[aria-label="${controlLabel}"]`)!;
+
+      expect(control.closest('.vc-discrete')).not.toBeNull();
+      vi.useFakeTimers();
+      control.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
+      vi.advanceTimersByTime(50);
+      expect(mockHandlers[handler]).toHaveBeenCalledExactlyOnceWith(expected);
+      vi.useRealTimers();
+    },
+  );
+});
+
+describe('DspPanel NB modal depth/width gating (MOR-502)', () => {
+  function openNbModal(t: HTMLElement): void {
+    vi.useFakeTimers();
+    try {
+      const nbBtn = Array.from(t.querySelectorAll<HTMLButtonElement>('.dsp-btn-wrap button')).find(
+        (b) => b.textContent?.trim().startsWith('NB'),
+      );
+      nbBtn?.dispatchEvent(new Event('pointerdown', { bubbles: true }));
+      vi.advanceTimersByTime(600);
+      flushSync();
+    } finally {
+      vi.useRealTimers();
+    }
+  }
+
+  it('renders NB Depth and NB Width in the modal when both capabilities are present', () => {
+    const t = mountPanel({ nbActive: true, hasNbDepth: true, hasNbWidth: true });
+    openNbModal(t);
+    const modal = t.querySelector('[aria-label="Noise blanker settings"]');
+    expect(modal?.textContent).toContain('NB Depth');
+    expect(modal?.textContent).toContain('NB Width');
+  });
+
+  it('omits NB Depth and NB Width in the modal when both capabilities are absent', () => {
+    const t = mountPanel({ nbActive: true, hasNbDepth: false, hasNbWidth: false });
+    openNbModal(t);
+    const modal = t.querySelector('[aria-label="Noise blanker settings"]');
+    expect(modal?.textContent).not.toContain('NB Depth');
+    expect(modal?.textContent).not.toContain('NB Width');
+    expect(modal?.textContent).toContain('NB Level');
+  });
+});
+
+/**
+ * MOR-2735: the legacy panel's manual-notch width group follows the same
+ * per-receiver `manual_notch_width` tag decision the v3 view model adopted
+ * in #3811 (MOR-2726) — a radio without the field draws no group at all —
+ * and an unread width lights NO choice (the store's null reading through
+ * `finiteValue`), never a made-up WIDE.
+ */
+describe('DspPanel notch width: none drawn without the field, none lit unread (MOR-2735)', () => {
+  function manualNotchState(width: number | null): ServerState {
+    const state = qualifiedState();
+    const main = state.main as unknown as Record<string, unknown>;
+    main.manualNotch = true;
+    main.manualNotchWidth = width;
+    return state;
+  }
+
+  function notchWidthCaps(withWidthTag: boolean): Capabilities {
+    const caps = qualifiedCaps();
+    caps.capabilities = withWidthTag
+      ? [...caps.capabilities, 'manual_notch_width']
+      : caps.capabilities;
+    return caps;
+  }
+
+  function mountReal(width: number | null, withWidthTag: boolean): HTMLElement {
+    runtimeDsp.useReal = true;
+    runtimeState.state = manualNotchState(width);
+    runtimeState.caps = notchWidthCaps(withWidthTag);
+    runtimeState.notify();
+    const t = document.createElement('div');
+    document.body.appendChild(t);
+    const component = mount(DspPanel, { target: t });
+    flushSync();
+    components.push(component);
+    return t;
+  }
+
+  function openNotchModal(t: HTMLElement): HTMLElement {
+    openLongPressModal(t, 'NOTCH');
+    return t.querySelector<HTMLElement>('[aria-label="Notch filter settings"]')!;
+  }
+
+  function widthButtons(modal: HTMLElement): HTMLButtonElement[] {
+    return Array.from(modal.querySelectorAll<HTMLButtonElement>('button'))
+      .filter((button) => ['WIDE', 'MID', 'NAR'].includes(button.textContent?.trim() ?? ''));
+  }
+
+  it('draws no width group on a radio whose profile declares no width field (FTX-1)', () => {
+    const t = mountReal(null, false);
+    const modal = openNotchModal(t);
+    expect(modal.querySelector('[aria-label="Notch Position"]')).not.toBeNull();
+    expect(widthButtons(modal)).toHaveLength(0);
+    expect(modal.textContent).not.toContain('WIDE');
+    expect(modal.textContent).not.toContain('MID');
+    expect(modal.textContent).not.toContain('NAR');
+  });
+
+  it('renders the WIDE / MID / NAR group with no choice lit while the width is unread (IC-7300)', () => {
+    const t = mountReal(null, true);
+    const modal = openNotchModal(t);
+    const buttons = widthButtons(modal);
+    expect(buttons.map((button) => button.textContent?.trim())).toEqual(['WIDE', 'MID', 'NAR']);
+    expect(buttons.filter((button) => button.dataset.active === 'true')).toHaveLength(0);
+    expect(buttons.every((button) => button.getAttribute('aria-pressed') === null)).toBe(true);
+  });
+
+  it('lights exactly MID when the MID width is read (IC-7300)', () => {
+    const t = mountReal(1, true);
+    const modal = openNotchModal(t);
+    const lit = widthButtons(modal).filter((button) => button.dataset.active === 'true');
+    expect(lit.map((button) => button.textContent?.trim())).toEqual(['MID']);
+  });
+});
+
+describe('DspPanel v3 DSP scalar source integration (MOR-2423)', () => {
+  const lanes = [
+    ['nbLevel', 'set_nb_level', { level: 129, receiver: 0 }, 129],
+    ['nbWidth', 'set_nb_width', { level: 64 }, 64],
+    ['notchFilter', 'set_notch_filter', { value: 127, receiver: 0 }, 127],
+    ['agcTimeConstant', 'set_agc_time_constant', { value: 4, receiver: 0 }, 4],
+  ] as const;
+  const modalLanes = [
+    ['NB', 'NB Level', 'hbar'],
+    ['NB', 'NB Width', 'hbar'],
+    ['NOTCH', 'Notch Position', 'hbar'],
+    ['AGC-T', 'AGC Time', 'discrete'],
+  ] as const;
+
+  function closeModal(t: HTMLElement): void {
+    t.querySelector<HTMLButtonElement>('[aria-label="Close DSP settings"]')!.click();
+    flushSync();
+  }
+
+  function assertModalFeedback(
+    t: HTMLElement,
+    expectedPhase: string,
+    expectedText: string | null,
+  ): void {
+    for (const [button, label, renderer] of modalLanes) {
+      openLongPressModal(t, button);
+      const control = t.querySelector<HTMLElement>(`[aria-label="${label}"]`)!;
+      expect(control.dataset.commandPhase).toBe(expectedPhase);
+      const owner = control.closest(renderer === 'hbar' ? '.vc-hbar' : '.vc-discrete')!;
+      if (renderer === 'discrete') {
+        if (expectedText === null) {
+          const current = owner.querySelector('[data-control-feedback-current-status]');
+          if (expectedPhase === 'unavailable') {
+            expect(current?.textContent).toBe('Control unavailable');
+          } else {
+            expect(current).toBeNull();
+          }
+        } else {
+          expect(owner.querySelector('[data-control-feedback-current-status]')?.textContent)
+            .toContain(expectedText);
+        }
+        expect(owner.querySelector('[data-control-feedback-status]')).toBeNull();
+      } else if (expectedText === null) {
+        expect(owner.querySelector('[data-control-feedback-status]')).toBeNull();
+      } else {
+        expect(owner.querySelectorAll('[data-control-feedback-status]')).toHaveLength(1);
+        expect(owner.querySelector('[data-control-feedback-status]')?.textContent).toContain(expectedText);
+      }
+      closeModal(t);
+    }
+  }
+
+  it('routes both NB lanes independently through their existing raw handlers', () => {
+    const t = mountPanel({ nbActive: true, nbLevel: 128, nbWidth: 63 });
+    openLongPressModal(t, 'NB');
+    vi.useFakeTimers();
+    t.querySelector<HTMLElement>('[aria-label="NB Level"]')!
+      .dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
+    t.querySelector<HTMLElement>('[aria-label="NB Width"]')!
+      .dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
+    vi.advanceTimersByTime(50);
+
+    expect(mockHandlers.onNbLevelChange).toHaveBeenCalledExactlyOnceWith(129);
+    expect(mockHandlers.onNbWidthChange).toHaveBeenCalledExactlyOnceWith(64);
+    vi.useRealTimers();
+  });
+
+  it('uses the real descriptors for submitted, ACK, fresh confirmation, and authority replacement', () => {
+    const commands = lanes.map(([field, name, params]) => beginCommand({
+      id: `dsp-${field}`, name, params, originalEpoch: 1, timeoutMs: 5_000,
+    }));
+    for (const [field] of lanes) {
+      const feedback = getDspControlFeedback(field);
+      expect(feedback.phase).toBe('submitted');
+      expect(feedback.availability).toBe('available');
+    }
+
+    commands.forEach((command) => acknowledgeCommand(command.id, command.originalEpoch, 1));
+    for (const [field] of lanes) expect(getDspControlFeedback(field).phase).toBe('awaiting-confirmation');
+
+    const next = qualifiedState(2);
+    next.main!.nbLevel = 129;
+    next.nbWidth = 64;
+    next.main!.notchFilter = 127;
+    next.main!.agcTimeConstant = 4;
+    runtimeState.state = next;
+    runtimeState.notify();
+    for (const [field, , , confirmed] of lanes) {
+      const feedback = getDspControlFeedback(field);
+      expect(feedback.phase).toBe('confirmed');
+      expect(feedback.confirmed).toBe(confirmed);
+    }
+
+    runtimeState.state = qualifiedState(3, 4);
+    runtimeState.caps = qualifiedCaps(4);
+    runtimeState.session = { state: 'connected', epoch: 2 };
+    runtimeState.notify();
+    for (const [field] of lanes) {
+      const feedback = getDspControlFeedback(field);
+      expect(feedback.phase).toBe('idle');
+      expect(feedback.lifecycleId).toBeNull();
+      expect(feedback.providerGeneration).toBe(4);
+      expect(feedback.sessionEpoch).toBe(2);
+    }
+  });
+
+  it('keeps all four hidden terminal facts current, clears them, and accepts fresh replacements', () => {
+    for (const [field, name, params] of lanes) {
+      const command = beginCommand({
+        id: `old-${field}`, name, params, originalEpoch: 1, timeoutMs: 5_000,
+      });
+      failCommand(command.id, command.originalEpoch, 1, `old ${field} failure`);
+    }
+    const t = mountPanel({ nbActive: true, notchMode: 'manual', notchFreq: 126 });
+
+    assertModalFeedback(t, 'failed', 'old');
+    assertModalFeedback(t, 'failed', 'old');
+
+    runtimeState.session = { state: 'disconnected', epoch: 1 };
+    runtimeState.notify();
+    flushSync();
+    assertModalFeedback(t, 'unavailable', null);
+    expect(t.textContent).not.toContain('old');
+
+    runtimeState.state = qualifiedState(2, 4);
+    runtimeState.caps = qualifiedCaps(4);
+    runtimeState.session = { state: 'connected', epoch: 2 };
+    mockProps.nbLevelMax = 200;
+    runtimeState.notify();
+    mockProjection.notify();
+    flushSync();
+    assertModalFeedback(t, 'idle', null);
+
+    for (const [field, name, params] of lanes) {
+      const command = beginCommand({
+        id: `new-${field}`, name, params, originalEpoch: 2, timeoutMs: 5_000,
+      });
+      failCommand(command.id, command.originalEpoch, 2, `new ${field} failure`);
+    }
+    flushSync();
+    assertModalFeedback(t, 'failed', 'new');
+  });
+
+  it('requires the same-field observation to be newer than ACK and equal to the target', () => {
+    const command = beginCommand({
+      id: 'exact-nb-level', name: 'set_nb_level', params: { level: 129, receiver: 0 },
+      originalEpoch: 1, timeoutMs: 5_000,
+    });
+    acknowledgeCommand(command.id, command.originalEpoch, 1);
+
+    const staleWrong = qualifiedState(1);
+    staleWrong.main!.nbLevel = 130;
+    runtimeState.state = staleWrong;
+    runtimeState.notify();
+    expect(getDspControlFeedback('nbLevel').phase).toBe('awaiting-confirmation');
+
+    const staleExact = qualifiedState(1);
+    staleExact.main!.nbLevel = 129;
+    runtimeState.state = staleExact;
+    runtimeState.notify();
+    expect(getDspControlFeedback('nbLevel').phase).toBe('awaiting-confirmation');
+
+    // Mirrors the store pin 'keeps an acknowledged IF-shift command awaiting when
+    // the first post-ACK readback is the pre-command value' (stores/__tests__/commands.test.ts).
+    const freshWrong = qualifiedState(2);
+    freshWrong.main!.nbLevel = 130;
+    runtimeState.state = freshWrong;
+    runtimeState.notify();
+    expect(getDspControlFeedback('nbLevel').phase).toBe('awaiting-confirmation');
+
+    const freshExact = qualifiedState(3);
+    freshExact.main!.nbLevel = 129;
+    runtimeState.state = freshExact;
+    runtimeState.notify();
+    expect(getDspControlFeedback('nbLevel').phase).toBe('confirmed');
+  });
+
+  it.each([
+    ['NB', 'NB Level', 'onNbLevelChange', { nbActive: true, nbLevel: 128 }, 129],
+    ['NB', 'NB Width', 'onNbWidthChange', { nbActive: true, nbWidth: 63 }, 64],
+    ['NOTCH', 'Notch Position', 'onNotchFreqChange', { notchMode: 'manual', notchFreq: 127 }, 128],
+    ['AGC-T', 'AGC Time', 'onAgcTimeChange', { agcTimeConstant: 3 }, 4],
+  ] as const)(
+    'invalidates deferred %s work on authority loss and recovers in place',
+    (button, label, handler, props, expected) => {
+      vi.useFakeTimers();
+      const t = mountPanel(props);
+      openLongPressModal(t, button);
+      vi.useFakeTimers();
+      const slider = t.querySelector<HTMLElement>(`[aria-label="${label}"]`)!;
+      slider.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
+
+      runtimeState.session = { state: 'disconnected', epoch: 1 };
+      runtimeState.notify();
+      flushSync();
+      vi.advanceTimersByTime(50);
+      expect(slider.getAttribute('aria-disabled')).toBe('true');
+      expect(mockHandlers[handler]).not.toHaveBeenCalled();
+
+      runtimeState.state = qualifiedState(2, 4);
+      runtimeState.caps = qualifiedCaps(4);
+      runtimeState.session = { state: 'connected', epoch: 2 };
+      runtimeState.notify();
+      flushSync();
+      slider.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
+      vi.advanceTimersByTime(50);
+      expect(slider.getAttribute('aria-disabled')).toBe('false');
+      expect(mockHandlers[handler]).toHaveBeenCalledExactlyOnceWith(expected);
+      vi.useRealTimers();
+    },
+  );
+});
+
+describe('DspPanel manual-notch position (MOR-1633)', () => {
+  function openNotchModal(t: HTMLElement): void {
+    vi.useFakeTimers();
+    try {
+      const notchBtn = Array.from(t.querySelectorAll<HTMLButtonElement>('.dsp-btn-wrap button')).find(
+        (b) => b.textContent?.trim() === 'NOTCH',
+      );
+      notchBtn?.dispatchEvent(new Event('pointerdown', { bubbles: true }));
+      vi.advanceTimersByTime(600);
+      flushSync();
+    } finally {
+      vi.useRealTimers();
+    }
+  }
+
+  function manualNotchPosition(t: HTMLElement): HTMLElement {
+    const slider = t.querySelector<HTMLElement>('[aria-label="Notch Position"]');
+    expect(slider).not.toBeNull();
+    return slider!;
+  }
+
+  it.each([0, 128, 255])('renders raw manual-notch position %i without Hz conversion', (notchFreq) => {
+    const t = mountPanel({ notchMode: 'manual', notchFreq });
+    openNotchModal(t);
+    const slider = manualNotchPosition(t);
+
+    expect(slider.getAttribute('aria-valuemin')).toBe('0');
+    expect(slider.getAttribute('aria-valuemax')).toBe('255');
+    expect(slider.getAttribute('aria-valuenow')).toBe(String(notchFreq));
+    const control = slider.closest('.vc-hbar');
+    expect(control?.querySelector('.vc-label')?.textContent).toBe('Notch Position');
+    expect(control?.querySelector('.vc-value')?.textContent).toBe(String(notchFreq));
+    expect(t.textContent).not.toContain('Hz');
+  });
+
+  it('emits raw manual-notch boundaries and midpoint unchanged', () => {
+    const t = mountPanel({ notchMode: 'manual', notchFreq: 127 });
+    openNotchModal(t);
+    const slider = manualNotchPosition(t);
+
+    vi.useFakeTimers();
+    try {
+      slider.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
+      vi.advanceTimersByTime(50);
+      slider.dispatchEvent(new KeyboardEvent('keydown', { key: 'Home', bubbles: true }));
+      vi.advanceTimersByTime(50);
+      slider.dispatchEvent(new KeyboardEvent('keydown', { key: 'End', bubbles: true }));
+      vi.advanceTimersByTime(50);
+    } finally {
+      vi.useRealTimers();
+    }
+
+    expect(mockHandlers.onNotchFreqChange).toHaveBeenNthCalledWith(1, 128);
+    expect(mockHandlers.onNotchFreqChange).toHaveBeenNthCalledWith(2, 0);
+    expect(mockHandlers.onNotchFreqChange).toHaveBeenNthCalledWith(3, 255);
+  });
+});
+
+describe('DspPanel mobile notch dialog (MOR-1631)', () => {
+  let lifecycleSerial = 0;
+
+  function beginNotchCommand(
+    strand: 'auto' | 'manual', on: boolean, timeoutMs = 5_000,
+  ) {
+    const name = strand === 'auto' ? 'set_auto_notch' : 'set_manual_notch';
+    lifecycleSerial += 1;
+    return beginCommand({
+      id: `${name}-${lifecycleSerial}`,
+      name,
+      params: { on, receiver: 0 },
+      originalEpoch: 1,
+      timeoutMs,
+    });
+  }
+
+  function openNotchModal(t: HTMLElement): void {
+    vi.useFakeTimers();
+    try {
+      const notchBtn = Array.from(t.querySelectorAll<HTMLButtonElement>('.dsp-btn-wrap button')).find(
+        (b) => b.textContent?.trim() === 'NOTCH',
+      );
+      notchBtn?.dispatchEvent(new Event('pointerdown', { bubbles: true }));
+      vi.advanceTimersByTime(600);
+      flushSync();
+    } finally {
+      vi.useRealTimers();
+    }
+  }
+
+  function modeButton(t: HTMLElement, mode: string): HTMLButtonElement {
+    const modeValue = mode === 'MAN' ? 'manual' : mode.toLowerCase();
+    const button = t.querySelector<HTMLButtonElement>(
+      `[aria-label="Notch filter settings"] [data-notch-mode-choice="${modeValue}"] button`,
+    );
+    expect(button).toBeDefined();
+    return button!;
+  }
+
+  it('uses the actual mobile tuning-strip bottom bound without a duplicated fixed height', () => {
+    const originalWidth = window.innerWidth;
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 375 });
+    const tuningStrip = document.createElement('nav');
+    tuningStrip.className = 'm-tuning-strip';
+    tuningStrip.getBoundingClientRect = () => ({ top: 610 } as DOMRect);
+    document.body.appendChild(tuningStrip);
+
+    try {
+      const t = mountPanel({ notchMode: 'manual', notchFreq: 128 });
+      openNotchModal(t);
+      const dialog = t.querySelector<HTMLElement>('[aria-label="Notch filter settings"]');
+      expect(dialog?.style.top).toBe('8px');
+      expect(dialog?.style.bottom).toBe('calc(100dvh + 8px - 610px)');
+      expect(dialog?.textContent).toContain('Notch Position');
+      expect(dialog?.querySelector('[aria-label="Notch Position"]')).not.toBeNull();
+    } finally {
+      tuningStrip.remove();
+      Object.defineProperty(window, 'innerWidth', { configurable: true, value: originalWidth });
+    }
+  });
+
+  it.each([
+    ['off', 'OFF'],
+    ['auto', 'AUTO'],
+    ['manual', 'MAN'],
+  ] as const)('renders only confirmed %s mode as selected', (notchMode, selectedLabel) => {
+    const t = mountPanel({ notchMode });
+    openNotchModal(t);
+
+    for (const mode of ['OFF', 'AUTO', 'MAN']) {
+      expect(modeButton(t, mode).dataset.active).toBe(String(mode === selectedLabel));
+    }
+    expect(t.querySelector('[aria-label="Notch Position"]') !== null).toBe(notchMode === 'manual');
+  });
+
+  it('does not optimistically select a requested mode before the confirmed radio state changes', () => {
+    const t = mountPanel({ notchMode: 'off' });
+    openNotchModal(t);
+
+    modeButton(t, 'MAN').click();
+    flushSync();
+
+    expect(mockHandlers.onNotchModeChange).toHaveBeenCalledExactlyOnceWith('manual');
+    expect(modeButton(t, 'OFF').dataset.active).toBe('true');
+    expect(modeButton(t, 'MAN').dataset.active).toBe('false');
+    expect(t.querySelector('[aria-label="Notch Position"]')).toBeNull();
+  });
+
+  it.each([
+    ['OFF', 'off'],
+    ['AUTO', 'auto'],
+    ['MAN', 'manual'],
+  ] as const)('uses the dialog-scoped %s choice selector and preserves its exact command target', (label, targetMode) => {
+    const t = mountPanel({ notchMode: 'off' });
+    openNotchModal(t);
+
+    modeButton(t, label).click();
+
+    expect(mockHandlers.onNotchModeChange).toHaveBeenCalledExactlyOnceWith(targetMode);
+  });
+
+  it.each([
+    ['AUTO', 'auto'],
+    ['MAN', 'manual'],
+  ] as const)('marks the delayed %s confirmation on its exact dialog choice without changing confirmed selection', (label, strand) => {
+    const t = mountPanel({ notchMode: 'off' });
+    openNotchModal(t);
+    beginNotchCommand(strand, true);
+    flushSync();
+
+    const choice = t.querySelector<HTMLElement>(
+      `[aria-label="Notch filter settings"] [data-notch-mode-choice="${label === 'MAN' ? 'manual' : label.toLowerCase()}"]`,
+    );
+    expect(choice?.getAttribute('aria-busy')).toBe('true');
+    expect(modeButton(t, label).dataset.armed).toBe('true');
+    expect(modeButton(t, 'OFF').dataset.active).toBe('true');
+    expect(modeButton(t, label).dataset.active).toBe('false');
+    expect(t.querySelector('[data-notch-mode-live]')?.textContent).toContain('Pending');
+  });
+
+  it('treats OFF as one pending choice only after both false command strands are armed', () => {
+    const t = mountPanel({ notchMode: 'manual' });
+    openNotchModal(t);
+
+    beginNotchCommand('auto', false);
+    flushSync();
+    expect(t.querySelector('[data-notch-mode-choice="off"]')?.getAttribute('aria-busy')).toBe('false');
+    expect(modeButton(t, 'OFF').dataset.armed).toBeUndefined();
+
+    beginNotchCommand('manual', false);
+    flushSync();
+    expect(t.querySelector('[data-notch-mode-choice="off"]')?.getAttribute('aria-busy')).toBe('true');
+    expect(modeButton(t, 'OFF').dataset.armed).toBe('true');
+    expect(modeButton(t, 'MAN').dataset.active).toBe('true');
+  });
+
+  it('does not resurrect an older AUTO target after its newer same-key command fails and is retained', () => {
+    const t = mountPanel({ notchMode: 'off' });
+    openNotchModal(t);
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+
+    beginNotchCommand('auto', true, 60_000);
+    flushSync();
+    expect(modeButton(t, 'AUTO').dataset.armed).toBe('true');
+
+    vi.setSystemTime(1_001);
+    const newer = beginNotchCommand('auto', false, 60_000);
+    flushSync();
+    expect(modeButton(t, 'AUTO').dataset.armed).toBeUndefined();
+    expect(modeButton(t, 'OFF').dataset.armed).toBeUndefined();
+
+    failCommand(newer.id, newer.originalEpoch, 1, 'expected component-test failure');
+    flushSync();
+    expect(modeButton(t, 'AUTO').dataset.armed).toBeUndefined();
+    expect(t.querySelector('[data-notch-mode-live]')).toBeNull();
+
+    vi.advanceTimersByTime(5_001);
+    flushSync();
+    expect(modeButton(t, 'AUTO').dataset.armed).toBeUndefined();
+  });
+
+  it('does not resurrect an older MAN target after its newer same-key command times out', () => {
+    const t = mountPanel({ notchMode: 'off' });
+    openNotchModal(t);
+    vi.useFakeTimers();
+
+    beginNotchCommand('manual', true, 60_000);
+    flushSync();
+    expect(modeButton(t, 'MAN').dataset.armed).toBe('true');
+
+    beginNotchCommand('manual', false, 100);
+    flushSync();
+    expect(modeButton(t, 'MAN').dataset.armed).toBeUndefined();
+
+    vi.advanceTimersByTime(101);
+    flushSync();
+    expect(modeButton(t, 'MAN').dataset.armed).toBeUndefined();
+    expect(t.querySelector('[data-notch-mode-live]')).toBeNull();
+  });
+
+  it('moves pending feedback to the newest same-key target without reviving the superseded target', () => {
+    const t = mountPanel({ notchMode: 'off' });
+    openNotchModal(t);
+
+    beginNotchCommand('auto', true);
+    flushSync();
+    expect(modeButton(t, 'AUTO').dataset.armed).toBe('true');
+
+    beginNotchCommand('auto', false);
+    flushSync();
+    expect(modeButton(t, 'AUTO').dataset.armed).toBeUndefined();
+    expect(modeButton(t, 'OFF').dataset.armed).toBeUndefined();
+
+    beginNotchCommand('manual', false);
+    flushSync();
+    expect(modeButton(t, 'OFF').dataset.armed).toBe('true');
+    expect(modeButton(t, 'AUTO').dataset.armed).toBeUndefined();
+  });
+
+  it('clears pending and selects an out-of-band confirmed AUTO observation', () => {
+    const t = mountPanel({ notchMode: 'off' });
+    openNotchModal(t);
+    const command = beginNotchCommand('auto', true);
+    flushSync();
+    expect(modeButton(t, 'AUTO').dataset.armed).toBe('true');
+    expect(modeButton(t, 'OFF').dataset.active).toBe('true');
+
+    acknowledgeCommand(command.id, command.originalEpoch, 1);
+    flushSync();
+    expect(modeButton(t, 'AUTO').dataset.armed).toBe('true');
+
+    runtimeState.state = {
+      active: 'MAIN',
+      main: { autoNotch: true, manualNotch: false },
+      sub: {},
+      observationSeq: 2,
+    } as unknown as ServerState;
+    mockProps.notchMode = 'auto';
+    runtimeState.notify();
+    mockProjection.notify();
+    flushSync();
+
+    expect(modeButton(t, 'AUTO').dataset.armed).toBeUndefined();
+    expect(modeButton(t, 'AUTO').dataset.active).toBe('true');
+    expect(modeButton(t, 'OFF').dataset.active).toBe('false');
+    expect(t.querySelector('[data-notch-mode-live]')).toBeNull();
+  });
+
+  it('keeps an out-of-band confirmed mode selected while a superseding target is pending', () => {
+    const t = mountPanel({ notchMode: 'manual' });
+    openNotchModal(t);
+    beginNotchCommand('auto', true);
+    flushSync();
+
+    expect(modeButton(t, 'MAN').dataset.active).toBe('true');
+    expect(modeButton(t, 'AUTO').dataset.active).toBe('false');
+    expect(modeButton(t, 'AUTO').dataset.armed).toBe('true');
+    expect(t.querySelector('[aria-label="Notch Position"]')).not.toBeNull();
+  });
+});
+
+// ── MOR-2910: NR level and NB depth adopt the shared command-feedback scalar
+// (`getDspControlFeedback` projected to display units, exactly the wiring
+// `SemanticRadioSurfaces.svelte` feeds `DspScalarHost`). Raw fixtures: legacy
+// nr_level 0..255 → display 0..15 (raw 85 = 5); nb_depth raw 0..9 → display
+// 1..10 (raw 4 = 5).
+describe('DspPanel NR-level / NB-depth command-feedback wiring (MOR-2910)', () => {
+  function nrLevelSlider(t: HTMLElement): HTMLElement {
+    return t.querySelector<HTMLElement>('[aria-label="NR Level"]')!;
+  }
+
+  function nbDepthSlider(t: HTMLElement): HTMLElement {
+    return t.querySelector<HTMLElement>('[aria-label="NB Depth"]')!;
+  }
+
+  // The discrete renderer exposes TWO ids (target description plus
+  // current status) while a command is in flight — read them all.
+  function describedTarget(t: HTMLElement, slider: HTMLElement): string {
+    const descriptionIds = slider.getAttribute('aria-describedby')!.split(' ');
+    return descriptionIds.map((id) => t.querySelector(`#${id}`)?.textContent ?? '').join(' ');
+  }
+
+  it('projects the NR-level requested target with busy state over confirmed truth', () => {
+    const t = mountPanel();
+    openLongPressModal(t, 'NR');
+    beginCommand({
+      id: 'mor-2910-nr', name: 'set_nr_level', params: { level: 102, receiver: 0 },
+      originalEpoch: 1, timeoutMs: 5_000,
+    });
+    flushSync();
+
+    const slider = nrLevelSlider(t);
+    expect(slider.dataset.commandPhase).toBe('submitted');
+    expect(slider.getAttribute('aria-busy')).toBe('true');
+    expect(slider.getAttribute('aria-valuenow')).toBe('5');
+    expect(describedTarget(t, slider)).toContain('6');
+
+    acknowledgeCommand('mor-2910-nr', 1, 1);
+    const next = qualifiedState(2);
+    next.main!.nrLevel = 102;
+    runtimeState.state = next;
+    runtimeState.notify();
+    flushSync();
+    expect(slider.dataset.commandPhase).toBe('confirmed');
+    expect(slider.getAttribute('aria-valuenow')).toBe('6');
+  });
+
+  it('keeps a terminal NR-level error visible without replacing confirmed truth', () => {
+    const t = mountPanel();
+    openLongPressModal(t, 'NR');
+    const command = beginCommand({
+      id: 'mor-2910-nr-failed', name: 'set_nr_level', params: { level: 102, receiver: 0 },
+      originalEpoch: 1, timeoutMs: 5_000,
+    });
+    failCommand(command.id, command.originalEpoch, 1, 'radio refused');
+    flushSync();
+
+    const slider = nrLevelSlider(t);
+    expect(slider.dataset.commandPhase).toBe('failed');
+    expect(slider.getAttribute('aria-busy')).toBe('false');
+    expect(slider.getAttribute('aria-valuenow')).toBe('5');
+    expect(slider.closest('.vc-discrete')?.querySelector('[data-control-feedback-status]')?.textContent)
+      .toContain('radio refused');
+  });
+
+  it('projects the NB-depth requested target on its display scale', () => {
+    const t = mountPanel({ nbActive: true });
+    openLongPressModal(t, 'NB');
+    beginCommand({
+      id: 'mor-2910-nb-depth', name: 'set_nb_depth', params: { level: 7 },
+      originalEpoch: 1, timeoutMs: 5_000,
+    });
+    flushSync();
+
+    const slider = nbDepthSlider(t);
+    expect(slider.dataset.commandPhase).toBe('submitted');
+    expect(slider.getAttribute('aria-busy')).toBe('true');
+    expect(slider.getAttribute('aria-valuenow')).toBe('5');
+    expect(describedTarget(t, slider)).toContain('8');
+
+    acknowledgeCommand('mor-2910-nb-depth', 1, 1);
+    const next = qualifiedState(2);
+    next.nbDepth = 7;
+    runtimeState.state = next;
+    runtimeState.notify();
+    flushSync();
+    expect(slider.dataset.commandPhase).toBe('confirmed');
+    expect(slider.getAttribute('aria-valuenow')).toBe('8');
+  });
+
+  it('routes NB-depth gestures through the shared policy handler', () => {
+    const t = mountPanel({ nbActive: true });
+    openLongPressModal(t, 'NB');
+    vi.useFakeTimers();
+    nbDepthSlider(t).dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
+    vi.advanceTimersByTime(50);
+    expect(mockHandlers.onNbDepthChange).toHaveBeenCalledExactlyOnceWith(6);
+    expect(mockHandlers.onNbLevelChange).not.toHaveBeenCalled();
+    vi.useRealTimers();
+  });
+});

@@ -25,6 +25,35 @@ Les outils natifs de visualisation/clavier, redémarrage, maintenance, DFU, gest
 | [FT8CN](https://github.com/N0BOY/FT8CN) (BG7YOZ) | Étudié uniquement pour comprendre sa gestion du CAT, de l’USB série et de l’audio sous Android ; aucun code ni ressource copié | MIT |
 | [OscarWatch · magicbug/OscarWatch-Tracker](https://github.com/magicbug/OscarWatch-Tracker) (© 2026 Peter Goodhall, MM9SQL) | Idées de fonctions uniquement : export des passages vers un calendrier `.ics`, passages communs avec une station DX par locator et terminateur jour/nuit sur la carte. Réimplémentées à partir de zéro en Kotlin et JavaScript d’après la RFC 5545 et des formules astronomiques standard ; aucun code C#, texte ni ressource n’est copié ou traduit | AGPL-3.0-or-later |
 
+### Yaesu FTX-1 (`third_party/ftx1/`)
+
+Copies non modifiées, figées au commit indiqué, utilisées comme référence pour `docs/FTX1-KNOWLEDGE.md` et pour réimplémenter des commandes CAT du FTX-1. Aucun code n'est copié. Détails et statut de licence dans [`third_party/ftx1/SOURCES.md`](third_party/ftx1/SOURCES.md).
+
+| Projet | Commit | Licence |
+| --- | --- | --- |
+| [evertonma/FTX-1CAT_PR2EM_Android](https://github.com/evertonma/FTX-1CAT_PR2EM_Android) | `80aa3a2` | PolyForm Noncommercial 1.0.0 |
+| [Evgeny161rus/ftx1-region-tool](https://github.com/Evgeny161rus/ftx1-region-tool) | `ba3692e` | Pas de licence déclarée ; permission MIT selon l'utilisateur (EA5KGV), 2026-11-17 |
+| [Semyonic/ftx1-programmer](https://github.com/Semyonic/ftx1-programmer) | `304d486` | GPL-3.0 |
+| [evertonma/FTX-1CAT_PR2EM](https://github.com/evertonma/FTX-1CAT_PR2EM) | `9f15f99` | PolyForm Noncommercial 1.0.0 |
+| [hatandspecs/ftx1-tuner-sweep](https://github.com/hatandspecs/ftx1-tuner-sweep) | `473e05a` | MIT |
+| [juanmmmmmmm/Look4Sat-FTX1](https://github.com/juanmmmmmmm/Look4Sat-FTX1) | `b4f93d0` | GPL-3.0 |
+| [gnfrazier/ftxcat](https://github.com/gnfrazier/ftxcat) | `08dbd7d` | MIT |
+| [git-jcw/FTX-1-WebUI](https://github.com/git-jcw/FTX-1-WebUI) | `0b89d46` | MIT |
+| [iTracMan/FTX1WinController](https://github.com/iTracMan/FTX1WinController) | `9f5d8f7` | MIT |
+| [pokibon3/FTX1Controller](https://github.com/pokibon3/FTX1Controller) | `adf730a` | Pas de licence déclarée ; permission MIT selon l'utilisateur (EA5KGV), 2026-11-17 |
+| [radiohyperactivity/ftx1-front-cover](https://github.com/radiohyperactivity/ftx1-front-cover) | `df6813b` | GPL-3.0 |
+| [Reid-n0rc/FTX-1_Firmware](https://github.com/Reid-n0rc/FTX-1_Firmware) | `38f3ed9` | Pas de licence déclarée ; permission MIT selon l'utilisateur (EA5KGV), 2026-11-17 |
+| [ew1abz/yaesu-ftx-1-control](https://github.com/ew1abz/yaesu-ftx-1-control) | `273d6c3` | Pas de licence déclarée ; permission MIT selon l'utilisateur (EA5KGV), 2026-11-17 |
+| [Eugen68/Yaesu-FTX1-CAT-Control](https://github.com/Eugen68/Yaesu-FTX1-CAT-Control) | `ea922b9` | MIT |
+| [fritzsche/yaesu-ftx1](https://github.com/fritzsche/yaesu-ftx1) | `a53baa3` | Pas de licence déclarée ; permission MIT selon l'utilisateur (EA5KGV), 2026-11-17 |
+| [byf3332/Yaesu-FTX1-Cat-Tunnel](https://github.com/byf3332/Yaesu-FTX1-Cat-Tunnel) | `7df422a` | WTFPL 2 |
+| [ew1abz/yaesu-ftx-1-memory-manipulator](https://github.com/ew1abz/yaesu-ftx-1-memory-manipulator) | `bad68d5` | MIT |
+| [sq9pd/Yaesu-FTX-1-mod](https://github.com/sq9pd/Yaesu-FTX-1-mod) | `ee71225` | Pas de licence déclarée ; permission MIT selon l'utilisateur (EA5KGV), 2026-11-17 |
+| [captobie/ftx1-remote](https://github.com/captobie/ftx1-remote) | `0fb8dd5` | MIT |
+| [bg7nzl/ftx1ctl](https://github.com/bg7nzl/ftx1ctl) | `36ceffc` | Pas de licence déclarée ; permission MIT selon l'utilisateur (EA5KGV), 2026-11-17 |
+| [rigplane/rigplane-core](https://github.com/rigplane/rigplane-core) | `71a5bff` | MIT |
+| [rzochowski/cat-ftx1](https://github.com/rzochowski/cat-ftx1) | `e77b599` | Pas de licence déclarée ; permission MIT selon l'utilisateur (EA5KGV), 2026-11-17 |
+
 ## Dépendances
 
 | Paquet | Utilisation | Licence |

@@ -1,0 +1,745 @@
+"""Tests for Yaesu CAT serial transport."""
+
+from __future__ import annotations
+
+import asyncio
+import sys
+from typing import Any
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+
+from rigplane.backends.yaesu_cat import (
+    CatTimeoutError,
+    CatTransportError,
+    YaesuCatTransport,
+)
+from rigplane.backends.yaesu_cat.transport import (
+    CatCommandRejected,
+    CatGarbledFrameError,
+)
+from rigplane.core.priority_exchange import ExchangeTier
+
+
+class FakeStreamReader:
+    """Fake asyncio StreamReader for testing."""
+
+    def __init__(self, responses: list[bytes]) -> None:
+        self._responses = list(responses)
+        self._index = 0
+
+    async def readuntil(self, separator: bytes) -> bytes:
+        """Return next canned response."""
+        if self._index >= len(self._responses):
+            raise asyncio.TimeoutError("No more responses")
+        data = self._responses[self._index]
+        self._index += 1
+        return data
+
+
+class FakeStreamWriter:
+    """Fake asyncio StreamWriter for testing."""
+
+    def __init__(self) -> None:
+        self.written: list[bytes] = []
+        self.closed = False
+
+    def write(self, data: bytes) -> None:
+        """Record written data."""
+        self.written.append(data)
+
+    async def drain(self) -> None:
+        """No-op drain."""
+        pass
+
+    def close(self) -> None:
+        """Mark as closed."""
+        self.closed = True
+
+    async def wait_closed(self) -> None:
+        """No-op wait."""
+        pass
+
+
+class BlockingFirstDrainWriter(FakeStreamWriter):
+    """Hold the first frame on the wire while later exchanges queue."""
+
+    def __init__(self, *, fail_first: bool = False) -> None:
+        super().__init__()
+        self._fail_first = fail_first
+        self.first_drain_entered = asyncio.Event()
+        self.release_first_drain = asyncio.Event()
+        self._drain_count = 0
+
+    async def drain(self) -> None:
+        self._drain_count += 1
+        if self._drain_count == 1:
+            self.first_drain_entered.set()
+            await self.release_first_drain.wait()
+            if self._fail_first:
+                raise OSError("first provider write failed")
+
+
+@pytest.fixture
+def mock_serial_connection(monkeypatch: pytest.MonkeyPatch) -> Any:
+    """Mock the serial open step.
+
+    The real open lives in rigplane.core.serial_open (pyserial instance
+    configured while closed, then opened and wrapped); tests replace that
+    step and keep assigning ``mock.open_serial_connection`` per test.
+    """
+    mock = MagicMock()
+    monkeypatch.setattr(
+        "rigplane.core.serial_open._open_with_idle_lines",
+        lambda **kwargs: mock.open_serial_connection(**kwargs),
+    )
+    yield mock
+
+
+class TestYaesuCatTransport:
+    """Tests for YaesuCatTransport basic operations."""
+
+    async def test_connect_opens_serial_port(self, mock_serial_connection: Any) -> None:
+        """connect() opens serial port with correct parameters."""
+        reader = FakeStreamReader([])
+        writer = FakeStreamWriter()
+        mock_serial_connection.open_serial_connection = AsyncMock(
+            return_value=(reader, writer)
+        )
+
+        transport = YaesuCatTransport(device="/dev/test", baudrate=38400)
+        await transport.connect()
+
+        assert transport.connected
+        mock_serial_connection.open_serial_connection.assert_called_once_with(
+            url="/dev/test",
+            baudrate=38400,
+            bytesize=8,
+            parity="N",
+            stopbits=1,
+        )
+
+    async def test_connect_twice_is_noop(self, mock_serial_connection: Any) -> None:
+        """Second connect() call is a no-op."""
+        reader = FakeStreamReader([])
+        writer = FakeStreamWriter()
+        mock_serial_connection.open_serial_connection = AsyncMock(
+            return_value=(reader, writer)
+        )
+
+        transport = YaesuCatTransport(device="/dev/test")
+        await transport.connect()
+        await transport.connect()  # Should not call open_serial_connection again
+
+        assert mock_serial_connection.open_serial_connection.call_count == 1
+
+    async def test_close_closes_writer(self, mock_serial_connection: Any) -> None:
+        """close() closes the writer."""
+        reader = FakeStreamReader([])
+        writer = FakeStreamWriter()
+        mock_serial_connection.open_serial_connection = AsyncMock(
+            return_value=(reader, writer)
+        )
+
+        transport = YaesuCatTransport(device="/dev/test")
+        await transport.connect()
+        await transport.close()
+
+        assert not transport.connected
+        assert writer.closed
+
+    async def test_write_sends_command_with_terminator(
+        self, mock_serial_connection: Any
+    ) -> None:
+        """write() sends command with semicolon terminator."""
+        reader = FakeStreamReader([])
+        writer = FakeStreamWriter()
+        mock_serial_connection.open_serial_connection = AsyncMock(
+            return_value=(reader, writer)
+        )
+
+        transport = YaesuCatTransport(device="/dev/test")
+        await transport.connect()
+        await transport.write("FA")
+
+        assert writer.written == [b"FA;"]
+
+    async def test_write_preserves_existing_terminator(
+        self, mock_serial_connection: Any
+    ) -> None:
+        """write() doesn't double-terminate if command already has `;`."""
+        reader = FakeStreamReader([])
+        writer = FakeStreamWriter()
+        mock_serial_connection.open_serial_connection = AsyncMock(
+            return_value=(reader, writer)
+        )
+
+        transport = YaesuCatTransport(device="/dev/test")
+        await transport.connect()
+        await transport.write("FA;")
+
+        assert writer.written == [b"FA;"]
+
+    async def test_write_without_connect_raises(self) -> None:
+        """write() raises if not connected."""
+        transport = YaesuCatTransport(device="/dev/test")
+
+        with pytest.raises(CatTransportError, match="not connected"):
+            await transport.write("FA;")
+
+    async def test_write_rejected_raises_and_names_frame(
+        self, mock_serial_connection: Any
+    ) -> None:
+        """write() raises CatCommandRejected when the radio answers '?;'
+        instead of silently discarding it as a drained stale line
+        (MOR-2103)."""
+        reader = FakeStreamReader([b"?;"])
+        writer = FakeStreamWriter()
+        mock_serial_connection.open_serial_connection = AsyncMock(
+            return_value=(reader, writer)
+        )
+
+        transport = YaesuCatTransport(device="/dev/test")
+        await transport.connect()
+
+        with pytest.raises(CatCommandRejected, match=r"CT002;"):
+            await transport.write("CT002;")
+
+        assert writer.written == [b"CT002;"]
+
+    @pytest.mark.parametrize("failure_stage", ["writer-drain", "response-drain"])
+    async def test_write_propagates_io_failure_without_resetting_error_count(
+        self,
+        mock_serial_connection: Any,
+        monkeypatch: pytest.MonkeyPatch,
+        failure_stage: str,
+    ) -> None:
+        reader = FakeStreamReader([])
+        writer = FakeStreamWriter()
+        io_error = OSError("serial I/O failed")
+        failed_io = AsyncMock(side_effect=io_error)
+        if failure_stage == "writer-drain":
+            monkeypatch.setattr(writer, "drain", failed_io)
+            error_prefix = "Write"
+        else:
+            monkeypatch.setattr(reader, "readuntil", failed_io)
+            error_prefix = "Read"
+        mock_serial_connection.open_serial_connection = AsyncMock(
+            return_value=(reader, writer)
+        )
+
+        transport = YaesuCatTransport(device="/dev/test")
+        await transport.connect()
+
+        with pytest.raises(
+            CatTransportError, match=f"{error_prefix} failed: serial I/O failed"
+        ) as caught:
+            await transport.write("TX0;")
+
+        assert type(caught.value) is CatTransportError
+        assert caught.value.__cause__ is io_error
+        assert writer.written == [b"TX0;"]
+        failed_io.assert_awaited_once()
+        assert transport.stats.errors == 1
+        assert transport.stats.consecutive_errors == 1
+        assert transport.stats.timeouts == 0
+        assert transport.stats.writes == (0 if failure_stage == "writer-drain" else 1)
+
+    async def test_urgent_write_waits_for_active_frame_then_overtakes_ordinary_fifo(
+        self,
+        mock_serial_connection: Any,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        reader = FakeStreamReader([])
+        writer = BlockingFirstDrainWriter()
+        mock_serial_connection.open_serial_connection = AsyncMock(
+            return_value=(reader, writer)
+        )
+        transport = YaesuCatTransport(device="/dev/test")
+        await transport.connect()
+        monkeypatch.setattr(transport, "_drain_responses", AsyncMock(return_value=0))
+        monkeypatch.setattr(transport, "readline", AsyncMock(return_value="MD02"))
+
+        active = asyncio.create_task(transport.write("FA000000001;"))
+        await asyncio.wait_for(writer.first_drain_entered.wait(), 1)
+        ordinary_query = asyncio.create_task(transport.query("MD0;"))
+        ordinary_write = asyncio.create_task(transport.write("FB000000002;"))
+        await asyncio.sleep(0)
+        urgent_off = asyncio.create_task(
+            transport.write("TX0;", tier=ExchangeTier.URGENT)
+        )
+        urgent_on = asyncio.create_task(
+            transport.write("TX1;", tier=ExchangeTier.URGENT)
+        )
+        await asyncio.sleep(0)
+
+        assert writer.written == [b"FA000000001;"]
+        writer.release_first_drain.set()
+        await asyncio.wait_for(
+            asyncio.gather(
+                active, ordinary_query, ordinary_write, urgent_off, urgent_on
+            ),
+            1,
+        )
+
+        assert writer.written == [
+            b"FA000000001;",
+            b"TX0;",
+            b"TX1;",
+            b"MD0;",
+            b"FB000000002;",
+        ]
+
+    async def test_cancelled_urgent_waiter_releases_ordinary_exchange(
+        self,
+        mock_serial_connection: Any,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        reader = FakeStreamReader([])
+        writer = BlockingFirstDrainWriter()
+        mock_serial_connection.open_serial_connection = AsyncMock(
+            return_value=(reader, writer)
+        )
+        transport = YaesuCatTransport(device="/dev/test")
+        await transport.connect()
+        monkeypatch.setattr(transport, "_drain_responses", AsyncMock(return_value=0))
+
+        active = asyncio.create_task(transport.write("FA000000001;"))
+        await asyncio.wait_for(writer.first_drain_entered.wait(), 1)
+        cancelled = asyncio.create_task(
+            transport.write("TX0;", tier=ExchangeTier.FORCE_RELEASE)
+        )
+        abort = asyncio.create_task(transport.write("KY;", tier=ExchangeTier.ABORT))
+        ordinary = asyncio.create_task(transport.write("FB000000002;"))
+        await asyncio.sleep(0)
+        cancelled.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await cancelled
+        await asyncio.sleep(0)
+
+        # Cancelling a queued higher-tier waiter must not release the active
+        # exchange or let any later waiter interleave with its wire frame.
+        assert writer.written == [b"FA000000001;"]
+
+        writer.release_first_drain.set()
+        await asyncio.wait_for(asyncio.gather(active, abort, ordinary), 1)
+        await asyncio.wait_for(transport.write("FC000000003;"), 1)
+
+        assert writer.written == [
+            b"FA000000001;",
+            b"KY;",
+            b"FB000000002;",
+            b"FC000000003;",
+        ]
+
+    async def test_force_release_overtakes_queued_aborts_after_provider_failure(
+        self,
+        mock_serial_connection: Any,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        reader = FakeStreamReader([])
+        writer = BlockingFirstDrainWriter(fail_first=True)
+        mock_serial_connection.open_serial_connection = AsyncMock(
+            return_value=(reader, writer)
+        )
+        transport = YaesuCatTransport(device="/dev/test")
+        await transport.connect()
+        monkeypatch.setattr(transport, "_drain_responses", AsyncMock(return_value=0))
+
+        active = asyncio.create_task(transport.write("FA000000001;"))
+        await asyncio.wait_for(writer.first_drain_entered.wait(), 1)
+        stop_cw = asyncio.create_task(transport.write("KY;", tier=ExchangeTier.ABORT))
+        stop_tune = asyncio.create_task(
+            transport.write("AC000;", tier=ExchangeTier.ABORT)
+        )
+        late_on = asyncio.create_task(transport.write("TX1;"))
+        await asyncio.sleep(0)
+        force_off = asyncio.create_task(
+            transport.write("TX0;", tier=ExchangeTier.FORCE_RELEASE)
+        )
+        await asyncio.sleep(0)
+
+        assert writer.written == [b"FA000000001;"]
+        writer.release_first_drain.set()
+        with pytest.raises(CatTransportError, match="first provider write failed"):
+            await active
+        await asyncio.wait_for(
+            asyncio.gather(force_off, stop_cw, stop_tune, late_on),
+            1,
+        )
+
+        assert writer.written == [
+            b"FA000000001;",
+            b"TX0;",
+            b"KY;",
+            b"AC000;",
+            b"TX1;",
+        ]
+
+    async def test_final_currency_check_suppresses_stale_write(
+        self,
+        mock_serial_connection: Any,
+    ) -> None:
+        reader = FakeStreamReader([])
+        writer = FakeStreamWriter()
+        mock_serial_connection.open_serial_connection = AsyncMock(
+            return_value=(reader, writer)
+        )
+        transport = YaesuCatTransport(device="/dev/test")
+        await transport.connect()
+        checks = iter((True, False))
+
+        with pytest.raises(CatTransportError, match="no longer current"):
+            await transport.write("TX0;", is_current=lambda: next(checks))
+
+        assert writer.written == []
+
+    async def test_readline_returns_response_without_terminator(
+        self, mock_serial_connection: Any
+    ) -> None:
+        """readline() returns response with terminator stripped."""
+        reader = FakeStreamReader([b"FA014074000;"])
+        writer = FakeStreamWriter()
+        mock_serial_connection.open_serial_connection = AsyncMock(
+            return_value=(reader, writer)
+        )
+
+        transport = YaesuCatTransport(device="/dev/test")
+        await transport.connect()
+        response = await transport.readline()
+
+        assert response == "FA014074000"
+
+    async def test_readline_timeout_raises(self, mock_serial_connection: Any) -> None:
+        """readline() raises CatTimeoutError on timeout."""
+        reader = FakeStreamReader([])  # No responses = timeout
+        writer = FakeStreamWriter()
+        mock_serial_connection.open_serial_connection = AsyncMock(
+            return_value=(reader, writer)
+        )
+
+        transport = YaesuCatTransport(device="/dev/test", timeout=0.1)
+        await transport.connect()
+
+        with pytest.raises(CatTimeoutError, match="Read timeout"):
+            await transport.readline()
+
+    async def test_query_timeout_names_the_unanswered_command(
+        self, mock_serial_connection: Any
+    ) -> None:
+        """A timed-out query carries the command the radio never answered.
+
+        MOR-2757: the Yaesu observation adapter counts unanswered reads of
+        safety-critical paths and names the command in the declared-command
+        defect that ends startup — the command reaches it through this
+        attribute, the way ``CatCommandRejected`` already carries its own.
+        """
+        reader = FakeStreamReader([])  # No responses = timeout
+        writer = FakeStreamWriter()
+        mock_serial_connection.open_serial_connection = AsyncMock(
+            return_value=(reader, writer)
+        )
+
+        transport = YaesuCatTransport(device="/dev/test", timeout=0.1)
+        await transport.connect()
+
+        with pytest.raises(CatTimeoutError) as caught:
+            await transport.query("FT;")
+
+        assert caught.value.command == "FT;"
+
+    async def test_readline_without_connect_raises(self) -> None:
+        """readline() raises if not connected."""
+        transport = YaesuCatTransport(device="/dev/test")
+
+        with pytest.raises(CatTransportError, match="not connected"):
+            await transport.readline()
+
+    @pytest.mark.parametrize(
+        "garbled",
+        [
+            pytest.param(b"SM\x00048;", id="control-byte"),
+            pytest.param(b"SM\x80048;", id="high-bit-set"),
+            pytest.param(b"\xff;", id="all-bits-set"),
+        ],
+    )
+    async def test_readline_rejects_a_terminated_line_carrying_a_byte_outside_0x20_0x7e(
+        self, mock_serial_connection: Any, garbled: bytes
+    ) -> None:
+        """A ``;``-terminated line with a byte outside 0x20-0x7E is link noise.
+
+        It never reaches the parser, where it would be indistinguishable from
+        a clean frame of the wrong shape.  Bytes >= 0x80 are classified the same way as control bytes.
+        """
+        reader = FakeStreamReader([garbled])
+        writer = FakeStreamWriter()
+        mock_serial_connection.open_serial_connection = AsyncMock(
+            return_value=(reader, writer)
+        )
+
+        transport = YaesuCatTransport(device="/dev/test")
+        await transport.connect()
+
+        with pytest.raises(CatGarbledFrameError) as caught:
+            await transport.readline()
+        assert isinstance(caught.value, CatTransportError)
+        assert repr(garbled) in str(caught.value)
+
+    async def test_readline_accepts_the_printable_ascii_edges(
+        self, mock_serial_connection: Any
+    ) -> None:
+        """0x20 and 0x7E are inside the accepted range."""
+        reader = FakeStreamReader([b" \x7e;"])
+        writer = FakeStreamWriter()
+        mock_serial_connection.open_serial_connection = AsyncMock(
+            return_value=(reader, writer)
+        )
+
+        transport = YaesuCatTransport(device="/dev/test")
+        await transport.connect()
+
+        assert await transport.readline() == " \x7e"
+
+    @pytest.mark.parametrize(
+        "noise",
+        [
+            pytest.param(b"MD\x000E;", id="control-byte"),
+            pytest.param(b"MD\x800E;", id="high-bit-set"),
+        ],
+    )
+    async def test_drained_garbled_line_after_a_write_is_discarded(
+        self, mock_serial_connection: Any, noise: bytes
+    ) -> None:
+        """A garbled line in the post-write drain stays a discarded line.
+
+        ``write()`` drains echo/auto-info; noise there is not the SET
+        command's outcome and must not fail it.
+        """
+        reader = FakeStreamReader([noise])
+        writer = FakeStreamWriter()
+        mock_serial_connection.open_serial_connection = AsyncMock(
+            return_value=(reader, writer)
+        )
+
+        transport = YaesuCatTransport(device="/dev/test")
+        await transport.connect()
+        await transport.write("MD0E;")
+
+        assert writer.written == [b"MD0E;"]
+
+    @pytest.mark.parametrize(
+        ("options", "error_delta"),
+        [
+            pytest.param({}, 1, id="default"),
+            pytest.param({"expect_rejection": False}, 1, id="unexpected"),
+            pytest.param({"expect_rejection": True}, 0, id="expected"),
+        ],
+    )
+    async def test_query_rejection_accounting_is_opt_in(
+        self, options: dict[str, bool], error_delta: int
+    ) -> None:
+        transport = YaesuCatTransport(device="/dev/test")
+        transport._reader = FakeStreamReader([b"?;"])  # type: ignore[assignment]
+        transport._writer = FakeStreamWriter()  # type: ignore[assignment]
+        transport._connected = True
+        transport.stats.record_error("earlier failure")
+        last_error = transport.stats.last_error
+
+        with pytest.raises(CatCommandRejected) as caught:
+            await transport.query("MR00025;", **options)
+
+        assert caught.value.command == "MR00025;"
+        assert transport.stats.queries == 1
+        assert transport.stats.errors == 1 + error_delta
+        assert transport.stats.consecutive_errors == 1 + error_delta
+        assert transport.stats.timeouts == 0
+        if not error_delta:
+            assert transport.stats.last_error == last_error
+
+    @pytest.mark.parametrize("expect_rejection", [False, True])
+    @pytest.mark.parametrize(
+        ("responses", "error", "errors", "timeouts"),
+        [
+            pytest.param([], CatTimeoutError, 0, 1, id="timeout"),
+            pytest.param([b"\xff;"], CatGarbledFrameError, 1, 0, id="garbled"),
+        ],
+    )
+    async def test_expected_rejection_keeps_other_failure_accounting(
+        self,
+        expect_rejection: bool,
+        responses: list[bytes],
+        error: type[CatTransportError],
+        errors: int,
+        timeouts: int,
+    ) -> None:
+        transport = YaesuCatTransport(device="/dev/test")
+        transport._reader = FakeStreamReader(responses)  # type: ignore[assignment]
+        transport._writer = FakeStreamWriter()  # type: ignore[assignment]
+        transport._connected = True
+        transport.stats.record_error("earlier failure")
+
+        with pytest.raises(error):
+            await transport.query("MR00025;", expect_rejection=expect_rejection)
+
+        assert transport.stats.errors == 1 + errors
+        assert transport.stats.consecutive_errors == 1 + errors
+        assert transport.stats.timeouts == timeouts
+
+    async def test_query_sends_and_reads(self, mock_serial_connection: Any) -> None:
+        """query() sends command and returns response."""
+        reader = FakeStreamReader([b"FA014074000;"])
+        writer = FakeStreamWriter()
+        mock_serial_connection.open_serial_connection = AsyncMock(
+            return_value=(reader, writer)
+        )
+
+        transport = YaesuCatTransport(device="/dev/test")
+        await transport.connect()
+        response = await transport.query("FA;")
+
+        assert writer.written == [b"FA;"]
+        assert response == "FA014074000"
+
+    async def test_query_with_echo_suppression(
+        self, mock_serial_connection: Any
+    ) -> None:
+        """query() skips echo line when echo_suppression=True."""
+        # Radio echoes request, then sends real response
+        reader = FakeStreamReader([b"FA;", b"FA014074000;"])
+        writer = FakeStreamWriter()
+        mock_serial_connection.open_serial_connection = AsyncMock(
+            return_value=(reader, writer)
+        )
+
+        transport = YaesuCatTransport(device="/dev/test", echo_suppression=True)
+        await transport.connect()
+        response = await transport.query("FA;")
+
+        assert writer.written == [b"FA;"]
+        assert response == "FA014074000"  # Second line, not echo
+
+    async def test_query_without_echo_suppression(
+        self, mock_serial_connection: Any
+    ) -> None:
+        """query() returns first line when echo_suppression=False."""
+        reader = FakeStreamReader([b"FA;"])
+        writer = FakeStreamWriter()
+        mock_serial_connection.open_serial_connection = AsyncMock(
+            return_value=(reader, writer)
+        )
+
+        transport = YaesuCatTransport(device="/dev/test", echo_suppression=False)
+        await transport.connect()
+        response = await transport.query("FA;")
+
+        assert response == "FA"  # First line (echo itself)
+
+    async def test_query_pairs_the_reply_to_the_whole_request_body(
+        self, mock_serial_connection: Any
+    ) -> None:
+        """MOR-3677: a late reply to a sibling query is stale, not the answer.
+
+        ``NA1;`` reads the SUB narrow state; ``NA00;`` is the late answer
+        to the earlier MAIN ``NA0;``. The digit-stripped prefix (``NA``)
+        accepted it and the ``NA1{state};`` parser then failed — the
+        owner's bench logged six ``declared read defect`` events a day on
+        exactly that frame. Whole-request pairing skips the stale line and
+        waits for the matching reply."""
+        reader = FakeStreamReader([b"NA00;", b"NA11;"])
+        writer = FakeStreamWriter()
+        mock_serial_connection.open_serial_connection = AsyncMock(
+            return_value=(reader, writer)
+        )
+
+        transport = YaesuCatTransport(device="/dev/test")
+        await transport.connect()
+        response = await transport.query("NA1;")
+
+        assert response == "NA11"
+        assert transport.stats.stale_lines_skipped == 1
+        assert writer.written == [b"NA1;"]
+
+    async def test_query_pairs_a_reply_through_a_declared_template_head(
+        self, mock_serial_connection: Any
+    ) -> None:
+        """MOR-3677: the one data exception — a reply head the profile's
+        parse template declares shorter than the request (get_s_meter_sub:
+        ``SM1;`` is answered ``SM0…``, the side digit echoed 0, f18b397f) —
+        still pairs, so strict whole-request matching does not time the
+        SUB S-meter read out."""
+        reader = FakeStreamReader([b"SM0078;"])
+        writer = FakeStreamWriter()
+        mock_serial_connection.open_serial_connection = AsyncMock(
+            return_value=(reader, writer)
+        )
+
+        transport = YaesuCatTransport(device="/dev/test", reply_heads=frozenset({"SM"}))
+        await transport.connect()
+        response = await transport.query("SM1;")
+
+        assert response == "SM0078"
+        assert transport.stats.stale_lines_skipped == 0
+
+    async def test_context_manager_opens_and_closes(
+        self, mock_serial_connection: Any
+    ) -> None:
+        """Context manager opens on enter, closes on exit."""
+        reader = FakeStreamReader([])
+        writer = FakeStreamWriter()
+        mock_serial_connection.open_serial_connection = AsyncMock(
+            return_value=(reader, writer)
+        )
+
+        async with YaesuCatTransport(device="/dev/test") as transport:
+            assert transport.connected
+
+        assert not transport.connected
+        assert writer.closed
+
+
+class TestYaesuCatTransportEdgeCases:
+    """Edge cases and error handling."""
+
+    async def test_connect_without_serial_asyncio_raises(self) -> None:
+        """connect() raises helpful error if pyserial-asyncio not installed."""
+        import builtins
+
+        real_import = builtins.__import__
+
+        def _mock_import(name: str, *args: Any, **kwargs: Any) -> Any:
+            if name == "serial_asyncio":
+                raise ImportError("mocked: no serial_asyncio")
+            return real_import(name, *args, **kwargs)
+
+        old_module = sys.modules.pop("serial_asyncio", None)
+        try:
+            builtins.__import__ = _mock_import  # type: ignore[assignment]
+            transport = YaesuCatTransport(device="/dev/test")
+            with pytest.raises(CatTransportError, match="pyserial"):
+                await transport.connect()
+        finally:
+            builtins.__import__ = real_import  # type: ignore[assignment]
+            if old_module:
+                sys.modules["serial_asyncio"] = old_module
+
+    async def test_multiple_queries_in_sequence(
+        self, mock_serial_connection: Any
+    ) -> None:
+        """Multiple query() calls work in sequence."""
+        reader = FakeStreamReader([b"FA014074000;", b"MD02;", b"PC2005;"])
+        writer = FakeStreamWriter()
+        mock_serial_connection.open_serial_connection = AsyncMock(
+            return_value=(reader, writer)
+        )
+
+        transport = YaesuCatTransport(device="/dev/test")
+        await transport.connect()
+
+        freq = await transport.query("FA;")
+        mode = await transport.query("MD0;")
+        power = await transport.query("PC;")
+
+        assert freq == "FA014074000"
+        assert mode == "MD02"
+        assert power == "PC2005"
+        assert writer.written == [b"FA;", b"MD0;", b"PC;"]

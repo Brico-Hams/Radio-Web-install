@@ -1,0 +1,280 @@
+import FTX1Core
+import SwiftUI
+
+/// The FM page's APRS S.LIST/M.LIST on the iPad: shown in place of the
+/// filter block and the MENU grid (`MenuPageView`'s `onShowAPRSList`),
+/// over their frame, until Close puts them back. They stay underneath,
+/// hidden, so the grid comes back on the FM page it was left on.
+///
+/// The same columns and filters as the Mac's `APRSStationListView`/
+/// `APRSMessageListView` windows, fed by whichever route is connected:
+/// Pi direct decodes on this iPad (`PiDirectViewModel.aprsStore`); the hub
+/// route shows the Mac's lists (`RigClientViewModel.aprsList`).
+struct APRSListPane: View {
+    @Binding var kind: APRSListKind?
+    let stations: [APRSStation]
+    let messages: [APRSMessage]
+    /// Pi direct: this iPad decodes, so it offers the decoder's settings
+    /// and Clear History. Nil on the hub route (the Mac's Settings → APRS).
+    let onClearHistory: (() -> Void)?
+
+    @State private var sourceFilter: APRSSource?
+    @State private var searchText = ""
+    @State private var heardWindow: APRSHeardWindow = .any
+    @State private var positionOnly = false
+    @State private var addressedToMe = false
+    @State private var hideBulletins = false
+    @State private var hideTelemetry = false
+    @State private var showingSettings = false
+    @AppStorage(StationSettings.callsignKey) private var myCallsign = ""
+    @AppStorage(APRSSettings.enabledKey) private var decodeEnabled = false
+    @AppStorage(APRSSettings.frequencyHzKey) private var frequencyHz = APRSSettings.defaultFrequencyHz
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            header
+            TextField(kind == .messages ? "aprsListPane.searchCallsignOrMessage" : "aprsListPane.searchCallsignOrComment", text: $searchText)
+                .textFieldStyle(.roundedBorder)
+                .textInputAutocapitalization(.characters)
+                .autocorrectionDisabled()
+            if kind == .messages {
+                messageTable
+            } else {
+                stationTable
+            }
+            footnote
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10))
+    }
+
+    private var header: some View {
+        HStack(spacing: 12) {
+            Picker("aprsListPane.list", selection: $kind) {
+                Text("S.LIST").tag(APRSListKind?.some(.stations))
+                Text("M.LIST").tag(APRSListKind?.some(.messages))
+            }
+            .pickerStyle(.segmented)
+            .frame(maxWidth: 200)
+
+            APRSSourcePicker(selection: $sourceFilter)
+                .frame(maxWidth: 200)
+
+            filterMenu
+
+            Spacer()
+
+            if onClearHistory != nil {
+                Button {
+                    showingSettings = true
+                } label: {
+                    Image(systemName: "gearshape")
+                }
+                .accessibilityLabel("aprsListPane.aprsDecoderSettings")
+                .popover(isPresented: $showingSettings) { decoderSettings }
+            }
+
+            Button {
+                kind = nil
+            } label: {
+                Label("common.close", systemImage: "xmark")
+            }
+            .buttonStyle(.bordered)
+        }
+    }
+
+    private var filterMenu: some View {
+        Menu {
+            Picker(kind == .messages ? "common.receivedWithin" : "common.heardWithin", selection: $heardWindow) {
+                ForEach(APRSHeardWindow.allCases, id: \.self) { Text($0.label).tag($0) }
+            }
+            if kind == .messages {
+                Toggle(myBaseCallsign.isEmpty ? "common.addressedToMe" : "aprsListPane.addressedTo \(myBaseCallsign)",
+                       isOn: $addressedToMe)
+                    .disabled(myBaseCallsign.isEmpty)
+                Toggle("common.hideBulletins", isOn: $hideBulletins)
+                Toggle("common.hideTelemetryDefinitions", isOn: $hideTelemetry)
+            } else {
+                Toggle("common.withPositionOnly", isOn: $positionOnly)
+            }
+        } label: {
+            Image(systemName: isFiltering
+                  ? "line.3.horizontal.decrease.circle.fill"
+                  : "line.3.horizontal.decrease.circle")
+        }
+        .accessibilityLabel("common.filter")
+    }
+
+    // MARK: - Lists
+
+    private var stationTable: some View {
+        Table(filteredStations) {
+            TableColumn("common.callsign") { station in
+                Text(station.callsign).fontDesign(.monospaced)
+            }
+            TableColumn("common.source") { station in
+                Text(station.source == .main ? "Main" : "Sub")
+            }
+            .width(60)
+            TableColumn("common.position") { station in
+                Text(Self.positionString(station))
+            }
+            TableColumn("common.comment") { station in
+                Text(station.comment ?? "")
+            }
+            TableColumn("common.lastHeard") { station in
+                Text(station.lastHeardAt, style: .relative)
+            }
+        }
+        .overlay {
+            if stations.isEmpty {
+                ContentUnavailableView("common.noStationsHeard", systemImage: "antenna.radiowaves.left.and.right", description: Text("aprsListPane.decodedStationsWillAppear \(Self.megahertz(frequencyHz))"))
+            } else if filteredStations.isEmpty {
+                ContentUnavailableView.search(text: searchText)
+            }
+        }
+    }
+
+    private var messageTable: some View {
+        Table(filteredMessages) {
+            TableColumn("common.from") { message in
+                Text(message.from).fontDesign(.monospaced)
+            }
+            TableColumn("common.to") { message in
+                Text(message.to).fontDesign(.monospaced)
+            }
+            TableColumn("common.source") { message in
+                Text(message.source == .main ? "Main" : "Sub")
+            }
+            .width(60)
+            TableColumn("common.message") { message in
+                Text(message.text)
+            }
+            TableColumn("common.received") { message in
+                Text(message.receivedAt, style: .relative)
+            }
+        }
+        .overlay {
+            if messages.isEmpty {
+                ContentUnavailableView("common.noMessages", systemImage: "envelope", description: Text("aprsListPane.decodedMessagesWillAppear \(Self.megahertz(frequencyHz))"))
+            } else if filteredMessages.isEmpty {
+                ContentUnavailableView.search(text: searchText)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var footnote: some View {
+        if onClearHistory != nil {
+            if !decodeEnabled {
+                Text("aprsListPane.aprsDecodingIsOff")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        } else {
+            Text("aprsListPane.decodedByTheMac")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    // MARK: - Decoder settings (Pi direct)
+
+    private var decoderSettings: some View {
+        Form {
+            Toggle("common.decodeAprs", isOn: $decodeEnabled)
+            LabeledContent("common.frequencyMHz") {
+                TextField("MHz", value: megahertzBinding, format: FrequencyFormat.mhzField(fractionLength: 3...3))
+                    .keyboardType(.decimalPad)
+                    .multilineTextAlignment(.trailing)
+            }
+            Text("aprsListPane.decodesMainOrSub \(APRSSettings.toleranceHz / 1000)")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Button("common.clearHistory", role: .destructive) {
+                onClearHistory?()
+                showingSettings = false
+            }
+        }
+        .frame(width: 380, height: 330)
+    }
+
+    private var megahertzBinding: Binding<Double> {
+        Binding(
+            get: { Double(frequencyHz) / 1_000_000 },
+            set: { if $0 > 0 { frequencyHz = Int(($0 * 1_000_000).rounded()) } }
+        )
+    }
+
+    private static func megahertz(_ hz: Int) -> String {
+        FrequencyFormat.mhz(hz, fractionDigits: 3)
+    }
+
+    // MARK: - Filtering (as the Mac's list windows)
+
+    private var myBaseCallsign: String {
+        APRSListFilter.baseCallsign(myCallsign.trimmingCharacters(in: .whitespaces))
+    }
+
+    private var isFiltering: Bool {
+        if kind == .messages {
+            return heardWindow != .any || (addressedToMe && !myBaseCallsign.isEmpty) || hideBulletins || hideTelemetry
+        }
+        return heardWindow != .any || positionOnly
+    }
+
+    private var filteredStations: [APRSStation] {
+        stations
+            .filter { sourceFilter == nil || $0.source == sourceFilter }
+            .filter { heardWindow.includes($0.lastHeardAt) }
+            .filter { !positionOnly || ($0.latitude != nil && $0.longitude != nil) }
+            .filter { APRSListFilter.matches(searchText, $0.callsign, $0.comment) }
+            .sorted { $0.lastHeardAt > $1.lastHeardAt }
+    }
+
+    private var filteredMessages: [APRSMessage] {
+        messages
+            .filter { sourceFilter == nil || $0.source == sourceFilter }
+            .filter { heardWindow.includes($0.receivedAt) }
+            .filter { !addressedToMe || myBaseCallsign.isEmpty || APRSListFilter.baseCallsign($0.to) == myBaseCallsign }
+            .filter { !hideBulletins || !APRSListFilter.isBulletin($0) }
+            .filter { !hideTelemetry || !APRSListFilter.isTelemetryDefinition($0) }
+            .filter { APRSListFilter.matches(searchText, $0.from, $0.to, $0.text) }
+            .sorted { $0.receivedAt > $1.receivedAt }
+    }
+
+    private static func positionString(_ station: APRSStation) -> String {
+        guard let latitude = station.latitude, let longitude = station.longitude else { return "—" }
+        return String(format: "%.4f, %.4f", latitude, longitude)
+    }
+}
+
+extension View {
+    /// Shows `APRSListPane` over this view (the filter block + MENU grid) while `kind` is
+    /// set, hiding — not removing — the view underneath so its page
+    /// survives.
+    func aprsListPane(kind: Binding<APRSListKind?>, stations: [APRSStation], messages: [APRSMessage], onClearHistory: (() -> Void)?) -> some View {
+        let showing = kind.wrappedValue != nil
+        return self
+            .opacity(showing ? 0 : 1)
+            .allowsHitTesting(!showing)
+            .accessibilityHidden(showing)
+            .overlay {
+                if showing {
+                    APRSListPane(kind: kind, stations: stations, messages: messages, onClearHistory: onClearHistory)
+                }
+            }
+    }
+}
+
+/// Re-renders `content` whenever `store` changes — `APRSStore` is its own
+/// `ObservableObject`, not part of the Pi-direct model's published state.
+struct ObservingAPRSStore<Content: View>: View {
+    @ObservedObject var store: APRSStore
+    @ViewBuilder let content: (APRSStore) -> Content
+
+    var body: some View {
+        content(store)
+    }
+}

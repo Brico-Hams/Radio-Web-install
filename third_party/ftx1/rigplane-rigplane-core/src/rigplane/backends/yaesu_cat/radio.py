@@ -1,0 +1,4752 @@
+"""Yaesu CAT radio backend — FTX-1 and compatible transceivers.
+
+Implements the core :class:`~rigplane.radio_protocol.Radio` protocol
+using :class:`YaesuCatTransport` for serial I/O and
+:class:`CatCommandParser` / :func:`format_command` for encoding.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import time
+from collections.abc import Mapping
+from dataclasses import dataclass
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Callable, Literal, Sequence, cast
+
+from ...audio import AudioPacket
+from ...audio.lan_stream import SYNTHETIC_RX_IDENT
+from ...command_spec import CatCommandSpec
+from ...commands import hz_to_table_index, table_index_to_hz
+from ...core.priority_exchange import ExchangeTier
+from ...core.radio_protocol import RadioIdentity, RadioIdentityStatus, RelativeVfoState
+from ...core.tx_observation import TxStateReading
+from ...core.types import MemoryEntry, ToneSquelchType
+from ...exceptions import (
+    AudioFormatError,
+    CommandError,
+    CommandRejectedError,
+    ModeReadbackError,
+)
+from ...exceptions import ConnectionError as RadioConnectionError
+from ...profiles.control_domain import (
+    control_display_band,
+    decode_control_domain,
+    encode_control_domain,
+    snap_control_domain,
+    validate_control_raw_value,
+)
+from ...radio_state import RadioState
+from ...runtime.callable_support import supports_callable
+from ...runtime.local_tx_work import LocalTxWorkRunner
+from ...runtime.memory_slot_lock import memory_slot_operation
+from ...runtime.managed_tx_fence import TxAbortFence
+from ...runtime.managed_tx_state import (
+    AbortOperation,
+    ActuationOperation,
+    ActuationResult,
+    EffectToken,
+)
+from ...types import AudioCodec, BreakInMode, Mode, RepeaterShiftDirection
+from .memory import memory_entry_from_cat
+from .parser import (
+    CatCommandParser,
+    CatParseError,
+    format_command,
+    is_data_mode,
+    literal_head,
+)
+from .transport import (
+    CatCommandRejected,
+    CatQueryResponse,
+    CatTimeoutError,
+    CatTransportError,
+    YaesuCatTransport,
+)
+
+if TYPE_CHECKING:
+    from ..._poller_types import CommandQueue
+    from ...audio.backend import CaptureMode
+    from ...audio.session import AudioSession
+    from ...audio.usb_driver import UsbAudioDriver
+    from ...audio_bus import AudioBus
+    from ...core.state_pipeline_contracts import FieldPath, Observation
+    from ...profiles import RadioProfile
+    from ...profiles.rig_loader import RigConfig
+    from ...types import BandStackRegister, MemoryChannel
+    from .poller import YaesuCatPoller
+
+__all__ = ["FilterWidthReading", "YaesuCatRadio"]
+
+logger = logging.getLogger(__name__)
+
+# Path to rigs/ directory: src/rigplane/backends/yaesu_cat/radio.py → 4 levels up
+_RIGS_DIR = Path(__file__).parents[4] / "rigs"
+
+
+def _ctcss_index_to_centihz(index: int, *, domain: tuple[int, ...] | None) -> int:
+    """Map a CAT ``CN`` index through a resolved profile CTCSS domain.
+
+    The profile catalog is the sole owner of selectable values. The Yaesu
+    provider only applies the device-reported index and fails closed when the
+    active profile has no valid resolved tuple or the index is out of range.
+    """
+    if not isinstance(domain, tuple) or not domain:
+        raise ValueError("active profile has no resolved CTCSS tone domain")
+    if isinstance(index, bool) or not isinstance(index, int) or index < 0:
+        raise ValueError(f"invalid CTCSS tone index: {index!r}")
+    if any(
+        isinstance(value, bool) or not isinstance(value, int) or value <= 0
+        for value in domain
+    ):
+        raise ValueError("active profile has an invalid CTCSS tone domain")
+    return int(table_index_to_hz(index, table=domain))
+
+
+# Single-character reply fields that a CAT radio always answers with a digit.
+# The shared parser stays tolerant of any character (its round-trip contract);
+# a non-digit answer is simply not credited as liveness evidence.
+_DIGIT_REPLY_FIELDS = frozenset(
+    {
+        "state",
+        "value",
+        "vfo",
+        "head",
+        "rx",
+        "tx",
+        "type",
+        "src",
+        "func",
+        "val",
+        "tone",
+        "shift",
+    }
+)
+
+
+def _digit_fields_valid(result: Mapping[str, Any]) -> bool:
+    return all(
+        value.isdigit()
+        for name, value in result.items()
+        if name in _DIGIT_REPLY_FIELDS and isinstance(value, str)
+    )
+
+
+def _decode_atu_response(result: Mapping[str, Any]) -> tuple[str, str, int]:
+    """Decode the AC route and native state before crediting the reply."""
+    src, typ, state = result.get("src"), result.get("type"), result.get("state")
+    # FTX-1 CAT Operation Reference 2508-C, AC table, printed page 6.
+    native_to_status = {"0": 0, "1": 1, "3": 2}
+    if src not in ("0", "1") or typ != "0" or state not in native_to_status:
+        raise ValueError(f"Unsupported ATU response: {result!r}")
+    return src, typ, native_to_status[state]
+
+
+def _load_config(profile: Any) -> "RigConfig":
+    """Load RigConfig from a profile name or return an existing RigConfig."""
+    from ...rig_loader import RigConfig, discover_available_rigs, load_rig
+
+    if isinstance(profile, str):
+        profile_key = profile.casefold().replace("-", "_")
+        for rig in discover_available_rigs(_RIGS_DIR).values():
+            rig_id = rig.id.casefold()
+            aliases = {
+                rig.model.casefold().replace("-", "_"),
+                rig_id,
+                rig_id.removeprefix("yaesu_"),
+            }
+            if profile_key in aliases:
+                return rig
+        path = _RIGS_DIR / f"{profile}.toml"
+        return load_rig(path)
+    if isinstance(profile, RigConfig):
+        return profile
+    raise TypeError(f"profile must be str or RigConfig, got {type(profile).__name__}")
+
+
+# Backwards-compat alias — historical name kept for the FTX-1 backend.
+# The shared implementation now lives in ``rigplane.meter_cal`` so that
+# both the Yaesu and Icom backends apply the same piecewise-linear curve
+# to ``[[meters.swr.calibration]]`` tables (issue #1173).
+from ...meter_cal import MeterType, interpolate_swr as _interpolate_swr  # noqa: E402
+
+
+@dataclass(frozen=True, slots=True)
+class FilterWidthReading:
+    """One decoded SH width answer (MOR-3677).
+
+    ``hz`` is the decoded passband, or ``None`` when the answer carries no
+    Hz value. ``radio_default`` is true exactly when the answer IS the
+    profile-declared ``filter_width_radio_default_code`` (FTX-1 Table 5 code
+    00, the mode-dependent "(Default)") — so a null ``hz`` splits honestly
+    into "the radio uses its own default" (true) versus "no Hz for another
+    reason: no table row, out-of-table code" (false).
+
+    This observation value shares its snake_case name with the
+    ``filter_width_radio_default`` CAPABILITY tag, which is a different
+    namespace: the tag means "the reset command is writeable"
+    (``core/capabilities.py``), this flag means "the last read WAS the
+    radio default".
+    """
+
+    hz: int | None
+    radio_default: bool
+
+
+class YaesuCatRadio:
+    """Radio backend for Yaesu FTX-1 (and compatible) transceivers.
+
+    Communicates via Yaesu CAT protocol over serial.  Supports the four
+    core operations needed for the FTX-1 smoke test: frequency, mode,
+    PTT, and S-meter.
+
+    Usage::
+
+        async with YaesuCatRadio("/dev/cu.usbserial-...") as radio:
+            freq = await radio.get_freq()
+            await radio.set_freq(14_074_000)
+            mode, _ = await radio.get_mode()
+            await radio.set_ptt(True)
+            s = await radio.get_s_meter()
+    """
+
+    # Yaesu CAT ``PC`` command takes a watt value (0-999, three-digit
+    # padded), not a raw 0-255 scale. Inspected by upper layers to
+    # avoid translating user-facing watt values into the Icom raw
+    # scale before queueing SetPower. See
+    # :class:`rigplane.core.radio_protocol.PowerControlCapable`.
+    native_power_unit: Literal["raw_255", "watts"] = "watts"
+
+    # Yaesu CAT radios connect over USB and expose audio as a separate
+    # USB Audio Class device handled by the OS, not through in-band
+    # CI-V/CAT framing. The web layer's ``runtime_capabilities`` helper
+    # uses this marker (via :class:`UsbAudioCapable`) to keep the
+    # ``"audio"`` UI capability advertised even for backends that don't
+    # implement the Radio Protocol's :class:`AudioCapable` surface.
+    # See :class:`rigplane.core.radio_protocol.UsbAudioCapable`.
+    has_usb_audio: bool = True
+
+    # MOR-3064: backoff for the background identity re-read on the held
+    # open port — 1, 2, 4 and 8 s, then every 15 s. Class attributes so
+    # tests can drive the cadence without timer sleeps (the same seam the
+    # Icom serial gate's ``_SERIAL_IDENTITY_REREAD_BACKOFF_S`` uses).
+    _IDENTITY_REREAD_BACKOFF_S: tuple[float, ...] = (1.0, 2.0, 4.0, 8.0)
+    _IDENTITY_REREAD_STEADY_S: float = 15.0
+
+    def __init__(
+        self,
+        device: str,
+        baudrate: int = 38400,
+        profile: str | Any = "ftx1",
+        rx_device: str | None = None,
+        tx_device: str | None = None,
+        audio_sample_rate: int = 48000,
+        audio_driver: UsbAudioDriver | None = None,
+        capture_mode: CaptureMode = "shared",
+        tx_abort_fence: TxAbortFence | None = None,
+    ) -> None:
+        """Create a YaesuCatRadio instance.
+
+        Args:
+            device: Serial port path (e.g. ``"/dev/cu.usbserial-01AE340D0"``).
+            baudrate: Serial baud rate (default 38400 for FTX-1).
+            profile: Rig profile name (``"ftx1"``) or a loaded ``RigConfig``.
+            rx_device: USB audio input device name for RX audio capture.
+            tx_device: USB audio output device name for TX audio playback.
+            capture_mode: Windows capture mode of the USB codec, ``"shared"``
+                (default) or ``"exclusive-preferred"`` (MOR-4030).
+            audio_sample_rate: Audio sample rate in Hz (default 48000).
+            audio_driver: Optional pre-constructed UsbAudioDriver (for testing).
+            tx_abort_fence: Runtime-owned fence for local CW/tuner work. Calls
+                remain unmanaged when omitted.
+        """
+        self._config: RigConfig = _load_config(profile)
+        self._profile_cache: RadioProfile | None = None
+        # MOR-3678: one send_cw_text at a time, so each KM memory write
+        # stays paired with the KY that plays it.
+        self._cw_text_lock = asyncio.Lock()
+        self._mode_lock = asyncio.Lock()
+        self._memory_select_lock = asyncio.Lock()
+        # Bumped by stop_cw_text and the managed CW abort: a send admitted
+        # under an older generation can no longer write KM or KY.
+        self._cw_text_generation = 0
+        self._tuner_provider_generation: Callable[[], int] | None = None
+        self._device = device
+        # MOR-4207: the baud the caller passed (``--serial-baud``, a saved
+        # route) is a hint, tried right after the profile baud the connect
+        # opens at (``discovery.serial_connect_baud_rates``).
+        self._serial_configured_baudrate = baudrate
+        # MOR-3677: the reply-line vocabulary this profile declares — the
+        # literal head of every parse template. The transport pairs a data
+        # reply with the whole request body, widened by any declared head
+        # that is a prefix of it. Only get_s_meter_sub needs the widening
+        # ("SM{receiver}…" is the data that says "SM1;" is answered
+        # "SM0…" — the radio echoes the side digit as 0); the selector-
+        # parameterised reads (RM/CT/CN/OS/MR/MT) keep their verb-level
+        # heads, which preserves exactly today's acceptance for them, and
+        # every other head restates its request and adds nothing.
+        reply_heads = {
+            literal_head(spec.parse).rstrip(";")
+            for spec in self._config.commands.values()
+            if isinstance(spec, CatCommandSpec) and spec.parse
+        }
+        reply_heads.discard("")
+        self._transport = YaesuCatTransport(
+            device=device, baudrate=baudrate, reply_heads=frozenset(reply_heads)
+        )
+        self._state = RadioState()
+        self._audio_bus: AudioBus | None = None
+        self._audio_session: AudioSession | None = None
+        self._audio_seq = 0
+        self._opus_rx_user_callback: Callable[[AudioPacket | None], None] | None = None
+        self._pcm_rx_user_callback: Callable[[bytes | None], None] | None = None
+        self._audio_sample_rate = audio_sample_rate
+        self._local_tx_work = (
+            LocalTxWorkRunner(tx_abort_fence) if tx_abort_fence is not None else None
+        )
+        if audio_driver is None:
+            # Lazy import: avoids pulling rigplane.audio.backend (PortAudio,
+            # numpy DSP) into top-level package import. PR #1200 / #1194.
+            from ...audio.usb_driver import AudioDeviceConfig as _AudioDeviceConfig
+            from ...audio.usb_driver import UsbAudioDriver as _UsbAudioDriver
+
+            self._audio_driver: UsbAudioDriver = _UsbAudioDriver(
+                _AudioDeviceConfig(
+                    rx_device=rx_device,
+                    tx_device=tx_device,
+                    sample_rate=audio_sample_rate,
+                    channels=1,
+                    capture_mode=capture_mode,
+                    # The FTX-1 presents USB RX audio on the LEFT channel only;
+                    # the profile's [audio].rx_audio_channel selects which
+                    # channel the stereo→mono downmix keeps at full level
+                    # (MOR-508). Defaults to "mix" (legacy (L+R)//2) for any
+                    # profile that omits it.
+                    rx_audio_channel=self._config.rx_audio_channel,
+                ),
+                serial_port=device,
+                usb_identity=self._config.usb_identity,
+                backend=None,  # default PortAudioBackend
+            )
+        else:
+            self._audio_driver = audio_driver
+
+        # Bidirectional mode code ↔ name maps from the profile's
+        # ``[modes].codes`` (MOR-2518): one single-character MD P2 code per
+        # mode; codes the rig's CAT manual leaves unused map to no mode.
+        if self._config.mode_codes is None:
+            raise ValueError(
+                f"rig profile {self._config.id!r} declares no [modes].codes; "
+                "the Yaesu CAT backend requires one single-character code "
+                "per mode"
+            )
+        self._code_to_mode: dict[str, str] = {}
+        self._mode_to_code: dict[str, str] = {}
+        for name, code in zip(self._config.modes, self._config.mode_codes, strict=True):
+            self._code_to_mode[code] = name
+            self._mode_to_code[name] = code
+
+        # MOR-561: poll-lane fields whose field-level CAT failure has already
+        # been warned about once. Persists across poll cycles (the observation
+        # adapter is rebuilt every cycle, the radio is not), so a permanently
+        # unsupported field warns once and then demotes repeats to DEBUG.
+        self._poll_warned_fields: set[str] = set()
+
+        # MOR-2757: consecutive unanswered reads per safety-critical path,
+        # kept by the observation adapter (rebuilt every poll cycle) across
+        # cycles — the same "state lives on the radio" idiom as
+        # ``_poll_warned_fields`` above. On the 3rd unanswered read the
+        # adapter records the declared-command defect that ends startup.
+        self._critical_read_timeouts: dict[FieldPath, int] = {}
+
+        # MOR-2632: the last nonzero NB/NR level seen per receiver, remembered
+        # when turning the function off. Lives only on this object: a radio
+        # whose level command doubles as the on/off switch reports 0 once off,
+        # so the next on has nothing else to restore the operator's level from.
+        self._remembered_nb_level: dict[int, int] = {}
+        self._remembered_nr_level: dict[int, int] = {}
+
+        # Compile response parsers once at init time (keyed by command name).
+        # Commands with unsupported placeholders (e.g. {vfo}, {band}) are skipped.
+        self._parsers: dict[str, CatCommandParser] = {}
+        for cmd_name, spec in self._config.commands.items():
+            if isinstance(spec, CatCommandSpec) and spec.parse:
+                try:
+                    self._parsers[cmd_name] = CatCommandParser(spec.parse)
+                except ValueError:
+                    logger.debug(
+                        "Skipping parser for %r (unsupported placeholder)", cmd_name
+                    )
+
+        # MOR-3064: typed identity of the radio on the open port. None until
+        # a connect attempt opens the port; reset to ``checking`` by every
+        # connect attempt; cleared by ``disconnect``. The generation fences
+        # late completions: every committed (re)connect and every disconnect
+        # advances it, so an answer recorded for an old link can never
+        # initialize state on the current one.
+        self._connection_identity: RadioIdentity | None = None
+        self._identity_generation: int = 0
+        self._identity_reread_task: asyncio.Task[None] | None = None
+        self._identity_gate_running: bool = False
+        # MOR-3436: the connect generation whose identity hold still owes
+        # the audio re-establishment; the re-read completion consumes it,
+        # any generation advance (``disconnect``, a new connect) drops it.
+        self._audio_reestablish_generation: int | None = None
+
+    # -- Lifecycle ----------------------------------------------------------
+
+    async def connect(self) -> None:
+        """Open the serial port and gate the connect on the model ID answer.
+
+        MOR-3064: the read-only ``ID;`` probe from the profile's ``get_id``
+        command runs before any IF seeding — ``connected`` does not latch on
+        a bare transport-open. A well-formed answer compared against the
+        profile's ``expected_identity_ids`` completes the connect
+        (``verified``/``unverified``); a wrong radio records
+        ``identity_mismatch``; silence, a malformed answer or a transport
+        error on the still-open port records ``no_response``, keeps the
+        port open under a bounded background re-read, and returns without
+        raising. A port that did not survive the probe fails the connect
+        with :class:`~rigplane.exceptions.ConnectionError`.
+        """
+        if (
+            self._connection_identity is not None
+            and self._transport.connected
+            and self._identity_permits_commands()
+        ):
+            return
+        if self._identity_hold_owns_open_link():
+            # The identity phase already owns the open port — a reopen
+            # would toggle DTR/RTS on a radio that may merely be off.
+            return
+        self._transport.last_valid_frame_monotonic = None
+        self._cancel_identity_reread()
+        self._identity_generation += 1
+        generation = self._identity_generation
+        # MOR-4207: the first open and the first byte at the head of the
+        # connect order (the profile baud); the rest is asked on silence.
+        connect_bauds = self._serial_connect_bauds()
+        self._transport.set_baudrate(connect_bauds[0])
+        await self._transport.connect()
+        self._connection_identity = RadioIdentity(
+            status=RadioIdentityStatus.CHECKING,
+            expected_model=self.model,
+        )
+        self._identity_gate_running = True
+        try:
+            answered = await self._read_identity_answer()
+            if answered is None:
+                answered = await self._sweep_identity_bauds(connect_bauds, generation)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            # The crashed gate owns no hold — the ``checking`` it recorded
+            # dies with it.
+            self._connection_identity = None
+            raise RadioConnectionError(
+                f"Failed to read the {self.model} identity on {self._device}: {exc}"
+            ) from exc
+        finally:
+            self._identity_gate_running = False
+        if generation != self._identity_generation:
+            return
+        if answered is None:
+            if not self._transport.connected:
+                # No live port exists to hold — the open did not survive
+                # the probe. This connect must not report success.
+                self._connection_identity = None
+                raise RadioConnectionError(
+                    f"The serial port on {self._device} did not stay open "
+                    f"for the {self.model} identity read"
+                )
+            self._connection_identity = RadioIdentity(
+                status=RadioIdentityStatus.NO_RESPONSE,
+                expected_model=self.model,
+            )
+            logger.warning(
+                "rigplane (%s): no answer to the ID read on %s; holding the "
+                "connect — the re-read task keeps asking on the open port",
+                self.model,
+                self._device,
+            )
+            self._start_identity_reread()
+            # MOR-3436: the connect returned into the identity hold — the
+            # audio re-establishment waits for the hold's completion.
+            self._audio_reestablish_generation = generation
+            return
+        completed = await self._resolve_identity_answer(answered)
+        if completed:
+            await self._reestablish_audio_after_connect(generation)
+        else:
+            # A wrong radio holds the connect; the re-read completion owes
+            # the audio re-establishment (MOR-3436).
+            self._audio_reestablish_generation = generation
+
+    async def disconnect(self) -> None:
+        """Close the serial port."""
+        self._transport.last_valid_frame_monotonic = None
+        self._cancel_identity_reread()
+        self._identity_generation += 1
+        self._connection_identity = None
+        self._audio_reestablish_generation = None
+        await self._audio_driver.stop_rx()
+        await self._audio_driver.stop_tx()
+        await self._transport.close()
+
+    async def __aenter__(self) -> "YaesuCatRadio":
+        await self.connect()
+        return self
+
+    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        await self.disconnect()
+
+    @property
+    def connected(self) -> bool:
+        """Whether the transport is open AND the radio answered its ID (MOR-3064).
+
+        ``False`` while the identity gate holds the open port
+        (``checking``/``no_response``/``identity_mismatch``) — a transport
+        open alone is not a connection. ``True`` when no connect attempt has
+        run yet (no gate evidence exists) or the identity read completed with
+        ``verified``/``unverified``.
+        """
+        if not self._transport.connected:
+            return False
+        return self._identity_permits_commands()
+
+    @property
+    def radio_ready(self) -> bool:
+        """Whether the backend is ready for commands."""
+        return self.connected
+
+    @property
+    def serial_reconnects_total(self) -> int:
+        """Link-loss episodes since this radio was created.
+
+        The first reconnect after the last successful exchange opens an
+        episode; retries inside it do not recount.
+        """
+        stats = getattr(getattr(self, "_transport", None), "stats", None)
+        episodes = getattr(stats, "reconnect_episodes", 0)
+        return episodes if type(episodes) is int else 0
+
+    @property
+    def connection_identity(self) -> RadioIdentity | None:
+        """Typed identity of the radio on the open port (MOR-3064).
+
+        ``None`` before the first connect attempt and after ``disconnect``;
+        ``status`` is ``checking``/``no_response``/``identity_mismatch``
+        while the identity phase holds the open port.
+        """
+        return self._connection_identity
+
+    # -- Connect-time identity gate (MOR-3064) ------------------------------
+
+    def _identity_permits_commands(self) -> bool:
+        """Whether the recorded identity lets the connect count as complete.
+
+        A transport supplied before any connect attempt has no gate evidence;
+        otherwise only ``verified``/``unverified`` permits commands. Clearing
+        identity during teardown does not release the gate. A hold status
+        (``checking``/``no_response``/``identity_mismatch``) does not.
+        """
+        identity = self._connection_identity
+        if identity is None:
+            return self._identity_generation == 0
+        return identity.status in (
+            RadioIdentityStatus.VERIFIED,
+            RadioIdentityStatus.UNVERIFIED,
+        )
+
+    def _identity_hold_status_held(self) -> bool:
+        identity = self._connection_identity
+        return identity is not None and identity.status in (
+            RadioIdentityStatus.CHECKING,
+            RadioIdentityStatus.NO_RESPONSE,
+            RadioIdentityStatus.IDENTITY_MISMATCH,
+        )
+
+    def _identity_hold_has_owner(self) -> bool:
+        """Whether the gate or the re-read task actively drives the hold.
+
+        A status left behind by a crashed gate or an abandoned hold owns
+        nothing and must not block a fresh connect attempt.
+        """
+        if self._identity_gate_running:
+            return True
+        task = self._identity_reread_task
+        return task is not None and not task.done()
+
+    def _identity_hold_owns_open_link(self) -> bool:
+        """Whether the identity phase owns the live open port."""
+        return (
+            self._identity_hold_status_held()
+            and self._transport.connected
+            and self._identity_hold_has_owner()
+        )
+
+    def _serial_connect_bauds(self) -> tuple[int, ...]:
+        """This radio's connect order: profile baud, configured baud, the rest."""
+        from ..discovery import serial_connect_baud_rates
+
+        return serial_connect_baud_rates(
+            "yaesu_cat", self.profile.default_baud, self._serial_configured_baudrate
+        )
+
+    async def _sweep_identity_bauds(
+        self, bauds: tuple[int, ...], generation: int
+    ) -> str | None:
+        """Ask ``ID;`` at the rest of the connect order on the open port (MOR-4207).
+
+        Yaesu CAT has no auto-baud: the profile-baud attempt before the
+        configured one is one read timeout on a radio set to another rate.
+        The port is retuned in place (``discovery.sweep_serial_bauds``, the
+        Icom connect's search too) and keeps the baud that answers. Without
+        an answer the starting baud is put back for the hold's re-reads,
+        unless the attempt was retired meanwhile.
+        """
+        from ..discovery import sweep_serial_bauds
+
+        transport = self._transport
+        start = transport.baudrate
+        answered: str | None = None
+
+        def retired() -> bool:
+            return generation != self._identity_generation
+
+        async def heard_at(_baud: int) -> bool:
+            nonlocal answered
+            answered = await self._read_identity_answer()
+            return retired() or answered is not None
+
+        try:
+            found = await sweep_serial_bauds(
+                bauds,
+                start=start,
+                retune=transport.set_baudrate,
+                heard_at=heard_at,
+                usable=lambda: not retired() and transport.connected,
+            )
+            if found is not None and answered is not None:
+                logger.info(
+                    "rigplane (%s): %s answered at %d baud (configured %d)",
+                    self.model,
+                    self._device,
+                    found,
+                    self._serial_configured_baudrate,
+                )
+            return answered
+        finally:
+            if answered is None and not retired() and transport.baudrate != start:
+                transport.set_baudrate(start)
+
+    async def _read_identity_answer(self) -> str | None:
+        """Send the profile's ``get_id`` read; ``None`` means no usable answer.
+
+        Returns the canonical answered ID string when the radio answers the
+        ``ID;`` probe, ``""`` when the profile declares no identity read
+        (connects as today, MOR-3064), and ``None`` for silence, a malformed
+        answer (parse failure), a refusal (``?;``) or a transport error —
+        none of which carry identity evidence.
+        """
+        spec = self._config.commands.get("get_id")
+        if not (isinstance(spec, CatCommandSpec) and spec.read):
+            return ""
+        if self._parsers.get("get_id") is None:
+            return ""
+        try:
+            result = await self._query_decoded("get_id", spec.read)
+        except (CatTimeoutError, CatTransportError, ValueError):
+            return None
+        return str(result["model"]).zfill(4)
+
+    def _classify_identity_answer(
+        self, answered: str
+    ) -> tuple[RadioIdentityStatus, str | None]:
+        """Map an answered ID to its status per the profile's expected IDs.
+
+        A raw answer with no ``expected_identity_ids`` metadata stays
+        ``UNVERIFIED`` — never ``VERIFIED`` (MOR-3064).
+        """
+        if not answered:
+            return RadioIdentityStatus.UNVERIFIED, None
+        expected = self.profile.expected_identity_ids
+        if not expected:
+            return RadioIdentityStatus.UNVERIFIED, answered
+        if answered in expected:
+            return RadioIdentityStatus.VERIFIED, answered
+        return RadioIdentityStatus.IDENTITY_MISMATCH, answered
+
+    async def _resolve_identity_answer(self, answered: str) -> bool:
+        """Record the classified answer; True when the connect may proceed.
+
+        A wrong radio keeps the hold: the re-read task keeps probing the
+        open port, so swapping in the expected radio completes the connect
+        without a port reopen. A valid answer runs the state initialization
+        (IF seeding) exactly here — the only completion path besides the
+        gate's own, and only one of them exists per generation.
+        """
+        status, answered_id = self._classify_identity_answer(answered)
+        answered_model: str | None = None
+        if status is RadioIdentityStatus.VERIFIED:
+            answered_model = self.model
+        self._connection_identity = RadioIdentity(
+            status=status,
+            expected_model=self.model,
+            answered_model=answered_model,
+            answered_id=answered_id,
+        )
+        if status is RadioIdentityStatus.IDENTITY_MISMATCH:
+            logger.warning(
+                "rigplane (%s): a different radio answered the ID read on %s "
+                "(answered %s, expected one of %s); holding the connect",
+                self.model,
+                self._device,
+                answered_id,
+                list(self.profile.expected_identity_ids),
+            )
+            self._start_identity_reread()
+            return False
+        await self._seed_state_from_if()
+        return True
+
+    async def _seed_state_from_if(self) -> None:
+        """Run the connect-time IF seeding (non-fatal, as before MOR-3064)."""
+        try:
+            await self.get_if_status()
+        except Exception:
+            logger.debug("IF bulk query at connect failed (non-fatal)")
+
+    def _start_identity_reread(self) -> None:
+        """Start the background identity re-read unless one already runs."""
+        task = self._identity_reread_task
+        if task is not None and not task.done():
+            return
+        self._identity_reread_task = asyncio.create_task(
+            self._identity_reread_loop(), name="yaesu-cat-identity-reread"
+        )
+
+    def _cancel_identity_reread(self) -> None:
+        task = self._identity_reread_task
+        if task is not None and not task.done() and task is not asyncio.current_task():
+            task.cancel()
+        self._identity_reread_task = None
+
+    async def _identity_reread_loop(self) -> None:
+        """Re-read ``ID;`` on the held open port until a valid answer lands.
+
+        Backoff 1, 2, 4 and 8 s, then every 15 s. Never reopens the port —
+        every serial open toggles DTR/RTS, and the hold exists precisely to
+        spare a radio that may merely be switched off. The generation fence
+        discards any completion that outlives its link (disconnect/replug),
+        and state initialization runs exactly once, on the current
+        generation's own answer.
+        """
+        generation = self._identity_generation
+        attempts = 0
+        try:
+            while True:
+                backoff = self._IDENTITY_REREAD_BACKOFF_S
+                delay = (
+                    backoff[attempts]
+                    if attempts < len(backoff)
+                    else self._IDENTITY_REREAD_STEADY_S
+                )
+                attempts += 1
+                await asyncio.sleep(delay)
+                if generation != self._identity_generation:
+                    return
+                if not self._identity_hold_owns_open_link():
+                    return
+                answered = await self._read_identity_answer()
+                if generation != self._identity_generation:
+                    return
+                if answered is None:
+                    continue
+                completed = await self._resolve_identity_answer(answered)
+                if completed:
+                    # MOR-3436: the hold completed — run the audio
+                    # re-establishment a held connect deferred here, once.
+                    await self._run_deferred_audio_reestablish(generation)
+                    return
+        except asyncio.CancelledError:
+            pass
+        except Exception as exc:
+            # The hold loses its owner (the status it recorded describes
+            # a hold nobody drives); the next connect() re-opens and
+            # re-gates. Logged here so a dead task never surfaces only as
+            # an unretrieved-exception warning.
+            logger.error(
+                "rigplane (%s): identity re-read on %s stopped: %s",
+                self.model,
+                self._device,
+                exc,
+                exc_info=True,
+            )
+
+    # -- Audio tail of a completed connect (MOR-3436) -----------------------
+
+    async def _reestablish_audio_after_connect(self, generation: int) -> None:
+        """Re-arm audio demand an owner teardown left held (MOR-3436).
+
+        ``disconnect()`` stops the USB audio driver's RX and TX legs while
+        the radio-owned ``AudioSession``'s demand handles survive it, and
+        before this tail nothing re-armed them after an owner
+        ``connect()``. Runs only while this connect's generation still
+        owns the radio — ``disconnect()`` and every new connect advance
+        ``_identity_generation``. This backend has no recovery-event
+        channel, so a failure is logged (WARNING), not raised — the same
+        non-raising contract ``AudioRecoveryRuntime.recover`` applies.
+        """
+        if self._identity_generation != generation:
+            return
+        session = self._audio_session
+        if session is None or (session.rx_demand <= 0 and session.tx_demand <= 0):
+            return
+        try:
+            await session.reestablish()
+        except Exception:
+            logger.warning(
+                "rigplane (%s): re-establishing held audio demand after connect failed",
+                self.model,
+                exc_info=True,
+            )
+
+    async def _run_deferred_audio_reestablish(self, generation: int) -> None:
+        """Run the audio re-establishment a held connect deferred, once."""
+        stashed = self._audio_reestablish_generation
+        self._audio_reestablish_generation = None
+        if stashed == generation:
+            await self._reestablish_audio_after_connect(generation)
+
+    @property
+    def backend_id(self) -> str:
+        """Stable backend family identifier — ``"yaesu_cat"`` for Yaesu CAT."""
+        return "yaesu_cat"
+
+    #: MOR-3845: liveness source label for the ``connection.liveness`` web
+    #: field — this backend talks to the radio directly.
+    liveness_source = "radio"
+
+    @property
+    def last_valid_frame_monotonic(self) -> float | None:
+        """Monotonic time of the last response accepted by the profile parser."""
+        return self._transport.last_valid_frame_monotonic
+
+    @property
+    def liveness_stale_after_ms(self) -> int:
+        """MOR-3845: age at which the liveness stamp is stale — twice the
+        transport's per-attempt read timeout, the same 2x ladder the CI-V
+        health classifier uses. The CAT poller queries on a 75 ms fast
+        cadence (1 s slow), so quiet RX and sustained TX stay far below it.
+        """
+        return int(self._transport.timeout * 2 * 1000)
+
+    @property
+    def model(self) -> str:
+        """Human-readable radio model name (e.g. ``'FTX-1'``)."""
+        return str(self._config.model)
+
+    @property
+    def hamlib_model_id(self) -> int:
+        """Hamlib rig_model integer (e.g. ``2028`` for RIG_MODEL_FTX1).
+
+        Read from the rig's TOML ``[radio].hamlib_model_id`` field; used by
+        the rigctld Yaesu ``dump_state`` response so external clients see the
+        correct model (closes #441).
+        """
+        return int(self._config.hamlib_model_id)
+
+    @property
+    def capabilities(self) -> set[str]:
+        """Set of capability tags from the rig profile."""
+        return set(self._config.capabilities)
+
+    @property
+    def profile(self) -> "RadioProfile":
+        """RadioProfile for this rig (from TOML config, cached)."""
+        if self._profile_cache is None:
+            self._profile_cache = self._config.to_profile()
+        return self._profile_cache
+
+    @property
+    def serial_baudrate(self) -> int:
+        """The baud the port runs at: the profile baud, or the one that answered."""
+        return self._transport.baudrate
+
+    @property
+    def radio_state(self) -> RadioState:
+        """Live radio state snapshot (updated by get_* calls)."""
+        return self._state
+
+    @property
+    def audio_codec(self) -> AudioCodec:
+        """Audio codec used by USB audio (always PCM 16-bit mono)."""
+        return AudioCodec.PCM_1CH_16BIT
+
+    @property
+    def audio_tx_codec(self) -> AudioCodec:
+        """Effective TX codec (MOR-532 codec descriptor surface).
+
+        The FTX-1 TX path pushes raw PCM straight to the OS USB audio
+        device — there is no in-band Opus framing — so this is always
+        ``PCM_1CH_16BIT``. Consumed by later MOR-532 epic steps.
+        """
+        return AudioCodec.PCM_1CH_16BIT
+
+    @property
+    def audio_duplex_mode(self) -> str:
+        """Duplex capability (MOR-532 duplex descriptor surface).
+
+        Delegates to ``UsbAudioDriver.duplex_mode`` (MOR-534):
+        ``"exclusive"`` when macOS AUHAL would reject concurrent RX+TX
+        streams against the same physical USB CODEC (paramErr -50 — the
+        same-device reality previously encoded only in the
+        ``--bridge-rx-only`` flag), ``"full"`` otherwise. Falls back to
+        ``"full"`` when the driver does not expose the policy or device
+        resolution fails (offline / test doubles). Single source of duplex
+        policy for later MOR-532 epic steps.
+        """
+        try:
+            mode = getattr(self._audio_driver, "duplex_mode", None)
+        except Exception:
+            return "full"
+        if isinstance(mode, str):
+            return mode
+        return "full"
+
+    @property
+    def audio_setup_order(self) -> Literal["rx_first", "tx_first", "atomic"]:
+        """Setup ordering descriptor (MOR-575, ADR §3.3).
+
+        Derived from :attr:`audio_duplex_mode` — single source of truth,
+        so the two descriptors never drift: ``"exclusive"`` (same-device
+        macOS USB CODEC: one duplex stream, setup does not decompose
+        into rx/tx-first) → ``"atomic"``; ``"full"`` (separate RX/TX
+        devices, order-indifferent) → ``"rx_first"``; ``"half"`` or any
+        unexpected/raising duplex mode degrades to the ``"rx_first"``
+        safe default — the same robustness ``audio_duplex_mode`` has
+        toward the driver. Nothing consumes this yet — the AudioSession
+        (MOR-562 step 8) and bridge (step 9) will read it.
+        """
+        try:
+            mode = self.audio_duplex_mode
+        except Exception:
+            return "rx_first"
+        if mode == "exclusive":
+            return "atomic"
+        # "full", "half", and anything unexpected → rx_first (safe default).
+        return "rx_first"
+
+    @property
+    def audio_sample_rate(self) -> int:
+        """Configured audio sample rate in Hz (default 48000)."""
+        return self._audio_sample_rate
+
+    @property
+    def usb_audio_contract(self) -> object | None:
+        """Effective OS audio contract reported by the USB audio driver."""
+
+        return getattr(self._audio_driver, "usb_audio_contract", None)
+
+    @property
+    def audio_bus(self) -> "AudioBus":
+        """AudioBus instance for pub/sub audio distribution."""
+        if self._audio_bus is None:
+            from ...audio_bus import AudioBus
+
+            self._audio_bus = AudioBus(self)
+        return self._audio_bus
+
+    @property
+    def audio_session(self) -> "AudioSession":
+        """Radio-owned AudioSession singleton (MOR-579).
+
+        ONE session per radio, shared by every consumer (bridge, web TX
+        handler, poller PTT hooks) so the TX refcount can never split
+        across independent sessions. Wraps the shared :attr:`audio_bus`.
+        """
+        if self._audio_session is None:
+            from ...audio.session import AudioSession
+
+            self._audio_session = AudioSession(self)
+        return self._audio_session
+
+    # -- Neutral AudioTransport surface (MOR-532 epic, MOR-541) --------------
+
+    async def start_rx(
+        self,
+        callback: Callable[[AudioPacket | None], None],
+    ) -> None:
+        """Start RX capture from the USB audio device (``AudioTransport.start_rx``).
+
+        Frames carry raw PCM encoded per :attr:`audio_codec`
+        (``PCM_1CH_16BIT``) — the FTX-1 USB path has no Opus framing.
+        Each captured frame is wrapped in a synthetic
+        :class:`AudioPacket` marked with ``SYNTHETIC_RX_IDENT`` and a
+        locally counted wrapping uint16 ``send_seq`` — there is no LAN
+        wire header on this path.
+        """
+        if not callable(callback):
+            raise TypeError("callback must be callable and accept AudioPacket | None.")
+        self._require_connected()
+
+        self._opus_rx_user_callback = callback
+
+        def _on_pcm_frame(pcm_frame: bytes) -> None:
+            packet = AudioPacket(
+                ident=SYNTHETIC_RX_IDENT,
+                send_seq=self._audio_seq,
+                data=pcm_frame,
+            )
+            self._audio_seq = (self._audio_seq + 1) & 0xFFFF
+            callback(packet)
+
+        await self._audio_driver.start_rx(_on_pcm_frame)
+
+    async def stop_rx(self) -> None:
+        """Stop RX capture (``AudioTransport.stop_rx``)."""
+        self._opus_rx_user_callback = None
+        await self._audio_driver.stop_rx()
+
+    async def start_tx(self) -> None:
+        """Arm the USB audio TX path (``AudioTransport.start_tx``).
+
+        Resolves the TX format from the backend contract — mono PCM at
+        :attr:`audio_sample_rate`, 20 ms frames — exactly what the legacy
+        ``start_audio_tx_pcm()`` defaults open today. On double start the
+        driver raises ``AudioDriverLifecycleError`` (a ``RuntimeError``
+        subclass), the same exception the legacy PCM path raises.
+        """
+        self._require_connected()
+        await self._audio_driver.start_tx(
+            sample_rate=self._audio_sample_rate,
+            channels=1,
+            frame_ms=20,
+        )
+
+    async def push_tx(self, data: bytes) -> None:
+        """Push one TX frame (``AudioTransport.push_tx``).
+
+        The payload must be raw PCM per :attr:`audio_tx_codec`; the USB
+        audio driver consumes PCM directly (no transcoding on this path).
+        """
+        await self._push_pcm_tx(data)
+
+    async def stop_tx(self) -> None:
+        """Close the TX path (``AudioTransport.stop_tx``)."""
+        await self._audio_driver.stop_tx()
+
+    # -- AudioCapable methods (legacy shims -> neutral AudioTransport) -------
+
+    async def start_audio_rx_opus(
+        self,
+        callback: Callable[[AudioPacket | None], None],
+        *,
+        jitter_depth: int = 5,
+    ) -> None:
+        """Deprecated shim — delegates to :meth:`start_rx`.
+
+        Despite the historical name, packets carry raw PCM per
+        :attr:`audio_codec` (no Opus framing exists on the USB path).
+        *jitter_depth* is validated for back-compat but unused.
+        """
+        if isinstance(jitter_depth, bool) or not isinstance(jitter_depth, int):
+            raise TypeError(
+                f"jitter_depth must be an int, got {type(jitter_depth).__name__}."
+            )
+        if jitter_depth < 0:
+            raise ValueError(f"jitter_depth must be >= 0, got {jitter_depth}.")
+        await self.start_rx(callback)
+
+    async def stop_audio_rx_opus(self) -> None:
+        """Deprecated shim — delegates to :meth:`stop_rx`."""
+        await self.stop_rx()
+
+    async def start_audio_rx_pcm(
+        self,
+        callback: Callable[[bytes | None], None],
+        *,
+        sample_rate: int = 48000,
+        channels: int = 1,
+        frame_ms: int = 20,
+        jitter_depth: int = 5,
+    ) -> None:
+        if not callable(callback):
+            raise TypeError("callback must be callable and accept bytes | None.")
+        for name, value in (
+            ("sample_rate", sample_rate),
+            ("channels", channels),
+            ("frame_ms", frame_ms),
+            ("jitter_depth", jitter_depth),
+        ):
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise TypeError(f"{name} must be an int, got {type(value).__name__}.")
+        if jitter_depth < 0:
+            raise ValueError(f"jitter_depth must be >= 0, got {jitter_depth}.")
+        if (sample_rate * frame_ms) % 1000 != 0:
+            raise AudioFormatError(
+                "sample_rate * frame_ms must produce an integer frame size."
+            )
+
+        self._require_connected()
+        self._pcm_rx_user_callback = callback
+
+        await self._audio_driver.start_rx(
+            callback,
+            sample_rate=sample_rate,
+            channels=channels,
+            frame_ms=frame_ms,
+        )
+
+    async def stop_audio_rx_pcm(self) -> None:
+        self._pcm_rx_user_callback = None
+        await self._audio_driver.stop_rx()
+
+    async def start_audio_tx_pcm(
+        self,
+        *,
+        sample_rate: int = 48000,
+        channels: int = 1,
+        frame_ms: int = 20,
+    ) -> None:
+        for name, value in (
+            ("sample_rate", sample_rate),
+            ("channels", channels),
+            ("frame_ms", frame_ms),
+        ):
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise TypeError(f"{name} must be an int, got {type(value).__name__}.")
+        if (sample_rate * frame_ms) % 1000 != 0:
+            raise AudioFormatError(
+                "sample_rate * frame_ms must produce an integer frame size."
+            )
+
+        self._require_connected()
+        await self._audio_driver.start_tx(
+            sample_rate=sample_rate,
+            channels=channels,
+            frame_ms=frame_ms,
+        )
+
+    async def stop_audio_tx_pcm(self) -> None:
+        """Deprecated shim — delegates to :meth:`stop_tx`."""
+        await self.stop_tx()
+
+    async def _push_pcm_tx(self, frame: bytes) -> None:
+        # Private terminal helper (MOR-539 pattern): every push path —
+        # neutral push_tx and both legacy shims — funnels here, so the
+        # delegation chain cannot recurse.
+        if not isinstance(frame, bytes):
+            raise TypeError(f"frame must be bytes, got {type(frame).__name__}.")
+        if len(frame) == 0:
+            raise ValueError("frame must not be empty.")
+
+        self._require_connected()
+        await self._audio_driver._push_tx_pcm(frame)
+
+    # -- AudioCapable TX methods (legacy shims) -------------------------------
+
+    async def push_audio_tx_opus(self, data: bytes) -> None:
+        """Legacy shim — pushes the payload as PCM via :meth:`push_tx`.
+
+        Historical oddity kept on purpose: despite the name, the bytes are
+        forwarded unchanged. AudioBroadcaster transcodes browser Opus to PCM
+        before calling; if raw Opus ever arrives here it is pushed as-is.
+        """
+        await self.push_tx(data)
+
+    async def push_audio_tx_pcm(self, data: bytes) -> None:
+        """Deprecated shim — delegates to :meth:`push_tx` (raw PCM)."""
+        await self.push_tx(data)
+
+    async def start_audio_tx_opus(self) -> None:
+        """Deprecated shim — delegates to :meth:`start_tx`.
+
+        BEHAVIOR CHANGE (MOR-541): this was a silent no-op (``pass``),
+        so the web handler's opus TX branch never armed the driver TX
+        path on Yaesu backends. It now arms TX like the PCM path.
+        """
+        await self.start_tx()
+
+    async def stop_audio_tx_opus(self) -> None:
+        """Deprecated shim — delegates to :meth:`stop_tx`."""
+        await self.stop_tx()
+
+    async def get_audio_stats(self) -> dict[str, Any]:
+        """Return basic audio stats."""
+        return {
+            "rx_active": self._audio_driver.rx_running,
+            "tx_active": self._audio_driver.tx_running,
+            "sample_rate": self._audio_sample_rate,
+        }
+
+    # -- LevelsCapable: unsupported TX controls -----------------------------
+
+    async def get_drive_gain(self) -> int:
+        """Drive gain not available via CAT on FTX-1."""
+        return 0
+
+    async def set_drive_gain(self, level: int) -> None:
+        """Drive gain not available via CAT on FTX-1."""
+        logger.debug("set_drive_gain: not supported on this radio")
+
+    async def get_compressor_level(self) -> int:
+        """Alias for LevelsCapable compatibility — delegates to processor level."""
+        return await self.get_processor_level()
+
+    async def set_compressor_level(self, level: int) -> None:
+        """Alias for LevelsCapable compatibility — delegates to processor level."""
+        await self.set_processor_level(level)
+
+    # -- Optional commands (profile-dependent) ------------------------------
+
+    async def set_nb(self, on: bool, receiver: int = 0) -> None:
+        """Enable or disable the noise blanker.
+
+        A radio with a ``set_nb`` write command gets that command. A radio
+        whose level command doubles as the switch (FTX-1: ``NL`` level 000
+        is OFF) is handled from the live level read via ``NL``. Off reads
+        that level first and, when it is nonzero, remembers it for this
+        receiver, then writes 0. On writes the live level when it is
+        nonzero, otherwise the level remembered for this receiver, otherwise
+        the midpoint default. The memory lives only on this radio object.
+        No-op when the profile defines neither command.
+        """
+        if self._has_write_command("set_nb"):
+            await self._write("set_nb", state="1" if on else "0")
+        elif self._has_write_command("set_nb_level"):
+            current = await self.read_nb_level(receiver)
+            if on:
+                level = (
+                    current
+                    if current > 0
+                    else self._remembered_nb_level.get(
+                        receiver, self._default_nb_level()
+                    )
+                )
+                await self.set_nb_level(level, receiver=receiver)
+            else:
+                if current > 0:
+                    self._remembered_nb_level[receiver] = current
+                await self.set_nb_level(0, receiver=receiver)
+
+    async def set_nr(self, on: bool, receiver: int = 0) -> None:
+        """Enable or disable noise reduction.
+
+        A radio with a ``set_nr`` write command gets that command. A radio
+        whose level command doubles as the switch (FTX-1: ``RL`` level 000
+        is OFF) is handled from the live level read via ``RL``. Off reads
+        that level first and, when it is nonzero, remembers it for this
+        receiver, then writes 0. On writes the live level when it is
+        nonzero, otherwise the level remembered for this receiver, otherwise
+        the midpoint default. The memory lives only on this radio object.
+        No-op when the profile defines neither command.
+        """
+        if self._has_write_command("set_nr"):
+            await self._write("set_nr", state="1" if on else "0")
+        elif self._has_write_command("set_nr_level"):
+            current = await self.read_nr_level(receiver)
+            if on:
+                level = (
+                    current
+                    if current > 0
+                    else self._remembered_nr_level.get(
+                        receiver, self._default_nr_level()
+                    )
+                )
+                await self.set_nr_level(level, receiver=receiver)
+            else:
+                if current > 0:
+                    self._remembered_nr_level[receiver] = current
+                await self.set_nr_level(0, receiver=receiver)
+
+    async def set_dual_watch(self, on: bool) -> None:
+        """Enable or disable dual watch.
+
+        Uses the profile's ``set_dual_watch`` write when it declares one.
+        Otherwise falls back to ``set_rx_func``, whose mode is inverted
+        relative to ``on``: 0 = dual receive, 1 = single receive. No-op
+        with warning if the profile declares neither.
+        """
+        if self._has_write_command("set_dual_watch"):
+            await self._write("set_dual_watch", state="1" if on else "0")
+        elif self._has_write_command("set_rx_func"):
+            await self.set_rx_func(0 if on else 1)
+        else:
+            logger.warning("set_dual_watch: no CAT command defined for %s", self.model)
+
+    # -- Runtime profile introspection -------------------------------------
+
+    def _has_write_command(self, name: str) -> bool:
+        """Check if a write command is defined in the rig profile."""
+        spec = self._config.commands.get(name)
+        return (
+            spec is not None
+            and isinstance(spec, CatCommandSpec)
+            and spec.write is not None
+        )
+
+    def supports_command(self, command: str, *, receiver: int | None = None) -> bool:
+        """Return profile-derived support only for an executable operation."""
+        dependencies = {
+            "get_vfo_slot": ("get_vfo_select",),
+            "set_vfo_slot": ("set_vfo_select",),
+            "swap_vfo_ab": ("vfo_swap",),
+            "get_tuner_status": ("get_tuner",),
+            "set_tuner_status": ("get_tuner", "set_tuner"),
+            # RepeaterControlCapable (MOR-2111 tone half): the protocol
+            # names name no CAT command; their support is the profile
+            # commands they are composed from. The toggle setters read
+            # ``CT`` before writing (read-modify-write), so they require
+            # the CT read as well as the write.
+            "get_repeater_tone": ("get_sql_type",),
+            "set_repeater_tone": ("get_sql_type", "set_sql_type"),
+            "get_repeater_tsql": ("get_sql_type",),
+            "set_repeater_tsql": ("get_sql_type", "set_sql_type"),
+            "get_tone_freq": ("get_ctcss_tone",),
+            "set_tone_freq": ("set_ctcss_tone",),
+            "get_tsql_freq": ("get_ctcss_tone",),
+            "set_tsql_freq": ("set_ctcss_tone",),
+        }.get(command)
+        if (
+            command in {"get_vfo_slot", "set_vfo_slot", "swap_vfo_ab"}
+            and self._config.vfo_scheme != "ab"
+        ):
+            return False
+        if dependencies is None:
+            profile_supported = supports_callable(self.profile, command)
+        else:
+            profile_supported = (
+                command not in self.profile.absent_command_names
+                and all(
+                    supports_callable(self.profile, dependency)
+                    for dependency in dependencies
+                )
+            )
+        supported = profile_supported and callable(getattr(self, command, None))
+        if receiver is None:
+            return supported
+        if not supported or command not in {
+            "set_af_level",
+            "set_rf_gain",
+            "set_squelch",
+            "set_attenuator_level",
+        }:
+            return False
+        try:
+            key = self._receiver_level_write_key(command, receiver)
+        except (TypeError, ValueError):
+            return False
+        if command == "set_attenuator_level":
+            if (
+                receiver != 0
+                or not self.profile.supports_capability("attenuator")
+                or not callable(getattr(self, "set_attenuator", None))
+            ):
+                return False
+            key = "set_attenuator"
+        return self._has_write_command(key)
+
+    def _receiver_level_write_key(self, command: str, receiver: int) -> str:
+        """Select a MAIN/SUB level key after validating the target receiver."""
+        if isinstance(receiver, bool) or not isinstance(receiver, int):
+            raise TypeError("level receiver must be an integer")
+        if receiver not in (0, 1) or not self.profile.supports_receiver(receiver):
+            raise ValueError(f"level receiver is not supported: {receiver}")
+        return command if receiver == 0 else f"{command}_sub"
+
+    def _default_nb_level(self) -> int:
+        """Default NB level for turning on when current level is 0."""
+        ctrl = (self._config.controls or {}).get("nb", {})
+        raw_max = ctrl.get("range_max", 10)
+        range_max = int(raw_max) if isinstance(raw_max, (int, float, str)) else 10
+        return max(1, range_max // 2)
+
+    def _default_nr_level(self) -> int:
+        """Default NR level for turning on when current level is 0."""
+        ctrl = (self._config.controls or {}).get("nr", {})
+        raw_max = ctrl.get("range_max", 15)
+        range_max = int(raw_max) if isinstance(raw_max, (int, float, str)) else 15
+        return max(1, range_max // 2)
+
+    # -- Internal helpers ---------------------------------------------------
+
+    def _get_spec(self, name: str) -> CatCommandSpec:
+        """Return the CatCommandSpec for *name*, raising CommandError if absent."""
+        spec = self._config.commands.get(name)
+        if spec is None:
+            raise CommandError(
+                f"Command {name!r} not found in profile {self._config.model!r}"
+            )
+        if not isinstance(spec, CatCommandSpec):
+            raise CommandError(f"Command {name!r} is not a CAT command spec")
+        return spec
+
+    def _require_connected(self) -> None:
+        if not self.connected:
+            raise RadioConnectionError("Radio not connected — call connect() first")
+
+    async def _query(
+        self,
+        cmd_name: str,
+        *,
+        expect_rejection: bool = False,
+        is_current: Callable[[], bool] | None = None,
+        tier: ExchangeTier = ExchangeTier.ORDINARY,
+        **params: Any,
+    ) -> dict[str, Any]:
+        """Send a read command and return the parsed response fields.
+
+        The transport strips the trailing ``;`` from responses; we add it
+        back before passing to the parser (templates include the semicolon).
+
+        *params*, when given, are formatted into the profile's read template
+        via :func:`format_command` (e.g. ``get_meter``'s ``"RM{type};"``).
+        With no params the read template is sent verbatim, as most commands
+        take no parameters in the read direction.
+
+        *is_current* and *tier* (MOR-2862) reach the transport untouched so
+        a managed confirming read can ride its own write's admission tier
+        and currency; ordinary callers leave both at their defaults.
+        """
+        self._require_connected()
+        spec = self._get_spec(cmd_name)
+        if spec.read is None:
+            raise CommandError(f"Command {cmd_name!r} has no read template")
+
+        read_cmd = format_command(spec.read, **params) if params else spec.read
+        query_kwargs: dict[str, Any] = {}
+        if is_current is not None or tier is not ExchangeTier.ORDINARY:
+            query_kwargs.update(is_current=is_current, tier=tier)
+        if expect_rejection:
+            query_kwargs["expect_rejection"] = True
+        return await self._query_decoded(cmd_name, read_cmd, **query_kwargs)
+
+    async def _query_decoded(
+        self, cmd_name: str, read_cmd: str, **query_kwargs: Any
+    ) -> dict[str, Any]:
+        """Decode a read and credit only its still-current connection."""
+        transport = self._transport
+        writer = transport._writer
+        identity_generation = self._identity_generation
+        reconnects = transport.stats.reconnects
+        capture = self._tuner_provider_generation
+        provider_generation = None if capture is None else capture()
+
+        raw = await transport.query(read_cmd, **query_kwargs)
+
+        parser = self._parsers.get(cmd_name)
+        if parser is None:
+            raise CommandError(f"Command {cmd_name!r} has no parse template")
+
+        # Transport strips trailing ';'; add it back for the parser.
+        result = parser.parse(raw + ";")
+        if cmd_name in {
+            "get_mode",
+            "get_mode_sub",
+            "get_if_status",
+            "get_memory_channel",
+        }:
+            self._mode_name(result["mode"])
+        elif cmd_name in {"get_agc", "get_agc_sub"}:
+            int(result["mode"])
+        elif cmd_name == "get_id":
+            value = result.get("model")
+            if isinstance(value, str):
+                if not (len(value) == 4 and value.isascii() and value.isdigit()):
+                    raise ValueError("Malformed CAT identity")
+            elif type(value) is not int or not 0 <= value <= 9999:
+                raise ValueError("Malformed CAT identity")
+        semantic_valid = True
+        try:
+            if cmd_name == "get_repeater_shift":
+                RepeaterShiftDirection(int(result["shift"]))
+            elif cmd_name == "get_tuner":
+                _decode_atu_response(result)
+        except (TypeError, ValueError):
+            semantic_valid = False
+        connection_current = (
+            transport.connected
+            and transport._writer is writer
+            and transport.stats.reconnects == reconnects
+            and self._tuner_provider_generation is capture
+            and (capture is None or capture() == provider_generation)
+        )
+        if isinstance(raw, CatQueryResponse):
+            connection_current = raw.is_current()
+        if (
+            self._transport is transport
+            and connection_current
+            and _digit_fields_valid(result)
+            and semantic_valid
+            and self._identity_generation == identity_generation
+        ):
+            self._transport.last_valid_frame_monotonic = time.monotonic()
+        return result
+
+    async def _write(
+        self,
+        cmd_name: str,
+        *,
+        is_current: Callable[[], bool] | None = None,
+        tier: ExchangeTier = ExchangeTier.ORDINARY,
+        on_committed: Callable[[], None] | None = None,
+        **kwargs: Any,
+    ) -> None:
+        """Format and send a write command (no response expected).
+
+        *on_committed* is handed to the transport, which runs it only for a
+        write that passed its final currency check (MOR-3678).
+
+        Raises:
+            CommandRejectedError: If the radio rejects the command with
+                ``?;`` (MOR-2103), translated from the transport's
+                :class:`~.transport.CatCommandRejected` — a plain
+                ``Exception`` subclass, not :class:`~...exceptions.RigplaneError`,
+                so it would otherwise escape ``validation/hardware.py``'s
+                ``_guard`` uncaught. A dedicated subclass of
+                :class:`~...exceptions.CommandError` (not a plain
+                ``CommandError``) so a caller that needs to know the radio
+                positively refused the command — as opposed to, say, a local
+                encoder rejecting an out-of-range value before anything was
+                sent — can identify it structurally, by type, instead of
+                re-deriving it from the exception's message text.
+        """
+        self._require_connected()
+        spec = self._get_spec(cmd_name)
+        if spec.write is None:
+            raise CommandError(f"Command {cmd_name!r} has no write template")
+
+        cmd = format_command(spec.write, **kwargs)
+        try:
+            if on_committed is not None:
+                await self._transport.write(
+                    cmd, is_current=is_current, tier=tier, on_committed=on_committed
+                )
+            elif is_current is None and tier is ExchangeTier.ORDINARY:
+                await self._transport.write(cmd)
+            else:
+                await self._transport.write(cmd, is_current=is_current, tier=tier)
+        except CatCommandRejected as exc:
+            raise CommandRejectedError(str(exc)) from exc
+
+    # -- IF Bulk Query ------------------------------------------------------
+
+    async def get_if_status(self) -> dict[str, Any]:
+        """Send ``IF;`` and parse the composite response into state fields.
+
+        The FTX-1 IF response layout, per the profile's ``get_if_status``
+        parse template (CAT manual FTX-1_CAT_OM_ENG_2508-C, bench-verified
+        2026-08-29): P1 channel(5, may be alphanumeric) + P2 freq(9 digits)
+        + P3 clarifier sign(1) + offset(4 digits) + P4 RX CLAR(1) + P5 TX
+        CLAR(1) + P6 mode(1) + P7 VFO/memory select(1) + P8 tone mode(1) +
+        P9 fixed "00" + P10 repeater shift(1). This response carries no PTT
+        or split field, so this method neither reads nor writes them;
+        :meth:`read_ptt` and ``get_split`` read the ``TX;``/``ST;``
+        commands for that state instead.
+
+        Returns a dict with parsed fields and populates :attr:`radio_state`.
+        """
+        result = await self._query("get_if_status")
+
+        freq = int(result["freq"])
+        offset = int(result["offset"])
+        rit_hz = offset if result["sign"] == "+" else -offset
+        rit_on = result["rx"] == "1"
+        xit_on = result["tx"] == "1"
+        mode_code = result["mode"]
+        mode_name = self._mode_name(mode_code)
+        vfo = int(result["vfo"])
+
+        # Populate state atomically.
+        self._state.main.freq = freq
+        self._state.main.mode = mode_name
+        self._state.rit_on = rit_on
+        self._state.rit_tx = xit_on
+        self._state.rit_freq = rit_hz
+
+        return {
+            "freq": freq,
+            "mode": mode_name,
+            "rit_offset": rit_hz,
+            "rit_on": rit_on,
+            "xit_on": xit_on,
+            "vfo": vfo,
+        }
+
+    # -- Frequency ----------------------------------------------------------
+
+    async def read_freq(self, receiver: int = 0) -> int:
+        """Read the current VFO frequency without mutating legacy state.
+
+        Args:
+            receiver: 0 = main (VFO-A), 1 = sub (VFO-B).
+        """
+        cmd = "get_freq" if receiver == 0 else "get_freq_sub"
+        result = await self._query(cmd)
+        return int(result["freq"])
+
+    async def get_freq(self, receiver: int = 0) -> int:
+        """Get the current VFO frequency in Hz.
+
+        Args:
+            receiver: 0 = main (VFO-A), 1 = sub (VFO-B).
+        """
+        freq = await self.read_freq(receiver)
+        if receiver == 0:
+            self._state.main.freq = freq
+        else:
+            self._state.sub.freq = freq
+        return freq
+
+    async def set_freq(self, freq: int, receiver: int = 0) -> None:
+        """Set the VFO frequency in Hz.
+
+        Args:
+            freq: Frequency in Hz (e.g. ``14_074_000``).
+            receiver: 0 = main (VFO-A), 1 = sub (VFO-B).
+        """
+        async with self._mode_lock:
+            cmd = "set_freq" if receiver == 0 else "set_freq_sub"
+            await self._write(cmd, freq=freq)
+            if receiver == 0:
+                self._state.main.freq = freq
+            else:
+                self._state.sub.freq = freq
+
+    # -- Mode ---------------------------------------------------------------
+
+    def _mode_name(self, code: str) -> str:
+        """Map a one-character MD P2 code to its profile mode name.
+
+        Codes the profile does not assign (the manual's unused letters)
+        raise :class:`CatParseError` rather than decoding to a neighbour
+        mode or a placeholder name (MOR-2518).
+        """
+        name = self._code_to_mode.get(code)
+        if name is None:
+            raise CatParseError(
+                "{mode}",
+                code,
+                f"mode code is not assigned in profile {self._config.model!r}",
+            )
+        return name
+
+    async def read_mode(self, receiver: int = 0) -> tuple[str, int | None]:
+        """Read the current operating mode without mutating legacy state.
+
+        Returns:
+            Tuple of (mode_name, None).  Mode names are from the rig
+            profile (e.g. ``"USB"``, ``"LSB"``, ``"CW-U"``).  A mode code
+            the profile does not assign raises ``CatParseError``.
+        """
+        cmd = "get_mode" if receiver == 0 else "get_mode_sub"
+        result = await self._query(cmd)
+        return self._mode_name(result["mode"]), None
+
+    async def get_mode(self, receiver: int = 0) -> tuple[str, int | None]:
+        """Get the current operating mode.
+
+        Returns:
+            Tuple of (mode_name, None).  Mode names are from the rig
+            profile (e.g. ``"USB"``, ``"LSB"``, ``"CW-U"``).
+        """
+        mode_name, filter_width = await self.read_mode(receiver)
+        if receiver == 0:
+            self._state.main.mode = mode_name
+        else:
+            self._state.sub.mode = mode_name
+        return mode_name, filter_width
+
+    async def set_mode(
+        self,
+        mode: str,
+        filter_width: int | None = None,
+        receiver: int = 0,
+    ) -> None:
+        """Set the operating mode.
+
+        Args:
+            mode: Mode name from the rig profile (e.g. ``"USB"``).
+            filter_width: Ignored (not supported by this backend).
+            receiver: 0 = main, 1 = sub.
+        """
+        receiver = self._validate_receiver(receiver)
+        if mode not in self._mode_to_code:
+            raise CommandError(
+                f"Unknown mode {mode!r} for {self._config.model!r}. "
+                f"Available: {list(self._mode_to_code)}"
+            )
+        async with self._mode_lock:
+            await self._set_mode_verified(mode, receiver)
+
+    async def _set_mode_verified(
+        self, mode: str, receiver: int, *, is_current: Callable[[], bool] | None = None
+    ) -> None:
+        cmd = "set_mode" if receiver == 0 else "set_mode_sub"
+        await self._write(cmd, mode=self._mode_to_code[mode], is_current=is_current)
+        for attempt in range(5):
+            observed, _ = await self.get_mode(receiver)
+            if observed == mode:
+                return
+            if attempt < 4:
+                await asyncio.sleep(0.05)
+        raise ModeReadbackError(mode, observed)
+
+    async def _relative_receiver(self, selected: bool) -> int:
+        if type(selected) is not bool:
+            raise CommandError("relative VFO selected must be a boolean")
+        if self._config.vfo_scheme == "ab" and self.receiver_count == 1:
+            # Single-receiver A/B pair (e.g. FT-991A): the TX slot is the
+            # unselected VFO, addressed by the declared FB commands. No
+            # selector exists, so the role check below is trivially met.
+            await self._require_main_relative_role()
+            return 0 if selected else 1
+        if self._config.vfo_scheme != "ab_shared" or self.receiver_count != 2:
+            raise CommandError(
+                "relative MAIN/SUB access is unavailable for this profile"
+            )
+        await self._require_main_relative_role()
+        return 0 if selected else 1
+
+    async def _require_main_relative_role(self) -> None:
+        if not self.supports_command("get_vfo_select"):
+            # No VS verb on this profile (e.g. FT-991A): there is no
+            # receiver selector to disturb, so the MAIN role holds
+            # trivially. Profile data, not a model check.
+            return
+        vfo = await self._relative_readback(
+            "MAIN/SUB selection", lambda: self.read_vfo_select()
+        )
+        if vfo != 0:
+            raise CommandError(
+                "relative split requires MAIN RX (VS0); selector unchanged"
+            )
+
+    @staticmethod
+    async def _relative_readback(label: str, read: Callable[[], Any]) -> Any:
+        """Await a relative-path read, mapping malformed replies to
+        :class:`CommandError`. An explicit radio ``?;`` refusal keeps its
+        :class:`CommandRejectedError` identity; transport failures pass
+        through untouched.
+        """
+        try:
+            return await read()
+        except CatCommandRejected as exc:
+            raise CommandRejectedError(str(exc)) from exc
+        except ValueError as exc:  # includes CatParseError
+            raise CommandError(f"unreadable relative {label}: {exc}") from exc
+
+    @staticmethod
+    def _relative_mode_value(mode: str) -> tuple[str, int]:
+        base = {
+            "DATA-U": "USB",
+            "DATA-L": "LSB",
+            "DATA-FM": "FM",
+            "DATA-FM-N": "FMN",
+            "FM-N": "FMN",
+            "AM-N": "AMN",
+            "CW-U": "CW",
+            "CW-L": "CW_R",
+            "RTTY-L": "RTTY",
+            "RTTY-U": "RTTY_R",
+        }.get(mode, mode)
+        return base, int(is_data_mode(mode))
+
+    async def _read_relative_receiver(self, receiver: int) -> RelativeVfoState:
+        freq = await self._relative_readback(
+            "frequency", lambda: self.read_freq(receiver)
+        )
+        native, _ = await self._relative_readback(
+            "mode", lambda: self.read_mode(receiver)
+        )
+        await self._require_main_relative_role()
+        mode, data = self._relative_mode_value(native)
+        return RelativeVfoState(freq_hz=freq, mode=mode, data_mode=data)
+
+    async def read_relative_vfo(self, *, selected: bool) -> RelativeVfoState:
+        """Read MAIN/SUB split roles with MAIN selected, without switching VFOs."""
+        async with self._mode_lock:
+            receiver = await self._relative_receiver(selected)
+            return await self._read_relative_receiver(receiver)
+
+    async def write_relative_vfo_mode(
+        self,
+        mode: int,
+        *,
+        selected: bool,
+        data: bool | int | None = None,
+        filter_width: int | None = None,
+        before_set: Callable[[], None] | None = None,
+    ) -> RelativeVfoState:
+        """Set the addressed split-role mode; Icom filter-bank numbers are unavailable."""
+        if isinstance(mode, bool) or not isinstance(mode, int):
+            raise CommandError("relative mode must be an integer Mode value")
+        try:
+            base = Mode(mode).name
+        except ValueError as exc:
+            raise CommandError(f"unsupported relative mode {mode!r}") from exc
+        native = {
+            "CW": "CW-U",
+            "CW_R": "CW-L",
+            "RTTY": "RTTY-L",
+            "RTTY_R": "RTTY-U",
+        }.get(base, base)
+        if native not in self._mode_to_code:
+            raise CommandError(f"relative mode {base!r} is absent from this profile")
+        if data is None:
+            pass
+        elif isinstance(data, bool):
+            pass
+        else:
+            # Yaesu exposes DATA as a mode pair, not a numbered sub-mode
+            # (MOR-3821 P0e): the widened numeric surface does not apply,
+            # so only a boolean selects the DATA partner.
+            raise CommandError("relative DATA must be a boolean")
+        if filter_width is not None:
+            raise CommandError(
+                "Icom filter-bank numbers are unavailable; use passband 0"
+            )
+        async with self._mode_lock:
+            receiver = await self._relative_receiver(selected)
+            if data is None:
+                current, _ = await self._relative_readback(
+                    "mode", lambda: self.read_mode(receiver)
+                )
+                data = is_data_mode(current)
+            if data:
+                native = {"USB": "DATA-U", "LSB": "DATA-L", "FM": "DATA-FM"}.get(
+                    base, ""
+                )
+                if native not in self._mode_to_code:
+                    raise CommandError(
+                        f"relative DATA partner unavailable for {base!r}"
+                    )
+
+            # MOR-3754: a before_set refusal at the transport's final
+            # currency check is wrapped in CatTransportError; restore the
+            # caller's exact refusal (identity-checked) so rigctld can
+            # still map ControllerError to EACCESS. Unrelated transport
+            # failures keep their own type.
+            guard_failure: BaseException | None = None
+
+            def current_target() -> bool:
+                nonlocal guard_failure
+                if before_set is not None:
+                    try:
+                        before_set()
+                    except BaseException as exc:
+                        guard_failure = exc
+                        raise
+                return True
+
+            current_target()
+            await self._require_main_relative_role()
+            try:
+                await self._set_mode_verified(
+                    native, receiver, is_current=current_target
+                )
+            except CatCommandRejected as exc:
+                raise CommandRejectedError(str(exc)) from exc
+            except CatTransportError as exc:
+                if guard_failure is not None and exc.__cause__ is guard_failure:
+                    raise guard_failure
+                raise
+            except CatParseError as exc:
+                raise CommandError(f"unreadable relative mode readback: {exc}") from exc
+            observed = await self._read_relative_receiver(receiver)
+            if (observed.mode, bool(observed.data_mode)) != (base, data):
+                raise CommandError("relative mode readback did not match the request")
+            return observed
+
+    async def write_relative_vfo_frequency(
+        self,
+        freq_hz: int,
+        *,
+        selected: bool,
+        before_set: Callable[[], None] | None = None,
+        after_ack: Callable[[], None] | None = None,
+        after_readback: Callable[[], None] | None = None,
+    ) -> int:
+        """Set native FA/FB and confirm it while retaining MAIN RX selection."""
+        if type(freq_hz) is not int or not 30_000 <= freq_hz <= 470_000_000:
+            raise CommandError("relative frequency must be integer Hz within CAT range")
+        async with self._mode_lock:
+            receiver = await self._relative_receiver(selected)
+
+            # MOR-3754: same restore as write_relative_vfo_mode — the
+            # transport wraps a final-check before_set refusal in
+            # CatTransportError; give the caller back the exact refusal.
+            guard_failure: BaseException | None = None
+
+            def current_target() -> bool:
+                nonlocal guard_failure
+                if before_set is not None:
+                    try:
+                        before_set()
+                    except BaseException as exc:
+                        guard_failure = exc
+                        raise
+                return True
+
+            current_target()
+            await self._require_main_relative_role()
+            cmd = "set_freq" if receiver == 0 else "set_freq_sub"
+            try:
+                await self._write(cmd, freq=freq_hz, is_current=current_target)
+            except CatTransportError as exc:
+                if guard_failure is not None and exc.__cause__ is guard_failure:
+                    raise guard_failure
+                raise
+            if after_ack is not None:
+                after_ack()
+            for attempt in range(5):
+                observed = await self._relative_readback(
+                    "frequency", lambda: self.read_freq(receiver)
+                )
+                if observed == freq_hz:
+                    await self._require_main_relative_role()
+                    if after_readback is not None:
+                        after_readback()
+                    return observed
+                if attempt < 4:
+                    await asyncio.sleep(0.05)
+            raise CommandError("relative frequency readback did not match the request")
+
+    # -- Data mode ---------------------------------------------------------
+
+    async def get_data_mode(self) -> bool:
+        """Whether DATA mode is active.
+
+        On Yaesu radios, DATA mode is embedded in the mode string (e.g.
+        ``DATA-U``).  We derive it from the radio's live mode answer
+        (``MD0;``), not the legacy ``self._state`` mirror, which the
+        observation pipeline never writes (MOR-2518).
+
+        This is a read-only derivation: it returns a flat ``bool`` and does
+        not synthesize or mutate the private ``self._state`` mirror. The
+        consumer pipeline is fed by ``YaesuObservationAdapter`` via the
+        non-mutating ``read_*`` paths; ``_state`` is legacy compat only
+        (MOR-434).
+        """
+        mode, _ = await self.read_mode(0)
+        return is_data_mode(mode)
+
+    async def set_data_mode(self, on: int | bool, receiver: int = 0) -> None:
+        """Select the profile's DATA partner of the live receiver mode."""
+        receiver = self._validate_receiver(receiver)
+        async with self._mode_lock:
+            if self._has_write_command("set_data_mode"):
+                await self._write("set_data_mode", state="1" if on else "0")
+                return
+
+            mode, _ = await self.read_mode(receiver)
+            pairs = {
+                "USB": "DATA-U",
+                "LSB": "DATA-L",
+                "FM": "DATA-FM",
+                "FM-N": "DATA-FM-N",
+            }
+            if on:
+                if mode in pairs.values():
+                    return
+                target = pairs.get(mode)
+            else:
+                target = {data: plain for plain, data in pairs.items()}.get(mode)
+                if target is None and not is_data_mode(mode):
+                    return
+            if target is None or target not in self._mode_to_code:
+                raise CommandError(
+                    f"No DATA mode partner for {mode!r} on {self._config.model!r}"
+                )
+            await self._set_mode_verified(target, receiver)
+
+    # -- Power switch (PS) -------------------------------------------------
+
+    async def get_powerstat(self) -> bool:
+        """Query the power switch state.
+
+        Returns:
+            ``True`` if the radio is powered on, ``False`` otherwise.
+        """
+        result = await self._query("get_powerstat")
+        return bool(result["state"] == "1")
+
+    async def set_powerstat(self, on: bool) -> None:
+        """Set the power switch state, with the MOR-3064 identity-hold rule.
+
+        While the identity hold owns the live port, only POWER ON passes —
+        and only in ``no_response`` (a radio that answered with a wrong ID
+        must not be powered by us). POWER ON goes straight to the transport
+        so it stays available while the readiness surface
+        (``connected``/``radio_ready``) is false under the hold. Everything
+        else is refused until the radio has answered its model
+        identification.
+
+        Args:
+            on: ``True`` to power on, ``False`` to power off.
+        """
+        identity = self._connection_identity
+        if (
+            identity is not None
+            and self._identity_hold_status_held()
+            and self._transport.connected
+            and self._identity_hold_has_owner()
+        ):
+            if on and identity.status is RadioIdentityStatus.NO_RESPONSE:
+                spec = self._get_spec("set_powerstat")
+                if spec.write is not None:
+                    await self._transport.write(format_command(spec.write, state="1"))
+                    return
+            raise RadioConnectionError(
+                f"{self.model} on {self._device} has not answered its model "
+                "ID; only POWER ON is available while the identity hold "
+                "owns the port"
+            )
+        await self._write("set_powerstat", state="1" if on else "0")
+
+    # -- PTT ----------------------------------------------------------------
+
+    async def set_ptt(self, on: bool) -> None:
+        """Key or un-key the transmitter.
+
+        Does not touch the legacy ``self._state`` mirror (MOR-1941): our
+        own command is a claim about the wire, never receive/transmit
+        truth (§3.7 of the transmit-authority ADR). Only a real read-back
+        (:meth:`get_ptt`) may update the mirror.
+
+        Args:
+            on: ``True`` to transmit, ``False`` to receive.
+        """
+        await self._write("set_ptt", state="1" if on else "0")
+
+    # The profile command each managed-release abort executes (MOR-4352).
+    # ``actuate`` resolves its abort command NAMES from this table -- the
+    # CAT "KY P1 0" stop for STOP_CW (2508-C printed p.18), the
+    # ``set_tuner`` state-0 write for STOP_TUNE -- and ``abort_applicable``
+    # checks the same names, so the executed command and the applicability
+    # decision are one mapping, never two.
+    _ABORT_COMMANDS: Mapping[AbortOperation, str] = {
+        AbortOperation.STOP_CW: "send_cw",
+        AbortOperation.STOP_TUNE: "set_tuner",
+    }
+
+    def abort_applicable(self, operation: AbortOperation) -> bool:
+        """Whether the profile declares the command *operation* executes.
+
+        MOR-4352: an abort the radio cannot execute is not applicable --
+        the effect lane never schedules it and it never surfaces as an
+        ``abortErrors`` entry. Decided by :meth:`supports_command` over
+        ``_ABORT_COMMANDS``, the same names ``actuate`` writes.
+        """
+        command = self._ABORT_COMMANDS.get(operation)
+        return command is not None and self.supports_command(command)
+
+    async def actuate(
+        self,
+        token: EffectToken,
+        operation: ActuationOperation | AbortOperation,
+        *,
+        is_current: Callable[[], bool],
+    ) -> ActuationResult:
+        """Execute one profile-backed runtime-managed transmit operation."""
+        del token
+        on_committed: Callable[[], None] | None = None
+        if operation in (ActuationOperation.PTT_ON, ActuationOperation.TRANSMIT_ON):
+            command, params, tier = "set_ptt", {"state": "1"}, ExchangeTier.ORDINARY
+        elif operation is ActuationOperation.FORCE_RECEIVE:
+            command, params, tier = (
+                "set_ptt",
+                {"state": "0"},
+                ExchangeTier.FORCE_RELEASE,
+            )
+        elif (abort := self._ABORT_COMMANDS.get(operation)) is not None:
+            # MOR-4352 review round 1: the command NAME comes from
+            # ``_ABORT_COMMANDS`` -- the same entry ``abort_applicable``
+            # answers from -- so what the lane schedules and what the
+            # profile declares can never diverge. Parameters, the ABORT
+            # tier and the CW commit callback stay per-operation.
+            command, tier = abort, ExchangeTier.ABORT
+            if operation is AbortOperation.STOP_CW:
+                # KY P1 P2 with P2 0 = STOP (CAT 2508-C printed p.18), MOR-3678.
+                # Only a stop the transport lets out ends earlier sends; a
+                # stale or superseded one leaves them alone (#4317 review).
+                on_committed = self._end_earlier_cw_text_sends
+                params = {"type": self._cw_text_memory_type_code(), "mem": "0"}
+            else:
+                params = {"src": "0", "type": "0", "state": "0"}
+        else:
+            return ActuationResult.REJECTED
+
+        try:
+            await self._write(
+                command,
+                is_current=is_current,
+                tier=tier,
+                on_committed=on_committed,
+                **params,
+            )
+        except CommandError:
+            return ActuationResult.REJECTED
+        if operation is not ActuationOperation.FORCE_RECEIVE:
+            return ActuationResult.ACCEPTED
+        # MOR-2862: a Yaesu set is answered with silence, so ACCEPTED
+        # after the write alone would mean only "written". The same
+        # actuation reads the TX state back once, the way ``get_ptt``
+        # does, on the unkey's own tier and currency; only a read that
+        # says receive confirms the unkey. TX, silence, a malformed
+        # answer, or a raised read is UNCERTAIN, which keeps the release
+        # owed (``managed_tx_state.py: _settle``).
+        try:
+            transmitting = await self.read_ptt(is_current=is_current, tier=tier)
+        except Exception:
+            return ActuationResult.UNCERTAIN
+        return (
+            ActuationResult.ACCEPTED if not transmitting else ActuationResult.UNCERTAIN
+        )
+
+    def _warn_ptt_unrecognised(self, state: str) -> None:
+        """Warn-once-then-DEBUG diagnostic for an unrecognised TX token.
+
+        PTT is polled at a fast, unthrottled cadence, so a persistently
+        unrecognised state would otherwise flood the log. Reuses the
+        existing ``_poll_warned_fields`` warn-once-then-DEBUG idiom already
+        used for permanently-unsupported poll fields (MOR-561) rather than
+        adding new rate-limiting machinery.
+        """
+        label = "ptt_unrecognised_state"
+        log = logger.debug if label in self._poll_warned_fields else logger.warning
+        self._poll_warned_fields.add(label)
+        log(
+            "read_ptt: unrecognised TX state %r from %s; failing closed (transmitting)",
+            state,
+            self.model,
+        )
+
+    async def read_ptt_token(
+        self,
+        *,
+        is_current: Callable[[], bool] | None = None,
+        tier: ExchangeTier = ExchangeTier.ORDINARY,
+    ) -> str:
+        """Read the raw ``TX;`` token -- no RX/TX interpretation, no mutation.
+
+        The primitive :meth:`read_ptt` is built on. Exposes the parsed wire
+        value (``"0"``/``"1"``/``"2"`` on shipped profiles, coerced to
+        ``str`` -- a no-op today, since the ``{state}`` parse template types
+        it as ``str`` on every shipped profile, but not a guarantee for a
+        future template typed otherwise) so a caller can map it through the
+        profile's :class:`~rigplane.profiles.TxPolicy` --
+        :meth:`~rigplane.profiles.TxPolicy.is_receiving` for the RX/TX
+        answer, :meth:`~rigplane.profiles.TxPolicy.attribution` for the
+        vendor's per-value label (MOR-1941, §3.7 of the transmit-authority
+        ADR).
+
+        *is_current* and *tier* pass through to :meth:`_query` (MOR-2862)
+        for the managed confirming read; ordinary callers use the defaults.
+        """
+        if is_current is None and tier is ExchangeTier.ORDINARY:
+            result = await self._query("get_ptt")
+        else:
+            result = await self._query("get_ptt", is_current=is_current, tier=tier)
+        return str(result["state"])
+
+    async def read_ptt(
+        self,
+        *,
+        is_current: Callable[[], bool] | None = None,
+        tier: ExchangeTier = ExchangeTier.ORDINARY,
+    ) -> bool:
+        """Read the current PTT state without mutating legacy state.
+
+        The Yaesu ``TX;`` answer is three-valued, not a plain boolean flag:
+        ``0`` = receiving, ``1`` = transmitting (CAT-keyed), ``2`` =
+        transmitting (the radio itself keyed it -- front panel, mic,
+        footswitch, or VOX). The raw token is routed through the profile's
+        ``[tx_policy].tx_state_map`` (positive-RX rule, MOR-1941, §3.7 of
+        the transmit-authority ADR): only a value explicitly mapped to
+        ``"rx"`` reads as receiving, so this predicate is structurally
+        unable to invert a state to RX the way the old inline
+        ``state == "1"`` comparison did (MOR-1905) -- an unrecognised
+        value fails closed (transmitting) with a diagnostic by
+        construction, not by a comparison that could quietly be flipped.
+
+        A profile that ships no ``[tx_policy].tx_state_map`` at all --
+        every rig this backend has not bench-measured -- falls back to
+        the legacy ``!= "0"`` predicate instead of consulting the (empty)
+        map: ``"0"`` is the Yaesu CAT protocol's own receive token, not a
+        per-radio measured value, so this is a vendor-level default
+        rather than a hardcoded radio constant. An undeclared profile
+        must degrade to today's behaviour, not to a radio that can never
+        be read as receiving.
+
+        Returns:
+            ``True`` if transmitting, ``False`` if receiving.
+        """
+        if is_current is None and tier is ExchangeTier.ORDINARY:
+            state = await self.read_ptt_token()
+        else:
+            state = await self.read_ptt_token(is_current=is_current, tier=tier)
+        return self._interpret_ptt_token(state)
+
+    def _interpret_ptt_token(self, state: str) -> bool:
+        """Map a raw ``TX;`` token to a transmitting boolean (positive-RX rule).
+
+        The one place this predicate is written: shared by :meth:`read_ptt`
+        and :meth:`read_transmit_state` (MOR-1914, row 5) so a regression in
+        either caller's path -- the MOR-1905 inversion class -- is a
+        regression here, and the row-5 conformance matrix, which points its
+        ``yaesu-ftx1`` column at :meth:`read_transmit_state` rather than a
+        harness-local reimplementation, still exercises the one shipped
+        predicate a plain ``read_ptt()`` call would (the MOR-1941 review
+        concern, BLOCKED-2).
+        """
+        policy = self.profile.tx_policy
+        if not policy.tx_state_map:
+            if state not in ("0", "1", "2"):
+                self._warn_ptt_unrecognised(state)
+            return state != "0"
+        if state not in policy.tx_state_map:
+            self._warn_ptt_unrecognised(state)
+        return not policy.is_receiving(state)
+
+    async def get_ptt(self) -> bool:
+        """Query the current PTT state.
+
+        Returns:
+            ``True`` if transmitting, ``False`` if receiving.
+        """
+        ptt = await self.read_ptt()
+        self._state.ptt = ptt
+        return ptt
+
+    async def read_transmit_state(self) -> TxStateReading:
+        """One solicited transmit-state observation.
+
+        It uses the same token interpretation as :meth:`read_ptt` and carries
+        the profile's attribution. Transport outcomes return a ``failure``
+        tag; connection preconditions still raise.
+        """
+        try:
+            token = await self.read_ptt_token()
+        except (CatCommandRejected, CatParseError):
+            return TxStateReading(value=None, failure="read-error")
+        except CatTimeoutError:
+            return TxStateReading(value=None, failure="timeout")
+        except CatTransportError:
+            return TxStateReading(value=None, failure="transport")
+        return TxStateReading(
+            value=self._interpret_ptt_token(token),
+            attributed=self.profile.tx_policy.attribution(token),
+            source="yaesu_poll_response",
+            verified_readback=True,
+        )
+
+    # -- S-meter ------------------------------------------------------------
+
+    async def read_s_meter(self, receiver: int = 0) -> int:
+        """Read the S-meter raw value without mutating legacy state.
+
+        Args:
+            receiver: 0 = main, 1 = sub.
+
+        Returns:
+            Raw S-meter reading (0–255, vendor scale).
+        """
+        cmd = "get_s_meter" if receiver == 0 else "get_s_meter_sub"
+        result = await self._query(cmd)
+        return int(result["raw"])
+
+    async def get_s_meter(self, receiver: int = 0) -> int:
+        """Get the S-meter raw value.
+
+        Args:
+            receiver: 0 = main, 1 = sub.
+
+        Returns:
+            Raw S-meter reading (0–255, vendor scale).
+        """
+        raw = await self.read_s_meter(receiver)
+        if receiver == 0:
+            self._state.main.s_meter = raw
+        else:
+            self._state.sub.s_meter = raw
+        return raw
+
+    # -- RM meters (COMP, ALC, Power, SWR, IDD, VDD) ----------------------
+
+    async def _read_meter(self, meter_type: int) -> tuple[int, int]:
+        """Read the meter's profile-defined command.
+
+        Returns (main, sub) raw 3-digit meter values as parsed by the
+        profile's ``get_meter`` template.
+
+        Routes through the ``get_meter`` profile entry (parameterised read
+        template, e.g. ``"RM{type};"``) rather than a hardcoded command —
+        a malformed or short reply fails the parse template and raises
+        :class:`~.parser.CatParseError` (a ``ValueError`` subclass). A
+        single-value answer (single-receiver profiles such as the FT-991A,
+        whose ``RM`` reply carries no SUB group) reads back as (main, main):
+        the shape comes from the profile's parse template, not from a
+        per-radio branch.
+        """
+        result = await self._query("get_meter", type=meter_type)
+        main = result["main"]
+        return main, result.get("sub", main)
+
+    async def read_comp_meter(self) -> int:
+        """Read COMP (compression) meter without mutating legacy state."""
+        main, _ = await self._read_meter(3)
+        return main
+
+    async def get_comp_meter(self) -> int:
+        """Get COMP (compression) meter reading (0–255)."""
+        return await self.read_comp_meter()
+
+    async def read_alc_meter(self) -> int:
+        """Read ALC meter without mutating legacy state."""
+        main, _ = await self._read_meter(4)
+        return main
+
+    async def get_alc_meter(self) -> int:
+        """Get ALC meter reading (0–255)."""
+        return await self.read_alc_meter()
+
+    async def read_power_meter(self) -> int:
+        """Read TX power meter without mutating legacy state."""
+        main, _ = await self._read_meter(5)
+        return main
+
+    async def get_power_meter(self) -> int:
+        """Get TX power meter reading (0–255)."""
+        return await self.read_power_meter()
+
+    async def read_swr_meter(self) -> int:
+        """Read SWR meter without mutating legacy state."""
+        main, _ = await self._read_meter(6)
+        return main
+
+    async def get_swr_meter(self) -> int:
+        """Get SWR meter raw reading (0–255)."""
+        return await self.read_swr_meter()
+
+    async def get_swr(self) -> float:
+        """Get SWR as a ratio (>= 1.0).
+
+        Uses the piecewise-linear calibration table from
+        ``[meters.swr.calibration]`` in the rig TOML when present
+        (closes #440). Falls back to the legacy linear mapping
+        ``1.0 + raw/255 * 8.9`` when no table is configured.
+        """
+        raw, _ = await self._read_meter(6)
+        return float(_interpolate_swr(raw, self._config.meter_calibrations))
+
+    async def get_id_meter(self) -> int:
+        """Get IDD (current drain) meter reading (0–255)."""
+        main, _ = await self._read_meter(7)
+        return main
+
+    async def get_vd_meter(self) -> int:
+        """Get VDD (voltage) meter reading (0–255)."""
+        main, _ = await self._read_meter(8)
+        return main
+
+    async def get_meter(self, meter_type: str | MeterType, receiver: int = 0) -> int:
+        """Dispatch to the matching per-type getter by meter type name.
+
+        Args:
+            meter_type: A :class:`~rigplane.meter_cal.MeterType` enum value or
+                its string equivalent (``"smeter"``, ``"comp"``, ``"alc"``,
+                ``"power"``, ``"swr"``, ``"id"``, ``"vd"``).
+            receiver: 0 = main, 1 = sub (only meaningful for ``"smeter"``).
+
+        Returns:
+            Raw meter reading (0–255, vendor scale).
+
+        Raises:
+            ValueError: If *meter_type* is not a recognised value.
+        """
+        if isinstance(meter_type, MeterType):
+            mt = meter_type
+        else:
+            try:
+                mt = MeterType(str(meter_type))
+            except ValueError:
+                raise ValueError(
+                    f"Unknown meter type: {meter_type!r}. "
+                    f"Valid values: {[m.value for m in MeterType]}"
+                )
+        if mt == MeterType.SMETER:
+            return await self.get_s_meter(receiver=receiver)
+        if mt == MeterType.COMP:
+            return await self.get_comp_meter()
+        if mt == MeterType.ALC:
+            return await self.get_alc_meter()
+        if mt == MeterType.POWER:
+            return await self.get_power_meter()
+        if mt == MeterType.SWR:
+            return await self.get_swr_meter()
+        if mt == MeterType.CURRENT:
+            return await self.get_id_meter()
+        if mt == MeterType.VOLTAGE:
+            return await self.get_vd_meter()
+        raise ValueError(f"Unhandled meter type: {meter_type!r}")
+
+    async def get_rf_power(self) -> int:
+        """Get configured TX power in watts.
+
+        Note: Returns the configured (SET) power level via PC command,
+        not measured output. For measured RF output use get_power_meter() (RM5).
+        """
+        _, watts = await self.get_power()
+        return watts
+
+    # -- D1: RX Audio Controls ----------------------------------------------
+
+    async def read_af_level(self, receiver: int = 0) -> int:
+        """Read the AF (audio) level without mutating legacy state."""
+        cmd = "get_af_level" if receiver == 0 else "get_af_level_sub"
+        result = await self._query(cmd)
+        return int(result["level"])
+
+    async def get_af_level(self, receiver: int = 0) -> int:
+        """Get the AF (audio) level (0–255)."""
+        level = await self.read_af_level(receiver)
+        rx = self._state.main if receiver == 0 else self._state.sub
+        rx.af_level = level
+        return level
+
+    async def set_af_level(self, level: int, receiver: int = 0) -> None:
+        """Set the AF (audio) level (0–255)."""
+        cmd = self._receiver_level_write_key("set_af_level", receiver)
+        await self._write(cmd, level=level)
+        rx = self._state.main if receiver == 0 else self._state.sub
+        rx.af_level = level
+
+    async def read_rf_gain(self, receiver: int = 0) -> int:
+        """Read the RF gain without mutating legacy state."""
+        cmd = "get_rf_gain" if receiver == 0 else "get_rf_gain_sub"
+        result = await self._query(cmd)
+        return int(result["level"])
+
+    async def get_rf_gain(self, receiver: int = 0) -> int:
+        """Get the RF gain (0–255)."""
+        level = await self.read_rf_gain(receiver)
+        rx = self._state.main if receiver == 0 else self._state.sub
+        rx.rf_gain = level
+        return level
+
+    async def set_rf_gain(self, level: int, receiver: int = 0) -> None:
+        """Set the RF gain (0–255)."""
+        cmd = self._receiver_level_write_key("set_rf_gain", receiver)
+        await self._write(cmd, level=level)
+        rx = self._state.main if receiver == 0 else self._state.sub
+        rx.rf_gain = level
+
+    async def read_squelch(self, receiver: int = 0) -> int:
+        """Read the squelch level without mutating legacy state."""
+        cmd = "get_squelch" if receiver == 0 else "get_squelch_sub"
+        result = await self._query(cmd)
+        return int(result["level"])
+
+    async def get_squelch(self, receiver: int = 0) -> int:
+        """Get the squelch level (0–255)."""
+        level = await self.read_squelch(receiver)
+        rx = self._state.main if receiver == 0 else self._state.sub
+        rx.squelch = level
+        return level
+
+    async def set_squelch(self, level: int, receiver: int = 0) -> None:
+        """Set the squelch level (0–255)."""
+        cmd = self._receiver_level_write_key("set_squelch", receiver)
+        await self._write(cmd, level=level)
+        rx = self._state.main if receiver == 0 else self._state.sub
+        rx.squelch = level
+
+    # -- D2: RF Front-End ---------------------------------------------------
+
+    async def read_attenuator(self, receiver: int = 0) -> bool:
+        """Read attenuator state without mutating legacy state.
+
+        Returns ``True`` when the attenuator is ON.  The FTX-1 has a single
+        on/off attenuator path (``RA0``); the ``receiver`` argument is
+        accepted for protocol symmetry but does not select a per-receiver
+        command (no ``RA1`` exists).
+        """
+        result = await self._query("get_attenuator")
+        return bool(int(result["state"]))
+
+    async def get_attenuator(self, receiver: int = 0) -> bool:
+        """Get attenuator state (False = OFF, True = ON)."""
+        return await self.read_attenuator(receiver)
+
+    async def set_attenuator(self, state: int, receiver: int = 0) -> None:
+        """Set attenuator state (0 = OFF, 1 = ON).
+
+        Callers (and the hardware validator) may pass a Python ``bool``;
+        ``str(True)`` would render the malformed ``RA0True;`` and the radio
+        silently ignores it. Coerce to ``int`` first so ``RA0{0,1};`` is sent.
+        """
+        await self._write("set_attenuator", state=str(int(state)))
+
+    def project_attenuator_observation_value(self, db: int) -> int:
+        return int(db > 0)
+
+    async def set_attenuator_level(self, db: int, receiver: int = 0) -> None:
+        """Set attenuator by dB level.
+
+        FTX-1 has a simple on/off attenuator: any db > 0 turns it on.
+        """
+        await self.set_attenuator(1 if db > 0 else 0, receiver=receiver)
+
+    async def read_preamp(self, band: int = 0) -> int:
+        """Read preamp setting (0–2) without mutating legacy state.
+
+        Args:
+            band: 0 = HF/50 MHz (PA0). Sub-band variants not yet supported.
+        """
+        result = await self._query("get_preamp")
+        return int(result["value"])
+
+    async def get_preamp(self, band: int = 0) -> int:
+        """Get preamp setting (0–2).
+
+        Args:
+            band: 0 = HF/50 MHz (PA0). Sub-band variants not yet supported.
+        """
+        return await self.read_preamp(band)
+
+    async def set_preamp(self, level: int, receiver: int = 0, *, band: int = 0) -> None:
+        """Set preamp setting.
+
+        Args:
+            level: Preamp level, must be one of the profile's declared
+                ``[preamp] values`` (e.g. FTX-1 declares 0/1/2 = IPO/AMP1/AMP2).
+            receiver: Ignored (FTX-1 single preamp path). Present for protocol compat.
+            band: 0 = HF/50 MHz, 1 = VHF, 2 = UHF.
+
+        Raises:
+            CommandError: If ``level`` is not in the profile's declared
+                preamp domain (MOR-1523, mirrors MOR-1522's AGC fix).
+        """
+        pre_values = self._config.pre_values
+        if pre_values is not None and level not in pre_values:
+            raise CommandError(
+                f"Preamp level must be one of {sorted(pre_values)} for "
+                f"{self._config.model!r}, got {level}"
+            )
+        await self._write("set_preamp", band=str(band), value=str(level))
+
+    # -- D3: DSP (NB/NR/Notch) ----------------------------------------------
+
+    async def read_nb_level(self, receiver: int = 0) -> int:
+        """Read noise blanker level without mutating legacy state.
+
+        Returns:
+            NB level (0 = OFF, 1–10 = level).
+        """
+        cmd = "get_nb_level" if receiver == 0 else "get_nb_level_sub"
+        result = await self._query(cmd)
+        return int(result["level"])
+
+    async def get_nb_level(self, receiver: int = 0) -> int:
+        """Get noise blanker level (0 = OFF, 1–10 = level)."""
+        return await self.read_nb_level(receiver)
+
+    async def set_nb_level(self, level: int, receiver: int = 0) -> None:
+        """Set noise blanker level (0 = OFF, 1–10 = level).
+
+        The value must lie on the profile's ``nb_level`` raw domain;
+        off-domain values raise ``ValueError`` before any CAT write.
+        """
+        validate_control_raw_value(self.profile.controls, "nb_level", level)
+        key = self._receiver_level_write_key("set_nb_level", receiver)
+        await self._write(key, level=level)
+
+    async def read_nr_level(self, receiver: int = 0) -> int:
+        """Read noise reduction level without mutating legacy state.
+
+        Returns:
+            NR level (0 = OFF, 1–10 = level).
+        """
+        cmd = "get_nr_level" if receiver == 0 else "get_nr_level_sub"
+        result = await self._query(cmd)
+        return int(result["level"])
+
+    async def get_nr_level(self, receiver: int = 0) -> int:
+        """Get noise reduction level (0 = OFF, 1–10 = level)."""
+        return await self.read_nr_level(receiver)
+
+    async def set_nr_level(self, level: int, receiver: int = 0) -> None:
+        """Set noise reduction level (0 = OFF, 1–10 = level).
+
+        The value must lie on the profile's ``nr_level`` raw domain;
+        off-domain values raise ``ValueError`` before any CAT write.
+        """
+        validate_control_raw_value(self.profile.controls, "nr_level", level)
+        key = self._receiver_level_write_key("set_nr_level", receiver)
+        await self._write(key, level=level)
+
+    async def read_auto_notch(self, receiver: int = 0) -> bool:
+        """Read auto notch state without mutating legacy state.
+
+        Returns:
+            ``True`` when auto notch is ON.
+        """
+        cmd = "get_auto_notch" if receiver == 0 else "get_auto_notch_sub"
+        result = await self._query(cmd)
+        return bool(result["state"] == "1")
+
+    async def get_auto_notch(self, receiver: int = 0) -> bool:
+        """Get auto notch state (True = ON)."""
+        return await self.read_auto_notch(receiver)
+
+    async def set_auto_notch(self, state: bool, receiver: int = 0) -> None:
+        """Set auto notch state."""
+        key = self._receiver_level_write_key("set_auto_notch", receiver)
+        await self._write(key, state="1" if state else "0")
+
+    async def read_manual_notch(self, receiver: int = 0) -> bool:
+        """Read manual notch ON/OFF state without mutating legacy state.
+
+        Issues a single read of the ``BP00``/``BP10`` pair. Use
+        :meth:`read_manual_notch_freq` for the freq index in a separate read.
+
+        Returns:
+            ``True`` when the manual notch is enabled.
+        """
+        cmd = "get_manual_notch" if receiver == 0 else "get_manual_notch_sub"
+        result = await self._query(cmd)
+        return bool(result["state"])
+
+    async def get_manual_notch(self, receiver: int = 0) -> tuple[bool, int]:
+        """Get manual notch state and frequency index.
+
+        Returns:
+            Tuple of (enabled: bool, freq_index: int).
+        """
+        state_result = await self._query("get_manual_notch")
+        freq_result = await self._query("get_manual_notch_freq")
+        return bool(state_result["state"]), freq_result["freq"]
+
+    async def set_manual_notch(self, state: bool, receiver: int = 0) -> None:
+        """Set manual notch ON/OFF."""
+        key = self._receiver_level_write_key("set_manual_notch", receiver)
+        await self._write(key, state=1 if state else 0)
+
+    async def read_manual_notch_freq(self, receiver: int = 0) -> int:
+        """Read manual notch frequency index without mutating legacy state.
+
+        Issues a single read of the ``BP01``/``BP11`` pair.
+
+        Returns:
+            Manual notch frequency raw index.
+        """
+        cmd = "get_manual_notch_freq" if receiver == 0 else "get_manual_notch_freq_sub"
+        result = await self._query(cmd)
+        return int(result["freq"])
+
+    async def get_manual_notch_freq(self, receiver: int = 0) -> int:
+        """Get manual notch frequency raw index.
+
+        Standalone freq-only getter for symmetry with :meth:`set_manual_notch_freq`.
+        Use :meth:`get_manual_notch` to fetch state+freq together in one call.
+        """
+        return await self.read_manual_notch_freq(receiver)
+
+    async def set_manual_notch_freq(self, freq: int, receiver: int = 0) -> None:
+        """Set manual notch frequency raw index.
+
+        The value must lie on the profile's ``manual_notch_freq`` raw
+        domain; off-domain values raise ``ValueError`` before any CAT write.
+        """
+        validate_control_raw_value(self.profile.controls, "manual_notch_freq", freq)
+        key = self._receiver_level_write_key("set_manual_notch_freq", receiver)
+        await self._write(key, freq=freq)
+
+    async def set_notch_filter(self, level: int, receiver: int = 0) -> None:
+        """Set notch filter position (manual notch frequency raw index).
+
+        Cross-vendor alias delegating to Yaesu BP01
+        (:meth:`set_manual_notch_freq`) — matches the Icom semantic of
+        ``0x14 0x0D``.
+        """
+        await self.set_manual_notch_freq(level, receiver=receiver)
+
+    async def get_notch_filter(self, receiver: int = 0) -> int:
+        """Get notch filter position (manual notch frequency raw index).
+
+        Returns only the frequency index from the Yaesu manual-notch state
+        tuple, mirroring the Icom ``0x14 0x0D`` read.
+        """
+        _, freq = await self.get_manual_notch(receiver=receiver)
+        return int(freq)
+
+    # -- D4: Filters --------------------------------------------------------
+
+    def _filter_width_table(
+        self, mode: str | None, *, narrow: bool = False
+    ) -> tuple[int, ...] | None:
+        """Return the filter-width table for a mode, or None.
+
+        Returns None for non-``table_index`` encodings and for modes
+        without a table row; the caller supplies the radio's live mode
+        (``read_filter_width`` resolves it via ``read_mode``). When
+        ``narrow`` is true and the mode's rule declares a narrow variant
+        (MOR-4428), the narrow table is returned instead of the wide one.
+        """
+        if self.profile.filter_width_encoding != "table_index":
+            return None
+        rule = self.profile.resolve_filter_rule(mode)
+        if rule is None:
+            return None
+        if narrow and rule.narrow_table:
+            return rule.narrow_table
+        if rule.table:
+            return rule.table
+        return None
+
+    async def _resolve_width_narrow(self, mode: str | None, receiver: int) -> bool:
+        """Whether the SH mapping uses the mode's narrow table (MOR-4428).
+
+        Reads the radio's narrow state (``get_narrow``/``get_narrow_sub``)
+        only when the live mode's rule declares a narrow variant; every
+        other mode keeps today's single-table behavior with no extra CAT
+        query. Fixed-width modes never reach here with narrow data (the
+        loader rejects that combination).
+        """
+        if self.profile.filter_width_encoding != "table_index":
+            return False
+        rule = self.profile.resolve_filter_rule(mode)
+        if rule is None or not rule.narrow_table:
+            return False
+        return await self.read_narrow(receiver)
+
+    async def read_filter_width_reading(
+        self, receiver: int = 0, mode: str | None = None
+    ) -> FilterWidthReading:
+        """Read the SH width answer as Hz plus the radio-default flag (MOR-3677).
+
+        Translates the radio's table-index code to Hz using the active
+        profile's filter rule for the radio's CURRENT mode. The width table is
+        mode-specific (SSB/CW/DATA/RTTY differ), so the table MUST be resolved
+        from the live mode, not the legacy ``self._state`` mirror — the
+        observation adapter never writes that mirror, so during polling it is
+        stale and would select the wrong table, leaking the raw SH code as the
+        "Hz" value (MOR-507). When the mode's rule declares a narrow variant
+        (MOR-4428), the narrow state is read first and selects the narrow
+        table instead of the wide one.
+
+        A code-00 "(Default)" answer carries no Hz value (bench: ``MD0C;
+        SH0000;`` in DATA-U, ``MD03; SH0000;`` in CW-U) and reads back as
+        ``(None, True)``; any other answer without a Hz value (no Table 5
+        row, out-of-table code) reads back as ``(None, False)``.
+
+        Args:
+            receiver: 0=MAIN, 1=SUB.
+            mode: The radio's current mode name. When provided (the poll path
+                reads the mode immediately before this call), it is used
+                directly so no extra CAT round-trip is issued. When omitted
+                (other call sites), the mode is read fresh via ``read_mode``.
+
+        Returns:
+            The decoded reading; never mutates legacy state.
+        """
+        if mode is None and self.profile.filter_width_encoding == "table_index":
+            mode, _ = await self.read_mode(receiver)
+        cmd = "get_filter_width" if receiver == 0 else "get_filter_width_sub"
+        result = await self._query(cmd)
+        code = int(result["code"])
+        rule = (
+            self.profile.resolve_filter_rule(mode)
+            if self.profile.filter_width_encoding == "table_index"
+            else None
+        )
+        if rule and rule.fixed and rule.defaults:
+            return FilterWidthReading(hz=int(rule.defaults[0]), radio_default=False)
+        # MOR-4428: the narrow state selects the SH table, so it is read
+        # before the SH answer is mapped -- but only for modes whose rule
+        # declares a narrow variant. Every other mode keeps today's wire
+        # log (no extra NA query).
+        narrow = await self._resolve_width_narrow(mode, receiver)
+        default_code = self.profile.filter_width_radio_default_code
+        if default_code is not None and code == default_code:
+            return FilterWidthReading(hz=None, radio_default=True)
+        table = self._filter_width_table(mode, narrow=narrow)
+        if table is None:
+            return FilterWidthReading(hz=None, radio_default=False)
+        try:
+            # Table codes count from the ACTIVE table's own base
+            # (MOR-4433): a per-rule ``first_code``/``narrow_first_code``
+            # when the rule declares one, else the profile-level
+            # ``first_code``. Codes below the base (the code-00
+            # "(Default)") are outside the 0-based codec table.
+            return FilterWidthReading(
+                hz=int(
+                    table_index_to_hz(
+                        code
+                        - self.profile.resolve_filter_first_code(rule, narrow=narrow),
+                        table=table,
+                    )
+                ),
+                radio_default=False,
+            )
+        except ValueError:
+            return FilterWidthReading(hz=None, radio_default=False)
+
+    async def read_filter_width(
+        self, receiver: int = 0, mode: str | None = None
+    ) -> int | None:
+        """Read filter width in Hz (SH0/SH1) without mutating legacy state.
+
+        The Hz projection of :meth:`read_filter_width_reading` — kept so
+        ``get_filter_width`` and profiles without the radio-default flag
+        keep their single-value read.
+
+        Args:
+            receiver: 0=MAIN, 1=SUB.
+            mode: The radio's current mode name (see
+                :meth:`read_filter_width_reading`).
+
+        Returns:
+            Filter width in Hz, or ``None`` when the answer carries no Hz
+            value: a mode with no Table 5 width row (C4FM), the code-00
+            "(Default)" answer, or a code outside the table.
+        """
+        return (await self.read_filter_width_reading(receiver, mode=mode)).hz
+
+    async def get_filter_width(self, receiver: int = 0) -> int | None:
+        """Get filter width in Hz (SH0/SH1).
+
+        Args:
+            receiver: 0=MAIN, 1=SUB.
+
+        Returns:
+            Filter width in Hz, or ``None`` when the radio's answer
+            carries no Hz value for the current mode.
+        """
+        return await self.read_filter_width(receiver)
+
+    async def set_filter_width(self, width_hz: int, receiver: int = 0) -> None:
+        """Set filter width in Hz (SH0/SH1).
+
+        Translates Hz to the radio's table-index code using the active
+        profile's filter rule for the radio's live mode, read fresh via
+        ``read_mode`` exactly as ``read_filter_width`` does — the legacy
+        ``self._state`` mirror can hold a stale mode. Fixed-width modes
+        and live modes without a width table (C4FM-DN, read back as
+        ``MD0H;``) refuse with the same ``CommandError`` as
+        ``RadioProfile.encode_filter_width`` does for segmented rules.
+        Encodings other than ``table_index`` send ``width_hz`` as the raw
+        index.
+        """
+        cmd = "set_filter_width" if receiver == 0 else "set_filter_width_sub"
+        if self.profile.filter_width_encoding != "table_index":
+            await self._write(cmd, code=width_hz)
+            return
+        mode, _ = await self.read_mode(receiver)
+        rule = self.profile.resolve_filter_rule(mode)
+        if rule is not None and rule.fixed:
+            raise CommandError(
+                f"set_filter_width is unsupported for fixed-width mode {mode}"
+            )
+        if rule is None or not rule.table:
+            raise CommandError(
+                f"set_filter_width is unsupported for mode {mode} without a width table"
+            )
+        # MOR-4428: map through the narrow table while NARROW is on —
+        # read before the write, only for modes with a narrow variant.
+        # A Hz value the active table cannot spell lands on the nearest
+        # entry, exactly as the wide table always has.
+        narrow = await self._resolve_width_narrow(mode, receiver)
+        table = self._filter_width_table(mode, narrow=narrow)
+        if table is None:  # pragma: no cover - loader pairs the tables
+            raise CommandError(
+                f"set_filter_width is unsupported for mode {mode} without a width table"
+            )
+        index = hz_to_table_index(width_hz, table=table) + (
+            self.profile.resolve_filter_first_code(rule, narrow=narrow)
+        )
+        await self._write(cmd, code=index)
+
+    async def reset_filter_width(self, receiver: int = 0) -> None:
+        """Return filter width to the radio's own default (SH, MOR-2535).
+
+        Writes the profile-declared ``filter_width_radio_default_code``
+        (FTX-1 2508-C Table 5 code 00, the mode-dependent "(Default)")
+        through the same ``set_filter_width``/``set_filter_width_sub`` CAT
+        command a Hz write uses — no mode query, no Hz translation: the
+        radio itself resolves the code to the current mode's default width.
+        The next read answers either the RESOLVED code's Hz value (MAIN USB,
+        bench probe 2026-09-22) or 00 itself (DATA-U/CW-U, MOR-3677 bench);
+        :meth:`read_filter_width_reading` reports the latter as
+        ``(None, True)``. Profiles without the field refuse with the same
+        ``CommandError`` style as ``set_filter_width``'s unsupported paths.
+        """
+        code = self.profile.filter_width_radio_default_code
+        if code is None:
+            raise CommandError(
+                "reset_filter_width is unsupported: the active profile "
+                "declares no radio-default width code"
+            )
+        cmd = "set_filter_width" if receiver == 0 else "set_filter_width_sub"
+        await self._write(cmd, code=code)
+
+    async def read_if_shift(self, receiver: int = 0) -> int:
+        """Read IF shift offset in Hz without mutating legacy state.
+
+        Returns:
+            Signed offset in Hz (negative = downshift).
+        """
+        cmd = "get_if_shift" if receiver == 0 else "get_if_shift_sub"
+        result = await self._query(cmd)
+        offset: int = result["offset"]
+        return -offset if result["sign"] == "-" else offset
+
+    async def get_if_shift(self, receiver: int = 0) -> int:
+        """Get IF shift offset in Hz (signed).
+
+        Returns:
+            Signed offset in Hz (negative = downshift).
+        """
+        return await self.read_if_shift(receiver)
+
+    async def set_if_shift(self, offset: int, receiver: int = 0) -> None:
+        """Set IF shift offset in Hz (signed).
+
+        The value must lie on the profile's ``if_shift`` raw domain;
+        off-domain values raise ``ValueError`` before any CAT write.
+        """
+        validate_control_raw_value(self.profile.controls, "if_shift", offset)
+        sign = "+" if offset >= 0 else "-"
+        key = self._receiver_level_write_key("set_if_shift", receiver)
+        await self._write(key, sign=sign, offset=abs(offset))
+
+    async def read_narrow(self, receiver: int = 0) -> bool:
+        """Read narrow filter state without mutating legacy state."""
+        cmd = "get_narrow" if receiver == 0 else "get_narrow_sub"
+        result = await self._query(cmd)
+        return bool(result["state"] == "1")
+
+    async def get_narrow(self, receiver: int = 0) -> bool:
+        """Get narrow filter state (True = narrow)."""
+        return await self.read_narrow(receiver)
+
+    async def set_narrow(self, state: bool, receiver: int = 0) -> None:
+        """Set narrow filter state."""
+        key = self._receiver_level_write_key("set_narrow", receiver)
+        await self._write(key, state="1" if state else "0")
+
+    # -- D5: Split/Dual Watch -----------------------------------------------
+
+    async def get_rx_func(self) -> int:
+        """Get RX function (0 = Dual RX, 1 = Single RX)."""
+        result = await self._query("get_rx_func")
+        return int(result["mode"])
+
+    async def set_rx_func(self, mode: int) -> None:
+        """Set RX function (0 = Dual RX, 1 = Single RX)."""
+        await self._write("set_rx_func", mode=mode)
+
+    async def get_tx_func(self) -> int:
+        """Get TX function (0/1 selects the TX VFO; the profile's
+        ``[vfo.tx_func]`` map names the receiver/slot each answer means)."""
+        result = await self._query("get_tx_func")
+        return int(result["vfo"])
+
+    async def set_tx_func(self, vfo: int) -> None:
+        """Set TX function (0/1 selects the TX VFO; the wire digit comes
+        from the profile's ``[vfo.tx_func]`` map: identity on the FTX-1,
+        ``2``/``3`` on the FT-991A)."""
+        spec = self._config.tx_func
+        if spec is None or type(vfo) is not int or vfo not in spec.write_map:
+            raise CommandError(f"set_tx_func {vfo!r} is not declared by this profile")
+        await self._write("set_tx_func", vfo=spec.write_map[vfo])
+
+    # -- TransceiverBankCapable --------------------------------------------
+
+    @property
+    def transceiver_count(self) -> int:
+        """Number of independent transceivers declared by the profile."""
+        return self._config.transceiver_count
+
+    async def set_tx_source(self, xcvr: int) -> None:
+        """Make ``xcvr`` the active TX transceiver (``FT`` command).
+
+        Routes through :meth:`set_tx_func` so the wire digit comes from
+        the profile's ``[vfo.tx_func]`` map (one encoding, not two).
+
+        The bank is the profile's declared ``transceiver_count`` — never
+        the model id. On a single-transceiver profile selecting the sole
+        transmitter is a no-op with no wire traffic: the VFO-level TX
+        selection (``FT2``/``FT3`` on an ``ab`` profile) stays reachable
+        only through the split/VFO API, never through this bank API.
+
+        Args:
+            xcvr: 0-based transmitter index below ``transceiver_count``.
+        """
+        count = self.transceiver_count
+        if (
+            isinstance(xcvr, bool)
+            or not isinstance(xcvr, int)
+            or xcvr < 0
+            or xcvr >= count
+        ):
+            raise ValueError(
+                f"xcvr {xcvr!r} out of range for transceiver_count={count}"
+            )
+        if count <= 1:
+            return
+        await self.set_tx_func(xcvr)
+
+    async def get_tx_source(self) -> int:
+        """Return the 0-based index of the currently active TX transceiver.
+
+        Parses ``FT0;`` / ``FT1;`` from the radio (``FT`` command) on a
+        multi-transceiver profile. On a single-transceiver profile the
+        sole transmitter is always active, so this returns ``0`` without
+        touching the wire (reading ``FT;`` there would answer the TX
+        *VFO*, not a transmitter index).
+        """
+        if self.transceiver_count <= 1:
+            return 0
+        result = await self._query("get_tx_func")
+        return int(result["vfo"])
+
+    async def set_cross_band_split(self, rx_xcvr: int, tx_xcvr: int) -> None:
+        """Route RX to ``rx_xcvr`` and TX to ``tx_xcvr`` for cross-band split.
+
+        Emits three CAT commands in sequence:
+
+        1. ``FR00;`` — enable Dual RX so both transceivers receive.
+           The FTX-1 ``FR`` command (Function RX) uses a 2-digit mode code:
+           ``00`` = Dual RX, ``01`` = Single RX.  It is **not** a transceiver
+           selector; the single-digit form ``FR0;`` is not valid on FTX-1.
+        2. ``VS{rx_xcvr};`` — focus the active receiver on ``rx_xcvr`` so
+           S-meter reads and audio routing stay on the intended receive band.
+        3. ``FT{tx_xcvr};`` — route TX to ``tx_xcvr``.
+
+        Args:
+            rx_xcvr: Primary receive transceiver (0 = MAIN HF/50 MHz, 1 = SUB 144/430 MHz).
+            tx_xcvr: Transmit transceiver (0 = MAIN, 1 = SUB).
+
+        Raises:
+            ValueError: If ``rx_xcvr == tx_xcvr`` (same transceiver is regular
+                split, not cross-band) or if either index is out of range.
+        """
+        count = self.transceiver_count
+        if rx_xcvr < 0 or rx_xcvr >= count:
+            raise ValueError(
+                f"rx_xcvr {rx_xcvr} out of range for transceiver_count={count}"
+            )
+        if tx_xcvr < 0 or tx_xcvr >= count:
+            raise ValueError(
+                f"tx_xcvr {tx_xcvr} out of range for transceiver_count={count}"
+            )
+        if rx_xcvr == tx_xcvr:
+            raise ValueError(
+                f"cross-band split requires different rx_xcvr and tx_xcvr; "
+                f"got rx={rx_xcvr}, tx={tx_xcvr}"
+            )
+        await self.set_rx_func(0)  # FR00: Dual RX
+        await self.select_receiver(rx_xcvr)  # VS{rx_xcvr}: focus active receiver
+        await self.set_tx_source(tx_xcvr)  # FT{tx_xcvr}: route TX
+
+    async def read_split(self) -> bool:
+        """Read split using the profile's answer map."""
+        result = await self._query("get_split")
+        return self._config.split.read_map.get(str(result["state"]), False)
+
+    async def get_split(self) -> bool:
+        """Get split operation state."""
+        return await self.read_split()
+
+    async def set_split(self, state: bool) -> None:
+        """Set split operation state."""
+        await self._write("set_split", state=self._config.split.write_map[state])
+
+    async def read_vfo_select(self) -> int:
+        """Read VFO/receiver selection without mutating legacy state.
+
+        Issues a single ``VS`` read and returns the active receiver index
+        (0 = MAIN, 1 = SUB). Feeds the observation pipeline via
+        :class:`YaesuObservationAdapter`, which coerces the index to the neutral
+        ``global.slow_state.active`` ``"MAIN"``/``"SUB"`` string; the legacy
+        ``self._state`` mirror is not written (MOR-434 / MOR-446).
+        """
+        if not self.supports_command("get_vfo_select"):
+            raise NotImplementedError(f"get_vfo_select not supported on {self.model}")
+        result = await self._query("get_vfo_select")
+        return int(result["vfo"])
+
+    async def get_vfo_select(self) -> int:
+        """Get VFO selection (0 = MAIN, 1 = SUB)."""
+        return await self.read_vfo_select()
+
+    async def set_vfo_select(self, vfo: int) -> None:
+        """Set VFO selection (0 = MAIN, 1 = SUB)."""
+        if not self.supports_command("set_vfo_select"):
+            raise NotImplementedError(f"set_vfo_select not supported on {self.model}")
+        async with self._mode_lock:
+            await self._write("set_vfo_select", vfo=str(vfo))
+
+    async def vfo_a_to_b(self) -> None:
+        """Copy VFO-A to VFO-B."""
+        async with self._mode_lock:
+            await self._write("vfo_a_to_b")
+
+    async def vfo_b_to_a(self) -> None:
+        """Copy VFO-B to VFO-A."""
+        async with self._mode_lock:
+            await self._write("vfo_b_to_a")
+
+    # -- ReceiverBankCapable -----------------------------------------------
+
+    @property
+    def receiver_count(self) -> int:
+        """Number of independent receivers exposed by this rig.
+
+        Profile-driven via ``[radio] receiver_count`` in the rig TOML.
+        FTX-1 reports ``2`` (MAIN + SUB); single-RX Yaesu CAT profiles
+        (e.g. FT-710, FT-991A — when added) report ``1``.
+        """
+        return int(self._config.receiver_count)
+
+    @staticmethod
+    def _normalize_receiver(which: int | str) -> int:
+        """Normalize a ``select_receiver`` argument to a 0-based index.
+
+        Accepts integer indices (``0`` / ``1``) or case-insensitive names
+        (``"main"`` / ``"sub"``).  Raises :class:`ValueError` for any other
+        value.
+        """
+        if isinstance(which, str):
+            key = which.strip().lower()
+            if key == "main":
+                return 0
+            if key == "sub":
+                return 1
+            raise ValueError(
+                f"select_receiver: unknown receiver name {which!r} "
+                "(expected 'main' or 'sub')"
+            )
+        if isinstance(which, bool) or not isinstance(which, int):
+            raise ValueError(
+                f"select_receiver: which must be int or str, got {type(which).__name__}"
+            )
+        return int(which)
+
+    async def select_receiver(self, which: int | str) -> None:
+        """Make ``which`` the active receiver for subsequent commands.
+
+        On dual-RX Yaesu CAT rigs (FTX-1) issues ``VS{0|1};`` via the
+        existing ``set_vfo_select`` template.  On single-RX profiles only
+        ``which == 0`` is accepted and the call is a no-op (matching the
+        :class:`~rigplane.radio_protocol.ReceiverBankCapable` contract).
+        """
+        index = self._normalize_receiver(which)
+        count = self.receiver_count
+        if index < 0 or index >= count:
+            raise ValueError(
+                f"select_receiver: receiver index {index} out of range "
+                f"for receiver_count={count}"
+            )
+        if count <= 1:
+            # Single-RX: nothing to switch.
+            return
+        async with self._mode_lock:
+            await self._write("set_vfo_select", vfo=str(index))
+
+    async def get_active_receiver(self) -> int:
+        """Return the index of the currently active receiver.
+
+        Reads ``VS;`` on dual-RX rigs; returns ``0`` on single-RX profiles.
+        """
+        if self.receiver_count <= 1:
+            return 0
+        result = await self._query("get_vfo_select")
+        return int(result["vfo"])
+
+    # -- VfoSlotCapable ----------------------------------------------------
+
+    def _vfo_slot_supported(self, operation: str) -> bool:
+        """Whether the profile declares the requested A/B slot operation."""
+        return self.supports_command(operation)
+
+    @staticmethod
+    def _slot_to_index(slot: str) -> int:
+        """Convert ``"A"`` / ``"B"`` (case-insensitive) to ``0`` / ``1``."""
+        if not isinstance(slot, str):
+            raise ValueError(f"slot must be str, got {type(slot).__name__}")
+        norm = slot.strip().upper()
+        if norm == "A":
+            return 0
+        if norm == "B":
+            return 1
+        raise ValueError(f"slot must be 'A' or 'B', got {slot!r}")
+
+    def _check_single_receiver(self, receiver: int, *, operation: str) -> None:
+        count = self.receiver_count
+        if receiver < 0 or receiver >= count:
+            raise ValueError(
+                f"{operation}: receiver index {receiver} out of range "
+                f"for receiver_count={count}"
+            )
+
+    async def get_vfo_slot(self, receiver: int = 0) -> str:
+        """Return the active VFO slot (``"A"`` or ``"B"``) for ``receiver``.
+
+        Raises :class:`NotImplementedError` without a slot read command.
+        """
+        self._check_single_receiver(receiver, operation="get_vfo_slot")
+        if not self._vfo_slot_supported("get_vfo_slot"):
+            raise NotImplementedError(
+                f"get_vfo_slot not supported on {self.model} "
+                f"(vfo_scheme={self._config.vfo_scheme!r})"
+            )
+        result = await self._query("get_vfo_select")
+        return "B" if int(result["vfo"]) == 1 else "A"
+
+    async def set_vfo_slot(self, slot: str, receiver: int = 0) -> None:
+        """Make ``slot`` (``"A"`` or ``"B"``) the active VFO on ``receiver``.
+
+        Raises :class:`NotImplementedError` without a slot select command.
+        """
+        self._check_single_receiver(receiver, operation="set_vfo_slot")
+        index = self._slot_to_index(slot)
+        if not self._vfo_slot_supported("set_vfo_slot"):
+            raise NotImplementedError(
+                f"set_vfo_slot not supported on {self.model} "
+                f"(vfo_scheme={self._config.vfo_scheme!r})"
+            )
+        async with self._mode_lock:
+            await self._write("set_vfo_select", vfo=str(index))
+
+    async def swap_vfo_ab(self, receiver: int = 0) -> None:
+        """Swap A/B through the profile's command on an A/B rig."""
+        self._check_single_receiver(receiver, operation="swap_vfo_ab")
+        if not self.supports_command("swap_vfo_ab"):
+            raise NotImplementedError(
+                f"swap_vfo_ab not supported on {self.model}: the profile "
+                "declares no symmetric A↔B swap primitive (vfo_swap)"
+            )
+        async with self._mode_lock:
+            await self._write("vfo_swap")
+
+    async def equalize_vfo_ab(self, receiver: int = 0) -> None:
+        """Copy VFO-A to VFO-B on ``receiver`` (MOR-4433 follow-up A).
+
+        On a single-transceiver ``ab`` profile that declares the
+        ``vfo_a_to_b`` copy primitive (e.g. FT-991A ``AB;``), equalize is
+        that A→B copy and delegates to :meth:`vfo_a_to_b`. Every other
+        profile keeps today's refusal: ``ab_shared`` (dual-RX, e.g. FTX-1)
+        copies between receivers, not between A/B within a receiver; a
+        multi-transceiver ``ab`` command set (same reason: its ``AB;``
+        spans receivers, so it is no per-receiver copy); and a profile
+        without the primitive exposes no equalize command.
+        Raises :class:`NotImplementedError`.
+        """
+        self._check_single_receiver(receiver, operation="equalize_vfo_ab")
+        if (
+            self._config.vfo_scheme == "ab"
+            and self._config.transceiver_count == 1
+            and self.supports_command("vfo_a_to_b")
+        ):
+            await self.vfo_a_to_b()
+            return
+        raise NotImplementedError(
+            f"equalize_vfo_ab not supported on {self.model}: "
+            "Yaesu CAT has no per-receiver A→B copy primitive "
+            "(the profile declares no single-transceiver vfo_a_to_b copy)"
+        )
+
+    # -- D6: TX Stack -------------------------------------------------------
+
+    async def read_power(self) -> tuple[int, int]:
+        """Read the TX power setpoint without mutating legacy state.
+
+        Returns:
+            Tuple of (head: int, watts: int).  This is the configured
+            (SET) power level via the ``PC`` command — the watt setpoint,
+            distinct from the measured ``RM5`` power meter.  A headless
+            ``PC`` answer (profiles such as the FT-991A whose ``PC`` reply
+            carries no head digit) reads back head 0 — no head selection;
+            only watts is consumed downstream.  The shape comes from the
+            profile's parse template, not from a per-radio branch.
+        """
+        result = await self._query("get_power")
+        head = result.get("head")
+        return (int(head) if head is not None else 0), result["watts"]
+
+    async def get_power(self) -> tuple[int, int]:
+        """Get TX power setting.
+
+        Returns:
+            Tuple of (head: int, watts: int).
+        """
+        return await self.read_power()
+
+    async def set_power(self, watts: int, head: int = 2) -> None:
+        """Set TX power.
+
+        A profile-declared ``[power].min_watts`` floor raises a request
+        below the radio's minimum up to that minimum before the wire
+        (MOR-2998: the FTX-1 manual floor is 5 W, so the bottom of the
+        normalized range sends ``PC2005;`` instead of the refused
+        ``PC2000;``). A profile without ``min_watts`` sends the request
+        unchanged.
+
+        Args:
+            watts: Power in watts.
+            head: Head selector (default 2).
+        """
+        if self._config.min_watts is not None:
+            watts = max(self._config.min_watts, watts)
+        await self._write("set_power", head=str(head), watts=watts)
+
+    async def set_rf_power(self, level: int) -> None:
+        """Set TX power level — :class:`PowerControlCapable` interface.
+
+        Yaesu's :attr:`native_power_unit` is ``"watts"``, so ``level`` is
+        interpreted as watts directly. Internally delegates to
+        :meth:`set_power` with the default ``head=2`` selector.
+        """
+        await self.set_power(watts=level)
+
+    async def read_mic_gain(self) -> int:
+        """Read microphone gain without mutating legacy state (0–100)."""
+        result = await self._query("get_mic_gain")
+        return int(result["level"])
+
+    async def get_mic_gain(self) -> int:
+        """Get microphone gain (0–100)."""
+        return await self.read_mic_gain()
+
+    async def set_mic_gain(self, level: int) -> None:
+        """Set microphone gain (0–100)."""
+        await self._write("set_mic_gain", level=level)
+
+    async def read_processor(self) -> bool:
+        """Read speech processor (compressor) state without mutating state."""
+        result = await self._query("get_processor")
+        return bool(result["state"] == "1")
+
+    async def get_processor(self) -> bool:
+        """Get speech processor state."""
+        return await self.read_processor()
+
+    async def set_processor(self, state: bool) -> None:
+        """Set speech processor state."""
+        await self._write("set_processor", state="1" if state else "0")
+
+    async def read_processor_level(self) -> int:
+        """Read processor (compressor) level without mutating state (0-100)."""
+        result = await self._query("get_processor_level")
+        return int(result["level"])
+
+    async def get_processor_level(self) -> int:
+        """Get processor level (0-100)."""
+        return await self.read_processor_level()
+
+    async def set_processor_level(self, level: int) -> None:
+        """Set processor level (0-100)."""
+        await self._write("set_processor_level", level=level)
+
+    async def get_monitor_on(self) -> bool:
+        """Get monitor ON/OFF state — not supported on FTX-1."""
+        raise NotImplementedError("Monitor not supported on this radio")
+
+    async def set_monitor_on(self, state: bool) -> None:
+        """Set monitor ON/OFF — not supported on FTX-1."""
+        raise NotImplementedError("Monitor not supported on this radio")
+
+    async def get_monitor_level(self) -> int:
+        """Get monitor level — not supported on FTX-1."""
+        raise NotImplementedError("Monitor not supported on this radio")
+
+    async def set_monitor_level(self, level: int) -> None:
+        """Set monitor level — not supported on FTX-1."""
+        raise NotImplementedError("Monitor not supported on this radio")
+
+    # -- D7: CW -------------------------------------------------------------
+
+    async def read_keyer_speed(self) -> int:
+        """Read CW keyer speed in WPM (4–60) without mutating legacy state."""
+        result = await self._query("get_keyer_speed")
+        return int(result["wpm"])
+
+    async def get_keyer_speed(self) -> int:
+        """Get CW keyer speed in WPM (4–60)."""
+        return await self.read_keyer_speed()
+
+    async def set_keyer_speed(self, wpm: int) -> None:
+        """Set CW keyer speed in WPM (4–60)."""
+        await self._write("set_keyer_speed", wpm=wpm)
+
+    async def read_key_pitch(self) -> int:
+        """Read the raw CW key-pitch index without mutating legacy state."""
+        result = await self._query("get_key_pitch")
+        return int(result["idx"])
+
+    async def get_key_pitch(self) -> int:
+        """Get the radio's raw CW key-pitch index."""
+        return await self.read_key_pitch()
+
+    async def set_key_pitch(self, idx: int) -> None:
+        """Set CW pitch by raw key-pitch index on the CAT wire."""
+        await self._write("set_key_pitch", idx=idx)
+
+    def _cw_pitch_hz_from_index(self, idx: int) -> int:
+        """Decode a CAT key-pitch index into Hz via the profile domain.
+
+        The index addresses the ``cw_pitch`` raw lattice from its first
+        point, so the decoded display value is the pitch in Hz. Raises
+        ``ValueError`` when the profile publishes no usable domain or the
+        index falls outside it.
+        """
+        controls = self.profile.controls
+        domain = controls.get("cw_pitch") if controls is not None else None
+        raw_min = domain.get("raw_min") if isinstance(domain, Mapping) else None
+        raw_step = domain.get("raw_step") if isinstance(domain, Mapping) else None
+        usable = (
+            isinstance(domain, Mapping)
+            and not isinstance(raw_min, bool)
+            and isinstance(raw_min, int)
+            and not isinstance(raw_step, bool)
+            and isinstance(raw_step, int)
+        )
+        if not usable:
+            raise ValueError(
+                "no normalized control domain for 'cw_pitch' in the active profile"
+            )
+        display = decode_control_domain(
+            cast(Mapping[str, object], domain),
+            cast(int, raw_min) + idx * cast(int, raw_step),
+        )
+        if display is None:
+            raise ValueError(
+                f"cw_pitch index {idx!r} is outside the profile's control domain"
+            )
+        return int(display)
+
+    async def read_cw_pitch(self) -> int:
+        """Read CW pitch in Hz without mutating legacy state.
+
+        The Hz value is decoded from the profile's ``cw_pitch`` control
+        domain: the CAT key-pitch index addresses the domain's raw lattice,
+        and the decoded display value is the pitch in Hz. Pure CAT read
+        used by the observation pipeline.
+        """
+        idx = await self.read_key_pitch()
+        return self._cw_pitch_hz_from_index(idx)
+
+    async def read_break_in(self) -> BreakInMode:
+        """Read CW break-in mode without mutating legacy state.
+
+        FTX-1 CAT exposes only binary on/off; map ``"1"`` to
+        :attr:`BreakInMode.SEMI` and ``"0"`` to :attr:`BreakInMode.OFF`.
+        :class:`BreakInMode` is an :class:`IntEnum` and remains
+        bool-compatible at runtime.
+        """
+        result = await self._query("get_break_in")
+        return BreakInMode.SEMI if result["state"] == "1" else BreakInMode.OFF
+
+    async def get_break_in(self) -> BreakInMode:
+        """Get CW break-in mode.
+
+        FTX-1 CAT exposes only binary on/off; map ``"1"`` to
+        :attr:`BreakInMode.SEMI` and ``"0"`` to :attr:`BreakInMode.OFF`.
+        :class:`BreakInMode` is an :class:`IntEnum` and remains
+        bool-compatible at runtime.
+        """
+        return await self.read_break_in()
+
+    async def set_break_in(self, mode: BreakInMode | int | bool) -> None:
+        """Set CW break-in mode.
+
+        ``mode`` must be one of the profile's declared ``[break_in] values``
+        (FTX-1: 0 = OFF, 1 = ON); ``False``/``True`` are 0/1.
+
+        Raises:
+            CommandError: If ``mode`` is outside the declared domain, or the
+                profile declares none (MOR-2729). Nothing is written.
+        """
+        mode_int = int(mode)
+        break_in_modes = self._config.break_in_modes
+        if break_in_modes is None or mode_int not in break_in_modes:
+            raise CommandError(
+                f"Break-in mode must be one of {sorted(break_in_modes or ())} "
+                f"for {self._config.model!r}, got {mode_int}"
+            )
+        await self._write("set_break_in", state=str(mode_int))
+
+    async def read_cw_spot(self) -> bool:
+        """Read CW spot tone state without mutating legacy state."""
+        result = await self._query("get_cw_spot")
+        return bool(result["state"] == "1")
+
+    async def get_cw_spot(self) -> bool:
+        """Get CW spot tone state."""
+        return await self.read_cw_spot()
+
+    async def set_cw_spot(self, state: bool) -> None:
+        """Set CW spot tone state."""
+        await self._write("set_cw_spot", state="1" if state else "0")
+
+    async def send_cw(self, msg_type: str, mem: str) -> None:
+        """Send a CW message (KY command).
+
+        Args:
+            msg_type: Message type character.
+            mem: CW message text to send.
+        """
+        if not mem or self._local_tx_work is None:
+            await self._write("send_cw", type=msg_type, mem=mem)
+            return
+
+        async def write(is_current: Callable[[], bool]) -> None:
+            await self._write("send_cw", type=msg_type, mem=mem, is_current=is_current)
+
+        await self._local_tx_work.run(write)
+
+    async def read_break_in_delay(self) -> int:
+        """Read CW break-in delay in ms (30–3000) without mutating legacy state."""
+        result = await self._query("get_break_in_delay")
+        return int(result["delay"])
+
+    async def get_break_in_delay(self) -> int:
+        """Get CW break-in delay in milliseconds (30–3000)."""
+        return await self.read_break_in_delay()
+
+    async def set_break_in_delay(self, delay: int) -> None:
+        """Set CW break-in delay in milliseconds (30–3000)."""
+        await self._write("set_break_in_delay", delay=delay)
+
+    # -- D8: Clarifier (RIT/XIT) --------------------------------------------
+
+    async def read_clarifier(self, receiver: int = 0) -> tuple[bool, bool]:
+        """Read clarifier state (CF000) without mutating legacy state.
+
+        Returns:
+            Tuple of (rx_clar: bool, tx_clar: bool).
+        """
+        result = await self._query("get_clarifier")
+        return result["rx"] == "1", result["tx"] == "1"
+
+    async def get_clarifier(self, receiver: int = 0) -> tuple[bool, bool]:
+        """Get clarifier state (CF000).
+
+        Returns:
+            Tuple of (rx_clar: bool, tx_clar: bool).
+        """
+        return await self.read_clarifier(receiver)
+
+    async def set_clarifier(
+        self, rx_clar: bool, tx_clar: bool, receiver: int = 0
+    ) -> None:
+        """Set clarifier RX/TX state (CF000)."""
+        await self._write(
+            "set_clarifier",
+            rx="1" if rx_clar else "0",
+            tx="1" if tx_clar else "0",
+            pad=0,
+        )
+
+    async def read_clarifier_freq(self, receiver: int = 0) -> int:
+        """Read clarifier offset frequency in Hz (signed, CF001).
+
+        Pure CAT read: returns the signed offset without mutating legacy state.
+        """
+        result = await self._query("get_clarifier_freq")
+        offset: int = result["offset"]
+        return -offset if result["sign"] == "-" else offset
+
+    async def get_clarifier_freq(self, receiver: int = 0) -> int:
+        """Get clarifier offset frequency in Hz (signed, CF001)."""
+        return await self.read_clarifier_freq(receiver)
+
+    async def set_clarifier_freq(self, offset: int, receiver: int = 0) -> None:
+        """Set clarifier offset frequency in Hz (signed, CF001)."""
+        sign = "+" if offset >= 0 else "-"
+        await self._write("set_clarifier_freq", sign=sign, offset=abs(offset))
+
+    # -- Canonical RIT/XIT surface (RitXitCapable) --------------------------
+    # Cross-vendor names that delegate to the *_clarifier* CAT helpers.
+    # set_rit_status / set_rit_tx_status do read-modify-write on CF000 so a
+    # single-bit setter does not clobber the other bit (P1-02 fix).
+
+    async def get_rit_frequency(self) -> int:
+        """Get RIT frequency offset in Hz (signed)."""
+        return await self.get_clarifier_freq()
+
+    async def set_rit_frequency(self, freq_hz: int) -> None:
+        """Set RIT frequency offset in Hz (signed). Fire-and-forget."""
+        await self.set_clarifier_freq(freq_hz)
+
+    async def get_rit_status(self) -> bool:
+        """Get RIT (RX clarifier) on/off status."""
+        rx_clar, _tx_clar = await self.get_clarifier()
+        return rx_clar
+
+    async def set_rit_status(self, on: bool) -> None:
+        """Set RIT (RX clarifier) on/off — preserves XIT bit (read-modify-write)."""
+        _rx_clar, tx_clar = await self.get_clarifier()
+        await self.set_clarifier(rx_clar=on, tx_clar=tx_clar)
+
+    async def get_rit_tx_status(self) -> bool:
+        """Get RIT TX / XIT (TX clarifier) on/off status."""
+        _rx_clar, tx_clar = await self.get_clarifier()
+        return tx_clar
+
+    async def set_rit_tx_status(self, on: bool) -> None:
+        """Set RIT TX / XIT on/off — preserves RIT bit (read-modify-write)."""
+        rx_clar, _tx_clar = await self.get_clarifier()
+        await self.set_clarifier(rx_clar=rx_clar, tx_clar=on)
+
+    # -- D9: Tone/TSQL ------------------------------------------------------
+
+    async def read_sql_type(self, receiver: int = 0) -> int:
+        """Read one receiver's squelch type code (CT) without mutating legacy state.
+
+        Pure CAT read used by the observation pipeline. Returns the FTX-1
+        ``CT`` P2 code (0=CTCSS OFF, 1=ENC ON/DEC OFF "TONE", 2=ENC ON/DEC ON
+        "TSQL", 3=DCS, 4=PR FREQ, 5=REV TONE) per the FTX-1 CAT Operation
+        Reference Manual (``FTX-1_CAT_OM_ENG_2508-C``). ``receiver`` maps to
+        the command's P1 digit (0=MAIN, 1=SUB).
+        """
+        receiver = self._validate_receiver(receiver)
+        result = await self._query("get_sql_type", receiver=receiver)
+        if result["receiver"] != receiver:
+            raise CommandError(
+                "sql type receiver mismatch: "
+                f"requested {receiver}, received {result['receiver']}"
+            )
+        return int(result["type"])
+
+    async def get_sql_type(self, receiver: int = 0) -> int:
+        """Get one receiver's squelch type code (CT)."""
+        return await self.read_sql_type(receiver)
+
+    async def set_sql_type(self, type_code: int, receiver: int = 0) -> None:
+        """Set one receiver's squelch type code (CT)."""
+        receiver = self._validate_receiver(receiver)
+        await self._write("set_sql_type", receiver=receiver, type=type_code)
+
+    async def read_ctcss_tone_index(self, receiver: int = 0) -> int:
+        """Read one receiver's CTCSS tone-chart index (CN command) — pure read.
+
+        Sends ``CN00;`` for MAIN or ``CN10;`` for SUB (P1=receiver, P2=0
+        CTCSS) and parses the ``CNrr0nnn;`` answer, returning the 000-049
+        tone-chart index per the FTX-1 CAT Operation Reference Manual
+        (``FTX-1_CAT_OM_ENG_2508-C``). Pure CAT read used by the observation
+        pipeline: it does NOT mutate ``radio_state``.
+        """
+        receiver = self._validate_receiver(receiver)
+        result = await self._query("get_ctcss_tone", receiver=receiver)
+        if result["receiver"] != receiver:
+            raise CommandError(
+                "ctcss tone receiver mismatch: "
+                f"requested {receiver}, received {result['receiver']}"
+            )
+        return int(result["code"])
+
+    async def get_tone_freq(self, receiver: int = 0) -> int:
+        """Get the CTCSS tone frequency in centiHz (CN command).
+
+        Reads the tone-chart index and maps it through the active profile's
+        resolved CTCSS domain (e.g. index 8 → 88.5 Hz → ``8850``). The FTX-1
+        has a single CTCSS tone (CN P2=0) shared by both TONE (encode) and
+        TSQL (decode).
+        """
+        return _ctcss_index_to_centihz(
+            await self.read_ctcss_tone_index(receiver),
+            domain=self.profile.ctcss_tones_centihz,
+        )
+
+    async def set_tone_freq(self, freq_hz: int, receiver: int = 0) -> None:
+        """Set the CTCSS tone frequency in centiHz (CN command).
+
+        ``freq_hz`` is hundredths of Hz (8850 = 88.5 Hz), matching
+        ``RepeaterControlCapable``. The value must be an exact member of the
+        profile's resolved CTCSS domain; anything else is refused with
+        ``ValueError`` BEFORE any frame is sent (MOR-2129), so an invalid
+        value can never be silently re-quantized to the nearest tone.
+        """
+        receiver = self._validate_receiver(receiver)
+        if isinstance(freq_hz, bool) or not isinstance(freq_hz, int):
+            raise TypeError("CTCSS tone frequency must be an integer in centiHz")
+        domain = self.profile.ctcss_tones_centihz
+        if not isinstance(domain, tuple) or not domain:
+            raise ValueError("active profile has no resolved CTCSS tone domain")
+        if freq_hz not in domain:
+            raise ValueError(
+                f"CTCSS tone frequency {freq_hz} is not an exact member of "
+                "the profile CTCSS domain"
+            )
+        index = hz_to_table_index(freq_hz, table=domain)
+        await self._write("set_ctcss_tone", receiver=receiver, code=index)
+
+    async def get_tsql_freq(self, receiver: int = 0) -> int:
+        """Get the TSQL frequency in centiHz — an honest alias of
+        :meth:`get_tone_freq`, because the FTX-1's single ``CN`` register
+        serves both TONE and TSQL.
+        """
+        return await self.get_tone_freq(receiver)
+
+    async def set_tsql_freq(self, freq_hz: int, receiver: int = 0) -> None:
+        """Set the TSQL frequency in centiHz — an honest alias of
+        :meth:`set_tone_freq`, because the FTX-1's single ``CN`` register
+        serves both TONE and TSQL.
+        """
+        await self.set_tone_freq(freq_hz, receiver=receiver)
+
+    async def get_repeater_tone(self, receiver: int = 0) -> bool:
+        """Get repeater tone (CTCSS ENC) on/off state, derived from ``CT``.
+
+        The current code's meaning comes from the profile's
+        ``[tone_squelch_types]`` table: ``tone`` and ``tsql`` both carry
+        encode, ``off`` carries neither. A code the table maps to any
+        other type (DCS and friends) has no two-boolean representation,
+        so the read refuses loudly with ``ValueError`` — the same refusal
+        the setters make — instead of inventing ``False`` (MOR-2572).
+        """
+        code = await self.read_sql_type(receiver)
+        neutral = (self.profile.tone_squelch_types or {}).get(code)
+        if neutral in (ToneSquelchType.TONE, ToneSquelchType.TSQL):
+            return True
+        if neutral == ToneSquelchType.OFF:
+            return False
+        raise ValueError(
+            f"cannot express a CTCSS tone pair over CT code {code} "
+            "(DCS/PR FREQ/REV TONE)" + ("" if neutral is not None else " [unmapped]")
+        )
+
+    async def set_repeater_tone(self, on: bool, receiver: int = 0) -> None:
+        """Set repeater tone (CTCSS ENC) on/off (CT command, read-modify-write).
+
+        Reads the current ``CT`` code first and resolves it through the
+        profile's ``[tone_squelch_types]`` table. A current code mapped to
+        anything but ``off``/``tone``/``tsql`` (DCS and friends) is refused
+        loudly and nothing is sent: the two-boolean vocabulary cannot
+        express that state, and overwriting it would destroy the radio's
+        configuration. ``tone=False`` while tone squelch is on
+        ((False, True)) is likewise refused as not representable.
+        """
+        receiver = self._validate_receiver(receiver)
+        table = dict(self.profile.tone_squelch_types or {})
+        current = await self.read_sql_type(receiver)
+        neutral = table.get(current)
+        if neutral not in (
+            ToneSquelchType.OFF,
+            ToneSquelchType.TONE,
+            ToneSquelchType.TSQL,
+        ):
+            raise ValueError(
+                f"cannot express a CTCSS toggle over CT code {current} "
+                "(DCS/PR FREQ/REV TONE); refusing to overwrite it"
+                + ("" if neutral is not None else " [unmapped]")
+            )
+        tone = bool(on)
+        tsql = neutral == ToneSquelchType.TSQL
+        if not tone and tsql:
+            raise ValueError(
+                "tone squelch cannot stay on while the repeater tone is off "
+                "(CT has no code for encode-off/decode-on)"
+            )
+        target = (
+            ToneSquelchType.TSQL
+            if tsql
+            else (ToneSquelchType.TONE if tone else ToneSquelchType.OFF)
+        )
+        code = next((c for c, n in table.items() if n == target), None)
+        if code is None:
+            raise ValueError(
+                f"profile {self.profile.model!r} has no CT code for "
+                f"{target.value}; refusing to invent one"
+            )
+        await self.set_sql_type(code, receiver)
+
+    async def get_repeater_tsql(self, receiver: int = 0) -> bool:
+        """Get tone squelch (CTCSS ENC+DEC) on/off state, derived from ``CT``.
+
+        The current code's meaning comes from the profile's
+        ``[tone_squelch_types]`` table: only ``tsql`` carries decode. A
+        code the table maps to any other type (DCS and friends) has no
+        two-boolean representation, so the read refuses loudly with
+        ``ValueError`` — the same refusal the setters make — instead of
+        inventing ``False`` (MOR-2572).
+        """
+        code = await self.read_sql_type(receiver)
+        neutral = (self.profile.tone_squelch_types or {}).get(code)
+        if neutral == ToneSquelchType.TSQL:
+            return True
+        if neutral in (ToneSquelchType.OFF, ToneSquelchType.TONE):
+            return False
+        raise ValueError(
+            f"cannot express a CTCSS tone pair over CT code {code} "
+            "(DCS/PR FREQ/REV TONE)" + ("" if neutral is not None else " [unmapped]")
+        )
+
+    async def set_repeater_tsql(self, on: bool, receiver: int = 0) -> None:
+        """Set tone squelch (CTCSS ENC+DEC) on/off (CT command, read-modify-write).
+
+        Reads the current ``CT`` code first and resolves it through the
+        profile's ``[tone_squelch_types]`` table. A current code mapped to
+        anything but ``off``/``tone``/``tsql`` (DCS and friends) is refused
+        loudly and nothing is sent. Turning tone squelch on while CTCSS
+        encode is off ((False, True)) is refused as not representable:
+        ``CT`` expresses decode only together with encode.
+        """
+        receiver = self._validate_receiver(receiver)
+        table = dict(self.profile.tone_squelch_types or {})
+        current = await self.read_sql_type(receiver)
+        neutral = table.get(current)
+        if neutral not in (
+            ToneSquelchType.OFF,
+            ToneSquelchType.TONE,
+            ToneSquelchType.TSQL,
+        ):
+            raise ValueError(
+                f"cannot express a CTCSS toggle over CT code {current} "
+                "(DCS/PR FREQ/REV TONE); refusing to overwrite it"
+                + ("" if neutral is not None else " [unmapped]")
+            )
+        tone = neutral in (ToneSquelchType.TONE, ToneSquelchType.TSQL)
+        tsql = bool(on)
+        if not tone and tsql:
+            raise ValueError(
+                "tone squelch cannot be on while the repeater tone is off "
+                "(CT has no code for encode-off/decode-on)"
+            )
+        target = (
+            ToneSquelchType.TSQL
+            if tsql
+            else (ToneSquelchType.TONE if tone else ToneSquelchType.OFF)
+        )
+        code = next((c for c, n in table.items() if n == target), None)
+        if code is None:
+            raise ValueError(
+                f"profile {self.profile.model!r} has no CT code for "
+                f"{target.value}; refusing to invent one"
+            )
+        await self.set_sql_type(code, receiver)
+
+    async def read_repeater_shift(self, receiver: int = 0) -> int:
+        """Read one receiver's repeater shift direction — pure read.
+
+        Sends ``OS0;`` for MAIN or ``OS1;`` for SUB and parses the answer per the
+        FTX-1 CAT Operation Reference Manual (``FTX-1_CAT_OM_ENG_2508-C``),
+        OS OFFSET (REPEATER SHIFT). Returns the raw 0-3 P2 code (0=Simplex,
+        1=Plus Shift, 2=Minus Shift, 3=ARS) — shift magnitude is not covered
+        by this command (see :class:`RepeaterShiftCapable`). Pure CAT read
+        used by the observation pipeline: it does NOT mutate ``radio_state``.
+        """
+        receiver = self._validate_receiver(receiver)
+        result = await self._query("get_repeater_shift", receiver=receiver)
+        if result["receiver"] != receiver:
+            raise CommandError(
+                "repeater shift receiver mismatch: "
+                f"requested {receiver}, received {result['receiver']}"
+            )
+        try:
+            return int(RepeaterShiftDirection(int(result["shift"])))
+        except (TypeError, ValueError) as exc:
+            raise CommandError(
+                f"invalid repeater shift direction in answer: {result['shift']!r}"
+            ) from exc
+
+    async def get_repeater_shift(self, receiver: int = 0) -> RepeaterShiftDirection:
+        """Get one receiver's repeater shift direction (OS command)."""
+        return RepeaterShiftDirection(await self.read_repeater_shift(receiver))
+
+    async def set_repeater_shift(
+        self, direction: RepeaterShiftDirection | int, receiver: int = 0
+    ) -> None:
+        """Set one receiver's repeater shift direction (OS command).
+
+        Args:
+            direction: Target shift direction.
+            receiver: 0 for MAIN or 1 for SUB, matching the manual's P1.
+
+        The manual's own footnote says this command "can be activated only
+        with an FM mode" — nothing more; the manual documents no error
+        response for any command. Separately, a bench measurement recorded
+        in MOR-2125 found that with MAIN in a non-FM mode the radio refuses
+        with ``?;``, while in FM all four direction values are accepted.
+        ``transport.py`` documents ``?;`` as meaning "unrecognized command"
+        (see its module docstring); here the command is recognized and
+        refused only for the current mode — a different failure wearing the
+        same reply.
+        """
+        receiver = self._validate_receiver(receiver)
+        if isinstance(direction, bool) or not isinstance(direction, int):
+            raise TypeError("repeater shift direction must be an integer from 0 to 3")
+        try:
+            validated_direction = RepeaterShiftDirection(direction)
+        except ValueError as exc:
+            raise ValueError(
+                f"repeater shift direction must be from 0 to 3, got {direction}"
+            ) from exc
+        await self._write(
+            "set_repeater_shift",
+            receiver=receiver,
+            shift=int(validated_direction),
+        )
+
+    def _validate_receiver(self, receiver: object) -> int:
+        """Validate a MAIN/SUB selector shared by the receiver-routed CAT
+        commands (``OS``, ``CT``, ``CN``): an int the profile supports,
+        refused before any wire traffic.
+        """
+        if isinstance(receiver, bool) or not isinstance(receiver, int):
+            raise TypeError("CAT receiver must be an integer")
+        if not self.profile.supports_receiver(receiver):
+            raise ValueError(
+                f"CAT receiver must be supported by the profile, got {receiver}"
+            )
+        return receiver
+
+    # -- D10: System --------------------------------------------------------
+
+    async def get_id(self) -> str:
+        """Get radio model ID string (e.g. '0840')."""
+        result = await self._query("get_id")
+        return str(result["model"]).zfill(4)
+
+    async def get_auto_info(self) -> bool:
+        """Get auto-info (AI) state."""
+        result = await self._query("get_auto_info")
+        return bool(result["state"] == "1")
+
+    async def set_auto_info(self, state: bool) -> None:
+        """Set auto-info (AI) state."""
+        await self._write("set_auto_info", state="1" if state else "0")
+
+    async def read_vox(self) -> bool:
+        """Read VOX state without mutating legacy state."""
+        result = await self._query("get_vox")
+        return bool(result["state"] == "1")
+
+    async def get_vox(self) -> bool:
+        """Get VOX state."""
+        return await self.read_vox()
+
+    async def set_vox(self, state: bool) -> None:
+        """Set VOX state."""
+        await self._write("set_vox", state="1" if state else "0")
+
+    async def read_lock(self) -> bool:
+        """Read dial lock state (LK) without mutating legacy state."""
+        result = await self._query("get_lock")
+        return bool(result["state"] == "1")
+
+    async def get_lock(self) -> bool:
+        """Get dial lock state."""
+        return await self.read_lock()
+
+    async def set_lock(self, state: bool) -> None:
+        """Set dial lock state."""
+        await self._write("set_lock", state="1" if state else "0")
+
+    # -- Tuner (AC) --------------------------------------------------------
+
+    async def read_tuner(self) -> int:
+        """Read antenna tuner state (AC) without mutating legacy state.
+
+        Returns:
+            Native AC state; interpretation depends on the reported tuner type.
+        """
+        result = await self._query("get_tuner")
+        return int(result["state"])
+
+    async def get_tuner(self) -> int:
+        """Get antenna tuner state (AC).
+
+        Returns:
+            Native AC state; interpretation depends on the reported tuner type.
+        """
+        return await self.read_tuner()
+
+    async def set_tuner(self, state: int, src: int = 0, typ: int = 0) -> None:
+        """Write native AC state to the explicitly selected source and type."""
+        params = {"src": str(src), "type": str(typ), "state": str(state)}
+        if state == 0 or self._local_tx_work is None:
+            await self._write("set_tuner", **params)
+            return
+
+        async def write(is_current: Callable[[], bool]) -> None:
+            await self._write("set_tuner", is_current=is_current, **params)
+
+        await self._local_tx_work.run(write)
+
+    # -- Contour / S-DX (CO) -----------------------------------------------
+
+    async def get_contour(self, receiver: int = 0) -> int:
+        """Get contour (S-DX) on/off state (CO rx 0).
+
+        Returns:
+            0=OFF, >0 = ON (value).
+        """
+        result = await self._query("get_contour")
+        return int(result["val"])
+
+    async def set_contour(self, val: int, receiver: int = 0) -> None:
+        """Set contour (S-DX) on/off. 0=OFF, 1=ON."""
+        await self._write("set_contour", val=val)
+
+    # -- APF (Audio Peak Filter, CO02/CO03) ------------------------------------
+
+    async def get_apf(self, receiver: int = 0) -> bool:
+        """Get APF on/off state (CO02). Returns True if APF is on."""
+        result = await self._query("get_apf")
+        return int(result["val"]) != 0
+
+    async def set_apf(self, on: bool, receiver: int = 0) -> None:
+        """Set APF on/off (CO02). 0=OFF, 1=ON."""
+        await self._write("set_apf", val=1 if on else 0)
+
+    async def get_apf_freq(self, receiver: int = 0) -> int:
+        """Get APF centre frequency (CO03)."""
+        result = await self._query("get_apf_freq")
+        return int(result["val"])
+
+    async def set_apf_freq(self, freq: int, receiver: int = 0) -> None:
+        """Set APF centre frequency (CO03)."""
+        await self._write("set_apf_freq", val=freq)
+
+    # -- Clarifier Reset (RC) --------------------------------------------------
+
+    async def reset_clarifier(self, receiver: int = 0) -> None:
+        """Reset clarifier offset to zero (RC). Fire-and-forget."""
+        await self._write("reset_clarifier")
+
+    async def set_band(self, band: int, receiver: int = 0) -> None:
+        """Set current band by index (BS, write-only on FTX-1).
+
+        Note: FTX-1 does not support BS read (returns ?;).
+        Band values: 00=1.8M, 01=3.5M, 02=5M, 03=7M, 04=10M,
+        05=14M, 06=18M, 07=21M, 08=24.5M, 09=28M, 10=50M,
+        11=70M/GEN, 12=AIR, 13=144M, 14=430M.
+        """
+        cmd = "set_band" if receiver == 0 else "set_band_sub"
+        await self._write(cmd, band=band)
+
+    async def band_up(self, receiver: int = 0) -> None:
+        """Step up one band (BU0)."""
+        await self._write("band_up")
+
+    async def band_down(self, receiver: int = 0) -> None:
+        """Step down one band (BD0)."""
+        await self._write("band_down")
+
+    # -- AGC ----------------------------------------------------------------
+
+    async def read_agc(self, receiver: int = 0) -> int:
+        """Read AGC mode without mutating legacy state.
+
+        Returns:
+            0=OFF, 1=FAST, 2=MID, 3=SLOW, 4=AUTO-F, 5=AUTO-M, 6=AUTO-S.
+        """
+        cmd = "get_agc" if receiver == 0 else "get_agc_sub"
+        result = await self._query(cmd)
+        return int(result["mode"])
+
+    async def get_agc(self, receiver: int = 0) -> int:
+        """Get AGC mode.
+
+        Returns:
+            0=OFF, 1=FAST, 2=MID, 3=SLOW, 4=AUTO-F, 5=AUTO-M, 6=AUTO-S.
+        """
+        return await self.read_agc(receiver)
+
+    async def set_agc(self, mode: int, receiver: int = 0) -> None:
+        """Set AGC mode.
+
+        The FTX-1 read side reports 0–6 (4/5/6 = the auto-selected
+        A-FAST/A-MID/A-SLOW for the current mode), but the SET side only
+        accepts 0–4 where ``4`` means AUTO; writing ``GT05;``/``GT06;`` is
+        rejected and the value sticks at the prior setting.
+
+        ``mode`` must be one of the profile's declared ``[agc] modes``
+        (MOR-1522) — an out-of-domain value raises instead of being sent
+        to the radio unchecked.
+        """
+        agc_modes = self._config.agc_modes
+        if agc_modes is not None and mode not in agc_modes:
+            raise CommandError(
+                f"AGC mode must be one of {sorted(agc_modes)} for "
+                f"{self._config.model!r}, got {mode}"
+            )
+        key = self._receiver_level_write_key("set_agc", receiver)
+        await self._write(key, mode=str(mode))
+
+    # -- Key speed (KS) -------------------------------------------------------
+
+    async def get_key_speed(self) -> int:
+        """Get CW keyer speed in WPM (KS)."""
+        return await self.read_keyer_speed()
+
+    async def set_key_speed(self, speed: int) -> None:
+        """Set CW keyer speed in WPM (KS)."""
+        await self._write("set_keyer_speed", wpm=speed)
+
+    # -- AdvancedControlCapable aliases ----------------------------------------
+
+    async def get_cw_pitch(self) -> int:
+        """CW pitch in Hz.
+
+        ``read_key_pitch`` is the Yaesu-internal helper and returns the raw
+        CAT index. The Icom-spelled ``CwControlCapable`` contract is Hz, so
+        the value is decoded from the profile's ``cw_pitch`` control domain.
+        """
+        return await self.read_cw_pitch()
+
+    async def set_cw_pitch(self, freq: int) -> None:
+        """Set CW pitch in Hz.
+
+        The value must lie on the profile's ``cw_pitch`` raw domain;
+        off-domain values raise ``ValueError`` before any CAT write. The
+        Hz→index encoding is derived from the same domain
+        (``(freq - raw_origin) // raw_step``).
+        """
+        _, _, raw_step, raw_origin = validate_control_raw_value(
+            self.profile.controls, "cw_pitch", freq
+        )
+        await self.set_key_pitch((freq - raw_origin) // raw_step)
+
+    # -- ControlDomainCapable --------------------------------------------------
+
+    def _published_control_domain(self, control: str) -> Mapping[str, object] | None:
+        """Return the published normalized domain for *control*, if any."""
+        controls = self.profile.controls
+        domain = controls.get(control) if controls is not None else None
+        return domain if isinstance(domain, Mapping) else None
+
+    def snap_control_display(self, control: str, display: str) -> int | None:
+        """Return the raw code for the display value nearest *display*.
+
+        Implements the
+        :class:`~rigplane.core.radio_protocol.ControlDomainCapable`
+        contract on the active profile's published normalized domain:
+        the display value is snapped to the nearest legal display point
+        (exact ties up) and encoded back to its raw code — all arithmetic
+        delegated to :mod:`rigplane.profiles.control_domain`. Returns
+        ``None`` when the profile publishes no normalized domain for
+        *control* or *display* is not a canonical decimal string; raises
+        ``ValueError`` when the domain is published and *display* is
+        outside its display range.
+        """
+        domain = self._published_control_domain(control)
+        if domain is None:
+            return None
+        try:
+            snapped = snap_control_domain(domain, display)
+        except ValueError as exc:
+            raise ValueError(f"{control} {exc}") from exc
+        if snapped is None:
+            return None
+        return cast(int | None, encode_control_domain(domain, snapped))
+
+    def decode_control_raw(self, control: str, raw: int) -> str | None:
+        """Return the canonical display string for *raw*, or ``None``.
+
+        Implements the
+        :class:`~rigplane.core.radio_protocol.ControlDomainCapable`
+        contract: ``None`` when the profile publishes no normalized
+        domain for *control* or *raw* is not a legal point on it.
+        """
+        domain = self._published_control_domain(control)
+        if domain is None:
+            return None
+        return cast(str | None, decode_control_domain(domain, raw))
+
+    def control_display_bounds(self, control: str) -> tuple[str, str] | None:
+        """Return the canonical display ``(min, max)`` for *control*, or ``None``.
+
+        Implements the
+        :class:`~rigplane.core.radio_protocol.ControlDomainCapable`
+        contract: the band is read — never re-derived — through
+        :func:`rigplane.profiles.control_domain.control_display_band`
+        on the active profile's published controls, and its Decimal
+        bounds render back to the canonical decimal strings they were
+        declared with. ``None`` when the profile publishes no domain
+        for *control*.
+        """
+        band = control_display_band(self.profile.controls, control)
+        if band is None:
+            return None
+        return (str(band[0]), str(band[1]))
+
+    async def get_dial_lock(self) -> bool:
+        """Alias for AdvancedControlCapable compatibility."""
+        return await self.get_lock()
+
+    async def set_dial_lock(self, on: bool) -> None:
+        """Alias for AdvancedControlCapable compatibility."""
+        await self.set_lock(on)
+
+    async def get_compressor(self) -> bool:
+        """Alias for VoiceControlCapable compatibility."""
+        return await self.get_processor()
+
+    async def set_compressor(self, on: bool) -> None:
+        """Alias for AdvancedControlCapable compatibility."""
+        await self.set_processor(on)
+
+    def _bind_tuner_provider_generation(self, capture: Callable[[], int]) -> None:
+        self._tuner_provider_generation = capture
+        self._transport.bind_provider_generation(capture)
+
+    async def _read_atu_route(self) -> tuple[str, str, int, Callable[[], bool]]:
+        transport = self._transport
+        reconnects = transport.stats.reconnects
+        writer = transport._writer
+        capture = self._tuner_provider_generation
+        generation = None if capture is None else capture()
+
+        def current() -> bool:
+            return (
+                self._transport is transport
+                and transport.connected
+                and transport.stats.reconnects == reconnects
+                and transport._writer is writer
+                and self._tuner_provider_generation is capture
+                and (capture is None or capture() == generation)
+            )
+
+        result = await self._query("get_tuner")
+        if not current():
+            raise CommandError(
+                "Tuner connection or provider changed during acquisition"
+            )
+        return (*_decode_atu_response(result), current)
+
+    async def get_tuner_status(self) -> int:
+        """Return generic ATU status: 0=OFF, 1=ON, 2=tuning/start."""
+        _, _, status, _ = await self._read_atu_route()
+        return status
+
+    async def set_tuner_status(self, value: int) -> None:
+        """Set 0=OFF, 1=ON, or 2=START using a fresh complete AC response.
+
+        Native ``set_tuner`` retains explicit source/type addressing. This
+        generic call preserves the acquired route; a front-panel selection
+        change between reply and write is not an atomic transaction.
+        """
+        if type(value) is not int or value not in (0, 1, 2):
+            raise ValueError("Tuner value must be 0, 1, or 2")
+
+        async def write(fence_current: Callable[[], bool]) -> None:
+            try:
+                src, typ, _, route_current = await self._read_atu_route()
+            except (ValueError, KeyError) as exc:
+                raise CommandError(f"Cannot acquire ATU route: {exc}") from exc
+            await self._write(
+                "set_tuner",
+                src=src,
+                type=typ,
+                state=str(3 if value == 2 else value),
+                is_current=lambda: route_current() and fence_current(),
+            )
+
+        if value == 0 or self._local_tx_work is None:
+            await write(lambda: True)
+        else:
+            await self._local_tx_work.run(write)
+
+    async def send_cw_text(self, text: str) -> None:
+        """Send CW text by writing a keyer memory and playing it (MOR-3678).
+
+        FTX-1_CAT_OM_ENG_2508-C: ``KM P1 P2..;`` (printed p.17) stores up to
+        50 characters in keyer memory channel P1 (1-5); ``KY P1 P2;``
+        (printed p.18) plays it, P1 ``0`` CW TEXT / ``1`` CW MESSAGE memory.
+        KY has no free-text form. Channel, memory type and the length limit
+        come from the profile's ``[cw_text]``; nothing is chunked, truncated
+        or split. Text with a ``;`` or an ASCII control code is rejected:
+        CAT parameters may not contain them (general rules, printed p.4;
+        DEL 7Fh included). Sends are serialized so each KM stays paired with
+        its KY; stop_cw_text does not wait for the lock.
+
+        Raises:
+            RuntimeError: The profile does not enable CW text sending.
+            ValueError: The text is longer than the profile limit or holds a
+                character a CAT parameter cannot carry. Nothing is written.
+            CwTextSendCancelledError: A CW stop or a transmit abort ended
+                the send before it was written (MOR-3700).
+        """
+        from ...profiles import (
+            CwTextUnsupportedError,
+            admit_cw_text,
+            await_fenced_cw_text,
+            cw_text_cancelled,
+        )
+
+        admit_cw_text(self.profile, text)
+        spec = self.profile.cw_text
+        if spec.memory_channel is None or not 1 <= spec.memory_channel <= 5:
+            # KM P1 is one digit, keyer memory 1-5 (printed p.17).
+            raise CwTextUnsupportedError(
+                f"{self.profile.model} does not support sending CW text yet: "
+                f"[cw_text].memory_channel {spec.memory_channel} is not a "
+                "KM keyer memory channel 1-5"
+            )
+        if not text:
+            raise ValueError("CW text is empty")
+        if any(ch == ";" or ord(ch) < 0x20 or ord(ch) == 0x7F for ch in text):
+            raise ValueError("CW text cannot contain ';' or control characters")
+        msg_type = self._cw_text_memory_type_code()
+        channel = str(spec.memory_channel)
+        generation = self._cw_text_generation
+
+        async def write(is_current: Callable[[], bool] | None) -> None:
+            def current() -> bool:
+                # A stop since admission (or a stale managed fence) ends
+                # this send: the transport refuses a write that is no
+                # longer current, checked when the write is sent.
+                return self._cw_text_generation == generation and (
+                    is_current is None or is_current()
+                )
+
+            # The lock is taken inside the fenced work, so a send still
+            # waiting for it already holds an abort token: a force-off ends
+            # it before it can write KM or KY.
+            async with self._cw_text_lock:
+                try:
+                    await self._write(
+                        "write_keyer_memory",
+                        chan=channel,
+                        mem=text,
+                        is_current=current,
+                    )
+                    # A stale fence makes this write raise "no longer
+                    # current", the same as a stale chunk: KY never plays
+                    # after a force-off.
+                    await self._write(
+                        "send_cw", type=msg_type, mem=channel, is_current=current
+                    )
+                except Exception as exc:
+                    # MOR-3700: a write that fails once a transmit abort or
+                    # a stop ended this send (refused as no longer current,
+                    # or a KM the radio rejects after the stop) is a
+                    # cancellation the caller is told about, not a
+                    # transport failure. The fence first: a force-off goes
+                    # stale before its managed CW stop runs. While the send
+                    # is current the failure stays what it was.
+                    if is_current is not None and not is_current():
+                        raise cw_text_cancelled(self.profile.model, "abort") from exc
+                    if self._cw_text_generation != generation:
+                        raise cw_text_cancelled(self.profile.model, "stop") from exc
+                    raise
+
+        if self._local_tx_work is None:
+            await write(None)
+        else:
+            await await_fenced_cw_text(
+                self._local_tx_work.run(write), self.profile.model
+            )
+
+    async def stop_cw_text(self) -> None:
+        """Stop keyer memory playback: ``KY P1 0;`` (printed p.18, P2 0 STOP)."""
+        # Ends every send admitted before this stop, then writes the stop
+        # unfenced (stopping never keys).
+        self._end_earlier_cw_text_sends()
+        await self._write("send_cw", type=self._cw_text_memory_type_code(), mem="0")
+
+    def _end_earlier_cw_text_sends(self) -> None:
+        """End every send_cw_text admitted before now (MOR-3678)."""
+        self._cw_text_generation += 1
+
+    def _cw_text_memory_type_code(self) -> str:
+        """KY P1: ``1`` CW MESSAGE memory, else ``0`` CW TEXT (printed p.18)."""
+        return "1" if self.profile.cw_text.memory_type == "message" else "0"
+
+    # -- Icom-only stubs (AdvancedControlCapable conformance) -----------------
+    # Yaesu does not support these features; methods exist for protocol compat.
+
+    async def get_antenna_1(self) -> bool:
+        raise NotImplementedError("Antenna switching not supported on Yaesu radios")
+
+    async def set_antenna_1(self, on: bool) -> None:
+        raise NotImplementedError("Antenna switching not supported on Yaesu radios")
+
+    async def get_antenna_2(self) -> bool:
+        raise NotImplementedError("Antenna switching not supported on Yaesu radios")
+
+    async def set_antenna_2(self, on: bool) -> None:
+        raise NotImplementedError("Antenna switching not supported on Yaesu radios")
+
+    async def get_rx_antenna_ant1(self) -> bool:
+        raise NotImplementedError("RX antenna switching not supported on Yaesu radios")
+
+    async def set_rx_antenna_ant1(self, on: bool) -> None:
+        raise NotImplementedError("RX antenna switching not supported on Yaesu radios")
+
+    async def get_rx_antenna_ant2(self) -> bool:
+        raise NotImplementedError("RX antenna switching not supported on Yaesu radios")
+
+    async def set_rx_antenna_ant2(self, on: bool) -> None:
+        raise NotImplementedError("RX antenna switching not supported on Yaesu radios")
+
+    async def get_pbt_inner(self, receiver: int = 0) -> int:
+        raise NotImplementedError("PBT (Icom) not supported on Yaesu radios")
+
+    async def set_pbt_inner(self, level: int, receiver: int = 0) -> None:
+        raise NotImplementedError("PBT (Icom) not supported on Yaesu radios")
+
+    async def get_pbt_outer(self, receiver: int = 0) -> int:
+        raise NotImplementedError("PBT (Icom) not supported on Yaesu radios")
+
+    async def set_pbt_outer(self, level: int, receiver: int = 0) -> None:
+        raise NotImplementedError("PBT (Icom) not supported on Yaesu radios")
+
+    async def set_digisel(self, on: bool, receiver: int = 0) -> None:
+        raise NotImplementedError("DIGI-SEL (Icom) not supported on Yaesu radios")
+
+    async def set_ip_plus(self, on: bool, receiver: int = 0) -> None:
+        raise NotImplementedError("IP+ (Icom) not supported on Yaesu radios")
+
+    async def set_filter(self, filter_num: int, receiver: int = 0) -> None:
+        raise NotImplementedError("Filter select (Icom) not supported on Yaesu radios")
+
+    async def get_filter(self, receiver: int = 0) -> int | None:
+        """Yaesu rigs do not expose discrete FIL1/2/3 — return ``None``."""
+        return None
+
+    async def set_filter_shape(self, shape: int, receiver: int = 0) -> None:
+        raise NotImplementedError("Filter shape (Icom) not supported on Yaesu radios")
+
+    async def get_attenuator_level(self, receiver: int = 0) -> int:
+        raise NotImplementedError(
+            "Attenuator level (Icom) not supported on Yaesu radios"
+        )
+
+    async def set_acc1_mod_level(self, level: int) -> None:
+        raise NotImplementedError("ACC1 mod level (Icom) not supported on Yaesu radios")
+
+    async def set_usb_mod_level(self, level: int) -> None:
+        raise NotImplementedError("USB mod level (Icom) not supported on Yaesu radios")
+
+    async def set_lan_mod_level(self, level: int) -> None:
+        raise NotImplementedError("LAN mod level (Icom) not supported on Yaesu radios")
+
+    async def get_system_date(self) -> tuple[int, int, int]:
+        raise NotImplementedError("System clock (Icom) not supported on Yaesu radios")
+
+    async def set_system_date(self, year: int, month: int, day: int) -> None:
+        raise NotImplementedError("System clock (Icom) not supported on Yaesu radios")
+
+    async def get_system_time(self) -> tuple[int, int]:
+        raise NotImplementedError("System clock (Icom) not supported on Yaesu radios")
+
+    async def set_system_time(self, hour: int, minute: int) -> None:
+        raise NotImplementedError("System clock (Icom) not supported on Yaesu radios")
+
+    async def get_vox_gain(self) -> int:
+        raise NotImplementedError("VOX gain not supported on this radio")
+
+    async def set_vox_gain(self, level: int) -> None:
+        raise NotImplementedError("VOX gain not supported on this radio")
+
+    async def get_anti_vox_gain(self) -> int:
+        raise NotImplementedError("Anti-VOX gain not supported on this radio")
+
+    async def set_anti_vox_gain(self, level: int) -> None:
+        raise NotImplementedError("Anti-VOX gain not supported on this radio")
+
+    async def get_monitor(self) -> bool:
+        raise NotImplementedError("Monitor (Icom) not supported on Yaesu radios")
+
+    async def set_monitor(self, on: bool) -> None:
+        raise NotImplementedError("Monitor (Icom) not supported on Yaesu radios")
+
+    async def get_monitor_gain(self) -> int:
+        raise NotImplementedError("Monitor gain (Icom) not supported on Yaesu radios")
+
+    async def set_monitor_gain(self, level: int) -> None:
+        raise NotImplementedError("Monitor gain (Icom) not supported on Yaesu radios")
+
+    async def get_dual_watch(self) -> bool:
+        raise NotImplementedError("Dual watch query not supported on Yaesu radios")
+
+    # -- Audio Peak Filter (canonical 3-mode adapter over Yaesu bool APF) -----
+
+    async def set_audio_peak_filter(self, mode: int, receiver: int = 0) -> None:
+        """Set Audio Peak Filter via the canonical 3-mode contract.
+
+        The cross-vendor contract is `mode = 0=off, 1=soft, 2=sharp`
+        (`DspControlCapable.set_audio_peak_filter`). Yaesu hardware exposes
+        APF as a plain on/off toggle (CO02) plus a tunable centre frequency
+        (CO03), so this adapter degrades the 3-mode form onto the bool form:
+
+        - mode 0 → APF off.
+        - mode 1 → APF on. The centre frequency is *not* touched here so
+          a previously-tuned APF frequency survives an off/on toggle. Set
+          it explicitly via `set_apf_freq()` if a particular pitch is
+          required.
+        - mode 2 → not supported; the hardware has no separate "sharp" mode.
+
+        Delegates to the backend-internal `set_apf` CAT primitive.
+        """
+        if mode == 0:
+            await self.set_apf(False, receiver=receiver)
+        elif mode == 1:
+            await self.set_apf(True, receiver=receiver)
+        else:
+            raise NotImplementedError(
+                f"APF mode {mode} (sharp) not supported on Yaesu — "
+                "only off (0) and on (1)"
+            )
+
+    async def get_audio_peak_filter(self, receiver: int = 0) -> int:
+        raise NotImplementedError("APF not supported on Yaesu radios")
+
+    # -- Twin Peak Filter (not supported on Yaesu) ----------------------------
+
+    async def set_twin_peak_filter(self, on: bool, receiver: int = 0) -> None:
+        raise NotImplementedError("Twin Peak not supported on Yaesu radios")
+
+    async def get_twin_peak_filter(self, receiver: int = 0) -> bool:
+        raise NotImplementedError("Twin Peak not supported on Yaesu radios")
+
+    # -- SSB TX bandwidth (not supported) -------------------------------------
+
+    async def set_ssb_tx_bandwidth(self, value: int) -> None:
+        raise NotImplementedError("SSB TX bandwidth not supported on this radio")
+
+    async def get_ssb_tx_bandwidth(self) -> int:
+        raise NotImplementedError("SSB TX bandwidth not supported on this radio")
+
+    # -- Manual notch width (not supported) -----------------------------------
+
+    async def set_manual_notch_width(self, value: int, receiver: int = 0) -> None:
+        raise NotImplementedError("Manual notch width not supported on this radio")
+
+    async def get_manual_notch_width(self, receiver: int = 0) -> int:
+        raise NotImplementedError("Manual notch width not supported on this radio")
+
+    # -- VOX delay (not supported) --------------------------------------------
+
+    async def set_vox_delay(self, level: int) -> None:
+        raise NotImplementedError("VOX delay not supported on this radio")
+
+    async def get_vox_delay(self) -> int:
+        raise NotImplementedError("VOX delay not supported on this radio")
+
+    # -- NB depth / width (not supported) -------------------------------------
+
+    async def set_nb_depth(self, level: int, receiver: int = 0) -> None:
+        raise NotImplementedError("NB depth not supported on this radio")
+
+    async def get_nb_depth(self, receiver: int = 0) -> int:
+        raise NotImplementedError("NB depth not supported on this radio")
+
+    async def set_nb_width(self, level: int, receiver: int = 0) -> None:
+        raise NotImplementedError("NB width not supported on this radio")
+
+    async def get_nb_width(self, receiver: int = 0) -> int:
+        raise NotImplementedError("NB width not supported on this radio")
+
+    # -- CW dash ratio (not supported) ----------------------------------------
+
+    async def set_dash_ratio(self, value: int) -> None:
+        raise NotImplementedError("CW dash ratio not supported on this radio")
+
+    async def get_dash_ratio(self) -> int:
+        raise NotImplementedError("CW dash ratio not supported on this radio")
+
+    # -- Main/Sub tracking (single-receiver Yaesu) ----------------------------
+
+    async def set_main_sub_tracking(self, on: bool) -> None:
+        raise NotImplementedError("Main/Sub tracking not supported on this radio")
+
+    async def get_main_sub_tracking(self) -> bool:
+        raise NotImplementedError("Main/Sub tracking not supported on this radio")
+
+    # -- MAIN/SUB receiver operations (dual-RX, ab_shared scheme) -------------
+
+    async def swap_main_sub(self) -> None:
+        """Swap the MAIN-side and SUB-side receiver state (FTX-1 ``SV;``).
+
+        Radio-level operation with no receiver parameter: OM 2508-C ``SV;``
+        SWAP VFO "Changes the MAIN-side and SUB-side" of the whole rig, so
+        a receiver index would be meaningless.  A profile without the
+        ``vfo_swap`` command raises :class:`~rigplane.exceptions.CommandError`
+        from :meth:`_get_spec` before anything is written.
+        """
+        async with self._mode_lock:
+            await self._write("vfo_swap")
+
+    async def equalize_main_sub(self) -> None:
+        """Copy the MAIN-side state onto the SUB-side (FTX-1 ``AB;``).
+
+        Radio-level M=S equalize: OM 2508-C ``AB;`` is MAIN-side to
+        SUB-side.  A profile without the ``vfo_equalize`` command raises
+        :class:`~rigplane.exceptions.CommandError` from :meth:`_get_spec`
+        before anything is written.
+        """
+        async with self._mode_lock:
+            await self._write("vfo_equalize")
+
+    # -- Memory: read-only listing (MOR-3628); writes are not supported --------
+
+    async def read_memory_entries(
+        self, group: int, channels: Sequence[int]
+    ) -> list[MemoryEntry]:
+        """Read stored channels with ``MR`` and ``MT`` without selecting them.
+
+        An unprogrammed channel answers ``?;`` and comes back empty. The
+        radio's tone frequency, DCS code and offset are not in ``MR``.
+        """
+        memory = self.profile.memory
+        if memory is None:
+            raise CommandError(f"{self.profile.model} declares no memory channels")
+        if group != memory.first_group:
+            raise ValueError(f"memory group must be {memory.first_group}, got {group}")
+        entries: list[MemoryEntry] = []
+        for channel in channels:
+            if not memory.first_channel <= channel <= memory.last_channel:
+                raise ValueError(
+                    f"memory channel must be {memory.first_channel}-"
+                    f"{memory.last_channel}, got {channel}"
+                )
+            async with memory_slot_operation(self):
+                chan = f"{channel:05d}"
+                try:
+                    mr = await self._query(
+                        "get_memory_channel", chan=chan, expect_rejection=True
+                    )
+                except CatCommandRejected:
+                    entries.append(
+                        MemoryEntry(group=group, channel=channel, empty=True)
+                    )
+                    continue
+                except (CatParseError, CatTransportError) as exc:
+                    raise CommandError(
+                        f"unreadable memory channel {channel}: {exc}"
+                    ) from exc
+                try:
+                    mt = await self._query(
+                        "get_memory_tag", chan=chan, expect_rejection=True
+                    )
+                except CatCommandRejected:
+                    mt = {"chan": chan, "tag": ""}
+                except (CatParseError, CatTransportError) as exc:
+                    raise CommandError(
+                        f"unreadable memory tag {channel}: {exc}"
+                    ) from exc
+                try:
+                    if mt["chan"] != chan:
+                        raise ValueError(
+                            f"MT answered channel {mt['chan']!r} for {channel}"
+                        )
+                    entries.append(
+                        memory_entry_from_cat(
+                            channel, mr, mt["tag"], self._mode_name(mr["mode"])
+                        )
+                    )
+                except (ValueError, CatParseError) as exc:
+                    raise CommandError(
+                        f"unreadable memory channel {channel}: {exc}"
+                    ) from exc
+        return entries
+
+    async def set_memory_mode(self, channel: int, group: int | None = None) -> None:
+        raise NotImplementedError("Memory mode not supported on this radio")
+
+    async def memory_write(self) -> None:
+        raise NotImplementedError("Memory write not supported on this radio")
+
+    async def memory_to_vfo(self, channel: int) -> None:
+        raise NotImplementedError("Memory to VFO not supported on this radio")
+
+    async def memory_clear(self, channel: int, group: int | None = None) -> None:
+        raise NotImplementedError("Memory clear not supported on this radio")
+
+    async def set_memory_contents(self, mem: "MemoryChannel") -> None:
+        raise NotImplementedError("Memory contents not supported on this radio")
+
+    async def set_bsr(self, bsr: "BandStackRegister") -> None:
+        raise NotImplementedError("Band stack register not supported on this radio")
+
+    def create_state_poller(
+        self,
+        *,
+        callback: Callable[[RadioState], None],
+        command_queue: "CommandQueue | None" = None,
+    ) -> "YaesuCatPoller":
+        """Construct a request-response state poller for this radio.
+
+        Used by the web layer to drive periodic state-change broadcasts
+        without depending on backend internals. Returns a
+        :class:`YaesuCatPoller` instance — the caller is responsible
+        for awaiting/spawning ``.start()``.
+
+        The lazy import keeps :class:`YaesuCatRadio` from depending on
+        its own poller at module-load time (the poller imports the
+        radio, so a top-level import here would be a cycle).
+
+        Args:
+            callback: Invoked with the current :class:`RadioState`
+                after every successful poll.
+            command_queue: Optional outbound command queue drained on
+                each poll cycle.
+
+        Returns:
+            A :class:`YaesuCatPoller` bound to this radio.
+        """
+        from .poller import YaesuCatPoller
+
+        return YaesuCatPoller(
+            self,
+            callback=callback,
+            command_queue=command_queue,
+        )
+
+    def create_observation_poller(
+        self,
+        *,
+        callback: Callable[[Sequence["Observation"]], None],
+        command_queue: "CommandQueue | None" = None,
+    ) -> "YaesuCatPoller":
+        """Construct a backend-neutral observation poller for this radio."""
+        from .poller import YaesuCatPoller
+
+        return YaesuCatPoller(
+            self,
+            observation_callback=callback,
+            command_queue=command_queue,
+        )
+
+    def rigctld_routing(
+        self,
+        max_power_w: float = 100.0,
+    ) -> Any:
+        """Construct a Yaesu-specific rigctld routing strategy.
+
+        Returns a :class:`~rigplane.rigctld.routing.YaesuRouting` that
+        translates rigctl ``get_level``/``set_level``/``get_func``/
+        ``set_func``/``dump_state``/``get_info`` calls into the Yaesu CAT
+        protocol semantics expected by the FTX-1 (and compatible)
+        transceivers.
+
+        The lazy import keeps :class:`YaesuCatRadio` from depending on
+        the rigctld layer at module-load time (``rigctld`` sits above
+        ``backends`` in the import-linter layered architecture, so a
+        top-level import here would invert the layering). The return
+        type is annotated as :class:`~typing.Any` for the same reason;
+        precise typing for the public surface lives on
+        :class:`~rigplane.core.radio_protocol.RigctldRoutable`.
+
+        Args:
+            max_power_w: Rated maximum TX power in watts; used to scale
+                normalised RFPOWER readings (defaults to 100 W).
+
+        Returns:
+            A :class:`~rigplane.rigctld.routing.YaesuRouting` instance
+            bound to this radio.
+        """
+        from ...rigctld.routing import YaesuRouting  # noqa: TID251
+
+        return YaesuRouting(self, max_power_w)

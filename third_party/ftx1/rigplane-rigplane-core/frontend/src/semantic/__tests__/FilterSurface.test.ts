@@ -1,0 +1,2074 @@
+/**
+ * MOR-1304 — the semantic mode/filter surface (vocabulary slice 4B).
+ *
+ * Covers BOTH fact groups the surface renders: `modeFilter` (MOR-1280 —
+ * mode, filter selection, filter width) and `filterPassband` (MOR-1284 —
+ * filter shape, IF-shift, PBT inner/outer, DATA submode). Every test names
+ * the doctrine it pins: two-level availability (MOR-977), no fabricated
+ * selection on an unobserved reading, and the F2-style independence between
+ * `filterWidth` and its own `filterWidthMin`/`filterWidthMax` bounds.
+ */
+import { readFileSync } from 'node:fs';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createRawSnippet, flushSync, mount, unmount, type ComponentProps } from 'svelte';
+import { SvelteMap } from 'svelte/reactivity';
+import { getLocale, setLocale } from '$lib/i18n';
+import FilterSurface, {
+  FILTER_PASSBAND_LEVELS, type FilterPassbandLevelField,
+} from '../FilterSurface.svelte';
+import FilterInstrumentHostFixture from './fixtures/FilterInstrumentHostFixture.svelte';
+import { topologyFixtures, withFilterPassband, withModeFilter } from '../fixtures/topologies';
+import { FILTER_SHAPES, type FilterInstrumentHandles } from '../filter-instruments';
+import type {
+  ActiveFilterConfiguration, Availability, FilterPassbandViewModel, ModeFilterViewModel,
+  RadioViewModel,
+} from '../radio-view-model';
+import type { CommandScalarFeedback } from '../../primitives/scalar/continuous-scalar.svelte';
+
+const base = (): RadioViewModel =>
+  withFilterPassband(withModeFilter(topologyFixtures['1/single']));
+
+type ModeFilterKey = keyof ModeFilterViewModel;
+type FilterPassbandKey = keyof FilterPassbandViewModel;
+
+function withModeFilterField(
+  view: RadioViewModel, field: ModeFilterKey,
+  over: { availability?: Availability; unknown?: boolean },
+): RadioViewModel {
+  const group = view.modeFilter!;
+  const current = group[field] as { reading: unknown; availability: Availability };
+  return {
+    ...view,
+    modeFilter: {
+      ...group,
+      [field]: {
+        reading: over.unknown ? { status: 'unknown' } : current.reading,
+        availability: over.availability ?? current.availability,
+      },
+    } as ModeFilterViewModel,
+  };
+}
+
+function withPassbandField(
+  view: RadioViewModel, field: FilterPassbandKey,
+  over: { availability?: Availability; unknown?: boolean },
+): RadioViewModel {
+  const group = view.filterPassband!;
+  const current = group[field] as { reading: unknown; availability: Availability };
+  return {
+    ...view,
+    filterPassband: {
+      ...group,
+      [field]: {
+        reading: over.unknown ? { status: 'unknown' } : current.reading,
+        availability: over.availability ?? current.availability,
+      },
+    } as FilterPassbandViewModel,
+  };
+}
+
+/**
+ * MOR-1494 review round. `ifShiftControlStructural` is a plain boolean
+ * SIBLING of `ifShift` on `filterPassband` (see `radio-view-model.ts`'s
+ * `FilterPassbandViewModel` doc comment) — not a `FilterPassbandField`, so
+ * `withPassbandField` above (which only knows the `{reading, availability}`
+ * shape) cannot set it. A dedicated helper, same idiom as
+ * `withModeFilterField`/`withPassbandField`.
+ */
+function withIfShiftControlStructural(view: RadioViewModel, value: boolean): RadioViewModel {
+  return {
+    ...view,
+    filterPassband: { ...view.filterPassband!, ifShiftControlStructural: value } as FilterPassbandViewModel,
+  };
+}
+
+/**
+ * MOR-1502 review round. `filterShapeControlStructural` is a plain boolean
+ * SIBLING of `filterShape` on `filterPassband` (same idiom as
+ * `withIfShiftControlStructural` above, for the same reason
+ * `withPassbandField` cannot set it).
+ */
+function withFilterShapeControlStructural(view: RadioViewModel, value: boolean): RadioViewModel {
+  return {
+    ...view,
+    filterPassband: { ...view.filterPassband!, filterShapeControlStructural: value } as FilterPassbandViewModel,
+  };
+}
+
+let target: HTMLDivElement;
+beforeEach(() => { target = document.createElement('div'); document.body.appendChild(target); });
+afterEach(() => { target.remove(); });
+
+type Handlers = {
+  onDataModeChange?: (mode: number) => void;
+  onModeChange?: (mode: string) => void;
+  onFilterChange?: (filter: number) => void;
+  onFilterWidthChange?: (width: number) => void;
+  onFilterShapeChange?: (shape: number) => void;
+  onIfShiftChange?: (value: number) => void;
+  onPbtInnerChange?: (value: number) => void;
+  onPbtOuterChange?: (value: number) => void;
+  onNarrowToggle?: () => void;
+};
+
+type PendingProps = {
+  pendingFilter?: number | null;
+  pendingDataMode?: number | null;
+  pendingNarrow?: boolean | null;
+  filterWidthFeedback?: Readonly<CommandScalarFeedback>;
+  ifShiftFeedback?: Readonly<CommandScalarFeedback>;
+  pbtInnerFeedback?: Readonly<CommandScalarFeedback>;
+  pbtOuterFeedback?: Readonly<CommandScalarFeedback>;
+  presentation?: 'grouped' | 'independent';
+};
+function render(view: RadioViewModel, handlers: Handlers = {}, extra: PendingProps = {}) {
+  const component = mount(FilterInstrumentHostFixture, { target, props: {
+    get view() { return view; },
+    renderSurface: true,
+    get presentation() { return extra.presentation; },
+    get pendingFilter() { return extra.pendingFilter; },
+    get pendingDataMode() { return extra.pendingDataMode; },
+    get pendingNarrow() { return extra.pendingNarrow; },
+    get filterWidthFeedback() { return extra.filterWidthFeedback; },
+    get ifShiftFeedback() { return extra.ifShiftFeedback; },
+    get pbtInnerFeedback() { return extra.pbtInnerFeedback; },
+    get pbtOuterFeedback() { return extra.pbtOuterFeedback; },
+    get onDataModeChange() { return handlers.onDataModeChange; },
+    get onModeChange() { return handlers.onModeChange; },
+    get onFilterChange() { return handlers.onFilterChange; },
+    get onFilterWidthChange() { return handlers.onFilterWidthChange; },
+    get onFilterShapeChange() { return handlers.onFilterShapeChange; },
+    get onIfShiftChange() { return handlers.onIfShiftChange; },
+    get onPbtInnerChange() { return handlers.onPbtInnerChange; },
+    get onPbtOuterChange() { return handlers.onPbtOuterChange; },
+    get onNarrowToggle() { return handlers.onNarrowToggle; },
+  } });
+  flushSync();
+  const q = <T extends HTMLElement>(sel: string) => target.querySelector(sel) as T | null;
+  return {
+    dispose: () => unmount(component),
+    root: () => q('[data-testid="filter-surface"]'),
+    group: (testId: string) => q<HTMLElement>(`[data-testid="${testId}"]`),
+    button: (testId: string, value: string | number) => q<HTMLButtonElement>(
+      `[data-testid="${testId}-${value}"]`,
+    ),
+    narrow: () => q<HTMLButtonElement>('[data-testid="filter-narrow"]'),
+    input: (testId: string) => q<HTMLInputElement>(`[data-testid="${testId}"] input`),
+    output: (testId: string) => q<HTMLElement>(`[data-testid="${testId}"] output`),
+  };
+}
+
+describe('hosted Mode and Filter placement', () => {
+  it('renders grouped and independent Mode/Filter once and preserves every residual owner once', () => {
+    for (const presentation of ['grouped', 'independent'] as const) {
+      withSurface(base(), (s) => {
+        expect(target.querySelectorAll('[data-testid="filter-mode"]')).toHaveLength(1);
+        expect(target.querySelectorAll('[data-testid="filter-select"]')).toHaveLength(1);
+        expect(target.querySelectorAll('[data-testid="filter-width"]')).toHaveLength(1);
+        expect(target.querySelectorAll('[data-testid="filter-shape"]')).toHaveLength(1);
+        expect(target.querySelectorAll('[data-testid="filter-data-mode"]')).toHaveLength(1);
+        for (const field of ['ifShift', 'pbtInner', 'pbtOuter']) {
+          expect(target.querySelectorAll(`[data-testid="filter-${field}"]`)).toHaveLength(1);
+        }
+        expect(target.querySelectorAll('[data-slot="mode"], [data-slot="filter"]')).toHaveLength(
+          presentation === 'independent' ? 2 : 0,
+        );
+        expect(s.root()).not.toBeNull();
+      }, {}, { presentation });
+    }
+  });
+});
+
+function withSurface(
+  view: RadioViewModel, fn: (s: ReturnType<typeof render>) => void, handlers: Handlers = {},
+  extra: PendingProps = {},
+): void {
+  const s = render(view, handlers, extra);
+  try { fn(s); } finally { s.dispose(); }
+}
+
+describe('DATA choices and evidence (MOR-2374)', () => {
+  function dataView(values = [0, 1]): RadioViewModel {
+    const view = base();
+    return { ...view, filterPassband: { ...view.filterPassband!,
+      dataMode: { availability: { structural: true, operational: true }, reading: { status: 'known', value: 0 } },
+      dataModeChoices: values.map(value => ({ value, label: value === 0 ? 'OFF' : `DATA${value}` })),
+    } };
+  }
+
+  it.each([{ values: [0, 1] }, { values: [0, 1, 2, 3] }])('renders capability labels and dispatches explicit choices for $values', ({ values }) => {
+    const onDataModeChange = vi.fn();
+    withSurface(dataView(values), s => {
+      expect(onDataModeChange).not.toHaveBeenCalled();
+      for (const value of values) {
+        const button = s.button('filter-data-mode', value)!;
+        expect(button.textContent).toBe(value === 0 ? 'OFF' : `DATA${value}`);
+        expect(button.getAttribute('aria-pressed')).toBe(String(value === 0));
+        button.click();
+      }
+      expect(onDataModeChange.mock.calls).toEqual(values.map(value => [value]));
+    }, { onDataModeChange });
+  });
+
+  it.each([{ values: [] }, { values: [0] }])('keeps $values readout-only', ({ values }) => {
+    withSurface(dataView(values), s => {
+      expect(s.group('filter-data-mode')!.classList.contains('filter-readout')).toBe(true);
+      expect(s.group('filter-data-mode')!.querySelector('.filter-level-name')!.textContent).toBe('DATA');
+      expect(s.group('filter-data-mode')!.querySelectorAll('button')).toHaveLength(0);
+      expect(s.output('filter-data-mode')!.textContent).toBe('0');
+    });
+  });
+
+  it.each(['unknown', 'stale'] as const)('disables %s DATA without a confirmed selection or forced callback', state => {
+    const onDataModeChange = vi.fn();
+    const view = withPassbandField(dataView(), 'dataMode', state === 'unknown'
+      ? { unknown: true } : { availability: { structural: true, operational: false } });
+    withSurface(view, s => {
+      for (const value of [0, 1]) {
+        const button = s.button('filter-data-mode', value)!;
+        expect(button.disabled).toBe(true);
+        expect(button.getAttribute('aria-pressed')).toBe('false');
+        button.disabled = false;
+        button.click();
+      }
+      expect(onDataModeChange).not.toHaveBeenCalled();
+    }, { onDataModeChange }, { pendingDataMode: 1 });
+  });
+
+  it('preserves current DATA outside the choices while dispatching only explicit destinations', () => {
+    const view = dataView(), onDataModeChange = vi.fn();
+    view.filterPassband!.dataMode.reading = { status: 'known', value: 2 };
+    withSurface(view, s => {
+      expect(s.output('filter-data-mode')!.textContent).toBe('2');
+      for (const value of [0, 1]) {
+        const button = s.button('filter-data-mode', value)!;
+        expect(button.disabled).toBe(false);
+        expect(button.getAttribute('aria-pressed')).toBe('false');
+        button.click();
+      }
+      expect(onDataModeChange.mock.calls).toEqual([[0], [1]]);
+    }, { onDataModeChange });
+  });
+
+  it('renders OFF and Dn when capability labels are absent', () => {
+    const baseView = dataView();
+    const view = { ...baseView, filterPassband: { ...baseView.filterPassband!, dataModeChoices: [0, 1].map(value => ({ value, label: null })) } };
+    withSurface(view, s => {
+      expect(s.button('filter-data-mode', 0)!.textContent).toBe('OFF');
+      expect(s.button('filter-data-mode', 1)!.textContent).toBe('D1');
+    });
+  });
+
+  it('rejects a removed choice even if its old DOM callback is invoked', () => {
+    const view = dataView([0, 1, 2, 3]);
+    const onDataModeChange = vi.fn();
+    withSurface(view, s => {
+      const choices = view.filterPassband!.dataModeChoices as { value: number; label: string }[];
+      choices.pop();
+      s.button('filter-data-mode', 3)!.click();
+      expect(onDataModeChange).not.toHaveBeenCalled();
+      choices.push({ value: 3, label: 'DATA3' });
+      s.button('filter-data-mode', 3)!.click();
+      expect(onDataModeChange).toHaveBeenCalledExactlyOnceWith(3);
+    }, { onDataModeChange });
+  });
+
+  it('keeps pending separate from confirmed with a Japanese accessible announcement', () => {
+    const locale = getLocale();
+    setLocale('ja-JP');
+    try {
+      withSurface(dataView([0, 1, 2, 3]), s => {
+        const group = s.group('filter-data-mode')!;
+        expect(group.getAttribute('aria-label')).toBe('DATA MODE');
+        expect(group.dataset.dataModeStatus).toBe('pending');
+        expect(s.button('filter-data-mode', 0)!.getAttribute('aria-pressed')).toBe('true');
+        expect(s.button('filter-data-mode', 2)!.getAttribute('aria-pressed')).toBe('false');
+        expect(s.button('filter-data-mode', 2)!.dataset.pending).toBe('true');
+        expect(s.button('filter-data-mode', 0)!.dataset.pending).toBe('false');
+        expect(document.getElementById(group.getAttribute('aria-describedby')!)!.textContent)
+          .toBe('保留中、まだ確認されていません');
+      }, {}, { pendingDataMode: 2 });
+    } finally { setLocale(locale); }
+  });
+});
+
+// ── 1. Whole-group gating ───────────────────────────────────────────────────
+
+describe('whole-group gating', () => {
+  it('renders nothing for a view model carrying neither group', () => {
+    withSurface(topologyFixtures['1/single'], (s) => {
+      expect(s.root()).toBeNull();
+    });
+  });
+
+  it('renders only the modeFilter controls when filterPassband is absent', () => {
+    withSurface(withModeFilter(topologyFixtures['1/single']), (s) => {
+      expect(s.root()).not.toBeNull();
+      expect(s.group('filter-mode')).not.toBeNull();
+      expect(s.group('filter-shape')).toBeNull();
+      expect(s.group('filter-data-mode')).toBeNull();
+    });
+  });
+
+  it('renders only the filterPassband controls when modeFilter is absent', () => {
+    withSurface(withFilterPassband(topologyFixtures['1/single']), (s) => {
+      expect(s.root()).not.toBeNull();
+      expect(s.group('filter-shape')).not.toBeNull();
+      expect(s.group('filter-mode')).toBeNull();
+    });
+  });
+});
+
+// ── 2. Structural gating: absent, never a disabled promise ──────────────────
+
+describe('structural availability decides whether a control EXISTS', () => {
+  const ABSENT: Availability = { structural: false, operational: false };
+
+  it('renders no mode control when currentMode is structurally absent', () => {
+    const view = withModeFilterField(base(), 'currentMode', { availability: ABSENT });
+    withSurface(view, (s) => expect(s.group('filter-mode')).toBeNull());
+  });
+
+  it('renders no filter-width control when filterWidth is structurally absent', () => {
+    const view = withModeFilterField(base(), 'filterWidth', { availability: ABSENT });
+    withSurface(view, (s) => expect(s.group('filter-width')).toBeNull());
+  });
+
+  // `filterShape` is deliberately excluded from this generic sweep (MOR-1502
+  // review round) — its ROW gates on the separate
+  // `filterShapeControlStructural` flag, not on its OWN field's
+  // `availability.structural`, so setting that to ABSENT here would no
+  // longer hide it. See the dedicated "filter-shape control gate is
+  // separate from the derived fact" block below.
+
+  it('renders no dataMode readout when dataMode is structurally absent', () => {
+    const view = withPassbandField(base(), 'dataMode', { availability: ABSENT });
+    withSurface(view, (s) => expect(s.group('filter-data-mode')).toBeNull());
+  });
+
+  // `ifShift` is deliberately excluded from this generic sweep (MOR-1494
+  // review round) — its ROW gates on the separate `ifShiftControlStructural`
+  // flag, not on its OWN field's `availability.structural`, so setting that
+  // to ABSENT here would no longer hide it. See the dedicated
+  // "IF-shift control gate is separate from the derived fact" block below.
+  it.each(FILTER_PASSBAND_LEVELS.filter(([field]) => field !== 'ifShift'))(
+    'renders no "%s" control when structurally absent',
+    (field) => {
+      const view = withPassbandField(base(), field, { availability: ABSENT });
+      withSurface(view, (s) => expect(s.group(`filter-${field}`)).toBeNull());
+    },
+  );
+});
+
+// ── 2b. IF-shift control gate is separate from the derived fact (MOR-1494) ──
+
+/**
+ * MOR-1494 review round. IC-7300 (PBT-only, no `if_shift` command) rendered
+ * the IF Shift row permanently disabled with a PBT-derived stand-in value —
+ * a dead control shown instead of hidden. The fix splits the presentation
+ * gate (`ifShiftControlStructural`, this block) from the derived-fact gate
+ * (`ifShift.availability.structural`, UNCHANGED — pinned untouched by the
+ * last test below, which is the trap a naive fix would have missed:
+ * `scope-adapter.ts`'s passband-center overlay reads `filterPassband.ifShift`
+ * directly and must keep getting the PBT-derived reading for a radio just
+ * like this one).
+ */
+describe('IF-shift control gate is separate from the derived fact (MOR-1494)', () => {
+  it('IC-7300-shaped (pbt, no if_shift): hides the ifShift row', () => {
+    const view = withIfShiftControlStructural(base(), false);
+    withSurface(view, (s) => expect(s.group('filter-ifShift')).toBeNull());
+  });
+
+  it('IC-7300-shaped (pbt, no if_shift): the underlying derived ifShift FACT stays structural and known — scope-adapter.ts still gets it', () => {
+    const view = withIfShiftControlStructural(base(), false);
+    // `ifShiftControlStructural: false` here mirrors what the adapter would
+    // compute for a pbt-only radio; `ifShift`'s OWN field is UNTOUCHED by
+    // this override and stays exactly what `base()` (a "fully observed"
+    // fixture) gives it — the row-hiding change above must never reach into
+    // this field.
+    expect(view.filterPassband!.ifShift.availability.structural).toBe(true);
+    expect(view.filterPassband!.ifShift.reading).toEqual({ status: 'known', value: 0 });
+  });
+
+  it('FTX-1-shaped (if_shift, no pbt): renders the ifShift row, enabled, bound to the real value', () => {
+    // base() defaults ifShiftControlStructural to true (see fixtures/
+    // topologies.ts) — the FTX-1-shaped case, no override needed.
+    withSurface(base(), (s) => {
+      expect(s.group('filter-ifShift')).not.toBeNull();
+      expect(s.input('filter-ifShift')!.disabled).toBe(false);
+    });
+  });
+
+  it('neither if_shift nor pbt: hides the ifShift row, no crash', () => {
+    let view = withIfShiftControlStructural(base(), false);
+    view = withPassbandField(view, 'ifShift', {
+      availability: { structural: false, operational: false },
+    });
+    withSurface(view, (s) => expect(s.group('filter-ifShift')).toBeNull());
+  });
+
+  it('still applies operational gating (disabled + reason) to a structurally-shown ifShift row', () => {
+    const view = withPassbandField(base(), 'ifShift', {
+      availability: { structural: true, operational: false },
+    });
+    withSurface(view, (s) => {
+      expect(s.group('filter-ifShift')).not.toBeNull();
+      expect(s.input('filter-ifShift')!.disabled).toBe(true);
+      expect(s.group('filter-ifShift')!.dataset.disabledReason).toBe('field-not-observed');
+    });
+  });
+});
+
+// ── 2c. filter-shape control gate is separate from the derived fact (MOR-1502) ─
+
+/**
+ * MOR-1502. The FTX-1 (no `filter_shape` command) rendered the SHARP/SOFT
+ * shape row permanently disabled — a dead control shown instead of hidden,
+ * same class of defect MOR-1494 fixed for the IF-shift row. The fix splits
+ * the presentation gate (`filterShapeControlStructural`, this block) from
+ * the derived-fact gate (`filterShape.availability.structural`, UNCHANGED —
+ * pinned untouched by the second test below, which is the trap a naive fix
+ * would have missed: `scope-adapter.ts` reads `filterPassband.filterShape`
+ * directly and must keep getting the reading for any radio whose capability
+ * set declares filters at all, filter_shape-capable or not).
+ */
+describe('filter-shape control gate is separate from the derived fact (MOR-1502)', () => {
+  it('FTX-1-shaped (filters, no filter_shape): hides the filter-shape row', () => {
+    const view = withFilterShapeControlStructural(base(), false);
+    withSurface(view, (s) => expect(s.group('filter-shape')).toBeNull());
+  });
+
+  it('FTX-1-shaped (filters, no filter_shape): the underlying derived filterShape FACT stays structural and known — scope-adapter.ts still gets it', () => {
+    const view = withFilterShapeControlStructural(base(), false);
+    // `filterShapeControlStructural: false` here mirrors what the adapter
+    // would compute for an FTX-1-shaped radio; `filterShape`'s OWN field is
+    // UNTOUCHED by this override and stays exactly what `base()` (a "fully
+    // observed" fixture) gives it — the row-hiding change above must never
+    // reach into this field.
+    expect(view.filterPassband!.filterShape.availability.structural).toBe(true);
+    expect(view.filterPassband!.filterShape.reading).toEqual({ status: 'known', value: 1 });
+  });
+
+  it('IC-7300-shaped (filter_shape): renders the filter-shape row, enabled, bound to the real value', () => {
+    // base() defaults filterShapeControlStructural to true (see fixtures/
+    // topologies.ts) — the IC-7300-shaped case, no override needed.
+    withSurface(base(), (s) => {
+      expect(s.group('filter-shape')).not.toBeNull();
+      expect(s.button('filter-shape', 1)!.disabled).toBe(false);
+    });
+  });
+
+  it('no filters at all: hides the filter-shape row, no crash', () => {
+    let view = withFilterShapeControlStructural(base(), false);
+    view = withPassbandField(view, 'filterShape', {
+      availability: { structural: false, operational: false },
+    });
+    withSurface(view, (s) => expect(s.group('filter-shape')).toBeNull());
+  });
+
+  it('still applies operational gating (disabled + reason) to a structurally-shown filter-shape row', () => {
+    const view = withPassbandField(base(), 'filterShape', {
+      availability: { structural: true, operational: false },
+    });
+    withSurface(view, (s) => {
+      expect(s.group('filter-shape')).not.toBeNull();
+      expect(s.button('filter-shape', 1)!.disabled).toBe(true);
+      expect(s.group('filter-shape')!.dataset.disabledReason).toBe('field-not-observed');
+    });
+  });
+});
+
+// ── 2d. IF-shift range and step come from the profile domain (MOR-1681) ────
+
+/**
+ * MOR-1681: the ifShift ROW's range/step come from the profile-published
+ * control domain (`filterPassband.ifShiftDomain`) when the radio declares
+ * one; the `FILTER_PASSBAND_LEVELS` row constant stays the explicit
+ * today-behaviour fallback for a radio that declares none. A native range
+ * input steps by its `step` attribute from the keyboard, so the step pin
+ * IS the keyboard-step pin.
+ */
+describe('IF-shift range and step come from the profile domain (MOR-1681)', () => {
+  const withIfShiftDomain = (
+    domain: Readonly<{ min: number; max: number; step: number; origin: number }>,
+  ): RadioViewModel => ({
+    ...base(), filterPassband: { ...base().filterPassband!, ifShiftDomain: domain },
+  });
+
+  it('drives the ifShift row from the profile domain (FTX-1: -1200..1200, step 20)', () => {
+    withSurface(withIfShiftDomain({ min: -1200, max: 1200, step: 20, origin: 0 }), (s) => {
+      const input = s.input('filter-ifShift')!;
+      expect(input.min).toBe('-1200');
+      expect(input.max).toBe('1200');
+      expect(input.step).toBe('20');
+    });
+  });
+
+  it('emits an on-lattice step from the domain-driven row', () => {
+    const onIfShiftChange = vi.fn();
+    withSurface(withIfShiftDomain({ min: -1200, max: 1200, step: 20, origin: 0 }), (s) => {
+      const input = s.input('filter-ifShift')!;
+      input.value = '20';
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+      flushSync();
+      expect(onIfShiftChange).toHaveBeenCalledExactlyOnceWith(20);
+    }, { onIfShiftChange });
+  });
+
+  it('keeps today\'s -1200..1200 step-25 row when the profile publishes no if_shift domain', () => {
+    withSurface(base(), (s) => {
+      const input = s.input('filter-ifShift')!;
+      expect(input.min).toBe('-1200');
+      expect(input.max).toBe('1200');
+      expect(input.step).toBe('25');
+    });
+  });
+});
+
+// ── 3. Operational gating: present, disabled, with a reason ─────────────────
+
+describe('operational availability decides whether a control is USABLE', () => {
+  const PRESENT_UNREADABLE: Availability = { structural: true, operational: false };
+
+  it('keeps the width slider present but disabled when unreadable', () => {
+    const view = withModeFilterField(base(), 'filterWidth', { availability: PRESENT_UNREADABLE });
+    withSurface(view, (s) => {
+      expect(s.input('filter-width')!.disabled).toBe(true);
+      expect(s.group('filter-width')!.dataset.disabledReason).toBe('field-not-observed');
+    });
+  });
+
+  // MOR-2803: while the radio declares the width field unavailable (FTX-1
+  // NARROW on: the per-mode NAR WIDTH menu owns the passband, not `SH`), the
+  // adapter publishes `operational: false` — the row must stay disabled with
+  // its reason and dispatch nothing.
+  it('keeps the width row disabled with its reason and sends nothing while the width field is unavailable', () => {
+    const onFilterWidthChange = vi.fn();
+    const view = withModeFilterField(base(), 'filterWidth', { availability: PRESENT_UNREADABLE });
+    withSurface(view, (s) => {
+      expect(s.input('filter-width')!.disabled).toBe(true);
+      expect(s.group('filter-width')!.dataset.disabledReason).toBe('field-not-observed');
+      const input = s.input('filter-width')!;
+      input.value = '3000';
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      flushSync();
+    }, { onFilterWidthChange });
+    expect(onFilterWidthChange).not.toHaveBeenCalled();
+  });
+
+  // MOR-2648: an unread value renders an unlit box — empty text, never a
+  // `?` glyph; the box itself stays reserved (see the geometry describe).
+  it('never enables the width slider on an unobserved reading', () => {
+    const view = withModeFilterField(base(), 'filterWidth', { unknown: true });
+    withSurface(view, (s) => {
+      expect(s.input('filter-width')!.disabled).toBe(true);
+      expect(s.output('filter-width')!.textContent).toBe('');
+    });
+  });
+
+  // MOR-2667: the unread fallback behind the aria-valuetext path renders
+  // empty — no '--- Hz' placeholder anywhere on the surface.
+  it('carries no placeholder glyph anywhere on an unobserved width reading', () => {
+    const view = withModeFilterField(base(), 'filterWidth', { unknown: true });
+    withSurface(view, (s) => {
+      expect(s.input('filter-width')!.getAttribute('aria-valuetext')).toBeNull();
+      expect(s.root()!.textContent).not.toContain('---');
+    });
+  });
+
+  it('renders the IF-shift value box empty on an unobserved reading, never a placeholder glyph', () => {
+    const view = withPassbandField(base(), 'ifShift', { unknown: true });
+    withSurface(view, (s) => {
+      expect(s.output('filter-ifShift')!.textContent).toBe('');
+    });
+  });
+
+  // `ifShift` stays in this sweep (unlike the structural-gating one above,
+  // MOR-1494 review round): `base()`'s `ifShiftControlStructural` is true
+  // and this override never touches it, so the row still shows; only the
+  // field's own `operational` (unaffected by the MOR-1494 split) decides
+  // whether it's disabled here.
+  it.each(FILTER_PASSBAND_LEVELS)('keeps "%s" present but disabled when unreadable', (field) => {
+    const view = withPassbandField(base(), field, { availability: PRESENT_UNREADABLE });
+    withSurface(view, (s) => {
+      expect(s.input(`filter-${field}`)!.disabled).toBe(true);
+      expect(s.group(`filter-${field}`)!.dataset.disabledReason).toBe('field-not-observed');
+    });
+  });
+
+  it('disables mode buttons and marks none pressed on an unobserved reading', () => {
+    const view = withModeFilterField(base(), 'currentMode', { unknown: true });
+    withSurface(view, (s) => {
+      for (const choice of view.modeFilter!.modeChoices) {
+        const button = s.button('filter-mode', choice)!;
+        expect(button.disabled).toBe(true);
+        expect(button.getAttribute('aria-pressed')).toBe('false');
+      }
+    });
+  });
+});
+
+// ── 4. Choice-field emission: mode, filter selection, shape ─────────────────
+
+describe('choice fields emit the caller intent only when usable', () => {
+  it('emits onModeChange with the clicked choice', () => {
+    const onModeChange = vi.fn();
+    withSurface(base(), (s) => {
+      s.button('filter-mode', 'LSB')!.click();
+      flushSync();
+      expect(onModeChange).toHaveBeenCalledExactlyOnceWith('LSB');
+    }, { onModeChange });
+  });
+
+  it('marks the current mode pressed and no other', () => {
+    withSurface(base(), (s) => {
+      expect(s.button('filter-mode', 'USB')!.getAttribute('aria-pressed')).toBe('true');
+      expect(s.button('filter-mode', 'LSB')!.getAttribute('aria-pressed')).toBe('false');
+    });
+  });
+
+  it('emits onFilterChange with the 1-based filter index', () => {
+    const onFilterChange = vi.fn();
+    withSurface(base(), (s) => {
+      s.button('filter-select', 2)!.click();
+      flushSync();
+      expect(onFilterChange).toHaveBeenCalledExactlyOnceWith(2);
+    }, { onFilterChange });
+  });
+
+  it('emits onFilterShapeChange with the clicked shape value', () => {
+    const onFilterShapeChange = vi.fn();
+    withSurface(base(), (s) => {
+      s.button('filter-shape', 1)!.click();
+      flushSync();
+      expect(onFilterShapeChange).toHaveBeenCalledExactlyOnceWith(1);
+    }, { onFilterShapeChange });
+  });
+
+  it.each(FILTER_SHAPES)('renders a "%s" button labelled "%s"', (value, label) => {
+    withSurface(base(), (s) => {
+      expect(s.button('filter-shape', value)!.textContent).toBe(label);
+    });
+  });
+
+  function forceClick(button: HTMLButtonElement): void {
+    button.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  }
+
+  it('emits nothing when the mode is clicked on an unobserved reading', () => {
+    const onModeChange = vi.fn();
+    const view = withModeFilterField(base(), 'currentMode', { unknown: true });
+    withSurface(view, (s) => {
+      forceClick(s.button('filter-mode', 'LSB')!);
+      flushSync();
+      expect(onModeChange).not.toHaveBeenCalled();
+    }, { onModeChange });
+  });
+
+  it('emits nothing when a filter is clicked on an unobserved reading', () => {
+    const onFilterChange = vi.fn();
+    const view = withModeFilterField(base(), 'currentFilter', { unknown: true });
+    withSurface(view, (s) => {
+      forceClick(s.button('filter-select', 2)!);
+      flushSync();
+      expect(onFilterChange).not.toHaveBeenCalled();
+    }, { onFilterChange });
+  });
+
+  it('emits nothing when a shape is clicked on an unobserved reading', () => {
+    const onFilterShapeChange = vi.fn();
+    const view = withPassbandField(base(), 'filterShape', { unknown: true });
+    withSurface(view, (s) => {
+      forceClick(s.button('filter-shape', 1)!);
+      flushSync();
+      expect(onFilterShapeChange).not.toHaveBeenCalled();
+    }, { onFilterShapeChange });
+  });
+});
+
+// ── 5. Level-field emission: width, IF-shift, PBT inner/outer ───────────────
+
+describe('level fields emit the raw value, unrescaled', () => {
+  it('emits onFilterWidthChange with the raw slider value', () => {
+    const onFilterWidthChange = vi.fn();
+    withSurface(base(), (s) => {
+      const input = s.input('filter-width')!;
+      input.value = '2800';
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      flushSync();
+      expect(onFilterWidthChange).toHaveBeenCalledExactlyOnceWith(2800);
+    }, { onFilterWidthChange });
+  });
+
+  // MUTATION KILLED (MF9, verify-MOR-1304 F3): `changeWidth`'s
+  // `usable(modeFilter.filterWidth)` guard dropped. No prior test exercised
+  // this — the slider's `disabled` attribute was never in question here, so
+  // an `input` event dispatched directly (never suppressed for a disabled
+  // range input the way `.click()` is for a disabled button) reaches the
+  // handler and proves the guard itself, not merely the DOM attribute.
+  it('emits nothing when the width slider is moved on an unobserved reading', () => {
+    const onFilterWidthChange = vi.fn();
+    const view = withModeFilterField(base(), 'filterWidth', { unknown: true });
+    withSurface(view, (s) => {
+      const input = s.input('filter-width')!;
+      input.value = '2800';
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      flushSync();
+      expect(onFilterWidthChange).not.toHaveBeenCalled();
+    }, { onFilterWidthChange });
+  });
+
+  const passbandHandlers: Record<FilterPassbandLevelField, keyof Handlers> = {
+    ifShift: 'onIfShiftChange', pbtInner: 'onPbtInnerChange', pbtOuter: 'onPbtOuterChange',
+  };
+
+  it.each(FILTER_PASSBAND_LEVELS)('emits (%s) via its own handler with min/max/step', (field, _label, min, max, step) => {
+    const spy = vi.fn();
+    withSurface(base(), (s) => {
+      const input = s.input(`filter-${field}`)!;
+      expect(input.min).toBe(String(min));
+      expect(input.max).toBe(String(max));
+      expect(input.step).toBe(String(step));
+      input.value = String(max);
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+      flushSync();
+      expect(spy).toHaveBeenCalledExactlyOnceWith(max);
+    }, { [passbandHandlers[field]]: spy });
+  });
+
+  // MOR-2497 W2b: the PBT rows take min/max/step from the group's measured
+  // `pbtDomain` — the same `measuredPbtDisplayDomain` derivation the v2
+  // FilterPanel reads through `toFilterProps` (#3527). The component computes
+  // nothing; without the key the row constants above stay, mirroring
+  // FilterPanel's own W2a fallback.
+  describe('PBT slider bounds from the measured domain (MOR-2497)', () => {
+    const withPbtDomain = (view: RadioViewModel, domain: { min: number; max: number; step: number; origin: number }): RadioViewModel =>
+      ({ ...view, filterPassband: { ...view.filterPassband!, pbtDomain: domain } });
+    const usb3600 = { min: -1800, max: 1800, step: 50, origin: 0 };
+
+    it('renders the domain min/max/step on both PBT sliders; ifShift keeps its own row', () => {
+      withSurface(withPbtDomain(base(), usb3600), (s) => {
+        for (const field of ['pbtInner', 'pbtOuter'] as const) {
+          const input = s.input(`filter-${field}`)!;
+          expect(input.min).toBe('-1800');
+          expect(input.max).toBe('1800');
+          expect(input.step).toBe('50');
+        }
+        expect(s.input('filter-ifShift')!.min).toBe('-1200');
+        expect(s.input('filter-ifShift')!.step).toBe('25');
+      });
+    });
+
+    it.each([
+      ['pbtInner', 'onPbtInnerChange'],
+      ['pbtOuter', 'onPbtOuterChange'],
+    ] as const)('one ArrowRight-sized step of %s moves exactly one domain step', (field, handler) => {
+      const spy = vi.fn();
+      withSurface(withPbtDomain(base(), usb3600), (s) => {
+        const input = s.input(`filter-${field}`)!;
+        expect(input.value).toBe('0');
+        const step = Number(input.step);
+        expect(step).toBe(50);
+        // jsdom applies no native arrow-key stepping; this is the same
+        // current + step change the browser makes for ArrowRight, committed
+        // by the `change` event a real keystroke follows its `input` with.
+        input.value = String(Number(input.value) + step);
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        input.dispatchEvent(new Event('change', { bubbles: true }));
+        flushSync();
+        expect(spy).toHaveBeenCalledExactlyOnceWith(50);
+      }, { [handler]: spy });
+    });
+
+    it('no domain on the group: keeps the row constants, the FilterPanel W2a fallback shape', () => {
+      withSurface(base(), (s) => {
+        const input = s.input('filter-pbtInner')!;
+        expect(input.min).toBe('-1200');
+        expect(input.max).toBe('1200');
+        expect(input.step).toBe('25');
+      });
+    });
+  });
+
+  // MUTATION KILLED: emitting a level intent from an unobserved reading.
+  it('emits nothing from an unobserved passband level', () => {
+    const onIfShiftChange = vi.fn();
+    const view = withPassbandField(base(), 'ifShift', { unknown: true });
+    withSurface(view, (s) => {
+      const input = s.input('filter-ifShift')!;
+      // MUTATION KILLED (MF1b): `numberOf(filterPassband[field], min)`'s
+      // fallback swapped for a non-min literal (e.g. 999) — an unread thumb
+      // is free to claim any position unless the fallback itself is pinned,
+      // BEFORE the dispatched input below overwrites it.
+      expect(input.value).toBe('-1200');
+      input.value = '100';
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+      flushSync();
+      expect(onIfShiftChange).not.toHaveBeenCalled();
+    }, { onIfShiftChange });
+  });
+});
+
+const widthFeedback = (
+  phase: CommandScalarFeedback['phase'] = 'idle',
+  over: Partial<CommandScalarFeedback> = {},
+): Readonly<CommandScalarFeedback> => ({
+  confirmed: 2400, target: null, requestedTarget: null, phase, busy: false,
+  availability: 'available', outcome: null, lifecycleId: null, transitionId: null,
+  sessionEpoch: 7, scope: { control: 'filter-width', receiver: 0 },
+  repeatPolicy: 'latest-target-wins', ...over,
+});
+
+describe('full Filter Width scalar feedback', () => {
+  it('previews native input on the thumb while the sibling output stays canonical', () => {
+    const request = vi.fn();
+    withSurface(base(), (surface) => {
+      const input = surface.input('filter-width')!;
+      input.value = '3000';
+      input.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText' }));
+      flushSync();
+      expect(request).toHaveBeenCalledExactlyOnceWith(3000);
+      expect(input.value).toBe('3000');
+      expect(surface.output('filter-width')!.textContent).toBe('2400');
+    }, { onFilterWidthChange: request }, { filterWidthFeedback: widthFeedback() });
+  });
+
+  it.each([
+    ['submitted', 'submitted'],
+    ['awaiting-confirmation', 'awaiting-confirmation'],
+  ] as const)('renders actual %s evidence without presenting the target as confirmed', (_name, phase) => {
+    withSurface(base(), (surface) => {
+      const input = surface.input('filter-width')!;
+      expect(input.dataset.commandPhase).toBe(phase);
+      expect(input.getAttribute('aria-busy')).toBe('true');
+      expect(input.value).toBe('2400');
+      expect(surface.output('filter-width')!.textContent).toBe('2400');
+    }, {}, { filterWidthFeedback: widthFeedback(phase, {
+      target: 3000, requestedTarget: 3000, busy: true,
+      lifecycleId: '7:width', transitionId: `7:width:${phase}`,
+    }) });
+  });
+
+  it('accepts another native input while the same authority is pending', () => {
+    const request = vi.fn();
+    withSurface(base(), (surface) => {
+      const input = surface.input('filter-width')!;
+      input.value = '3200';
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      flushSync();
+      expect(request).toHaveBeenCalledExactlyOnceWith(3200);
+      expect(input.value).toBe('3200');
+      expect(surface.output('filter-width')!.textContent).toBe('2400');
+    }, { onFilterWidthChange: request }, { filterWidthFeedback: widthFeedback('submitted', {
+      target: 3000, requestedTarget: 3000, busy: true,
+      lifecycleId: '7:width', transitionId: '7:width:submitted',
+    }) });
+  });
+
+  it('retires a matching draft when the radio confirms it', () => {
+    const current = base();
+    current.modeFilter!.filterWidth.reading = { status: 'known', value: 3000 };
+    withSurface(current, (surface) => {
+      const input = surface.input('filter-width')!;
+      expect(input.value).toBe('3000');
+      expect(input.dataset.commandPhase).toBe('confirmed');
+      expect(input.getAttribute('aria-busy')).toBe('false');
+      expect(surface.output('filter-width')!.textContent).toBe('3000');
+    }, {}, { filterWidthFeedback: widthFeedback('confirmed', {
+      confirmed: 3000, requestedTarget: 3000, outcome: { phase: 'confirmed' },
+      lifecycleId: '7:width', transitionId: '7:width:confirmed',
+    }) });
+  });
+
+  it('restores canonical display and reports a terminal error', () => {
+    withSurface(base(), (surface) => {
+      const input = surface.input('filter-width')!;
+      expect(input.value).toBe('2400');
+      expect(input.dataset.commandPhase).toBe('failed');
+      expect(input.getAttribute('aria-busy')).toBe('false');
+      expect(surface.group('filter-width')!.querySelector('[data-control-feedback-status]')?.textContent)
+        .toBe('Failed: 3000: radio refused width');
+    }, {}, { filterWidthFeedback: widthFeedback('failed', {
+      requestedTarget: 3000, outcome: { phase: 'failed', error: 'radio refused width' },
+      lifecycleId: '7:width', transitionId: '7:width:failed',
+    }) });
+  });
+
+  // MOR-2648: a screen reader must never hear a placeholder — while a
+  // value the message needs is unread, the width announcement is skipped
+  // entirely, never a `'---'` fallback.
+  it('announces nothing while a value the width message needs is unread — never a placeholder', () => {
+    withSurface(base(), (surface) => {
+      expect(surface.group('filter-width')!.querySelector('[data-control-feedback-status]')).toBeNull();
+    }, {}, { filterWidthFeedback: widthFeedback('failed', {
+      confirmed: null, requestedTarget: null,
+      outcome: { phase: 'failed', error: 'radio refused width' },
+      lifecycleId: '7:width', transitionId: '7:width:failed',
+    }) });
+  });
+
+  it('retains an issued status only while its presentation authority is unchanged', () => {
+    const state = new SvelteMap<string, Readonly<CommandScalarFeedback>>();
+    state.set('feedback', widthFeedback('failed', {
+      requestedTarget: 3000, outcome: { phase: 'failed', error: 'radio refused width' },
+      lifecycleId: '7:width', transitionId: '7:width:failed',
+    }));
+    const surface = render(base(), {}, {
+      get filterWidthFeedback() { return state.get('feedback')!; },
+    });
+    try {
+      const status = surface.group('filter-width')!.querySelector('[data-control-feedback-status]')!;
+      const frozen = status.textContent;
+
+      flushSync(() => state.set('feedback', widthFeedback('idle', { confirmed: 2500 })));
+
+      const retained = surface.group('filter-width')!.querySelector('[data-control-feedback-status]');
+      expect(retained).toBe(status);
+      expect(retained?.textContent).toBe(frozen);
+
+      flushSync(() => state.set('feedback', widthFeedback('unavailable', {
+        confirmed: null, availability: 'unavailable',
+      })));
+
+      expect(surface.group('filter-width')!.querySelector('[data-control-feedback-status]')).toBeNull();
+    } finally { void surface.dispose(); }
+  });
+
+  it.each([
+    ['provider', { providerGeneration: 2 }],
+    ['session', { sessionEpoch: 8 }],
+    ['scope', { scope: { control: 'filter-width', receiver: 1 as const } }],
+  ])('clears an issued status when %s authority is replaced without a fresh event', (_name, authority) => {
+    const state = new SvelteMap<string, Readonly<CommandScalarFeedback>>();
+    state.set('feedback', widthFeedback('failed', {
+      providerGeneration: 1, requestedTarget: 3000,
+      outcome: { phase: 'failed', error: 'radio refused width' },
+      lifecycleId: '7:width', transitionId: '7:width:failed',
+    }));
+    const surface = render(base(), {}, {
+      get filterWidthFeedback() { return state.get('feedback')!; },
+    });
+    try {
+      expect(surface.group('filter-width')!.querySelector('[data-control-feedback-status]')).not.toBeNull();
+
+      flushSync(() => state.set('feedback', widthFeedback('idle', {
+        providerGeneration: 1, ...authority,
+      })));
+
+      expect(surface.group('filter-width')!.querySelector('[data-control-feedback-status]')).toBeNull();
+    } finally { void surface.dispose(); }
+  });
+
+  it('replaces the live node for a fresh same-text event under replacement authority', () => {
+    const state = new SvelteMap<string, Readonly<CommandScalarFeedback>>();
+    const failure = {
+      requestedTarget: 3000, outcome: { phase: 'failed' as const, error: 'radio refused width' },
+      lifecycleId: 'width', transitionId: 'width:failed',
+    };
+    state.set('feedback', widthFeedback('failed', {
+      ...failure, providerGeneration: 1, sessionEpoch: 7,
+    }));
+    const surface = render(base(), {}, {
+      get filterWidthFeedback() { return state.get('feedback')!; },
+    });
+    try {
+      const first = surface.group('filter-width')!.querySelector('[data-control-feedback-status]')!;
+
+      flushSync(() => state.set('feedback', widthFeedback('failed', {
+        ...failure, providerGeneration: 2, sessionEpoch: 8,
+      })));
+
+      const statuses = surface.group('filter-width')!.querySelectorAll('[data-control-feedback-status]');
+      expect(statuses).toHaveLength(1);
+      expect(statuses[0]).not.toBe(first);
+      expect(statuses[0].textContent).toBe('Failed: 3000: radio refused width');
+      expect(statuses[0].textContent?.match(/radio refused width/g)).toHaveLength(1);
+    } finally { void surface.dispose(); }
+  });
+
+  it('makes forced input inert when feedback is unavailable', () => {
+    const request = vi.fn();
+    withSurface(base(), (surface) => {
+      const input = surface.input('filter-width')!;
+      expect(input.disabled).toBe(true);
+      input.value = '3000';
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      flushSync();
+      expect(request).not.toHaveBeenCalled();
+    }, { onFilterWidthChange: request }, { filterWidthFeedback: widthFeedback('unavailable', {
+      confirmed: null, availability: 'unavailable',
+    }) });
+  });
+
+  it('uses current receiver authority and callback after replacement', () => {
+    const first = vi.fn(), second = vi.fn();
+    const state = new SvelteMap<string, Readonly<CommandScalarFeedback> | typeof first>();
+    state.set('feedback', widthFeedback());
+    state.set('request', first);
+    const props = {
+      get filterWidthFeedback() { return state.get('feedback') as Readonly<CommandScalarFeedback>; },
+    };
+    const handlers = {
+      get onFilterWidthChange() { return state.get('request') as typeof first; },
+    };
+    const surface = render(base(), handlers, props);
+    try {
+      const input = surface.input('filter-width')!;
+      input.value = '3000';
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      flushSync();
+      expect(first).toHaveBeenCalledExactlyOnceWith(3000);
+
+      flushSync(() => {
+        state.set('feedback', widthFeedback('idle', {
+          confirmed: 2100, sessionEpoch: 8,
+          scope: { control: 'filter-width', receiver: 1 },
+        }));
+        state.set('request', second);
+      });
+      expect(input.value).toBe('2100');
+      input.value = '2800';
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      flushSync();
+      expect(first).toHaveBeenCalledTimes(1);
+      expect(second).toHaveBeenCalledExactlyOnceWith(2800);
+    } finally { void surface.dispose(); }
+  });
+
+  it('disposes the owner so detached input callbacks cannot dispatch', () => {
+    const request = vi.fn();
+    const surface = render(base(), { onFilterWidthChange: request }, {
+      filterWidthFeedback: widthFeedback(),
+    });
+    const input = surface.input('filter-width')!;
+    void surface.dispose();
+    input.value = '3000';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    expect(request).not.toHaveBeenCalled();
+  });
+});
+
+// ── 5a. Passband scalar feedback: PBT inner/outer and IF shift (MOR-1687 part 1) ─
+
+/**
+ * The same feedback-integrated scalar contract the Filter Width row above
+ * adopted, applied to the three passband rows. Values are in the DISPLAY
+ * unit (Hz on the measured lattice) for confirmed AND target/requested —
+ * never the raw BCD scale the wire carries.
+ */
+describe('passband scalar feedback (MOR-1687 part 1)', () => {
+  const passbandFeedback = (
+    control: string, over: Partial<CommandScalarFeedback> = {},
+  ): Readonly<CommandScalarFeedback> => ({
+    confirmed: 0, target: null, requestedTarget: null, phase: 'idle', busy: false,
+    availability: 'available', outcome: null, lifecycleId: null, transitionId: null,
+    sessionEpoch: 7, scope: { control, receiver: 0 }, repeatPolicy: 'latest-target-wins', ...over,
+  });
+  const PENDING: Partial<CommandScalarFeedback> = {
+    phase: 'submitted', busy: true, target: 600, requestedTarget: 600,
+    lifecycleId: '7:passband', transitionId: '7:passband:submitted',
+  };
+  const ROWS = [
+    ['pbtInner', 'onPbtInnerChange', 'pbt-inner', 'pbtInnerFeedback'],
+    ['pbtOuter', 'onPbtOuterChange', 'pbt-outer', 'pbtOuterFeedback'],
+    ['ifShift', 'onIfShiftChange', 'if-shift', 'ifShiftFeedback'],
+  ] as const;
+  /** The en-US `core.filter.passband.control.*` names — what the {control}
+   *  placeholder of the one announcement family resolves to per row. */
+  const PASSBAND_CONTROL_NAME = {
+    pbtInner: 'PBT inner', pbtOuter: 'PBT outer', ifShift: 'IF shift',
+  } as const;
+
+  it.each(ROWS)('%s: shows the pending target on the thumb and the unconfirmed number, marked unconfirmed by the command phase', (field, _handler, control, feedbackKey) => {
+    withSurface(base(), (s) => {
+      const input = s.input(`filter-${field}`)!;
+      expect(input.dataset.commandPhase).toBe('submitted');
+      expect(input.getAttribute('aria-busy')).toBe('true');
+      expect(input.value).toBe('600');
+      expect(input.disabled).toBe(false);
+      // MOR-1691: the PBT rows' visible number follows the operator's
+      // requested value (draft -> pending target) — it never claims
+      // confirmation: the row's marker for that is the input's own command
+      // phase/aria-busy above, and canonical truth still comes only from
+      // the readback. The IF-shift row's readout stays canonical (its own
+      // long-tail ticket owns that row's number).
+      expect(s.output(`filter-${field}`)!.textContent).toBe(field === 'ifShift' ? '0' : '600');
+    }, {}, { [feedbackKey]: passbandFeedback(control, PENDING) } as PendingProps);
+  });
+
+  it.each(ROWS)('%s: announces a submitted command politely with the control name and target', (field, _handler, control, feedbackKey) => {
+    withSurface(base(), (s) => {
+      const status = s.group(`filter-${field}`)!.querySelector<HTMLElement>('[data-control-feedback-status]');
+      expect(status).not.toBeNull();
+      expect(status!.getAttribute('role')).toBe('status');
+      expect(status!.getAttribute('aria-live')).toBe('polite');
+      expect(status!.textContent).toBe(`${PASSBAND_CONTROL_NAME[field]} 600 Hz requested; not yet confirmed by the radio.`);
+    }, {}, { [feedbackKey]: passbandFeedback(control, PENDING) } as PendingProps);
+  });
+
+  // MOR-2648: a screen reader must never hear a placeholder — while a
+  // value the message needs is unread, the announcement is skipped
+  // entirely, never `'--- Hz'`/`'---'`.
+  it.each(ROWS)('%s: announces nothing while a value the message needs is unread — never a placeholder', (field, _handler, control, feedbackKey) => {
+    withSurface(base(), (s) => {
+      expect(s.group(`filter-${field}`)!.querySelector('[data-control-feedback-status]')).toBeNull();
+    }, {}, {
+      [feedbackKey]: passbandFeedback(control, {
+        confirmed: null, requestedTarget: null, phase: 'failed',
+        outcome: { phase: 'failed', error: 'radio refused' },
+        lifecycleId: '7:passband', transitionId: '7:passband:failed',
+      }),
+    } as PendingProps);
+  });
+
+  it.each(ROWS)('%s: announces a submitted command with no target read as nothing, never a placeholder', (field, _handler, control, feedbackKey) => {
+    withSurface(base(), (s) => {
+      expect(s.group(`filter-${field}`)!.querySelector('[data-control-feedback-status]')).toBeNull();
+    }, {}, {
+      [feedbackKey]: passbandFeedback(control, {
+        ...PENDING, requestedTarget: null, target: null, transitionId: '7:passband:submitted-2',
+      }),
+    } as PendingProps);
+  });
+
+  it.each(ROWS)('%s: announces the confirmed outcome with the confirmed Hz', (field, _handler, control, feedbackKey) => {
+    const current = base();
+    const group = current.filterPassband!;
+    if (field === 'ifShift') {
+      group.ifShift = { reading: { status: 'known', value: 600 }, availability: { structural: true, operational: true } };
+    } else {
+      group[field] = {
+        reading: { status: 'known', value: 600 }, availability: { structural: true, operational: true },
+        display: { state: 'current', value: 600 },
+      } as typeof group.pbtInner;
+    }
+    withSurface(current, (s) => {
+      const status = s.group(`filter-${field}`)!.querySelector<HTMLElement>('[data-control-feedback-status]');
+      expect(status).not.toBeNull();
+      expect(status!.textContent).toBe(`${PASSBAND_CONTROL_NAME[field]} confirmed at 600 Hz.`);
+    }, {}, {
+      [feedbackKey]: passbandFeedback(control, {
+        confirmed: 600, requestedTarget: 600, phase: 'confirmed',
+        outcome: { phase: 'confirmed' }, lifecycleId: '7:passband', transitionId: '7:passband:confirmed',
+      }),
+    } as PendingProps);
+  });
+
+  it.each(ROWS)('%s: keeps the operator\'s requested value through the command\'s OWN lifecycle — no snap-back to the stale readback', (field, handler, control, feedbackKey) => {
+    const spy = vi.fn();
+    const viewState = new SvelteMap<string, RadioViewModel>([['view', base()]]);
+    const feedbackState = new SvelteMap<string, Readonly<CommandScalarFeedback>>([
+      ['feedback', passbandFeedback(control)],
+    ]);
+    const withPushedReadback = (value: number): RadioViewModel => {
+      const current = viewState.get('view')!;
+      const group = current.filterPassband!;
+      const original = group[field] as {
+        reading: { status: 'known'; value: number };
+        display?: { state: string; value: number };
+      };
+      const pushed = original.display === undefined
+        ? { ...original, reading: { status: 'known' as const, value } }
+        : { ...original, display: { ...original.display, value } };
+      return { ...current, filterPassband: { ...group, [field]: pushed } as FilterPassbandViewModel };
+    };
+    const component = mount(FilterInstrumentHostFixture, { target, props: {
+      get view() { return viewState.get('view')!; },
+      renderSurface: true,
+      get [feedbackKey]() { return feedbackState.get('feedback')!; },
+      get [handler]() { return spy; },
+    } as ComponentProps<typeof FilterInstrumentHostFixture> });
+    try {
+      flushSync();
+      const input = target.querySelector<HTMLInputElement>(`[data-testid="filter-${field}"] input`)!;
+      expect(input.value).toBe('0');
+      input.value = '600';
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+      flushSync();
+      expect(spy).toHaveBeenCalledExactlyOnceWith(600);
+      // The dispatched command mints a fresh lifecycle id and a stale
+      // readback push lands while it is in flight.
+      flushSync(() => {
+        feedbackState.set('feedback', passbandFeedback(control, {
+          ...PENDING, lifecycleId: 'fresh-1', transitionId: 'fresh-1:submitted',
+        }));
+        viewState.set('view', withPushedReadback(25));
+      });
+      expect(input.value).toBe('600');
+      expect(input.dataset.commandPhase).toBe('submitted');
+      // MOR-1691: the PBT number holds the operator's requested value with
+      // the thumb (draft -> pending target); the IF-shift readout keeps its
+      // own confirmed/reading text.
+      expect(target.querySelector<HTMLElement>(`[data-testid="filter-${field}"] output`)!.textContent)
+        .toBe(field === 'ifShift' ? '25' : '600');
+      // Readback confirms: the thumb and the readout end on the confirmed Hz.
+      flushSync(() => {
+        feedbackState.set('feedback', passbandFeedback(control, {
+          confirmed: 600, requestedTarget: 600, phase: 'confirmed',
+          outcome: { phase: 'confirmed' }, lifecycleId: 'fresh-1', transitionId: 'fresh-1:confirmed',
+        }));
+        viewState.set('view', withPushedReadback(600));
+      });
+      expect(input.value).toBe('600');
+      expect(input.dataset.commandPhase).toBe('confirmed');
+      expect(input.getAttribute('aria-busy')).toBe('false');
+      expect(target.querySelector<HTMLElement>(`[data-testid="filter-${field}"] output`)!.textContent).toBe('600');
+    } finally { unmount(component); }
+  });
+
+  it.each(ROWS)('%s: reports confirmed with the confirmed Hz', (field, _handler, control, feedbackKey) => {
+    const current = base();
+    const group = current.filterPassband!;
+    if (field === 'ifShift') {
+      group.ifShift = { reading: { status: 'known', value: 600 }, availability: { structural: true, operational: true } };
+    } else {
+      group[field] = {
+        reading: { status: 'known', value: 600 }, availability: { structural: true, operational: true },
+        display: { state: 'current', value: 600 },
+      } as typeof group.pbtInner;
+    }
+    withSurface(current, (s) => {
+      const input = s.input(`filter-${field}`)!;
+      expect(input.dataset.commandPhase).toBe('confirmed');
+      expect(input.getAttribute('aria-busy')).toBe('false');
+      expect(input.value).toBe('600');
+      expect(s.output(`filter-${field}`)!.textContent).toBe('600');
+    }, {}, {
+      [feedbackKey]: passbandFeedback(control, {
+        confirmed: 600, requestedTarget: 600, phase: 'confirmed',
+        outcome: { phase: 'confirmed' }, lifecycleId: '7:passband', transitionId: '7:passband:confirmed',
+      }),
+    } as PendingProps);
+  });
+
+  it.each(ROWS)('%s: reports failed and returns to the last confirmed value', (field, _handler, control, feedbackKey) => {
+    withSurface(base(), (s) => {
+      const input = s.input(`filter-${field}`)!;
+      expect(input.dataset.commandPhase).toBe('failed');
+      expect(input.getAttribute('aria-busy')).toBe('false');
+      expect(input.value).toBe('0');
+      expect(s.output(`filter-${field}`)!.textContent).toBe('0');
+    }, {}, {
+      [feedbackKey]: passbandFeedback(control, {
+        requestedTarget: 600, phase: 'failed',
+        outcome: { phase: 'failed', error: 'radio refused' },
+        lifecycleId: '7:passband', transitionId: '7:passband:failed',
+      }),
+    } as PendingProps);
+  });
+
+  it.each(ROWS)('%s: unavailable feedback keeps commanding through the view reading — never NaN (MOR-2425/R40)', (field, handler, control, feedbackKey) => {
+    const spy = vi.fn();
+    withSurface(base(), (s) => {
+      const input = s.input(`filter-${field}`)!;
+      expect(input.disabled).toBe(false);
+      expect(input.value).not.toBe('NaN');
+      expect(input.value).toBe('0');
+      expect(input.dataset.commandPhase).toBeUndefined();
+      input.value = '600';
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+      flushSync();
+      expect(spy).toHaveBeenCalledExactlyOnceWith(600);
+    }, { [handler]: spy }, {
+      [feedbackKey]: passbandFeedback(control, {
+        confirmed: null, phase: 'unavailable', availability: 'unavailable',
+      }),
+    } as PendingProps);
+  });
+});
+
+// ── 5a'. Passband dispatch is bounded: one committed request per gesture ────
+
+/**
+ * MOR-1691 acceptance: the dispatch count is bounded and deterministic for
+ * pointer, touch, and keyboard gestures — no unbounded per-pixel CAT write
+ * stream. A native range drag fires `input` at every intermediate position
+ * and exactly ONE `change` at the release (pointer, touch, and a committed
+ * keyboard step alike), so the rows hold every `input` as the gesture-local
+ * draft — thumb AND visible number follow it — and dispatch once on the
+ * `change` commit.
+ */
+describe('passband dispatch is bounded and committed on release (MOR-1691)', () => {
+  const DRAG = [50, 100, 150, 200, 250, 300];
+  const boundedHandlers: Record<FilterPassbandLevelField, keyof Handlers> = {
+    ifShift: 'onIfShiftChange', pbtInner: 'onPbtInnerChange', pbtOuter: 'onPbtOuterChange',
+  };
+
+  it.each(FILTER_PASSBAND_LEVELS)(
+    '%s: holds every intermediate input as the draft and dispatches once on change',
+    (field, _label, _min, _max, _step) => {
+      const spy = vi.fn();
+      withSurface(base(), (s) => {
+        const input = s.input(`filter-${field}`)!;
+        for (const value of DRAG) {
+          input.value = String(value);
+          input.dispatchEvent(new Event('input', { bubbles: true }));
+          flushSync();
+          expect(spy).not.toHaveBeenCalled();
+          // The thumb follows the local draft without claiming radio
+          // confirmation.
+          expect(input.value).toBe(String(value));
+        }
+        input.dispatchEvent(new Event('change', { bubbles: true }));
+        flushSync();
+        expect(spy).toHaveBeenCalledExactlyOnceWith(DRAG.at(-1));
+      }, { [boundedHandlers[field]]: spy });
+    },
+  );
+
+  it.each([['pbtInner', 'onPbtInnerChange'], ['pbtOuter', 'onPbtOuterChange']] as const)(
+    '%s: the visible number follows the local draft through the whole gesture',
+    (field, handler) => {
+      const spy = vi.fn();
+      withSurface(base(), (s) => {
+        const input = s.input(`filter-${field}`)!;
+        for (const value of DRAG) {
+          input.value = String(value);
+          input.dispatchEvent(new Event('input', { bubbles: true }));
+          flushSync();
+          expect(s.output(`filter-${field}`)!.textContent).toBe(String(value));
+        }
+        input.dispatchEvent(new Event('change', { bubbles: true }));
+        flushSync();
+        expect(spy).toHaveBeenCalledExactlyOnceWith(DRAG.at(-1));
+        expect(s.output(`filter-${field}`)!.textContent).toBe(String(DRAG.at(-1)));
+      }, { [handler]: spy });
+    },
+  );
+
+  it.each([['pbtInner', 'onPbtInnerChange'], ['pbtOuter', 'onPbtOuterChange']] as const)(
+    '%s: one committed keyboard step dispatches exactly one command',
+    (field, handler) => {
+      const spy = vi.fn();
+      withSurface(base(), (s) => {
+        const input = s.input(`filter-${field}`)!;
+        // A real ArrowRight fires input then change, once.
+        input.value = String(Number(input.value) + Number(input.step));
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        flushSync();
+        expect(spy).not.toHaveBeenCalled();
+        input.dispatchEvent(new Event('change', { bubbles: true }));
+        flushSync();
+        expect(spy).toHaveBeenCalledExactlyOnceWith(25);
+      }, { [handler]: spy });
+    },
+  );
+
+  it.each([['pbtInner', 'onPbtInnerChange'], ['pbtOuter', 'onPbtOuterChange']] as const)(
+    '%s: a second gesture after a committed one dispatches its own single command',
+    (field, handler) => {
+      const spy = vi.fn();
+      withSurface(base(), (s) => {
+        const input = s.input(`filter-${field}`)!;
+        for (const value of [100, 200]) {
+          input.value = String(value);
+          input.dispatchEvent(new Event('input', { bubbles: true }));
+        }
+        input.dispatchEvent(new Event('change', { bubbles: true }));
+        flushSync();
+        for (const value of [300, 400]) {
+          input.value = String(value);
+          input.dispatchEvent(new Event('input', { bubbles: true }));
+        }
+        input.dispatchEvent(new Event('change', { bubbles: true }));
+        flushSync();
+        expect(spy.mock.calls).toEqual([[200], [400]]);
+      }, { [handler]: spy });
+    },
+  );
+
+  it.each([['pbtInner', 'onPbtInnerChange'], ['pbtOuter', 'onPbtOuterChange']] as const)(
+    '%s: the number returns to the confirmed value when the readback moves underneath an uncommitted draft',
+    (field, handler) => {
+      const spy = vi.fn();
+      const viewState = new SvelteMap<string, RadioViewModel>([['view', base()]]);
+      const component = mount(FilterInstrumentHostFixture, { target, props: {
+        get view() { return viewState.get('view')!; },
+        renderSurface: true,
+        get [handler]() { return spy; },
+      } as ComponentProps<typeof FilterInstrumentHostFixture> });
+      try {
+        flushSync();
+        const input = target.querySelector<HTMLInputElement>(`[data-testid="filter-${field}"] input`)!;
+        input.value = '600';
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        flushSync();
+        expect(target.querySelector(`[data-testid="filter-${field}"] output`)!.textContent).toBe('600');
+        // The observation moves out from under the draft (reading evidence
+        // retires it): the number follows the confirmed truth again.
+        const current = viewState.get('view')!;
+        const passband = current.filterPassband!;
+        viewState.set('view', { ...current, filterPassband: { ...passband, [field]: {
+          reading: { status: 'known', value: 175 },
+          availability: { structural: true, operational: true },
+          display: { state: 'current', value: 175 },
+        } as typeof passband.pbtInner } });
+        flushSync();
+        expect(spy).not.toHaveBeenCalled();
+        expect(target.querySelector(`[data-testid="filter-${field}"] output`)!.textContent).toBe('175');
+      } finally { unmount(component); }
+    },
+  );
+});
+
+// ── 5b. Unknown PBT is indeterminate, never an endpoint-shaped range ───────
+
+describe('unknown PBT has no fabricated numeric semantics (MOR-1705)', () => {
+  const PBT_FIELDS = [
+    ['pbtInner', 'PBT inner', 'onPbtInnerChange'],
+    ['pbtOuter', 'PBT outer', 'onPbtOuterChange'],
+  ] as const;
+
+  it.each(PBT_FIELDS)('renders unknown %s as an accessible non-live slot with no command target', (field, label, handler) => {
+    const spy = vi.fn();
+    const view = withPassbandField(base(), field, { unknown: true });
+    withSurface(view, (s) => {
+      const group = s.group(`filter-${field}`)!;
+      expect(group.getAttribute('role')).toBe('group');
+      expect(group.getAttribute('aria-label')).toBe(label);
+      // MOR-2648: an unmeasured PBT renders nothing in its reserved slot —
+      // never a localized "unknown" word; the `[data-pbt-slot]` box (pinned
+      // structurally in the geometry describe) keeps the row's geometry.
+      expect(group.querySelector('[data-pbt-slot]')?.textContent).toBe('');
+      expect(group.textContent).not.toContain('unknown');
+      expect(group.textContent).toContain(label);
+      expect(group.querySelector('[data-pbt-slot]')).not.toBeNull();
+      expect(group.querySelector('[aria-live]:not([aria-live="off"]), [role="status"]')).toBeNull();
+      expect(group.querySelector('output')?.getAttribute('aria-live')).toBe('off');
+      expect(group.querySelector('input')).toBeNull();
+      expect(group.querySelector('[aria-valuenow]')).toBeNull();
+      expect(s.input(`filter-${field}`)).toBeNull();
+      expect(spy).not.toHaveBeenCalled();
+    }, { [handler]: spy });
+  });
+
+  it.each(PBT_FIELDS)('renders known and retained %s as ranges with their own availability', (field, _label, handler) => {
+    const onChange = vi.fn();
+    withSurface(base(), (s) => {
+      const input = s.input(`filter-${field}`)!;
+      expect(input.disabled).toBe(false);
+      expect(s.group(`filter-${field}`)!.dataset.presentation).toBe('confirmed');
+      input.value = '100';
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+      flushSync();
+      expect(onChange).toHaveBeenCalledExactlyOnceWith(100);
+    }, { [handler]: onChange });
+    const retained = withPassbandField(base(), field, {
+      availability: { structural: true, operational: false },
+    });
+    withSurface(retained, (s) => {
+      const input = s.input(`filter-${field}`)!;
+      expect(input.disabled).toBe(true);
+      expect(s.group(`filter-${field}`)!.dataset.disabledReason).toBe('field-not-observed');
+      expect(s.group(`filter-${field}`)!.dataset.presentation).toBe('retained');
+      // MOR-2648: a retained (held) reading is still a reading — its known
+      // value renders exactly as a confirmed one, never a placeholder.
+      expect(s.output(`filter-${field}`)!.textContent).toBe('0');
+    });
+  });
+});
+
+// ── 6. filterWidth bounds read their OWN field, independently (F2-style) ────
+
+describe('filterWidth and its bounds carry independent availability', () => {
+  // MUTATION KILLED: gating the width slider on filterWidthMin/Max's
+  // availability instead of filterWidth's own — a shared "modeObserved" stand-
+  // in for the whole group, exactly the fabrication the MOR-1280 F2 fix bans.
+  it('keeps the width slider enabled when only the BOUNDS are unobserved', () => {
+    let view = withModeFilterField(base(), 'filterWidthMin', {
+      availability: { structural: true, operational: false },
+    });
+    view = withModeFilterField(view, 'filterWidthMax', {
+      availability: { structural: true, operational: false },
+    });
+    withSurface(view, (s) => {
+      expect(s.input('filter-width')!.disabled).toBe(false);
+    });
+  });
+
+  it('disables the width slider when filterWidth itself is unobserved, bounds untouched', () => {
+    const view = withModeFilterField(base(), 'filterWidth', { unknown: true });
+    withSurface(view, (s) => {
+      expect(s.input('filter-width')!.disabled).toBe(true);
+      // Bounds are still their own known values — used for min/max regardless.
+      expect(s.input('filter-width')!.min).toBe('50');
+      expect(s.input('filter-width')!.max).toBe('3600');
+      // MUTATION KILLED (MF1): `numberOf(modeFilter.filterWidth, 0)`'s
+      // fallback swapped for a non-zero literal — an unread thumb is free to
+      // claim any position unless the fallback itself is pinned. The DOM
+      // clamps the fallback `0` to the slider's own `min` (`50`, this view's
+      // known `filterWidthMin`), which is itself the honest rendered
+      // position and still distinguishes the fallback from a fabricated
+      // literal like `777` (which sits inside [50, 3600] and would NOT clamp).
+      expect(s.input('filter-width')!.value).toBe('50');
+    });
+  });
+
+  it('falls back to a sane default range when the bounds are unobserved', () => {
+    let view = withModeFilterField(base(), 'filterWidthMin', { unknown: true });
+    view = withModeFilterField(view, 'filterWidthMax', { unknown: true });
+    withSurface(view, (s) => {
+      expect(s.input('filter-width')!.min).toBe('50');
+      expect(s.input('filter-width')!.max).toBe('9999');
+    });
+  });
+});
+
+// ── 6b. a fixed-width mode gets no width slider ─────────────────────────────
+
+describe('a fixed-width configuration hides the width slider', () => {
+  const configured = (fixed: boolean): RadioViewModel => {
+    const view = base();
+    const activeFilterConfiguration: ActiveFilterConfiguration = {
+      slots: [15000, 10000, 7000].map((factoryWidthHz, i) =>
+        ({ filter: i + 1, label: `FIL${i + 1}`, factoryWidthHz })),
+      fixed, minHz: null, maxHz: null, stepHz: null, segments: [], table: [],
+    };
+    return { ...view, modeFilter: { ...view.modeFilter!, activeFilterConfiguration } };
+  };
+
+  it('renders no width range input and keeps the width readout', () => {
+    withSurface(configured(true), (s) => {
+      expect(s.group('filter-width')).not.toBeNull();
+      expect(s.input('filter-width')).toBeNull();
+      expect(s.output('filter-width')!.textContent).toBe('2400');
+      expect(s.group('filter-width')!.querySelector('.filter-level-name')!.textContent).toBe('Width');
+    });
+  });
+
+  it('leaves every other filter control untouched', () => {
+    withSurface(configured(true), (s) => {
+      for (const testId of ['filter-mode', 'filter-select', 'filter-shape', 'filter-data-mode']) {
+        expect(s.group(testId)).not.toBeNull();
+      }
+      for (const field of ['ifShift', 'pbtInner', 'pbtOuter']) {
+        expect(s.group(`filter-${field}`)).not.toBeNull();
+        expect(s.input(`filter-${field}`)).not.toBeNull();
+      }
+      expect(s.group('filter-pbt-reset')).not.toBeNull();
+    });
+  });
+
+  it('renders the width range input for a non-fixed configuration', () => {
+    withSurface(configured(false), (s) => {
+      const input = s.input('filter-width')!;
+      expect(input.type).toBe('range');
+      expect(input.min).toBe('50');
+      expect(input.max).toBe('3600');
+      expect(input.disabled).toBe(false);
+      expect(s.output('filter-width')!.textContent).toBe('2400');
+    });
+  });
+});
+
+// ── 7. filterShape unknown-but-structural is accepted, honest (carry-fwd 4) ─
+
+describe('filterShape renders honest unknown rather than a fabricated default', () => {
+  it('marks neither SHARP nor SOFT pressed while unobserved', () => {
+    const view = withPassbandField(base(), 'filterShape', { unknown: true });
+    withSurface(view, (s) => {
+      for (const [value] of FILTER_SHAPES) {
+        expect(s.button('filter-shape', value)!.getAttribute('aria-pressed')).toBe('false');
+        expect(s.button('filter-shape', value)!.disabled).toBe(true);
+      }
+    });
+  });
+});
+
+// ── 8. DATA readout ────────────────────────────────────────────────────────
+
+describe('dataMode renders as a readout', () => {
+  it('shows the known value', () => {
+    withSurface(base(), (s) => {
+      expect(s.output('filter-data-mode')!.textContent).toBe('0');
+    });
+  });
+
+  it('renders the box empty when unobserved, never a fabricated default or a placeholder glyph', () => {
+    const view = withPassbandField(base(), 'dataMode', { unknown: true });
+    withSurface(view, (s) => {
+      expect(s.output('filter-data-mode')!.textContent).toBe('');
+    });
+  });
+
+  it('carries no button or input when no DATA choices are available', () => {
+    const view = base();
+    withSurface({ ...view, filterPassband: { ...view.filterPassband!, dataModeChoices: [] } }, (s) => {
+      const readout = s.group('filter-data-mode')!;
+      expect(readout.querySelector('button')).toBeNull();
+      expect(readout.querySelector('input')).toBeNull();
+    });
+  });
+});
+
+// ── 8b. Pending-target affordance (MOR-1441 leg 2) ──────────────────────────
+
+describe('pending-target affordance (MOR-1441 leg 2)', () => {
+  // base(): currentFilter known(1) — 'FIL1'.
+  it('marks only the pending choice, leaves the CONFIRMED choice aria-pressed, and marks the group', () => {
+    withSurface(base(), (s) => {
+      const group = s.group('filter-select')!;
+      expect(group.dataset.filterStatus).toBe('pending');
+      expect(s.button('filter-select', 1)!.getAttribute('aria-pressed')).toBe('true');
+      expect(s.button('filter-select', 1)!.dataset.pending).toBe('false');
+      expect(s.button('filter-select', 3)!.getAttribute('aria-pressed')).toBe('false');
+      expect(s.button('filter-select', 3)!.dataset.pending).toBe('true');
+    }, {}, { pendingFilter: 3 });
+  });
+
+  it('renders confirmed status and no pending marker when nothing is pending', () => {
+    withSurface(base(), (s) => {
+      const group = s.group('filter-select')!;
+      expect(group.dataset.filterStatus).toBe('confirmed');
+      for (const value of [1, 2, 3]) expect(s.button('filter-select', value)!.dataset.pending).toBe('false');
+    });
+  });
+
+  it('renders a screen-reader announcement only while pending', () => {
+    withSurface(base(), (s) => {
+      expect(s.group('filter-select')!.querySelector('.sr-only')).not.toBeNull();
+    }, {}, { pendingFilter: 3 });
+    withSurface(base(), (s) => {
+      expect(s.group('filter-select')!.querySelector('.sr-only')).toBeNull();
+    });
+  });
+
+  // THE seam test (MOR-1441 leg-1 lesson applied to a discrete control): a
+  // click while a DIFFERENT choice is pending must still dispatch the
+  // CLICKED value verbatim — never something read off the pending display.
+  // Unlike the frequency digits' arithmetic base, a choice button's value is
+  // always the literal clicked value, so this pins that clicking anywhere
+  // OTHER than the pending choice is unaffected by it, and clicking the
+  // pending choice itself dispatches THAT explicit value too (never
+  // suppressed, never silently reinterpreted).
+  it('SEAM: clicking a choice while a DIFFERENT value is pending dispatches the CLICKED value, unaffected by pending', () => {
+    const onFilterChange = vi.fn();
+    withSurface(base(), (s) => {
+      s.button('filter-select', 2)!.click();
+      flushSync();
+      expect(onFilterChange).toHaveBeenCalledExactlyOnceWith(2);
+    }, { onFilterChange }, { pendingFilter: 3 });
+  });
+
+  it('SEAM: clicking the PENDING choice itself still dispatches it explicitly, never suppressed', () => {
+    const onFilterChange = vi.fn();
+    withSurface(base(), (s) => {
+      s.button('filter-select', 3)!.click();
+      flushSync();
+      expect(onFilterChange).toHaveBeenCalledExactlyOnceWith(3);
+    }, { onFilterChange }, { pendingFilter: 3 });
+  });
+
+  it('keeps an observed out-of-list filter unselected without changing clicked intent', () => {
+    const onFilterChange = vi.fn();
+    const view = base();
+    view.modeFilter!.currentFilter = {
+      availability: { structural: true, operational: true }, reading: { status: 'known', value: 99 },
+    };
+    withSurface(view, (s) => {
+      for (const value of [1, 2, 3]) expect(s.button('filter-select', value)!.getAttribute('aria-pressed')).toBe('false');
+      s.button('filter-select', 2)!.click();
+      flushSync();
+      expect(onFilterChange).toHaveBeenCalledExactlyOnceWith(2);
+    }, { onFilterChange });
+  });
+});
+
+// ── 9. No re-derivation — facts only (carry-forwards 1 and 5) ───────────────
+
+describe('the surface never re-derives what the adapter already computed', () => {
+  /** Strip comments first — the file's own header PROSE necessarily names
+   *  the functions it must not import, while explaining why. Same stripper
+   *  `TxAuxSurface.test.ts` uses for its analogous source-text pin. */
+  const withoutComments = (text: string): string => text
+    .replace(/<!--[\s\S]*?-->/g, '')
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/^\s*\/\/.*$/gm, '');
+  const source = withoutComments(readFileSync('src/semantic/FilterSurface.svelte', 'utf8'));
+
+  it('imports neither resolveFilterModeConfig nor a PBT/IF-shift formula', () => {
+    expect(source).not.toMatch(/resolveFilterModeConfig/);
+    expect(source).not.toMatch(/pbtRawToHz/);
+    expect(source).not.toMatch(/deriveIfShift/);
+  });
+
+  it('holds no runtime, transport, audio, or store import', () => {
+    expect(source).not.toMatch(/\$lib\/transport/);
+    expect(source).not.toMatch(/audio-manager/);
+    expect(source).not.toMatch(/\$lib\/runtime/);
+  });
+});
+
+
+describe('explicit PBT display (MOR-1692)', () => {
+  // MOR-2425/R40+R41 overturns MOR-1692's guarded input and sr-only sentence.
+  // The fixture is what the adapter now projects for a held field.
+  it.each(['pbtInner', 'pbtOuter'] as const)('keeps a stale %s enabled, dispatching and unmarked', (field) => {
+    const current = base(), onChange = vi.fn();
+    current.filterPassband![field] = { reading: { status: 'known', value: 425 }, availability: { structural: true, operational: true }, display: { state: 'stale', value: 425 } };
+    withSurface(current, (s) => {
+      const group = s.group(`filter-${field}`)!, input = s.input(`filter-${field}`)!;
+      expect(input).not.toBeNull(); expect(input.disabled).toBe(false); expect(input.value).toBe('425');
+      expect(Array.from(input.labels ?? []).map((label) => label.textContent)).toContain(field === 'pbtInner' ? 'PBT inner' : 'PBT outer');
+      expect(s.output(`filter-${field}`)?.textContent).toBe('425');
+      expect(s.output(`filter-${field}`)?.getAttribute('aria-live')).toBe('off');
+      expect(input.getAttribute('aria-describedby')).toBeNull();
+      expect(group.querySelector('[data-stale-cue]')).toBeNull();
+      expect(group.textContent).not.toContain('†');
+      input.value = '900'; input.dispatchEvent(new Event('input', { bubbles: true })); input.dispatchEvent(new Event('change', { bubbles: true })); flushSync();
+      expect(onChange).toHaveBeenCalledWith(900);
+    }, { [field === 'pbtInner' ? 'onPbtInnerChange' : 'onPbtOuterChange']: onChange });
+  });
+
+  it('does not confuse current display with a separate operational gate', () => {
+    const current = base();
+    current.filterPassband!.pbtInner = { reading: { status: 'known', value: 0 }, availability: { structural: true, operational: false }, display: { state: 'current', value: 0 } };
+    withSurface(current, (s) => {
+      expect(s.group('filter-pbtInner')!.dataset.presentation).toBe('confirmed');
+      expect(s.input('filter-pbtInner')!.disabled).toBe(true);
+      expect(s.output('filter-pbtInner')!.textContent).toBe('0');
+      expect(s.group('filter-pbtInner')!.querySelector('[data-stale-cue]')).toBeNull();
+    });
+  });
+
+  it('explicit unknown masks a legacy numeric reading and admits no synthetic event', () => {
+    const current = base(), onChange = vi.fn();
+    current.filterPassband!.pbtInner = { ...current.filterPassband!.pbtInner, display: { state: 'unknown', reason: 'invalid-evidence' } };
+    withSurface(current, (s) => {
+      const group = s.group('filter-pbtInner')!;
+      expect(s.input('filter-pbtInner')).toBeNull(); expect(group.querySelector('[aria-valuenow]')).toBeNull();
+      // MOR-2648: an unmeasured PBT renders an unlit box — empty text,
+      // never the `—` dash. The box itself stays reserved (geometry describe).
+      expect(s.output('filter-pbtInner')!.textContent).toBe('');
+      group.dispatchEvent(new Event('input', { bubbles: true })); flushSync(); expect(onChange).not.toHaveBeenCalled();
+    }, { onPbtInnerChange: onChange });
+  });
+});
+
+/**
+ * MOR-2425 restore — PBT reset; MOR-2535 correction round 1 — the button and
+ * the PBT rows' double-click gesture share ONE dispatch site: the
+ * `onPbtReset` prop. Its handler (`makeFilterHandlers().onPbtReset`) gates
+ * the combined operation, converts 0 Hz to the lattice centre raw, and
+ * dispatches `set_pbt_inner` + `set_pbt_outer` in that order — pinned end to
+ * end against the REAL factory and a spied `sendCommand` in
+ * `panel-commands.intent.isolated.test.ts` (`resets both edges to the
+ * lattice centre`: `['set_pbt_inner', { value: 128, receiver: 0 }]`,
+ * `['set_pbt_outer', { value: 128, receiver: 0 }]`) and, from a mounted
+ * surface via a real button click, in
+ * `FilterSurface.dblclick-reset.isolated.test.ts`.
+ *
+ * This block proves the surface's OWN half: the button renders only when
+ * BOTH PBT fields are structural, and a real DOM click on it calls the prop
+ * exactly once — never the per-row change callbacks. Mounted directly (no
+ * `modeFilter`, so `handles.mode()/filter()` are never invoked) rather than
+ * through `FilterInstrumentHostFixture`, whose fixed prop list does not
+ * forward `onPbtReset`.
+ */
+const pbtStubHandles: FilterInstrumentHandles = {
+  mode: createRawSnippet(() => ({ render: () => '<span></span>' })),
+  filter: createRawSnippet(() => ({ render: () => '<span></span>' })),
+  shape: createRawSnippet(() => ({ render: () => '<span></span>' })),
+  dataMode: createRawSnippet(() => ({ render: () => '<span></span>' })),
+};
+function renderPbtOnly(
+  view: RadioViewModel,
+  handlers: {
+    onPbtReset?: () => void;
+    onPbtInnerChange?: (value: number) => void;
+    onPbtOuterChange?: (value: number) => void;
+  } = {},
+) {
+  const component = mount(FilterSurface, {
+    target, props: { view, handles: pbtStubHandles, ...handlers },
+  });
+  flushSync();
+  return {
+    dispose: () => unmount(component),
+    button: () => target.querySelector<HTMLButtonElement>('[data-testid="filter-pbt-reset"]'),
+  };
+}
+
+describe('PBT reset (MOR-2425 restore)', () => {
+  it('renders only when BOTH pbtInner and pbtOuter are structural', () => {
+    const r = renderPbtOnly(withFilterPassband(topologyFixtures['1/single']));
+    expect(r.button()).not.toBeNull();
+    r.dispose();
+  });
+
+  it('is absent when pbtInner is not structural (e.g. no PBT capability)', () => {
+    const view = withPassbandField(
+      withFilterPassband(topologyFixtures['1/single']), 'pbtInner',
+      { availability: { structural: false, operational: false } },
+    );
+    const r = renderPbtOnly(view);
+    expect(r.button()).toBeNull();
+    r.dispose();
+  });
+
+  it('is absent when pbtOuter is not structural, even if pbtInner is', () => {
+    const view = withPassbandField(
+      withFilterPassband(topologyFixtures['1/single']), 'pbtOuter',
+      { availability: { structural: false, operational: false } },
+    );
+    const r = renderPbtOnly(view);
+    expect(r.button()).toBeNull();
+    r.dispose();
+  });
+
+  it('click calls the onPbtReset prop exactly once — never the per-row change callbacks (MOR-2535)', () => {
+    const onPbtReset = vi.fn();
+    const onPbtInnerChange = vi.fn();
+    const onPbtOuterChange = vi.fn();
+    const r = renderPbtOnly(
+      withFilterPassband(topologyFixtures['1/single']),
+      { onPbtReset, onPbtInnerChange, onPbtOuterChange },
+    );
+    r.button()!.click();
+    flushSync();
+    expect(onPbtReset).toHaveBeenCalledTimes(1);
+    expect(onPbtReset).toHaveBeenCalledWith();
+    expect(onPbtInnerChange).not.toHaveBeenCalled();
+    expect(onPbtOuterChange).not.toHaveBeenCalled();
+    r.dispose();
+  });
+});
+
+// ── NARROW toggle (MOR-2640) ────────────────────────────────────────────
+//
+// The filter family's NARROW key for the ACTIVE receiver: drawn only when
+// the connected radio declares the `narrow` capability, an unlit button
+// while the reading is unknown (never a fabricated "off"), confirmed
+// truth as the pressed state, the pending target display-only until the
+// readback confirms. Same toggle doctrine as `DspInstrumentHost`'s NR/NB
+// keys (`aria-pressed={behavior.confirmed}`, MOR-2527).
+function renderNarrowOnly(
+  view: RadioViewModel,
+  handlers: {
+    onNarrowToggle?: () => void;
+  } = {},
+  extra: PendingProps = {},
+) {
+  const component = mount(FilterSurface, {
+    target,
+    props: {
+      view,
+      handles: pbtStubHandles,
+      ...handlers,
+      ...(extra.pendingNarrow !== undefined ? { pendingNarrow: extra.pendingNarrow } : {}),
+    },
+  });
+  flushSync();
+  return {
+    dispose: () => unmount(component),
+    button: () => target.querySelector<HTMLButtonElement>('[data-testid="filter-narrow"]'),
+  };
+}
+
+function withNarrowField(
+  view: RadioViewModel,
+  over: { availability?: Availability; unknown?: boolean; value?: boolean },
+): RadioViewModel {
+  const group = view.filterPassband!;
+  const current = group.narrow as { reading: unknown; availability: Availability };
+  return {
+    ...view,
+    filterPassband: {
+      ...group,
+      narrow: {
+        reading: over.unknown ? { status: 'unknown' }
+          : over.value !== undefined ? { status: 'known', value: over.value }
+          : current.reading,
+        availability: over.availability ?? current.availability,
+      },
+    } as FilterPassbandViewModel,
+  };
+}
+
+describe('NARROW toggle (MOR-2640)', () => {
+  it('is absent when narrow is structurally absent (no narrow capability)', () => {
+    const view = withNarrowField(base(), {
+      availability: { structural: false, operational: false },
+    });
+    const r = renderNarrowOnly(view);
+    expect(r.button()).toBeNull();
+    r.dispose();
+  });
+
+  it('renders the confirmed reading, not the pending target, as the pressed state', () => {
+    // Confirmed off, requested on: until the readback confirms, the key
+    // stays unlit — reading pending as "on" would be the fabrication
+    // MOR-1441 leg 2 forbids.
+    const view = withNarrowField(base(), { value: false });
+    const r = renderNarrowOnly(view, {}, { pendingNarrow: true });
+    const button = r.button()!;
+    expect(button.getAttribute('aria-pressed')).toBe('false');
+    expect(button.dataset.pendingStatus).toBe('pending');
+    r.dispose();
+  });
+
+  it('an unread reading is an unlit button: no aria-pressed, no placeholder text', () => {
+    const view = withNarrowField(base(), { unknown: true });
+    const r = renderNarrowOnly(view);
+    const button = r.button()!;
+    expect(button).not.toBeNull();
+    expect(button.hasAttribute('aria-pressed')).toBe(false);
+    expect(button.textContent).toBe('NARROW');
+    r.dispose();
+  });
+
+  it('click calls onNarrowToggle exactly once', () => {
+    const onNarrowToggle = vi.fn();
+    const r = renderNarrowOnly(withNarrowField(base(), { value: true }), { onNarrowToggle });
+    r.button()!.click();
+    flushSync();
+    expect(onNarrowToggle).toHaveBeenCalledTimes(1);
+    expect(onNarrowToggle).toHaveBeenCalledWith();
+    r.dispose();
+  });
+
+  it('a disabled (unusable) key refuses the click at the handler gate', () => {
+    const onNarrowToggle = vi.fn();
+    const view = withNarrowField(base(), {
+      availability: { structural: true, operational: false },
+    });
+    const r = renderNarrowOnly(view, { onNarrowToggle });
+    expect(r.button()!.disabled).toBe(true);
+    r.dispose();
+    expect(onNarrowToggle).not.toHaveBeenCalled();
+  });
+
+  // MOR-2704 G1: the KNOWN-reading, not-operational half of the gate, now
+  // pinned against the imported `usable` (a mutation that drops its
+  // `operational` check turns the key enabled and this dies).
+  it('a read but not-operational key stays disabled, reason intact, refusing a bypassed click', () => {
+    const onNarrowToggle = vi.fn();
+    const view = withNarrowField(base(), {
+      value: true,
+      availability: { structural: true, operational: false },
+    });
+    const r = renderNarrowOnly(view, { onNarrowToggle });
+    expect(r.button()!.disabled).toBe(true);
+    expect(r.button()!.dataset.disabledReason).toBe('field-not-observed');
+    r.button()!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    flushSync();
+    expect(onNarrowToggle).not.toHaveBeenCalled();
+    r.dispose();
+  });
+
+  it('reaches the surface through the host fixture wiring: click dispatches, pending marks', () => {
+    // The same prop path `SemanticRadioSurfaces` uses — the host fixture
+    // forwards `onNarrowToggle`/`pendingNarrow` unchanged, so a dropped or
+    // misnamed prop between wiring and surface fails here.
+    const onNarrowToggle = vi.fn();
+    withSurface(withNarrowField(base(), { value: false }), (s) => {
+      const button = s.narrow()!;
+      expect(button.getAttribute('aria-pressed')).toBe('false');
+      expect(button.dataset.pendingStatus).toBe('pending');
+      button.click();
+      flushSync();
+      expect(onNarrowToggle).toHaveBeenCalledTimes(1);
+      expect(onNarrowToggle).toHaveBeenCalledWith();
+    }, { onNarrowToggle }, { pendingNarrow: true });
+  });
+});
+
+// ── 11. Reserved value boxes (MOR-2648) ─────────────────────────────────────
+//
+// jsdom does no layout, so the reservation is pinned structurally: the
+// reserving rule itself, checked against the widest text the readouts render
+// today — the same source-text idiom the "no re-derivation" describe above
+// uses. The RfFrontEnd readout treatment (MOR-2527): an unlit `<output>`
+// keeps its reserved box so the first reading cannot move its neighbours.
+describe('unread readouts keep their reserved boxes (MOR-2648)', () => {
+  const withoutComments = (text: string): string => text
+    .replace(/<!--[\s\S]*?-->/g, '')
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/^\s*\/\/.*$/gm, '');
+  const surfaceSource = withoutComments(readFileSync('src/semantic/FilterSurface.svelte', 'utf8'));
+  const hostSource = withoutComments(readFileSync('src/semantic/FilterInstrumentHost.svelte', 'utf8'));
+
+  it('reserves the width/IF-shift value box: min-width covers the widest rendered text', () => {
+    const rule = surfaceSource.match(/\.filter-level > output:not\(\.pbt-value\) \{([^}]*)\}/);
+    expect(rule).not.toBeNull();
+    // Widest text the two rows render today: the width fallback max '9999'
+    // (4 chars) and the IF-shift lower bound '-1200' (5 chars).
+    const widest = Math.max('9999'.length, String(FILTER_PASSBAND_LEVELS[0][2]).length);
+    const minWidth = Number(rule![1].match(/min-width: (\d+)ch/)?.[1]);
+    expect(Number.isFinite(minWidth)).toBe(true);
+    expect(minWidth).toBeGreaterThanOrEqual(widest);
+    // Digits are tabular, so a changing value cannot shift its neighbours.
+    expect(rule![1]).toContain('tabular-nums');
+  });
+
+  it('keeps the PBT value box reserved, tabular, and empty while unmeasured', () => {
+    const rule = surfaceSource.match(/\.pbt-value \{([^}]*)\}/);
+    expect(rule).not.toBeNull();
+    // Widest PBT text today: '-1200' (5 chars) — 6ch covers it.
+    expect(rule![1]).toContain('min-width: 6ch');
+    expect(rule![1]).toContain('tabular-nums');
+  });
+
+  it('reserves the DATA-mode value box in the host: min-width covers the rendered digits', () => {
+    const rule = hostSource.match(/\.(?:filter-readout|filter-choice-group) output \{([^}]*)\}/);
+    expect(rule).not.toBeNull();
+    // The DATA-mode output renders String(value) — a small integer code. The
+    // widest today is a single digit ('0'); 4ch covers a multi-digit code
+    // without the box ever depending on the reading.
+    const minWidth = Number(rule![1].match(/min-width: (\d+)ch/)?.[1]);
+    expect(Number.isFinite(minWidth)).toBe(true);
+    expect(minWidth).toBeGreaterThanOrEqual('0'.length);
+    expect(rule![1]).toContain('tabular-nums');
+  });
+
+  it('reserves the mod-input select column: the grid track never depends on the option text', () => {
+    // MOR-2648: an unread select shows a blank `<option>` — the select's
+    // width comes from the `standard-mod-input` grid track, so the blank
+    // option cannot shrink it next to the widest real choice ('MIC').
+    const rule = hostSource.match(/\.standard-mod-input \{([^}]*)\}/);
+    expect(rule).not.toBeNull();
+    expect(rule![1]).toContain('grid-template-columns: 1fr minmax(0, 1fr)');
+  });
+});
+
+// ── MOR-2905: the hertz unit comes from the i18n catalog ────────────────────
+describe('the exact-width and passband hertz unit follows the locale (MOR-2905)', () => {
+  // The pins hold the RENDERED text through the one `core.filter.unit.hz`
+  // catalog key — never `t(key)` — so a re-introduced literal fails here.
+  const passbandPending: Readonly<CommandScalarFeedback> = {
+    confirmed: 0, target: 600, requestedTarget: 600, phase: 'submitted', busy: true,
+    availability: 'available', outcome: null, lifecycleId: '2905:passband',
+    transitionId: '2905:passband:submitted', sessionEpoch: 7,
+    scope: { control: 'pbt-inner', receiver: 0 }, repeatPolicy: 'latest-target-wins',
+  };
+
+  it.each(['en-US', 'ru-RU'] as const)('the width slider names its exact value with the %s hertz unit', (locale) => {
+    const previous = getLocale();
+    setLocale(locale);
+    try {
+      withSurface(base(), (surface) => {
+        expect(surface.input('filter-width')!.getAttribute('aria-valuetext'))
+          .toBe(locale === 'ru-RU' ? '2400 Гц' : '2400 Hz');
+      });
+    } finally { setLocale(previous); }
+  });
+
+  it('announces a pending passband target with the Russian hertz unit (ru-RU)', () => {
+    const previous = getLocale();
+    setLocale('ru-RU');
+    try {
+      withSurface(base(), (s) => {
+        const status = s.group('filter-pbtInner')!
+          .querySelector<HTMLElement>('[data-control-feedback-status]');
+        expect(status!.textContent)
+          .toBe('Запрошен PBT inner 600 Гц; радио ещё не подтвердило значение.');
+      }, {}, { pbtInnerFeedback: passbandPending } as PendingProps);
+    } finally { setLocale(previous); }
+  });
+});

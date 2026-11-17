@@ -1,0 +1,144 @@
+import XCTest
+@testable import FTX1Core
+
+/// Structural sanity checks for `DeepSettingsCatalog` — with ~100+ items
+/// per category hand-transcribed from the CAT manual, these catch
+/// transcription slips (a duplicated P1/P2/P3 address, a reused
+/// enumeration index, digits too narrow for the declared range) that
+/// wouldn't otherwise surface until clicking through every row by hand.
+/// Doesn't check labels/values against the manual itself — that's still a
+/// per-category read-through — just that the catalog is internally
+/// consistent.
+final class DeepSettingsCatalogTests: XCTestCase {
+    func testNoDuplicateItemAddresses() {
+        let ids = DeepSettingsCatalog.items.map(\.id)
+        XCTAssertEqual(ids.count, Set(ids).count, "duplicate p1.p2.p3 address in the catalog")
+    }
+
+    func testNoDuplicateEnumerationIndices() {
+        for item in DeepSettingsCatalog.items {
+            guard case .enumeration(let cases, _) = item.valueType else { continue }
+            let indices = cases.map(\.index)
+            XCTAssertEqual(indices.count, Set(indices).count, "\(item.id) (\(item.label)) has a duplicate enumeration index")
+        }
+    }
+
+    /// Every enumeration/intRange/signedRange value must actually fit in
+    /// its declared `digits` width — a range that needs 3 digits but is
+    /// declared with `digits: 2` would silently truncate on encode.
+    func testDigitsAreWideEnoughForDeclaredRange() {
+        for item in DeepSettingsCatalog.items {
+            switch item.valueType {
+            case .enumeration(let cases, let digits):
+                for c in cases {
+                    XCTAssertLessThanOrEqual(
+                        String(c.index).count, digits,
+                        "\(item.id) (\(item.label)) index \(c.index) doesn't fit in \(digits) digits"
+                    )
+                }
+            case .intRange(let range, let digits, _, _):
+                XCTAssertLessThanOrEqual(
+                    String(range.upperBound).count, digits,
+                    "\(item.id) (\(item.label)) upper bound \(range.upperBound) doesn't fit in \(digits) digits"
+                )
+            case .signedRange(let range, let digits, _, _):
+                let maxMagnitude = max(abs(range.lowerBound), abs(range.upperBound))
+                XCTAssertLessThanOrEqual(
+                    String(maxMagnitude).count, digits,
+                    "\(item.id) (\(item.label)) magnitude \(maxMagnitude) doesn't fit in \(digits) digits"
+                )
+            default:
+                break
+            }
+        }
+    }
+
+    /// Regression guard for the RADIO SETTING transcription itself — this
+    /// only checks the item counts documented per tab in Table 3 (pages
+    /// 10-11), so an accidental dropped/duplicated row trips it even
+    /// though the label/value content isn't re-checked here.
+    func testRadioSettingTabCounts() {
+        let radioItems = DeepSettingsCatalog.items(forP1: 1)
+        let countsByTab = Dictionary(grouping: radioItems, by: \.p2).mapValues(\.count)
+        XCTAssertEqual(countsByTab[1], 17, "MODE SSB")
+        XCTAssertEqual(countsByTab[2], 15, "MODE AM")
+        XCTAssertEqual(countsByTab[3], 37, "MODE FM")
+        XCTAssertEqual(countsByTab[4], 18, "MODE DATA")
+        XCTAssertEqual(countsByTab[5], 16, "MODE RTTY")
+        XCTAssertEqual(countsByTab[6], 5, "DIGITAL")
+        XCTAssertEqual(radioItems.count, 108)
+    }
+
+    func testCWSettingTabCounts() {
+        let cwItems = DeepSettingsCatalog.items(forP1: 2)
+        let countsByTab = Dictionary(grouping: cwItems, by: \.p2).mapValues(\.count)
+        XCTAssertEqual(countsByTab[1], 18, "MODE CW")
+        XCTAssertEqual(countsByTab[2], 11, "KEYER")
+        XCTAssertEqual(cwItems.count, 29)
+    }
+
+    func testOperationSettingTabCounts() {
+        let opItems = DeepSettingsCatalog.items(forP1: 3)
+        let countsByTab = Dictionary(grouping: opItems, by: \.p2).mapValues(\.count)
+        XCTAssertEqual(countsByTab[1], 17, "GENERAL")
+        XCTAssertEqual(countsByTab[2], 4, "BAND-SCAN")
+        XCTAssertEqual(countsByTab[3], 6, "RX-DSP")
+        XCTAssertEqual(countsByTab[4], 19, "TX AUDIO")
+        XCTAssertEqual(countsByTab[5], 13, "TX GENERAL")
+        XCTAssertEqual(countsByTab[6], 14, "KEY/DIAL")
+        XCTAssertEqual(countsByTab[7], 15, "OPTION")
+        XCTAssertEqual(opItems.count, 88)
+    }
+
+    func testExtensionSettingTabCounts() {
+        let extItems = DeepSettingsCatalog.items(forP1: 5)
+        let countsByTab = Dictionary(grouping: extItems, by: \.p2).mapValues(\.count)
+        XCTAssertEqual(countsByTab[1], 7, "DATE&TIME")
+        XCTAssertEqual(countsByTab[2], 3, "MY POSITION (confirmed its own tab via live rig probe)")
+        XCTAssertEqual(countsByTab[3], 7, "SD CARD")
+        XCTAssertEqual(countsByTab[4], 1, "SOFT VERSION")
+        XCTAssertEqual(countsByTab[5], 1, "CALIBRATION")
+        XCTAssertEqual(countsByTab[6], 4, "RESET (includes CERTIFICATION)")
+        XCTAssertEqual(extItems.count, 23)
+    }
+
+    func testAPRSSettingTabCounts() {
+        let items = DeepSettingsCatalog.items(forP1: 6)
+        let countsByTab = Dictionary(grouping: items, by: \.p2).mapValues(\.count)
+        XCTAssertEqual(countsByTab[1], 6, "GENERAL")
+        XCTAssertEqual(countsByTab[2], 8, "MSG TEMPLATE")
+        XCTAssertEqual(countsByTab[3], 5, "MY SYMBOL")
+        XCTAssertEqual(countsByTab[4], 1, "DIGI PATH")
+        XCTAssertEqual(items.count, 20)
+    }
+
+    func testAPRSBeaconTabCounts() {
+        let items = DeepSettingsCatalog.items(forP1: 7)
+        let countsByTab = Dictionary(grouping: items, by: \.p2).mapValues(\.count)
+        XCTAssertEqual(countsByTab[1], 6, "BEACON SET.")
+        XCTAssertEqual(countsByTab[2], 5, "AUTO BEACON")
+        XCTAssertEqual(countsByTab[3], 7, "SmartBeac.")
+        XCTAssertEqual(countsByTab[4], 8, "BEACON TEXT")
+        XCTAssertEqual(items.count, 26)
+    }
+
+    func testAPRSFilterTabCounts() {
+        let items = DeepSettingsCatalog.items(forP1: 8)
+        let countsByTab = Dictionary(grouping: items, by: \.p2).mapValues(\.count)
+        XCTAssertEqual(countsByTab[1], 1, "LIST SETTING")
+        XCTAssertEqual(countsByTab[2], 8, "STATION LIST")
+        XCTAssertEqual(countsByTab[3], 2, "POPUP")
+        XCTAssertEqual(countsByTab[4], 5, "RINGER")
+        XCTAssertEqual(countsByTab[5], 9, "MSG FIL. (confirmed via live probe, not P2=06)")
+        XCTAssertEqual(items.count, 25)
+    }
+
+    func testDisplaySettingTabCounts() {
+        let displayItems = DeepSettingsCatalog.items(forP1: 4)
+        let countsByTab = Dictionary(grouping: displayItems, by: \.p2).mapValues(\.count)
+        XCTAssertEqual(countsByTab[1], 7, "DISPLAY (LED DIMMER deliberately excluded)")
+        XCTAssertEqual(countsByTab[2], 7, "UNIT")
+        XCTAssertEqual(countsByTab[3], 5, "SCOPE")
+        XCTAssertEqual(countsByTab[4], 3, "VFO IND COLOR")
+    }
+}

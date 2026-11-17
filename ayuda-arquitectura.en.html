@@ -24,7 +24,7 @@
       <nav aria-label="Help"><a href="ayuda-referencias.en.html">Documentation and references</a> · <a href="ayuda-firmwares.en.html">Firmware library</a> · <a href="ayuda-atlas-uv-k5-v3.en.html">Atlas UV-K5 V3</a> · <a href="quansheng.html?lang=en-US">Quansheng</a> · <a href="opengd77.html?lang=en-US">OpenGD77</a></nav>
       <nav class="languages" aria-label="Language"><a href="ayuda-arquitectura.html" hreflang="es" lang="es">Español</a> · <a href="ayuda-arquitectura.en.html" hreflang="en-US" lang="en-US" aria-current="page">English (US)</a> · <a href="ayuda-arquitectura.de.html" hreflang="de" lang="de">Deutsch</a> · <a href="ayuda-arquitectura.it.html" hreflang="it" lang="it">Italiano</a> · <a href="ayuda-arquitectura.fr.html" hreflang="fr" lang="fr">Français</a></nav>
     </header>
-    <nav class="panel" aria-label="Contents of this guide"><h2>In this guide</h2><ul><li><a href="#modos-de-ejecucion">Runtime modes</a></li><li><a href="#vista-de-componentes">Component view</a></li><li><a href="#modulos">Modules</a></li><li><a href="#flujo-de-conexion-y-copia-automatica">Connection and automatic backup flow</a></li><li><a href="#capas-de-seguridad">Security layers</a></li><li><a href="#limitaciones-conocidas">Known limitations</a></li></ul></nav>
+    <nav class="panel" aria-label="Contents of this guide"><h2>In this guide</h2><ul><li><a href="#modos-de-ejecucion">Runtime modes</a></li><li><a href="#vista-de-componentes">Component view</a></li><li><a href="#modulos">Modules</a></li><li><a href="#flujo-de-conexion-y-copia-automatica">Connection and automatic backup flow</a></li><li><a href="#capas-de-seguridad">Security layers</a></li><li><a href="#limitaciones-conocidas">Known limitations</a></li><li><a href="#security-review-sonarqube-2026-11-13">Security review (SonarQube 2026-11-13)</a></li></ul></nav>
     <article class="panel"><h1 id="arquitectura-de-bricohams-radio-workspace">Bricohams Radio Workspace architecture</h1>
 <p>Bricohams Radio Workspace is a <strong>local</strong> web application. A small Node.js server serves a fixed allowlist of static files and a few read-only APIs. All communication with the radio takes place in the browser through WebUSB or Web Serial.</p>
 <p>&lt;a id=&quot;modos-de-ejecución&quot;&gt;&lt;/a&gt;</p>
@@ -118,6 +118,39 @@
 <li><strong>RepeaterBook:</strong> requires a token approved by RepeaterBook and is available only in the local version.</li>
 <li><strong>Web:</strong> satellite data may be up to one day old (a warning appears after 7 days), and firmware/RadioID files are loaded manually.</li>
 <li><strong>Hardware:</strong> earlier reads from one Quansheng unit exist, but they do not certify writes, the independent resident, or the current combination of APK, SAT slot, and phone. Physical tests for this revision are pending.</li>
+</ul>
+<h2 id="security-review-sonarqube-2026-11-13">Security review (SonarQube 2026-11-13)</h2>
+<h3 id="corregido">Fixed</h3>
+<p><strong>xml:S6358 – Android application backup should be disabled or restricted</strong> (MEDIUM) — <code>android/app/src/fdroid/AndroidManifest.xml:6</code>.</p>
+<ul>
+<li>*Why it was a flaw:* with backup enabled, local data (preferences, files, databases) can be exported to Google Cloud or through <code>adb backup</code>, or restored from a tampered copy (CWE-922, OWASP M9/A1). The F-Droid flavor&#39;s <code>&lt;application&gt;</code> overlay did not declare the attribute, so the analysis saw it as implicit (default <code>true</code>).</li>
+<li>*Change:* <code>android:allowBackup=&quot;false&quot;</code> is added to the overlay.</li>
+<li>*No loss of functionality:* the main manifest already declares <code>allowBackup=&quot;false&quot;</code>, <code>fullBackupContent=&quot;false&quot;</code> and <code>dataExtractionRules</code>; the merged value does not change. Check: the fdroid flavor&#39;s <code>manifest merger report</code> (<code>processFdroidReleaseMainManifest</code>) shows <code>allowBackup=false</code>.</li>
+</ul>
+<p><strong>xml:S5332 – Clear-text protocols should not be used</strong> (LOW) — same file, line 6.</p>
+<ul>
+<li>*Why it was a flaw:* on Android &lt; 9 <code>usesCleartextTraffic</code> is implicitly <code>true</code>, which allows unencrypted http (interception and tampering, CWE-319, CWE-200).</li>
+<li>*Change:* <code>android:usesCleartextTraffic=&quot;false&quot;</code> is added to the overlay.</li>
+<li>*No loss of functionality:* the main manifest already sets it to <code>false</code> and defines <code>networkSecurityConfig</code>; the merged result is identical. Check: same merger report; rotor/radio behaviour does not change.</li>
+</ul>
+<p><strong>kotlin:S2245 – Pseudorandom number generators (PRNGs) should not be used in security contexts</strong> (MEDIUM) — <code>android/app/src/main/java/org/bricohams/radio/Rt950Protocol.kt:156</code>.</p>
+<ul>
+<li>*Why it was a flaw:* <code>Random()</code> is not a cryptographically secure generator; an attacker who knows or guesses its internal state can predict the next values (CWE-338, CWE-330, OWASP A2 Cryptographic Failures). The default value of <code>Rt950Session.random</code> used <code>Random()</code>.</li>
+<li>*Change:* the default value becomes <code>SecureRandom()</code> (<code>java.security.SecureRandom</code>, a subclass of <code>java.util.Random</code>). The parameter type is still <code>Random</code>, so tests can inject a seeded instance.</li>
+<li>*No loss of functionality:* <code>buildKeyFrame</code> still uses the same ranges (<code>nextInt(2)+1</code>, <code>nextInt(5)</code>, <code>nextInt(KEYS.size)</code>), so the RT-950 protocol bytes keep their format. Check: (<code>Rt950ProtocolTest</code>: <code>headersAndKeySelection</code>, <code>readAllSkipsUnknownRegions</code>).</li>
+</ul>
+<p><strong>kotlin:S2245 (MEDIUM)</strong> — <code>android/app/src/test/java/org/bricohams/radio/Rt950ProtocolTest.kt:93</code> (and lines 67, 175, 309). Not modified.</p>
+<ul>
+<li>*Why Sonar flags it:* same reason as above (non-cryptographic PRNG, CWE-338/CWE-330).</li>
+<li>*Decision:* it is a unit test that uses <code>Random(it.toLong())</code> with a fixed seed to build reproducible key frames; it is not a security context (it generates no secrets) and <code>SecureRandom</code> would make the test non-deterministic. Left unchanged.</li>
+<li>*No loss of functionality:* nothing is touched. Check: <code>Rt950ProtocolTest</code> still passes; the production class accepts any injected <code>Random</code>.</li>
+</ul>
+<h3 id="not-changed-requires-decision">Not changed - requires decision</h3>
+<ul>
+<li><strong>Sonar javascript S4036 (LOW, CWE-426/427)</strong> — <code>scripts/build-platform-app.cjs:16,20,27,30</code>, <code>scripts/build-platform-resident.cjs:55,73,82,85,87,89</code>, <code>scripts/export-project.cjs:48,94,177,178,181,230</code>. The scripts call <code>arm-none-eabi-*</code>, <code>git</code> and <code>zip</code> by name. There is no fixed absolute path valid on every machine (the ARM toolchain and git are installed in different locations); inventing one or requiring a new environment variable would change usage. Decision: accept the risk (development tools run by the developer) or define an environment variable for the toolchain path. (The <code>tar.exe</code> call on line 228 already uses an absolute path.)</li>
+<li><strong>kotlin:S1313 (LOW)</strong> — <code>android/app/src/main/java/org/bricohams/radio/RotorProtocol.kt:14</code>. <code>AP_HOST = &quot;192.168.4.1&quot;</code> is the factory address of the ESP32 rotor access point; moving it to configuration would break the default connection.</li>
+<li><strong>kotlin:S2245 (MEDIUM)</strong> — <code>android/app/src/test/java/org/bricohams/radio/FtxEnhancedDecoderTest.kt:59</code>. It is a unit test with a fixed-seed <code>Random(7)</code> to reproduce the error pattern; it is not a security context and <code>SecureRandom</code> would make the test non-deterministic.</li>
+<li><strong>kotlin:S7204 (HIGH)</strong> — <code>android/app/build.gradle.kts:52</code>. Enabling <code>isMinifyEnabled</code> requires ProGuard/R8 rules (there is no <code>proguard-rules.pro</code>) and validating on a device that reflection/JSON/BLE still work; this cannot be guaranteed without physical tests. Decision: create the keep rules and test a minified release APK.</li>
 </ul></article>
     <footer><p class="translation-note">Translation of the Spanish original. If there is any discrepancy, the Spanish version prevails.</p><p>Document generated from the versioned Markdown. Check the sources and limits of each guide. <a href="ayuda-firmwares.en.html">Back to the index</a>.</p></footer>
   </main>

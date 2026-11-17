@@ -1,0 +1,2172 @@
+/**
+ * Runtime command handler factories for panel controls.
+ *
+ * This module canonically owns the panel command factories. The legacy
+ * `components-v2/wiring/command-bus` is an identity-preserving compatibility
+ * re-export only.
+ *
+ * Do NOT import from `components-v2/*` here.  Pure filter helpers come
+ * from `$lib/radio/filter-controls`.
+ *
+ * See issue #999, parent #959 (M-4).
+ */
+
+import {
+  getActiveReceiver,
+  getRadioState,
+} from '$lib/stores/radio.svelte';
+import {
+  capabilitiesMatchGeneration,
+  getCapabilities,
+} from '$lib/stores/capabilities.svelte';
+import { getFieldStatus, isFieldAvailable, isFieldFreshlyObserved } from '$lib/state/field-status';
+import { runtime } from '../frontend-runtime';
+import { consumePendingFocus, setPendingFocus } from '$lib/radio/pending-focus';
+import { getModeFilter } from '$lib/radio/mode-filter-memory';
+import { relativeVfoIdentityUnknown, resolveFilterModeConfig } from '../props/panel-props';
+import type { Capabilities, FilterModeConfig, FilterSegmentConfig } from '$lib/types/capabilities';
+import { modInputCommand, modInputStateKey } from '$lib/radio/mod-input';
+import {
+  mapIfShiftToPbt, measuredPbtHzToRaw, measuredPbtRawToHz, pbtRangeFromCaps,
+  quantizeFilterWidthToRule,
+  resolveControlContract,
+  resolveNrLevelContract,
+} from '$lib/radio/filter-controls';
+import { audioManager } from '$lib/audio/audio-manager';
+import { RX_AF_LEVEL_MAX } from '$lib/audio/rx-player';
+import { adjustTuningStep, getTuningStep } from '$lib/stores/tuning.svelte';
+import { currentControlSessionEpoch, dispatchRadioIntent, isNormalizedLevel } from './radio-intents';
+import { getCommandLifecycles } from '$lib/stores/commands.svelte';
+import { stepRef, refRangeFromCaps } from '../../../components/spectrum/spectrum-toolbar-logic';
+import {
+  getSharedTuningAccumulator,
+  type AcceptedTargetQuery,
+} from './tuning-accumulator';
+import {
+  shiftDirection,
+  type RepeaterShift,
+  type RepeaterToneMode,
+} from '$lib/radio/repeater-transitions';
+
+/* ── Shared helpers ──────────────────────────────────────────────── */
+
+type Receiver = 0 | 1;
+
+export interface DirectVfoFrequencyRequest {
+  readonly frequencyHz: number;
+  readonly receiver: 'MAIN' | 'SUB';
+  readonly slot: 'A' | 'B';
+  readonly expectedActiveSlot: 'A' | 'B';
+  readonly providerGeneration: number;
+  readonly sessionEpoch: number;
+}
+
+function knownActiveReceiver(
+  field?: string, target?: 'MAIN' | 'SUB', receiverCount?: number | null,
+): Receiver | null {
+  const state = getRadioState();
+  if (!state) return null;
+  // MOR-1418: on a single-receiver radio, `active` (MAIN/SUB) is
+  // structurally unobservable — no CI-V echo ever sets it, so it never
+  // becomes an observed field. The active receiver is tautologically MAIN
+  // in that case, so an unobserved `active` must not block the write.
+  // Dual-RX radios are unaffected: `active` observation is still required
+  // whenever it is actually observed (or on any radio with receivers > 1).
+  const activeObserved = isFieldAvailable(state, 'active');
+  const receivers = receiverCount === undefined ? getCapabilities()?.receivers : receiverCount;
+  const singleReceiver = receivers === 1;
+  const receiverName = target
+    ?? (activeObserved ? state.active : singleReceiver ? 'MAIN' : undefined);
+  if (receiverName !== 'MAIN' && receiverName !== 'SUB') return null;
+  if (receiverName === 'SUB') {
+    if (!Number.isSafeInteger(receivers) || (receivers as number) < 2 || !state.sub) return null;
+  } else if (!state.main) return null;
+  const receiver = receiverName === 'SUB' ? 1 : 0;
+  const prefix = receiver === 1 ? 'sub' : 'main';
+  return field && !isFieldAvailable(state, `${prefix}.${field}`) ? null : receiver;
+}
+
+function hasCapability(name: string): boolean {
+  return getCapabilities()?.capabilities.includes(name) ?? false;
+}
+
+function knownReceiverField(field: string, receiverCount?: number | null): Receiver | null {
+  const receiver = knownActiveReceiver(field, undefined, receiverCount);
+  if (receiver === null) return null;
+  const state = getRadioState();
+  const target = receiver === 1 ? state?.sub : state?.main;
+  const value = (target as unknown as Record<string, unknown> | null | undefined)?.[field];
+  return value === undefined || value === null ? null : receiver;
+}
+
+function knownTopLevelField(field: string): boolean {
+  const state = getRadioState();
+  const value = (state as unknown as Record<string, unknown> | null)?.[field];
+  return state !== null && value !== undefined && value !== null && isFieldAvailable(state, field);
+}
+
+function currentA03cContext() {
+  const state = getRadioState();
+  const caps = getCapabilities();
+  if (!state || !caps || !capabilitiesMatchGeneration(state.providerGeneration)) return null;
+  const expectedReceivers = caps.vfoScheme === 'single' || caps.vfoScheme === 'ab' ? 1
+    : caps.vfoScheme === 'ab_shared' || caps.vfoScheme === 'main_sub' ? 2 : 0;
+  if (expectedReceivers === 0 || caps.receivers !== expectedReceivers) return null;
+  return { state, caps };
+}
+
+function knownA03cTopLevelField(
+  context: NonNullable<ReturnType<typeof currentA03cContext>>,
+  field: string,
+): boolean {
+  const value = (context.state as unknown as Record<string, unknown>)[field];
+  return value !== undefined && value !== null && isFieldAvailable(context.state, field);
+}
+
+function knownA03cReceiver(
+  context: NonNullable<ReturnType<typeof currentA03cContext>>,
+  target: 'MAIN' | 'SUB',
+  field?: string,
+): Receiver | null {
+  if (target !== 'MAIN' && target !== 'SUB') return null;
+  if (target === 'SUB'
+    && (context.caps.receivers < 2 || !context.caps.capabilities.includes('dual_rx'))) return null;
+  const receiver: Receiver = target === 'SUB' ? 1 : 0;
+  const state = receiver === 1 ? context.state.sub : context.state.main;
+  if (!state) return null;
+  if (!field) return receiver;
+  const value = (state as unknown as Record<string, unknown>)[field];
+  const path = `${receiver === 1 ? 'sub' : 'main'}.${field}`;
+  return value !== undefined && value !== null && isFieldAvailable(context.state, path)
+    ? receiver : null;
+}
+
+function toggleVox(): void {
+  const context = currentA03cContext();
+  const current = context?.state.voxOn;
+  if (!context || !context.caps.capabilities.includes('tx')
+    || !context.caps.capabilities.includes('vox')
+    || !knownA03cTopLevelField(context, 'voxOn') || typeof current !== 'boolean') return;
+  dispatchRadioIntent({ name: 'set_vox', params: { on: !current } });
+}
+
+/* ── PBT / IF-shift helpers ──────────────────────────────────────── */
+// MOR-1291: the local re-implementations that used to live here (`pbtRange`,
+// `pbtHzToRaw`, `clampToBipolarRange`, `deriveIfShift`, `mapIfShiftToPbt`)
+// are gone — this module now imports the ONE shipped versions from
+// `$lib/radio/filter-controls` (the neutral module #996 introduced). The
+// duplicate `pbtRange()` silently fell back to an IC-7610-shaped default
+// (rawCenter 128, ±1200 Hz) via the capabilities STORE whenever a radio's
+// caps omitted `controls.pbt_inner` — exactly the fabricated-command class
+// this ticket closes. `pbtRangeFromCaps(getCapabilities())` below is called
+// at each PBT command site instead, and the handler bails (emits nothing)
+// when it comes back `undefined`. MOR-2500: the Hz<->raw conversions the
+// sites call after that gate are the measured-lattice pair
+// (`measuredPbtRawToHz`/`measuredPbtHzToRaw`), never a store-backed
+// proportional fallback.
+
+/**
+ * The twin-PBT write lattice of the ACTIVE receiver's current mode
+ * (MOR-2500) — the same `resolveFilterModeConfig(caps, mode, dataMode)`
+ * resolution of mode + dataMode the readers in
+ * `radio-view-model-adapter.ts` use, so a reader and a writer can never
+ * disagree about which mode's step applies. `null` when state/caps are
+ * unavailable, the mode declares no `pbtStepHz`, or the current
+ * `filterWidth` is not a finite number: a mode with no step (FM) and a
+ * legacy payload where NO mode declares one both refuse here — unlike the
+ * readers' `modeHasTwinPbt`, which keeps the radio-wide capability for the
+ * legacy case, because a WRITE with no lattice to land on has no honest
+ * fallback at all.
+ */
+function activePbtLattice(): { filterWidthHz: number; stepHz: number } | null {
+  const caps = getCapabilities();
+  const activeRx = getActiveReceiver();
+  if (!caps || !activeRx) return null;
+  // MOR-2513: null mode/dataMode (unobserved) resolves no config, hence no
+  // lattice and no PBT write computed from an unknown mode.
+  const stepHz = resolveFilterModeConfig(caps, activeRx.mode ?? undefined, activeRx.dataMode ?? undefined)?.pbtStepHz;
+  const filterWidthHz = activeRx.filterWidth;
+  if (
+    stepHz === undefined
+    || typeof filterWidthHz !== 'number' || !Number.isFinite(filterWidthHz)
+  ) return null;
+  return { filterWidthHz, stepHz };
+}
+
+/* ── Memory Handlers ─────────────────────────────────────────────── */
+
+type MemorySnapshot = { frequencyHz: number | null; mode: string | null };
+
+/**
+ * Fresh-only, deliberately — the one such gate MOR-2425/R40 does not widen.
+ * This predicate resolves the identity a command is DISPATCHED against
+ * (which receiver is active, which slot, its frequency and mode), never a
+ * value the web paints. MOR-1601 pins the refusal: the "toggles only a
+ * fresh observed active receiver" case in
+ * `__tests__/panel-commands.intent.isolated.test.ts` sets
+ * `fieldStatus.active.freshness` to `'stale'` and requires no command.
+ */
+function observedAvailableField(
+  state: NonNullable<ReturnType<typeof getRadioState>>,
+  path: string,
+): boolean {
+  const status = getFieldStatus(state, path);
+  return status?.observed === true && status.freshness === 'fresh'
+    && status.availability === 'available';
+}
+
+function currentMemorySnapshot(): MemorySnapshot | null {
+  const context = currentA03cContext();
+  // MOR-1423: same single-receiver `active` bypass as knownActiveReceiver
+  // (MOR-1418) — on a one-receiver radio, active is tautologically MAIN
+  // even when structurally unobservable. Dual-RX still requires observation.
+  const activeObserved = context !== null && observedAvailableField(context.state, 'active');
+  const singleReceiver = context?.caps.receivers === 1;
+  const active = context
+    && (activeObserved ? context.state.active : singleReceiver ? 'MAIN' : undefined);
+  if (!context
+    || (active !== 'MAIN' && active !== 'SUB')
+    || knownA03cReceiver(context, active) === null) return null;
+
+  const receiverKey = active === 'SUB' ? 'sub' : 'main';
+  const receiver = context.state[receiverKey];
+  if (!receiver) return null;
+
+  let source: { freqHz?: number | null; mode?: string | null } = receiver;
+  let base = `${receiverKey}.`;
+  const relative = context.caps.vfoScheme === 'ab'
+    && relativeVfoIdentityUnknown(context.state, context.caps, receiverKey);
+  const unslotted = context.caps.vfoScheme === 'single'
+    || context.caps.vfoScheme === 'ab_shared';
+  if (!relative && !unslotted) {
+    const slot = receiver.activeSlot;
+    if (!observedAvailableField(context.state, `${receiverKey}.activeSlot`)
+      || (slot !== 'A' && slot !== 'B')) return null;
+    const slotKey = slot === 'A' ? 'vfoA' : 'vfoB';
+    const slotted = receiver[slotKey];
+    if (!slotted) return null;
+    source = slotted;
+    base = `${receiverKey}.${slotKey}.`;
+  }
+
+  const frequencyHz = source.freqHz;
+  const mode = source.mode;
+  return {
+    frequencyHz: observedAvailableField(context.state, `${base}freqHz`)
+      && Number.isSafeInteger(frequencyHz) && (frequencyHz as number) > 0
+      ? frequencyHz as number : null,
+    mode: observedAvailableField(context.state, `${base}mode`)
+      && typeof mode === 'string' && mode.length > 0 ? mode : null,
+  };
+}
+
+function validMemoryChannel(channel: number): boolean {
+  return Number.isSafeInteger(channel) && channel >= 1 && channel <= 99;
+}
+
+export function makeMemoryHandlers() {
+  return {
+    fetchPage: (...args: Parameters<typeof runtime.fetchMemoryPage>) => runtime.fetchMemoryPage(...args),
+    onRecall: (channel: number): boolean => {
+      if (!validMemoryChannel(channel) || currentMemorySnapshot() === null) return false;
+      dispatchRadioIntent({ name: 'set_memory_mode', params: { channel } });
+      dispatchRadioIntent({ name: 'memory_to_vfo', params: { channel } });
+      return true;
+    },
+    /** Recall of a channel listed from the radio itself (MOR-3627); an explicit click, never automatic. */
+    onRecallListed: (group: number, channel: number): boolean => {
+      if (!hasCapability('memory_read') || !Number.isSafeInteger(group) || group < 0
+        || !Number.isSafeInteger(channel) || channel < 0) return false;
+      dispatchRadioIntent({ name: 'set_memory_mode', params: { channel, group } });
+      return true;
+    },
+    onStore: (channel: number, frequencyHz: number, mode: string): boolean => {
+      const snapshot = currentMemorySnapshot();
+      if (!validMemoryChannel(channel) || !snapshot || snapshot.frequencyHz === null
+        || snapshot.mode === null || frequencyHz !== snapshot.frequencyHz
+        || mode !== snapshot.mode) return false;
+      dispatchRadioIntent({ name: 'set_memory_mode', params: { channel } });
+      dispatchRadioIntent({ name: 'memory_write', params: {} });
+      return true;
+    },
+    onClear: (channel: number): boolean => {
+      if (!validMemoryChannel(channel) || currentMemorySnapshot() === null) return false;
+      dispatchRadioIntent({ name: 'memory_clear', params: { channel } });
+      return true;
+    },
+  };
+}
+
+/* ── AGC Handlers ────────────────────────────────────────────────── */
+
+export function makeAgcHandlers() {
+  return {
+    onAgcModeChange: (mode: number) => {
+      const receiver = knownReceiverField('agc');
+      if (!hasCapability('agc') || receiver === null || !Number.isSafeInteger(mode)) return;
+      dispatchRadioIntent({ name: 'set_agc', params: { mode, receiver } });
+    },
+  };
+}
+
+/* ── Mode Handlers ───────────────────────────────────────────────── */
+
+export function makeModeHandlers() {
+  return {
+    onModeChange: (mode: string) => {
+      const pending = consumePendingFocus();
+      const receiver = knownActiveReceiver('mode', pending ?? undefined);
+      if (receiver === null) return;
+      // MOR-495: recall the destination mode's remembered filter so the web
+      // mirrors the front panel (mode-only 0x06 would force the radio's
+      // mode-default filter, e.g. USB → FIL2).  Unseen mode → mode-only.
+      const filter = getModeFilter(mode);
+      if (filter !== undefined) {
+        dispatchRadioIntent({ name: 'set_mode', params: { mode, filter, receiver } });
+      } else {
+        dispatchRadioIntent({ name: 'set_mode', params: { mode, receiver } });
+      }
+    },
+    onDataModeChange: (mode: number) => {
+      const receiver = knownActiveReceiver('dataMode');
+      if (receiver === null) return;
+      dispatchRadioIntent({ name: 'set_data_mode', params: { mode, receiver } });
+    },
+    onModInputChange: (source: number) => {
+      // MOR-616: route the new source to the active receiver's DATA group
+      // (DATA OFF/1/2/3 MOD, CI-V 0x1A 05 00 0x91-0x94). The command
+      // lifecycle stays separate until canonical readback confirms truth.
+      const receiver = knownActiveReceiver('dataMode');
+      const dataMode = receiver === null ? null : getActiveReceiver()?.dataMode;
+      const state = getRadioState();
+      const caps = getCapabilities();
+      if (
+        !state
+        || !caps
+        || !Array.isArray(caps.dataModeInputs)
+        || !caps.dataModeInputs.some(option => option.value === source)
+        || !Number.isSafeInteger(dataMode)
+        || (dataMode as number) < 0
+        || (dataMode as number) > 3
+        || !Number.isSafeInteger(caps.dataModeCount)
+        || (dataMode as number) > (caps.dataModeCount as number)
+        || !isFieldAvailable(state, modInputStateKey(dataMode as number))
+      ) return;
+      dispatchRadioIntent({ name: modInputCommand(dataMode as number), params: { source } });
+    },
+  };
+}
+
+/* ── Antenna Handlers ────────────────────────────────────────────── */
+
+export function makeAntennaHandlers() {
+  return {
+    onSelectAnt1: () => {
+      const state = getRadioState();
+      if ((getCapabilities()?.antennas ?? 0) < 2 || !knownTopLevelField('rxAntenna1')
+        || typeof state?.rxAntenna1 !== 'boolean') return;
+      dispatchRadioIntent({ name: 'set_antenna_1', params: { on: state.rxAntenna1 } });
+    },
+    onSelectAnt2: () => {
+      const state = getRadioState();
+      if ((getCapabilities()?.antennas ?? 0) < 2 || !knownTopLevelField('rxAntenna2')
+        || typeof state?.rxAntenna2 !== 'boolean') return;
+      dispatchRadioIntent({ name: 'set_antenna_2', params: { on: state.rxAntenna2 } });
+    },
+    onToggleRxAnt: () => {
+      const state = getRadioState();
+      const tx = state?.txAntenna;
+      if ((getCapabilities()?.antennas ?? 0) < 2 || !hasCapability('rx_antenna')
+        || !knownTopLevelField('txAntenna') || (tx !== 1 && tx !== 2)) return;
+      const field = tx === 2 ? 'rxAntenna2' : 'rxAntenna1';
+      const current = tx === 2 ? state?.rxAntenna2 : state?.rxAntenna1;
+      if (!knownTopLevelField(field) || typeof current !== 'boolean') return;
+      const next = !current;
+      if (tx === 2) {
+        dispatchRadioIntent({ name: 'set_rx_antenna_ant2', params: { on: next } });
+      } else {
+        dispatchRadioIntent({ name: 'set_rx_antenna_ant1', params: { on: next } });
+      }
+    },
+  };
+}
+
+/* ── RF Front End Handlers ───────────────────────────────────────── */
+
+export function makeRfFrontEndHandlers() {
+  return {
+    onAttChange: (db: number) => {
+      const receiver = knownActiveReceiver('att');
+      if (receiver === null || !Number.isSafeInteger(db)) return;
+      dispatchRadioIntent({ name: 'set_attenuator', params: { db, receiver } });
+    },
+    onPreChange: (level: number) => {
+      const receiver = knownActiveReceiver('preamp');
+      if (receiver === null || !Number.isSafeInteger(level)) return;
+      dispatchRadioIntent({ name: 'set_preamp', params: { level, receiver } });
+    },
+    onRfGainChange: (level: number) => {
+      const receiver = knownActiveReceiver('rfGain');
+      if (receiver === null || !Number.isSafeInteger(level)) return;
+      dispatchRadioIntent({ name: 'set_rf_gain', params: { level, receiver } });
+    },
+    onSquelchChange: (level: number) => {
+      const receiver = knownActiveReceiver('squelch');
+      if (receiver === null || !Number.isSafeInteger(level)) return;
+      dispatchRadioIntent({ name: 'set_squelch', params: { level, receiver } });
+    },
+    onDigiSelToggle: (on: boolean) => {
+      const receiver = knownActiveReceiver('digisel');
+      if (receiver === null || typeof on !== 'boolean') return;
+      dispatchRadioIntent({ name: 'set_digisel', params: { on, receiver } });
+    },
+    onIpPlusToggle: (on: boolean) => {
+      const receiver = knownActiveReceiver('ipplus');
+      if (receiver === null || typeof on !== 'boolean') return;
+      dispatchRadioIntent({ name: 'set_ip_plus', params: { on, receiver } });
+    },
+  };
+}
+
+/* ── RIT / XIT Handlers ──────────────────────────────────────────── */
+
+export function makeRitXitHandlers() {
+  return {
+    onRitToggle: () => {
+      const state = getRadioState();
+      if (!hasCapability('rit') || knownActiveReceiver() === null
+        || !knownTopLevelField('ritOn') || typeof state?.ritOn !== 'boolean') return;
+      dispatchRadioIntent({ name: 'set_rit_status', params: { on: !state.ritOn } });
+    },
+    onXitToggle: () => {
+      const state = getRadioState();
+      if (!hasCapability('xit') || knownActiveReceiver() === null
+        || !knownTopLevelField('ritTx') || typeof state?.ritTx !== 'boolean') return;
+      dispatchRadioIntent({ name: 'set_rit_tx_status', params: { on: !state.ritTx } });
+    },
+    onRitOffsetChange: (hz: number) => {
+      if (!hasCapability('rit') || knownActiveReceiver() === null
+        || !knownTopLevelField('ritFreq') || !Number.isSafeInteger(hz)) return;
+      dispatchRadioIntent({ name: 'set_rit_frequency', params: { freq: hz } });
+    },
+    onXitOffsetChange: (hz: number) => {
+      // RIT and XIT share the same offset register
+      if (!hasCapability('xit') || knownActiveReceiver() === null
+        || !knownTopLevelField('ritFreq') || !Number.isSafeInteger(hz)) return;
+      dispatchRadioIntent({ name: 'set_rit_frequency', params: { freq: hz } });
+    },
+    onClear: () => {
+      if ((!hasCapability('rit') && !hasCapability('xit')) || knownActiveReceiver() === null
+        || !knownTopLevelField('ritFreq')) return;
+      dispatchRadioIntent({ name: 'set_rit_frequency', params: { freq: 0 } });
+    },
+  };
+}
+
+/* ── Scan Handlers ───────────────────────────────────────────────── */
+
+export function makeScanHandlers() {
+  return {
+    onScanStart: (type: number) => {
+      if (!hasCapability('scan') || !Number.isSafeInteger(type)) return;
+      dispatchRadioIntent({ name: 'scan_start', params: { type } });
+    },
+    onScanStop: () => {
+      if (!hasCapability('scan')) return;
+      dispatchRadioIntent({ name: 'scan_stop', params: {} });
+    },
+    onDfSpanChange: (span: number) => {
+      if (!hasCapability('scan') || !Number.isSafeInteger(span)) return;
+      dispatchRadioIntent({ name: 'scan_set_df_span', params: { span } });
+    },
+    onResumeChange: (mode: number) => {
+      if (!hasCapability('scan') || !Number.isSafeInteger(mode)) return;
+      dispatchRadioIntent({ name: 'scan_set_resume', params: { mode } });
+    },
+  };
+}
+
+/* ── Dual-RX audio routing (#756) ──────────────────────────────────
+ * UI surface for the pipeline plumbed in #755 (audio_config WS +
+ * CI-V Phones L/R Mix) and #757 (RxPlayer routing graph).  Three
+ * widgets: focus selector, stereo split toggle, per-channel gain.
+ */
+
+const LS_FOCUS = 'icom.audio.focus';
+const LS_SPLIT = 'icom.audio.split_stereo';
+const LS_MAIN_DB = 'icom.audio.main_gain_db';
+const LS_SUB_DB = 'icom.audio.sub_gain_db';
+
+type AudioFocus = 'main' | 'sub' | 'both';
+
+function _ls<T>(key: string, parse: (raw: string) => T | null): T | null {
+  try {
+    const raw = localStorage.getItem(key);
+    if (raw === null) return null;
+    return parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+function _lsSet(key: string, value: string): void {
+  try { localStorage.setItem(key, value); } catch { /* quota / private mode — ignore */ }
+}
+
+export function makeAudioRoutingHandlers() {
+  return {
+    onFocusChange: (focus: AudioFocus) => {
+      audioManager.setAudioConfig({ focus });
+      _lsSet(LS_FOCUS, focus);
+    },
+    onSplitStereoChange: (on: boolean) => {
+      audioManager.setAudioConfig({ split_stereo: on });
+      _lsSet(LS_SPLIT, on ? '1' : '0');
+    },
+    onChannelGainChange: (channel: 'main' | 'sub', db: number) => {
+      const safe = Number.isFinite(db) ? db : 0;
+      if (channel === 'main') {
+        audioManager.setAudioConfig({ main_gain_db: safe });
+        _lsSet(LS_MAIN_DB, String(safe));
+      } else {
+        audioManager.setAudioConfig({ sub_gain_db: safe });
+        _lsSet(LS_SUB_DB, String(safe));
+      }
+    },
+    restoreFromStorage: () => {
+      const focus = _ls<AudioFocus>(LS_FOCUS, (r) =>
+        r === 'main' || r === 'sub' || r === 'both' ? r : null
+      );
+      const split = _ls<boolean>(LS_SPLIT, (r) => r === '1');
+      const mainDb = _ls<number>(LS_MAIN_DB, (r) => {
+        const n = Number(r);
+        return Number.isFinite(n) ? n : null;
+      });
+      const subDb = _ls<number>(LS_SUB_DB, (r) => {
+        const n = Number(r);
+        return Number.isFinite(n) ? n : null;
+      });
+      const cfg: Record<string, unknown> = {};
+      if (focus !== null) cfg.focus = focus;
+      if (split !== null) cfg.split_stereo = split;
+      if (mainDb !== null) cfg.main_gain_db = mainDb;
+      if (subDb !== null) cfg.sub_gain_db = subDb;
+      if (Object.keys(cfg).length > 0) audioManager.setAudioConfig(cfg);
+      return {
+        focus: focus ?? 'both' as AudioFocus,
+        split_stereo: split ?? false,
+        main_gain_db: mainDb ?? 0,
+        sub_gain_db: subDb ?? 0,
+      };
+    },
+  };
+}
+
+/* ── CW Panel Handlers ───────────────────────────────────────────── */
+
+export function makeCwPanelHandlers() {
+  return {
+    onCwPitchChange: (value: number) => {
+      if (!hasCapability('cw') || !knownTopLevelField('cwPitch') || !Number.isSafeInteger(value)) return;
+      dispatchRadioIntent({ name: 'set_cw_pitch', params: { value } });
+    },
+    onKeySpeedChange: (speed: number) => {
+      if (!hasCapability('cw') || !knownTopLevelField('keySpeed') || !Number.isSafeInteger(speed)) return;
+      dispatchRadioIntent({ name: 'set_key_speed', params: { speed } });
+    },
+    onBreakInToggle: () => {
+      const current = getRadioState()?.breakIn;
+      if (!hasCapability('cw') || !hasCapability('break_in') || !knownTopLevelField('breakIn')
+        || !Number.isSafeInteger(current)) return;
+      dispatchRadioIntent({ name: 'set_break_in', params: { mode: (current as number) > 0 ? 0 : 1 } });
+    },
+    onBreakInModeChange: (mode: number) => {
+      if (!hasCapability('cw') || !hasCapability('break_in') || !knownTopLevelField('breakIn')
+        || !Number.isSafeInteger(mode)) return;
+      dispatchRadioIntent({ name: 'set_break_in', params: { mode } });
+    },
+    onApfChange: (mode: number) => {
+      const receiver = knownReceiverField('apfTypeLevel');
+      if (!hasCapability('cw') || !hasCapability('apf') || receiver === null
+        || !Number.isSafeInteger(mode)) return;
+      dispatchRadioIntent({ name: 'set_apf', params: { mode, receiver } });
+    },
+    onTwinPeakToggle: () => {
+      const receiver = knownReceiverField('twinPeakFilter');
+      const state = getRadioState();
+      const rx = receiver === 0 ? state?.main : state?.sub;
+      if (!hasCapability('cw') || !hasCapability('twin_peak') || receiver === null
+        || typeof rx?.twinPeakFilter !== 'boolean') return;
+      dispatchRadioIntent({ name: 'set_twin_peak', params: { on: !rx.twinPeakFilter, receiver } });
+    },
+    onAutoTune: () => {
+      const caps = getCapabilities();
+      if (!hasCapability('cw') || !hasCapability('audio') || caps?.audioFftAvailable !== true
+        || knownActiveReceiver('freqHz') === null) return;
+      dispatchRadioIntent({ name: 'cw_auto_tune', params: {} });
+    },
+    onWpmChange: (speed: number) => {
+      if (!hasCapability('cw') || !knownTopLevelField('keySpeed') || !Number.isSafeInteger(speed)) return;
+      dispatchRadioIntent({ name: 'set_key_speed', params: { speed } });
+    },
+    onBreakInDelayChange: (level: number) => {
+      if (!hasCapability('cw') || !hasCapability('break_in') || !knownTopLevelField('breakInDelay')
+        || !Number.isSafeInteger(level)) return;
+      dispatchRadioIntent({ name: 'set_break_in_delay', params: { level } });
+    },
+    onSidetonePitchChange: (value: number) => {
+      if (!hasCapability('cw') || !knownTopLevelField('cwPitch') || !Number.isSafeInteger(value)) return;
+      dispatchRadioIntent({ name: 'set_cw_pitch', params: { value } });
+    },
+    onSidetoneLevelChange: (level: number) => {
+      if (!hasCapability('cw') || !knownTopLevelField('monitorGain') || !Number.isSafeInteger(level)) return;
+      dispatchRadioIntent({ name: 'set_monitor_gain', params: { level } });
+    },
+    onReversePaddleToggle: () => {
+      const current = getRadioState()?.dashRatio;
+      if (!hasCapability('cw') || !knownTopLevelField('dashRatio')
+        || !Number.isSafeInteger(current)) return;
+      dispatchRadioIntent({ name: 'set_dash_ratio', params: { ratio: (current as number) < 0 ? 0 : -1 } });
+    },
+  };
+}
+
+/* ── DSP Handlers ────────────────────────────────────────────────── */
+
+export function makeDspHandlers() {
+  return {
+    onNrModeChange: (mode: number) => {
+      const receiver = knownReceiverField('nr');
+      if (!hasCapability('nr') || receiver === null || !Number.isSafeInteger(mode)) return;
+      dispatchRadioIntent({ name: 'set_nr', params: { on: mode > 0, receiver } });
+    },
+    onNrLevelChange: (level: number) => {
+      let receiver: Receiver;
+      let raw: number;
+      try {
+        const contract = resolveNrLevelContract(getCapabilities());
+        const resolvedReceiver = knownReceiverField('nrLevel', contract.receivers);
+        if (!contract.hasNr || resolvedReceiver === null || !Number.isFinite(level)) return;
+        const resolvedRaw = contract.displayToRaw(level);
+        if (resolvedRaw === null) return;
+        receiver = resolvedReceiver;
+        raw = resolvedRaw;
+      } catch {
+        return;
+      }
+      dispatchRadioIntent({ name: 'set_nr_level', params: { level: raw, receiver } });
+    },
+    onNbToggle: (on: boolean) => {
+      const receiver = knownReceiverField('nb');
+      if (!hasCapability('nb') || receiver === null || typeof on !== 'boolean') return;
+      dispatchRadioIntent({ name: 'set_nb', params: { on, receiver } });
+    },
+    onNbLevelChange: (level: number) => {
+      const receiver = knownReceiverField('nbLevel');
+      if (!hasCapability('nb') || receiver === null || !Number.isSafeInteger(level)) return;
+      dispatchRadioIntent({ name: 'set_nb_level', params: { level, receiver } });
+    },
+    onNotchModeChange: (mode: string) => {
+      const receiver = knownReceiverField('autoNotch');
+      if (!hasCapability('notch') || receiver === null
+        || knownReceiverField('manualNotch') !== receiver
+        || (mode !== 'auto' && mode !== 'manual' && mode !== 'off')) return;
+      if (mode === 'auto') {
+        dispatchRadioIntent({ name: 'set_auto_notch', params: { on: true, receiver } });
+      } else if (mode === 'manual') {
+        dispatchRadioIntent({ name: 'set_manual_notch', params: { on: true, receiver } });
+      } else {
+        // MOR-1541: notch-off genuinely dispatches BOTH commands, so both
+        // NOTCH and A-NOTCH legitimately arm until each is confirmed —
+        // that is an honest reflection of what is actually in flight, not
+        // a bug (owner-decided: keep this behavior). Dispatch-order pin:
+        // panel-commands.intent.isolated.test.ts:396. Rendered-armed pin
+        // (both buttons show data-armed together): mor1536-armed-adoption
+        // .isolated.test.ts, "DspPanel notch armed signal".
+        dispatchRadioIntent({ name: 'set_auto_notch', params: { on: false, receiver } });
+        dispatchRadioIntent({ name: 'set_manual_notch', params: { on: false, receiver } });
+      }
+    },
+    onAutoNotchToggle: () => {
+      const receiver = knownReceiverField('autoNotch');
+      const current = receiver === 0 ? getRadioState()?.main?.autoNotch : getRadioState()?.sub?.autoNotch;
+      if (!hasCapability('notch') || receiver === null || typeof current !== 'boolean') return;
+      dispatchRadioIntent({ name: 'set_auto_notch', params: { on: !current, receiver } });
+    },
+    onNotchFreqChange: (value: number) => {
+      // notchFilter (MOR-1548): reclassified receiver-scoped, matching the
+      // ic7610.toml cmd29 route's own per-receiver rationale — same gate
+      // pattern as onManualNotchWidthChange below.
+      // MOR-2475: when the radio publishes a `manual_notch_freq` display
+      // domain, the slider carries display units and the value must encode
+      // display -> raw through the same `resolveControlContract` the
+      // view-model adapter decodes with; the gate then follows the field
+      // that carries the reading (`manualNotchFreq`). Without a published
+      // domain the slider value already IS the raw wire code and dispatches
+      // verbatim, gated on `notchFilter` exactly as before.
+      const contract = resolveControlContract(getCapabilities(), 'manual_notch_freq');
+      const field = contract.displayDomain === null ? 'notchFilter' : 'manualNotchFreq';
+      const receiver = knownReceiverField(field, contract.receivers ?? undefined);
+      if (!hasCapability('notch') || receiver === null || !Number.isSafeInteger(value)) return;
+      const raw = contract.displayDomain === null ? value : contract.displayToRaw(value);
+      if (raw === null) return;
+      dispatchRadioIntent({ name: 'set_notch_filter', params: { value: raw, receiver } });
+    },
+    onNbDepthChange: (level: number) => {
+      // MOR-498: slider carries display units (IC-7610: 1-10 front-panel
+      // scale over the 0-9 wire value).  Encode display -> wire through the
+      // published `controls.nb_depth` domain (MOR-2475) — the same shared
+      // contract the readback decodes with.  The gate above already requires
+      // a declared nb_depth control; a declared-but-unusable domain resolves
+      // to the empty contract and refuses rather than dispatching a value
+      // encoded against a fabricated scale.
+      const caps = getCapabilities();
+      if (!caps?.controls?.nb_depth || knownActiveReceiver() === null
+        || !knownTopLevelField('nbDepth') || !Number.isFinite(level)) return;
+      const wire = resolveControlContract(caps, 'nb_depth').displayToRaw(level);
+      if (wire === null) return;
+      dispatchRadioIntent({ name: 'set_nb_depth', params: { level: wire } });
+    },
+    onNbWidthChange: (level: number) => {
+      if (!getCapabilities()?.controls?.nb_depth || knownActiveReceiver() === null
+        || !knownTopLevelField('nbWidth') || !Number.isSafeInteger(level)) return;
+      dispatchRadioIntent({ name: 'set_nb_width', params: { level } });
+    },
+    onManualNotchWidthChange: (value: number) => {
+      const receiver = knownReceiverField('manualNotchWidth');
+      if (!hasCapability('notch') || receiver === null || !Number.isSafeInteger(value)) return;
+      dispatchRadioIntent({ name: 'set_manual_notch_width', params: { value, receiver } });
+    },
+    onAgcTimeChange: (value: number) => {
+      const receiver = knownReceiverField('agcTimeConstant');
+      if (!hasCapability('agc') || receiver === null || !Number.isSafeInteger(value)) return;
+      dispatchRadioIntent({ name: 'set_agc_time_constant', params: { value, receiver } });
+    },
+  };
+}
+
+/* ── TX Handlers ─────────────────────────────────────────────────── */
+
+export function makeTxHandlers() {
+  return {
+    onRfPowerChange: (level: number) => {
+      if (!hasCapability('tx') || !knownTopLevelField('powerLevel') || !isNormalizedLevel(level)) return;
+      dispatchRadioIntent({ name: 'set_rf_power', params: { level, level_unit: 'normalized' } });
+    },
+    onMicGainChange: (level: number) => {
+      if (!hasCapability('tx') || !knownTopLevelField('micGain') || !Number.isSafeInteger(level)) return;
+      dispatchRadioIntent({ name: 'set_mic_gain', params: { level } });
+    },
+    onAtuToggle: () => {
+      const current = getRadioState()?.tunerStatus;
+      if (!hasCapability('tx') || !hasCapability('tuner') || !knownTopLevelField('tunerStatus')
+        || !Number.isSafeInteger(current)) return;
+      dispatchRadioIntent({ name: 'set_tuner_status', params: { value: (current as number) > 0 ? 0 : 1 } });
+    },
+    onAtuTune: () => {
+      if (!hasCapability('tx') || !hasCapability('tuner') || !knownTopLevelField('tunerStatus')) return;
+      dispatchRadioIntent({ name: 'set_tuner_status', params: { value: 2 } });
+    },
+    onVoxToggle: toggleVox,
+    onCompToggle: () => {
+      const current = getRadioState()?.compressorOn;
+      if (!hasCapability('tx') || !hasCapability('compressor') || !knownTopLevelField('compressorOn')
+        || typeof current !== 'boolean') return;
+      dispatchRadioIntent({ name: 'set_compressor', params: { on: !current } });
+    },
+    onCompLevelChange: (level: number) => {
+      if (!hasCapability('tx') || !hasCapability('compressor') || !knownTopLevelField('compressorLevel')
+        || !Number.isSafeInteger(level)) return;
+      dispatchRadioIntent({ name: 'set_compressor_level', params: { level } });
+    },
+    onMonToggle: () => {
+      const current = getRadioState()?.monitorOn;
+      if (!hasCapability('tx') || !hasCapability('monitor') || !knownTopLevelField('monitorOn')
+        || typeof current !== 'boolean') return;
+      dispatchRadioIntent({ name: 'set_monitor', params: { on: !current } });
+    },
+    onMonLevelChange: (level: number) => {
+      if (!hasCapability('tx') || !hasCapability('monitor') || !knownTopLevelField('monitorGain')
+        || !Number.isSafeInteger(level)) return;
+      dispatchRadioIntent({ name: 'set_monitor_gain', params: { level } });
+    },
+    onDriveGainChange: (level: number) => {
+      if (!hasCapability('tx') || !hasCapability('drive_gain') || !knownTopLevelField('driveGain')
+        || !Number.isSafeInteger(level)) return;
+      dispatchRadioIntent({ name: 'set_drive_gain', params: { level } });
+    },
+  };
+}
+
+/* ── Filter Handlers ─────────────────────────────────────────────── */
+
+const positiveSafeInteger = (value: unknown): value is number =>
+  Number.isSafeInteger(value) && (value as number) > 0;
+
+function validFilterSegments(segments: readonly FilterSegmentConfig[], minHz: number, maxHz: number): boolean {
+  if (segments.length === 0 || segments[0].hzMin !== minHz
+    || segments[segments.length - 1].hzMax !== maxHz) return false;
+  let previousHzMax = 0;
+  let previousIndexMax = -1;
+  for (const segment of segments) {
+    if (!positiveSafeInteger(segment.hzMin) || !positiveSafeInteger(segment.hzMax)
+      || !positiveSafeInteger(segment.stepHz) || !Number.isSafeInteger(segment.indexMin)
+      || segment.indexMin < 0 || segment.hzMin > segment.hzMax
+      || (segment.hzMax - segment.hzMin) % segment.stepHz !== 0
+      || segment.hzMin <= previousHzMax || segment.indexMin <= previousIndexMax) return false;
+    previousHzMax = segment.hzMax;
+    previousIndexMax = segment.indexMin + ((segment.hzMax - segment.hzMin) / segment.stepHz);
+    if (!Number.isSafeInteger(previousIndexMax)) return false;
+  }
+  return true;
+}
+
+function validResolvedFilterWidth(width: number, rule: FilterModeConfig | null): boolean {
+  if (!positiveSafeInteger(width) || !rule || rule.fixed) return false;
+  const hasTable = rule.table !== undefined;
+  const hasSegments = rule.segments !== undefined;
+  if (hasTable && hasSegments) return false;
+  if (hasTable) {
+    const table = rule.table!;
+    if (table.length === 0 || table.some((value, index) =>
+      !positiveSafeInteger(value) || (index > 0 && value <= table[index - 1]))) return false;
+    if ((rule.minHz !== undefined && rule.minHz !== table[0])
+      || (rule.maxHz !== undefined && rule.maxHz !== table[table.length - 1])) return false;
+    return table.includes(width);
+  }
+  if (hasSegments) {
+    if (!positiveSafeInteger(rule.minHz) || !positiveSafeInteger(rule.maxHz)
+      || rule.minHz > rule.maxHz
+      || !validFilterSegments(rule.segments!, rule.minHz, rule.maxHz)) return false;
+    const segment = rule.segments!.find(({ hzMin, hzMax }) => width >= hzMin && width <= hzMax);
+    return segment !== undefined && (width - segment.hzMin) % segment.stepHz === 0;
+  }
+  return positiveSafeInteger(rule.minHz) && positiveSafeInteger(rule.maxHz)
+    && positiveSafeInteger(rule.stepHz) && rule.minHz <= rule.maxHz
+    && (rule.maxHz - rule.minHz) % rule.stepHz === 0
+    && width >= rule.minHz && width <= rule.maxHz
+    && (width - rule.minHz) % rule.stepHz === 0;
+}
+
+/**
+ * The active filter-width rule for `receiver` (MOR-1518) — the SAME
+ * `resolveFilterModeConfig(caps, mode, dataMode)` resolution
+ * `onFilterWidthCommit` already reads via its own `currentA03cContext()`
+ * (below), but usable from the debounced/preset handlers, which key off
+ * `knownActiveReceiver` rather than the stricter A06a1 context. `null` when
+ * state/caps are unavailable or the mode has no declared rule — the
+ * capability-absent case `quantizeFilterWidthToRule` itself falls back to
+ * the plain clamp for.
+ */
+function activeFilterRule(receiver: Receiver): FilterModeConfig | null {
+  const state = getRadioState();
+  const caps = getCapabilities();
+  if (!state || !caps) return null;
+  const rx = receiver === 1 ? state.sub : state.main;
+  const prefix = receiver === 1 ? 'sub' : 'main';
+  // MOR-2513: null mode/dataMode (unobserved) resolves no config.
+  // MOR-4434: the freshly observed narrow state selects the active table —
+  // an unobserved or stale narrow reading keeps the wide table, exactly as
+  // before and as the backend's admission hint reads it.
+  const narrow = isFieldFreshlyObserved(state, `${prefix}.narrow`) ? (rx?.narrow ?? null) : null;
+  return resolveFilterModeConfig(caps, rx?.mode ?? undefined, rx?.dataMode ?? undefined, narrow);
+}
+
+export function makeFilterHandlers() {
+  return {
+    onFilterChange: (filter: number) => {
+      const receiver = knownActiveReceiver('filter');
+      if (receiver === null) return;
+      dispatchRadioIntent({ name: 'set_filter', params: { filter, receiver } });
+    },
+    // MOR-1518: `width` here is a raw, possibly mid-drag or mid-keystroke
+    // slider value — the native `<input type="range">` in `FilterSurface`/
+    // `FilterPanel` steps by a single fixed increment that cannot match
+    // every mode's radio-declared step (the IC-7300's own USB/LSB/CW/RTTY
+    // rules widen from 50 Hz to 100 Hz above 500 Hz, `rigs/ic7300.toml`).
+    // `quantizeFilterWidthToRule` snaps to a value the resolved per-mode
+    // rule actually accepts BEFORE it reaches the wire — the "command-
+    // emission point", not just a display-layer clamp — so this handler
+    // never dispatches the alignment-error-triggering values the live
+    // bench reported (1050/2150/3150 Hz).
+    //
+    // MOR-2529: the direct width write needs receiver identity, not a
+    // selected-filter reading. The FTX-1 fixture keeps `main.filter`
+    // undeclared while width writes remain available; the component-path
+    // regression test exercises that exact state.
+    onFilterWidthChange: (() => {
+      let timer: ReturnType<typeof setTimeout> | null = null;
+      return (width: number) => {
+        if (knownActiveReceiver() === null) return;
+        if (timer) clearTimeout(timer);
+        timer = setTimeout(() => {
+          timer = null;
+          const receiver = knownActiveReceiver();
+          if (receiver === null) return;
+          const quantized = quantizeFilterWidthToRule(width, activeFilterRule(receiver));
+          dispatchRadioIntent({ name: 'set_filter_width', params: { width: quantized, receiver } });
+        }, 200);
+      };
+    })(),
+    onFilterWidthCommit: (
+      width: number,
+      receiver: Receiver,
+      expectedProviderGeneration: number,
+    ): void => {
+      const context = currentA03cContext();
+      const stateGeneration = context?.state.providerGeneration;
+      // MOR-1418: same single-receiver `active` bypass as knownActiveReceiver
+      // — on a one-receiver radio, active is tautologically MAIN even when
+      // structurally unobservable. Dual-RX still requires observation.
+      const activeObserved = context !== null && observedAvailableField(context.state, 'active');
+      const singleReceiver = context?.caps.receivers === 1;
+      const active = context
+        && (activeObserved ? context.state.active : singleReceiver ? 'MAIN' : undefined);
+      // MOR-1576: receiver identity is established via `mode` only. The
+      // `filterWidth`-observation checks that used to sit alongside it here
+      // (a `knownA03cReceiver(..., 'filterWidth')` receiver-identity check
+      // plus a `positiveSafeInteger(currentWidth)` freshness check) were a
+      // receiver-identity proxy, not a functional need — the write below
+      // never reads `currentWidth`; it resolves the quantization `rule` from
+      // `mode`/`dataMode` alone and validates the passed `width` PARAMETER
+      // against that rule via `validResolvedFilterWidth`. Dropping them
+      // aligns this site with the other three `set_filter_width` dispatch
+      // sites, all of which already gate on identity + mode/dataMode only.
+      if (!context || !Number.isSafeInteger(expectedProviderGeneration)
+        || expectedProviderGeneration < 0 || !Number.isSafeInteger(stateGeneration)
+        || expectedProviderGeneration !== stateGeneration
+        || (active !== 'MAIN' && active !== 'SUB')
+        || (active === 'MAIN' ? 0 : 1) !== receiver
+        || knownA03cReceiver(context, active, 'mode') !== receiver
+        || !context.caps.capabilities.includes('filter_width')) return;
+      const key = receiver === 1 ? 'sub' : 'main';
+      const observed = context.state[key];
+      const mode = observed?.mode;
+      if (!observed || !observedAvailableField(context.state, `${key}.mode`)
+        || typeof mode !== 'string' || mode.length === 0) return;
+      const supportsData = context.caps.capabilities.includes('data_mode');
+      const dataMode = supportsData ? observed.dataMode : 0;
+      if (supportsData && (!observedAvailableField(context.state, `${key}.dataMode`)
+        || !Number.isSafeInteger(dataMode) || (dataMode as number) < 0)) return;
+      // MOR-4434: the commit validates against the NARROW-selected table —
+      // a narrow-only width commits instead of dying in `table.includes`.
+      // Unobserved or stale narrow keeps the wide table, exactly as before
+      // and as the backend's admission hint reads it.
+      const narrow = knownA03cReceiver(context, active, 'narrow') === receiver
+        && isFieldFreshlyObserved(context.state, `${key}.narrow`)
+        ? (observed?.narrow ?? null)
+        : null;
+      const rule = resolveFilterModeConfig(context.caps, mode, dataMode as number, narrow);
+      if (!validResolvedFilterWidth(width, rule)) return;
+      dispatchRadioIntent({ name: 'set_filter_width', params: { width, receiver } });
+    },
+    // MOR-2535 follow-up (owner ruling 2026-09-22): on a radio whose profile
+    // declares a radio-default width code (the `filter_width_radio_default`
+    // capability), the width row's double-click resets to the RADIO's own
+    // mode-dependent default, not to a profile table entry — only the radio
+    // can resolve it (FTX-1 `SH` code 00). This is deliberately NOT a
+    // state-backed command: no draft, no pending target, no
+    // lifecycle wait for a value (MOR-2533 — never confirm on time after
+    // the ACK); the slider moves when the post-write readback arrives. The
+    // wiring seam passes this handler to the surface ONLY when the
+    // capability is present, so the gate below is the fail-closed backstop,
+    // and without the capability the double-click keeps its lease-reset
+    // behaviour untouched.
+    onFilterWidthReset: () => {
+      const caps = getCapabilities();
+      if (!caps || !caps.capabilities.includes('filter_width_radio_default')) return;
+      const receiver = knownActiveReceiver();
+      if (receiver === null) return;
+      dispatchRadioIntent({ name: 'reset_filter_width', params: { receiver } });
+    },
+    onFilterShapeChange: (shape: number) => {
+      const receiver = knownActiveReceiver('filterShape');
+      if (receiver === null) return;
+      dispatchRadioIntent({ name: 'set_filter_shape', params: { shape, receiver } });
+    },
+    // MOR-2640: NARROW for the ACTIVE receiver (`set_narrow {on,
+    // receiver}`, backend #3689). Same inversion shape as
+    // `makeCwPanelHandlers().onTwinPeakToggle`: negate the CONFIRMED
+    // reading, never a pending target — the pending marker is
+    // display-only (MOR-1441 leg-1 doctrine). Gated on the
+    // profile-declared `narrow` capability; the view model hides the
+    // control without it, this gate refuses the dispatch.
+    onNarrowToggle: () => {
+      const receiver = knownActiveReceiver('narrow');
+      const state = getRadioState();
+      const rx = receiver === 0 ? state?.main : state?.sub;
+      if (!hasCapability('narrow') || receiver === null
+        || typeof rx?.narrow !== 'boolean') return;
+      dispatchRadioIntent({ name: 'set_narrow', params: { on: !rx.narrow, receiver } });
+    },
+    // MOR-1518: `width` is a direct-entry value from the filter-settings
+    // modal's per-preset slider (`FilterPanel.svelte`'s `handlePresetChange`)
+    // — the same "any direct-entry path into the width command" the ticket
+    // calls out. Quantized against the CURRENT receiver's resolved rule at
+    // fire time (not the rule captured when the drag started), matching
+    // `currentReceiver`/`currentActive` already being re-read fresh below.
+    onFilterPresetChange: (() => {
+      let timer: ReturnType<typeof setTimeout> | null = null;
+      return (filter: number, width: number) => {
+        const receiver = knownActiveReceiver('filter');
+        const activeFilter = receiver === null ? null : getActiveReceiver()?.filter;
+        if (receiver === null || !Number.isSafeInteger(activeFilter)) return;
+        if (timer) clearTimeout(timer);
+        timer = setTimeout(() => {
+          timer = null;
+          const currentReceiver = knownActiveReceiver('filter');
+          const currentActive = currentReceiver === null ? null : getActiveReceiver()?.filter;
+          if (currentReceiver === null || !Number.isSafeInteger(currentActive)) return;
+          const quantized = quantizeFilterWidthToRule(width, activeFilterRule(currentReceiver));
+          if (filter !== currentActive) {
+            dispatchRadioIntent({ name: 'set_filter', params: { filter, receiver: currentReceiver } });
+          }
+          dispatchRadioIntent({ name: 'set_filter_width', params: { width: quantized, receiver: currentReceiver } });
+          if (filter !== currentActive) {
+            dispatchRadioIntent({ name: 'set_filter', params: { filter: currentActive as number, receiver: currentReceiver } });
+          }
+        }, 200);
+      };
+    })(),
+    // MOR-1576: defaults require the observed active filter slot but not a
+    // confirmed prior `filterWidth` reading.
+    //
+    // MOR-1576 review (B1): `quantizeFilterWidthToRule` passes non-finite
+    // input straight through when no usable rule/segment covers it
+    // (`filter-controls.ts`), and `dispatchRadioIntent` THROWS on a
+    // non-safe-integer width. `FilterPanel.svelte`'s `factoryDefaults`
+    // falls back to the observed `filterWidth` (which is `Number.NaN`
+    // whenever `main.filterWidth` is unobserved — `panel-props.ts`) when
+    // the mode has no declared `defaults` array, so `defaults` here CAN
+    // legitimately arrive carrying NaN — precisely on radios that never
+    // confirm `filterWidth` readback, the case this ticket exists for. The
+    // whole array is validated (quantized-and-checked) BEFORE any command
+    // is dispatched, same MOR-1291 fail-closed shape used elsewhere in this
+    // file — a mid-loop throw would otherwise leave the radio bracketed
+    // into a non-active filter slot with the restoring `set_filter` never
+    // reached.
+    onFilterDefaults: (defaults: number[]) => {
+      const receiver = knownActiveReceiver('filter');
+      const activeFilter = receiver === null ? null : getActiveReceiver()?.filter;
+      if (receiver === null || !Number.isSafeInteger(activeFilter)) return;
+      const rule = activeFilterRule(receiver);
+      const quantizedWidths = defaults.map((width) => quantizeFilterWidthToRule(width, rule));
+      if (!quantizedWidths.every((width) => positiveSafeInteger(width))) return;
+      for (let i = 0; i < quantizedWidths.length; i++) {
+        const filter = i + 1;
+        if (filter !== activeFilter) {
+          dispatchRadioIntent({ name: 'set_filter', params: { filter, receiver } });
+        }
+        dispatchRadioIntent({
+          name: 'set_filter_width',
+          params: { width: quantizedWidths[i], receiver },
+        });
+      }
+      if ((activeFilter as number) <= defaults.length) {
+        dispatchRadioIntent({ name: 'set_filter', params: { filter: activeFilter as number, receiver } });
+      }
+    },
+    onIfShiftChange: (value: number) => {
+      const caps = getCapabilities();
+      if (!caps) return;
+      if (caps.capabilities.includes('if_shift')) {
+        const receiver = knownActiveReceiver('ifShift');
+        if (receiver !== null) dispatchRadioIntent({ name: 'set_if_shift', params: { offset: value, receiver } });
+      } else if (caps.capabilities.includes('pbt')) {
+        // MOR-1291: a radio can declare the `pbt` capability tag without
+        // (yet, or ever) declaring a usable `controls.pbt_inner` range — no
+        // fabricated IC-7610-shaped scale (rawCenter 128, ±1200 Hz) stands in
+        // for a range this radio's OWN capabilities never provided. Missing
+        // or malformed range ⇒ no command, same fail-closed shape every
+        // other guard below already uses.
+        const pbtRange = pbtRangeFromCaps(caps);
+        if (!pbtRange) return;
+        const receiver = knownActiveReceiver('pbtInner');
+        const state = getRadioState();
+        const activeRx = getActiveReceiver();
+        const prefix = receiver === 1 ? 'sub' : 'main';
+        if (
+          receiver === null
+          || !state
+          || !isFieldAvailable(state, `${prefix}.pbtOuter`)
+          || typeof activeRx?.pbtInner !== 'number'
+          || typeof activeRx.pbtOuter !== 'number'
+        ) return;
+        // MOR-2500: the current edges are RAW 0..255 — read them in Hz on
+        // the measured lattice FIRST, then move the passband in Hz and
+        // write it back on the same lattice. Feeding the raws to
+        // `mapIfShiftToPbt` as if they were Hz collapsed a 900 Hz passband
+        // to 100 Hz (raws 160/96 -> 163/157 at a 3600 Hz filter, shift
+        // +300).
+        const lattice = activePbtLattice();
+        if (!lattice) return;
+        const innerHz = measuredPbtRawToHz(activeRx.pbtInner, lattice.filterWidthHz, lattice.stepHz);
+        const outerHz = measuredPbtRawToHz(activeRx.pbtOuter, lattice.filterWidthHz, lattice.stepHz);
+        if (innerHz === null || outerHz === null) return;
+        const { pbtInner, pbtOuter } = mapIfShiftToPbt(
+          value,
+          innerHz,
+          outerHz,
+          lattice.filterWidthHz,
+          lattice.stepHz,
+        );
+        const innerRaw = measuredPbtHzToRaw(pbtInner, lattice.filterWidthHz, lattice.stepHz);
+        const outerRaw = measuredPbtHzToRaw(pbtOuter, lattice.filterWidthHz, lattice.stepHz);
+        if (innerRaw === null || outerRaw === null) return;
+        dispatchRadioIntent({ name: 'set_pbt_inner', params: { value: innerRaw, receiver } });
+        dispatchRadioIntent({ name: 'set_pbt_outer', params: { value: outerRaw, receiver } });
+      }
+    },
+    onPbtInnerChange: (value: number) => {
+      // MOR-1291: see `onIfShiftChange`'s pbt branch above — no command
+      // without a caps-declared PBT range. MOR-2500: no command without a
+      // lattice for the ACTIVE receiver's mode either; `measuredPbtHzToRaw`
+      // snaps the Hz value to the nearest reachable raw on it.
+      const pbtRange = pbtRangeFromCaps(getCapabilities());
+      if (!pbtRange) return;
+      const receiver = knownActiveReceiver('pbtInner');
+      if (receiver === null) return;
+      const lattice = activePbtLattice();
+      if (!lattice) return;
+      const raw = measuredPbtHzToRaw(value, lattice.filterWidthHz, lattice.stepHz);
+      if (raw === null) return;
+      dispatchRadioIntent({ name: 'set_pbt_inner', params: { value: raw, receiver } });
+    },
+    onPbtOuterChange: (value: number) => {
+      const pbtRange = pbtRangeFromCaps(getCapabilities());
+      if (!pbtRange) return;
+      const receiver = knownActiveReceiver('pbtOuter');
+      if (receiver === null) return;
+      const lattice = activePbtLattice();
+      if (!lattice) return;
+      const raw = measuredPbtHzToRaw(value, lattice.filterWidthHz, lattice.stepHz);
+      if (raw === null) return;
+      dispatchRadioIntent({ name: 'set_pbt_outer', params: { value: raw, receiver } });
+    },
+    onPbtReset: () => {
+      const pbtRange = pbtRangeFromCaps(getCapabilities());
+      if (!pbtRange) return;
+      const receiver = knownActiveReceiver('pbtInner');
+      const state = getRadioState();
+      const prefix = receiver === 1 ? 'sub' : 'main';
+      if (receiver === null || !state || !isFieldAvailable(state, `${prefix}.pbtOuter`)) return;
+      const lattice = activePbtLattice();
+      if (!lattice) return;
+      const center = measuredPbtHzToRaw(0, lattice.filterWidthHz, lattice.stepHz);
+      if (center === null) return;
+      dispatchRadioIntent({ name: 'set_pbt_inner', params: { value: center, receiver } });
+      dispatchRadioIntent({ name: 'set_pbt_outer', params: { value: center, receiver } });
+    },
+  };
+}
+
+/* ── Band Handlers ───────────────────────────────────────────────── */
+
+export function makeBandHandlers() {
+  return {
+    onBandSelect: (_name: string, freq: number, bsrCode?: number) => {
+      const receiver = knownReceiverField('freqHz');
+      if (receiver === null || !Number.isSafeInteger(freq)
+        || (bsrCode !== undefined && !Number.isSafeInteger(bsrCode))) return;
+      if (bsrCode !== undefined) {
+        // MOR-1435: an absolute band write retires any pending paced
+        // flush first — a stray follow-up set_freq would fight the band.
+        tuningAccumulator().cancel(receiver);
+        dispatchRadioIntent({ name: 'set_band', params: { band: bsrCode } });
+      } else {
+        // MOR-1435: the bandless fallback is an ABSOLUTE target — jump
+        // (clears burst state, emits unpaced) instead of a direct write.
+        tuningAccumulator().jump(receiver, freq);
+      }
+    },
+  };
+}
+
+/* ── Preset Handlers ─────────────────────────────────────────────── */
+
+export function makePresetHandlers() {
+  const select = (freq: number, mode: string, filter = 1): void => {
+    const receiver = knownReceiverField('freqHz');
+    if (receiver === null || knownReceiverField('mode') !== receiver
+      || !Number.isSafeInteger(freq) || typeof mode !== 'string' || mode.length === 0
+      || !Number.isSafeInteger(filter)) return;
+    // MOR-1435: an absolute preset target — jump (clears burst state,
+    // emits unpaced) instead of a direct write.
+    tuningAccumulator().jump(receiver, freq);
+    dispatchRadioIntent({ name: 'set_mode', params: { mode, filter, receiver } });
+  };
+  return {
+    onPresetSelect: select,
+    onFreqPreset: select,
+  };
+}
+
+/* ── RX Audio Handlers ───────────────────────────────────────────── */
+
+/** The radio AF of the NAMED receiver, whichever is selected; `true` when sent. */
+function setReceiverAf(target: 'main' | 'sub', level: number): boolean {
+  if (!isNormalizedLevel(level) || !hasCapability('af_level')) return false;
+  const receiver = knownActiveReceiver('afLevel', target === 'sub' ? 'SUB' : 'MAIN');
+  if (receiver === null) return false;
+  dispatchRadioIntent({ name: 'set_af_level', params: { level, receiver } });
+  return true;
+}
+
+/** MOR-2583: monitor MUTE lives on the server, which saves each receiver's
+ *  AF before zeroing it. Unmute restores those saved levels, so it is sent
+ *  only when the server says MUTE is on — a client that never muted must not
+ *  restore levels another client (or a previous page) saved. */
+function unmuteServerMonitor(): void {
+  if (getRadioState()?.monitorMute?.on !== true) return;
+  dispatchRadioIntent({ name: 'set_monitor_mute', params: { on: false } });
+}
+
+export function makeRxAudioHandlers() {
+  return {
+    onMonitorModeChange: (mode: string) => {
+      if (mode !== 'live' && mode !== 'mute' && mode !== 'local' && mode !== 'radio') return;
+      if (mode === 'live') {
+        runtime.setMuted(false);
+        unmuteServerMonitor();
+        runtime.setRxLive(true);
+        return;
+      }
+
+      runtime.setRxLive(false);
+
+      if (mode === 'mute') {
+        runtime.setMuted(true);
+        dispatchRadioIntent({ name: 'set_monitor_mute', params: { on: true } });
+      } else {
+        runtime.setMuted(false);
+        unmuteServerMonitor();
+      }
+    },
+    onAfLevelChange: (level: number) => {
+      if (runtime.rxEnabled) {
+        // MOR-4210: the browser AF level goes above 1 into makeup gain.
+        if (!Number.isFinite(level) || level < 0 || level > RX_AF_LEVEL_MAX) return;
+        runtime.setRxVolume(level);
+        runtime.setVolume(Math.round(level * 100));
+      } else {
+        if (!isNormalizedLevel(level)) return;
+        const receiver = knownReceiverField('afLevel');
+        if (!hasCapability('af_level') || receiver === null) return;
+        dispatchRadioIntent({ name: 'set_af_level', params: { level, receiver } });
+      }
+    },
+    /** MOR-2579: the radio AF of the NAMED receiver, whichever is selected. */
+    onReceiverAfLevelChange: (target: 'main' | 'sub', level: number) => {
+      setReceiverAf(target, level);
+    },
+  };
+}
+
+/* ── VFO Handlers ────────────────────────────────────────────────── */
+
+function activateReceiver(
+  target: 'MAIN' | 'SUB',
+  context = currentA03cContext(),
+): boolean {
+  if (!context || knownA03cReceiver(context, target) === null) return false;
+  dispatchRadioIntent({ name: 'set_vfo', params: { vfo: target } });
+  makeAudioRoutingHandlers().onFocusChange(target === 'SUB' ? 'sub' : 'main');
+  return true;
+}
+
+function focusModePanel(target: 'MAIN' | 'SUB'): void {
+  if (!activateReceiver(target)) return;
+  setPendingFocus(target);
+  const modePanel = document.querySelector<HTMLElement>('[data-mode-panel="true"]');
+  if (!modePanel) return;
+  modePanel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  modePanel.dataset.highlight = 'true';
+  window.setTimeout(() => {
+    if (modePanel.dataset.highlight === 'true') delete modePanel.dataset.highlight;
+  }, 1200);
+}
+
+function supportsVfoSlot(
+  context: NonNullable<ReturnType<typeof currentA03cContext>>,
+  slot: 'A' | 'B' | null,
+): boolean {
+  if (slot === null) return true;
+  if (slot !== 'A' && slot !== 'B') return false;
+  return context.caps.vfoScheme === 'ab' || context.caps.vfoScheme === 'main_sub';
+}
+
+function tuningReceiverPath(receiver: number): 'main' | 'sub' | null {
+  return receiver === 0 ? 'main' : receiver === 1 ? 'sub' : null;
+}
+
+/** Identity of the physical receiver's currently selected VFO. Relative A/B
+ * providers remain relative; an A/B label is used only when observed. */
+function currentTuningContext(receiver: number): string | null {
+  const context = currentA03cContext();
+  const receiverPath = tuningReceiverPath(receiver);
+  if (!context || receiverPath === null) return null;
+  if (knownA03cReceiver(context, receiverPath === 'main' ? 'MAIN' : 'SUB', 'freqHz') !== receiver) return null;
+  if (context.caps.vfoScheme === 'single' || context.caps.vfoScheme === 'ab_shared') {
+    return `${context.caps.vfoScheme}:${receiverPath}`;
+  }
+  if (context.caps.vfoScheme === 'ab'
+    && relativeVfoIdentityUnknown(context.state, context.caps, receiverPath)) {
+    return `ab-relative:${receiverPath}`;
+  }
+  const selected = context.state[receiverPath]?.activeSlot;
+  const status = getFieldStatus(context.state, `${receiverPath}.activeSlot`);
+  if (context.caps.vfoScheme === 'main_sub' && (status?.observed !== true
+    || (selected !== 'A' && selected !== 'B'))) return `main_sub:${receiverPath}`;
+  return status?.observed === true && status.freshness !== 'unknown'
+    && status.availability !== 'missing' && (selected === 'A' || selected === 'B')
+    ? `${context.caps.vfoScheme}:${receiverPath}:${selected}` : null;
+}
+
+function currentTuningMarker(receiver: number): number | null {
+  const context = currentA03cContext();
+  const receiverPath = tuningReceiverPath(receiver);
+  if (!context || receiverPath === null) return null;
+  const status = getFieldStatus(context.state, `${receiverPath}.freqHz`);
+  const marker = status?.lastObservedMonotonic;
+  return status?.observed === true && status.freshness !== 'unknown'
+    && status.availability !== 'missing' && status.availability !== 'unavailable'
+    && status.availability !== 'undeclared'
+    && status.source !== null
+    && (!Array.isArray(status.quality) || status.quality.includes('confirmed'))
+    && typeof marker === 'number' && Number.isFinite(marker) && marker >= 0
+    ? marker : null;
+}
+
+function acceptedTuningTarget(query: AcceptedTargetQuery): boolean {
+  // Practical association, not causal proof: a changed radio observation may
+  // continue this burst only when it exactly equals an accepted local target
+  // and advances that command's frequency-field ACK marker. A still-pending
+  // send carries no ACK marker yet, so it associates by exact in-burst target
+  // instead — its echo on a slow link arrives before any acknowledgement
+  // (MOR-4393). A physical move to the same still-relevant target is
+  // intrinsically indistinguishable and is intentionally treated as the local
+  // echo.
+  if (currentTuningContext(query.receiver) !== query.context) return false;
+  const receiverPath = tuningReceiverPath(query.receiver);
+  if (receiverPath === null) return false;
+  const path = `${receiverPath}.freqHz`;
+  const records = getCommandLifecycles();
+  const anchorIndex = query.anchor.id === null ? -1 : records.findIndex((record) =>
+    record.id === query.anchor.id && record.createdAt === query.anchor.createdAt);
+  return records.some((record, index) => {
+    const inBurst = anchorIndex >= 0
+      ? index >= anchorIndex
+      : record.createdAt > query.anchor.createdAt;
+    const params = record.params;
+    const boundary = record.ackFieldObservationTimes?.[path];
+    const markerAdvanced = typeof boundary === 'number' && Number.isFinite(boundary)
+      && query.observationMarker > boundary;
+    // Pending sends carry no ACK marker yet — exact in-burst target match is
+    // the whole claim. Acknowledged/confirmed sends additionally require a
+    // post-ACK readback.
+    const associated = record.status === 'pending' ? boundary === undefined : markerAdvanced;
+    return inBurst
+      && record.name === 'set_freq'
+      && (record.status === 'acknowledged' || record.status === 'confirmed'
+        || record.status === 'pending')
+      && record.originalEpoch === currentControlSessionEpoch()
+      && record.providerGeneration === getCapabilities()?.providerGeneration
+      && Reflect.ownKeys(params).length === 2
+      && params.receiver === query.receiver
+      && params.freq === query.frequency
+      && associated;
+  });
+}
+
+// MOR-1425: rapid-tuning-step accumulator, shared module-wide (review
+// B5) — NOT per-instance: `panel-adapters.ts` holds both a singleton
+// accessor and fresh per-composition-root calls, and two independently-
+// tracked accumulators for the same receiver would be blind to each
+// other's writes. `epoch`/`generation` are the same session/capabilities
+// reads `dispatchRadioIntent` itself uses (review B4).
+// MOR-1435: hoisted to module scope so the band/preset legacy paths can
+// route their absolute writes through the same accumulator.
+function tuningAccumulator(): ReturnType<typeof getSharedTuningAccumulator> {
+  return getSharedTuningAccumulator({
+    emit: (receiver, freq) =>
+      dispatchRadioIntent({ name: 'set_freq', params: { freq, receiver: receiver as Receiver } }),
+    epoch: currentControlSessionEpoch,
+    generation: () => {
+      const value = getCapabilities()?.providerGeneration;
+      return typeof value === 'number' ? value : null;
+    },
+    context: currentTuningContext,
+    acceptedTarget: acceptedTuningTarget,
+  });
+}
+
+export function isTuningBurstObservation(receiver: number, frequency: number): boolean {
+  return tuningAccumulator().acceptsObservation(receiver, frequency, currentTuningMarker(receiver));
+}
+
+export function makeVfoHandlers() {
+  return {
+    onSwap: () => {
+      const context = currentA03cContext();
+      if (!context || !context.caps.capabilities.includes('vfo_swap')) return;
+      tuningAccumulator().cancel();
+      dispatchRadioIntent({ name: 'vfo_swap', params: {} });
+    },
+    onEqual: () => {
+      const context = currentA03cContext();
+      if (!context || !context.caps.capabilities.includes('vfo_equalize')) return;
+      tuningAccumulator().cancel();
+      dispatchRadioIntent({ name: 'vfo_equalize', params: {} });
+    },
+    onSplitToggle: () => {
+      const context = currentA03cContext();
+      const current = context?.state.split;
+      if (!context || !context.caps.capabilities.includes('split')
+        || !knownA03cTopLevelField(context, 'split') || typeof current !== 'boolean') return;
+      dispatchRadioIntent({ name: 'set_split', params: { on: !current } });
+    },
+    onMainVfoClick: () => { tuningAccumulator().cancel(); activateReceiver('MAIN'); },
+    onSubVfoClick: () => { tuningAccumulator().cancel(); activateReceiver('SUB'); },
+    onVfoSelect: (receiver: 'MAIN' | 'SUB', slot: 'A' | 'B' | null) => {
+      const context = currentA03cContext();
+      // MOR-1423: same single-receiver `active` bypass as knownActiveReceiver
+      // (MOR-1418) — on a one-receiver radio, active is tautologically MAIN
+      // even when structurally unobservable. Dual-RX still requires observation.
+      const activeObserved = context !== null && knownA03cTopLevelField(context, 'active');
+      const singleReceiver = context?.caps.receivers === 1;
+      const active = context
+        && (activeObserved ? context.state.active : singleReceiver ? 'MAIN' : undefined);
+      if (!context || (active !== 'MAIN' && active !== 'SUB')
+        || knownA03cReceiver(context, receiver) === null
+        || !supportsVfoSlot(context, slot)) return;
+      tuningAccumulator().cancel(receiver === 'SUB' ? 1 : 0);
+      if (active !== receiver && !activateReceiver(receiver, context)) return;
+      if (slot !== null) dispatchRadioIntent({ name: 'set_vfo', params: { vfo: slot } });
+    },
+    onDirectFrequencyChange: (request: DirectVfoFrequencyRequest) => {
+      const context = currentA03cContext();
+      const generation = context?.state.providerGeneration;
+      const activeSlot = context?.state.main?.activeSlot;
+      if (!context || request.receiver !== 'MAIN' || context.caps.receivers !== 1
+        || context.caps.vfoScheme !== 'ab'
+        || !context.caps.capabilities.includes('vfo_freq_direct')
+        || request.sessionEpoch !== currentControlSessionEpoch()
+        || !Number.isSafeInteger(request.providerGeneration) || request.providerGeneration < 0
+        || generation !== request.providerGeneration
+        || context.caps.providerGeneration !== request.providerGeneration
+        || !observedAvailableField(context.state, 'main.activeSlot')
+        || (activeSlot !== 'A' && activeSlot !== 'B')
+        || activeSlot !== request.expectedActiveSlot
+        || (request.slot !== 'A' && request.slot !== 'B')
+        || !Number.isSafeInteger(request.frequencyHz) || request.frequencyHz <= 0
+        || !context.caps.freqRanges.some(
+          (range) => request.frequencyHz >= range.start && request.frequencyHz <= range.end,
+        )) return null;
+      tuningAccumulator().cancel(0);
+      return dispatchRadioIntent({
+        name: 'set_vfo_freq',
+        params: {
+          freq: request.frequencyHz,
+          receiver: 0,
+          slot: request.slot,
+          expected_active_slot: request.expectedActiveSlot,
+          provider_generation: request.providerGeneration,
+        },
+      });
+    },
+    onMainModeClick: () => { tuningAccumulator().cancel(); focusModePanel('MAIN'); },
+    onSubModeClick: () => { tuningAccumulator().cancel(); focusModePanel('SUB'); },
+    onMainFreqChange: (freq: number) => {
+      const context = currentA03cContext();
+      const main = context?.state.main;
+      if (!context || knownA03cReceiver(context, 'MAIN', 'freqHz') !== 0
+        || !Number.isSafeInteger(freq) || !main || typeof main.freqHz !== 'number') return;
+      tuningAccumulator().step(0, main.freqHz, freq, currentTuningMarker(0));
+    },
+    onSubFreqChange: (freq: number) => {
+      const context = currentA03cContext();
+      const sub = context?.state.sub;
+      if (!context || knownA03cReceiver(context, 'SUB', 'freqHz') !== 1
+        || !Number.isSafeInteger(freq) || !sub || typeof sub.freqHz !== 'number') return;
+      tuningAccumulator().step(1, sub.freqHz, freq, currentTuningMarker(1));
+    },
+    // MOR-1425 review B1: callers mix ABSOLUTE targets (spectrum click/
+    // drag, EiBi/QSY recall) and RELATIVE steps (spectrum scroll, media
+    // keys, keyboard 'tune'). Defaults to 'jump' — absolute correctness by
+    // default — so only true step sources opt in with 'step'.
+    onFreqChange: (freq: number, receiver?: Receiver, kind: 'jump' | 'step' | 'drag' = 'jump') => {
+      const context = currentA03cContext();
+      const target = receiver === 0 ? 'MAIN' : receiver === 1 ? 'SUB' : null;
+      if (!context || target === null || receiver === undefined
+        || knownA03cReceiver(context, target, 'freqHz') !== receiver
+        || !Number.isSafeInteger(freq)) return;
+      const confirmed = receiver === 1 ? context.state.sub : context.state.main;
+      if (kind === 'jump' || kind === 'drag') {
+        tuningAccumulator().jump(receiver, freq, confirmed?.freqHz ?? undefined, currentTuningMarker(receiver), kind === 'drag');
+        return;
+      }
+      // MOR-2513: an unobserved current frequency (null) computes no step.
+      if (!confirmed || typeof confirmed.freqHz !== 'number') return;
+      tuningAccumulator().step(receiver, confirmed.freqHz, freq, currentTuningMarker(receiver));
+    },
+    onModeChange: (mode: string, receiver?: Receiver) => {
+      const context = currentA03cContext();
+      const target = receiver === 0 ? 'MAIN' : receiver === 1 ? 'SUB' : null;
+      if (!context || target === null || knownA03cReceiver(context, target, 'mode') !== receiver
+        || typeof mode !== 'string' || mode.length === 0) return;
+      dispatchRadioIntent({ name: 'set_mode', params: { mode, receiver } });
+    },
+    onFilterChange: (filter: number, receiver?: Receiver) => {
+      const context = currentA03cContext();
+      const target = receiver === 0 ? 'MAIN' : receiver === 1 ? 'SUB' : null;
+      if (!context || target === null || knownA03cReceiver(context, target, 'filter') !== receiver
+        || !Number.isSafeInteger(filter)) return;
+      dispatchRadioIntent({ name: 'set_filter', params: { filter, receiver } });
+    },
+    onDualWatchToggle: (on: boolean) => {
+      const context = currentA03cContext();
+      if (!context || context.caps.receivers < 2
+        || !context.caps.capabilities.includes('dual_rx')
+        || !context.caps.capabilities.includes('dual_watch')
+        || !knownA03cTopLevelField(context, 'dualWatch') || typeof on !== 'boolean') return;
+      dispatchRadioIntent({ name: 'set_dual_watch', params: { on } });
+    },
+    onTrackingToggle: (on: boolean) => {
+      const context = currentA03cContext();
+      if (!context || context.caps.receivers < 2
+        || !context.caps.capabilities.includes('dual_rx')
+        || !context.caps.capabilities.includes('main_sub_tracking')
+        || !knownA03cTopLevelField(context, 'mainSubTracking') || typeof on !== 'boolean') return;
+      dispatchRadioIntent({ name: 'set_main_sub_tracking', params: { on } });
+    },
+  };
+}
+
+/* ── System / scope handlers ─────────────────────────────────────── */
+
+function currentScopeContext() {
+  const context = currentA03cContext();
+  return context && context.caps.scope === true && context.caps.capabilities.includes('scope')
+    ? context : null;
+}
+
+function validScopeValue(
+  value: unknown,
+  kind: 'boolean' | 'integer' | 'number',
+  min = 0,
+  max = 0,
+): boolean {
+  if (kind === 'boolean') return typeof value === 'boolean';
+  if (kind === 'number') {
+    // MOR-3694: a REF readback may be half-dB (e.g. -4.5) — finite and in
+    // range is enough for the CURRENT value; only proposals must be
+    // integers on the stepping grid.
+    return typeof value === 'number' && Number.isFinite(value)
+      && (value as number) >= min && (value as number) <= max;
+  }
+  return Number.isSafeInteger(value) && (value as number) >= min && (value as number) <= max;
+}
+
+function acceptsScopeValue(
+  context: NonNullable<ReturnType<typeof currentScopeContext>>,
+  field: string,
+  proposed: unknown,
+  kind: 'boolean' | 'integer' | 'number',
+  min = 0,
+  max = 0,
+  currentKind: 'boolean' | 'integer' | 'number' = kind,
+): boolean {
+  const current = (context.state.scopeControls as unknown as Record<string, unknown> | undefined)?.[field];
+  return isFieldAvailable(context.state, `scopeControls.${field}`)
+    && validScopeValue(current, currentKind, min, max) && validScopeValue(proposed, kind, min, max);
+}
+
+function hasPhysicalSub(context: NonNullable<ReturnType<typeof currentScopeContext>>): boolean {
+  return context.caps.receivers === 2 && context.caps.capabilities.includes('dual_rx')
+    && context.state.sub !== null && context.state.sub !== undefined;
+}
+
+export function makeSystemHandlers() {
+  return {
+    onDialLock: (on: boolean) => {
+      const context = currentA03cContext();
+      if (!context || !context.caps.capabilities.includes('dial_lock')
+        || !knownA03cTopLevelField(context, 'dialLock')
+        || typeof context.state.dialLock !== 'boolean' || typeof on !== 'boolean') return;
+      dispatchRadioIntent({ name: 'set_dial_lock', params: { on } });
+    },
+    onPowerOff: () => {
+      const context = currentA03cContext();
+      if (!context || !context.caps.capabilities.includes('power_control')) return;
+      dispatchRadioIntent({ name: 'set_powerstat', params: { on: false } });
+    },
+  };
+}
+
+export function makeScopeControlsHandlers() {
+  return {
+    onModeChange: (mode: number) => {
+      const context = currentScopeContext();
+      if (!context || !acceptsScopeValue(context, 'mode', mode, 'integer', 0, 3)) return;
+      dispatchRadioIntent({ name: 'set_scope_mode', params: { mode } });
+    },
+    onEdgeChange: (edge: number) => {
+      const context = currentScopeContext();
+      if (!context || !acceptsScopeValue(context, 'edge', edge, 'integer', 1, 4)) return;
+      dispatchRadioIntent({ name: 'set_scope_edge', params: { edge } });
+    },
+    onSpanChange: (delta: number) => {
+      if (currentScopeContext() && (delta === -1 || delta === 1)) runtime.scope.spanControl?.step(delta);
+    },
+    onSpeedChange: (speed: number) => {
+      const context = currentScopeContext();
+      if (!context || !acceptsScopeValue(context, 'speed', speed, 'integer', 0, 2)) return;
+      dispatchRadioIntent({ name: 'set_scope_speed', params: { speed } });
+    },
+    onHoldChange: (on: boolean) => {
+      const context = currentScopeContext();
+      if (!context || !acceptsScopeValue(context, 'hold', on, 'boolean')) return;
+      dispatchRadioIntent({ name: 'set_scope_hold', params: { on } });
+    },
+    onRefChange: (ref: number) => {
+      const context = currentScopeContext();
+      // MOR-3694: gate on the caps-declared REF range; no declared range
+      // fails closed (no fallback). The CURRENT readback may be half-dB.
+      const range = refRangeFromCaps(context?.caps ?? null);
+      if (!context || !range
+        || !acceptsScopeValue(context, 'refDb', ref, 'integer', range.min, range.max, 'number')) return;
+      dispatchRadioIntent({ name: 'set_scope_ref', params: { ref } });
+    },
+    onDualChange: (dual: boolean) => {
+      const context = currentScopeContext();
+      if (!context || !hasPhysicalSub(context) || !acceptsScopeValue(context, 'dual', dual, 'boolean')) return;
+      dispatchRadioIntent({ name: 'set_scope_dual', params: { dual } });
+    },
+    onReceiverChange: (receiver: number) => {
+      const context = currentScopeContext();
+      if (!context || !acceptsScopeValue(context, 'receiver', receiver, 'integer', 0, 1)
+        || (receiver === 1 && !hasPhysicalSub(context))) return;
+      dispatchRadioIntent({ name: 'switch_scope_receiver', params: { receiver: receiver as Receiver } });
+    },
+    onDuringTxChange: (on: boolean) => {
+      const context = currentScopeContext();
+      if (!context || !acceptsScopeValue(context, 'duringTx', on, 'boolean')) return;
+      dispatchRadioIntent({ name: 'set_scope_during_tx', params: { on } });
+    },
+    onCenterTypeChange: (center_type: number) => {
+      const context = currentScopeContext();
+      if (!context || !acceptsScopeValue(context, 'centerType', center_type, 'integer', 0, 2)) return;
+      dispatchRadioIntent({ name: 'set_scope_center_type', params: { center_type } });
+    },
+    onVbwChange: (narrow: boolean) => {
+      const context = currentScopeContext();
+      if (!context || !acceptsScopeValue(context, 'vbwNarrow', narrow, 'boolean')) return;
+      dispatchRadioIntent({ name: 'set_scope_vbw', params: { narrow } });
+    },
+    onRbwChange: (rbw: number) => {
+      const context = currentScopeContext();
+      if (!context || !acceptsScopeValue(context, 'rbw', rbw, 'integer', 0, 2)) return;
+      dispatchRadioIntent({ name: 'set_scope_rbw', params: { rbw } });
+    },
+  };
+}
+
+/* ── Keyboard radio delegation (MOR-1409 A03d1a) ─────────────────── */
+
+type KeyboardRadioAction = { action: string; params?: Record<string, unknown> };
+type KeyboardContext = NonNullable<ReturnType<typeof currentA03cContext>> & { receiver: Receiver };
+
+const KEYBOARD_RADIO_ACTIONS = new Set([
+  'tune', 'band_select', 'mode_select', 'cycle_data_mode', 'cycle_filter',
+  'cycle_preamp', 'cycle_att', 'cycle_agc', 'toggle_nr', 'toggle_nb',
+  'toggle_auto_notch', 'toggle_ip_plus',
+  'toggle_rit', 'toggle_xit', 'clear_rit_xit',
+  'adjust_af_level', 'adjust_rf_gain', 'toggle_monitor',
+  'toggle_split', 'vfo_swap', 'vfo_equalize', 'switch_active_vfo', 'set_active_vfo',
+  'toggle_dial_lock', 'scope_span_step', 'scope_ref_step', 'scope_toggle_hold',
+  'scope_toggle_dual', 'scope_toggle_fst',
+]);
+
+function currentKeyboardContext(): KeyboardContext | null {
+  const context = currentA03cContext();
+  // MOR-1423: same single-receiver `active` bypass as knownActiveReceiver
+  // (MOR-1418) — on a one-receiver radio, active is tautologically MAIN
+  // even when structurally unobservable. Dual-RX still requires observation.
+  const activeObserved = context !== null && knownA03cTopLevelField(context, 'active');
+  const singleReceiver = context?.caps.receivers === 1;
+  const active = context
+    && (activeObserved ? context.state.active : singleReceiver ? 'MAIN' : undefined);
+  if (!context || (active !== 'MAIN' && active !== 'SUB')) return null;
+  const receiver = knownA03cReceiver(context, active);
+  return receiver === null ? null : { ...context, receiver };
+}
+
+function keyboardReceiverField(context: KeyboardContext, field: string): boolean {
+  const receiver = context.receiver === 0 ? context.state.main : context.state.sub;
+  const value = receiver?.[field as never];
+  return value !== undefined && value !== null
+    && isFieldAvailable(context.state, `${context.receiver === 0 ? 'main' : 'sub'}.${field}`);
+}
+
+function keyboardCycle(values: unknown, current: unknown): number | null {
+  if (!Array.isArray(values) || values.length === 0 || !Number.isSafeInteger(current)
+    || !values.every(Number.isSafeInteger)) return null;
+  const index = values.indexOf(current);
+  return index < 0 ? null : values[(index + 1) % values.length] as number;
+}
+
+function keyboardDirection(value: unknown): 'up' | 'down' | null {
+  return value === 'up' || value === 'down' ? value : null;
+}
+
+/** Finite `delta` param, in RAW units — `null` when absent/non-numeric so
+ *  callers can fall through to the `direction`-based step (MOR-1577:
+ *  explicit `delta` wins over `direction` when a binding declares both). */
+function keyboardDelta(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+/** A control's declared raw domain (`caps.controls[key].raw_min/raw_max`,
+ *  MOR-1577) — falls back to 0/255 only when caps declares nothing for
+ *  `key`, matching the hardcoded domain the `direction`-based fallback
+ *  below has always assumed. Data-driven per repo doctrine: no other
+ *  hardcoded 255 appears in the `delta`-handling path. */
+function keyboardControlRawDomain(caps: Capabilities, key: string): { rawMin: number; rawMax: number } {
+  const ctrl = caps.controls?.[key];
+  return {
+    rawMin: typeof ctrl?.raw_min === 'number' ? ctrl.raw_min : 0,
+    rawMax: typeof ctrl?.raw_max === 'number' ? ctrl.raw_max : 255,
+  };
+}
+
+function keyboardScopeField(context: KeyboardContext, field: string): unknown | null {
+  const scope = context.state.scopeControls;
+  const value = (scope as unknown as Record<string, unknown> | undefined)?.[field];
+  return value !== undefined && value !== null && isFieldAvailable(context.state, `scopeControls.${field}`)
+    ? value : null;
+}
+
+function keyboardParams(value: unknown): Record<string, unknown> | null {
+  if (value === null || typeof value !== 'object') return null;
+  try {
+    if (Array.isArray(value)) return null;
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) return null;
+    const params: Record<PropertyKey, unknown> = Object.create(null);
+    for (const key of Reflect.ownKeys(value)) {
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      if (!descriptor || !('value' in descriptor)) return null;
+      Object.defineProperty(params, key, {
+        value: descriptor.value,
+        enumerable: descriptor.enumerable,
+        configurable: true,
+        writable: true,
+      });
+    }
+    return params;
+  } catch {
+    return null;
+  }
+}
+
+/** Handles only the A03d1a radio family; invalid recognized actions fail closed. */
+export function dispatchKeyboardRadioAction({ action, params }: KeyboardRadioAction): boolean {
+  if (!KEYBOARD_RADIO_ACTIONS.has(action)) return false;
+  const safeParams = params === undefined ? {} : keyboardParams(params);
+  if (safeParams === null) return true;
+
+  // These declared primitives are deliberately blind to receiver and VFO
+  // readback. Their shared panel handlers own the generation/topology/tag
+  // gate; do this after parameter validation, before keyboard active-RX
+  // resolution so an unobserved active field cannot invent a refusal.
+  switch (action) {
+    case 'vfo_swap':
+      makeVfoHandlers().onSwap();
+      return true;
+    case 'vfo_equalize':
+      makeVfoHandlers().onEqual();
+      return true;
+  }
+
+  const context = currentKeyboardContext();
+  if (!context) return true;
+  const receiver = context.receiver;
+  const rx = receiver === 0 ? context.state.main : context.state.sub;
+  const has = (name: string) => context.caps.capabilities.includes(name);
+
+  switch (action) {
+    case 'tune': {
+      const step = getTuningStep();
+      const direction = keyboardDirection(safeParams.direction);
+      const delta = Number.isSafeInteger(safeParams.deltaHz) ? safeParams.deltaHz
+        : direction && Number.isSafeInteger(step) && step > 0 ? (direction === 'down' ? -step : step) : null;
+      const frequency = rx?.freqHz;
+      // MOR-2513: null (unobserved) frequency computes no target.
+      const target = typeof delta === 'number' && typeof frequency === 'number'
+        && Number.isSafeInteger(frequency) ? frequency + delta : null;
+      if (keyboardReceiverField(context, 'freqHz') && Number.isSafeInteger(step) && step > 0
+        && typeof frequency === 'number' && Number.isSafeInteger(frequency) && frequency > 0
+        && typeof target === 'number' && Number.isSafeInteger(target) && target > 0) makeVfoHandlers().onFreqChange(target, receiver, 'step');
+      return true;
+    }
+    case 'band_select': {
+      const bsr = safeParams.index;
+      const frequency = rx?.freqHz;
+      if (has('bsr') && keyboardReceiverField(context, 'freqHz') && typeof bsr === 'number'
+        && Number.isSafeInteger(bsr) && bsr > 0 && typeof frequency === 'number'
+        && Number.isSafeInteger(frequency) && frequency > 0) makeBandHandlers().onBandSelect('', frequency, bsr);
+      return true;
+    }
+    case 'mode_select':
+      if (keyboardReceiverField(context, 'mode') && typeof safeParams.mode === 'string' && safeParams.mode.length > 0
+        && context.caps.modes.includes(safeParams.mode)) makeModeHandlers().onModeChange(safeParams.mode);
+      return true;
+    case 'cycle_data_mode': {
+      const count = context.caps.dataModeCount;
+      if (keyboardReceiverField(context, 'dataMode') && typeof count === 'number' && Number.isSafeInteger(count) && count > 0
+        && typeof rx?.dataMode === 'number' && Number.isSafeInteger(rx.dataMode)
+        && rx.dataMode >= 0 && rx.dataMode < count) {
+        makeModeHandlers().onDataModeChange((rx.dataMode + 1) % count);
+      }
+      return true;
+    }
+    case 'cycle_filter': {
+      const delta = safeParams.step === -1 || safeParams.step === 1 ? safeParams.step
+        : safeParams.direction === 'wider' ? -1 : safeParams.direction === 'narrower' ? 1 : null;
+      const count = context.caps.filters.length;
+      const filter = rx?.filter;
+      if (keyboardReceiverField(context, 'filter') && typeof filter === 'number' && Number.isSafeInteger(filter)
+        && filter >= 1 && filter <= count && count > 0 && delta !== null) {
+        makeFilterHandlers().onFilterChange(((filter - 1 + delta + count) % count) + 1);
+      }
+      return true;
+    }
+    case 'cycle_preamp': {
+      const next = keyboardCycle(context.caps.preValues, rx?.preamp);
+      if (has('preamp') && keyboardReceiverField(context, 'preamp') && next !== null) makeRfFrontEndHandlers().onPreChange(next);
+      return true;
+    }
+    case 'cycle_att': {
+      const next = keyboardCycle(context.caps.attValues, rx?.att);
+      if (has('attenuator') && keyboardReceiverField(context, 'att') && next !== null) makeRfFrontEndHandlers().onAttChange(next);
+      return true;
+    }
+    case 'cycle_agc': {
+      const next = keyboardCycle(context.caps.agcModes, rx?.agc);
+      if (has('agc') && keyboardReceiverField(context, 'agc') && next !== null) makeAgcHandlers().onAgcModeChange(next);
+      return true;
+    }
+    case 'toggle_nr':
+      if (has('nr') && keyboardReceiverField(context, 'nr') && typeof rx?.nr === 'boolean') makeDspHandlers().onNrModeChange(rx.nr ? 0 : 1);
+      return true;
+    case 'toggle_nb':
+      if (has('nb') && keyboardReceiverField(context, 'nb') && typeof rx?.nb === 'boolean') makeDspHandlers().onNbToggle(!rx.nb);
+      return true;
+    case 'toggle_auto_notch':
+      if (has('notch') && keyboardReceiverField(context, 'autoNotch') && typeof rx?.autoNotch === 'boolean') makeDspHandlers().onAutoNotchToggle();
+      return true;
+    case 'toggle_ip_plus':
+      if (has('ip_plus') && keyboardReceiverField(context, 'ipplus') && typeof rx?.ipplus === 'boolean') makeRfFrontEndHandlers().onIpPlusToggle(!rx.ipplus);
+      return true;
+    case 'toggle_rit':
+      if (has('rit') && knownA03cTopLevelField(context, 'ritOn')
+        && typeof context.state.ritOn === 'boolean') makeRitXitHandlers().onRitToggle();
+      return true;
+    case 'toggle_xit':
+      if (has('xit') && knownA03cTopLevelField(context, 'ritTx')
+        && typeof context.state.ritTx === 'boolean') makeRitXitHandlers().onXitToggle();
+      return true;
+    case 'clear_rit_xit':
+      if ((has('rit') || has('xit')) && knownA03cTopLevelField(context, 'ritFreq')
+        && Number.isSafeInteger(context.state.ritFreq)) makeRitXitHandlers().onClear();
+      return true;
+    case 'adjust_af_level': {
+      // MOR-4210: LIVE steps the browser volume from its own reading, up to
+      // the browser maximum (makeup gain above 1); otherwise the radio AF.
+      const live = runtime.rxEnabled;
+      const current = live ? runtime.audio.volume / 100 : rx?.afLevel;
+      const max = live ? RX_AF_LEVEL_MAX : 1;
+      const known = typeof current === 'number' && (live
+        ? Number.isFinite(current) && current >= 0 && current <= max
+        : keyboardReceiverField(context, 'afLevel') && isNormalizedLevel(current));
+      if (!known) return true;
+      const delta = keyboardDelta(safeParams.delta);
+      if (delta !== null) {
+        // MOR-1577: `delta` is declared in RAW units against the control's
+        // domain (`af-level-up`/`-down` bindings), converted here to the
+        // handler's normalized 0-1 wire shape — same shape `direction`
+        // already produced, just scaled from the declared domain instead
+        // of a hardcoded 5%.
+        const { rawMin, rawMax } = keyboardControlRawDomain(context.caps, 'af_level');
+        const span = rawMax - rawMin;
+        if (span > 0) makeRxAudioHandlers().onAfLevelChange(Math.max(0, Math.min(max, current + delta / span)));
+        return true;
+      }
+      const direction = keyboardDirection(safeParams.direction);
+      if (direction) {
+        makeRxAudioHandlers().onAfLevelChange(Math.max(0, Math.min(max, current + (direction === 'down' ? -0.05 : 0.05))));
+      }
+      return true;
+    }
+    case 'adjust_rf_gain': {
+      const current = rx?.rfGain;
+      if (!keyboardReceiverField(context, 'rfGain') || !isNormalizedLevel(current)) return true;
+      const { rawMin, rawMax } = keyboardControlRawDomain(context.caps, 'rf_gain');
+      if (rawMax <= rawMin) return true;
+      const span = rawMax - rawMin;
+      const step = Math.round(0.05 * span);
+      const delta = keyboardDelta(safeParams.delta);
+      if (delta !== null) {
+        // MOR-1577: `delta` is declared in RAW units against the control's
+        // domain (`rf-level-up`/`-down` bindings) and applied directly to
+        // the raw current value — `onRfGainChange` already takes a raw
+        // integer, so no normalized round-trip is needed here.
+        const currentRaw = rawMin + current * span;
+        const nextRaw = Math.round(Math.max(rawMin, Math.min(rawMax, currentRaw + delta)));
+        makeRfFrontEndHandlers().onRfGainChange(nextRaw);
+        return true;
+      }
+      const direction = keyboardDirection(safeParams.direction);
+      if (direction) {
+        // MOR-1676 part R: step in raw units (symmetric), clamped —
+        // up then down restores the exact raw value. Published `controls`
+        // only ever change the span (`keyboardControlRawDomain` falls back
+        // to 0/255 when the radio publishes nothing); there is no squelch
+        // keyboard action — squelch steps only via its slider.
+        const currentRaw = Math.round(rawMin + current * span);
+        const nextRaw = Math.max(rawMin, Math.min(rawMax,
+          currentRaw + (direction === 'down' ? -step : step)));
+        makeRfFrontEndHandlers().onRfGainChange(nextRaw);
+      }
+      return true;
+    }
+    case 'toggle_monitor':
+      if (has('tx') && has('monitor') && knownA03cTopLevelField(context, 'monitorOn')
+        && typeof context.state.monitorOn === 'boolean') makeTxHandlers().onMonToggle();
+      return true;
+    case 'toggle_split':
+      if (has('split') && knownA03cTopLevelField(context, 'split')
+        && typeof context.state.split === 'boolean') makeVfoHandlers().onSplitToggle();
+      return true;
+    case 'switch_active_vfo': {
+      // MOR-1601: toggling a physical receiver is meaningful only when the
+      // active receiver is an observed, fresh fact on a declared dual-RX
+      // MAIN/SUB topology. Never infer MAIN from an unobserved raw value.
+      if (context.caps.receivers < 2 || !has('dual_rx') || !context.state.sub
+        || !observedAvailableField(context.state, 'active')) return true;
+      const active = context.state.active;
+      if (active !== 'MAIN' && active !== 'SUB') return true;
+      const target = active === 'MAIN' ? 'SUB' : 'MAIN';
+      if (target === 'MAIN') makeVfoHandlers().onMainVfoClick();
+      else makeVfoHandlers().onSubVfoClick();
+      return true;
+    }
+    case 'set_active_vfo':
+      if (safeParams.vfo === 'MAIN') makeVfoHandlers().onMainVfoClick();
+      else if (safeParams.vfo === 'SUB' && context.caps.receivers >= 2 && has('dual_rx') && context.state.sub) makeVfoHandlers().onSubVfoClick();
+      return true;
+    case 'toggle_dial_lock': {
+      const dialLock = context.state.dialLock;
+      if (has('dial_lock') && knownA03cTopLevelField(context, 'dialLock') && typeof dialLock === 'boolean') {
+        makeSystemHandlers().onDialLock(!dialLock);
+      }
+      return true;
+    }
+    case 'scope_span_step': {
+      const direction = keyboardDirection(safeParams.direction);
+      if (context.caps.scope === true && has('scope') && direction) {
+        makeScopeControlsHandlers().onSpanChange(direction === 'down' ? -1 : 1);
+      }
+      return true;
+    }
+    case 'scope_ref_step': {
+      const current = keyboardScopeField(context, 'refDb');
+      const direction = keyboardDirection(safeParams.direction);
+      // MOR-3694: step on the 5 dB grid against the caps-declared range.
+      // The readback may be off-grid or half-dB but must sit inside the
+      // declared range; no declared range fails closed.
+      const range = refRangeFromCaps(context.caps);
+      if (context.caps.scope === true && has('scope') && direction && range
+        && typeof current === 'number' && Number.isFinite(current)
+        && current >= range.min && current <= range.max) {
+        makeScopeControlsHandlers().onRefChange(
+          stepRef(current, direction === 'down' ? -1 : 1, range),
+        );
+      }
+      return true;
+    }
+    case 'scope_toggle_hold': {
+      const hold = keyboardScopeField(context, 'hold');
+      if (context.caps.scope === true && has('scope') && typeof hold === 'boolean') {
+        makeScopeControlsHandlers().onHoldChange(!hold);
+      }
+      return true;
+    }
+    case 'scope_toggle_dual': {
+      const dual = keyboardScopeField(context, 'dual');
+      if (context.caps.scope === true && has('scope') && context.caps.receivers === 2
+        && has('dual_rx') && context.state.sub && typeof dual === 'boolean') {
+        makeScopeControlsHandlers().onDualChange(!dual);
+      }
+      return true;
+    }
+    case 'scope_toggle_fst': {
+      const speed = keyboardScopeField(context, 'speed');
+      if (context.caps.scope === true && has('scope') && typeof speed === 'number' && Number.isSafeInteger(speed) && speed >= 0 && speed <= 2) {
+        makeScopeControlsHandlers().onSpeedChange(speed === 0 ? 1 : 0);
+      }
+      return true;
+    }
+    default:
+      return true;
+  }
+}
+
+export function makeKeyboardHandlers() {
+  return {
+    dispatch<T extends KeyboardRadioAction>(action: T): void {
+      if (dispatchKeyboardRadioAction(action)) return;
+      switch (action.action) {
+        case 'adjust_tuning_step': {
+          adjustTuningStep(action.params?.direction === 'down' ? 'down' : 'up');
+          return;
+        }
+        case 'open_filter_settings': {
+          window.dispatchEvent(new CustomEvent('rigplane:open-filter-settings'));
+          return;
+        }
+        case 'focus_target': {
+          const target = action.params?.target;
+          if (typeof target === 'string') {
+            // MOR-1456: every selector below is verified against the ACTUAL
+            // rendered desktop-v2 composition, not the pre-v3-rework legacy
+            // panels (`LeftSidebar`'s `RfFrontEnd`/`ModePanel`/`FilterPanel`
+            // are suppressed there — see `desktop-declarations.ts`'s
+            // `filter`/`rfFrontEnd`/`rx-audio` zones). Each entry points at
+            // the semantic surface that actually mounts, reusing its existing
+            // `data-testid` hooks rather than inventing a parallel
+            // `data-panel`/`data-control` vocabulary no component emits.
+            const selectors: Record<string, string> = {
+              // MOR-2579: with one AF knob per receiver, `af` is the selected
+              // receiver's knob (MAIN's while the selection is unknown). A
+              // getter, so only this target reads the selection.
+              get af() {
+                const row = `rx-audio-af-${knownActiveReceiver() === 1 ? 'sub' : 'main'}`;
+                return `[data-testid="rx-audio-af"] [role="slider"], [data-testid="${row}"] [role="slider"], [data-testid="rx-audio-af"] input[type="range"]`;
+              },
+              rf: '[data-testid="rf-front-end-rf-sql"] [role="slider"], [data-testid="rf-front-end-rfGain"] [role="slider"], [data-testid="rf-front-end-rf-sql"] input, [data-testid="rf-front-end-rfGain"] input',
+              squelch: '[data-testid="rf-front-end-rf-sql"] [role="slider"], [data-testid="rf-front-end-squelch"] [role="slider"], [data-testid="rf-front-end-rf-sql"] input, [data-testid="rf-front-end-squelch"] input',
+              filter: '[data-testid="filter-select"] button',
+              mode: '[data-testid="filter-mode"] button',
+              pbt: '[data-testid="filter-pbtInner"] input',
+              waterfall: '[data-waterfall]',
+              // The active receiver's tunable frequency tile: `data-vfo-freq`
+              // marks the region (`VfoSurface.svelte`, MOR-1480), but the
+              // actual focusable node is `FrequencyDisplayInteractive`'s
+              // `tabindex="0"` root nested inside it (`vfoFreqHook={false}`
+              // there deliberately keeps the attribute off that inner node —
+              // see `keyboard-map.ts`'s `isFrequencyDisplayFocused` for the
+              // same closest()-based hook this selector mirrors).
+              vfo: '[data-vfo-tile][data-vfo-active="true"] [data-vfo-freq] [tabindex]',
+            };
+            const selector = selectors[target];
+            const el = selector ? document.querySelector(selector) : null;
+            if (el instanceof HTMLElement) {
+              el.focus();
+              el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+            }
+            // Honest failure (MOR-1456): a dead selector must never look like
+            // a no-op keypress. `document.activeElement !== el` also catches
+            // an element that resolved but couldn't actually take focus (e.g.
+            // disabled or not currently rendered).
+            if (!(el instanceof HTMLElement) || document.activeElement !== el) {
+              console.warn(`[keyboard] focus_target "${target}" has no focusable anchor in the current layout`);
+            }
+          }
+          return;
+        }
+        default:
+          console.warn('[keyboard] unhandled action', action.action, action.params);
+      }
+    },
+  };
+}
+
+/* ── VOX Handlers ────────────────────────────────────────────────── */
+
+function knownVoxLevel(field: 'voxGain' | 'antiVoxGain' | 'voxDelay', level: number): boolean {
+  const context = currentA03cContext();
+  return context !== null && context.caps.capabilities.includes('tx')
+    && context.caps.capabilities.includes('vox')
+    && knownA03cTopLevelField(context, field) && Number.isSafeInteger(level);
+}
+
+export function makeVoxHandlers() {
+  return {
+    onVoxToggle: toggleVox,
+    onVoxGainChange: (level: number) => {
+      if (!knownVoxLevel('voxGain', level)) return;
+      dispatchRadioIntent({ name: 'set_vox_gain', params: { level } });
+    },
+    onAntiVoxGainChange: (level: number) => {
+      if (!knownVoxLevel('antiVoxGain', level)) return;
+      dispatchRadioIntent({ name: 'set_anti_vox_gain', params: { level } });
+    },
+    onVoxDelayChange: (level: number) => {
+      if (!knownVoxLevel('voxDelay', level)) return;
+      dispatchRadioIntent({ name: 'set_vox_delay', params: { level } });
+    },
+  };
+}
+
+/**
+ * MOR-2111 — the repeater panel's command handlers. The tone-mode
+ * transition is spelled out as literal frames (not a `command.name` loop)
+ * so the conformance completeness ledger sees each dispatched intent name.
+ * The receiver rides every command.
+ *
+ *   OFF  → TONE   set_repeater_tone on:true
+ *   OFF  → TSQL   set_repeater_tone on:true, then set_repeater_tsql on:true
+ *   TONE → TSQL   set_repeater_tsql on:true
+ *   TSQL → TONE   set_repeater_tsql on:false
+ *   TONE → OFF    set_repeater_tone on:false
+ *   TSQL → OFF    set_repeater_tsql on:false, then set_repeater_tone on:false
+ *
+ * The tone frequency is one `CN` register on the FTX-1: `set_tsql_freq` is
+ * dispatched only in TSQL, `set_tone_freq` otherwise.
+ */
+export function makeRepeaterHandlers() {
+  return Object.freeze({
+    onToneModeChange(from: RepeaterToneMode, to: RepeaterToneMode, receiver: Receiver): void {
+      if (from === to) return;
+      if (from === 'off' && to === 'tone') {
+        dispatchRadioIntent({ name: 'set_repeater_tone', params: { on: true, receiver } });
+      } else if (from === 'off' && to === 'tsql') {
+        dispatchRadioIntent({ name: 'set_repeater_tone', params: { on: true, receiver } });
+        dispatchRadioIntent({ name: 'set_repeater_tsql', params: { on: true, receiver } });
+      } else if (from === 'tone' && to === 'off') {
+        dispatchRadioIntent({ name: 'set_repeater_tone', params: { on: false, receiver } });
+      } else if (from === 'tone' && to === 'tsql') {
+        dispatchRadioIntent({ name: 'set_repeater_tsql', params: { on: true, receiver } });
+      } else if (from === 'tsql' && to === 'off') {
+        dispatchRadioIntent({ name: 'set_repeater_tsql', params: { on: false, receiver } });
+        dispatchRadioIntent({ name: 'set_repeater_tone', params: { on: false, receiver } });
+      } else if (from === 'tsql' && to === 'tone') {
+        dispatchRadioIntent({ name: 'set_repeater_tsql', params: { on: false, receiver } });
+      }
+    },
+    onShiftChange(shift: RepeaterShift, receiver: Receiver): void {
+      dispatchRadioIntent({
+        name: 'set_repeater_shift',
+        params: { direction: shiftDirection(shift), receiver },
+      });
+    },
+    onToneFreqChange(freqHz: number, tsql: boolean, receiver: Receiver): void {
+      if (tsql) {
+        dispatchRadioIntent({ name: 'set_tsql_freq', params: { freq: freqHz, receiver } });
+      } else {
+        dispatchRadioIntent({ name: 'set_tone_freq', params: { freq: freqHz, receiver } });
+      }
+    },
+  });
+}

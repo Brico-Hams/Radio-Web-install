@@ -1,0 +1,3014 @@
+# mypy: disable-error-code=untyped-decorator
+"""Tests for src/rigplane/rigctld/server.py.
+
+Strategy
+--------
+- Inject mock protocol and handler via the private _protocol / _handler kwargs
+  on RigctldServer so these tests never need a real radio or real protocol impl.
+- Use asyncio.open_connection as the test client.
+- Port 0 → OS assigns a free ephemeral port; read it from server._server.sockets.
+- asyncio_mode = "auto" (pyproject.toml) — no @pytest.mark.asyncio needed.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import time
+from collections.abc import AsyncIterator
+from dataclasses import replace
+from types import SimpleNamespace
+from typing import Any, cast
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
+
+import pytest
+
+from serial_stub import SerialMockRadio
+from rigplane.testing.timing import VirtualClock, await_until
+from rigplane.commands.commander import Priority
+from rigplane.core.acquisition_scheduler import (
+    AcquisitionExecutionResult,
+    AcquisitionPriority,
+    AcquisitionQuery,
+    AcquisitionRequest,
+    AcquisitionScheduler,
+    AcquisitionStatus,
+    IcomCivAcquisitionExecutor,
+    MeterObservationCoalescer,
+    RadioStateModelService,
+    StateFreshnessService,
+    derive_tx_active,
+)
+from rigplane.core.radio_state import RadioState
+from rigplane.core.state_acquisition_policy import (
+    AcquisitionPolicy,
+    FieldAvailability,
+    FieldCapability,
+    MeterCoalescingPolicy,
+    RadioAcquisitionProfile,
+)
+from rigplane.core.state_diagnostics import StateDiagnosticsRecorder
+from rigplane.core.state_pipeline_contracts import (
+    FieldPath,
+    Observation,
+    SourceMetadata,
+)
+from rigplane.core.state_store import FreshnessClock, StateStore
+from rigplane.rigctld.contract import (
+    ClientSession,
+    HamlibError,
+    RigctldCommand,
+    RigctldConfig,
+    RigctldResponse,
+)
+from rigplane.rigctld.server import RigctldServer, run_rigctld_server
+import rigplane.rigctld.server as rigctld_server
+from rigplane.web.radio_poller import RadioPoller
+from rigplane.profiles import resolve_radio_profile
+from rigplane.types import Mode
+
+# ---------------------------------------------------------------------------
+# Canned objects shared across tests
+# ---------------------------------------------------------------------------
+
+_FREQ_CMD = RigctldCommand(short_cmd="f", long_cmd="get_freq", is_set=False)
+_FREQ_RESP = RigctldResponse(values=["14074000"], error=0)
+_RESPONSE_BYTES = b"14074000\n"
+_ERROR_BYTES = b"RPRT -8\n"  # EPROTO
+_TIMEOUT_BYTES = b"RPRT -5\n"  # ETIMEOUT
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _addr(server: RigctldServer) -> tuple[str, int]:
+    """Return (host, port) for a started server."""
+    assert server._server is not None
+    sockname = server._server.sockets[0].getsockname()
+    assert isinstance(sockname, tuple)
+    host, port = sockname[:2]
+    assert isinstance(host, str)
+    assert isinstance(port, int)
+    return host, port
+
+
+async def _connect(
+    server: RigctldServer,
+) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
+    host, port = _addr(server)
+    return await asyncio.open_connection(host, port)
+
+
+async def _close(writer: asyncio.StreamWriter) -> None:
+    try:
+        writer.close()
+        await writer.wait_closed()
+    except Exception:
+        pass
+
+
+async def _read_all(reader: asyncio.StreamReader, *, timeout: float = 1.0) -> bytes:
+    """Read until EOF or timeout."""
+    try:
+        return await asyncio.wait_for(reader.read(4096), timeout=timeout)
+    except asyncio.TimeoutError:
+        return b""
+
+
+class _ContractPrewarmRadio:
+    def __init__(self, mode: str, data_mode: bool = False) -> None:
+        self.mode = mode
+        self.data_mode = data_mode
+        self.set_data_mode = AsyncMock(side_effect=self._set_data_mode)
+
+    async def get_mode(self, receiver: int = 0) -> tuple[str, int | None]:
+        assert receiver == 0
+        return self.mode, 2
+
+    async def get_data_mode(self) -> bool:
+        return self.data_mode
+
+    async def _set_data_mode(self, on: bool) -> None:
+        self.data_mode = on
+
+
+class _CompatHandler:
+    def __init__(self) -> None:
+        self.calls: list[RigctldCommand] = []
+
+    async def execute(self, cmd: RigctldCommand) -> RigctldResponse:
+        self.calls.append(cmd)
+        return _FREQ_RESP
+
+
+class _RecordingStateModelService:
+    def ensure_fresh(self, *args: object, **kwargs: object) -> object:
+        return object()
+
+
+class _FakeSocket:
+    def getsockname(self) -> tuple[str, int]:
+        return ("127.0.0.1", 0)
+
+
+class _FakeAsyncServer:
+    def __init__(self) -> None:
+        self.sockets = [_FakeSocket()]
+        self.closed = False
+
+    def close(self) -> None:
+        self.closed = True
+
+    async def wait_closed(self) -> None:
+        return None
+
+
+class _ProfiledStandaloneRadio:
+    def __init__(self, *, profile: object) -> None:
+        self.profile = profile
+        self.connected = True
+        self.radio_ready = True
+        self.control_connected = True
+        self.get_freq = AsyncMock(return_value=14_090_000)
+        self._radio_state = RadioState()
+
+    @property
+    def radio_state(self) -> RadioState:
+        """Match the ``Radio`` protocol's required ``radio_state`` member."""
+        return self._radio_state
+
+
+class _CivProfiledStandaloneRadio(_ProfiledStandaloneRadio):
+    def __init__(self, *, profile: object, observed_freq: int) -> None:
+        super().__init__(profile=profile)
+        self.observed_freq = observed_freq
+        self.send_civ_calls: list[dict[str, object]] = []
+
+    async def send_civ(
+        self,
+        command: int,
+        sub: int | None = None,
+        data: bytes | None = None,
+        *,
+        wait_response: bool = True,
+        priority: Any = None,
+    ) -> None:
+        self.send_civ_calls.append(
+            {
+                "command": command,
+                "sub": sub,
+                "data": data,
+                "wait_response": wait_response,
+                "priority": priority,
+            }
+        )
+
+
+class _CadenceRecordingRadio(_ProfiledStandaloneRadio):
+    """Standalone CI-V radio double that timestamps every ``send_civ``.
+
+    Owns the ``StateStore`` (so ``RigctldServer`` adopts it instead of a
+    fallback) and stamps each send with the store's manual clock, which is
+    the same clock the cadence under test is driven on.
+    """
+
+    def __init__(
+        self,
+        *,
+        profile: object,
+        store: StateStore,
+        clock: FreshnessClock,
+    ) -> None:
+        super().__init__(profile=profile)
+        self._store = store
+        self._clock = clock
+        self.civ_sends: list[tuple[float, int, int | None]] = []
+
+    @property
+    def state_store(self) -> StateStore:
+        return self._store
+
+    async def send_civ(
+        self,
+        command: int,
+        sub: int | None = None,
+        data: bytes | None = None,
+        *,
+        wait_response: bool = True,
+        **_ignored: Any,
+    ) -> None:
+        self.civ_sends.append((self._clock.now(), command, sub))
+
+
+class _ApplyingAcquisitionExecutor:
+    def __init__(self, radio: object, *, value: int) -> None:
+        self._radio = radio
+        self._value = value
+        self.calls: list[tuple[AcquisitionRequest, frozenset[FieldPath]]] = []
+
+    async def execute(
+        self,
+        request: AcquisitionRequest,
+        *,
+        already_sent_paths: frozenset[FieldPath],
+    ) -> AcquisitionExecutionResult:
+        self.calls.append((request, already_sent_paths))
+        store = getattr(self._radio, "_state_store")
+        scheduler = getattr(self._radio, "_acquisition_scheduler")
+        change_set = store.apply(
+            Observation(
+                path=request.paths[0],
+                value=self._value,
+                source=SourceMetadata(
+                    source="poll_response",
+                    provider=request.provider,
+                    native_id="fake-provider-read",
+                ),
+                timestamp_monotonic=3.0,
+                max_age=request.policy.freshness_ttl_seconds,
+                provider_generation=store.provider_generation,
+            )
+        )
+        scheduler.record_acquisition_result(request, change_set)
+        return AcquisitionExecutionResult(sent_paths=request.paths)
+
+
+class _BlockingAcquisitionExecutor:
+    def __init__(self) -> None:
+        self.calls: list[tuple[AcquisitionRequest, frozenset[FieldPath]]] = []
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def execute(
+        self,
+        request: AcquisitionRequest,
+        *,
+        already_sent_paths: frozenset[FieldPath],
+    ) -> AcquisitionExecutionResult:
+        self.calls.append((request, already_sent_paths))
+        self.started.set()
+        await self.release.wait()
+        return AcquisitionExecutionResult(sent_paths=request.paths)
+
+
+class _FailingAcquisitionExecutor:
+    def __init__(self) -> None:
+        self.calls: list[tuple[AcquisitionRequest, frozenset[FieldPath]]] = []
+
+    async def execute(
+        self,
+        request: AcquisitionRequest,
+        *,
+        already_sent_paths: frozenset[FieldPath],
+    ) -> AcquisitionExecutionResult:
+        self.calls.append((request, already_sent_paths))
+        raise RuntimeError("executor transport failed")
+
+
+def _acquisition_profile(
+    *paths: FieldPath,
+    provider: str = "test_provider",
+) -> RadioAcquisitionProfile:
+    return RadioAcquisitionProfile(
+        provider=provider,
+        capabilities=tuple(
+            FieldCapability(
+                path=path,
+                polling=True,
+                command_response_observable=True,
+            )
+            for path in paths
+        ),
+        default_policy=AcquisitionPolicy(),
+    )
+
+
+def _unavailable_profile(path: FieldPath) -> RadioAcquisitionProfile:
+    return RadioAcquisitionProfile(
+        provider="test_provider",
+        capabilities=(
+            FieldCapability(
+                path=path,
+                availability=FieldAvailability.UNSUPPORTED,
+                diagnostic=f"{path}: field unavailable in fake profile",
+            ),
+        ),
+        default_policy=AcquisitionPolicy(),
+    )
+
+
+def _tx_only_swr_profile(swr: FieldPath) -> RadioAcquisitionProfile:
+    """MOR-1531/1532 fixture: one reconciliation-only tx_only global meter."""
+    return RadioAcquisitionProfile(
+        provider="test_provider",
+        capabilities=(FieldCapability(path=swr, command_response_observable=True),),
+        field_policies={
+            swr: AcquisitionPolicy(
+                cadence_seconds=None, freshness_ttl_seconds=2.0, tx_only=True
+            ),
+        },
+    )
+
+
+def _apply_store_value(
+    store: StateStore,
+    path: FieldPath,
+    value: object,
+    *,
+    max_age: float | None = None,
+) -> None:
+    store.apply_current(
+        Observation(
+            path=path,
+            value=value,
+            source=SourceMetadata(
+                source="test",
+                provider="tests",
+                command_source="rigctld",
+            ),
+            timestamp_monotonic=1.0,
+            max_age=max_age,
+        )
+    )
+
+
+# ---------------------------------------------------------------------------
+# Fixtures
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def mock_radio() -> MagicMock:
+    radio = MagicMock(name="radio")
+    radio.connected = True
+    radio.radio_ready = True
+    radio.control_connected = True
+    return radio
+
+
+@pytest.fixture
+def cfg() -> RigctldConfig:
+    return RigctldConfig(
+        host="127.0.0.1",
+        port=0,  # OS assigns a free port
+        max_clients=3,
+        client_timeout=0.5,
+        command_timeout=0.3,
+    )
+
+
+@pytest.fixture
+def proto() -> MagicMock:
+    """Mock protocol module with canned responses."""
+    m = MagicMock(name="protocol")
+    m.parse_line.return_value = _FREQ_CMD
+    m.format_response.return_value = _RESPONSE_BYTES
+    m.format_error.return_value = _ERROR_BYTES
+    return m
+
+
+@pytest.fixture
+def handler() -> MagicMock:
+    """Mock handler *instance* (not the class) with async execute."""
+    m = MagicMock(name="handler")
+    m.execute = AsyncMock(return_value=_FREQ_RESP)
+    return m
+
+
+@pytest.fixture
+async def server(
+    mock_radio: MagicMock, cfg: RigctldConfig, proto: MagicMock, handler: MagicMock
+) -> AsyncIterator[RigctldServer]:
+    srv = RigctldServer(mock_radio, cfg, _protocol=proto, _handler=handler)
+    await srv.start()
+    yield srv
+    await srv.stop()
+
+
+@pytest.fixture
+async def server_serial_radio(
+    cfg: RigctldConfig,
+) -> AsyncIterator[tuple[RigctldServer, SerialMockRadio]]:
+    """RigctldServer running on top of a real SerialMockRadio core."""
+    radio = SerialMockRadio()
+    await radio.connect()
+    srv = RigctldServer(radio, cfg)
+    await srv.start()
+    # DEFER-classified split writes fail closed on unknown RF state. This
+    # bootstrapped fallback StateStore never observes a real PTT sample, so
+    # seed a known-RX one (a huge max_age so it never ages out against the
+    # real monotonic clock) to keep the TX interlock out of these tests'
+    # unrelated freq/mode round-trip coverage.
+    _apply_store_value(
+        srv._state_store, FieldPath.global_("tx_state", "ptt"), False, max_age=1e9
+    )
+    try:
+        yield srv, radio
+    finally:
+        await srv.stop()
+
+
+# ---------------------------------------------------------------------------
+# Lifecycle tests
+# ---------------------------------------------------------------------------
+
+
+class TestLifecycle:
+    async def test_start_creates_server(self, server: RigctldServer) -> None:
+        assert server._server is not None
+
+    async def test_stop_closes_server(
+        self,
+        mock_radio: MagicMock,
+        cfg: RigctldConfig,
+        proto: MagicMock,
+        handler: MagicMock,
+    ) -> None:
+        srv = RigctldServer(mock_radio, cfg, _protocol=proto, _handler=handler)
+        await srv.start()
+        await srv.stop()
+        assert srv._server is None
+
+    async def test_context_manager(
+        self,
+        mock_radio: MagicMock,
+        cfg: RigctldConfig,
+        proto: MagicMock,
+        handler: MagicMock,
+    ) -> None:
+        async with RigctldServer(
+            mock_radio, cfg, _protocol=proto, _handler=handler
+        ) as srv:
+            host, port = _addr(srv)
+            assert port > 0
+        assert srv._server is None
+
+    async def test_double_stop_is_safe(
+        self,
+        mock_radio: MagicMock,
+        cfg: RigctldConfig,
+        proto: MagicMock,
+        handler: MagicMock,
+    ) -> None:
+        srv = RigctldServer(mock_radio, cfg, _protocol=proto, _handler=handler)
+        await srv.start()
+        await srv.stop()
+        await srv.stop()  # second call must not raise
+
+    async def test_start_passes_state_model_capability_to_default_handler(
+        self, mock_radio: MagicMock, cfg: RigctldConfig
+    ) -> None:
+        store = StateStore()
+        model_service = _RecordingStateModelService()
+        mock_radio.state_store = store
+        mock_radio.state_model_service = model_service
+        fake_server = _FakeAsyncServer()
+
+        with (
+            patch(
+                "rigplane.rigctld.server.asyncio.start_server",
+                new=AsyncMock(return_value=fake_server),
+            ),
+            patch("rigplane.rigctld.handler.RigctldHandler") as handler_cls,
+        ):
+            srv = RigctldServer(mock_radio, cfg)
+            await srv.start()
+            await srv.stop()
+
+        handler_cls.assert_called_once_with(
+            mock_radio,
+            cfg,
+            state_store=store,
+            state_model_service=model_service,
+            managed_tx_authority=None,
+            command_queue=None,
+            command_service=None,
+        )
+
+    async def test_start_bootstraps_profiled_standalone_state_acquisition(
+        self, cfg: RigctldConfig
+    ) -> None:
+        freq = FieldPath.active("main", "freq_mode", "freq_hz")
+        radio = _ProfiledStandaloneRadio(
+            profile=type(
+                "Profile",
+                (),
+                {"state_acquisition": _acquisition_profile(freq)},
+            )()
+        )
+        fake_server = _FakeAsyncServer()
+
+        with (
+            patch(
+                "rigplane.rigctld.server.asyncio.start_server",
+                new=AsyncMock(return_value=fake_server),
+            ),
+            patch("rigplane.rigctld.handler.RigctldHandler") as handler_cls,
+        ):
+            srv = RigctldServer(radio, cfg)
+            await srv.start()
+            try:
+                assert isinstance(srv._state_store, StateStore)
+                assert isinstance(srv._acquisition_scheduler, AcquisitionScheduler)
+                assert isinstance(srv._state_model_service, RadioStateModelService)
+                assert isinstance(srv._state_freshness_service, StateFreshnessService)
+                assert srv._state_store_freshness_task is not None
+                assert not srv._state_store_freshness_task.done()
+            finally:
+                await srv.stop()
+
+        handler_cls.assert_called_once_with(
+            radio,
+            cfg,
+            state_store=srv._state_store,
+            state_model_service=srv._state_model_service,
+            managed_tx_authority=None,
+            command_queue=None,
+            command_service=None,
+        )
+        assert srv._state_store_freshness_task is None
+
+    async def test_start_reuses_runtime_services_without_owning_freshness_task(
+        self, cfg: RigctldConfig
+    ) -> None:
+        store = StateStore()
+        freq = FieldPath.active("main", "freq_mode", "freq_hz")
+        scheduler = AcquisitionScheduler(profile=_acquisition_profile(freq))
+        model_service = RadioStateModelService(store=store, scheduler=scheduler)
+        freshness_service = StateFreshnessService(store=store, scheduler=scheduler)
+        radio = _ProfiledStandaloneRadio(
+            profile=type(
+                "Profile",
+                (),
+                {"state_acquisition": _acquisition_profile(freq)},
+            )()
+        )
+        radio.state_store = store
+        radio.state_model_service = model_service
+        radio._state_freshness_service = freshness_service
+        fake_server = _FakeAsyncServer()
+
+        with (
+            patch(
+                "rigplane.rigctld.server.asyncio.start_server",
+                new=AsyncMock(return_value=fake_server),
+            ),
+            patch("rigplane.rigctld.handler.RigctldHandler") as handler_cls,
+        ):
+            srv = RigctldServer(radio, cfg)
+            await srv.start()
+            await srv.stop()
+
+        assert srv._state_store is store
+        assert srv._state_model_service is model_service
+        assert srv._state_freshness_service is freshness_service
+        assert srv._state_store_freshness_task is None
+        handler_cls.assert_called_once_with(
+            radio,
+            cfg,
+            state_store=store,
+            state_model_service=model_service,
+            managed_tx_authority=None,
+            command_queue=None,
+            command_service=None,
+        )
+
+    async def test_combined_seats_drive_the_shared_service_once(
+        self, cfg: RigctldConfig
+    ) -> None:
+        """Both seats over one radio produce one ticking freshness loop.
+
+        Reproduces combined mode's shape (``rigplane web --rigctld``). The
+        radio carries the store it owns, plus the services the web seat
+        attaches to it in
+        ``web/server.py: WebServer._bootstrap_state_acquisition`` -- among
+        them the freshness service and its scheduler. The web seat's
+        ``web-state-freshness`` task
+        (``web/web_startup.py: start_web_server``) runs over that service;
+        ``RigctldServer.start`` then takes its reuse branch and starts
+        ``rigctld-state-freshness`` over the same instance.
+
+        The web HTTP listener is not started: the web seat's whole
+        contribution to *this defect* is that one task.
+
+        The discriminator is the gap between consecutive ticks: one loop
+        leaves at least ``interval_seconds`` between them, two loops started
+        back to back tick in closely spaced pairs.
+        """
+
+        interval = 0.02
+        store = StateStore()
+        freq = FieldPath.active("main", "freq_mode", "freq_hz")
+        scheduler = AcquisitionScheduler(profile=_acquisition_profile(freq))
+        model_service = RadioStateModelService(store=store, scheduler=scheduler)
+        freshness_service = StateFreshnessService(
+            store=store, scheduler=scheduler, interval_seconds=interval
+        )
+        radio = _ProfiledStandaloneRadio(
+            profile=type(
+                "Profile",
+                (),
+                {"state_acquisition": _acquisition_profile(freq)},
+            )()
+        )
+        radio.state_store = store
+        radio.state_model_service = model_service
+        radio._state_freshness_service = freshness_service
+        radio._acquisition_scheduler = scheduler
+        fake_server = _FakeAsyncServer()
+
+        stamps: list[float] = []
+        real_tick = StateFreshnessService.tick
+
+        def _tick(service: StateFreshnessService, *, now: float | None = None) -> Any:
+            stamps.append(time.monotonic())
+            return real_tick(service, now=now)
+
+        with (
+            patch(
+                "rigplane.rigctld.server.asyncio.start_server",
+                new=AsyncMock(return_value=fake_server),
+            ),
+            patch("rigplane.rigctld.handler.RigctldHandler"),
+            patch.object(StateFreshnessService, "tick", _tick),
+        ):
+            web_task = asyncio.get_running_loop().create_task(
+                freshness_service.run(), name="web-state-freshness"
+            )
+            srv = RigctldServer(radio, cfg)
+            try:
+                await srv.start()
+                assert srv._state_freshness_service is freshness_service
+                assert srv._state_store_freshness_task is not None
+                await asyncio.sleep(interval * 12)
+            finally:
+                await srv.stop()
+                web_task.cancel()
+                await asyncio.gather(web_task, return_exceptions=True)
+
+        assert len(stamps) >= 3
+        gaps = [later - earlier for earlier, later in zip(stamps, stamps[1:])]
+        assert min(gaps) >= interval * 0.9, f"ticks overlapped: gaps={gaps}"
+
+    async def test_standalone_rigctld_cadence_polls_ptt_at_the_profile_declared_interval(
+        self, cfg: RigctldConfig
+    ) -> None:
+        """``0x1C/0x00`` reaches the wire at the interval the profile declares.
+
+        The interval asserted below is read from the IC-7300 profile's
+        policy for ``global.tx_state.ptt`` in this test, not written down
+        here. Standalone
+        rigctld had no cadence driver at all before this change -- a
+        hardcoded re-read loop stood in for one.
+
+        Driven synchronously: the server's own freshness and drain tasks
+        are never started, so every tick and every drain in the loop below
+        is one this test issued, on one manual clock.
+        """
+
+        profile = resolve_radio_profile(model="IC-7300")
+        acquisition = profile.state_acquisition
+        assert acquisition is not None
+        ptt = FieldPath.global_("tx_state", "ptt")
+        declared_cadence = acquisition.policy_for(ptt).cadence_seconds
+        assert declared_cadence is not None
+
+        # Ahead of real ``time.monotonic()`` so the drain's own real-clock
+        # expiry check can never fire on a request stamped in this domain.
+        clock = FreshnessClock(start=time.monotonic() + 60.0)
+        store = StateStore(freshness_clock=clock)
+        radio = _CadenceRecordingRadio(profile=profile, store=store, clock=clock)
+
+        srv = RigctldServer(radio, cfg)
+        srv._bootstrap_state_acquisition()
+        service = srv._state_freshness_service
+        scheduler = srv._acquisition_scheduler
+        assert service is not None
+        assert scheduler is not None
+
+        tick_interval = 0.05
+        window = 1.2
+        steps = round(window / tick_interval)
+        ticks_per_cadence = round(declared_cadence / tick_interval)
+        cycle_start = clock.now()
+        for step in range(steps):
+            tick_in_cycle = step % ticks_per_cadence
+            if step and tick_in_cycle == 0:
+                cycle_start += declared_cadence
+            target = cycle_start + tick_in_cycle * tick_interval
+            clock.advance(target - clock.now())
+            service.tick(now=clock.now())
+            await srv._drain_state_acquisition_once()
+            # Stand in for the CI-V ingress that credits an answered read;
+            # without it the request stays queued and the cadence group is
+            # deduped out forever, so only the first poll would ever show.
+            for request in scheduler.pending_requests():
+                if ptt not in request.paths:
+                    continue
+                change_set = store.apply(
+                    Observation(
+                        path=ptt,
+                        value=False,
+                        source=SourceMetadata(
+                            source="poll_response",
+                            provider=request.provider,
+                            native_id="cadence-test",
+                        ),
+                        timestamp_monotonic=clock.now(),
+                        max_age=request.policy.freshness_ttl_seconds,
+                        provider_generation=store.provider_generation,
+                    )
+                )
+                scheduler.record_acquisition_result(request, change_set)
+
+        ptt_sends = [
+            at for at, command, sub in radio.civ_sends if (command, sub) == (0x1C, 0x00)
+        ]
+        gaps = [
+            round(later - earlier, 6)
+            for earlier, later in zip(ptt_sends, ptt_sends[1:])
+        ]
+        assert gaps, f"no repeated 0x1C/0x00 poll on the wire: sends={ptt_sends}"
+        assert set(gaps) == {declared_cadence}, (
+            f"PTT poll cadence {gaps} does not follow the profile's declared "
+            f"{declared_cadence}s"
+        )
+        assert len(ptt_sends) == round(window / declared_cadence)
+
+    async def test_external_cat_session_stands_the_cadence_down_but_not_a_user_read(
+        self, cfg: RigctldConfig
+    ) -> None:
+        """The deleted PTT re-read's external-CAT stand-down survives the move.
+
+        ``RigctldServer._send_ptt_reread_once`` returned early while
+        ``external_cat_session_active is True`` so a Hamlib bridge owning the
+        byte stream saw no traffic from that read. The cadence that replaces
+        it stands down on the same flag.
+
+        Three things are asserted, each of which a plausible guard gets
+        wrong. The cadence quiesces. A client read of the same field still
+        reaches the wire, whether it was queued before the tick or -- the
+        only ordering reachable once a session is under way -- after it, by
+        which time it can only coalesce into the standing cadence request.
+        And non-cadence background work still reaches the wire: the tick's
+        own ``prime_unobserved`` queues at ``BACKGROUND`` too, so a guard
+        selecting on priority rather than on the reason would silence it.
+        """
+
+        ptt = FieldPath.global_("tx_state", "ptt")
+
+        async def _drive(
+            *, external_cat: bool, user_read: str | None
+        ) -> tuple[int, int]:
+            profile = resolve_radio_profile(model="IC-7300")
+            clock = FreshnessClock(start=time.monotonic() + 60.0)
+            store = StateStore(freshness_clock=clock)
+            radio = _CadenceRecordingRadio(profile=profile, store=store, clock=clock)
+            radio.external_cat_session_active = external_cat
+            srv = RigctldServer(radio, cfg)
+            srv._bootstrap_state_acquisition()
+            scheduler = srv._acquisition_scheduler
+            service = srv._state_freshness_service
+            assert scheduler is not None
+            assert service is not None
+
+            def _client_read() -> None:
+                queued = scheduler.ensure_fresh(
+                    (ptt,),
+                    max_age=1.0,
+                    priority=AcquisitionPriority.USER,
+                    reason="user_read",
+                )
+                assert queued.status is AcquisitionStatus.QUEUED
+
+            if user_read == "before":
+                _client_read()
+            service.tick(now=clock.now())
+            if user_read == "after":
+                _client_read()
+            await srv._drain_state_acquisition_once()
+            ptt_reads = sum(
+                1
+                for _at, command, sub in radio.civ_sends
+                if (command, sub) == (0x1C, 0x00)
+            )
+            return ptt_reads, len(radio.civ_sends)
+
+        ptt_reads, total = await _drive(external_cat=False, user_read=None)
+        assert (ptt_reads, total > 0) == (1, True)
+
+        ptt_reads, total = await _drive(external_cat=True, user_read=None)
+        assert ptt_reads == 0, "the cadence did not stand down for external CAT"
+        assert total > 0, (
+            "everything went quiet, not just the cadence -- a guard that "
+            "also silences prime_unobserved is wider than the one it replaced"
+        )
+
+        for ordering in ("before", "after"):
+            ptt_reads, _total = await _drive(external_cat=True, user_read=ordering)
+            assert ptt_reads == 1, (
+                f"a client read queued {ordering} the tick was swallowed by "
+                "the external-CAT stand-down"
+            )
+
+    async def test_standalone_fallback_store_begin_and_detach_each_advance_once(
+        self, cfg: RigctldConfig
+    ) -> None:
+        radio = _ProfiledStandaloneRadio(
+            profile=type("Profile", (), {"state_acquisition": None})()
+        )
+        fake_server = _FakeAsyncServer()
+
+        with (
+            patch(
+                "rigplane.rigctld.server.asyncio.start_server",
+                new=AsyncMock(return_value=fake_server),
+            ),
+            patch("rigplane.rigctld.handler.RigctldHandler") as handler_cls,
+        ):
+            srv = RigctldServer(radio, cfg)
+            await srv.start()
+            assert isinstance(srv._state_store, StateStore)
+            assert srv._state_store.provider_generation == 1
+            await srv.stop()
+            await srv.stop()
+
+        assert isinstance(srv._state_store, StateStore)
+        # The standalone server, rather than its default handler, owns the
+        # one fallback Store. Attach and detach are the only lifecycle
+        # transitions it advances.
+        assert srv._state_store.provider_generation == 2
+        assert srv._acquisition_scheduler is None
+        assert srv._state_model_service is None
+        assert srv._state_freshness_service is None
+        assert srv._state_store_freshness_task is None
+        handler_cls.assert_called_once_with(
+            radio,
+            cfg,
+            state_store=srv._state_store,
+            state_model_service=None,
+            managed_tx_authority=None,
+            command_queue=None,
+            command_service=None,
+        )
+
+    async def test_standalone_shared_store_is_never_advanced_by_server(
+        self, cfg: RigctldConfig
+    ) -> None:
+        radio = _ProfiledStandaloneRadio(
+            profile=type("Profile", (), {"state_acquisition": None})()
+        )
+        store = StateStore()
+        radio.state_store = store
+        fake_server = _FakeAsyncServer()
+
+        with patch(
+            "rigplane.rigctld.server.asyncio.start_server",
+            new=AsyncMock(return_value=fake_server),
+        ):
+            srv = RigctldServer(radio, cfg)
+            await srv.start()
+            assert store.provider_generation == 0
+            await srv.stop()
+
+        assert store.provider_generation == 0
+
+    async def test_seat_services_on_a_non_protocol_radio_are_reused_not_replaced(
+        self, cfg: RigctldConfig
+    ) -> None:
+        """MOR-2557: rigctld must not overwrite a web seat's services.
+
+        ``WebServer._bootstrap_state_acquisition`` attaches ``_state_store``,
+        ``state_model_service``, ``_acquisition_scheduler``,
+        ``_state_freshness_service`` and a meter coalescer onto a radio that
+        is neither ``StateStoreCapable`` nor ``StateModelCapable`` (the
+        YaesuCATRadio shape). A ``RigctldServer`` started over the same radio
+        must adopt that exact set: at v3.0.0b4 it instead built a fallback
+        ``StateStore`` and overwrote the attributes, so the Yaesu adapter
+        resolved ``available_when`` against the empty fallback and silently
+        withheld the conditional ATT / manual-notch-frequency reads while
+        the web startup gate — resolving the same clauses against the web
+        store — waited on them forever.
+        """
+        freq = FieldPath.active("main", "freq_mode", "freq_hz")
+        profile = _acquisition_profile(freq)
+        radio = _ProfiledStandaloneRadio(
+            profile=type("Profile", (), {"state_acquisition": profile})()
+        )
+        # The web seat's attachment over a non-protocol radio, mirroring
+        # web/server.py: WebServer._bootstrap_state_acquisition.
+        web_store = StateStore()
+        web_scheduler = AcquisitionScheduler(profile=profile)
+        web_model_service = RadioStateModelService(
+            store=web_store, scheduler=web_scheduler
+        )
+        web_freshness_service = StateFreshnessService(
+            store=web_store, scheduler=web_scheduler
+        )
+        web_coalescer = MeterObservationCoalescer()
+        radio._state_store = web_store
+        radio._acquisition_scheduler = web_scheduler
+        radio.state_model_service = web_model_service
+        radio._state_freshness_service = web_freshness_service
+        radio._meter_observation_coalescer = web_coalescer
+        fake_server = _FakeAsyncServer()
+
+        with (
+            patch(
+                "rigplane.rigctld.server.asyncio.start_server",
+                new=AsyncMock(return_value=fake_server),
+            ),
+            patch("rigplane.rigctld.handler.RigctldHandler") as handler_cls,
+        ):
+            srv = RigctldServer(radio, cfg)
+            await srv.start()
+            try:
+                assert srv._state_store is web_store
+                assert srv._uses_fallback_state_store is False
+                assert srv._state_model_service is web_model_service
+                assert srv._state_freshness_service is web_freshness_service
+                assert srv._acquisition_scheduler is web_scheduler
+                # Identity on the radio is preserved: nothing was replaced.
+                assert radio._state_store is web_store
+                assert radio.state_model_service is web_model_service
+                assert radio._acquisition_scheduler is web_scheduler
+                assert radio._state_freshness_service is web_freshness_service
+                assert radio._meter_observation_coalescer is web_coalescer
+            finally:
+                await srv.stop()
+
+        # stop() advanced no provider generation on the web seat's store.
+        assert web_store.provider_generation == 0
+        assert srv._state_store is web_store
+        handler_cls.assert_called_once_with(
+            radio,
+            cfg,
+            state_store=web_store,
+            state_model_service=web_model_service,
+            managed_tx_authority=None,
+            command_queue=None,
+            command_service=None,
+        )
+
+    async def test_standalone_rigctld_without_a_prior_seat_attaches_its_own(
+        self, cfg: RigctldConfig
+    ) -> None:
+        """No seat, no protocol: the standalone fallback is unchanged.
+
+        The same non-protocol radio shape as the MOR-2557 test above, but
+        with nothing attached ahead of the server: rigctld still creates and
+        attaches its own fallback store, scheduler and services, and still
+        advances that store's provider generation exactly once per lifecycle
+        transition.
+        """
+        freq = FieldPath.active("main", "freq_mode", "freq_hz")
+        profile = _acquisition_profile(freq)
+        radio = _ProfiledStandaloneRadio(
+            profile=type("Profile", (), {"state_acquisition": profile})()
+        )
+        fake_server = _FakeAsyncServer()
+
+        with (
+            patch(
+                "rigplane.rigctld.server.asyncio.start_server",
+                new=AsyncMock(return_value=fake_server),
+            ),
+            patch("rigplane.rigctld.handler.RigctldHandler"),
+        ):
+            srv = RigctldServer(radio, cfg)
+            await srv.start()
+            try:
+                assert srv._uses_fallback_state_store is True
+                assert isinstance(srv._state_store, StateStore)
+                assert radio._state_store is srv._state_store
+                assert isinstance(radio.state_model_service, RadioStateModelService)
+                assert radio._acquisition_scheduler is srv._acquisition_scheduler
+                assert radio._state_freshness_service is srv._state_freshness_service
+                assert srv._state_store.provider_generation == 1
+            finally:
+                await srv.stop()
+
+        assert srv._state_store.provider_generation == 2
+
+    async def test_protocol_capable_radio_still_resolves_via_the_capability(
+        self, cfg: RigctldConfig
+    ) -> None:
+        """MOR-2557 regression guard: the protocol path is unchanged.
+
+        A ``StateStoreCapable`` / ``StateModelCapable`` radio resolves
+        through its own capability properties even when a seat also left a
+        different store under ``_state_store``; the duck-typed reuse path is
+        strictly a non-protocol fallback.
+        """
+        freq = FieldPath.active("main", "freq_mode", "freq_hz")
+        profile = _acquisition_profile(freq)
+        radio = _ProfiledStandaloneRadio(
+            profile=type("Profile", (), {"state_acquisition": profile})()
+        )
+        own_store = StateStore()
+        own_scheduler = AcquisitionScheduler(profile=profile)
+        own_model_service = RadioStateModelService(
+            store=own_store, scheduler=own_scheduler
+        )
+        radio.state_store = own_store
+        radio.state_model_service = own_model_service
+        # A seat also attached a scheduler and a different store; the
+        # capability wins on both.
+        radio._acquisition_scheduler = own_scheduler
+        radio._state_store = StateStore()
+
+        srv = RigctldServer(radio, cfg)
+        srv._bootstrap_state_acquisition()
+
+        assert srv._state_store is own_store
+        assert srv._uses_fallback_state_store is False
+        assert srv._state_model_service is own_model_service
+        assert srv._acquisition_scheduler is own_scheduler
+
+    async def test_standalone_stop_rejects_delayed_handler_readback_without_mutation(
+        self, cfg: RigctldConfig
+    ) -> None:
+        radio = _ProfiledStandaloneRadio(
+            profile=type("Profile", (), {"state_acquisition": None})()
+        )
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def delayed_get_freq() -> int:
+            started.set()
+            await release.wait()
+            return 14_074_000
+
+        radio.get_freq.side_effect = delayed_get_freq
+        srv = RigctldServer(radio, cfg)
+        await srv.start()
+        try:
+            assert isinstance(srv._state_store, StateStore)
+            handler = srv._rig_handler
+            request = asyncio.create_task(
+                handler.execute(_FREQ_CMD, session_id="delayed-readback")
+            )
+            await started.wait()
+            before = srv._state_store.snapshot()
+            stopping = asyncio.create_task(srv.stop())
+            await asyncio.sleep(0)
+            assert srv._state_store.provider_generation == 2
+            release.set()
+            await request
+            after = srv._state_store.snapshot()
+            assert after.state_revision == before.state_revision
+            assert after.freshness_revision == before.freshness_revision
+            assert after.observation_seq == before.observation_seq
+            assert after.fields == before.fields
+            await stopping
+        finally:
+            if srv._server is not None:
+                await srv.stop()
+
+    async def test_stale_standalone_state_store_queues_acquisition_via_server_service(
+        self, cfg: RigctldConfig
+    ) -> None:
+        freq = FieldPath.active("main", "freq_mode", "freq_hz")
+        radio = _ProfiledStandaloneRadio(
+            profile=type(
+                "Profile",
+                (),
+                {"state_acquisition": _acquisition_profile(freq)},
+            )()
+        )
+        executor = _BlockingAcquisitionExecutor()
+        radio._acquisition_executor = executor
+        fake_server = _FakeAsyncServer()
+
+        with patch(
+            "rigplane.rigctld.server.asyncio.start_server",
+            new=AsyncMock(return_value=fake_server),
+        ):
+            srv = RigctldServer(radio, cfg)
+            await srv.start()
+            try:
+                assert isinstance(srv._state_store, StateStore)
+                assert isinstance(srv._state_freshness_service, StateFreshnessService)
+                assert isinstance(srv._acquisition_scheduler, AcquisitionScheduler)
+                _apply_store_value(
+                    srv._state_store,
+                    freq,
+                    14_074_000,
+                    max_age=0.25,
+                )
+                srv._state_freshness_service.tick(now=2.0)
+
+                resp = await srv._rig_handler.execute(_FREQ_CMD)
+
+                assert resp.values == ["14090000"]
+                await asyncio.wait_for(executor.started.wait(), timeout=1.0)
+                requests = srv._acquisition_scheduler.pending_requests()
+                assert len(requests) == 1
+                assert requests[0].paths == (freq,)
+                assert requests[0].priority is AcquisitionPriority.USER
+                assert requests[0].reasons == ("stale", "rigctld.get_freq")
+            finally:
+                executor.release.set()
+                await srv.stop()
+
+    async def test_stale_standalone_get_drains_acquisition_through_provider_observation(
+        self, cfg: RigctldConfig
+    ) -> None:
+        freq = FieldPath.active("main", "freq_mode", "freq_hz")
+        radio = _ProfiledStandaloneRadio(
+            profile=type(
+                "Profile",
+                (),
+                {"state_acquisition": _acquisition_profile(freq)},
+            )()
+        )
+        executor = _ApplyingAcquisitionExecutor(radio, value=14_110_000)
+        radio._acquisition_executor = executor
+        fake_server = _FakeAsyncServer()
+
+        with patch(
+            "rigplane.rigctld.server.asyncio.start_server",
+            new=AsyncMock(return_value=fake_server),
+        ):
+            srv = RigctldServer(radio, cfg)
+            await srv.start()
+            try:
+                assert isinstance(srv._state_store, StateStore)
+                assert isinstance(srv._acquisition_scheduler, AcquisitionScheduler)
+                _apply_store_value(
+                    srv._state_store,
+                    freq,
+                    14_074_000,
+                    max_age=0.25,
+                )
+                srv._state_freshness_service.tick(now=2.0)
+
+                resp = await srv._rig_handler.execute(_FREQ_CMD)
+
+                assert resp.values == ["14090000"]
+                await await_until(
+                    lambda: srv._acquisition_scheduler.pending_requests() == ()
+                )
+                assert executor.calls
+                assert srv._state_store.snapshot().field(freq).value == 14_110_000
+                assert (
+                    srv._acquisition_scheduler.diagnostics()["queuedRequestCount"] == 0
+                )
+            finally:
+                await srv.stop()
+
+    async def test_standalone_drain_derives_tx_active_and_suppresses_tx_only_reconciliation(
+        self, cfg: RigctldConfig
+    ) -> None:
+        """MOR-1532: standalone rigctld's drain must feed the scheduler a
+        canonical ``tx_active`` source.
+
+        Standalone rigctld never calls ``AcquisitionScheduler.due_requests()``
+        (no cadence-poll concept of its own), so pre-fix its scheduler's
+        cached ``_tx_active`` stays at the ``__init__`` default of ``True``
+        forever -- the MOR-1531 ``tx_only`` gate never engages in this mode.
+        Reproduces the MOR-1525 SWR-flap loop for standalone rigctld: a
+        ``tx_only`` meter observed once (e.g. a rigctld one-shot ``l SWR``
+        read) keeps getting reconciled/re-sent forever, even with the
+        canonical ``global.tx_state.ptt`` observation FRESH and False
+        throughout.
+        """
+
+        swr = FieldPath.global_("meters", "swr")
+        ptt = FieldPath.global_("tx_state", "ptt")
+        radio = _ProfiledStandaloneRadio(
+            profile=type(
+                "Profile", (), {"state_acquisition": _tx_only_swr_profile(swr)}
+            )()
+        )
+
+        class _ReapplyingExecutor:
+            """Re-observes the field with its own answer, like a real radio."""
+
+            def __init__(self) -> None:
+                self.calls: list[AcquisitionRequest] = []
+
+            async def execute(
+                self,
+                request: AcquisitionRequest,
+                *,
+                already_sent_paths: frozenset[FieldPath],
+            ) -> AcquisitionExecutionResult:
+                self.calls.append(request)
+                store = radio._state_store
+                scheduler = radio._acquisition_scheduler
+                change_set = store.apply(
+                    Observation(
+                        path=request.paths[0],
+                        value=1,
+                        source=SourceMetadata(
+                            source="poll_response",
+                            provider=request.provider,
+                            native_id="fake-provider-read",
+                        ),
+                        timestamp_monotonic=time.monotonic(),
+                        max_age=request.policy.freshness_ttl_seconds,
+                        provider_generation=store.provider_generation,
+                    )
+                )
+                scheduler.record_acquisition_result(request, change_set)
+                return AcquisitionExecutionResult(sent_paths=request.paths)
+
+        executor = _ReapplyingExecutor()
+        radio._acquisition_executor = executor
+
+        fake_now = [1000.0]
+        with patch("time.monotonic", side_effect=lambda: fake_now[0]):
+            srv = RigctldServer(radio, cfg)
+            # Bootstrap directly (no real background loop tasks) so time can
+            # be driven deterministically across several drain cycles.
+            srv._bootstrap_state_acquisition()
+            assert isinstance(srv._state_store, StateStore)
+            assert isinstance(srv._acquisition_scheduler, AcquisitionScheduler)
+            assert isinstance(srv._state_freshness_service, StateFreshnessService)
+
+            # Canonical PTT: FRESH and False (confirmed RX) throughout. SWR
+            # observed exactly once, as if from an earlier TX or a rigctld
+            # one-shot cmd15 read.
+            _apply_store_value(srv._state_store, ptt, False, max_age=1000.0)
+            _apply_store_value(srv._state_store, swr, 1, max_age=2.0)
+
+            for _ in range(5):
+                fake_now[0] += 2.1
+                srv._state_freshness_service.tick(now=fake_now[0])
+                await srv._drain_state_acquisition_once()
+
+        assert executor.calls == [], (
+            "tx_only field re-polled via reconciliation while "
+            "global.tx_state.ptt is FRESH and False -- this is the "
+            "MOR-1525 SWR-flap loop, reachable in standalone rigctld mode "
+            "(MOR-1532)"
+        )
+
+    async def test_combined_mode_rigctld_drain_never_flips_shared_scheduler_tx_active(
+        self, cfg: RigctldConfig
+    ) -> None:
+        """MOR-1532: combined (`rigplane web --rigctld`) mode shares one
+        scheduler. Both ``due_requests()`` (driven by the shared freshness
+        tick) and rigctld's own drain derive ``tx_active`` through
+        ``derive_tx_active`` over the identical canonical
+        ``global.tx_state.ptt`` fact, so rigctld's drain must never
+        spuriously flip the cached value the tick just set -- same source,
+        same value, no fight.
+        """
+
+        swr = FieldPath.global_("meters", "swr")
+        ptt = FieldPath.global_("tx_state", "ptt")
+        profile = _tx_only_swr_profile(swr)
+        store = StateStore()
+        scheduler = AcquisitionScheduler(profile=profile)
+        model_service = _RecordingStateModelService()
+
+        class _SharedSchedulerRadio:
+            def __init__(self) -> None:
+                self.profile = type("Profile", (), {"state_acquisition": profile})()
+                self.connected = True
+                self.radio_ready = True
+                self.control_connected = True
+                self.state_store = store
+                self.state_model_service = model_service
+                self._acquisition_scheduler = scheduler
+                self._state_store = store
+
+        radio = _SharedSchedulerRadio()
+        srv = RigctldServer(radio, cfg)
+        srv._bootstrap_state_acquisition()
+        assert srv._acquisition_scheduler is scheduler, (
+            "combined mode must reuse the radio's already-attached "
+            "scheduler, not create a second one"
+        )
+
+        # Canonical PTT fact: FRESH and False (confirmed RX). A real
+        # RECONCILIATION request is queued -- without this, the RX-leg
+        # ``dispatchable_requests() == ()`` assertion below would be
+        # vacuous (an empty scheduler is trivially "gated").
+        _apply_store_value(store, ptt, False, max_age=1000.0)
+        result = scheduler.ensure_fresh(
+            swr,
+            max_age=2.0,
+            priority=AcquisitionPriority.RECONCILIATION,
+            reason="stale",
+        )
+        assert result.status is AcquisitionStatus.QUEUED
+        assert len(scheduler.pending_requests()) == 1
+
+        # The freshness tick's cadence call runs first: due_requests()
+        # caches tx_active=False.
+        scheduler.due_requests(now=0.0, tx_active=False)
+
+        # rigctld's own drain runs next, deriving tx_active from the same
+        # canonical fact -- must not flip the cache.
+        derived = derive_tx_active(store)
+        assert derived is False
+        scheduler.note_tx_active(derived)
+
+        assert scheduler.dispatchable_requests() == (), (
+            "rigctld's drain must not spuriously re-enable the tx_only "
+            "gate the web poller's drain just closed"
+        )
+
+        # TX leg: canonical PTT flips FRESH True -- both due_requests()
+        # (tick) and derive_tx_active() (rigctld's drain) must agree, and
+        # the still-queued request must now be dispatchable.
+        _apply_store_value(store, ptt, True, max_age=1000.0)
+        scheduler.due_requests(now=1.0, tx_active=True)
+        derived = derive_tx_active(store)
+        assert derived is True
+        scheduler.note_tx_active(derived)
+
+        assert len(scheduler.dispatchable_requests()) == 1
+
+    async def test_standalone_drain_records_executor_missing_failure(
+        self, cfg: RigctldConfig
+    ) -> None:
+        freq = FieldPath.active("main", "freq_mode", "freq_hz")
+        diagnostics = StateDiagnosticsRecorder(enabled=True)
+        radio = _ProfiledStandaloneRadio(
+            profile=type(
+                "Profile",
+                (),
+                {"state_acquisition": _acquisition_profile(freq)},
+            )()
+        )
+        radio._state_diagnostics = diagnostics
+        fake_server = _FakeAsyncServer()
+
+        with patch(
+            "rigplane.rigctld.server.asyncio.start_server",
+            new=AsyncMock(return_value=fake_server),
+        ):
+            srv = RigctldServer(radio, cfg)
+            await srv.start()
+            try:
+                assert isinstance(srv._state_store, StateStore)
+                assert isinstance(srv._acquisition_scheduler, AcquisitionScheduler)
+                _apply_store_value(
+                    srv._state_store,
+                    freq,
+                    14_074_000,
+                    max_age=0.25,
+                )
+                srv._state_freshness_service.tick(now=2.0)
+
+                await srv._rig_handler.execute(_FREQ_CMD)
+
+                await await_until(
+                    lambda: srv._acquisition_scheduler.pending_requests() == ()
+                )
+                scheduler_diagnostics = srv._acquisition_scheduler.diagnostics()
+                assert (
+                    scheduler_diagnostics["failureCountByReason"][
+                        "acquisition_executor_missing"
+                    ]
+                    == 1
+                )
+                assert any(
+                    event.kind == "acquisition_executor_missing"
+                    and event.source == "rigctld.server"
+                    and event.details["provider"] == "test_provider"
+                    for event in diagnostics.events()
+                )
+            finally:
+                await srv.stop()
+
+    async def test_standalone_drain_records_executor_exception_and_keeps_running(
+        self, cfg: RigctldConfig
+    ) -> None:
+        freq = FieldPath.active("main", "freq_mode", "freq_hz")
+        diagnostics = StateDiagnosticsRecorder(enabled=True)
+        radio = _ProfiledStandaloneRadio(
+            profile=type(
+                "Profile",
+                (),
+                {"state_acquisition": _acquisition_profile(freq)},
+            )()
+        )
+        executor = _FailingAcquisitionExecutor()
+        radio._acquisition_executor = executor
+        radio._state_diagnostics = diagnostics
+        fake_server = _FakeAsyncServer()
+
+        with patch(
+            "rigplane.rigctld.server.asyncio.start_server",
+            new=AsyncMock(return_value=fake_server),
+        ):
+            srv = RigctldServer(radio, cfg)
+            await srv.start()
+            try:
+                assert isinstance(srv._state_store, StateStore)
+                assert isinstance(srv._acquisition_scheduler, AcquisitionScheduler)
+                _apply_store_value(
+                    srv._state_store,
+                    freq,
+                    14_074_000,
+                    max_age=0.25,
+                )
+                srv._state_freshness_service.tick(now=2.0)
+
+                await srv._rig_handler.execute(_FREQ_CMD)
+
+                await await_until(
+                    lambda: srv._acquisition_scheduler.pending_requests() == ()
+                )
+                assert executor.calls
+                assert srv._state_acquisition_drain_task is not None
+                assert not srv._state_acquisition_drain_task.done()
+                scheduler_diagnostics = srv._acquisition_scheduler.diagnostics()
+                assert (
+                    scheduler_diagnostics["failureCountByReason"][
+                        "acquisition_executor_error"
+                    ]
+                    == 1
+                )
+                assert any(
+                    event.kind == "acquisition_request_failed"
+                    and event.source == "rigctld.server"
+                    and event.details["reason"] == "acquisition_executor_error"
+                    and "executor transport failed" in event.details["error"]
+                    for event in diagnostics.events()
+                )
+            finally:
+                await srv.stop()
+
+    async def test_civ_profile_without_send_capability_fails_before_timeout(
+        self, cfg: RigctldConfig
+    ) -> None:
+        freq = FieldPath.active("main", "freq_mode", "freq_hz")
+        diagnostics = StateDiagnosticsRecorder(enabled=True)
+        radio = _ProfiledStandaloneRadio(
+            profile=type(
+                "Profile",
+                (),
+                {
+                    "state_acquisition": _acquisition_profile(
+                        freq,
+                        provider="icom_civ",
+                    )
+                },
+            )()
+        )
+        radio._state_diagnostics = diagnostics
+        fake_server = _FakeAsyncServer()
+
+        with patch(
+            "rigplane.rigctld.server.asyncio.start_server",
+            new=AsyncMock(return_value=fake_server),
+        ):
+            srv = RigctldServer(radio, cfg)
+            await srv.start()
+            try:
+                assert isinstance(srv._state_store, StateStore)
+                assert isinstance(srv._acquisition_scheduler, AcquisitionScheduler)
+                _apply_store_value(
+                    srv._state_store,
+                    freq,
+                    14_074_000,
+                    max_age=0.25,
+                )
+                srv._state_freshness_service.tick(now=2.0)
+
+                await srv._rig_handler.execute(_FREQ_CMD)
+
+                await await_until(
+                    lambda: srv._acquisition_scheduler.pending_requests() == ()
+                )
+                scheduler_diagnostics = srv._acquisition_scheduler.diagnostics()
+                assert (
+                    scheduler_diagnostics["failureCountByReason"][
+                        "acquisition_executor_unavailable"
+                    ]
+                    == 1
+                )
+                assert any(
+                    event.kind == "acquisition_executor_unavailable"
+                    and event.source == "rigctld.server"
+                    and event.details["provider"] == "icom_civ"
+                    for event in diagnostics.events()
+                )
+                assert not any(
+                    event.kind == "acquisition_request_failed"
+                    and event.details.get("reason") == "acquisition_request_timeout"
+                    for event in diagnostics.events()
+                )
+            finally:
+                await srv.stop()
+
+    async def test_civ_standalone_drain_sends_read_and_applies_observation(
+        self, cfg: RigctldConfig
+    ) -> None:
+        freq = FieldPath.active("main", "freq_mode", "freq_hz")
+        radio = _CivProfiledStandaloneRadio(
+            profile=replace(
+                resolve_radio_profile(model="IC-705"),
+                state_acquisition=_acquisition_profile(freq, provider="icom_civ"),
+            ),
+            observed_freq=14_110_000,
+        )
+        fake_server = _FakeAsyncServer()
+
+        with patch(
+            "rigplane.rigctld.server.asyncio.start_server",
+            new=AsyncMock(return_value=fake_server),
+        ):
+            srv = RigctldServer(radio, cfg)
+            await srv.start()
+            try:
+                assert isinstance(srv._state_store, StateStore)
+                assert isinstance(srv._acquisition_scheduler, AcquisitionScheduler)
+                _apply_store_value(
+                    srv._state_store,
+                    freq,
+                    14_074_000,
+                    max_age=0.25,
+                )
+                srv._state_freshness_service.tick(now=2.0)
+
+                resp = await srv._rig_handler.execute(_FREQ_CMD)
+
+                assert resp.values == ["14090000"]
+                await await_until(lambda: bool(radio.send_civ_calls))
+                assert radio.send_civ_calls == [
+                    {
+                        "command": 0x25,
+                        "sub": None,
+                        "data": b"\x00",
+                        "wait_response": False,
+                        "priority": Priority.NORMAL,
+                    }
+                ]
+
+                request = srv._acquisition_scheduler.pending_requests()[0]
+                change_set = srv._state_store.apply(
+                    Observation(
+                        path=freq,
+                        value=radio.observed_freq,
+                        source=SourceMetadata(
+                            source="command_response",
+                            provider=request.provider,
+                            native_id="0x25",
+                        ),
+                        timestamp_monotonic=3.0,
+                        max_age=request.policy.freshness_ttl_seconds,
+                        provider_generation=srv._state_store.provider_generation,
+                    )
+                )
+                srv._acquisition_scheduler.record_acquisition_result(
+                    request,
+                    change_set,
+                )
+
+                assert srv._state_store.snapshot().field(freq).value == 14_110_000
+                assert srv._acquisition_scheduler.pending_requests() == ()
+            finally:
+                await srv.stop()
+
+    async def test_civ_executor_uses_active_ic9700_profile_query(
+        self, cfg: RigctldConfig
+    ) -> None:
+        path = FieldPath.global_("tx_state", "dual_watch")
+        profile = replace(
+            resolve_radio_profile(model="IC-9700"),
+            state_acquisition=_acquisition_profile(path, provider="icom_civ"),
+        )
+        radio = _CivProfiledStandaloneRadio(profile=profile, observed_freq=0)
+        srv = RigctldServer(radio, cfg)
+        scheduler = AcquisitionScheduler(profile=profile.state_acquisition)
+
+        executor = srv._default_acquisition_executor_for_scheduler(scheduler)
+
+        assert isinstance(executor, IcomCivAcquisitionExecutor)
+        assert executor.query_for_path(path) == AcquisitionQuery(0x16, sub=0x59)
+
+    async def test_unavailable_field_records_distinct_acquisition_diagnostic(
+        self, cfg: RigctldConfig
+    ) -> None:
+        freq = FieldPath.active("main", "freq_mode", "freq_hz")
+        diagnostics = StateDiagnosticsRecorder(enabled=True)
+        radio = _ProfiledStandaloneRadio(
+            profile=type(
+                "Profile",
+                (),
+                {"state_acquisition": _unavailable_profile(freq)},
+            )()
+        )
+        radio._state_diagnostics = diagnostics
+        fake_server = _FakeAsyncServer()
+
+        with patch(
+            "rigplane.rigctld.server.asyncio.start_server",
+            new=AsyncMock(return_value=fake_server),
+        ):
+            srv = RigctldServer(radio, cfg)
+            await srv.start()
+            try:
+                await srv._rig_handler.execute(_FREQ_CMD)
+
+                assert isinstance(srv._acquisition_scheduler, AcquisitionScheduler)
+                assert srv._acquisition_scheduler.pending_requests() == ()
+                assert not any(
+                    event.kind == "acquisition_executor_missing"
+                    for event in diagnostics.events()
+                )
+                assert any(
+                    event.kind == "acquisition_unavailable"
+                    and event.source == "rigctld.handler"
+                    and event.details["reason"] == "rigctld.get_freq"
+                    for event in diagnostics.events()
+                )
+            finally:
+                await srv.stop()
+
+
+# ---------------------------------------------------------------------------
+# Accept / response cycle
+# ---------------------------------------------------------------------------
+
+
+class TestAcceptResponse:
+    async def test_single_command_response(
+        self, server: RigctldServer, proto: MagicMock
+    ) -> None:
+        r, w = await _connect(server)
+        w.write(b"f\n")
+        await w.drain()
+
+        data = await asyncio.wait_for(r.read(4096), timeout=1.0)
+        assert data == _RESPONSE_BYTES
+        proto.parse_line.assert_called_once_with(b"f", ANY)
+
+        await _close(w)
+
+    async def test_multiple_commands_same_connection(
+        self, server: RigctldServer, proto: MagicMock
+    ) -> None:
+        r, w = await _connect(server)
+
+        for _ in range(3):
+            w.write(b"f\n")
+            await w.drain()
+            data = await asyncio.wait_for(r.read(4096), timeout=1.0)
+            assert data == _RESPONSE_BYTES
+
+        assert proto.parse_line.call_count == 3
+        await _close(w)
+
+    async def test_set_command_calls_execute(
+        self, server: RigctldServer, proto: MagicMock, handler: MagicMock
+    ) -> None:
+        set_cmd = RigctldCommand("F", "set_freq", args=("14074000",), is_set=True)
+        proto.parse_line.return_value = set_cmd
+        proto.format_response.return_value = b"RPRT 0\n"
+
+        r, w = await _connect(server)
+        w.write(b"F 14074000\n")
+        await w.drain()
+
+        data = await asyncio.wait_for(r.read(4096), timeout=1.0)
+        assert data == b"RPRT 0\n"
+        handler.execute.assert_called_once()
+        call = handler.execute.call_args
+        assert call is not None
+        assert call.args == (set_cmd,)
+        assert call.kwargs["session_id"] == "rigctld-client-1"
+        await _close(w)
+
+    async def test_legacy_handler_execute_without_session_id_still_runs(
+        self, mock_radio: MagicMock, cfg: RigctldConfig, proto: MagicMock
+    ) -> None:
+        compat_handler = _CompatHandler()
+        srv = RigctldServer(
+            mock_radio,
+            cfg,
+            _protocol=proto,
+            _handler=compat_handler,
+        )
+        await srv.start()
+        try:
+            r, w = await _connect(srv)
+            w.write(b"f\n")
+            await w.drain()
+
+            data = await asyncio.wait_for(r.read(4096), timeout=1.0)
+            assert data == _RESPONSE_BYTES
+            assert compat_handler.calls == [_FREQ_CMD]
+            await _close(w)
+        finally:
+            await srv.stop()
+
+    async def test_format_response_receives_session(
+        self, server: RigctldServer, proto: MagicMock
+    ) -> None:
+        r, w = await _connect(server)
+        w.write(b"f\n")
+        await w.drain()
+        await asyncio.wait_for(r.read(4096), timeout=1.0)
+
+        # format_response must be called with (cmd, resp, ClientSession)
+        call_args = proto.format_response.call_args
+        assert call_args is not None
+        _cmd, _resp, session = call_args.args
+        assert isinstance(session, ClientSession)
+        assert session.client_id > 0
+
+        await _close(w)
+
+    async def test_blank_lines_are_skipped(
+        self, server: RigctldServer, proto: MagicMock
+    ) -> None:
+        r, w = await _connect(server)
+        w.write(b"\n\n\nf\n")
+        await w.drain()
+        data = await asyncio.wait_for(r.read(4096), timeout=1.0)
+        assert data == _RESPONSE_BYTES
+        proto.parse_line.assert_called_once_with(b"f", ANY)
+        await _close(w)
+
+    async def test_crlf_line_ending_accepted(
+        self, server: RigctldServer, proto: MagicMock
+    ) -> None:
+        r, w = await _connect(server)
+        w.write(b"f\r\n")
+        await w.drain()
+        data = await asyncio.wait_for(r.read(4096), timeout=1.0)
+        assert data == _RESPONSE_BYTES
+        proto.parse_line.assert_called_once_with(b"f", ANY)
+        await _close(w)
+
+
+class TestSemiIntegrationSerialMockRadio:
+    async def test_get_and_set_frequency_flows_through_core(
+        self, server_serial_radio: tuple[RigctldServer, SerialMockRadio]
+    ) -> None:
+        """f/F commands go through real RigctldHandler into SerialMockRadio."""
+        server, radio = server_serial_radio
+        reader, writer = await _connect(server)
+        try:
+            # Initial frequency from SerialMockRadio default state.
+            writer.write(b"f\n")
+            await writer.drain()
+            data = await asyncio.wait_for(reader.read(4096), timeout=1.0)
+            assert b"14074000" in data
+
+            # Change frequency and verify both protocol response and core state.
+            writer.write(b"F 7050000\n")
+            await writer.drain()
+            data_set = await asyncio.wait_for(reader.read(4096), timeout=1.0)
+            assert data_set == b"RPRT 0\n"
+
+            writer.write(b"f\n")
+            await writer.drain()
+            data_after = await asyncio.wait_for(reader.read(4096), timeout=1.0)
+            assert data_after == b"7050000\n"
+
+            freq_core = await radio.get_freq()
+            assert freq_core == 7_050_000
+        finally:
+            await _close(writer)
+
+    async def test_get_and_set_mode_flows_through_core(
+        self, server_serial_radio: tuple[RigctldServer, SerialMockRadio]
+    ) -> None:
+        """m/M commands go through real RigctldHandler into SerialMockRadio."""
+        server, radio = server_serial_radio
+        reader, writer = await _connect(server)
+        try:
+            # Initial mode from SerialMockRadio default state.
+            writer.write(b"m\n")
+            await writer.drain()
+            data = await asyncio.wait_for(reader.read(4096), timeout=1.0)
+            lines = data.decode().splitlines()
+            assert lines[0] == "USB"
+
+            # Change mode to LSB with passband and verify both layers.
+            writer.write(b"M LSB 2400\n")
+            await writer.drain()
+            data_set = await asyncio.wait_for(reader.read(4096), timeout=1.0)
+            assert data_set == b"RPRT 0\n"
+
+            writer.write(b"m\n")
+            await writer.drain()
+            data_after = await asyncio.wait_for(reader.read(4096), timeout=1.0)
+            after_lines = data_after.decode().splitlines()
+            assert after_lines[0] == "LSB"
+
+            mode_core, filt_core = await radio.get_mode()
+            assert mode_core == "LSB"
+            assert filt_core == 2
+        finally:
+            await _close(writer)
+
+    async def test_get_lock_mode_keeps_next_reply_aligned(
+        self, server_serial_radio: tuple[RigctldServer, SerialMockRadio]
+    ) -> None:
+        """MOR-3113: `\\get_lock_mode` answers value + RPRT 0, nothing more.
+
+        netrigctl (WSJT-X 3.0.2 / Hamlib 4.7.1 d042479) reads the
+        lock-mode value and then a second RPRT line. Read both lines, then
+        prove the footer does not leak into the ordinary GET after it,
+        nor into a repeat of the lock-mode query itself.
+        """
+        server, _ = server_serial_radio
+        reader, writer = await _connect(server)
+        try:
+            writer.write(b"\\get_lock_mode\n")
+            await writer.drain()
+            line_1 = await asyncio.wait_for(reader.readline(), timeout=1.0)
+            line_2 = await asyncio.wait_for(reader.readline(), timeout=1.0)
+            assert line_1 == b"0\n"
+            assert line_2 == b"RPRT 0\n"
+
+            # The ordinary GET after it must start clean: a leftover or
+            # duplicate trailer from the lock-mode reply surfaces here.
+            writer.write(b"f\n")
+            await writer.drain()
+            freq = await asyncio.wait_for(reader.readline(), timeout=1.0)
+            assert freq == b"14074000\n"
+
+            # Repeat the lock-mode query: same two lines, nothing extra.
+            writer.write(b"\\get_lock_mode\n")
+            await writer.drain()
+            line_3 = await asyncio.wait_for(reader.readline(), timeout=1.0)
+            line_4 = await asyncio.wait_for(reader.readline(), timeout=1.0)
+            assert line_3 == b"0\n"
+            assert line_4 == b"RPRT 0\n"
+
+            # And the next ordinary GET still starts clean.
+            writer.write(b"f\n")
+            await writer.drain()
+            freq_again = await asyncio.wait_for(reader.readline(), timeout=1.0)
+            assert freq_again == b"14074000\n"
+        finally:
+            await _close(writer)
+
+
+async def test_deferred_write_and_unkey_both_answer_immediately_on_one_connection(
+    cfg: RigctldConfig,
+) -> None:
+    """MOR-1881: the exact regression the rejected deferred-lane design
+    failed at (PR #2755).
+
+    One connection, ``S <split>`` then ``T 0``, PTT seeded known TX. The lane
+    build held the split command in-band and answered the unkey at +2.003s.
+    This seat now never holds anything in-band for a DEFER-classified write
+    -- known TX is dropped immediately (``RPRT 0``, radio untouched) -- so
+    both replies must land essentially instantly, and the split write must
+    never have reached the radio.
+    """
+    radio = SerialMockRadio()
+    await radio.connect()
+    srv = RigctldServer(radio, cfg)
+    await srv.start()
+    _apply_store_value(
+        srv._state_store, FieldPath.global_("tx_state", "ptt"), True, max_age=1e9
+    )
+    try:
+        reader, writer = await _connect(srv)
+        try:
+            split_before = radio._split  # noqa: SLF001
+
+            start = time.monotonic()
+            writer.write(b"S 1 VFOA\n")
+            await writer.drain()
+            data_split = await asyncio.wait_for(reader.read(4096), timeout=1.0)
+            elapsed_split = time.monotonic() - start
+
+            start_ptt = time.monotonic()
+            writer.write(b"T 0\n")
+            await writer.drain()
+            data_ptt = await asyncio.wait_for(reader.read(4096), timeout=1.0)
+            elapsed_ptt = time.monotonic() - start_ptt
+        finally:
+            await _close(writer)
+    finally:
+        await srv.stop()
+
+    assert data_split == b"RPRT 0\n"
+    assert elapsed_split < 0.1
+    assert data_ptt == b"RPRT 0\n"
+    assert elapsed_ptt < 0.1
+    assert radio._split is split_before  # noqa: SLF001
+
+
+# ---------------------------------------------------------------------------
+# Quit command
+# ---------------------------------------------------------------------------
+
+
+class TestQuit:
+    async def test_quit_closes_connection(
+        self, server: RigctldServer, proto: MagicMock
+    ) -> None:
+        proto.parse_line.return_value = RigctldCommand("q", "quit")
+
+        r, w = await _connect(server)
+        w.write(b"q\n")
+        await w.drain()
+
+        data = await _read_all(r)
+        assert data == b""  # server closed the connection
+        await _close(w)
+
+    async def test_quit_decrements_client_count(
+        self, server: RigctldServer, proto: MagicMock
+    ) -> None:
+        proto.parse_line.return_value = RigctldCommand("q", "quit")
+
+        r, w = await _connect(server)
+        w.write(b"q\n")
+        await w.drain()
+        await _read_all(r)
+
+        # Give event loop a beat to run the done callback.
+        await asyncio.sleep(0.05)
+        assert server._client_count == 0
+        await _close(w)
+
+
+# ---------------------------------------------------------------------------
+# Error handling
+# ---------------------------------------------------------------------------
+
+
+class TestErrorHandling:
+    async def test_parse_error_sends_enimpl(
+        self, server: RigctldServer, proto: MagicMock
+    ) -> None:
+        """Unknown commands (ValueError) return ENIMPL, not EPROTO."""
+        proto.parse_line.side_effect = ValueError("unknown command")
+        proto.format_error.return_value = b"RPRT -4\n"
+
+        r, w = await _connect(server)
+        w.write(b"garbage\n")
+        await w.drain()
+
+        data = await asyncio.wait_for(r.read(4096), timeout=1.0)
+        assert data == b"RPRT -4\n"
+        proto.format_error.assert_called_with(HamlibError.ENIMPL)
+        await _close(w)
+
+    async def test_parse_error_connection_stays_open(
+        self, server: RigctldServer, proto: MagicMock
+    ) -> None:
+        """After a parse error the connection should remain open."""
+        # First command: parse error
+        proto.parse_line.side_effect = [ValueError("bad"), _FREQ_CMD]
+        proto.format_error.return_value = b"RPRT -8\n"
+
+        r, w = await _connect(server)
+        w.write(b"garbage\n")
+        await w.drain()
+        await asyncio.wait_for(r.read(4096), timeout=1.0)  # consume error
+
+        # Second command: succeeds
+        proto.parse_line.side_effect = None
+        proto.parse_line.return_value = _FREQ_CMD
+        w.write(b"f\n")
+        await w.drain()
+        data = await asyncio.wait_for(r.read(4096), timeout=1.0)
+        assert data == _RESPONSE_BYTES
+
+        await _close(w)
+
+    async def test_handler_exception_sends_eio(
+        self, server: RigctldServer, handler: MagicMock, proto: MagicMock
+    ) -> None:
+        handler.execute.side_effect = RuntimeError("radio exploded")
+        proto.format_error.return_value = b"RPRT -6\n"
+
+        r, w = await _connect(server)
+        w.write(b"f\n")
+        await w.drain()
+
+        data = await asyncio.wait_for(r.read(4096), timeout=1.0)
+        assert data == b"RPRT -6\n"
+        proto.format_error.assert_called_with(HamlibError.EIO)
+        await _close(w)
+
+    async def test_line_too_long_closes_connection(self, server: RigctldServer) -> None:
+        r, w = await _connect(server)
+        # max_line_length default is 1024; send > 1024 bytes without \n first
+        oversized = b"x" * 1025 + b"\n"
+        w.write(oversized)
+        await w.drain()
+
+        data = await _read_all(r)
+        assert data == b""  # connection closed
+
+        await _close(w)
+
+
+# ---------------------------------------------------------------------------
+# Command timeout
+# ---------------------------------------------------------------------------
+
+
+class TestCommandTimeout:
+    """The command timeout (0.3 s) runs on the test loop's virtual clock.
+
+    The sockets are real; only time is controlled, and it moves when the test
+    says so, after the event that proves the server is waiting on the handler.
+    """
+
+    @pytest.mark.timeout(30)
+    async def test_slow_handler_gets_etimeout(
+        self,
+        server: RigctldServer,
+        handler: MagicMock,
+        proto: MagicMock,
+        virtual_clock: VirtualClock,
+    ) -> None:
+        entered = asyncio.Event()
+
+        async def slow(cmd: RigctldCommand) -> RigctldResponse:
+            entered.set()
+            await asyncio.sleep(10)  # > command_timeout=0.3
+            return _FREQ_RESP  # pragma: no cover
+
+        handler.execute = slow
+        proto.format_error.return_value = _TIMEOUT_BYTES
+
+        r, w = await _connect(server)
+        w.write(b"f\n")
+        await w.drain()
+        reply = asyncio.ensure_future(r.read(4096))
+
+        await entered.wait()  # the server is now waiting on the handler
+        await virtual_clock.elapse(0.29)  # just inside command_timeout=0.3
+        assert not reply.done()
+        await virtual_clock.elapse(0.02)  # past it
+        await await_until(reply.done, timeout=10.0, description="the ETIMEOUT reply")
+        assert reply.result() == _TIMEOUT_BYTES
+        proto.format_error.assert_called_with(HamlibError.ETIMEOUT)
+        await _close(w)
+
+    @pytest.mark.timeout(30)
+    async def test_connection_still_usable_after_timeout(
+        self,
+        server: RigctldServer,
+        handler: MagicMock,
+        proto: MagicMock,
+        virtual_clock: VirtualClock,
+    ) -> None:
+        """After a command timeout the client can send another command."""
+        call_count = 0
+        entered = asyncio.Event()
+
+        async def sometimes_slow(cmd: RigctldCommand) -> RigctldResponse:
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                entered.set()
+                await asyncio.sleep(10)  # first: timeout
+            return _FREQ_RESP
+
+        handler.execute = sometimes_slow
+        proto.format_error.return_value = _TIMEOUT_BYTES
+
+        r, w = await _connect(server)
+
+        # First command times out
+        w.write(b"f\n")
+        await w.drain()
+        err_reply = asyncio.ensure_future(r.read(4096))
+        await entered.wait()
+        await virtual_clock.elapse(0.31)
+        await await_until(
+            err_reply.done, timeout=10.0, description="the ETIMEOUT reply"
+        )
+        assert err_reply.result() == _TIMEOUT_BYTES
+
+        # Second command succeeds
+        w.write(b"f\n")
+        await w.drain()
+        assert await r.read(4096) == _RESPONSE_BYTES
+
+        await _close(w)
+
+
+# ---------------------------------------------------------------------------
+# Idle timeout
+# ---------------------------------------------------------------------------
+
+
+class TestIdleTimeout:
+    async def test_idle_client_gets_disconnected(self, server: RigctldServer) -> None:
+        """client_timeout=0.5; sending nothing should close the connection."""
+        r, w = await _connect(server)
+
+        # Read should return EOF after idle timeout fires.
+        data = await asyncio.wait_for(r.read(4096), timeout=2.0)
+        assert data == b""
+
+        await _close(w)
+
+    async def test_active_client_resets_timeout(
+        self, server: RigctldServer, proto: MagicMock
+    ) -> None:
+        """Each command resets the idle clock."""
+        r, w = await _connect(server)
+
+        # Send two commands 0.3s apart (< client_timeout=0.5) — should work.
+        for _ in range(2):
+            w.write(b"f\n")
+            await w.drain()
+            await asyncio.wait_for(r.read(4096), timeout=1.0)
+            await asyncio.sleep(0.2)
+
+        await _close(w)
+
+
+# ---------------------------------------------------------------------------
+# Max clients
+# ---------------------------------------------------------------------------
+
+
+class TestMaxClients:
+    async def test_max_clients_enforced(
+        self, server: RigctldServer, cfg: RigctldConfig
+    ) -> None:
+        """Connecting max_clients+1 should get an immediate EOF on the last."""
+        connections: list[tuple[asyncio.StreamReader, asyncio.StreamWriter]] = []
+
+        for _ in range(cfg.max_clients):
+            r, w = await _connect(server)
+            connections.append((r, w))
+
+        # Give event loop a beat so all connections are registered.
+        await asyncio.sleep(0.05)
+
+        # One extra — should be rejected.
+        r_extra, w_extra = await _connect(server)
+        data = await _read_all(r_extra)
+        assert data == b""  # immediate EOF
+
+        for r, w in connections:
+            await _close(w)
+        await _close(w_extra)
+
+    async def test_client_count_decreases_on_disconnect(
+        self, server: RigctldServer, proto: MagicMock
+    ) -> None:
+        proto.parse_line.return_value = RigctldCommand("q", "quit")
+
+        r, w = await _connect(server)
+        await asyncio.sleep(0.05)
+        assert server._client_count == 1
+
+        w.write(b"q\n")
+        await w.drain()
+        await _read_all(r)
+        await asyncio.sleep(0.05)
+
+        assert server._client_count == 0
+        await _close(w)
+
+
+# ---------------------------------------------------------------------------
+# Concurrent clients
+# ---------------------------------------------------------------------------
+
+
+class TestConcurrentClients:
+    async def test_three_concurrent_clients(self, server: RigctldServer) -> None:
+        """All three clients should receive independent responses."""
+        conns = [await _connect(server) for _ in range(3)]
+
+        for _, w in conns:
+            w.write(b"f\n")
+            await w.drain()
+
+        results = []
+        for r, _ in conns:
+            data = await asyncio.wait_for(r.read(4096), timeout=1.0)
+            results.append(data)
+
+        assert all(d == _RESPONSE_BYTES for d in results)
+
+        for r, w in conns:
+            await _close(w)
+
+    async def test_each_client_has_unique_id(
+        self, server: RigctldServer, proto: MagicMock
+    ) -> None:
+        conns = [await _connect(server) for _ in range(3)]
+
+        for _, w in conns:
+            w.write(b"f\n")
+            await w.drain()
+
+        for r, _ in conns:
+            await asyncio.wait_for(r.read(4096), timeout=1.0)
+
+        # Collect the sessions passed to format_response
+        sessions = [call.args[2] for call in proto.format_response.call_args_list]
+        ids = {s.client_id for s in sessions}
+        assert len(ids) == 3, "each client should have a unique client_id"
+
+        for r, w in conns:
+            await _close(w)
+
+
+# ---------------------------------------------------------------------------
+# Graceful shutdown
+# ---------------------------------------------------------------------------
+
+
+class TestGracefulShutdown:
+    async def test_stop_closes_active_clients(
+        self,
+        mock_radio: MagicMock,
+        cfg: RigctldConfig,
+        proto: MagicMock,
+        handler: MagicMock,
+    ) -> None:
+        srv = RigctldServer(mock_radio, cfg, _protocol=proto, _handler=handler)
+        await srv.start()
+
+        r, w = await _connect(srv)
+        await asyncio.sleep(0.05)  # ensure task is running
+
+        await srv.stop()
+
+        # Client should receive EOF after server stops.
+        data = await _read_all(r)
+        assert data == b""
+        await _close(w)
+
+    async def test_stop_cancels_all_tasks(
+        self,
+        mock_radio: MagicMock,
+        cfg: RigctldConfig,
+        proto: MagicMock,
+        handler: MagicMock,
+    ) -> None:
+        srv = RigctldServer(mock_radio, cfg, _protocol=proto, _handler=handler)
+        await srv.start()
+
+        readers_writers = [await _connect(srv) for _ in range(2)]
+        await asyncio.sleep(0.05)
+
+        assert srv._client_count == 2
+        await srv.stop()
+        # Allow done callbacks to fire after task cancellation
+        await asyncio.sleep(0.05)
+        assert srv._client_count == 0
+
+        for r, w in readers_writers:
+            await _close(w)
+
+    async def test_serve_forever_stops_on_cancel(
+        self,
+        mock_radio: MagicMock,
+        cfg: RigctldConfig,
+        proto: MagicMock,
+        handler: MagicMock,
+    ) -> None:
+        srv = RigctldServer(mock_radio, cfg, _protocol=proto, _handler=handler)
+        task = asyncio.get_event_loop().create_task(srv.serve_forever())
+        await asyncio.sleep(0.05)
+
+        task.cancel()
+        try:
+            await asyncio.wait_for(task, timeout=2.0)
+        except (asyncio.CancelledError, asyncio.TimeoutError):
+            pass
+
+        assert srv._server is None
+
+    async def test_stop_during_client_teardown_still_closes_socket(
+        self,
+        mock_radio: MagicMock,
+        cfg: RigctldConfig,
+        proto: MagicMock,
+        handler: MagicMock,
+    ) -> None:
+        """MOR-1887: stop() cancelling a client mid-teardown strands nothing.
+
+        The client handler's ``finally`` gathers its cancelled response tasks
+        before the unconditional socket close. A ``stop()`` cancellation
+        landing on that gather used to skip the close entirely: the abandoned
+        transport kept ``Server.wait_closed()`` pending forever, which under
+        ``-n auto`` surfaced as a dead xdist worker ("node down") around
+        ``test_max_clients_rejected``. The teardown must be waited out even
+        when the cancellation arrives mid-teardown.
+        """
+
+        async def slow_to_cancel(cmd: RigctldCommand) -> RigctldResponse:
+            try:
+                await asyncio.sleep(30)
+            except asyncio.CancelledError:
+                # The cancel takes a detour, so the handler's teardown
+                # gather is still pending when stop() cancels the handler.
+                await asyncio.sleep(0.1)
+                raise
+            return _FREQ_RESP  # pragma: no cover
+
+        handler.execute = slow_to_cancel
+        srv = RigctldServer(mock_radio, cfg, _protocol=proto, _handler=handler)
+        await srv.start()
+
+        r, w = await _connect(srv)
+        w.write(b"f\n")
+        await w.drain()
+        await asyncio.sleep(0.05)  # the response task is inside execute()
+
+        # EOF: the handler breaks out of its read loop and enters its
+        # teardown gather while the response task is still unwinding.
+        w.close()
+        await asyncio.sleep(0.05)
+
+        # Cancels the handler mid-teardown; before MOR-1887 this hung forever
+        # inside Server.wait_closed().
+        await asyncio.wait_for(srv.stop(), timeout=5.0)
+
+        assert srv._server is None
+        await _close(w)
+
+
+# ---------------------------------------------------------------------------
+# Abrupt disconnect
+# ---------------------------------------------------------------------------
+
+
+class TestAbruptDisconnect:
+    async def test_abrupt_disconnect_does_not_crash_server(
+        self, server: RigctldServer
+    ) -> None:
+        r, w = await _connect(server)
+
+        # Close without sending anything (abrupt).
+        w.close()
+        await asyncio.sleep(0.1)
+
+        # Server must still be running and accept new clients.
+        assert server._server is not None
+        r2, w2 = await _connect(server)
+        w2.write(b"f\n")
+        await w2.drain()
+        data = await asyncio.wait_for(r2.read(4096), timeout=1.0)
+        assert data == _RESPONSE_BYTES
+        await _close(w2)
+
+    async def test_disconnect_mid_session_handled(
+        self, server: RigctldServer, handler: MagicMock
+    ) -> None:
+        """Handler may be awaiting execute when client disconnects."""
+        evt = asyncio.Event()
+
+        async def blocking(cmd: RigctldCommand) -> RigctldResponse:
+            evt.set()
+            await asyncio.sleep(10)  # blocking
+            return _FREQ_RESP  # pragma: no cover
+
+        handler.execute = blocking
+
+        r, w = await _connect(server)
+        w.write(b"f\n")
+        await w.drain()
+
+        # Wait until handler is entered, then yank the connection.
+        await asyncio.wait_for(evt.wait(), timeout=1.0)
+        w.close()
+        await asyncio.sleep(0.2)
+
+        # Server should still be alive.
+        assert server._server is not None
+
+
+# ---------------------------------------------------------------------------
+# run_rigctld_server convenience helper
+# ---------------------------------------------------------------------------
+
+
+class TestRunRigctldServer:
+    async def test_run_stops_on_cancel(self, mock_radio: MagicMock) -> None:
+        """run_rigctld_server should exit cleanly when cancelled."""
+        # Use a no-op handler/protocol so start() doesn't fail on stubs.
+        proto = MagicMock()
+        proto.parse_line.return_value = _FREQ_CMD
+        proto.format_response.return_value = _RESPONSE_BYTES
+        proto.format_error.return_value = _ERROR_BYTES
+
+        hdl = MagicMock()
+        hdl.execute = AsyncMock(return_value=_FREQ_RESP)
+
+        # Patch the module-level imports that run_rigctld_server triggers.
+        import rigplane.rigctld.server as server_mod
+
+        orig_cls = server_mod.RigctldServer
+        server_mod_any = cast(Any, server_mod)
+
+        def _patched_cls(radio: MagicMock, config: RigctldConfig) -> RigctldServer:
+            return orig_cls(radio, config, _protocol=proto, _handler=hdl)
+
+        server_mod_any.RigctldServer = _patched_cls
+        try:
+            task = asyncio.get_event_loop().create_task(
+                run_rigctld_server(mock_radio, host="127.0.0.1", port=0)
+            )
+            await asyncio.sleep(0.05)
+            task.cancel()
+            try:
+                await asyncio.wait_for(task, timeout=2.0)
+            except (asyncio.CancelledError, asyncio.TimeoutError):
+                pass
+        finally:
+            server_mod_any.RigctldServer = orig_cls
+
+
+# ---------------------------------------------------------------------------
+# WSJT-X compatibility prewarm
+# ---------------------------------------------------------------------------
+
+
+class TestWsjtxCompatPrewarm:
+    async def test_prewarm_falls_back_to_core_radio_contract(self) -> None:
+        radio = _ContractPrewarmRadio("USB", data_mode=False)
+        cfg = RigctldConfig(wsjtx_compat=True)
+        srv = RigctldServer(radio, cfg, _protocol=MagicMock(), _handler=MagicMock())
+
+        await srv._wsjtx_compat_prewarm()
+
+        radio.set_data_mode.assert_awaited_once_with(True)
+
+    async def test_prewarm_enables_data_when_usb_and_data_off(
+        self, mock_radio: MagicMock
+    ) -> None:
+        cfg = RigctldConfig(wsjtx_compat=True)
+        srv = RigctldServer(
+            mock_radio, cfg, _protocol=MagicMock(), _handler=MagicMock()
+        )
+
+        mock_radio.get_mode_info = AsyncMock(return_value=(Mode.USB, 2))
+        mock_radio.get_data_mode = AsyncMock(return_value=False)
+        mock_radio.set_data_mode = AsyncMock(return_value=None)
+
+        await srv._wsjtx_compat_prewarm()
+
+        mock_radio.set_data_mode.assert_awaited_once_with(True)
+
+    async def test_prewarm_skips_when_data_already_on(
+        self, mock_radio: MagicMock
+    ) -> None:
+        cfg = RigctldConfig(wsjtx_compat=True)
+        srv = RigctldServer(
+            mock_radio, cfg, _protocol=MagicMock(), _handler=MagicMock()
+        )
+
+        mock_radio.get_mode_info = AsyncMock(return_value=(Mode.USB, 2))
+        mock_radio.get_data_mode = AsyncMock(return_value=True)
+        mock_radio.set_data_mode = AsyncMock(return_value=None)
+
+        await srv._wsjtx_compat_prewarm()
+
+        mock_radio.set_data_mode.assert_not_called()
+
+    async def test_prewarm_configured_data2_falls_back_on_single_data_profile(
+        self, mock_radio: MagicMock
+    ) -> None:
+        cfg = RigctldConfig(
+            wsjtx_compat=True,
+            wsjtx_data_mode=2,
+            wsjtx_data_mod_input=5,
+        )
+        srv = RigctldServer(
+            mock_radio, cfg, _protocol=MagicMock(), _handler=MagicMock()
+        )
+
+        mock_radio.profile = MagicMock(data_mode_count=1)
+        mock_radio.get_mode_info = AsyncMock(return_value=(Mode.USB, 2))
+        mock_radio.get_data_mode = AsyncMock(return_value=True)
+        mock_radio.set_data_mode = AsyncMock(return_value=None)
+        mock_radio.set_data2_mod_input = AsyncMock(return_value=None)
+
+        await srv._wsjtx_compat_prewarm()
+
+        mock_radio.set_data2_mod_input.assert_not_called()
+        mock_radio.set_data_mode.assert_awaited_once_with(True)
+
+    async def test_prewarm_skips_for_non_ssb_modes(self, mock_radio: MagicMock) -> None:
+        cfg = RigctldConfig(wsjtx_compat=True)
+        srv = RigctldServer(
+            mock_radio, cfg, _protocol=MagicMock(), _handler=MagicMock()
+        )
+
+        mock_radio.get_mode_info = AsyncMock(return_value=(Mode.CW, None))
+        mock_radio.get_data_mode = AsyncMock(return_value=False)
+        mock_radio.set_data_mode = AsyncMock(return_value=None)
+
+        await srv._wsjtx_compat_prewarm()
+
+        mock_radio.set_data_mode.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# MOR-2280 F14: standalone rigctld attaches the meter coalescer only the web
+# seat used to build, and the freshness tick releases what it holds.
+# ---------------------------------------------------------------------------
+
+
+def _coalescing_swr_profile(swr: FieldPath) -> RadioAcquisitionProfile:
+    return RadioAcquisitionProfile(
+        provider="test_provider",
+        capabilities=(FieldCapability(path=swr, command_response_observable=True),),
+        field_policies={
+            swr: AcquisitionPolicy(
+                cadence_seconds=None,
+                freshness_ttl_seconds=2.0,
+                meter_coalescing=MeterCoalescingPolicy(window_seconds=0.2),
+            ),
+        },
+    )
+
+
+def _meter_observation(path: FieldPath, value: object, *, at: float) -> Observation:
+    return Observation(
+        path=path,
+        value=value,
+        source=SourceMetadata(source="poll_response", provider="test_provider"),
+        timestamp_monotonic=at,
+        max_age=2.0,
+    )
+
+
+async def test_standalone_rigctld_coalesces_meter_bursts_and_the_tick_releases_them(
+    cfg: RigctldConfig,
+) -> None:
+    """MOR-2280 F14. This is a behaviour change for the standalone seat.
+
+    ``CivRuntime._record_coalesced_meter_observation`` coalesces only if the
+    radio carries a ``MeterObservationCoalescer``; standalone rigctld attached
+    none, so it returned False for every meter sample and nothing was ever
+    held. Bootstrapping the standalone server now attaches one, and the
+    freshness tick is what releases the held sample into the store.
+    """
+
+    from rigplane.runtime._civ_rx import CivRuntime
+
+    swr = FieldPath.global_("meters", "swr")
+    radio = _ProfiledStandaloneRadio(
+        profile=type(
+            "Profile", (), {"state_acquisition": _coalescing_swr_profile(swr)}
+        )()
+    )
+    srv = RigctldServer(radio, cfg)
+    srv._bootstrap_state_acquisition()
+
+    coalescer = getattr(radio, "_meter_observation_coalescer", None)
+    assert isinstance(coalescer, MeterObservationCoalescer)
+
+    runtime = CivRuntime(radio)
+    radio._civ_runtime = runtime
+
+    # First sample: nothing stored yet, so it is not a burst and applies.
+    assert runtime._record_coalesced_meter_observation(
+        _meter_observation(swr, 1.1, at=500.0)
+    )
+    assert radio._state_store.snapshot().field(swr).value == 1.1
+
+    # Second sample, inside the window: held by the coalescer, not applied.
+    assert runtime._record_coalesced_meter_observation(
+        _meter_observation(swr, 1.9, at=500.05)
+    )
+    assert radio._state_store.snapshot().field(swr).value == 1.1
+    assert coalescer.diagnostics()["pendingSampleCount"] == 1
+
+    # The tick releases it once the window has elapsed.
+    assert srv._state_freshness_service is not None
+    srv._state_freshness_service.tick(now=500.3)
+
+    assert radio._state_store.snapshot().field(swr).value == 1.9
+    assert coalescer.diagnostics()["pendingSampleCount"] == 0
+
+
+# ---------------------------------------------------------------------------
+# State-acquisition drain policies (MOR-2293)
+# ---------------------------------------------------------------------------
+
+
+class _SilentAcquisitionExecutor:
+    """Reports every path as sent and never answers — a lost read."""
+
+    def __init__(self) -> None:
+        self.calls: list[AcquisitionRequest] = []
+
+    async def execute(
+        self,
+        request: AcquisitionRequest,
+        *,
+        already_sent_paths: frozenset[FieldPath],
+    ) -> AcquisitionExecutionResult:
+        self.calls.append(request)
+        return AcquisitionExecutionResult(
+            sent_paths=tuple(
+                path for path in request.paths if path not in already_sent_paths
+            )
+        )
+
+
+class TestStateAcquisitionDrainPolicies:
+    """The two collaborators the shared ``AcquisitionDrain`` takes."""
+
+    async def test_a_timed_out_request_is_terminal_even_on_a_healthy_civ_link(
+        self, cfg: RigctldConfig
+    ) -> None:
+        """rigctld does NOT get MOR-874's healthy-link grace.
+
+        The web poller holds a healthy-link expiry in flight and withholds
+        it from the scheduler's failure accounting; rigctld reports every
+        timeout with ``link_healthy=False`` — the MOR-874 comment at
+        ``_record_acquisition_failure`` says so on purpose.
+
+        The radio is given the attributes the web probe reads, and the probe
+        itself is asked (unbound, on this radio) to confirm it calls the
+        link healthy: without that control this test would also pass on a
+        radio that looks broken to both seats.
+        """
+
+        freq = FieldPath.active("main", "freq_mode", "freq_hz")
+        radio = _ProfiledStandaloneRadio(
+            profile=type(
+                "Profile", (), {"state_acquisition": _acquisition_profile(freq)}
+            )()
+        )
+        executor = _SilentAcquisitionExecutor()
+        radio._acquisition_executor = executor
+        recorder = StateDiagnosticsRecorder(enabled=True)
+        radio._state_diagnostics = recorder
+
+        fake_now = [1000.0]
+        with patch("time.monotonic", side_effect=lambda: fake_now[0]):
+            srv = RigctldServer(radio, cfg)
+            srv._bootstrap_state_acquisition()
+            scheduler = srv._acquisition_scheduler
+            service = srv._state_freshness_service
+            assert scheduler is not None
+            assert service is not None
+
+            service.tick(now=fake_now[0])
+            await srv._drain_state_acquisition_once()
+            assert executor.calls, "nothing was dispatched, so nothing can time out"
+            assert srv._acquisition_in_flight != {}
+
+            # Well past every deadline the queued request carries, with the
+            # link demonstrably alive: a CI-V frame landed this instant.
+            fake_now[0] += 3600.0
+            radio._civ_recovering = False
+            radio._last_civ_data_received = fake_now[0]
+            radio._civ_ready_idle_timeout = 2.0
+            probe = RadioPoller._civ_link_healthy  # noqa: SLF001
+            assert probe(cast(Any, SimpleNamespace(_radio=radio)), now=fake_now[0]), (
+                "premise failed: the web poller's own probe does not call this "
+                "link healthy, so this test would not detect the grace"
+            )
+
+            await srv._drain_state_acquisition_once()
+
+        assert srv._acquisition_in_flight == {}, (
+            "the timed-out request stayed in flight — rigctld picked up the "
+            "MOR-874 healthy-link grace"
+        )
+        assert scheduler.diagnostics()["failureCountByReason"] == {
+            "acquisition_request_timeout": 1
+        }, (
+            "the scheduler did not count the timeout — it was reported with "
+            "link_healthy=True, which is the web seat's grace, not rigctld's rule"
+        )
+        timeouts = [
+            event
+            for event in recorder.events()
+            if event.details.get("reason") == "acquisition_request_timeout"
+        ]
+        assert len(timeouts) == 1
+        assert "grace_expired" not in timeouts[0].details
+
+    async def test_a_confirmation_answer_a_drain_tick_later_is_not_a_timeout(
+        self, cfg: RigctldConfig
+    ) -> None:
+        """MOR-1898: an epsilon-``max_age`` confirmation is not born expired.
+
+        A post-write confirmation passes the freshness epsilon as
+        ``max_age`` — "no prior observation may satisfy this" — so the
+        enqueue deadline it produced used to land before the request was
+        even dispatched. The first drain still sent it, but the next tick
+        saw the deadline behind it and reported a terminal
+        ``acquisition_request_timeout`` (``link_healthy=False``) for an
+        answer that was merely one drain tick away.
+        """
+
+        freq = FieldPath.active("main", "freq_mode", "freq_hz")
+        radio = _ProfiledStandaloneRadio(
+            profile=type(
+                "Profile", (), {"state_acquisition": _acquisition_profile(freq)}
+            )()
+        )
+        executor = _SilentAcquisitionExecutor()
+        radio._acquisition_executor = executor
+        radio._state_diagnostics = StateDiagnosticsRecorder(enabled=True)
+
+        fake_now = [1000.0]
+        with patch("time.monotonic", side_effect=lambda: fake_now[0]):
+            srv = RigctldServer(radio, cfg)
+            srv._bootstrap_state_acquisition()
+            scheduler = srv._acquisition_scheduler
+            assert scheduler is not None
+
+            # The exact shape CommandService queues after a write: the
+            # epsilon max_age, a dispatch of its own, no explicit timeout.
+            scheduler.ensure_fresh(
+                (freq,),
+                max_age=1e-9,
+                priority=AcquisitionPriority.COMMAND,
+                reason="post_write:set_freq",
+                require_fresh_dispatch=True,
+            )
+            await srv._drain_state_acquisition_once()
+            assert executor.calls, "nothing was dispatched, so nothing can time out"
+            assert srv._acquisition_in_flight != {}
+
+            # One-two drain ticks later (the drain sleeps 0.05 s), well
+            # inside any sane answer window: the request must still be
+            # live, awaiting its answer.
+            fake_now[0] += 0.1
+            await srv._drain_state_acquisition_once()
+
+        assert srv._acquisition_in_flight != {}, (
+            "the confirmation was dropped — its enqueue deadline was the "
+            "freshness epsilon, so it was born expired"
+        )
+        assert scheduler.diagnostics()["failureCountByReason"] == {}, (
+            "an in-window confirmation recorded a failure — the false "
+            "acquisition_request_timeout of MOR-1898"
+        )
+        assert scheduler.pending_requests(), (
+            "the confirmation left the queue — a false timeout re-based it"
+        )
+
+    async def test_external_cat_stand_down_selects_on_reasons_not_on_the_request(
+        self, cfg: RigctldConfig
+    ) -> None:
+        """The dispatch-eligibility filter stays as narrow as it is today.
+
+        It drops a request whose ``reasons`` is exactly
+        ``("policy-cadence",)`` and nothing else: a cadence request a client
+        read coalesced into carries a second reason and must survive, and so
+        must background work queued under another reason
+        (``prime_unobserved``).
+        """
+
+        ptt = FieldPath.global_("tx_state", "ptt")
+        profile = resolve_radio_profile(model="IC-7300")
+        clock = FreshnessClock(start=time.monotonic() + 60.0)
+        store = StateStore(freshness_clock=clock)
+        radio = _CadenceRecordingRadio(profile=profile, store=store, clock=clock)
+        srv = RigctldServer(radio, cfg)
+        srv._bootstrap_state_acquisition()
+        scheduler = srv._acquisition_scheduler
+        service = srv._state_freshness_service
+        assert scheduler is not None
+        assert service is not None
+
+        service.tick(now=clock.now())
+        queued = scheduler.ensure_fresh(
+            (ptt,),
+            max_age=1.0,
+            priority=AcquisitionPriority.USER,
+            reason="user_read",
+        )
+        assert queued.status is AcquisitionStatus.QUEUED
+        pending = scheduler.dispatchable_requests()
+        cadence_only = tuple(
+            request for request in pending if request.reasons == ("policy-cadence",)
+        )
+        coalesced = tuple(
+            request
+            for request in pending
+            if "policy-cadence" in request.reasons and "user_read" in request.reasons
+        )
+        assert cadence_only, "fixture queued no cadence-only request"
+        assert coalesced, "fixture queued no coalesced client read"
+
+        radio.external_cat_session_active = False
+        assert srv._dispatchable_this_pass(pending) == pending
+
+        radio.external_cat_session_active = True
+        filtered_ids = {request.id for request in srv._dispatchable_this_pass(pending)}
+        assert filtered_ids.isdisjoint({request.id for request in cadence_only}), (
+            "the cadence did not stand down while an external CAT session owns the wire"
+        )
+        for request in coalesced:
+            assert request.id in filtered_ids, (
+                "a client read that coalesced into the standing cadence "
+                "request was swallowed by the external-CAT stand-down"
+            )
+        assert len(filtered_ids) == len(pending) - len(cadence_only)
+
+
+# ---------------------------------------------------------------------------
+# MOR-2875: the shutdown waits carry their own bounds
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("cancelled", [False, True], ids=["waited", "cancelled-once"])
+async def test_a_handback_that_never_settles_is_waited_on_only_for_its_bound(
+    mock_radio: MagicMock,
+    cfg: RigctldConfig,
+    proto: MagicMock,
+    handler: MagicMock,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    cancelled: bool,
+) -> None:
+    monkeypatch.setattr(rigctld_server, "SESSION_TX_HANDBACK_TIMEOUT_S", 0.05)
+    started, never = asyncio.Event(), asyncio.Event()
+
+    async def release_session_tx(_session_id: str) -> None:
+        started.set()
+        await never.wait()
+
+    handler.release_session_tx = release_session_tx
+    srv = RigctldServer(mock_radio, cfg, _protocol=proto, _handler=handler)
+    teardown = asyncio.ensure_future(srv._release_session_tx("s1"))
+    await asyncio.wait_for(started.wait(), 1.0)
+    if cancelled:
+        teardown.cancel()  # stop() reaching the session mid-handback
+    # asyncio.wait, not wait_for: a timeout here must not cancel the teardown
+    # into its second, bounded wait and pass for the wrong reason.
+    done, _ = await asyncio.wait({teardown}, timeout=1.0)
+    never.set()  # the abandoned handback may finish now
+    await asyncio.sleep(0)
+
+    assert done == {teardown}
+    errors = [r.getMessage() for r in caplog.records if r.levelname == "ERROR"]
+    assert len(errors) == 1
+    assert errors[0].startswith("session s1: managed TX handback did not settle")
+    assert errors[0].endswith("unkey not confirmed")
+
+
+async def test_a_handback_cancelled_twice_is_left_with_an_error_naming_the_session(
+    mock_radio: MagicMock,
+    cfg: RigctldConfig,
+    proto: MagicMock,
+    handler: MagicMock,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    monkeypatch.setattr(rigctld_server, "SESSION_TX_HANDBACK_TIMEOUT_S", 5.0)
+    started, never = asyncio.Event(), asyncio.Event()
+    ends: list[str] = []
+
+    async def release_session_tx(_session_id: str) -> None:
+        started.set()
+        try:
+            await never.wait()
+        except asyncio.CancelledError:
+            ends.append("handback cancelled")
+            raise
+
+    handler.release_session_tx = release_session_tx
+    srv = RigctldServer(mock_radio, cfg, _protocol=proto, _handler=handler)
+    teardown = asyncio.ensure_future(srv._release_session_tx("s1"))
+    await asyncio.wait_for(started.wait(), 1.0)
+    teardown.cancel()  # the first cancellation: a second, bounded wait begins
+    await asyncio.sleep(0.05)
+    assert not teardown.done()
+    teardown.cancel()  # the second one ends the wait and the handback
+    done, _ = await asyncio.wait({teardown}, timeout=1.0)
+    await asyncio.sleep(0)
+
+    assert done == {teardown} and teardown.cancelled()
+    assert ends == ["handback cancelled"]
+    errors = [r.getMessage() for r in caplog.records if r.levelname == "ERROR"]
+    assert errors == [
+        "session s1: managed TX handback cancelled a second time before it"
+        " settled; unkey not confirmed"
+    ]
+
+
+async def test_stop_waits_for_a_listener_that_never_closes_only_for_its_bound(
+    mock_radio: MagicMock,
+    cfg: RigctldConfig,
+    proto: MagicMock,
+    handler: MagicMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(rigctld_server, "LISTENER_CLOSE_TIMEOUT_S", 0.05)
+
+    class _NeverClosingListener:
+        def close(self) -> None:
+            pass
+
+        async def wait_closed(self) -> None:
+            await asyncio.Event().wait()
+
+    srv = RigctldServer(mock_radio, cfg, _protocol=proto, _handler=handler)
+    srv._server = cast(Any, _NeverClosingListener())
+    await asyncio.wait_for(srv.stop(), 1.0)
+    assert srv._server is None
+
+
+def test_stop_timeout_is_the_sum_of_its_timed_waits() -> None:
+    """``STOP_TIMEOUT_S`` sums the ``timeout=`` of every wait in
+    ``_release_session_tx`` and ``stop()``.
+
+    MOR-3821 P0c moved the two handback waits into shared
+    ``release_managed_session_tx``: each still waits ``handback_timeout_s``,
+    which the delegate binds to ``SESSION_TX_HANDBACK_TIMEOUT_S``.
+    """
+    import ast
+    import inspect
+    import textwrap
+
+    from rigplane.runtime.managed_tx_submission import release_managed_session_tx
+
+    timeouts = [
+        keyword.value
+        for method in (
+            RigctldServer._release_session_tx,
+            RigctldServer.stop,
+            release_managed_session_tx,
+        )
+        for node in ast.walk(ast.parse(textwrap.dedent(inspect.getsource(method))))
+        if isinstance(node, ast.Call)
+        for keyword in node.keywords
+        if keyword.arg == "timeout"
+    ]
+    assert timeouts and all(isinstance(value, ast.Name) for value in timeouts)
+    delegate_binding = [
+        keyword.value
+        for node in ast.walk(
+            ast.parse(
+                textwrap.dedent(inspect.getsource(RigctldServer._release_session_tx))
+            )
+        )
+        if isinstance(node, ast.Call)
+        for keyword in node.keywords
+        if keyword.arg == "handback_timeout_s"
+    ]
+    assert (
+        len(delegate_binding) == 1
+        and isinstance(delegate_binding[0], ast.Name)
+        and delegate_binding[0].id == "SESSION_TX_HANDBACK_TIMEOUT_S"
+    )
+    shared_waits = [
+        value
+        for value in timeouts
+        if isinstance(value, ast.Name) and value.id == "handback_timeout_s"
+    ]
+    assert len(shared_waits) == 2
+    bound = {"handback_timeout_s": rigctld_server.SESSION_TX_HANDBACK_TIMEOUT_S}
+    resolved = [
+        (
+            bound[cast(ast.Name, value).id]
+            if cast(ast.Name, value).id in bound
+            else getattr(rigctld_server, cast(ast.Name, value).id)
+        )
+        for value in timeouts
+    ]
+    assert rigctld_server.STOP_TIMEOUT_S == sum(resolved)

@@ -1,0 +1,407 @@
+# Mechanism-audit reports
+
+Archived, point-in-time outputs of the `auditor` role running the
+`.claude/skills/mechanism-audit/SKILL.md` method. Evidence files an archived
+audit rests on are kept beside it. Each report pins the exact
+revision it audited in its own header; citations inside a report (including
+`file:line` forms used where no symbol encloses the evidence) are frozen at
+that revision and are not maintained. These files live under `.claude/` rather
+than `docs/` deliberately: the doc-citation gate treats `docs/**` citations as
+living references that must not use line numbers, while an archived audit is
+evidence about one commit and must quote it verbatim. Like `agents/`,
+`commands/` and `skills/`, this directory is tracked and **published in a
+public repository** — never put session notes, baselines, or anything with
+internal identifiers here; untracked working notes belong in the ignored
+remainder of `.claude/`.
+
+## 2026-10-02 — LAN audio, observation delivery and recovery
+
+- [2026-10-02-mechanism-audit-core-next-bugs.md](2026-10-02-mechanism-audit-core-next-bugs.md)
+  — bounded changed-mechanism audit at three pinned candidates; shared route
+  decisions and observation metadata are retained, and recovery cleanup uses
+  the existing lifecycle owner with an explicit waiter relation. No whole-module
+  dead-code or hardware acceptance claim.
+
+## 2026-09-28 — MOR-2215 final whole-path audit, instrument inventory, and census
+
+The final whole-path mechanism audit of the frontend instrument layer, with
+the two evidence files it rests on: the instrument and live-consumer
+inventory at the same revision, and the MOR-2215 / MOR-2425 acceptance
+census. The audit pins its revision (`3c19f5c9`) and labels its claims as
+observation or inference.
+
+- [2026-09-28-mechanism-audit-mor2215-final.md](2026-09-28-mechanism-audit-mor2215-final.md)
+  — the frontend instrument layer at `3c19f5c9`: deletions D1–D10 and
+  findings F1–F9; F7 and F3 unconditionally block MOR-2215 closure on the
+  Standard path, the rest unless the owner has scoped the mobile/LCD legacy
+  hosts out.
+- [2026-09-28-mor2215-instrument-inventory.md](2026-09-28-mor2215-instrument-inventory.md)
+  — the instrument and live-consumer inventory at `3c19f5c9`: 57 instrument
+  rows and 17 surface rows, 74 mapped in total, each with its live consumers
+  and proof.
+- [2026-09-28-mor2215-mor2425-acceptance-census.md](2026-09-28-mor2215-mor2425-acceptance-census.md)
+  — the acceptance census at `3c19f5c9`: MOR-2425 MET on all six lines;
+  MOR-2215 MET on five, PARTLY on the inventory and review lines, with its
+  whole-program audit then not present.
+
+## 2026-09-27 — MOR-2688 slices S3–S4c, and the MOR-2704 design audit
+
+Four more slice audits for MOR-2688 (its design audit and the S1–S2 audits are
+in the section below), and the design audit for MOR-2704: one fail-closed gate,
+`usable`, for whether the operator may act on a control. Each report pins the
+revision it audited and labels its claims as observation or inference.
+
+- [2026-09-27-mechanism-audit-mor2688-s3.md](2026-09-27-mechanism-audit-mor2688-s3.md)
+  — #3766 (S3) at `41f05141`: the closure-pinned surfaces use `readingText`.
+- [2026-09-27-mechanism-audit-mor2688-s4a.md](2026-09-27-mechanism-audit-mor2688-s4a.md)
+  — #3776 (S4a) at `88430fe2`: one value-or-nothing rule and its entry points.
+- [2026-09-27-mechanism-audit-mor2688-s4b.md](2026-09-27-mechanism-audit-mor2688-s4b.md)
+  — #3780 (S4b) at `de35a9b6`: the finite-number entry point and the scalar
+  hosts.
+- [2026-09-27-mechanism-audit-mor2688-s4c.md](2026-09-27-mechanism-audit-mor2688-s4c.md)
+  — #3790 (S4c) at `b9784393`: the observation rule is typed and takes its
+  fallback.
+- [2026-09-27-mechanism-audit-mor2704-design.md](2026-09-27-mechanism-audit-mor2704-design.md)
+  — the MOR-2704 design audit at `523e2174`. Its PR plan (Q6) is G0–G6 and
+  T1–T2.
+
+## 2026-09-27 — MOR-2688, one unread-display rule (design audit and slices S1–S2)
+
+One design audit and two slice audits for MOR-2688: drawing code receives a
+value or nothing, and the "unread → empty text" rule lives in one primitive,
+`frontend/src/primitives/reading-text.ts`. Each report pins the revision it
+audited and labels its claims as observation or inference.
+
+- [2026-09-27-mechanism-audit-mor2688-design.md](2026-09-27-mechanism-audit-mor2688-design.md)
+  — the design audit at `8018f8ec`. It chose the owner layer (`primitives/`),
+  planned the slices S1–S8 (Q6) and listed the risks R1–R8 (Q7). R1, predicate
+  drift, is the rule `reading-text.ts` cites: the predicate stays exactly
+  `reading.status === 'known'`.
+- [2026-09-27-mechanism-audit-mor2688-s1.md](2026-09-27-mechanism-audit-mor2688-s1.md)
+  — #3761 (S1) at `6eac5b53`: the primitive and the filter and scope surfaces.
+- [2026-09-27-mechanism-audit-mor2688-s2.md](2026-09-27-mechanism-audit-mor2688-s2.md)
+  — #3763 (S2) at `8cff8d60`: six more surfaces.
+
+## 2026-09-27 — three changes merged on the night of 2026-09-26 (head `f9b599e9`)
+
+Two read-only tracts over #3743, #3744 and #3741. Each report pins revision
+`f9b599e90249e19bfb8234f1722f8d9effa9029e` and labels its claims as observation
+or inference.
+
+- [2026-09-27-mechanism-audit-control-domain-vectors.md](2026-09-27-mechanism-audit-control-domain-vectors.md)
+  — #3743 (MOR-2477), the Python/TypeScript control-domain vectors. No
+  deletions and no consolidations. The commit is the vector pin the 2026-09-15
+  control-conversion audit ordered. The generator reuses the profile loader. The
+  two control-domain fixtures answer different questions: shape versus
+  computed results.
+- [2026-09-27-mechanism-audit-unread-readouts.md](2026-09-27-mechanism-audit-unread-readouts.md)
+  — #3744 (MOR-2651) and #3741 (MOR-2658), the unread readouts.
+  - Five deletions, filed as MOR-2685 (D3 folded into MOR-2675):
+    - D1 `extractMeterState`;
+    - D2 `toTxProps` `micGain`/`driveGain`;
+    - D3 an unread `rfFrontEnd` derived;
+    - D4 `getRedlineRaw`/`getScaleMarks`;
+    - D5 the unreachable non-dB S-meter arm.
+  - Four consolidation findings:
+    - F1 the "unread → empty" rule written about 15 times, with a diverged
+      `'—'`/`'---'` subset still on screen (MOR-2684, MOR-2675, MOR-2673);
+    - F2 two byte-identical RF-power guards;
+    - F3 two fabricated defaults that reach the screen, "MON 50%" and
+      "PROC 0" (MOR-2683);
+    - F4 the reserved-slot CSS convention.
+
+    The shared primitive for F1/F2/F4 is MOR-2688, after the whole-page guard
+    lands.
+
+## 2026-09-26 — the day's merged changes, backend and frontend (head `a04f7b1e`)
+
+Two read-only tracts over the changes merged on 2026-09-26, range
+`9a1b90f9..a04f7b1e`. Each report pins revision
+`a04f7b1e51ff012ff1de0d42e876befbd06ead47` and labels its claims as observation
+or inference.
+
+- [2026-09-26-mechanism-audit-backend.md](2026-09-26-mechanism-audit-backend.md)
+  — `src/` (18 files, +554/−83). Three deletions: D1 dead PTT arms in
+  `_enqueue_rc_power`, D2 a production-dead `PttOn` branch, D3 unread
+  `break_in_labels` / `ssb_tx_bw_labels` left undetermined. Four consolidations:
+  F1 a helper written twice, F2 an abandoned queue twin of managed PTT, F3 a
+  notch-only rule beside the generic parser, F4 LAN-session recovery already
+  shared.
+- [2026-09-26-mechanism-audit-frontend.md](2026-09-26-mechanism-audit-frontend.md)
+  — `frontend/src` and `rigs/`. One deletion, D1 dead `domainOf`, and four
+  consolidations: F1 three readers and two formulas for the published raw range,
+  F2 a notch pending scan beside `latestPendingParam`, F3 two hand-copied
+  notch-width renderings, F4 a second toast-suppression gate. Its F1 formula
+  half was refuted after the audit: the backend normalizes RF gain and squelch
+  by a constant 255, so the host's formula matches every shipped profile
+  (MOR-2637).
+
+## 2026-09-16 — closing audit of the two 2026-09-15 tracts (head `94361667`)
+
+Re-runs the method over the same tract as the two reports below and adjudicates
+each of their fifteen findings at the later head, so that "what closed" is a
+verdict with evidence rather than the difference between two revisions. Every
+closure names the commit that closed it and which of two buckets it belongs to:
+the epic's own pull requests, or other work in the same range.
+
+- [2026-09-16-mechanism-audit-closing-mor2478.md](2026-09-16-mechanism-audit-closing-mor2478.md)
+  — closure ledger plus fresh findings. Verdict: four of the fifteen closed, two
+  partly, one moved rather than closed; no commit from the epic's own pull
+  requests modifies any file under `src/rigplane/`, so every Python-side closure
+  in the range belongs to other work. Also corrects two counts the opening
+  audits carried and one finding they misclassified — the audio-spectrum
+  renderer held its own copy of the PBT conversion rather than consuming the
+  shared one, which the opening audit recorded as a consumer.
+
+## 2026-09-15 — control conversion and command path (head `e3d435dc`)
+
+Two read-only tracts answering one owner question: why web, rigctld and the CLI
+reach the radio through different mechanisms. Each report labels its own claims as
+observation or inference, carries a per-finding falsifier field, and closes with
+the capabilities it examined and cleared.
+
+- [2026-09-15-mechanism-audit-control-conversion.md](2026-09-15-mechanism-audit-control-conversion.md)
+  — where display ↔ raw conversion belongs. Verdict: the Python and TypeScript
+  exact implementations are a sanctioned pair whose only pin is hand-copied
+  test vectors; rigctld's level conversion is a gap, not a duplicate, because
+  the Radio surface lacked a display-value API.
+- [2026-09-15-mechanism-audit-command-path.md](2026-09-15-mechanism-audit-command-path.md)
+  — the four consumers' paths to the radio across eight concerns. Verdict:
+  standalone consumers legitimately run without the web command queue; the
+  duplicated dispatch and receiver validation are displacement with the shared
+  targets already in place, while value validation is a gap in the runtime seat
+  with its shared math only emerging.
+
+## 2026-09-15 — Standard TX indication and AGC cleanup (head `5fa07e1a`, base `f27f1132`)
+
+- [2026-09-15-mechanism-audit-standard-tx-ptt.md](2026-09-15-mechanism-audit-standard-tx-ptt.md)
+  — independent read-only PASS: the redundant visible Standard TX banner is
+  removed while semantic status and the existing PTT path remain intact; the
+  stray AGC `NB width` render is removed without deleting its persistent
+  binding or DSP/NB/SDR consumers. Mac Mini evidence is a separate gate.
+
+## 2026-09-15 — MOR-2467 IC-7610 startup-optional scope state after rebase (head `62a1c107`, base `39c88afd`)
+
+- [2026-09-15-mechanism-audit-mor-2467-ic7610-startup-rebased.md](2026-09-15-mechanism-audit-mor-2467-ic7610-startup-rebased.md)
+  — read-only independent PASS on the rebased implementation. It supersedes
+  the pre-rebase report for merge evidence and confirms that the TX-interlock
+  cleanup conflict changed no startup-optional semantics. Tests and live
+  RX-only evidence are separate.
+
+## 2026-09-15 — MOR-2467 IC-7610 startup-optional scope state before rebase (head `d53e91e5`, base `bd75f60c`)
+
+- [2026-09-15-mechanism-audit-mor-2467-ic7610-startup.md](2026-09-15-mechanism-audit-mor-2467-ic7610-startup.md)
+  — historical read-only PASS on the pre-rebase implementation. Superseded by
+  the rebased report above; retained as a frozen point-in-time result.
+
+## 2026-09-14 — MOR-2467 IC-7610 Standard v3 restoration (head `479dd587`, base `99f4bcd3`)
+
+- [2026-09-14-mechanism-audit-mor-2467-ic7610-v3.md](2026-09-14-mechanism-audit-mor-2467-ic7610-v3.md)
+  — read-only, independently adjudicated PASS with no blockers for the
+  IC-7610 Standard v3 restoration of MAIN/SUB records and one combined
+  RF/SQL control. Preserves one deletion candidate (`vfoLabel` tests-only
+  shim), three follow-ups (panel-commands `main_sub` residue, stale
+  per-receiver A/B comment, slot-view documentation), and the cleared
+  items. Tests were not run by the audit; remote test evidence is separate.
+
+## 2026-09-14 — IC-7610 state, scope, and canvas stability (head `de50644e`, base `601f27f7`)
+
+- [2026-09-14-mechanism-audit-state-scope-canvas.md](2026-09-14-mechanism-audit-state-scope-canvas.md)
+  — read-only independent PASS for the state/projection/canvas mechanism,
+  held-stale passband display authority, and drag continuity. No TX/RF safety
+  regression or competing canonical mechanism was found. The remaining full
+  `fieldStatus` signature cost is recorded as a non-blocking future producer-
+  side optimization. Tests and live RX-only evidence are separate.
+
+## 2026-09-06 — instrument mechanism decision audits (source `f2e7969708d5c93890cf1b24d833ce820b36dc15`)
+
+Three independent, bounded mechanism-audit tracts at the pinned source. They
+record point-in-time evidence for scalar pairs, meter context, and finite
+choice controls; a final whole-path audit remains outstanding.
+
+- [2026-09-06-mechanism-audit-scalar-pair.md](2026-09-06-mechanism-audit-scalar-pair.md)
+  — scalar-pair ownership, lifecycle and interaction evidence.
+- [2026-09-06-mechanism-audit-meter-context.md](2026-09-06-mechanism-audit-meter-context.md)
+  — meter source/context and ballistics-continuity evidence.
+- [2026-09-06-mechanism-audit-finite-choice.md](2026-09-06-mechanism-audit-finite-choice.md)
+  — finite-choice observation, eligibility and feedback-boundary evidence.
+
+## 2026-09-06 — RF/SQL feedback decision (tree `5a4cee2cd734ae31c76eb48397b6df6a062043ea`)
+
+- [2026-09-06-mechanism-audit-rf-sql-feedback.md](2026-09-06-mechanism-audit-rf-sql-feedback.md)
+  — bounded supplemental RF/SQL feedback decision: normalized exact matching
+  and one-binding-one-lease are cleared; admission, provider continuity and
+  native-consumer authority still need explicit contracts. No implementation
+  or final whole-path completion claim.
+
+## 2026-09-06 — native scalar normalization and RF/SQL draft handoff (unaccepted PR #3261 candidate `1f5d5e74774c8aa481937271f4ca400fcbf5ebb8`, base `e9f6800adb4ffad83b2d1b70fbb0680b707d3fe9`)
+
+- [2026-09-06-mechanism-audit-native-scalar-normalization.md](2026-09-06-mechanism-audit-native-scalar-normalization.md)
+  — historical source audit of native scalar input normalization and separate
+  RF/SQL draft retirement. Subsequent acceptance work is tracked by MOR-2409;
+  this archive neither audits a later fix nor claims that work complete.
+
+## 2026-09-06 — legacy RF HBar request retirement (accepted main `12444a3f5c977da790cd2f84123732cf53f6666c`)
+
+- [2026-09-06-mechanism-audit-legacy-rf-hbar-handoff.md](2026-09-06-mechanism-audit-legacy-rf-hbar-handoff.md)
+  — historical adjudication of the bounded shared-scalar request-retirement
+  gap before prospective legacy RF HBar adoption. MOR-2415 owns any separate
+  correction; this archive is neither an accepted fix nor a final program audit.
+
+## 2026-09-06 — CW and current Filter Width (tree `53b27aebbed6a8e27114c442a7420d589af23876`)
+
+- [2026-09-06-mechanism-audit-cw-filter-feedback.md](2026-09-06-mechanism-audit-cw-filter-feedback.md)
+  — bounded CW scalar and legacy current Filter Width decision: shared owners
+  are cleared; provider-routing, table-truth and full-feedback adoption remain
+  bounded gaps. No implementation completion, universal provider timing, or
+  all-controls claim.
+
+## 2026-09-06 — Filter Width coordinate and localized presentation (tree `e9f6800adb4ffad83b2d1b70fbb0680b707d3fe9`)
+
+- [2026-09-06-mechanism-audit-filter-coordinate-presentation.md](2026-09-06-mechanism-audit-filter-coordinate-presentation.md)
+  — historical decision record for exact-Hz coordinates, catalog geometry, and
+  localized presentation. Audit-time ownership references are evidence, not
+  current file leases; MOR-2412 owns downstream implementation. This does not
+  claim implementation completion or parent-program completion.
+
+## 2026-09-03 — Icom lower-executor lifetime (draft, source `4e4c1782`)
+
+- [2026-09-03-mechanism-audit-icom-lower-executor-lifetime.md](2026-09-03-mechanism-audit-icom-lower-executor-lifetime.md)
+  — bounded commander/captured-executor ownership and frozen-matrix evidence;
+  pending independent adjudication, without whole-app or RF claims.
+
+## 2026-09-03 — managed command queue (tree `3c997a9d`)
+
+- [2026-09-03-mechanism-audit-managed-command-queue.md](2026-09-03-mechanism-audit-managed-command-queue.md)
+  — shared definitions, missing whole-operation claim/lifetime surfaces, and
+  incomplete managed ingress migration; no implementation or runtime proof.
+
+## 2026-09-03 — command queue and Web execution (tree `fdbd7403`)
+
+- [2026-09-03-mechanism-audit-command-queue-web.md](2026-09-03-mechanism-audit-command-queue-web.md)
+  — bounded static review of pending identity, cancellation lifetime and the
+  finite Web drain; provider migration remains incomplete. No runtime, RF,
+  stop/replacement or whole-module deletion claim.
+
+## 2026-09-03 — rigctld observed PTT (tree `9b1a0084`)
+
+- [2026-09-03-mechanism-audit-rigctld-observed-ptt.md](2026-09-03-mechanism-audit-rigctld-observed-ptt.md)
+  — bounded helper-level tract: records the existing canonical normalizer,
+  provider-metadata adapter, generation/TTL handling, and one PTT poll path;
+  the capability declaration is polling-only. It makes no RF, hardware,
+  producer-completion, TX-authority, or proven-mutation claim.
+
+## 2026-09-03 — Icom observed PTT producer (PR #3062, tree `150c3865`)
+
+- [2026-09-03-mechanism-audit-icom-observed-ptt-producer.md](2026-09-03-mechanism-audit-icom-observed-ptt-producer.md)
+  — bounded helper-level audit of the Icom CI-V producer slice. Verdict: the
+  protocol-local adapter and the shared tri-state reuse are cleared, while the
+  live direct managed-observer stream and the profile-TTL source are recorded
+  as existing staged migrations. It makes no hardware, full-chain or deletion
+  claim.
+
+## 2026-09-03 — serial write completion (tree `84c96d44`)
+
+- [2026-09-03-mechanism-audit-serial-write-completion.md](2026-09-03-mechanism-audit-serial-write-completion.md)
+  — bounded helper-level archive of `SerialCivLink` write completion, currency
+  and retirement. Verdict: at the frozen `f203d649` snapshot those local
+  mechanisms are canonical, with application-level currency and production
+  runtime integration retained as separate work.
+
+## 2026-09-02 — Icom STOP CW NAK handling (tree `4cbd5ba4`)
+
+- [2026-09-02-mechanism-audit-icom-stop-cw.md](2026-09-02-mechanism-audit-icom-stop-cw.md)
+  — bounded canonical-adapter tract: a delivered STOP-CW NAK reached the
+  existing response wait but was discarded by its caller. The report makes no
+  manufacturer, RF-stop, or whole-adapter claim.
+
+## 2026-09-02 — rigctld exchange boundary (tree `21814f3c0`)
+
+- [2026-09-02-mechanism-audit-rigctld-exchange.md](2026-09-02-mechanism-audit-rigctld-exchange.md)
+  — canonical external-rigctld transaction boundary. The report records a
+  missing response-isolation primitive for cancelled exchanges;
+  it does not claim adapter integration, final-OFF ordering, or RF proof.
+
+## 2026-09-02 — ForceOff cleanup ordering (tree `7387c84e`)
+
+- [2026-09-02-mechanism-audit-force-off-cleanup.md](2026-09-02-mechanism-audit-force-off-cleanup.md)
+  — records the pending ForceOff ordering contract and the exact-tree evidence:
+  old-work invalidation must precede urgent OFF submission without waiting for
+  unrelated cleanup; the archive makes no installed-runtime or RF claim.
+
+## 2026-08-30 — v3 pre-release audit (three tracts, tree `8c8a70d4`)
+
+Commissioned to close the pre-release fix list before the v2.12.0 release
+cycle. The audited commit `8c8a70d4` was squash-merged as main's `3ba1a14a`
+(byte-identical tree), and the original commit survives as
+`refs/pull/2801/head` — fetch that ref explicitly to resolve the pin; a
+plain clone carries only the identical tree, via `3ba1a14a`. One report per
+tract:
+
+- [2026-08-30-mechanism-audit-command-path.md](2026-08-30-mechanism-audit-command-path.md)
+  — UI/rigctld/CLI action → wire bytes. Headline findings: rigctld advertises
+  IC-7610 capability data for every Icom and invents ATT/PREAMP domains
+  (F1/F2, live-reachable bugs on both bench radios); per-receiver write
+  routing duplicated with a `receiver=0` contract split (F3); queue-drain and
+  deferred-TX lane written twice (F4); queue dedup key undoes the MOR-1499
+  coalescing fix one layer down (F6).
+- [2026-08-30-mechanism-audit-tx-truth.md](2026-08-30-mechanism-audit-tx-truth.md)
+  — everything deriving or gating on "is the radio transmitting". Headline:
+  eight live derivations of TX truth (MOR-1973 said three); the rigctld-client
+  backend's web write path has no TX interlock and no key-down bound (F2); the
+  tuner-engage write is gated by the loosest resolver on a queue-bypassing
+  path (F1); interlock refusal envelope typed on Icom, untyped on FTX-1 (F3).
+- [2026-08-30-mechanism-audit-state-feedback.md](2026-08-30-mechanism-audit-state-feedback.md)
+  — radio truth → screen → control feedback. Headline: two S-unit algorithms
+  disagreeing on FTX-1 at the profile's own anchors (F1); TX state-feedback
+  decision duplicated byte-identically across both design languages while its
+  nested visual descriptors are computed and discarded (F2); `StateStore`
+  history retention deep-copies every observation for a `delta_since` API
+  with zero production consumers (D7).
+
+Owner rulings recorded 2026-08-30 (they supersede in-report recommendations
+where they differ):
+
+1. `receiver=0` means literal MAIN, always; encapsulate the
+   switch-write-restore mechanism in the runtime write path and delete the
+   web poller's inline copy (command-path F3).
+2. Transmit-state interpretation goes through the profile's `tx_state_map` on
+   every vendor, Icom included. This answers TX-authority ADR Q14; the ADR's
+   own §9 table still records Q14 as open, and amending it belongs to the
+   epic's decode ticket, not to this archive.
+3. Consolidate the TX state-feedback decision into one shared resolver; the
+   nested descriptor bodies are deletable (no consumer exists — verified same
+   day, including the built-dist browser suite); `.text` stays per MOR-1482.
+4. `delta_since` + the history retention are deleted **before** the release
+   (dead public API must not be frozen by a release); the same rule applies to
+   the other dead public-surface findings.
+5. Meter-conversion divisors become profile-calibration data; the four inline
+   STRENGTH copies collapse onto the existing helper first (text-neutral).
+
+Ticket disposition for every actionable finding is tracked in Linear (the
+2026-08-30 pre-release epic and the documents mirroring these reports); the
+reports themselves are the evidence record, not the work queue.
+
+## 2026-08-30 — VFO equalize/swap tract (tree `7479ebd5`)
+
+Commissioned out of MOR-2007 (the vfo.py bound-command-map migration), which
+surfaced but could not scope the question. The audited commit `7479ebd5` is a
+main commit (#2838), so the pin resolves in a plain clone.
+
+- [2026-08-30-mechanism-audit-vfo-swap-equalize.md](2026-08-30-mechanism-audit-vfo-swap-equalize.md)
+  — every mechanism reaching "equalize or swap the VFOs" (CI-V `0x07` + one
+  operation byte). Headline findings: `commands/vfo.py: vfo_a_equals_b` /
+  `vfo_swap` are a vestigial fork — zero production call sites by AST census,
+  byte-for-byte reducible to the live `set_vfo(code)`, hardcoding an equalize
+  byte (`0xA0`) that no shipped dual-RX profile declares (D1); dead
+  `RadioProfile.vfo_swap_code`/`.vfo_equal_code` legacy aliases (D2); stale
+  test stubs for a pre-#1114 radio API (D3); the "does this rig support
+  swap/equalize" decision inlined seven times across two incompatible
+  discriminators, with an observable WS-vs-HTTP capability disagreement
+  between `ControlHandler._capabilities` and
+  `WebServer._projected_runtime_capabilities` (F1); the dual-RX mixin's
+  `0x07` command byte still outside the MOR-2007 binder contract, in a file
+  the plan's Steps 5..N explicitly name (F2). Cleared: the runtime mixin
+  itself (the live side, correctly located), `set_vfo` post-MOR-1986, the
+  Yaesu backend arms, `BoundCommands`, and the identically-named-but-unrelated
+  WebSocket intent `"vfo_swap"`.

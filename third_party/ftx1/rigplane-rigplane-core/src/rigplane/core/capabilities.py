@@ -1,0 +1,317 @@
+"""Unified capability constants and known-capability registry.
+
+Every capability tag used by rigplane rig profiles lives here.
+Import constants from this module instead of using bare strings.
+"""
+
+__all__ = [
+    "KNOWN_CAPABILITIES",
+    # Re-export all CAP_* constants for convenient `from .capabilities import CAP_NB`
+    "CAP_AUDIO",
+    "CAP_DUAL_RX",
+    "CAP_DUAL_WATCH",
+    "CAP_LAN_DUAL_RX_AUDIO_ROUTING",
+    "CAP_AF_LEVEL",
+    "CAP_RF_GAIN",
+    "CAP_SQUELCH",
+    "CAP_ATTENUATOR",
+    "CAP_PREAMP",
+    "CAP_DIGISEL",
+    "CAP_DIGISEL_SHIFT",
+    "CAP_IP_PLUS",
+    "CAP_ANTENNA",
+    "CAP_RX_ANTENNA",
+    "CAP_NB",
+    "CAP_NR",
+    "CAP_NOTCH",
+    "CAP_NARROW",
+    "CAP_APF",
+    "CAP_TWIN_PEAK",
+    "CAP_PBT",
+    "CAP_FILTER_WIDTH",
+    "CAP_FILTER_WIDTH_RADIO_DEFAULT",
+    "CAP_FILTER_SHAPE",
+    "CAP_IF_SHIFT",
+    "CAP_CONTOUR",
+    "CAP_TX",
+    "CAP_SPLIT",
+    "CAP_VOX",
+    "CAP_COMPRESSOR",
+    "CAP_MONITOR",
+    "CAP_DRIVE_GAIN",
+    "CAP_SSB_TX_BW",
+    "CAP_CW",
+    "CAP_BREAK_IN",
+    "CAP_RIT",
+    "CAP_XIT",
+    "CAP_TUNER",
+    "CAP_METERS",
+    "CAP_SCOPE",
+    "CAP_REPEATER_TONE",
+    "CAP_TSQL",
+    "CAP_DTCS",
+    "CAP_CSQL",
+    "CAP_SQL_TYPE",
+    "CAP_REPEATER_SHIFT",
+    "CAP_REPEATER_SHIFT_ARS",
+    "CAP_VOICE_TX",
+    "CAP_SPEECH",
+    "CAP_DATA_MODE",
+    "CAP_MOD_INPUT_ROUTING",
+    "CAP_AGC",
+    "CAP_POWER_CONTROL",
+    "CAP_DIAL_LOCK",
+    "CAP_SCAN",
+    "CAP_BSR",
+    "CAP_MAIN_SUB_TRACKING",
+    "CAP_TUNING_STEP",
+    "CAP_BAND_EDGE",
+    "CAP_MEMORY_READ",
+    "CAP_XFC",
+    "CAP_SYSTEM_SETTINGS",
+    "CAP_VFO_SWAP",
+    "CAP_VFO_EQUALIZE",
+    "CAP_WEBRTC",
+]
+
+# ---------------------------------------------------------------------------
+# Capability tag constants — grouped by category
+# ---------------------------------------------------------------------------
+
+# Receiver
+CAP_AUDIO = "audio"
+CAP_DUAL_RX = "dual_rx"
+CAP_DUAL_WATCH = "dual_watch"
+CAP_AF_LEVEL = "af_level"
+CAP_RF_GAIN = "rf_gain"
+CAP_SQUELCH = "squelch"
+
+# LAN audio stereo routing via the ``0x1A 05 00 72`` "Phones L/R Mix" CI-V
+# sub-command (IC-7610 menu path: Connectors → Phones → L/R Mix).  Declaring
+# this capability authorises the web audio broadcaster to (a) force Mix OFF
+# once per relay start so the LAN stream stays separated L=MAIN / R=SUB, and
+# (b) echo the frontend ``audio_config`` message's ``focus`` / ``split_stereo``
+# payload back to the client.  Both paths are dual-RX contract (#787 / #792 /
+# #794).  Do NOT add this tag to rigs that don't expose this menu item — IC-
+# 9700 also has ``receiver_count=2`` but its menu layout does not include
+# ``0x1A 05 00 72``, and FTX-1 runs on Yaesu CAT which has no ``send_civ``
+# at all.
+CAP_LAN_DUAL_RX_AUDIO_ROUTING = "lan_dual_rx_audio_routing"
+
+# RF front-end
+CAP_ATTENUATOR = "attenuator"
+CAP_PREAMP = "preamp"
+CAP_DIGISEL = "digisel"
+# DIGI-SEL Shift level (0x14 0x13 cmd29 level, ``get_digisel_shift``/
+# ``set_digisel_shift``) is a distinct CI-V command from the DIGI-SEL on/off
+# toggle (0x16 0x4E, ``CAP_DIGISEL``), so it is gated on its own tag
+# (MOR-1544).
+CAP_DIGISEL_SHIFT = "digisel_shift"
+CAP_IP_PLUS = "ip_plus"
+
+# Antenna
+CAP_ANTENNA = "antenna"
+CAP_RX_ANTENNA = "rx_antenna"
+
+# DSP / Noise
+CAP_NB = "nb"
+CAP_NR = "nr"
+CAP_NOTCH = "notch"
+# Narrow filter on/off (Yaesu CAT ``NA``). Distinct from ``filter_width``:
+# the width command writes the SH code, this one writes NA0/NA1.
+CAP_NARROW = "narrow"
+CAP_APF = "apf"
+CAP_TWIN_PEAK = "twin_peak"
+
+# Filter
+CAP_PBT = "pbt"
+CAP_FILTER_WIDTH = "filter_width"
+# The radio can return the filter width to its OWN mode-dependent default
+# (FTX-1 CAT ``SH`` code 00, 2508-C Table 5 "(Default)"). Not declared in any
+# TOML ``features`` list: ``rig_loader`` derives it from the profile's
+# ``[filters].radio_default_code`` field, so the tag exists exactly when a
+# writeable default code exists. Gates ``reset_filter_width``.
+CAP_FILTER_WIDTH_RADIO_DEFAULT = "filter_width_radio_default"
+CAP_FILTER_SHAPE = "filter_shape"
+CAP_IF_SHIFT = "if_shift"
+CAP_CONTOUR = "contour"
+
+# TX
+CAP_TX = "tx"
+CAP_SPLIT = "split"
+CAP_VOX = "vox"
+CAP_COMPRESSOR = "compressor"
+CAP_MONITOR = "monitor"
+CAP_DRIVE_GAIN = "drive_gain"
+CAP_SSB_TX_BW = "ssb_tx_bw"
+
+# CW
+CAP_CW = "cw"
+CAP_BREAK_IN = "break_in"
+
+# RIT / XIT
+CAP_RIT = "rit"
+CAP_XIT = "xit"
+
+# Tuner
+CAP_TUNER = "tuner"
+
+# Metering
+CAP_METERS = "meters"
+
+# Scope
+CAP_SCOPE = "scope"
+
+# Tone
+CAP_REPEATER_TONE = "repeater_tone"
+CAP_TSQL = "tsql"
+CAP_DTCS = "dtcs"
+CAP_CSQL = "csql"
+CAP_VOICE_TX = "voice_tx"
+# Radio built-in voice-announcement command; distinct from voice TX.
+CAP_SPEECH = "speech"
+# Squelch-type readback (Yaesu FTX-1 CAT ``CT`` "SQL TYPE"). Distinct from the
+# Icom-style ``repeater_tone``/``tsql`` SET-command capabilities: ``sql_type``
+# gates only the observation-pipeline readback that maps the ``CT`` P2 code onto
+# the neutral CTCSS booleans (MOR-457). The FTX-1 profile declares all three:
+# ``sql_type`` for the readback route and ``repeater_tone``/``tsql`` for the
+# two-boolean command surface whose backend writes the same ``CT`` register
+# (MOR-2111, pinned by ``TestCapabilitiesNoFalseAdvertising``).
+CAP_SQL_TYPE = "sql_type"
+
+# Repeater shift DIRECTION (simplex/plus/minus/ARS) — MOR-2111. Distinct from
+# the tone-family tags above: gates ``RepeaterShiftCapable``, not
+# ``RepeaterControlCapable``. Shift magnitude has no capability tag yet — it
+# is a separate, not-yet-built surface.
+CAP_REPEATER_SHIFT = "repeater_shift"
+# Automatic Repeater Shift (``RepeaterShiftDirection.ARS``) as a fourth shift
+# direction.
+CAP_REPEATER_SHIFT_ARS = "repeater_shift_ars"
+
+# Data
+CAP_DATA_MODE = "data_mode"
+
+# Modulation input routing — USB/LAN/DATA MOD source select (Icom 1A 05
+# 0089-0094). Guards the TX-audio routing surface behind the "web voice TX =
+# noise" failure mode (the documented fix is DATA-OFF MOD = LAN; MOR-678).
+CAP_MOD_INPUT_ROUTING = "mod_input_routing"
+
+# AGC
+CAP_AGC = "agc"
+
+# System
+CAP_POWER_CONTROL = "power_control"
+CAP_DIAL_LOCK = "dial_lock"
+CAP_SCAN = "scan"
+CAP_BSR = "bsr"
+CAP_MAIN_SUB_TRACKING = "main_sub_tracking"
+CAP_TUNING_STEP = "tuning_step"
+CAP_BAND_EDGE = "band_edge"
+# Read-only listing of stored memory channels (MOR-3627; profile ``[memory]``).
+CAP_MEMORY_READ = "memory_read"
+CAP_XFC = "xfc"
+CAP_SYSTEM_SETTINGS = "system_settings"
+
+# VFO primitives — M⇄S / M=S. The web layer never trusts these tags from
+# ``radio.capabilities`` directly (``web/runtime_helpers.py:
+# VFO_CAPABILITY_TAGS`` strips and re-projects them from the profile's swap
+# declarations); the TOML feature tag is the rig's declaration that the
+# primitive exists.
+CAP_VFO_SWAP = "vfo_swap"
+CAP_VFO_EQUALIZE = "vfo_equalize"
+
+# WebRTC — low-latency audio delivery via browser peer connection (issue #104)
+CAP_WEBRTC = "webrtc"
+
+# ---------------------------------------------------------------------------
+# Master set — rig_loader rejects any TOML tag not listed here.
+# ---------------------------------------------------------------------------
+
+KNOWN_CAPABILITIES: frozenset[str] = frozenset(
+    {
+        # Receiver
+        CAP_AUDIO,
+        CAP_DUAL_RX,
+        CAP_DUAL_WATCH,
+        CAP_LAN_DUAL_RX_AUDIO_ROUTING,
+        CAP_AF_LEVEL,
+        CAP_RF_GAIN,
+        CAP_SQUELCH,
+        # RF front-end
+        CAP_ATTENUATOR,
+        CAP_PREAMP,
+        CAP_DIGISEL,
+        CAP_DIGISEL_SHIFT,
+        CAP_IP_PLUS,
+        # Antenna
+        CAP_ANTENNA,
+        CAP_RX_ANTENNA,
+        # DSP / Noise
+        CAP_NB,
+        CAP_NR,
+        CAP_NOTCH,
+        CAP_NARROW,
+        CAP_APF,
+        CAP_TWIN_PEAK,
+        # Filter
+        CAP_PBT,
+        CAP_FILTER_WIDTH,
+        CAP_FILTER_WIDTH_RADIO_DEFAULT,
+        CAP_FILTER_SHAPE,
+        CAP_IF_SHIFT,
+        CAP_CONTOUR,
+        # TX
+        CAP_TX,
+        CAP_SPLIT,
+        CAP_VOX,
+        CAP_COMPRESSOR,
+        CAP_MONITOR,
+        CAP_DRIVE_GAIN,
+        CAP_SSB_TX_BW,
+        # CW
+        CAP_CW,
+        CAP_BREAK_IN,
+        # RIT / XIT
+        CAP_RIT,
+        CAP_XIT,
+        # Tuner
+        CAP_TUNER,
+        # Metering
+        CAP_METERS,
+        # Scope
+        CAP_SCOPE,
+        # Tone
+        CAP_REPEATER_TONE,
+        CAP_TSQL,
+        CAP_DTCS,
+        CAP_CSQL,
+        CAP_SQL_TYPE,
+        # Repeater shift (direction only)
+        CAP_REPEATER_SHIFT,
+        CAP_REPEATER_SHIFT_ARS,
+        CAP_VOICE_TX,
+        CAP_SPEECH,
+        # Data
+        CAP_DATA_MODE,
+        # Modulation input routing
+        CAP_MOD_INPUT_ROUTING,
+        # AGC
+        CAP_AGC,
+        # System
+        CAP_POWER_CONTROL,
+        CAP_DIAL_LOCK,
+        CAP_SCAN,
+        CAP_BSR,
+        CAP_MAIN_SUB_TRACKING,
+        CAP_TUNING_STEP,
+        CAP_BAND_EDGE,
+        CAP_MEMORY_READ,
+        CAP_XFC,
+        CAP_SYSTEM_SETTINGS,
+        # VFO primitives
+        CAP_VFO_SWAP,
+        CAP_VFO_EQUALIZE,
+        # WebRTC
+        CAP_WEBRTC,
+    }
+)

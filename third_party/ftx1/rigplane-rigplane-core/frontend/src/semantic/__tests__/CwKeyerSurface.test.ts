@@ -1,0 +1,1491 @@
+/**
+ * MOR-1310 — the semantic CW-keyer surface (vocabulary slice 9B).
+ *
+ * SAFETY-CRITICAL. Break-in KEYS THE TRANSMITTER, so every test below names
+ * the mutation it kills:
+ *   (a) the surface becoming a second key path — it must emit SETTING intents
+ *       only, and never a key/unkey or a transmit-causing action; RX frequency
+ *       correction remains a non-TX setting intent, while exactly one
+ *       `<RxTxSurface>` stays the authority
+ *       (MOR-1262 decomposition R9);
+ *   (b) break-in enabled under a permit that is not positively `'allowed'` —
+ *       `denied` AND `unknown`, each pinned independently, on the widget AND
+ *       in the handler (a `.click()` on a disabled button is a no-op, so the
+ *       `disabled` assertion alone is vacuous — MOR-1304 F3);
+ *   (c) a second permit derivation appearing in the CW path (MOR-1296 §2);
+ *   (d) the `twinPeak` mutex rendered without naming RTTY, leaving the
+ *       operator a permanently-disabled control in a block they read as "CW"
+ *       (MOR-1296 O1);
+ *   (e) an unread break-in state presented as "off" — v2's `formatBreakIn`
+ *       falls back to 'OFF' and slice 9A degraded it to `unknown` precisely so
+ *       an unreadable keyer never reads as "the key is safe".
+ *
+ * Fast-pool-safe by construction (MOR-1272): no `vi.mock`, no `vi.stubGlobal`,
+ * no global spy. The command-bus / no-key-path behavioural pins against the
+ * REAL module live in `components-v2/wiring/__tests__/
+ * semantic-cw-keyer-wiring.component.test.ts`.
+ */
+import { readFileSync } from 'node:fs';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { flushSync, mount, unmount } from 'svelte';
+// @ts-expect-error -- Svelte does not publish types for its reactive test harness.
+import { proxy } from 'svelte/internal/client';
+import {
+  APF_CHOICES, BREAK_IN_REASON_KEY, CW_LEVELS, MUTEX_LABEL, POSTURE_LABEL,
+  breakInBlockedLabel, breakInPosture, textOf, type CwLevelField,
+} from '../CwKeyerSurface.svelte';
+/** The legacy trio, pinned locally so the surface's own export space stays
+ *  free of hard-coded choices (MOR-2729). */
+const BREAK_IN_CHOICES = [['off', 0], ['semi', 1], ['full', 2]] as const;
+type BreakInChoice = { value: number; label: string };
+/** MOR-2729: after the fallback deletion a prop-free render still needs the
+ *  choices it exercises, now passed EXPLICITLY. */
+const EXPLICIT_CHOICES: BreakInChoice[] =
+  BREAK_IN_CHOICES.map(([label, value]) => ({ value, label: label.toUpperCase() }));
+import CwKeyerInstrumentHostFixture from './fixtures/CwKeyerInstrumentHostFixture.svelte';
+import { topologyFixtures, withCwKeyer, withModeFilter, withTxAux } from '../fixtures/topologies';
+import type {
+  Availability, BreakInMode, CwKeyerField, CwKeyerViewModel, DisabledReason, RadioViewModel,
+} from '../radio-view-model';
+import { t, setLocale, getLocale } from '$lib/i18n';
+import type {
+  ControlFeedbackPresentationInput, PresentationPhase,
+} from '../../primitives/control-feedback/control-feedback-presentation';
+
+type BreakInDelayFeedback = ControlFeedbackPresentationInput<number> & {
+  readonly sessionEpoch?: number;
+  readonly scope?: Readonly<{ control: string; receiver: number; slot?: string }>;
+};
+
+const SOURCE = readFileSync('src/semantic/CwKeyerSurface.svelte', 'utf8');
+/** Comments stripped, so the file's own doctrine prose can never be what a
+ *  source-scanning test matches. */
+const CODE = SOURCE
+  .replace(/<!--[\s\S]*?-->/g, '')
+  .replace(/\/\*[\s\S]*?\*\//g, '')
+  .replace(/^\s*\/\/.*$/gm, '');
+
+const ON: Availability = { structural: true, operational: true };
+const OFF: Availability = { structural: false, operational: false };
+const DEGRADED: Availability = { structural: true, operational: false };
+
+/** `1/single` carries an `allowed` permit — the only fixture whose break-in is
+ *  legitimately live, which is what most of the non-permit tests need. */
+const base = (): RadioViewModel => withCwKeyer(topologyFixtures['1/single']);
+const withCw = (
+  over: Partial<CwKeyerViewModel>, view: RadioViewModel = base(),
+): RadioViewModel => ({ ...view, cwKeyer: { ...view.cwKeyer!, ...over } });
+const unread = <T>(availability: Availability = ON): CwKeyerField<T> =>
+  ({ reading: { status: 'unknown' }, availability });
+const known = <T>(value: T, availability: Availability = ON): CwKeyerField<T> =>
+  ({ reading: { status: 'known', value }, availability });
+const withReasons = (view: RadioViewModel, ...extra: DisabledReason[]): RadioViewModel =>
+  ({ ...view, disabledReasons: [...view.disabledReasons, ...extra] });
+
+let target: HTMLDivElement;
+beforeEach(() => { target = document.createElement('div'); document.body.appendChild(target); });
+afterEach(() => { target.remove(); });
+
+type Handlers = {
+  standard?: boolean;
+  autoTuneAvailable?: boolean;
+  onBreakInMode?: (mode: number) => void;
+  onLevelChange?: (field: CwLevelField, value: number) => void;
+  onApfOn?: (on: boolean) => void;
+  onTwinPeakToggle?: () => void;
+  onReversePaddleToggle?: () => void;
+  breakInDelayFeedback?: Readonly<BreakInDelayFeedback>;
+  breakInChoices?: readonly BreakInChoice[];
+  onAutoTune?: () => void;
+};
+
+function render(view: RadioViewModel, handlers: Handlers = {}) {
+  // MOR-2729: the exported `BEFORE FIX` lookup is gone; every prop-free
+  // render still gets the choices it exercises, passed explicitly. A test
+  // pinning the absent field passes `breakInChoices: undefined`.
+  const component = mount(CwKeyerInstrumentHostFixture, {
+    target,
+    props: {
+      view,
+      breakInChoices: EXPLICIT_CHOICES,
+      ...handlers,
+    },
+  });
+  flushSync();
+  const q = <T extends HTMLElement>(sel: string) => target.querySelector(sel) as T | null;
+  return {
+    dispose: () => unmount(component),
+    root: () => q('[data-testid="cw-keyer-surface"]'),
+    el: (id: string) => q<HTMLElement>(`[data-testid="cw-keyer-${id}"]`),
+    input: (id: string) => q<HTMLInputElement>(`[data-testid="cw-keyer-${id}"] input`),
+    text: (id: string) => q<HTMLElement>(`[data-testid="cw-keyer-${id}"]`)?.textContent?.trim(),
+    /** Every focusable control the surface renders, whatever its state. */
+    controls: () => [...target.querySelectorAll<HTMLElement>('button, input, select, [tabindex]')],
+  };
+}
+
+function renderReactiveFeedback(initial: BreakInDelayFeedback) {
+  const onLevelChange = vi.fn();
+  const props = proxy({ view: base(), onLevelChange, breakInDelayFeedback: initial });
+  const component = mount(CwKeyerInstrumentHostFixture, { target, props });
+  flushSync();
+  const input = () => target.querySelector<HTMLInputElement>(
+    '[data-testid="cw-keyer-breakInDelay"] input',
+  )!;
+  const output = () => target.querySelector<HTMLElement>(
+    '[data-testid="cw-keyer-breakInDelay-value"]',
+  )!;
+  return { dispose: () => unmount(component), input, output, onLevelChange, props };
+}
+
+/** A real click, not `.click()`: `.click()` is a no-op on a disabled button, so
+ *  it can never tell a `disabled` attribute apart from a handler guard. */
+const press = (el: HTMLElement) => el.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+const slide = (el: HTMLInputElement, value: number) => {
+  el.value = String(value);
+  el.dispatchEvent(new Event('input', { bubbles: true }));
+  el.dispatchEvent(new Event('change', { bubbles: true }));
+};
+const feedback = (
+  phase: PresentationPhase,
+  over: Partial<BreakInDelayFeedback> = {},
+): Readonly<BreakInDelayFeedback> => ({
+  confirmed: 64, target: null, requestedTarget: null, phase,
+  transitionId: null, outcome: null, ...over,
+});
+/* ── (a) the surface is not a key path ────────────────────────── */
+
+describe('the CW-keyer surface is NOT a key path (decomposition R9)', () => {
+  it('renders the Standard compact composition through the existing setting intents', () => {
+    const onBreakInMode = vi.fn();
+    const onApfOn = vi.fn();
+    const onAutoTune = vi.fn();
+    const r = render(withModeFilter(withCw({ breakIn: known('semi'), apf: known(1) })), {
+      standard: true, autoTuneAvailable: true, onBreakInMode, onApfOn, onAutoTune,
+    });
+    try {
+      expect(r.el('rx-mode')?.textContent).toContain('USB');
+      expect(r.el('break-in-off')).toBeNull();
+      expect(r.text('break-in-semi')).toBe('SEMI');
+      expect(r.text('break-in-full')).toBe('FULL');
+      expect(r.el('apf')?.getAttribute('role')).toBeNull();
+      expect(r.el('apf-on')?.getAttribute('role')).toBeNull();
+      expect(r.el('apf-on')?.getAttribute('aria-pressed')).toBe('true');
+      expect(r.el('pitchHz')!.compareDocumentPosition(r.el('keyerSpeed')!)
+        & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
+
+      press(r.el('break-in-semi')!);
+      press(r.el('break-in-full')!);
+      expect(onBreakInMode.mock.calls).toEqual([[0], [2]]);
+      press(r.el('apf-on')!);
+      expect(onApfOn).toHaveBeenCalledWith(false);
+
+      const settings = r.controls().find(control =>
+        control.getAttribute('aria-label') === 'CW additional settings')!;
+      expect(settings.getAttribute('aria-expanded')).toBe('false');
+      expect(settings.getAttribute('aria-controls')).toBe('cw-extra-settings');
+      const controlled = target.querySelector<HTMLElement>(
+        `#${settings.getAttribute('aria-controls')}`,
+      )!;
+      expect(controlled.hidden).toBe(true);
+      expect(controlled.querySelector('[data-testid="cw-keyer-breakInDelay"]')).not.toBeNull();
+      expect(controlled.querySelector('[data-testid="cw-keyer-reverse-paddle"]')).not.toBeNull();
+      press(settings);
+      flushSync();
+      expect(settings.getAttribute('aria-expanded')).toBe('true');
+      expect(controlled.hidden).toBe(false);
+
+      expect(r.text('auto-tune')).toBe('AUTO TUNE');
+      press(r.el('auto-tune')!);
+      expect(onAutoTune).toHaveBeenCalledTimes(1);
+    } finally { r.dispose(); }
+  });
+
+  /** The whole static import closure of the file, allow-listed. Kills: adding
+   *  ANY import that could reach the TX controller, the transport or the
+   *  permit utility — including through a relative specifier.
+   *  `./pressed-of` (MOR-1358) is allow-listed alongside the fact contract:
+   *  it is a pure, dependency-free `aria-pressed` derivation, itself
+   *  importing only a TYPE from
+   *  `./radio-view-model` — it cannot reach the TX controller, the
+   *  transport or the permit utility any more than the fact contract can.
+   *  This check regexes THIS file's specifiers only, so that premise is
+   *  pinned one level down by `pressed-of.test.ts`'s `'has no runtime
+   *  import'` case (verify-MOR-1358 F1) — the two together are the closure. */
+
+  it('renders the RX-mode line as an EMPTY reserved slot when the mode is unread (MOR-2653)', () => {
+    const observed = withModeFilter(base());
+    const view: RadioViewModel = {
+      ...observed,
+      modeFilter: {
+        ...observed.modeFilter!,
+        currentMode: { reading: { status: 'unknown' }, availability: ON },
+      },
+    };
+    const r = render(view, { standard: true });
+    expect(r.el('rx-mode')!.querySelector('output')!.textContent?.trim()).toBe('');
+    // Structural geometry pin (jsdom has no layout): the stylesheet's 5ch is
+    // the FLOOR of the RX-mode reservation; the reservation itself derives
+    // inline from the mounted profile's mode catalog (MOR-2706 tests below).
+    expect(SOURCE).toMatch(/\.cw-mode-line output\s*\{[^}]*min-width:\s*5ch/);
+    r.dispose();
+  });
+
+  // MOR-2706: the RX-mode slot's reserved width derives from the mounted
+  // profile's own mode catalog (`modeFilter.modeChoices`) — the #3751 LCD
+  // mode-box treatment, never a raised constant. The catalogs are the
+  // shipped `rigs/ftx1.toml` [modes].list and `rigs/ic7300.toml` mode list.
+  const FTX1_MODE_CHOICES = [
+    'LSB', 'USB', 'CW-U', 'FM', 'AM', 'RTTY-L', 'CW-L', 'DATA-L', 'RTTY-U',
+    'DATA-FM', 'FM-N', 'DATA-U', 'AM-N', 'PSK', 'DATA-FM-N', 'C4FM-DN', 'C4FM-VW',
+  ] as const;
+  const IC7300_MODE_CHOICES = [
+    'USB', 'LSB', 'CW', 'CW-R', 'AM', 'FM', 'RTTY', 'RTTY-R',
+  ] as const;
+  const withModeChoices = (modes: readonly string[]): RadioViewModel => {
+    const observed = withModeFilter(base());
+    return {
+      ...observed,
+      modeFilter: { ...observed.modeFilter!, modeChoices: modes },
+    };
+  };
+  const rxModeReservation = (view: RadioViewModel): string => {
+    const r = render(view, { standard: true });
+    const width = r.el('rx-mode')!.querySelector('output')!.style.minWidth;
+    r.dispose();
+    return width;
+  };
+
+  it('reserves the RX-mode slot for the widest FTX-1 mode label (DATA-FM-N = 9ch)', () => {
+    expect(rxModeReservation(withModeChoices(FTX1_MODE_CHOICES))).toBe('9ch');
+    expect('DATA-FM-N'.length).toBeLessThanOrEqual(9);
+  });
+
+  it('reserves the RX-mode slot for the widest Icom mode label (RTTY-R = 6ch)', () => {
+    expect(rxModeReservation(withModeChoices(IC7300_MODE_CHOICES))).toBe('6ch');
+    expect('RTTY-R'.length).toBeLessThanOrEqual(6);
+  });
+
+  it('keeps the RX-mode reservation unchanged when a reading arrives (MOR-2706)', () => {
+    const withCurrentMode = (status: 'unknown' | 'known'): RadioViewModel => {
+      const observed = withModeChoices(FTX1_MODE_CHOICES);
+      return {
+        ...observed,
+        modeFilter: {
+          ...observed.modeFilter!,
+          currentMode: status === 'known'
+            ? known('DATA-FM-N')
+            : { reading: { status: 'unknown' }, availability: ON },
+        },
+      };
+    };
+    const unread = rxModeReservation(withCurrentMode('unknown'));
+    const read = rxModeReservation(withCurrentMode('known'));
+    expect(read).toBe(unread);
+    expect(read).toBe('9ch');
+  });
+
+  it('imports only the allow-listed fact, presentation and numeric dependencies', () => {
+    const specifiers = [...CODE.matchAll(/from\s+'([^']+)'/g)].map((m) => m[1]);
+    expect(specifiers.length).toBeGreaterThan(0);
+    // MOR-1474: `$lib/i18n` added for the operator-legible `t()` catalog
+    // lookups — the SAME allow-listed addition MOR-1448 made to
+    // BandSurface's identical closure guard. It is a pure string-resolution
+    // module (no transport, no controller, no permit utility) and cannot
+    // widen this file's reach any more than `./pressed-of` does.
+    // MOR-2688 S3: `../primitives/reading-text` joined the closure — the ONE
+    // unread-display rule. It imports TYPES ONLY (its own
+    // `reading-text.test.ts: has no runtime import` pins that one level down,
+    // like the `pressed-of` purity argument above), so it cannot reach the TX
+    // controller, the transport or the permit utility any more than the fact
+    // contract can.
+    expect([...new Set(specifiers)]).toEqual([
+      '$lib/i18n', './CwKeyerInstrumentHost.svelte', '$lib/types/capabilities',
+      './radio-view-model', '$lib/utils/tx-permit',
+      './pressed-of', '../primitives/reading-text', 'svelte',
+      '../primitives/control-feedback/control-feedback-presentation',
+      '../primitives/scalar/committed-scalar.svelte',
+      '../primitives/scalar/value-control-core',
+      '../primitives/control-instruments/control-instrument-behavior',
+    ]);
+  });
+
+  // MOR-2688 S3 literal pin, with literal strings: `textOf`'s own formatter
+  // writes booleans as lowercase `on`/`off` — under a `format → String`
+  // mutation String(true) would print 'true' (never 'on'). The exported
+  // helper delegates to `readingText`, so the predicate stays exactly
+  // `status === 'known'`.
+  it('renders read booleans as on/off literals and an unread field as empty text', () => {
+    const onField = { reading: { status: 'known', value: true }, availability: ON } as CwKeyerField<unknown>;
+    const offField = { reading: { status: 'known', value: false }, availability: ON } as CwKeyerField<unknown>;
+    const unreadField = { reading: { status: 'unknown' }, availability: ON } as CwKeyerField<unknown>;
+    expect(textOf(onField)).toBe('on');
+    expect(textOf(offField)).toBe('off');
+    expect(textOf(unreadField)).toBe('');
+  });
+
+  // Kills (MOR-2705 part 2): the feedback-less (raw) break-in delay readout
+  // printing the unit with no value (the '#3746 for offsets and widths'
+  // treatment). Untrimmed `textContent` pins the exact text: an unread delay
+  // renders NOTHING (not even a stray space), a known delay renders the
+  // value, and the unit suffix appears only with a value.
+  it('renders the raw break-in delay readout as value-with-unit or nothing', () => {
+    const knownRaw = render(base());
+    expect(knownRaw.el('breakInDelay-value')!.textContent).toBe('64');
+    knownRaw.dispose();
+    const unreadRaw = render(withCw({ breakInDelay: unread(ON) }));
+    const el = unreadRaw.el('breakInDelay-value')!;
+    expect(el.textContent).toBe('');
+    expect(el.textContent).not.toContain(' ms');
+    unreadRaw.dispose();
+  });
+
+  it('uses current-input bindings for APF, Twin Peak and reverse paddle', () => {
+    expect(CODE).toContain('const apfChoice = bindChoiceInstrument');
+    expect(CODE).toContain('const twinPeakToggle = bindToggleInstrument');
+    expect(CODE).toContain('const reversePaddleToggle = bindToggleInstrument');
+    expect(CODE).toContain('value: field.reading.value > 0');
+    expect(CODE).toContain('invoke: () => onTwinPeakToggle?.()');
+    expect(CODE).toContain('invoke: () => onReversePaddleToggle?.()');
+    expect(CODE).toContain('{@render continuousHandles.keyerSpeed()}');
+    expect(CODE).toContain('{@render continuousHandles.pitchHz()}');
+    expect(CODE).not.toContain('keySpeedScalar');
+    expect(CODE).not.toContain('cwPitchScalar');
+  });
+
+  // Kills: `onMount(() => …)` and every relative of it, plus a dynamic import
+  // used to smuggle in the controller.
+  it('allows cleanup-only lifecycle ownership without a mount-time dispatch path', () => {
+    expect(CODE).toContain('onDestroy');
+    for (const forbidden of ['onMount', 'import(', 'sendCommand']) {
+      expect(CODE).not.toContain(forbidden);
+    }
+    expect(CODE).not.toMatch(/onDestroy\s*\([^)]*=>[\s\S]*?(?:onLevelChange|nativeInput)\s*\(/);
+  });
+
+  // Kills: (a) a key path, (c) a second permit derivation. Neither the key
+  // vocabulary nor the permit machinery may appear anywhere in this file —
+  // with exactly ONE exception (MOR-4433): the shared `isSourcelessPermitUnknown`
+  // predicate READ from `$lib/utils/tx-permit` (pinned below). A
+  // `getFrequencyPermit` call, a band-plan lookup, or any other import from
+  // the permit utility would be a second derivation and still fails here.
+  it('never mentions keying, PTT, the TX controller or a permit derivation', () => {
+    for (const forbidden of [
+      'ptt', 'Ptt', 'PTT', 'requestKey', 'onRequestKey', 'onRequestUnkey', 'tx-controller',
+      'TxAuthoritySnapshot', 'keyBlockedReasons', 'getFrequencyPermit', 'txBands', 'sendCommand',
+      '$lib/transport',
+    ]) {
+      expect(CODE).not.toContain(forbidden);
+    }
+    // The single allowed `$lib/utils/tx-permit` import (see the specifier
+    // allow-list above) is the shared `isSourcelessPermitUnknown` predicate —
+    // a second permit derivation would have to name `getFrequencyPermit`,
+    // `txBands`, or another import, each of which fails above or in the list.
+    expect(CODE).toContain('isSourcelessPermitUnknown');
+  });
+
+  // Kills: the surface growing an authority prop or a key intent. The props
+  // list is the structural statement that this cannot key.
+  it('takes exactly one state prop — the view model — plus SETTING intents', () => {
+    const props = CODE.slice(CODE.indexOf('interface Props'), CODE.indexOf('}: Props'));
+    expect([...props.matchAll(/^\s{4}(\w+)[?]?:/gm)].map((m) => m[1])).toEqual([
+      'view', 'continuousHandles', 'showKeyerSpeed', 'showPitchHz', 'standard',
+      'onBreakInMode', 'onLevelChange',
+      'onApfOn', 'onTwinPeakToggle', 'onReversePaddleToggle', 'breakInDelayFeedback',
+      'breakInChoices', 'autoTuneAvailable', 'onAutoTune',
+    ]);
+  });
+
+  it('renders an available RX frequency-correction control and emits exactly once', () => {
+    const onAutoTune = vi.fn();
+    const component = mount(CwKeyerInstrumentHostFixture, {
+      target,
+      props: { view: base(), autoTuneAvailable: true, onAutoTune },
+    });
+    flushSync();
+    const control = target.querySelector<HTMLElement>('[data-testid="cw-keyer-auto-tune"]');
+    expect(control).not.toBeNull();
+    expect(control!.textContent).toContain('RX frequency correction');
+    press(control!);
+    expect(onAutoTune).toHaveBeenCalledExactlyOnceWith();
+    unmount(component);
+  });
+
+  it('omits the RX frequency-correction control when unavailable or callback-free', () => {
+    const unavailableCallback = vi.fn();
+    const unavailable = mount(CwKeyerInstrumentHostFixture, {
+      target,
+      props: { view: base(), autoTuneAvailable: false, onAutoTune: unavailableCallback },
+    });
+    flushSync();
+    expect(target.querySelector('[data-testid="cw-keyer-auto-tune"]')).toBeNull();
+    expect(unavailableCallback).not.toHaveBeenCalled();
+    unmount(unavailable);
+
+    const callbackFree = mount(CwKeyerInstrumentHostFixture, {
+      target,
+      props: { view: base(), autoTuneAvailable: true },
+    });
+    flushSync();
+    const control = target.querySelector<HTMLElement>('[data-testid="cw-keyer-auto-tune"]');
+    expect(control).not.toBeNull();
+    expect(() => press(control!)).not.toThrow();
+    unmount(callbackFree);
+  });
+
+  // Kills: rendering an empty CW panel for a radio with no keyer.
+  it('renders NOTHING at all when the view model carries no cwKeyer group', () => {
+    const view = { ...base() };
+    delete (view as { cwKeyer?: unknown }).cwKeyer;
+    const r = render(view);
+    expect(r.root()).toBeNull();
+    expect(target.textContent?.trim()).toBe('');
+    r.dispose();
+  });
+
+  /**
+   * The FULLY-ARMED sweep: break-in structurally available, permit `allowed`,
+   * every fact observed, every control enabled — then every control on the
+   * surface is interacted with. Only the five declared SETTING intents may
+   * fire, and each carries a setting payload. Kills: wiring a key intent onto
+   * any control (it would have to arrive as a sixth channel, or as a call on a
+   * handler this surface is not allowed to have).
+   */
+  it('emits ONLY setting intents when every control is exercised fully armed', () => {
+    const seen: string[] = [];
+    const r = render(withCw({ breakIn: known<BreakInMode>('full') }, withTxAux(base())), {
+      onBreakInMode: (m) => seen.push(`breakIn:${m}`),
+      onLevelChange: (f, v) => seen.push(`level:${f}:${v}`),
+      onApfOn: (on) => seen.push(`apf:${on}`),
+      onTwinPeakToggle: () => seen.push('twinPeak'),
+      onReversePaddleToggle: () => seen.push('reversePaddle'),
+    });
+    const controls = r.controls();
+    expect(controls.length).toBeGreaterThan(0);
+    for (const control of controls) {
+      if (control instanceof HTMLInputElement) slide(control, Number(control.max));
+      else press(control);
+    }
+    flushSync();
+    // pitchHz is now a hosted ValueControl scalar (pointer/keyboard driven, no
+    // native <input>) — its own routing is proven in
+    // CwKeyerInstrumentHost.isolated.test.ts, not by this DOM sweep.
+    expect(seen).toEqual([
+      'breakIn:0', 'breakIn:1', 'breakIn:2',
+      'level:breakInDelay:255',
+      'reversePaddle', 'apf:false', 'apf:true', 'twinPeak',
+    ]);
+    r.dispose();
+  });
+});
+
+/* ── MOR-1648/MOR-1753 — truthful draft and feedback ─────────── */
+
+describe('Break-in Delay separates draft, submitted target and confirmed truth', () => {
+  it('shows a local draft, then emits one bounded integer and presents the submitted target', () => {
+    const onLevelChange = vi.fn();
+    const r = render(base(), { onLevelChange, breakInDelayFeedback: feedback('idle') });
+    const input = r.input('breakInDelay')!;
+    for (const value of [80, 96, 111]) {
+      input.value = String(value);
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+    expect(onLevelChange).not.toHaveBeenCalled();
+    flushSync();
+    expect(input.value).toBe('111');
+    expect(r.text('breakInDelay-value')).toContain('111 draft');
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+    expect(onLevelChange).toHaveBeenCalledExactlyOnceWith('breakInDelay', 111);
+    flushSync();
+    expect(input.value).toBe('64');
+    r.dispose();
+  });
+
+  it.each([
+    ['submitted', true, 111, null],
+    ['awaiting-confirmation', true, 111, null],
+    ['failed', false, 64, 'failed'],
+    ['timed-out', false, 64, 'timed-out'],
+    ['cancelled', false, 64, 'cancelled'],
+    ['superseded', false, 64, 'superseded'],
+    ['confirmed', false, 111, 'confirmed'],
+  ] as const)('projects %s without presenting an unconfirmed target as canonical', (
+    phase, busy, displayed, outcome,
+  ) => {
+    const terminal = outcome === null ? null : { phase: outcome };
+    const r = render(base(), {
+      breakInDelayFeedback: feedback(phase, {
+        confirmed: phase === 'confirmed' ? 111 : 64,
+        target: busy ? 111 : null,
+        requestedTarget: 111,
+        transitionId: `[1,"command","${phase}"]`,
+        outcome: terminal,
+      }),
+    });
+    const input = r.input('breakInDelay')!;
+    expect(input.value).toBe(String(displayed));
+    expect(input.dataset.commandPhase).toBe(phase);
+    expect(input.getAttribute('aria-busy')).toBe(String(busy));
+    expect(r.text('breakInDelay-value')).toContain(`${displayed} ${phase.replaceAll('-', ' ')}`);
+    const live = target.querySelector('[data-control-feedback-status]');
+    expect(live?.getAttribute('aria-live')).toBe('polite');
+    expect(live?.textContent).toContain('111');
+    r.dispose();
+  });
+
+  it('fails closed when feedback is unavailable and Escape cancels a draft without dispatch', () => {
+    const onLevelChange = vi.fn();
+    const r = render(base(), { onLevelChange, breakInDelayFeedback: feedback('idle') });
+    const input = r.input('breakInDelay')!;
+    input.value = '99';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+    expect(onLevelChange).not.toHaveBeenCalled();
+    expect(input.value).toBe('64');
+
+    r.dispose();
+
+    const unavailable = render(base(), {
+      onLevelChange, breakInDelayFeedback: feedback('unavailable', { confirmed: null }),
+    });
+    const unavailableInput = unavailable.input('breakInDelay')!;
+    expect(unavailableInput.disabled).toBe(true);
+    expect(unavailableInput.dataset.commandPhase).toBe('unavailable');
+    expect(unavailableInput.getAttribute('aria-valuetext')).toBe('Break-in delay unavailable');
+    expect(unavailable.text('breakInDelay-value')).toBe('unavailable');
+    expect(unavailable.text('breakInDelay-value')).not.toContain('—');
+    unavailable.dispose();
+  });
+
+  it('renders the break-in delay value text in Russian when locale is ru-RU', () => {
+    const previousLocale = getLocale();
+    setLocale('ru-RU');
+    try {
+      const onLevelChange = vi.fn();
+      const r = render(base(), {
+        onLevelChange, breakInDelayFeedback: feedback('unavailable', { confirmed: null }),
+      });
+      const unavailableInput = r.input('breakInDelay')!;
+      expect(unavailableInput.getAttribute('aria-valuetext')).toBe(
+        'Задержка break-in недоступна',
+      );
+      r.dispose();
+    } finally {
+      setLocale(previousLocale);
+    }
+  });
+
+  it('rounds and clamps a programmatic final candidate before dispatch', () => {
+    const onLevelChange = vi.fn();
+    const r = render(base(), { onLevelChange });
+    const input = r.input('breakInDelay')!;
+    Object.defineProperty(input, 'valueAsNumber', { configurable: true, value: 300.4 });
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+    expect(onLevelChange).toHaveBeenCalledExactlyOnceWith('breakInDelay', 255);
+    r.dispose();
+  });
+
+  it('cancels a gesture and suppresses its trailing change', () => {
+    const onLevelChange = vi.fn();
+    const r = render(base(), { onLevelChange });
+    const input = r.input('breakInDelay')!;
+    input.value = '111';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    input.dispatchEvent(new Event('pointercancel', { bubbles: true }));
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+    expect(onLevelChange).not.toHaveBeenCalled();
+    expect(input.value).toBe('64');
+    r.dispose();
+  });
+
+  it('adopts one committed renderer lease and destroys its owner on unmount', () => {
+    const committedBlock = CODE.slice(
+      CODE.indexOf('const breakInDelayScalar'),
+      CODE.indexOf('function requestRxFrequencyCorrection'),
+    );
+    expect(committedBlock).toContain(
+      'const breakInDelayLease = breakInDelayScalar.attachRenderer()',
+    );
+    expect(committedBlock).not.toMatch(/breakInDelayScalar\.(?:input|commit|cancel)\(/);
+    for (const method of ['input', 'commit', 'cancel']) {
+      expect(committedBlock).toContain(`breakInDelayLease.${method}(`);
+    }
+    expect(CODE).toMatch(/onpointercancel=.*cancelBreakInDelay/);
+    expect(CODE).toMatch(/function keyBreakInDelay[\s\S]*?cancelBreakInDelay\(event\.currentTarget\)/);
+    expect(CODE).toMatch(/onDestroy\(\(\) => \{[\s\S]*?breakInDelayScalar\.destroy\(\)/);
+
+    const onLevelChange = vi.fn();
+    const r = render(base(), { onLevelChange });
+    const input = r.input('breakInDelay')!;
+    input.value = '111';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    r.dispose();
+    expect(onLevelChange).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['cancelled', 72, 'provider-replaced'],
+    ['failed', 73, 'failed-transition'],
+    ['timed-out', 74, 'timed-out-transition'],
+    ['superseded', 75, 'superseded-transition'],
+    ['idle', 76, null],
+  ] as const)('invalidates a stale draft when authority advances to %s', (phase, canonical, id) => {
+    const r = renderReactiveFeedback(feedback('idle'));
+    r.input().value = '111';
+    r.input().dispatchEvent(new Event('input', { bubbles: true }));
+    const terminal = phase === 'idle' ? null : { phase };
+    r.props.breakInDelayFeedback = feedback(phase, {
+      confirmed: canonical, requestedTarget: phase === 'idle' ? null : 111,
+      transitionId: id, outcome: terminal,
+    });
+    flushSync();
+    expect(r.input().value).toBe(String(canonical));
+    expect(r.output().textContent).toContain(`${canonical} ${phase.replaceAll('-', ' ')}`);
+    r.input().dispatchEvent(new Event('change', { bubbles: true }));
+    expect(r.onLevelChange).not.toHaveBeenCalled();
+
+    r.input().value = '99';
+    r.input().dispatchEvent(new Event('input', { bubbles: true }));
+    r.input().dispatchEvent(new Event('change', { bubbles: true }));
+    expect(r.onLevelChange).toHaveBeenCalledExactlyOnceWith('breakInDelay', 99);
+    r.dispose();
+  });
+
+  it('preserves an active draft while the same feedback authority is re-projected', () => {
+    const current = feedback('awaiting-confirmation', {
+      target: 80, requestedTarget: 80, transitionId: 'authority-a',
+    });
+    const r = renderReactiveFeedback(current);
+    r.input().value = '111';
+    r.input().dispatchEvent(new Event('input', { bubbles: true }));
+    r.props.breakInDelayFeedback = { ...current };
+    flushSync();
+    expect(r.input().value).toBe('111');
+    r.input().dispatchEvent(new Event('change', { bubbles: true }));
+    expect(r.onLevelChange).toHaveBeenCalledExactlyOnceWith('breakInDelay', 111);
+    r.dispose();
+  });
+
+  it('invalidates a stale draft when an equal projection moves to a new session context', () => {
+    const context = { control: 'break-in-delay', receiver: 0 } as const;
+    const r = renderReactiveFeedback(feedback('idle', { sessionEpoch: 1, scope: context }));
+    r.input().value = '111';
+    r.input().dispatchEvent(new Event('input', { bubbles: true }));
+    flushSync();
+    expect(r.input().value).toBe('111');
+    r.props.breakInDelayFeedback = feedback('idle', { sessionEpoch: 2, scope: { ...context } });
+    flushSync();
+    const restored = r.input().value;
+    r.input().dispatchEvent(new Event('change', { bubbles: true }));
+    expect([restored, r.onLevelChange.mock.calls]).toEqual(['64', []]);
+    r.dispose();
+  });
+
+  it('keeps draft and announcement state independent across mounted instances', () => {
+    const secondTarget = document.createElement('div'); document.body.appendChild(secondTarget);
+    const current = feedback('failed', {
+      requestedTarget: 111, transitionId: 'shared-transition', outcome: { phase: 'failed' },
+    });
+    const first = mount(CwKeyerInstrumentHostFixture, {
+      target, props: { view: base(), breakInDelayFeedback: current },
+    });
+    const second = mount(CwKeyerInstrumentHostFixture, {
+      target: secondTarget, props: { view: base(), breakInDelayFeedback: { ...current } },
+    });
+    flushSync();
+    const firstInput = target.querySelector<HTMLInputElement>(
+      '[data-testid="cw-keyer-breakInDelay"] input',
+    )!;
+    firstInput.value = '90'; firstInput.dispatchEvent(new Event('input', { bubbles: true }));
+    flushSync();
+    const secondInput = secondTarget.querySelector<HTMLInputElement>(
+      '[data-testid="cw-keyer-breakInDelay"] input',
+    )!;
+    expect([firstInput.value, secondInput.value]).toEqual(['90', '64']);
+    expect(target.querySelector('[data-control-feedback-status]')?.textContent).toContain('111');
+    expect(secondTarget.querySelector('[data-control-feedback-status]')?.textContent).toContain('111');
+    unmount(first); unmount(second); secondTarget.remove();
+  });
+
+  it.each([
+    ['missing', null], ['not-a-number', Number.NaN], ['infinite', Number.POSITIVE_INFINITY],
+    ['below-domain', -1], ['above-domain', 256], ['off-lattice', 64.5],
+  ] as const)('fails closed for %s canonical truth', (_case, confirmed) => {
+    const r = renderReactiveFeedback(feedback('idle', { confirmed }));
+    expect(r.input().disabled).toBe(true);
+    expect(r.input().hasAttribute('aria-valuenow')).toBe(false);
+    expect(r.input().getAttribute('aria-valuetext')).toBe('Break-in delay unavailable');
+    expect(r.output().textContent).toContain('unavailable');
+    expect(r.output().textContent).not.toContain('—');
+    r.input().value = '99';
+    r.input().dispatchEvent(new Event('input', { bubbles: true }));
+    r.input().dispatchEvent(new Event('change', { bubbles: true }));
+    expect(r.onLevelChange).not.toHaveBeenCalled();
+    r.dispose();
+  });
+
+  it.each([
+    ['non-finite target', feedback('submitted', {
+      target: Number.NaN, requestedTarget: 111, transitionId: 'bad-target',
+    })],
+    ['mismatched terminal outcome', feedback('failed', {
+      requestedTarget: 111, transitionId: 'bad-outcome', outcome: { phase: 'confirmed' },
+    })],
+  ])('fails closed for %s', (_case, malformed) => {
+    const r = renderReactiveFeedback(malformed);
+    expect(r.input().disabled).toBe(true);
+    expect(r.input().hasAttribute('aria-valuenow')).toBe(false);
+    expect(r.output().textContent).toContain('unavailable');
+    expect(r.output().textContent).not.toContain('—');
+    r.dispose();
+  });
+});
+
+/* ── (b) the break-in permit gate, fail-closed ─────────────────── */
+
+describe('break-in obeys the ONE txPermit and fails closed', () => {
+  it('enables the break-in choices under a positively allowed permit', () => {
+    const r = render(base());
+    for (const [label] of BREAK_IN_CHOICES) {
+      expect(r.el(`break-in-${label}`)!.hasAttribute('disabled')).toBe(false);
+    }
+    expect(r.el('break-in')!.dataset.permitted).toBe('true');
+    expect(r.el('break-in-blocked')).toBeNull();
+    r.dispose();
+  });
+
+  // Kills: enabling break-in under a DENIED permit. `2/ab_shared`'s permit is
+  // `denied`; `withCwKeyer` records the matching reason, as the validator
+  // requires.
+  it.each(BREAK_IN_CHOICES)('disables the %s choice under a denied permit', (label) => {
+    const r = render(withCwKeyer(topologyFixtures['2/ab_shared']));
+    expect(r.el(`break-in-${label}`)!.hasAttribute('disabled')).toBe(true);
+    r.dispose();
+  });
+
+  /**
+   * Kills: enabling break-in under an UNKNOWN permit — the deliberate
+   * over-disable of MOR-1296 O2, and the single most likely "fix" a future
+   * reader would apply. Pinned INDEPENDENTLY of the denied case: `unknown` is
+   * not `denied`, and a `status === 'denied'` gate would pass the test above
+   * while failing this one.
+   */
+  it.each(BREAK_IN_CHOICES)('disables the %s choice under an UNKNOWN permit', (label) => {
+    const r = render(withCwKeyer(topologyFixtures['1/ab']));
+    expect(r.el(`break-in-${label}`)!.hasAttribute('disabled')).toBe(true);
+    r.dispose();
+  });
+
+  /**
+   * The handler half, for BOTH non-allowed permits, dispatched as a real
+   * bubbling click rather than `.click()`. Kills: dropping the `permitAllowed`
+   * conjunct from `setBreakIn` — which the `disabled` assertions above cannot
+   * see, because jsdom fires nothing on a disabled button (MOR-1304 F3).
+   */
+  it.each([
+    ['denied', '2/ab_shared'], ['unknown', '1/ab'],
+  ] as const)('emits no break-in intent under a %s permit, even bypassing disabled', (_s, key) => {
+    const onBreakInMode = vi.fn();
+    const r = render(withCwKeyer(topologyFixtures[key]), { onBreakInMode });
+    for (const [label] of BREAK_IN_CHOICES) press(r.el(`break-in-${label}`)!);
+    flushSync();
+    expect(onBreakInMode).not.toHaveBeenCalled();
+    r.dispose();
+  });
+
+  // Kills: swallowing the recorded reason and leaving a dead control with no
+  // cause. The validator guarantees the entry exists (MOR-1296 §3), so the
+  // surface only has to render it — and it must render the RIGHT one.
+  it.each([
+    ['2/ab_shared', 'out-of-band'], ['1/ab', 'tx-target-unknown'],
+  ] as const)('renders the recorded reason for %s', (key, code) => {
+    const view = withCwKeyer(topologyFixtures[key]);
+    const r = render({
+      ...view,
+      disabledReasons: view.disabledReasons.map(
+        (reason) => (reason.field === 'cwKeyer.breakIn' ? { field: reason.field, code } : reason),
+      ),
+    });
+    const blocked = r.el('break-in-blocked')!;
+    expect(blocked).not.toBeNull();
+    expect(blocked.dataset.reason).toBe(code);
+    expect(blocked.textContent!.trim()).toBe(breakInBlockedLabel(code));
+    r.dispose();
+  });
+
+  // Kills: a label map that drifts from the three codes the adapter can emit
+  // for this field (`deriveCwKeyerReasons`).
+  it('has a label for each of the three codes the CW break-in gate can record', () => {
+    expect(Object.keys(BREAK_IN_REASON_KEY).sort())
+      .toEqual(['capability-unavailable', 'out-of-band', 'tx-target-unknown']);
+  });
+
+  /* ── MOR-1474: operator-legible wording, reusing the MOR-1448 per-status
+     catalog keys for the SAME `txPermit`-sourced fact this field's
+     `deriveCwKeyerReasons` reads. ──────────────────────────────────────── */
+  describe('MOR-1474 — break-in block reason resolves through the shared TX-reason catalog', () => {
+    it.each([
+      ['out-of-band', 'core.band.tx.reason.outOfBand'],
+      ['capability-unavailable', 'core.band.tx.reason.rangesNotConfigured'],
+      ['tx-target-unknown', 'core.band.tx.reason.targetUnknown'],
+    ] as const)('composes code %s through core.cwKeyer.breakIn.blocked with reason key %s', (code, key) => {
+      expect(breakInBlockedLabel(code)).toBe(
+        t('core.cwKeyer.breakIn.blocked', { reason: t(key) }),
+      );
+    });
+
+    it('never leaks the raw disabledReasonCode into the rendered text', () => {
+      for (const code of ['out-of-band', 'capability-unavailable', 'tx-target-unknown'] as const) {
+        expect(breakInBlockedLabel(code)).not.toContain(code);
+      }
+    });
+  });
+
+  // Kills: a radio with no break-in capability growing the control anyway.
+  it('renders no break-in block at all when break-in is structurally absent', () => {
+    const r = render(withCw({ breakIn: unread<BreakInMode>(OFF) }));
+    expect(r.el('break-in')).toBeNull();
+    r.dispose();
+  });
+
+  // Kills: acting on an unread break-in reading even while the permit allows.
+  it('disables and refuses break-in while its own reading is unobserved', () => {
+    const onBreakInMode = vi.fn();
+    const r = render(withCw({ breakIn: unread<BreakInMode>(DEGRADED) }), { onBreakInMode });
+    for (const [label] of BREAK_IN_CHOICES) {
+      expect(r.el(`break-in-${label}`)!.hasAttribute('disabled')).toBe(true);
+      press(r.el(`break-in-${label}`)!);
+    }
+    flushSync();
+    expect(onBreakInMode).not.toHaveBeenCalled();
+    r.dispose();
+  });
+
+  // MOR-2704 G3: the imported gate keeps the read-but-NOT-operational
+  // refusal — the case the local copy handled, now pinned against the
+  // shared `usable` (a mutation that drops its `operational` check dies
+  // here). The permit is allowed, so ONLY the gate refuses. `textOf`
+  // follows the reading status alone, so the known delay keeps rendering.
+  it('disables and refuses break-in while its reading is known but not operational', () => {
+    const onBreakInMode = vi.fn();
+    const r = render(withCw({
+      breakIn: known<BreakInMode>('semi', DEGRADED),
+      breakInDelay: known(30, DEGRADED),
+    }), { onBreakInMode });
+    for (const [label] of BREAK_IN_CHOICES) {
+      expect(r.el(`break-in-${label}`)!.hasAttribute('disabled')).toBe(true);
+      press(r.el(`break-in-${label}`)!);
+    }
+    flushSync();
+    expect(onBreakInMode).not.toHaveBeenCalled();
+    expect(r.el('breakInDelay')!.dataset.observed).toBe('false');
+    expect(r.text('breakInDelay-value')).toBe('30');
+    r.dispose();
+  });
+
+  it.each(BREAK_IN_CHOICES)('emits the absolute %s intent when permitted', (label, mode) => {
+    const onBreakInMode = vi.fn();
+    const r = render(base(), { onBreakInMode });
+    press(r.el(`break-in-${label}`)!);
+    flushSync();
+    expect(onBreakInMode).toHaveBeenCalledExactlyOnceWith(mode);
+    r.dispose();
+  });
+
+  /* MOR-2729 — the break-in choice list comes from the profile's published
+     `breakInChoices`, not the hard-coded trio. The prop-free renders above
+     pass the choices explicitly; these pin the profile path. */
+  describe('MOR-2729 — profile-published choices drive the break-in keys', () => {
+    const ftx1: BreakInChoice[] = [{ value: 0, label: 'OFF' }, { value: 1, label: 'ON' }];
+    const ic7300: BreakInChoice[] = [
+      { value: 0, label: 'OFF' }, { value: 1, label: 'SEMI' }, { value: 2, label: 'FULL' },
+    ];
+
+    it('FTX-1 lists OFF and ON only, and a click on ON dispatches mode 1', () => {
+      const onBreakInMode = vi.fn();
+      const r = render(base(), { breakInChoices: ftx1, onBreakInMode });
+      expect(r.el('break-in')).not.toBeNull();
+      expect(r.el('break-in-off')!.textContent).toBe('OFF');
+      expect(r.el('break-in-semi')!.textContent).toBe('ON');
+      expect(r.el('break-in-full')).toBeNull();
+      press(r.el('break-in-semi')!);
+      flushSync();
+      expect(onBreakInMode).toHaveBeenCalledExactlyOnceWith(1);
+      r.dispose();
+    });
+
+    it('IC-7300 keeps the published OFF / SEMI / FULL choices unchanged', () => {
+      const r = render(base(), { breakInChoices: ic7300 });
+      expect(r.el('break-in-off')!.textContent).toBe('OFF');
+      expect(r.el('break-in-semi')!.textContent).toBe('SEMI');
+      expect(r.el('break-in-full')!.textContent).toBe('FULL');
+      r.dispose();
+    });
+
+    it('a radio publishing an empty list (X6100, X6200) renders no break-in block at all', () => {
+      const r = render(base(), { breakInChoices: [] });
+      expect(r.el('break-in')).toBeNull();
+      r.dispose();
+    });
+
+    // Item 1 (review 2026-09-27): no `LEGACY_BREAK_IN_CHOICES` fallback — an
+    // absent field means NO break-in control, like `notchWidthChoices`.
+    it('an absent breakInChoices field renders no break-in control (MOR-2729)', () => {
+      const r = render(base(), { breakInChoices: undefined });
+      expect(r.el('break-in')).toBeNull();
+      r.dispose();
+    });
+  });
+
+  /* MOR-2797 — the Standard face's break-in row carries a visible row
+     label, the same way its neighbouring rows say CW PITCH / KEYER SPEED:
+     the FTX-1's OFF/ON domain left the row as a lone 'ON' button that read
+     as "something is on", not as break-in. The literal text is pinned per
+     locale — never `t(key)` — so a catalog drift cannot pass silently. */
+  describe('MOR-2797 — the break-in row shows a visible label in Standard mode', () => {
+    const ftx1: BreakInChoice[] = [{ value: 0, label: 'OFF' }, { value: 1, label: 'ON' }];
+    const ic7300: BreakInChoice[] = [
+      { value: 0, label: 'OFF' }, { value: 1, label: 'SEMI' }, { value: 2, label: 'FULL' },
+    ];
+    const rowLabel = (r: ReturnType<typeof render>): HTMLElement | null =>
+      r.el('break-in')!.querySelector<HTMLElement>('[data-testid="cw-keyer-break-in-label"]');
+
+    it('FTX-1 renders the literal Break-in label above the unchanged ON key', () => {
+      const r = render(base(), { standard: true, breakInChoices: ftx1 });
+      const label = rowLabel(r)!;
+      expect(label.textContent).toBe('Break-in');
+      // The label lives inside the break-in row and nothing else moves: the
+      // row keeps exactly the one key Standard draws for the OFF/ON pair.
+      const row = label.closest('.cw-keyer-row')!;
+      expect(row.closest('[data-testid="cw-keyer-break-in"]')).not.toBeNull();
+      expect(label.compareDocumentPosition(row.querySelector('button')!)
+        & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
+      expect(r.el('break-in-off')).toBeNull();
+      expect(r.text('break-in-semi')).toBe('ON');
+      expect(row.querySelectorAll('button')).toHaveLength(1);
+      r.dispose();
+    });
+
+    it('IC-7300 renders the same label with the SEMI / FULL keys unchanged', () => {
+      const r = render(base(), { standard: true, breakInChoices: ic7300 });
+      const label = rowLabel(r)!;
+      expect(label.textContent).toBe('Break-in');
+      expect(r.text('break-in-semi')).toBe('SEMI');
+      expect(r.text('break-in-full')).toBe('FULL');
+      expect(label.closest('.cw-keyer-row')!.querySelectorAll('button')).toHaveLength(2);
+      r.dispose();
+    });
+
+    // The label renders UPPER-CASE like CW PITCH / KEYER SPEED, but through
+    // the stylesheet (the neighbouring labels uppercase the same way), never
+    // by upper-casing the catalog text — the Russian text would break.
+    it('upper-cases the label through the stylesheet on its own grid line', () => {
+      const sheet = /<style>([\s\S]*?)<\/style>/.exec(CODE)![1];
+      expect(sheet).toMatch(/\.standard \.cw-keyer-row-label\s*\{[^}]*grid-column:\s*1\s*\/\s*-1/);
+      expect(sheet).toMatch(/\.standard \.cw-keyer-row-label\s*\{[^}]*text-transform:\s*uppercase/);
+      const r = render(base(), { standard: true, breakInChoices: ic7300 });
+      expect(rowLabel(r)!.textContent).toBe('Break-in');
+      r.dispose();
+    });
+
+    it('renders the Russian label text through the same catalog key', () => {
+      const previousLocale = getLocale();
+      setLocale('ru-RU');
+      try {
+        const r = render(base(), { standard: true, breakInChoices: ftx1 });
+        expect(rowLabel(r)!.textContent).toBe('Брейк-ин');
+        r.dispose();
+      } finally {
+        setLocale(previousLocale);
+      }
+    });
+
+    it('renders no row label outside Standard mode', () => {
+      const r = render(base(), { breakInChoices: ic7300 });
+      expect(rowLabel(r)).toBeNull();
+      r.dispose();
+    });
+  });
+
+  // MOR-2690: the choices are KEYs, not radios — `aria-pressed` appears only
+  // on a KNOWN reading, and `aria-checked` is gone entirely: a radio REQUIRES
+  // `aria-checked`, and on an unread key a missing or `false` one reads as
+  // OFF about a reading the radio never reported.
+  it.each(BREAK_IN_CHOICES)('lights exactly the observed break-in key %s', (label) => {
+    const r = render(withCw({ breakIn: known<BreakInMode>(label) }));
+    for (const [other] of BREAK_IN_CHOICES) {
+      expect(r.el(`break-in-${other}`)!.getAttribute('aria-pressed')).toBe(String(other === label));
+      expect(r.el(`break-in-${other}`)!.hasAttribute('aria-checked')).toBe(false);
+    }
+    r.dispose();
+  });
+
+  // MOR-2690: an UNREAD break-in key is BARE — no `aria-pressed`, no
+  // `aria-checked`, no radio role — and no wording claims a state.
+  it('leaves every break-in key bare while the reading is unread', () => {
+    const r = render(withCw({ breakIn: unread<BreakInMode>(DEGRADED) }));
+    const fallbackLabel: Record<string, string> = { off: 'OFF', semi: 'SEMI', full: 'FULL' };
+    for (const [label] of BREAK_IN_CHOICES) {
+      const key = r.el(`break-in-${label}`)!;
+      expect(key.hasAttribute('aria-pressed')).toBe(false);
+      expect(key.hasAttribute('aria-checked')).toBe(false);
+      expect(key.getAttribute('role')).toBeNull();
+      expect(key.textContent).toBe(fallbackLabel[label]);
+    }
+    expect(r.el('break-in')!.querySelector('[role="radiogroup"]')).toBeNull();
+    expect(r.el('break-in')!.querySelector('[role="group"]')).not.toBeNull();
+    r.dispose();
+  });
+});
+
+/* ── (e) armed-vs-off is a rendered distinction, unknown fails closed ── */
+
+describe('break-in POSTURE distinguishes armed from off, and unknown from both', () => {
+  // The explicit MOR-1296 open-question-5 decision, made here: "armed but not
+  // permitted" reads differently from "off and not permitted", because the
+  // radio's own paddle can still key an armed keyer while this UI refuses to
+  // change the setting.
+  it.each([
+    ['off', 'off'], ['semi', 'armed'], ['full', 'armed'],
+  ] as const)('reads a %s break-in as posture %s', (value, posture) => {
+    expect(breakInPosture(known<BreakInMode>(value))).toBe(posture);
+    const r = render(withCw({ breakIn: known<BreakInMode>(value) }));
+    expect(r.el('break-in')!.dataset.posture).toBe(posture);
+    expect(r.text('posture')).toBe(POSTURE_LABEL[posture]);
+    r.dispose();
+  });
+
+  // Kills: v2's `formatBreakIn` fallback to 'OFF'. An unreadable keyer must
+  // never present as "the key is safe". MOR-2690: it presents as an EMPTY
+  // reserved line and BARE keys, never as 'off' and never the word unknown.
+  it('reads an UNOBSERVED break-in as unknown, never as off', () => {
+    expect(breakInPosture(unread<BreakInMode>(DEGRADED))).toBe('unknown');
+    const r = render(withCw({ breakIn: unread<BreakInMode>(DEGRADED) }));
+    expect(r.el('break-in')!.dataset.posture).toBe('unknown');
+    expect(r.text('posture')).toBe('');
+    expect(r.text('posture')).not.toContain('off');
+    expect(r.text('posture')).not.toContain('unknown');
+    r.dispose();
+  });
+
+  // Kills: a posture whose only channel is an attribute (forced-colors,
+  // MOR-977), and a wording that does not say what the key will DO.
+  it.each(['off', 'armed'] as const)('says in TEXT what %s means for the key', (p) => {
+    expect(POSTURE_LABEL[p]).toMatch(/key/);
+  });
+
+  // MOR-2690: the unknown SENTENCE is gone — the owner ordered it removed
+  // ("если нет у радио, не вижу причины оставлять на вебе"), so an unread
+  // break-in renders EMPTY in its reserved line, never a sentence.
+  it('renders the unknown posture as an EMPTY reserved line, not a sentence', () => {
+    expect(POSTURE_LABEL.unknown).toBe('');
+    const r = render(withCw({ breakIn: unread<BreakInMode>(DEGRADED) }));
+    expect(r.text('posture')).toBe('');
+    r.dispose();
+  });
+
+  // MOR-2690: the removed sentence is gone from `aria-describedby` too — an
+  // empty reserved line describes nothing, while a KNOWN posture still does.
+  it('describes the keys with the posture only while it is a known sentence', () => {
+    const bare = render(withCw({ breakIn: unread<BreakInMode>(DEGRADED) }));
+    for (const [label] of BREAK_IN_CHOICES) {
+      expect(bare.el(`break-in-${label}`)!.getAttribute('aria-describedby')).toBeNull();
+    }
+    bare.dispose();
+    const armed = render(withCw({ breakIn: known<BreakInMode>('semi') }));
+    for (const [label] of BREAK_IN_CHOICES) {
+      expect(armed.el(`break-in-${label}`)!.getAttribute('aria-describedby'))
+        .toContain('-posture');
+    }
+    armed.dispose();
+  });
+
+  // MOR-2690: the posture line keeps its box in EVERY state — the `<p>`
+  // exists unread and known, and the stylesheet reserves its height for the
+  // widest sentence, so a first reading cannot move the layout.
+  it('keeps the posture line reserved in every state', () => {
+    const sheet = /<style>([\s\S]*?)<\/style>/.exec(CODE)![1];
+    expect(sheet).toContain('.cw-keyer-posture-line:not(.sr-only) { min-height: 1lh; }');
+    for (const f of [
+      unread<BreakInMode>(DEGRADED), known<BreakInMode>('off'), known<BreakInMode>('full'),
+    ]) {
+      const r = render(withCw({ breakIn: f }));
+      expect(target.querySelector('[data-testid="cw-keyer-posture"]')
+        ?.closest('p.cw-keyer-posture-line')).not.toBeNull();
+      r.dispose();
+    }
+  });
+
+  // Kills: the posture sentence back inside the keys' row, where a sentence
+  // can only stretch the row or wrap between the keys.
+  it('gives the posture sentence its own line under the break-in keys', () => {
+    const r = render(base());
+    const keys = target.querySelector<HTMLElement>(
+      '[data-testid="cw-keyer-break-in"] [role="group"]',
+    )!;
+    const posture = target.querySelector<HTMLElement>('[data-testid="cw-keyer-posture"]')!;
+    expect(keys.querySelectorAll('button')).toHaveLength(BREAK_IN_CHOICES.length);
+    expect(keys.contains(posture)).toBe(false);
+    expect(posture.closest('[role="group"]')).toBeNull();
+    expect(keys.compareDocumentPosition(posture) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    r.dispose();
+  });
+
+  // Kills: a rule in this file that would clip the sentence or hold it on one
+  // line. Scoped to this stylesheet, which is what this file controls.
+  it('clips text in exactly one rule of its own stylesheet, the screen-reader one', () => {
+    const sheet = /<style>([\s\S]*?)<\/style>/.exec(CODE)![1];
+    const clipping = [...sheet.matchAll(/([^{}]+)\{([^{}]*)\}/g)]
+      .filter(([, , body]) => /white-space:\s*nowrap|text-overflow/.test(body))
+      .map(([, selector]) => selector.trim());
+    expect(clipping).toEqual(['.sr-only']);
+  });
+
+  // The two "not permitted" states are visibly different, which is the whole
+  // point of the decision above.
+  it('renders armed-and-not-permitted differently from off-and-not-permitted', () => {
+    const denied = withCwKeyer(topologyFixtures['2/ab_shared']);
+    const armed = render(withCw({ breakIn: known<BreakInMode>('semi') }, denied));
+    const armedText = armed.el('break-in')!.textContent;
+    armed.dispose();
+    const idle = render(withCw({ breakIn: known<BreakInMode>('off') }, denied));
+    expect(idle.el('break-in')!.textContent).not.toBe(armedText);
+    expect(armedText).toContain('ARMED');
+    idle.dispose();
+  });
+});
+
+/* ── (d) the group is not uniformly "CW" ──────────────────────── */
+
+describe('the mutex reasons are rendered with the other mode NAMED (MOR-1296 O1)', () => {
+  // Kills: labelling the block "CW". `twinPeak` is an RTTY control living here
+  // for v2-family reasons; a block called "CW" makes it inexplicable.
+  it('does not present the group as uniformly CW', () => {
+    const r = render(base());
+    expect(r.root()!.getAttribute('aria-label')).toBe('CW keyer and audio peak filters');
+    r.dispose();
+  });
+
+  // Kills: rendering the generic `mutually-exclusive-control` code with no
+  // words, leaving a permanently-disabled TPF button unexplained.
+  it('disables TPF and names RTTY when the mutex reason is recorded', () => {
+    const onTwinPeakToggle = vi.fn();
+    const r = render(
+      withReasons(base(), { field: 'cwKeyer.twinPeak', code: 'mutually-exclusive-control' }),
+      { onTwinPeakToggle },
+    );
+    const button = r.el('twin-peak-toggle')!;
+    expect(button.hasAttribute('disabled')).toBe(true);
+    expect(r.text('twin-peak-mutex')).toBe(MUTEX_LABEL.twinPeak);
+    expect(r.text('twin-peak-mutex')).toContain('RTTY');
+    press(button);
+    flushSync();
+    expect(onTwinPeakToggle).not.toHaveBeenCalled();
+    r.dispose();
+  });
+
+  // Same for APF, whose mutex names CW/CW-R.
+  it('disables APF and names CW when the mutex reason is recorded', () => {
+    const onApfOn = vi.fn();
+    const r = render(
+      withReasons(base(), { field: 'cwKeyer.apf', code: 'mutually-exclusive-control' }),
+      { onApfOn },
+    );
+    for (const [label] of APF_CHOICES) {
+      expect(r.el(`apf-${label}`)!.hasAttribute('disabled')).toBe(true);
+      press(r.el(`apf-${label}`)!);
+    }
+    flushSync();
+    expect(onApfOn).not.toHaveBeenCalled();
+    expect(r.text('apf-mutex')).toBe(MUTEX_LABEL.apf);
+    expect(r.text('apf-mutex')).toContain('CW');
+    r.dispose();
+  });
+
+  // Kills: a mutex lookup that matches the WRONG field — the entries are
+  // dotted paths (MOR-1293 O1) and APF's must not disable TPF or vice versa.
+  it('keeps the other control live when only one mutex reason is recorded', () => {
+    const r = render(
+      withReasons(base(), { field: 'cwKeyer.apf', code: 'mutually-exclusive-control' }),
+    );
+    expect(r.el('twin-peak-toggle')!.hasAttribute('disabled')).toBe(false);
+    expect(r.el('twin-peak-mutex')).toBeNull();
+    r.dispose();
+  });
+
+  it('shows no mutex explanation while neither reason is recorded', () => {
+    const r = render(base());
+    expect(r.el('apf-mutex')).toBeNull();
+    expect(r.el('twin-peak-mutex')).toBeNull();
+    r.dispose();
+  });
+});
+
+/* ── a sentence never sits in a keys row ──────────────────────── */
+
+describe('every sentence gets its own line, and the keys keep their gap', () => {
+  /** Each sentence this surface can render, with a selector for the keys row
+   *  it explains. `cw-keyer-apf-value` is NOT here: it is the APF ordinal
+   *  read back, a reading beside its keys, not a sentence. */
+  const SENTENCES = [
+    ['posture', '[data-testid="cw-keyer-break-in"] .cw-keyer-row'],
+    ['break-in-blocked', '[data-testid="cw-keyer-break-in"] .cw-keyer-row'],
+    ['apf-mutex', '[data-testid="cw-keyer-apf"]'],
+    ['twin-peak-mutex', '[data-testid="cw-keyer-twin-peak"]'],
+  ] as const;
+
+  /** One view carrying all four at once: `2/ab_shared` denies the permit and
+   *  records the break-in reason, and both mutex reasons are added on top. */
+  const everySentence = (): RadioViewModel => withReasons(
+    withCwKeyer(topologyFixtures['2/ab_shared']),
+    { field: 'cwKeyer.apf', code: 'mutually-exclusive-control' },
+    { field: 'cwKeyer.twinPeak', code: 'mutually-exclusive-control' },
+  );
+
+  // Kills: any sentence left inside `.cw-keyer-row`, where it can only
+  // stretch the row or wrap between the keys.
+  it('renders all four sentences, none of them inside a keys row', () => {
+    const r = render(everySentence());
+    const rows = [...target.querySelectorAll<HTMLElement>('.cw-keyer-row')];
+    expect(rows.length).toBeGreaterThan(0);
+    for (const row of rows) expect(row.querySelector('.cw-keyer-sentence')).toBeNull();
+    for (const [id] of SENTENCES) {
+      const el = r.el(id);
+      expect(el).not.toBeNull();
+      expect(el!.closest('.cw-keyer-row')).toBeNull();
+      expect(el!.closest('.cw-keyer-sentence')).not.toBeNull();
+    }
+    r.dispose();
+  });
+
+  // Kills: a sentence hoisted above its keys, or parked in a different block.
+  it.each(SENTENCES)('puts %s on its own line directly below its keys row', (id, rowSelector) => {
+    const r = render(everySentence());
+    const row = target.querySelector<HTMLElement>(rowSelector)!;
+    const sentence = r.el(id)!.closest<HTMLElement>('.cw-keyer-sentence')!;
+    expect(row.contains(sentence)).toBe(false);
+    expect(row.compareDocumentPosition(sentence) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(sentence.parentElement).toBe(row.closest('.cw-keyer-block'));
+    r.dispose();
+  });
+
+  // Kills: the #3402 wrapper shipped with no class, which left the keys and
+  // the sentences flush because nothing gave that wrapper the surface's gap.
+  it('wraps every keys row that owns a sentence in a gapped block', () => {
+    const r = render(everySentence());
+    for (const [, rowSelector] of SENTENCES) {
+      const row = target.querySelector<HTMLElement>(rowSelector)!;
+      expect(row.closest('.cw-keyer-block')).not.toBeNull();
+    }
+    r.dispose();
+  });
+
+  // Kills: a second gap number for the blocks. The block reuses the ONE
+  // declaration `.cw-keyer-surface` already had, in that same rule.
+  it('takes the block gap from the surface rule itself, not a second number', () => {
+    const sheet = /<style>([\s\S]*?)<\/style>/.exec(CODE)![1];
+    const withBlock = [...sheet.matchAll(/([^{}]+)\{([^{}]*)\}/g)]
+      .filter(([, selector]) => selector.includes('.cw-keyer-block'));
+    expect(withBlock).toHaveLength(1);
+    const [, selector, body] = withBlock[0];
+    expect(selector).toContain('.cw-keyer-surface');
+    expect(body).toMatch(/gap:\s*0\.25rem/);
+  });
+});
+
+/* ── facts render honestly ─────────────────────────────────────── */
+
+describe('every unread fact renders honestly, never as a v2 default', () => {
+  const NATIVE_LEVELS = CW_LEVELS.filter(([field]) => field !== 'keyerSpeed' && field !== 'pitchHz');
+
+  it.each(NATIVE_LEVELS)('renders the %s fact verbatim on its raw wire scale', (field, _l, min, max) => {
+    const r = render(withCw({ [field]: known(max) } as Partial<CwKeyerViewModel>));
+    expect(r.input(field)!.valueAsNumber).toBe(max);
+    expect([r.input(field)!.min, r.input(field)!.max]).toEqual([String(min), String(max)]);
+    r.dispose();
+  });
+
+  // Kills: an unread level rendering as a number, and a thumb free to claim
+  // any position (the MOR-1279 F1 / MOR-1304 F2 precedent). MOR-2653: the
+  // unread value is EMPTY in its reserved slot — never a placeholder dash.
+  it.each(NATIVE_LEVELS)('renders an unread %s as an empty reserved slot and parks the thumb at min', (field, _l, min) => {
+    const onLevelChange = vi.fn();
+    const r = render(
+      withCw({ [field]: unread<number>() } as Partial<CwKeyerViewModel>), { onLevelChange },
+    );
+    expect(r.text(`${field}-value`)).toBe('');
+    expect(r.text(`${field}-value`)).not.toContain('—');
+    expect(r.el(`${field}-value`)!.classList.contains('cw-keyer-readout')).toBe(true);
+    expect(r.el(field)!.dataset.observed).toBe('false');
+    expect(r.input(field)!.disabled).toBe(true);
+    expect(r.input(field)!.valueAsNumber).toBe(min);
+    slide(r.input(field)!, min + 1);
+    flushSync();
+    expect(onLevelChange).not.toHaveBeenCalled();
+    r.dispose();
+  });
+
+  it.each(NATIVE_LEVELS)('emits the %s intent verbatim when observed', (field, _l, _min, max) => {
+    const onLevelChange = vi.fn();
+    const r = render(base(), { onLevelChange });
+    slide(r.input(field)!, max);
+    flushSync();
+    expect(onLevelChange).toHaveBeenCalledExactlyOnceWith(field, max);
+    r.dispose();
+  });
+
+  it.each(NATIVE_LEVELS)('renders no %s block when it is structurally absent', (field) => {
+    const r = render(withCw({ [field]: unread(OFF) } as Partial<CwKeyerViewModel>));
+    expect(r.el(field)).toBeNull();
+    r.dispose();
+  });
+
+  // Kills: `?? 0` on the APF ordinal, and a hardcoded APF domain. The contract
+  // states an ordinal; the surface shows it verbatim and offers absolute
+  // on/off over it (an `apfOn`/`apfType` fact is a deferred 9A question).
+  it('renders the APF ordinal verbatim and checks on for any non-zero type', () => {
+    for (const [value, expected] of [[0, 'off'], [1, 'on'], [3, 'on']] as const) {
+      const r = render(withCw({ apf: known(value) }));
+      expect(r.text('apf-value')).toBe(String(value));
+      for (const [label] of APF_CHOICES) {
+        expect(r.el(`apf-${label}`)!.getAttribute('aria-checked')).toBe(String(label === expected));
+      }
+      r.dispose();
+    }
+  });
+
+  it('renders an unread APF ordinal as an empty reserved slot with nothing checked', () => {
+    const r = render(withCw({ apf: unread<number>(DEGRADED) }));
+    expect(r.text('apf-value')).toBe('');
+    expect(r.text('apf-value')).not.toContain('—');
+    expect(r.el('apf-value')!.classList.contains('cw-keyer-readout')).toBe(true);
+    for (const [label] of APF_CHOICES) {
+      expect(r.el(`apf-${label}`)!.getAttribute('aria-checked')).toBe('false');
+    }
+    r.dispose();
+  });
+
+  it.each(APF_CHOICES)('emits the absolute APF %s intent', (label, on) => {
+    const onApfOn = vi.fn();
+    const r = render(base(), { onApfOn });
+    press(r.el(`apf-${label}`)!);
+    flushSync();
+    expect(onApfOn).toHaveBeenCalledExactlyOnceWith(on);
+    r.dispose();
+  });
+
+  it.each([
+    ['apf', 'apf'], ['twinPeak', 'twin-peak'], ['reversePaddle', 'reverse-paddle'],
+  ] as const)('renders no %s block when it is structurally absent', (field, id) => {
+    const r = render(withCw({ [field]: unread(OFF) } as Partial<CwKeyerViewModel>));
+    expect(r.el(id)).toBeNull();
+    r.dispose();
+  });
+
+  it.each([
+    ['twinPeak', 'twin-peak-toggle', 'onTwinPeakToggle', 'TPF'],
+    ['reversePaddle', 'reverse-paddle', 'onReversePaddleToggle', 'Reverse paddle'],
+  ] as const)('disables and refuses %s while unobserved', (field, id, handler, _label) => {
+    const spy = vi.fn();
+    const r = render(
+      withCw({ [field]: unread<boolean>(DEGRADED) } as Partial<CwKeyerViewModel>),
+      { [handler]: spy },
+    );
+    expect(r.el(id)!.hasAttribute('disabled')).toBe(true);
+    expect(r.el(id)!.hasAttribute('aria-pressed')).toBe(false);
+    press(r.el(id)!);
+    flushSync();
+    expect(spy).not.toHaveBeenCalled();
+    r.dispose();
+  });
+
+  // MOR-2653 KEY treatment (MOR-2527 owner rule): a toggle is a KEY — the
+  // label only, lit by `aria-pressed`; an unread reading draws the unlit
+  // label with no `NAME: value` text and no pressed state at all.
+  it.each([
+    ['twinPeak', 'twin-peak-toggle', 'onTwinPeakToggle', 'TPF'],
+    ['reversePaddle', 'reverse-paddle', 'onReversePaddleToggle', 'Reverse paddle'],
+  ] as const)('renders %s as a KEY — the label only, never "NAME: value"', (field, id, _handler, label) => {
+    for (const [value, pressed] of [[true, 'true'], [false, 'false']] as const) {
+      const r = render(withCw({ [field]: known(value) } as Partial<CwKeyerViewModel>));
+      expect(r.text(id)).toBe(label);
+      expect(r.text(id)).not.toContain(':');
+      expect(r.el(id)!.getAttribute('aria-pressed')).toBe(pressed);
+      r.dispose();
+    }
+    const unreadR = render(withCw({ [field]: unread<boolean>(DEGRADED) } as Partial<CwKeyerViewModel>));
+    expect(unreadR.text(id)).toBe(label);
+    expect(unreadR.el(id)!.hasAttribute('aria-pressed')).toBe(false);
+    unreadR.dispose();
+  });
+
+  it('emits the reverse-paddle intent when observed', () => {
+    const onReversePaddleToggle = vi.fn();
+    const r = render(base(), { onReversePaddleToggle });
+    press(r.el('reverse-paddle')!);
+    flushSync();
+    expect(onReversePaddleToggle).toHaveBeenCalledTimes(1);
+    r.dispose();
+  });
+
+  // Kills: an unknown state that is only a colour or an attribute (MOR-977).
+  // MOR-2653: every unknown readout is now an EMPTY reserved slot — the
+  // honest rendering the operator can still tell from a value — never a
+  // placeholder dash.
+  it('keeps every unknown honest — an empty reserved slot, never placeholder text', () => {
+    const r = render(withCw({
+      keyerSpeed: unread<number>(), pitchHz: unread<number>(), apf: unread<number>(),
+      breakInDelay: unread<number>(),
+    }));
+    for (const id of ['apf-value', 'breakInDelay-value']) {
+      expect(r.text(id)).toBe('');
+      expect(r.text(id)).not.toContain('—');
+      expect(r.el(id)!.classList.contains('cw-keyer-readout')).toBe(true);
+    }
+    r.dispose();
+  });
+});
+
+/* ── sidetone level is READ from txAux, never duplicated ───────── */
+
+describe('sidetone level is txAux.monitorLevel — read there, not duplicated (MOR-1296 §4)', () => {
+  // Kills: a second sidetone CONTROL, or a `cwKeyer.sidetoneLevel` fact. The
+  // readout carries no input and no intent; the one control lives in
+  // `TxAuxSurface`.
+  it('shows the txAux monitor level as a READOUT with no control of its own', () => {
+    const r = render(withTxAux(base()));
+    expect(r.text('sidetone')).toBe('Sidetone level: 128');
+    expect(r.el('sidetone')!.querySelector('input, button')).toBeNull();
+    r.dispose();
+  });
+
+  // MOR-2653: an unread sidetone level renders an EMPTY reserved slot after
+  // the label — never a placeholder dash and never an invented value.
+  it('renders an unread sidetone level as an empty reserved slot', () => {
+    const observed = withTxAux(base());
+    const view = {
+      ...observed,
+      txAux: { ...observed.txAux!, monitorLevel: unread<number>() },
+    };
+    const r = render(view);
+    expect(r.text('sidetone')).toBe('Sidetone level:');
+    expect(r.text('sidetone')).not.toContain('—');
+    const slot = r.el('sidetone')!.querySelector('output.cw-keyer-readout')!;
+    expect(slot.textContent?.trim()).toBe('');
+    r.dispose();
+  });
+
+  it('shows no sidetone readout at all when the model carries no txAux group', () => {
+    const r = render(base());
+    expect(r.el('sidetone')).toBeNull();
+    r.dispose();
+  });
+
+  // Kills: reintroducing the fact into the CW group.
+  it('the cwKeyer group states no sidetone level of its own', () => {
+    expect(Object.keys(base().cwKeyer!).sort()).toEqual([
+      'apf', 'breakIn', 'breakInDelay', 'keyerSpeed', 'pitchHz', 'reversePaddle', 'twinPeak',
+    ]);
+  });
+});

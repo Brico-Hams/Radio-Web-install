@@ -1,0 +1,188 @@
+name: Visual regression (pixel-diff)
+
+# MOR-1090 — approved pixel-diff baselines for the v3 semantic surfaces,
+# over the fixtures/ harness (MOR-1070/1085/1087/1088). Separate from
+# quick.yml by design: path-filtered like quick.yml's frontend block, but
+# isolated so a pixel-diff never blocks the Python lint/test gate quick.yml
+# exists for.
+#
+# MOR-1396: browser system dependencies are installed explicitly and the
+# approved baselines were re-pinned from real Linux runner output.
+#
+# The scheduled full.yml run calls this workflow on `main` without a paths
+# filter, so two individually-green PRs that jointly redden the approved set
+# are still caught on `main` (MOR-3878: there is no push run, because the
+# merge queue already tested the tree that lands). The concurrency group is
+# keyed on the workflow, the event name and github.ref, so a run on main and a
+# workflow_dispatch run on main are in different groups. Runs on main are
+# informational: their failure annotation asks for a ticket, not a revert.
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, reopened, synchronize, ready_for_review]
+    paths:
+      - "frontend/**"
+      - "!frontend/*.md"
+      - "!frontend/*.mD"
+      - "!frontend/*.Md"
+      - "!frontend/*.MD"
+      - "!frontend/*.rst"
+      - "!frontend/*.rsT"
+      - "!frontend/*.rSt"
+      - "!frontend/*.rST"
+      - "!frontend/*.RsT"
+      - "!frontend/*.Rst"
+      - "!frontend/*.RSt"
+      - "!frontend/*.RST"
+      - "!frontend/**/*.md"
+      - "!frontend/**/*.mD"
+      - "!frontend/**/*.Md"
+      - "!frontend/**/*.MD"
+      - "!frontend/**/*.rst"
+      - "!frontend/**/*.rsT"
+      - "!frontend/**/*.rSt"
+      - "!frontend/**/*.rST"
+      - "!frontend/**/*.RsT"
+      - "!frontend/**/*.Rst"
+      - "!frontend/**/*.RSt"
+      - "!frontend/**/*.RST"
+  # Also called by full.yml for the scheduled run on main (MOR-3878): the merge
+  # queue does not run this informational gate, so the merged tree gets its
+  # signal from there with this same job definition.
+  workflow_call:
+  workflow_dispatch:
+    inputs:
+      regenerate:
+        description: "Re-pin baselines on the Linux runner, upload as artifact"
+        type: boolean
+        default: false
+
+concurrency:
+  group: visual-${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  changes:
+    runs-on: [self-hosted, Linux, ARM64, light]
+    outputs:
+      frontend: ${{ steps.filter.outputs.frontend || steps.manual.outputs.frontend }}
+    steps:
+      - name: Select product frontend changes
+        id: filter
+        if: github.event_name == 'pull_request'
+        uses: dorny/paths-filter@v4
+        with:
+          filters: |
+            frontend:
+              - 'frontend/**'
+              - '!frontend/**/*.md'
+              - '!frontend/**/*.mD'
+              - '!frontend/**/*.Md'
+              - '!frontend/**/*.MD'
+              - '!frontend/**/*.rst'
+              - '!frontend/**/*.rsT'
+              - '!frontend/**/*.rSt'
+              - '!frontend/**/*.rST'
+              - '!frontend/**/*.RsT'
+              - '!frontend/**/*.Rst'
+              - '!frontend/**/*.RSt'
+              - '!frontend/**/*.RST'
+
+      - name: Select unfiltered visual run
+        id: manual
+        # A manual dispatch, or full.yml calling this workflow on main.
+        if: github.event_name != 'pull_request'
+        run: echo "frontend=true" >> "$GITHUB_OUTPUT"
+
+  visual:
+    needs: changes
+    # Draft pushes do not consume the shared self-hosted runner. ready_for_review
+    # starts the visual run for the final candidate; manual regeneration is
+    # still available through workflow_dispatch.
+    if: >-
+      needs.changes.outputs.frontend == 'true' &&
+      (github.event_name != 'pull_request' ||
+      github.event.pull_request.draft == false)
+    # Build pool, not the 2 GiB gate pool (MOR-4280): Playwright Chromium pixel diff; same architecture as before.
+    runs-on: [self-hosted, Linux, ARM64, build]
+    timeout-minutes: 10
+    # MOR-3778: presetting the variables Chromium's browser process adds at
+    # startup removed a headless_shell SIGSEGV in getenv in a minimal-environment
+    # loop test. Nothing in this repo reads them.
+    env:
+      DBUS_SESSION_BUS_ADDRESS: 'disabled:'
+      FC_FONTATIONS: '1'
+      VK_ICD_FILENAMES: ''
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      # Fails loud on its own: no `|| true` masking (same split rationale as
+      # full.yml/quick.yml's capture-harness install step — MOR-1386). A
+      # chromium download or `npm ci` failure red-flags THIS step — reads as
+      # provisioning — and never reaches the pixel-diff step below.
+      - name: Install deps + Playwright chromium
+        run: |
+          cd frontend
+          npm ci
+          npx playwright install chromium
+
+      - name: Install Playwright Chromium system dependencies
+        working-directory: frontend
+        run: sudo -E env "PATH=$PATH" npx playwright install-deps chromium
+
+      - name: Pixel-diff vs approved baselines
+        id: visual
+        if: github.event.inputs.regenerate != 'true'
+        run: cd frontend && npm run test:e2e:visual
+
+      - name: Annotate failure
+        if: always() && steps.visual.outcome == 'failure'
+        run: |
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
+            echo "::error::Visual pixel-diff failed on main. This run is informational; open a ticket for the baseline drift instead of reverting the merge. See the Pixel-diff vs approved baselines step log."
+          else
+            echo "::error::Visual pixel-diff failed. See the Pixel-diff vs approved baselines step log."
+          fi
+
+      # MOR-2296 — manual re-pin route. A visual change small enough to stay
+      # under the comparator floor (`COMPARATOR` in
+      # playwright.visual.config.ts) leaves the pixel-diff step green. This
+      # explicit route produces Linux-rendered PNGs for re-pinning and runs INSTEAD
+      # of the pixel-diff step (their conditions are mutually exclusive),
+      # writing into frontend/fixtures/approved-baselines/ via that config's
+      # `snapshotPathTemplate`.
+      #
+      # `=all` is load-bearing: the bare `--update-snapshots` flag selects
+      # mode `changed`, which is comparator-gated and so writes nothing for
+      # exactly the sub-floor change this route exists to re-pin. Mode `all`
+      # skips the comparator and rewrites every baseline whose raw bytes
+      # differ from the freshly-rendered capture. That includes the
+      # same-tree antialiasing noise fixtures/approved-baselines/README.md
+      # records (3-123 differing pixels per capture), so the tradeoff is
+      # accepted deliberately: each dispatch re-pins every capture rather
+      # than only the ones that actually changed.
+      - name: Regenerate approved baselines
+        if: github.event.inputs.regenerate == 'true'
+        run: cd frontend && npm run test:e2e:visual -- --update-snapshots=all
+
+      # always(): upload whatever the step above wrote even if it exited
+      # non-zero, so a partial re-pin is still downloadable.
+      - name: Upload regenerated baselines
+        if: always() && github.event.inputs.regenerate == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: regenerated-baselines
+          path: frontend/fixtures/approved-baselines/
+          retention-days: 3

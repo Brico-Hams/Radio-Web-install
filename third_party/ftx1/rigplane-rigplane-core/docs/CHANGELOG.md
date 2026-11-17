@@ -1,0 +1,5396 @@
+---
+robots: noindex, follow
+---
+
+# Changelog
+
+All notable changes to this project will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [Unreleased]
+
+## [3.2.0rc9] — 2026-11-16
+
+This is the ninth release candidate of 3.2.0 and the first cut from main. 3.2.0rc1 to 3.2.0rc8 were cut from the release/3.2.x branch; their notes follow below. This candidate contains everything merged to main up to #4605.
+
+### Added
+
+- **Experimental** — 4 m (70 MHz) band for the IC-7300 and IC-7300MK2: a 4 m band button (tunes 70.200 MHz) with the band's rated power (50 W), and 4 m segments in the IARU Region 1 band-plan overlay. Whether the radio transmits on 70 MHz is left to the radio (only European versions do). Experimental until a real European radio confirms it. (MOR-4300)
+- Control WebSocket: managed-transmit, connection identity/session and audio-receive facts are pushed as typed records. The `managed_transmit_changed` event now carries the full `GET /api/v1/managed-transmit` document (including `txObservation.observedPtt`) instead of an empty payload, sent once on connect and on every change; the public state payload gains `connection.identity`, `connection.session` and `audioReceive` leaves with the same records `GET /api/v1/info` serves. All pushes are change-driven. The record types are exposed in `rigplane.web.api_contract` for SDK consumers. (MOR-4279)
+- A Xiegu G7250 profile (USB CI-V). Discovery tells Xiegu models apart by their model id as profile data, and an unknown Xiegu id now reports "Unknown Xiegu" instead of falling back to X6200. The profile declares the G7250 RF power range (5–100 W), CI-V RF power writes are quantized to whole watts, and managed TX no longer schedules aborts the radio has no command for (G7250/X6200 `stop_cw`). (MOR-4352, #4544, #4548, #4549, #4550)
+- macOS USB audio pairing for radios whose CODECs share one name, such as G7250 and FTX-1 ("USB Audio Device"), by matching the CoreAudio enumeration order when device counts and channel numbers agree, otherwise refusing as before. (MOR-4356, #4545)
+
+### Fixed
+
+- Icom LAN: after a full reconnect (the resident reconnect loop, or DISCONNECT then CONNECT in the UI) the frequency and mode are published again and commands work, as after a fresh connect. The reconnect callback now also runs after a full connect, so the web layer re-selects its VFO identity. The connect-time `19 00` identity read no longer refuses commands or holds state reads: it is published as `connection.identity` (verified, unverified, a different model, no response) and nothing waits for it. Serial and Yaesu connects are unchanged. (MOR-4382)
+- Panorama: dragging or zooming the panorama no longer starts a re-subscribe loop between the page and the radio (span flipping, constant radio writes, high page CPU); display previews stay local and the server writes nothing to the radio for an unchanged view. (MOR-4345, #4533)
+
+### Removed
+
+- The quiet RX audio hint and its unused profile field `[audio].rx_audio_level_menu` are removed. The public `/api/v1/capabilities` response no longer includes `rxAudioLevelMenu`; API consumers should stop relying on it. (MOR-4294)
+
+### Changed
+
+- Panorama SPAN controls step the scope subscription view and display the granted ±half width, including FIXED-edge grants. Breaking for WS clients: `set_scope_span` is refused; use the scope subscription view. (MOR-4349)
+
+- Scope WebSocket clients now select `radio`, `audio_fft` or `iq_fft` explicitly on `/api/v1/scope`, with a requested view, pixel width and maximum frame rate. The server replies with granted geometry and binary v2 frames, including source identity, coverage and nullable pixels. `/api/v1/audio-scope` and binary v1 scope delivery are removed; clients must migrate their subscription and decoder. (MOR-4273)
+- The SDK `scope_stream()` iterator is a deprecated compatibility adapter that emits `DeprecationWarning`; use `on_scope_data()`. The low-level `scope_data_output_on()` / `scope_data_output_off()` builders are removed; use `scope_data_output(True)` / `scope_data_output(False)`. (MOR-4273)
+- The red BUSY lamp is gone. In its place an SQL tag shows next to the receiver tags whenever the squelch is closed or partly closed (level above 0), on every band, and nothing shows while the squelch is fully open. The radio's squelch-open status is no longer read over CI-V. (MOR-4223)
+
+### Fixed
+
+- Memory recall now puts the radio on the channel. `set_memory_mode` with `group` (the RECALL button of the memory list) selected the group and the channel but never sent the bare `08` "Select the Memory mode", so a radio in the VFO mode acknowledged both frames and stayed where it was. The recall now ends with that `08`, requires an ACK for every frame (a NAK or any other answer fails the command), and works on the channel-addressed IC-7300, IC-7300MK2 and IC-7610 as well (group 0). Not yet verified on hardware. (MOR-4219)
+- Windows USB audio: selection failures now offer explicit audio device candidates when USB topology or endpoint name matching is unavailable, and matching accounts for Windows' numbered endpoint prefixes. (MOR-4119)
+- Web UI: the memory list (local channels and the radio's own list with Reload, More and Recall) is no longer shown inline on the station page. The Memory panel now holds a Memory button that opens the list in the shared dialog. Escape, the close button or a backdrop click close it, Tab stays inside, and the list scrolls within the window. The radio's list still loads with the page. The frequency-entry dialog it reuses now also closes on Escape after focus fell out of it, without the Escape also clearing RIT/XIT. (MOR-4220)
+
+## [3.2.0rc8] — 2026-11-09
+
+This is the eighth release candidate of 3.2.0. Equals 3.2.0rc7 plus the Xiegu G7250 profile and macOS USB audio pairing for radios whose CODECs share one name.
+
+### Added
+
+- A Xiegu G7250 profile (USB CI-V). Discovery tells Xiegu models apart by their model id as profile data, and an unknown Xiegu id now reports "Unknown Xiegu" instead of falling back to X6200. (MOR-4352, #4544)
+- macOS USB audio pairing for radios whose CODECs share one name, such as G7250 and FTX-1 ("USB Audio Device"), by matching the CoreAudio enumeration order when device counts and channel numbers agree, otherwise refusing as before. (MOR-4356, #4545)
+
+## [3.2.0rc7] — 2026-11-09
+
+This is the seventh release candidate of 3.2.0. Equals 3.2.0rc6 except one test fix: the scope-hidden test no longer sits on a float idle==interval boundary that failed on hosts in some uptime bands (the rc6 PyPI publish validation failed on it). No product code change. (MOR-4353, #4542)
+
+## [3.2.0rc6] — 2026-11-09
+
+This is the sixth release candidate of 3.2.0. It equals 3.2.0rc5 plus the panorama
+SPAN fix, the panorama retune demand refresh and the waterfall look restore.
+
+### Fixed
+
+- Panorama: an explicit scope demand now refreshes on a confirmed retune, regardless of which surface (page or radio state) updates first. (MOR-4345, #4535)
+- Panorama: the SPAN control works again. Every span control drives the scope subscription and the label shows the granted span. Breaking for WS clients: the legacy `set_scope_span` intent now gets a typed refusal pointing at the scope subscription. (MOR-4349, #4536)
+- Waterfall: the WebGL renderer restores the 3.2.0rc3 2D look (interpolation between adjacent bins before the level map), checked by a parity test on recorded IC-705 live-air frames. (MOR-4348, #4537)
+
+## [3.2.0rc5] — 2026-11-09
+
+This is the fifth release candidate of 3.2.0. It equals 3.2.0rc4 plus the panorama
+oscillation fix.
+
+### Fixed
+
+- Panorama: dragging or zooming the panorama no longer starts a re-subscribe loop between the page and the radio (span flipping, constant radio writes, high page CPU); display previews stay local and the server writes nothing to the radio for an unchanged view. (MOR-4345, #4531)
+
+## [3.2.0rc4] — 2026-11-09
+
+This is the fourth release candidate of 3.2.0. It equals 3.2.0rc3 plus the WebGL
+waterfall from main.
+
+### Changed
+
+- Waterfall: the waterfall now draws through WebGL with a texture-ring history, and the spectrum keeps a cached static layer instead of redrawing it every frame. WebGL is required; where it is unavailable, the waterfall shows a clear message. (MOR-4272, #4525)
+
+## [3.2.0rc3] — 2026-11-09
+
+This is the third release candidate of 3.2.0. It equals 3.2.0rc2 except for one
+CI change: the rc2 publish run failed with a svelte-check out-of-memory error.
+
+### Fixed
+
+- CI: the publish frontend step gets the Node heap setting used by quick (the rc2 publish failed with a svelte-check out-of-memory). No product code changed.
+
+## [3.2.0rc2] — 2026-11-09
+
+This is the second release candidate of 3.2.0. It equals 3.2.0rc1 except for one
+test fix: the slow scope stress test of rc1 was stale and blocked the release run.
+
+### Fixed
+
+- Tests: the slow scope stress test (`tests/test_scope_stress.py`) now exercises the v2 scope hub. It was a release blocker for 3.2.0rc1. No product code changed. (MOR-4273, #4523)
+
+## [3.2.0rc1] — 2026-11-09
+
+This is the first release candidate of 3.2.0. It collects the changes made on
+`main` since 3.1.2rc4: the one scope channel with wire v2, a 4 m band for the
+IC-7300 and IC-7300MK2, host API v3, an IC-905 profile, phone-layout Memory and
+power controls, managed-transmit and session facts pushed on the control
+WebSocket, an SQL tag in place of the BUSY lamp, and several smaller repairs.
+Details below.
+
+### Added
+
+- **Experimental** — 4 m (70 MHz) band for the IC-7300 and IC-7300MK2: a 4 m band button (tunes 70.200 MHz) with the band's rated power (50 W), and 4 m segments in the IARU Region 1 band-plan overlay. Whether the radio transmits on 70 MHz is left to the radio (only European versions do). Experimental until a real European radio confirms it. (MOR-4300)
+- Control WebSocket: managed-transmit, connection identity/session and audio-receive facts are pushed as typed records. The `managed_transmit_changed` event now carries the full `GET /api/v1/managed-transmit` document (including `txObservation.observedPtt`) instead of an empty payload, sent once on connect and on every change; the public state payload gains `connection.identity`, `connection.session` and `audioReceive` leaves with the same records `GET /api/v1/info` serves. All pushes are change-driven. The record types are exposed in `rigplane.web.api_contract` for SDK consumers. (MOR-4279)
+- Host API v3 for the desktop host: local extensions can read the host's capabilities, request host actions and control listening, through the same UI actions the web UI uses. Version 2 commands and manifests keep working unchanged. (MOR-4258)
+- Web UI phone layout: the Memory button is now reachable on every radio and opens the same memory surface as the desktop. A radio without a readable memory list still shows the button and the local channels. (MOR-4299)
+- Web UI phone layout: the radio can be switched on and off from SETUP, with a confirmation, and the power-off overlay offers the same action. (MOR-4299)
+- IC-905 profile (144, 430, 1200, 2400 and 5600 MHz), documented tier: CI-V address 0xAC, one receiver with VFO A/B, LAN and USB CI-V, per-band rated power, scope and tone/repeater data from the official CI-V reference. The 10 GHz band, the DD/ATV modes and memory channels are not supported yet. No IC-905 hardware has been tested. (MOR-3984)
+
+### Removed
+
+- The quiet RX audio hint and its unused profile field `[audio].rx_audio_level_menu` are removed. The public `/api/v1/capabilities` response no longer includes `rxAudioLevelMenu`; API consumers should stop relying on it. (MOR-4294)
+
+### Changed
+
+- Scope WebSocket clients now select `radio`, `audio_fft` or `iq_fft` explicitly on `/api/v1/scope`, with a requested view, pixel width and maximum frame rate. The server replies with granted geometry and binary v2 frames, including source identity, coverage and nullable pixels. `/api/v1/audio-scope` and binary v1 scope delivery are removed; clients must migrate their subscription and decoder. (MOR-4273)
+- The SDK `scope_stream()` iterator is a deprecated compatibility adapter that emits `DeprecationWarning`; use `on_scope_data()`. The low-level `scope_data_output_on()` / `scope_data_output_off()` builders are removed; use `scope_data_output(True)` / `scope_data_output(False)`. (MOR-4273)
+- The red BUSY lamp is gone. In its place an SQL tag shows next to the receiver tags whenever the squelch is closed or partly closed (level above 0), on every band, and nothing shows while the squelch is fully open. The radio's squelch-open status is no longer read over CI-V. (MOR-4223)
+- Web UI scope: every panorama view now reads one typed scope stream, one geometry store and one band-plan view, and every scope canvas shares one canvas surface and render scheduler: a canvas mounted at zero size paints once it gains size, a burst of frames draws once, and nothing is drawn while the canvas is hidden. (MOR-4270, MOR-4271)
+- Web UI panorama: while you drag to tune, the spectrum, waterfall, band plan and passband follow the pointer as a display-only preview. One tune command is sent on release, and the waterfall keeps its history if the drag is cancelled. (MOR-4256)
+- Scope: scope frames are encoded once and shared between clients, WebSocket compression contexts are reused, and scope liveness stamps no longer wake control clients. (MOR-4268)
+
+### Fixed
+
+- Memory recall now puts the radio on the channel. `set_memory_mode` with `group` (the RECALL button of the memory list) selected the group and the channel but never sent the bare `08` "Select the Memory mode", so a radio in the VFO mode acknowledged both frames and stayed where it was. The recall now ends with that `08`, requires an ACK for every frame (a NAK or any other answer fails the command), and works on the channel-addressed IC-7300, IC-7300MK2 and IC-7610 as well (group 0). Not yet verified on hardware. (MOR-4219)
+- Windows USB audio: selection failures now offer explicit audio device candidates when USB topology or endpoint name matching is unavailable, and matching accounts for Windows' numbered endpoint prefixes. (MOR-4119)
+- Web UI: the memory list (local channels and the radio's own list with Reload, More and Recall) is no longer shown inline on the station page. The Memory panel now holds a Memory button that opens the list in the shared dialog. Escape, the close button or a backdrop click close it, Tab stays inside, and the list scrolls within the window. The radio's list still loads with the page. The frequency-entry dialog it reuses now also closes on Escape after focus fell out of it, without the Escape also clearing RIT/XIT. (MOR-4220)
+- Split TX frequency: during a split transmission the phone layout headers show the transmit frequency for the whole transmission and return to the receive frequency afterwards. An untagged CI-V frequency report received while transmitting no longer overwrites the receive frequency. (MOR-4298)
+- Icom serial radios on Python 3.11: a shutdown could lose the cancellation of a pending RX read, so the receive loop did not stop. The timed read now keeps the cancellation. (MOR-4317)
+- Web UI audio: a saved RX routing is applied only when the radio reports that it supports RX routing, an explicit receiver audio focus is saved, and a capability update no longer replays routing commands. (MOR-4296)
+- Scope: a frame the radio marks as out of range counts as a live frame for the scope watchdog and keeps its content. The view shows fixed edges with a CTR action to bring the signal back. (MOR-4241)
+- Web UI: the audio scope stays visible, and aligned with the frequency axis, when the filter width is unknown. (MOR-4243)
+- Radio liveness for rigctld and Yaesu CAT: a radio counts as alive only after a fully decoded answer from the current connection. A malformed answer, or one from an earlier connection, no longer refreshes liveness. (MOR-3872)
+
+## [3.1.4] — 2026-11-07
+
+This is the first release candidate of 3.1.4. It collects the fixes made on
+`main` after 3.1.3: a lower CPU and bandwidth cost of the web UI and audio path,
+LAN CI-V datagrams delivered in the radio's order, serial radios contacted at
+their own baud rate first, a quieter-RX makeup gain, a Memory button and an SQL
+tag in the web UI, and several smaller repairs. Details below.
+
+### Changed
+
+- The red BUSY lamp is gone. In its place an SQL tag shows next to the receiver tags whenever the squelch is closed or partly closed (level above 0), on every band, and nothing shows while the squelch is fully open. The radio's squelch-open status is no longer read over CI-V. (MOR-4223, #4491)
+- Web UI RX volume: the player now has makeup gain up to +20 dB above the radio's AF level 1 (unity stays exact), with an output soft limiter, so a radio already at its maximum USB AF output (IC-705) is no longer far quieter than normal program audio. A centred mono signal no longer loses 3 dB to the panner. (MOR-4210, #4480)
+- Quiet RX source: the browser detects a quiet RX source and names the radio's own audio output menu item, taken from the new optional profile key `[audio].rx_audio_level_menu`, which `/api/v1/capabilities` serves as `rxAudioLevelMenu` (`null` when the profile declares none). (MOR-4210, #4479, #4481)
+- Performance, state stream: the WebSocket state encoder diffs down to the leaves and sends leaf deltas (`deltaVersion` 2) instead of resending whole top-level maps, which cuts the state stream about 37 times. (MOR-4206, #4476)
+- Performance, state store: unchanged field snapshots are reused, so a state broadcast no longer deep-copies and re-sorts the whole store, and a single field is read without copying the store. Unchanged polled fields are no longer re-published. (MOR-4212, MOR-4211, #4485, #4483)
+- Performance, web UI: the radio view model is derived once per state change instead of once per caller, and at most one waterfall frame is drawn per animation frame (the latest wins). (MOR-4213, MOR-4206, #4486, #4482)
+- Performance, audio and event loop: the RX downmix and the RMS meter use numpy with results identical to the previous code, audio-thread wake-ups of the event loop are coalesced, and only changed state is copied. (MOR-4227, #4494)
+
+### Fixed
+
+- LAN radios: CI-V datagrams are delivered in the radio's sequence order, and the simulator numbers its CI-V echo in the radio's own sequence as the recorded IC-7610 does. (MOR-4205, #4492)
+- Serial radios: connect and discovery now open the port at the profile baud rate first and treat the baud passed in by the caller as a fallback hint, so an Icom on CI-V USB Baud Rate = Auto locks to 115200 instead of 19200 and the scope is no longer refused. (MOR-4207, #4484, #4487)
+- CI-V reads: a bare `FA` no longer refuses a read whose own answer was lost; the refusal is attributed to the read the radio actually refused. (MOR-4209, #4478)
+- IC-705 scope: the scope-health watchdog never re-enables the scope while the radio is in its menu (the radio sends no scope frames there), the reconnect path respects the same rule, and the watchdog no longer logs a negative elapsed time. (MOR-3690, #4477)
+- RX audio in a starved browser tab (App Nap, an unfocused WKWebView): a late burst of frames after a delivery stall is kept instead of being dropped at the jitter ceiling, so it no longer runs the buffer dry and stutters. (MOR-4221, #4489)
+- Memory recall now puts the radio on the channel. `set_memory_mode` with `group` (the RECALL button of the memory list) selected the group and the channel but never sent the bare `08` "Select the Memory mode", so a radio in the VFO mode acknowledged both frames and stayed where it was. The recall now ends with that `08`, requires an ACK for every frame (a NAK or any other answer fails the command), and works on the channel-addressed IC-7300, IC-7300MK2 and IC-7610 as well (group 0). Not yet verified on hardware. (MOR-4219, #4490)
+- Windows USB audio: selection failures now offer explicit audio device candidates when USB topology or endpoint name matching is unavailable, and matching accounts for Windows' numbered endpoint prefixes. (MOR-4119, #4473)
+- Web UI: the memory list (local channels and the radio's own list with Reload, More and Recall) is no longer shown inline on the station page. The Memory panel now holds a Memory button that opens the list in the shared dialog. Escape, the close button or a backdrop click close it, Tab stays inside, and the list scrolls within the window. The radio's list still loads with the page. The frequency-entry dialog it reuses now also closes on Escape after focus fell out of it, without the Escape also clearing RIT/XIT. (MOR-4220, #4493)
+- Test suite: every Core test that was red on some host is deterministic (WSL2 mirrored-loopback races, the port-9 connect test, the golden clock, simulator session-release timing). Tests only; no product change. (MOR-4214, #4488)
+
+## [3.1.3] — 2026-11-04
+
+This is the first release candidate of 3.1.3. It adds one safety fix on top of
+3.1.2: a transmitter left keyed after a crash is released when Core starts or
+reconnects.
+
+### Fixed
+
+- Transmitter left keyed after a crash: when Core starts or reconnects, it reads the radio's PTT before the radio is offered to clients; if the radio is transmitting and no one in this Core owns the transmission, Core releases it through the managed-TX authority and logs `managed_tx.startup_unkey`. A failed or unverified read writes nothing. (MOR-4186, #4474)
+
+## [3.1.2rc4] — 2026-11-03
+
+This is the fourth release candidate of 3.1.2. It fixes one thing on top of
+3.1.2rc3: the first shutdown signal now starts the release of a transmitter keyed
+through rigctld, HTTP or a controller session before the web server shuts down.
+
+### Fixed
+
+- `web` and `station`: the first SIGTERM/SIGINT now starts managed-TX release for rigctld, HTTP and controller-session owners before web teardown. Admitted ON effects are fenced at the final wire check immediately on that signal. A second signal defers task cancellation until protected releases finish or reach their own bounds; a third still exits immediately. Late owner handbacks reuse the shutdown release without sending another OFF (MOR-4102, MOR-3999, #4470).
+
+## [3.1.2rc3] — 2026-11-03
+
+This is the third release candidate of 3.1.2. It fixes one thing on top of
+3.1.2rc2: a Windows COM port held by another program is now reported as busy
+instead of an unknown error.
+
+### Fixed
+
+- Windows: when another program holds the COM port of a USB radio, opening it is now classified as `serial_busy` (a Windows access-denied or sharing-violation error) and `serial_not_found` for a missing port, instead of `serial_unknown`, so the local API and the apps built on it can tell the user that another program is using the port. Classification reads only the Windows error number, never the localized message text, so it works on every Windows language. POSIX handling is unchanged. (MOR-4105, #4468)
+
+## [3.1.2rc2] — 2026-11-02
+
+This is the second release candidate of 3.1.2. It fixes mode changes out of a
+DATA mode on the IC-705, garbled RX audio from capture devices with more than
+two channels, stuttering RX audio in a hidden browser tab, rigctld writes held
+up by a lost or refused read, and the audio bridge not starting when the radio
+connects after the server. Details below.
+
+### Changed
+
+- Test-suite stability: the IC-9700 and IC-7300MK2 LAN simulators take their behaviour from the capability profile, timing tests share one virtual-clock helper, and a collection-time check stops new wall-clock tests from being added.
+
+### Fixed
+
+- IC-705 and other radios with DATA-less modes: changing from a DATA mode (for example USB-D) to a mode without DATA (CW, CW-R, RTTY) no longer sends the DATA flag with the new mode. The radio refused that command and stayed in the DATA mode while the change was reported as done. Profiles now declare which modes accept DATA (`[data_mode].modes`). (MOR-4036, #4459)
+- RX audio from a capture device with more than two input channels (PipeWire "pulse", BlackHole, multi-channel interfaces) is no longer garbage: the first two device channels are taken as left and right and mixed down to the delivered layout. (MOR-4029, #4461)
+- Web UI: RX audio no longer stutters heavily while the browser tab is hidden (for example on Android with battery management). The jitter buffer widens while the page is hidden and drops the excess backlog when the page is shown again, so playback does not stay seconds behind. (MOR-3965, #4462)
+- rigctld with several clients: a frequency read whose answer from the radio is lost no longer delays another client's frequency change by up to two seconds (for example a WSJT-X poll and a spot click). A read gives up the radio command slot after 0.25 s while it keeps waiting for its answer. (MOR-3888, #4463)
+- A read the radio refuses (CI-V NAK) now counts as answered instead of timing out: the web server no longer waits 10 s at every IC-705 start for the tuner status, and rigctld stops logging repeated read timeouts for refused reads. A refused read that is required for safe operation still fails startup. (MOR-4058, #4464)
+- `rigplane web` started before the radio is connected no longer turns the audio bridge off for the whole run: the bridge auto-start now waits until the radio is connected, then starts as before. An explicit `--bridge=<DEVICE>` still fails at once. (MOR-2922, #4458)
+
+## [3.1.2rc1] — 2026-11-01
+
+This is the first release candidate of 3.1.2. It adds an exclusive-preferred
+capture mode for USB radio codecs on Windows, with notices that tell you when
+another program holds the codec or Windows silences it, faster recovery of a
+silently dropped LAN session, FTX-1 filter-width fixes, steadier RX playback,
+a unicast liveness probe for LAN radios, and more. Details by area below.
+
+### Added
+
+- `probe_lan_radio` — a public unicast liveness probe for Icom LAN radios: sends the radio's own "Are You There" handshake to one known host and control port (retransmitting through the window) and returns `True` on the first "I Am Here" and `False` on timeout or when the OS reports the host unreachable, never raising for an unreachable host, so callers can give up on an unreachable saved radio in seconds instead of waiting out a full connect cycle. Import it from `rigplane` or `rigplane.backends.discovery`.
+
+### Changed
+
+- Every CI-V frequency field is read and written by one shared codec, so frequency encoding no longer differs between commands.
+- Test-suite stability: new pins for USB audio pairing of renamed endpoints on the IC-7610 shape, the TX observation conformance now runs on virtual time, and two timing-dependent tests were made deterministic.
+
+### Fixed
+
+- Windows: a radio's USB codec no longer has to deliver digital silence when the Windows AI noise suppression ("Audio enhancements") is on for its capture input. A new capture mode for serial and Yaesu CAT radios, `exclusive-preferred` (`--usb-capture-mode`, `ICOM_USB_CAPTURE_MODE`, `capture_mode` on the backend configs), pairs the codec on WASAPI for both directions and opens it in WASAPI exclusive mode, which bypasses those effects; when Windows refuses the exclusive open it opens shared WASAPI instead and logs that once. Saved `MME|...` device selectors keep working and resolve to the same endpoint on WASAPI. The default stays `shared` (other programs can use the codec at the same time); when a shared capture stays silent for ten seconds on Windows, the log and the RX audio notice now say to turn off "Audio enhancements" for that input in Windows Sound settings. When another program holds the codec exclusively, so both the exclusive open and the shared fallback are refused, RX start now fails with the category `device_in_use` and the message "The radio's audio input is in use by another program. Close it, then turn the audio on again." On Windows the message names the program ("...in use by wsjtx.exe...") when the audio sessions of the capture endpoint show it, and stays generic otherwise.
+- A LAN session the radio drops without a notice now recovers in about 6-8 seconds instead of after about a minute: on the first stall the watchdog asks the control session by token renewal, and when the radio rejects it, the session is released and logged in again at once. A slow or unanswered renewal keeps the existing patience.
+- The scope reference level (REF) steps on a 5 dB grid and stays inside the range the radio's profile declares.
+- RX audio playback holds a small fill target (150 ms) and compensates for the drift between the radio's clock and the sound device's clock, instead of building up a full second of buffered audio and dropping a frame per write.
+- FTX-1: a filter-width answer of `SH 00` is reported as the radio default, with no Hz value, and the UI shows the radio-default and NARROW filter-width states instead of an unknown width.
+- Yaesu CAT replies are matched to the whole query, not only the command prefix, so a late reply to a sibling query is skipped instead of being taken as the answer; this fixes the FTX-1 SUB narrow-filter read.
+- The scope-health watchdog leaves a radio alone while it is in its own menu and sends all-zero scope frames, instead of restarting the scope.
+
+## [3.1.0rc1] — 2026-10-31
+
+This is the first release candidate of 3.1. It adds a TCI listener for
+loggers that speak TCI, a `rigplane models` command, per-band power limits
+and region-aware VHF/UHF handling, a universal radio liveness signal, faster
+and more robust rigctld and PTT behaviour, a USB audio-pairing fix for
+repeated serial ports, and more. Details by area below.
+
+### Added
+
+- **IC-9700 repeater shift and tone-squelch type declarations.**
+  The IC-9700 profile declares the repeater shift direction (CI-V `0F`:
+  10 simplex, 11 DUP−, 12 DUP+, the same codes as the IC-705) and the
+  `16 5D` tone-squelch type read with its type table, and polls the shift,
+  the type and the two CTCSS booleans beside split. The D-STAR DV mode
+  gets its fixed-width filter row. DD stays undeclared until mode selection
+  can be limited to the 1.2 GHz band.
+- TCI listener: `rigplane web --tci` and `rigplane station --tci` serve frequency, mode, split and PTT over TCI (default port `50001`, loopback bind) with `--tci-port` and the shared `--ingress-host` setting also read by the `rigctld` listener; off by default, no `serve` support. TCI clients can read and change frequency, mode and split, and key the radio through the managed transmit authority. See the TCI API page and the TCI setup guide.
+- Added `rigplane models`: list supported radio profiles with the exact `--model` value for each, as a plain table or `rigplane models --json`.
+- `rigplane discover` prints a ready-to-copy `rigplane --model ... status` command after each radio connection line (a `<MODEL>` placeholder with a pointer to `rigplane models` when LAN discovery cannot tell the model).
+- The RF power slider follows the rated maximum of the band the radio is on. A band row in a radio profile can declare `max_power_w`, published as `txBands[].maxPowerW` next to the flat `maxPowerW` and a `powerUnit`. On an Icom (level is a percentage of the current band's maximum) the slider keeps its full range and shows watts: the IC-9700 declares 100 W on 2 m, 75 W on 70 cm and 10 W on 23 cm (from the manuals, not yet verified on hardware). On a watts-based radio the slider range is the band maximum. Radios without per-band data keep the unchanged slider. Nothing changes the power value you set: it is sent exactly as chosen.
+- Region-aware VHF/UHF band plans with per-band mode defaults. Band edges and default modes for the VHF/UHF bands follow the profile data for your region instead of one hard-coded table, so tuning steps onto 2 m, 70 cm and 23 cm with the mode the band plan expects.
+- A BUSY lamp next to the S-meter. The lamp lights from the radio's squelch state, so you can see at a glance whether the channel is busy before calling.
+- A universal radio liveness signal. Every radio now reports `connection.liveness`, one field that tells clients whether the radio link is alive, degrading or down, regardless of backend.
+- The embedded page accepts an `--rp-chrome-top` inset contract, so a host page can reserve space for its own top chrome without overlapping the RigPlane UI.
+
+### Changed
+
+- Without `--backend`, `--host` or `--serial-port`, a CI-V radio whose profile has no LAN interface (IC-7300, X6200) now scans USB for the radio instead of the network; LAN-capable profiles (IC-7610, IC-705) still use LAN, and an explicit `--host` still means LAN.
+- **Dual-receiver radios: no hidden receiver switching.** A
+  receiver-scoped command for a receiver the radio cannot address directly
+  (no cmd29 route, no profile-declared selector) now goes only to the
+  receiver you have selected. A command for the other receiver -- or for
+  either receiver before the radio has reported which one is selected -- is
+  refused with the stable reason code `receiver_not_selected` ("select that
+  receiver first"; HTTP 409, rigctld `RPRT -9`) instead of RigPlane briefly
+  selecting the other receiver, writing, and selecting back. Select the
+  receiver first, then change its settings. On the IC-9700 this covers SUB
+  frequency, mode, DATA, filter width, tone/TSQL and VFO A/B, and MAIN
+  writes while SUB is selected; on the IC-7610 the SUB frequency and mode
+  are written directly through CI-V 0x25/0x26 selector 01. A frequency or
+  mode read of a receiver that is not selected (MAIN or SUB) returns the
+  value last observed while it was selected (refused if never observed)
+  instead of reading the other receiver.
+- Commands that connect to a radio without `--model` (and without a matching `--radio-addr`) are refused with the list of supported models instead of connecting without one; rigplane never picks a model.
+- Transmit audio always follows the radio: the separate outside-TX audio path is removed, so audio sent while transmitting goes to the radio the radio is keyed on, with no alternate route to configure or misroute.
+- On FM, controls the radio refuses and the offered filter widths come from profile data, so the UI disables what the radio cannot do instead of sending commands the radio rejects.
+- IC-705 receive-only band rows are marked `rx_only` and excluded from the transmit bands, so the UI no longer offers transmit where the radio cannot transmit.
+- LAN discovery connects to the radio's pinned control port, so finding a networked radio no longer depends on which port answers first.
+- The frequency-change glow uses a single token with a tighter default, so rapid tuning shows one calm highlight instead of stacked flashes.
+- **Core 3.0 is marked stable.** The package declares
+  `Development Status :: 5 - Production/Stable`. The README, installation
+  guide, migration guide, What's New and known limitations no longer call 3.0
+  a beta or ask for `pip install --pre`; the README no
+  longer lists which radios were tested; the docs site opens on 3.0 by
+  default; and the beta report form is now the 3.0 radio report form. The
+  PyPI project page shows the new README and classifier from the next upload.
+
+### Fixed
+
+- rigctld acquisition polls now run on the background lane, so periodic polling no longer holds up your commands.
+- The PTT release read-back has its own commander lane ahead of background polls, so confirming an unkey is not stuck behind routine polling traffic.
+- USB audio pairing accepts repeated serial functions of one VID:PID, so stations with several identical USB radios pair each radio with its own audio devices.
+- Serial radio candidates are probed concurrently, so the Add-radio scan fits its time budget even with many ports attached.
+- LAN UDP failures are counted as consecutive errors and any inbound datagram resets the run, so a brief burst of errors no longer trips recovery while a truly silent link still does.
+- The control watchdog no longer mistakes its own event-loop stall for a dead radio link, so a busy UI thread stops raising false "link down" alarms.
+- The attenuator on-level and its timeout fallback come from the radio profile, so attenuator behaviour matches each radio's documented step.
+- `rigplane validate` reports a refused model or a bad bridge config as a readable refusal instead of a Python traceback.
+- A notice that arrives with no session during a recovery's tail restarts the recovery instead of being dropped, so late notices no longer leave recovery stalled.
+
+## [3.0.1] — 2026-10-28
+
+3.0.0 was prepared and tagged but never published to PyPI, so no user received
+it. 3.0.1 is the first release after 3.0.0rc1: it carries everything listed
+under 3.0.0 below, plus the changes in this section.
+
+### Fixed
+
+- `rigplane validate --hardware` reports a model the radio factory has no backend for (for example X6100 or TX-500 on a serial port) or an invalid bridge timeout as an `Error:` line, a failed `discovery.identify` artifact and exit code 3, instead of a Python traceback.
+- **A quick key, unkey, key, unkey could leave the radio transmitting
+  (MOR-3838, #4390).** A release that arrived while the previous key-on was
+  still being sent was lost: the key-on went out afterwards and nothing
+  unkeyed the radio. The unkey of a release that supersedes a key-on still in
+  flight is now sent promptly; a key-on that stays stuck is escalated once to
+  port retirement and re-arm, and an unkey older than a newer key-on is
+  dropped. A release requested while no TX provider is available is answered
+  as pending and is sent when the provider is re-armed. Covered by simulator
+  tests of the managed transmit authority.
+
+- **Ambiguous Icom PTT release is confirmed by a verified read-back
+  (MOR-3818, #4388, #4389).** When the acknowledgement of an unkey is missing
+  or ambiguous, Core reads the transmit state back with `1C 00`. The answer
+  counts only if no earlier read of the same command can still be answering;
+  replies still owed are accounted for. A confirmed release clears the
+  debt and the next key-down is accepted; an unconfirmed one stays uncertain
+  and key-down is still refused, as before. Covered by LAN and serial
+  simulator tests.
+
+- **Clear message when the radio's audio devices cannot be paired (MOR-3823,
+  #4385).** When several identical USB radios (or an unreadable USB topology)
+  stop the station from pairing the radio's audio devices automatically, every
+  web client now gets one neutral message: the audio device must be chosen on
+  the station computer. Remote clients no longer receive host-side
+  instructions (device flags and paths) that apply only to the station.
+
+- **Verified memory write layouts as profile data (MOR-3644).**
+  `set_memory_contents` used to build one fixed 26-byte `1A 00` record and
+  `memory_clear` one fixed `0x0B` clear frame — the IC-7610's historic
+  wire forms, applied to every radio (its `0x0B` channel payload remains
+  the open MOR-2055 question); on radios with a different memory layout
+  a client call could corrupt a stored channel. Part 1 refused both
+  commands with the stable error `memory_write_unverified` unless the
+  profile's `[memory]` section declares a `write_layout`. Part 2
+  replaces the hard-coded record with ONE table-driven encoder built
+  from a profile-declared field table (`[memory.write_layout]`: field,
+  offset, length, encoding, plus the clear form and the channel-block
+  copy count), and declares the verified layouts for the IC-705 (CI-V
+  Reference Guide p.17), IC-9700 (p.14), IC-7300 (Advanced Manual 11a
+  p.19-11) and IC-7300MK2 (p.17) — each with manual-sourced fixture
+  bytes, out-of-range refusals (address, tone, frequency, name) and a
+  write/read round trip on the radios with a merged read model
+  (IC-705/IC-9700). All four manuals print the channel-data block's
+  position labels twice — the TX/split copy a non-split entry fills with
+  the RX values, per each manual's own NOTE — so the write body carries
+  the block `copies = 2` times, the same record a read reply carries.
+  The IC-7610 keeps its historic 26-byte record and `0x0B` clear
+  byte-for-byte, now declared in the same vocabulary; the discrepancy
+  with its own guide (a 27-byte record and a `1A 00 + channel + FF`
+  clear) stays open as MOR-2055. The write API takes the address the
+  profile needs (`group` for the IC-705's memory groups and the
+  IC-9700's band codes) and centi-Hz-exact tones through the profile's
+  CTCSS domain. Both typed commands stay classified in the TX
+  interlock's MEMORY family (held while keyed on the unmanaged poller
+  path; managed-TX authority deliberately bypasses the non-PTT
+  interlock). Radios without a
+  verified layout (FTX-1, X6100, X6200, TX-500) still refuse; the
+  IC-7300/IC-7300MK2 read listing stays off — their `1A 00` read reply
+  is not documented in the sourced manuals.
+
+### Changed
+
+- **Simulator `[timing]` keys (#4392).** The simulator profile and the CI-V
+  serial fake accept optional per-class delays (`ack_ms_set`,
+  `ptt_set_ack_ms`, `readback_ms`, `write_drain_ms`, `tx_on_switch_ms`,
+  `tx_off_switch_ms`). Test tooling only; no shipped profile sets them.
+
+## [3.0.0] — 2026-10-27
+
+The same code as 3.0.0rc1 plus three fixes made during the release freeze.
+
+### Fixed
+
+- **Icom LAN disconnect then connect in the same process (MOR-3807, #4378).**
+  After an explicit `disconnect()` the next `connect()` failed with "login
+  response timed out": the transport kept the previous session's ids and
+  skipped the discovery handshake the radio had already forgotten, and the
+  CI-V receive pump of the old session survived and dropped every reply of
+  the next one. The transport now forgets its session ids when it sends the
+  disconnect, so the next connect runs the full discovery handshake, and
+  `disconnect()` stops the CI-V watchdog, worker and receive pump even when
+  the CI-V transport is already gone; a `disconnect()` cancelled while one of
+  those tasks stops still finishes releasing the session. Covered by LAN
+  simulator tests for the IC-7610 and IC-705 profiles; not yet verified on a
+  real IC-705 over Wi-Fi.
+
+- **Honest refusal while the previous release is still owed (MOR-3810,
+  #4377).** A key-down refused because the previous release is not yet
+  confirmed now answers "the previous transmission is still being released"
+  instead of "managed transmit authority unavailable", and the command poller
+  logs it as one info line instead of a warning with a traceback. Release
+  behaviour is unchanged: an ambiguous Icom unkey still stays uncertain and a
+  key-down is refused until it settles. Not verified on hardware.
+
+- **Phone PTT no longer drops when the phone is rotated or the finger slides
+  (MOR-3817, #4379).** The four PTT button implementations of the web UI now
+  share one hold mechanism: pointer capture on press; a pointer hold ends on
+  pointer up or cancel of the same pointer, page hidden or window blur, not
+  when the pointer leaves the button; the held state lives outside the button
+  and survives a layout swap. Before, rotating re-created the PTT binding
+  and its teardown released PTT, the TX panel released on `pointerleave`, and
+  a finger drift of more than 8 px released an already-pressed button.
+  Verified in Chromium with emulated touch (Playwright); not verified on real
+  iOS or Android devices.
+
+## [3.0.0rc1] — 2026-10-26
+
+### Added
+
+- **Discard queued playback on TX streams (MOR-3760).** `TxStream` and
+  `DuplexStream` gain `async discard_queued()`, dropping every playback
+  frame queued but not yet handed to the device and returning how many
+  queued writes were dropped; `TxStreamHealth` reports `discard_events`
+  and `discarded_audio_ms`.
+- **Outside-only TX audio admission (MOR-3764).** New binary TX frame type
+  `0x12` on `/api/v1/audio`: admitted only while the radio is observed keyed
+  outside Core (intent `rx`, no release debt, a foreign TX observation),
+  authorized and pushed atomically against any Core-client keying
+  transition; refused otherwise. `0x11` behavior is unchanged.
+
+### Fixed
+
+- **Profile receive ranges match published coverage (MOR-3782).** The
+  IC-7300MK2, IC-705 and FTX-1 profiles' tuning/receive ranges now match
+  the manufacturer's published receiver coverage (IC-7300MK2 up to
+  74.800 MHz; IC-705 0.030-199.999999 and 400-470 MHz; FTX-1 0.030-174
+  and 400-470 MHz); no transmit band was added or widened; not verified
+  on radios.
+
+- **IC-7300 frequency entry and tuning are no longer capped at 60 MHz
+  (MOR-3782).** The profile now covers the receiver range up to 74.800 MHz,
+  which includes the 4 m band; no 4 m transmit band is declared, so the
+  frontend does not offer TX at 70 MHz (EU 4 m transmit needs per-radio
+  variant selection, a separate follow-up); not verified on a radio.
+
+- **IC-7300MK2 CI-V identity (MOR-3792).** The shared serial identity
+  table now maps the MK2's default CI-V address `0xB6` to `IC-7300MK2`,
+  so `identify_radio` — and the CI-V identity resolver Pro consumes —
+  answers `IC-7300MK2` instead of `Unknown (0xB6)`. The MK2 model-ID
+  bytes are not documented in the CI-V guide and the radio has not been
+  verified on hardware; the profile's identity gate stays unverified.
+
+- **Split-mode read-modify-write detects concurrent commands
+  (MOR-3743).** A split-mode mode write that preserves DATA or filter
+  (`DualRxRuntimeMixin.write_relative_vfo_mode`, rigctld `X`) now runs
+  its preservation read → SET → readback inside an
+  `IcomCommander.interference_scope`: any non-BACKGROUND command
+  dispatched by another task between the preservation read and the SET —
+  including a direct raw CI-V transaction, which reaches the wire
+  without entering the commander queue — marks the scope, the SET is
+  refused before the wire (the refusal carries the new
+  `StaleBeforeWireError`, a `ConnectionError` subclass and the only
+  retryable one), and the whole write retries from the preservation
+  read — up to three attempts, then a retryable `CommandError`. A SET
+  that already reached the wire is never retried: a currency failure
+  raised behind the send — interference detected while the SET's ACK
+  was pending — propagates as `ConnectionError` instead of repeating
+  the SET, interference behind an acknowledged SET is decided by the
+  readback (a consistent readback succeeds, a contradictory one fails),
+  and a VFO selection change during the write — including one that
+  completes during the readback — fails it with `CommandError` even
+  though the SET was already applied; the caller must re-read. A
+  retired scope's currency dies with it, so a delayed transport
+  retransmit request for its SET is answered with the idle packet,
+  never the stale tuple. No command is ever delayed or reordered and no
+  send priority changed; TX releases are unaffected. This detects and
+  retries; it does not exclude anyone.
+
+## [3.0.0b21] — 2026-10-26
+
+### Added
+
+- **Stored memory listing over HTTP (MOR-3627, #4298, #4299).**
+  `GET /api/v1/memories?group=&start=&count=` reads IC-705 and IC-9700
+  channels with CI-V `1A 00` without selecting them. Pages default to 25
+  slots, at most 50, with names, frequency, mode, DATA, duplex and tone
+  fields; empty slots carry their address and `empty: true`. The endpoint
+  has not been verified on hardware; IC-9700 decoding follows the reference
+  layout without a radio recording.
+- **FTX-1 stored memory listing (MOR-3628, #4304).** The same endpoint
+  reads channels 1–99 with `MR` and `MT`, including names and empty slots.
+  Tone frequency, DCS code and per-channel offset remain unknown; PMS,
+  5 MHz and EMGCH slots are excluded. Recall remains disabled because
+  `MC`/`VM` semantics have not been verified on hardware.
+- **Explicit IC-705 memory recall (MOR-3645, #4300).**
+  `set_memory_mode` accepts `group` and `channel` for the IC-705, selecting
+  the group with `08 A0` and then the channel with `08`, under one lock
+  with an ACK required for each. It writes no memory contents. Grouped
+  recall is unavailable on IC-9700 and has not been verified on hardware.
+- **Radio memories in the Web UI (MOR-3629, #4301).** The memory surface
+  lists stored channels when `memory_read` is available, with group
+  selection, Reload and explicit Recall where the API permits it. It loads
+  25 slots on mount and further pages only with More; cancelled loads cannot
+  replace a newer list. Browser geometry remains unverified (MOR-3766),
+  and this UI has not been checked with a real-radio session.
+- **Read-only Windows USB capture (MOR-3772, #4325).**
+  `rigplane audio usb-capture --radio PROFILE=PORT --out FILE` accepts
+  repeated `--radio` and optional `--no-unplug`. It writes a redacted
+  JSON bundle of Windows device topology, PortAudio enumeration and
+  serial-port inventory without opening radio devices.
+
+### Changed
+
+- **Shared Windows USB audio pairing and explicit device choices
+  (MOR-3775, MOR-3774, #4329, #4331).** Pairing uses serial/audio topology
+  and optional `[usb].audio_codec` identity instead of an IC-7300-only rule.
+  A retained RX-start pairing refusal exposes the available capture and
+  render candidates in `/api/v1/info` `audioReceive.failure.candidates`,
+  with `stableId`, `displayName`, `direction`, `hostApi`, `portAudioIndex`
+  and `nearRadio`. The field is absent when there are no candidates.
+  `rx_device`/`tx_device` and `--rx-device`/`--tx-device` accept these stable
+  IDs; missing or ambiguous choices fail without an automatic fallback.
+  Without a codec identity, a shared hub containing just one foreign audio
+  device can still pair to that device (MOR-3710).
+- **Shared serial capability and identity APIs (MOR-3777, #4342).**
+  `supports_serial_model(model)` reports the native factory's serial
+  routing, including IC-7300MK2; `resolve_civ_radio_identity` exposes the
+  CI-V/X6200 identity resolver used by discovery. IC-7300MK2 native identity
+  remains unverified on hardware.
+- **Radio connection control is REST-only (MOR-3777, #4327).** Use
+  `POST /api/v1/radio/connect` and `POST /api/v1/radio/disconnect`.
+  The old control-WebSocket `radio_connect` and `radio_disconnect` messages
+  no longer dispatch an operation or receive a reply.
+
+### Fixed
+
+- **rigctld split routing and native Yaesu mode control (MOR-3754,
+  #4341, #4345, #4346, #4347, #4350).** `I`/`i` and `X`/`x` target IC-7610
+  SUB or IC-9700's unselected MAIN A/B; `S 1 VFOB` leaves RX selection
+  alone. Contradictory split mode/DATA/filter readback returns `RPRT -11`.
+  Protocol-1 `dump_state` advertises `targetable_vfo=0x3`, and `s` reads
+  live split state where the backend provides it. IC-7300 packet-mode
+  changes retain the requested DATA1 filter. Native Yaesu mode changes
+  select DATA partners and require mode readback; rigctld reports
+  `DATA-U`/`DATA-L` as `PKTUSB`/`PKTLSB`. Native `read_relative_vfo`,
+  `write_relative_vfo_mode` and `write_relative_vfo_frequency` require MAIN
+  RX and address the receiver directly, with readback required for writes
+  and explicit filter-bank numbers refused. The FTX-1 profile leaves
+  rigctld `I`/`i`/`X`/`x` unavailable. These changes
+  have not been verified on IC-7300, IC-7300MK2, IC-705, IC-7610, IC-9700
+  or FTX-1 hardware. IC-9700 satellite/memory routing is excluded; the
+  multi-client read/modify/write limitation MOR-3743 remains.
+- **Plain rigctld SSB clears DATA (MOR-3750, #4333).** `M`/`X` with
+  `USB` or `LSB` explicitly clear supported DATA mode, including IC-7610
+  D2/D3 on the split path. An omitted or `0` passband preserves the target
+  filter; packet modes still select DATA.
+- **Browser audio failures retain their ownership (MOR-3753, #4335,
+  #4337, #4338).** RX/TX errors survive automatic resource, controller and
+  session cleanup; explicit stop/disconnect or a new audio attempt clears
+  the corresponding error.
+  The audio indicator is neutral when browser audio is idle and shows
+  latched failures after cleanup. Stale capture results cannot latch an
+  error after cancellation, and an older preparation cannot clean up a
+  newer attempt.
+- **IC-9700 receiver controls and preamp combinations (MOR-3574,
+  #4026, #4028).** Polling `global.slow_state.active` with `07 D2` supplies
+  the active receiver needed by Web UI mode/filter controls. Treating that
+  query as a data read also avoids a leftover write-ACK sink during unkey;
+  the IC-7610 effect has not been verified on hardware. Preamp values are
+  `[0, 1, 2, 3]`, labelled `OFF`/`INT`/`EXT`/`INT+EXT`; the CLI accepts
+  profile-declared levels and prints their labels. In rigctld's index-to-dB
+  `PREAMP` path, unrepresentable indices return `RPRT -11`, and pending
+  writes keep native index units.
+- **PTT-holder conflicts have specific wording (MOR-3684, #4344).**
+  A rejected WebSocket PTT submission whose receipt identifies another
+  PTT owner reports `another client is transmitting`. Queue failures
+  without that evidence retain `managed transmit authority unavailable`.
+- **External rigctld pollers stop across cancellation races (MOR-3786,
+  #4343).** An explicit stop request survives a poll's cancellation/completion
+  race, so its observation loop exits before another reconnect or sleep
+  during shutdown.
+- **Duplicate `rigplane.log` writes (MOR-3777, #4326).** The CLI removes
+  the diagnostic handler when its file handler targets the same file.
+  `ICOM_LOG_FILE=off` disables both CLI and diagnostic file logging.
+
+## [3.0.0b20] — 2026-10-23
+
+### Added
+
+- **rigctld split frequency and mode for WSJT-X "Split: Rig" (MOR-3115,
+  #4275, #4323).** `I`/`i` and `X`/`x` set and read the unselected VFO's
+  frequency and mode on the IC-7300, IC-7300MK2 and IC-705 without
+  selecting that VFO, using the profile's `set_/get_unselected_freq` and
+  `set_/get_unselected_mode` commands (`26 01` for the mode). `X` sets the requested mode and fills DATA and the filter field
+  by field: an ordinary mode keeps the VFO's current DATA setting, a packet
+  mode (`PKTUSB`, `PKTLSB`, `PKTRTTY`) turns DATA on; an omitted or `0`
+  passband keeps the VFO's current filter, a positive passband selects filter
+  1 (2800 Hz and up), 2 (2000 Hz and up) or 3. Whenever `X` keeps the current
+  DATA or filter it reads them first; a VFO selection, swap or equalize
+  through the runtime's own methods between that read and the write refuses
+  `X` with `RPRT -9`. Known limitation: a raw `w` frame or another `X` from a
+  second client that changes the same VFO between that read and the write can
+  make `X` write the wrong DATA/filter back, and DATA also selects the TX
+  audio source; a packet mode with a positive passband sets both fields
+  itself and is not affected (tracked in MOR-3743, see
+  `docs/release-notes/2026-beta-known-limitations.md`).
+- **Local audio bridge input and output gains (#4023, #4024).**
+  `rigplane audio bridge` takes `--input-gain-db` and `--output-gain-db`,
+  `rigplane web` takes `--bridge-input-gain-db` and
+  `--bridge-output-gain-db` (all default 0 dB), and `PATCH /api/v1/bridge`
+  changes the running bridge. The gains apply to local device audio only.
+- **Profiles can describe how stored memory channels are addressed
+  (MOR-3627, #4296).** The IC-705 (group + channel) and IC-9700 (band +
+  channel) profiles carry a `[memory]` section that the loader validates.
+  Nothing reads or lists memory channels yet.
+
+### Fixed
+
+- **IC-9700 attenuator declared as the documented 10 dB step (#4027).**
+  The profile changes `[0, 20]` to `[0, 10]`; the CI-V Reference Guide lists
+  only `00` (OFF) and `10` (10 dB). The radio's owner reported on IC-9700
+  over LAN that the ATT button takes effect with `values = [0, 10]`
+  (rigplane 3.0.0b14, #4026 also applied); not otherwise verified.
+- **A CW text send a stop or force-off ends gets a defined answer
+  (MOR-3700).** A pending `send_cw_text` that a CW stop ended answered HTTP
+  `500` with the transport's "Managed Yaesu CAT write is no longer current",
+  and one a managed force-off ended got no answer at all: the HTTP
+  connection closed and the WebSocket command never got a response. Both
+  now answer HTTP `409` with `error: "command_cancelled"` and a message
+  naming the cause (`CW text send to <model> was cancelled by a CW stop` /
+  `... by a transmit abort`); the WebSocket command answers `ok: false`
+  with the same code and message, and the CLI prints `Error: <message>`
+  and exits 1. The same holds for `send_cw_text` on `POST /api/v1/commands`
+  and for Icom (CI-V) sends a force-off ends (a CW stop does not end a
+  CI-V send in progress). See the refusal table in `docs/api/web.md`.
+- **Radio profiles name their CW modes in one place (MOR-3679, MOR-3678).**
+  Clients guessed CW mode names and missed the FTX-1's `CW-U`/`CW-L`, so
+  the Pro CW console never left "Waiting for CW mode". A profile can now
+  declare `[modes] families = { cw = [...] }`; the loader rejects a member
+  that is not in `[modes].list` or is listed twice, and `/api/v1/info` and
+  `/api/v1/capabilities` publish it as `modeFamilies` (`{}` when absent).
+- **FTX-1 CW text: no invalid `KY <text>;` frames; `cwText` capability
+  (MOR-3678).** The FTX-1 backend sent typed CW text as `KY <text>;` in
+  24-character chunks and stopped with `KY ;`; neither is a valid FTX-1 CAT
+  frame (CAT manual 2508-C printed p.18: `KY P1 P2;` plays a keyer memory).
+  It now writes the text with `KM` into a keyer memory channel and plays it
+  with `KY`, and stops with `KY00;`. Sending stays disabled on the FTX-1
+  until the memory type is checked on a radio. A new profile section
+  `[cw_text]` (`supported`, `max_length`, `memory_channel`, `memory_type`)
+  is published as `cwText` inside `capabilities` on `/api/v1/info` and at
+  the top level of `/api/v1/capabilities`; `hasCw` and the `cw` tag are
+  unchanged. One check in every radio's `send_cw_text` enforces it, so
+  HTTP, WebSocket and the CLI refuse the same requests with the same
+  message; the web handler's own 512-character limit is gone (512 is now
+  only the profile default). Profiles without a `send_cw` command (TX-500,
+  X6100, X6200) publish `supported: false`. Yaesu CAT and Kenwood CAT
+  profiles without `[cw_text].supported = true` publish `supported: false`;
+  a Yaesu enable without keyer memory channel 1-5, a `max_length` of at
+  most 50 (one `KM` write) and writable `KM`/`KY` commands, or any Kenwood
+  enable, does not load. The `cw` tag no longer gates sending or stopping
+  CW text over HTTP, WebSocket or the CLI; `cwText` alone decides. A
+  backend with no CW text sending (external rigctld) answers all three as an
+  unsupported command, and a rig profile that does not load is reported by
+  every CLI path (including `--model` and `audio probe`) as `Error: <file>:
+  <key> ...`, exit 1. `cwText.supported` is false when the active backend
+  cannot send CW text (external rigctld), with the profile's limits kept.
+- **The RF front-end preamp buttons show the profile's preamp labels
+  (#4029).** The semantic RF front-end passes the profile's preamp labels
+  through to the buttons instead of always showing `P1`/`P2`; a profile
+  without labels keeps `P1`/`P2`. The FTX-1 declares `IPO`/`AMP1`/`AMP2`.
+- **IC-705 reads its duplex offset with CI-V `0C` (MOR-3624, #4295).** The
+  profile mapped the read to `0D`, the send opcode, which the radio NAKs;
+  writes still use `0D`.
+- **Serial connections try the other CI-V baud rates after silence
+  (MOR-3620, #4302).** A radio set to another baud rate can now be found
+  with a read-only identity retry, with a notice naming the rate found (a rate below 115200 warns that the
+  scope needs 115200); if none answers, the profile baud is restored and the
+  diagnostics name the likely causes.
+- **Packet receives with a timeout are cancellation-correct (MOR-3575,
+  #4282).** The audio bus and the transport now receive packets through
+  `asyncio.timeout`.
+
+### Tests
+
+- **Universal radio simulator and recorded conformance fixtures (MOR-3592,
+  MOR-3593, MOR-3594, MOR-3595, MOR-3596, MOR-3597, MOR-3598, MOR-3599,
+  MOR-3600, MOR-3602, MOR-3605, MOR-3609, MOR-3610, MOR-3678).** A
+  standalone IC-7610 simulator with a deterministic engine and validated
+  simulation profiles; IC-7300, IC-705 and FTX-1 profiles, recordings and
+  conformance replay; `serve --radio ic7300` and `serve --radio ftx1`; the
+  FTX-1 simulator models the `KM`/`KY` keyer memory.
+- **Test-infrastructure hardening (MOR-3575, MOR-3701, MOR-3733).** The soak
+  driver counts run-owned sockets and tasks; the worker-death qualification
+  has a hang deadline, a log tail and process diagnostics; the macOS full run
+  has no environment failures.
+- **CI review gate (MOR-3621).** The exact-head local review is the primary
+  Agent Review Gate verdict and GitHub Codex reviews are advisory.
+
+## [3.0.0b19] — 2026-10-20
+
+### Added
+
+- **`rigplane web` accepts `--log-level` (MOR-3569, #4265, #1905).** Before,
+  the level of the web server could only be raised to DEBUG through the
+  `ICOM_DEBUG` environment variable. The flag takes `DEBUG`, `INFO`,
+  `WARNING`, `ERROR` or `CRITICAL`. Without it the loggers are left alone, so
+  `ICOM_DEBUG=1` still works.
+
+### Fixed
+
+- **LAN discovery finds radios behind a second network adapter and survives
+  receive errors (MOR-2968, #4270).** The probe is also sent from each local
+  IPv4 address, and a Windows `ConnectionResetError` while receiving no
+  longer aborts the scan and drops the radios already found.
+- **No scope-health writes while the radio is known to be transmitting
+  (MOR-2859, #4271).** With "scope during TX" off, the all-zero scope frames
+  made the server re-enable the scope three times during a transmit. The
+  watchdog now waits, and the panorama says the radio is transmitting instead
+  of "Scope disconnected".
+- **The LCD layout takes its TX look from the managed TX state, not from
+  the last `ptt` value (MOR-2855, #4272).** A stale PTT reading no longer
+  leaves the LCD showing a transmit that is not happening.
+
+### Tests
+
+- **Cover every holder-end mode of the soak detach-sabotage test (MOR-3565,
+  #4266).**
+- **Capture xdist worker hang evidence in the quick test run (MOR-3575,
+  #4273).**
+- **Settle file-descriptor and task counts before the soak stability
+  comparison (MOR-3575, #4274).** On a loaded test worker the soak driver
+  compared counts while sockets and tasks were still closing and failed a
+  healthy run.
+- **CI: merge queue triggers and gates (MOR-3571, #4268, #4269).**
+
+## [3.0.0b18] — 2026-10-20
+
+Republishes 3.0.0b17 to PyPI. The 3.0.0b17 tag exists on GitHub but its
+PyPI publish stopped in the pre-publish test run, so 3.0.0b17 was never
+uploaded. The runtime code is identical to 3.0.0b17.
+
+### Tests
+
+- **Make the soak detach-sabotage test deterministic (MOR-3565, #4263).** On
+  slower runners one soak cycle lasted about two seconds and the sabotaged
+  session's lease expired inside the check window, so the negative control
+  passed instead of failing. The soak driver now renews live sessions' leases
+  before closing clients.
+
+## [3.0.0b17] — 2026-10-20
+
+### Added
+
+- **Several clients can share one radio session; only one of them holds TX
+  at a time (MOR-3534, #4253, #4254).** The first client to press PTT holds
+  transmit until it releases; the others stay connected for receive, scope
+  and control. The web UI opens a controller session in every mode
+  (MOR-3535, #4255).
+- **rigctl over the WebSocket, bound to the client's session (MOR-3536,
+  #4256).** A remote client can drive CAT through the same session that
+  carries its audio and scope.
+- **Per-IP cap on controller sessions and channels (MOR-3557, #4258).**
+
+### Fixed
+
+- **Refuse CW text, VOX, TUNE and break-in while the radio transmits TX that
+  Core does not hold (MOR-3537, #4257).** Emergency TX release is never
+  gated; TX counts as foreign only after receive was seen since Core's own
+  unkey (MOR-3561).
+- **Closing an auxiliary channel no longer drops the session's TX
+  (MOR-3562, #4261).**
+- **Pair IC-7300 USB audio on Windows when endpoint names are localized,
+  renamed or re-plugged (MOR-3530, #4250).** The resolver matches the endpoint
+  names the Windows device topology reports for the radio's codec, including
+  MME's 31-character cut, instead of requiring `Microphone (USB Audio CODEC)`.
+  `/api/v1/info` `audioReceive.failure` gains an additive `reason` category
+  (`usb_topology_names`, `usb_topology_unavailable`, `usb_ambiguous`,
+  `open_timeout`, `format`, `other`), and topology query failures and timeouts
+  are logged at WARNING.
+- **Read the Windows USB audio topology primarily from cfgmgr32, keeping the
+  PowerShell PnP query as a fallback (MOR-3556, #4252).** Audio device
+  matching no longer waits on a slow PowerShell call in the normal case.
+- **Send diagnostic reports to the public `reports.rigplane.app` endpoint
+  (MOR-3533, #4251).** The built-in "Send" button and `rigplane diagnose
+  --upload` defaulted to `reports.msmsoft.net`, which does not resolve outside
+  the maintainer's private network, so uploads failed for every external user
+  with `getaddrinfo failed`. `RIGPLANE_REPORT_ENDPOINT` still overrides the
+  default.
+
+### Tests
+
+- Multi-session TX fault lanes, soak scenario and mutation targets
+  (MOR-3538, #4259, #4260).
+
+## [3.0.0b16] — 2026-10-15
+
+### Fixed
+
+- **Close and reconnect a silent control, scope or audio-scope WebSocket instead of showing a live link over a dead connection (MOR-1831, MOR-3276, #4043).** The Web UI now closes and reconnects the channel when the server goes silent for 30 s. A new Web UI talking to an older Core without the pong reply reconnects an idle control channel about every 31 s.
+
+- **Keep web and station listeners available during the LAN identity hold
+  (MOR-3363, #4102).** The bundled rigctld listener no longer aborts startup
+  while radio identity is pending; readiness remains false until the hold resolves.
+
+- **Re-login when the control session dies during a LAN identity hold
+  (MOR-3349, #4109, #4172).** The held session is probed before requesting
+  recovery; a live standby session does not trigger that escalation.
+
+- **Recover startup from a radio-held session with bounded fresh-login retries
+  (MOR-3391, #4176, #4178, #4197).** Web and station serve HTTP not-ready
+  during the startup busy hold. The busy retry budget is 600 seconds, with
+  a 90-second live-holder boundary and two retries for an unanswered first
+  discovery; a live holder ends the retry loop rather than being displaced.
+
+### Known issues
+
+- **MOR-3471 remains unresolved and is deferred to the next release:** the
+  waterfall can replay buffered frames at 4–5× after returning from an inactive
+  macOS Space. The added diagnostics (#4246) do not establish a fix.
+
+## [3.0.0b15] — 2026-10-11
+
+### Added
+
+- **Add an experimental SDR IQ panadapter as a scope source (MOR-3151,
+  MOR-3154, MOR-3155, MOR-3156, #4011, #4015, #4016, #4018).** A new
+  `rigplane.sdr` package defines the IQ source contract, and
+  `SoapyIqSource` implements it over SoapySDR through an optional `sdr`
+  extra, including a remote driver and reconnect. `IqFftScope` converts
+  IQ into scope frames, and a controller follows the radio VFO with
+  view shift or retune and freezes the scope during TX. The SDR scope
+  source is experimental in this beta and off by default unless
+  configured.
+
+- **Wire the SDR scope source into the server, CLI and Web UI
+  (MOR-3157, MOR-3158, MOR-3200, MOR-3201, MOR-3202, #4014, #4019,
+  #4020, #4021, #4022).** The Web UI renders the SDR scope source with
+  a status badge, a TX-frozen hold and a source selector, and a public
+  `sdr` status object exposes its state; environment configuration
+  controls the source. Zoom FFT gives real resolution for narrow spans,
+  and radios that have their own scope fall back between SDR and
+  hardware scopes at runtime.
+
+- **Add an experimental remote controller lease with admission and
+  transmit fences (MOR-3143, MOR-3144, #4002, #4003, #4012, #4013,
+  #4017).** One ephemeral controller capability with heartbeat and
+  expiry gates queued commands, and revocation fences new work before
+  retained cleanup completes. Admission is enforced across HTTP,
+  WebSocket and rigctld ingress and browser TX-audio ownership, and a
+  lost admission releases momentary holds. The remote controller lease
+  is experimental in this beta; its admission is enabled whenever the
+  managed TX composition is installed, which is the normal `rigplane web`
+  and `station` startup.
+
+- **Report a refused browser RX start through the existing info status
+  (MOR-3148, #4005).** `GET /api/v1/info` now retains the actual
+  RX-start refusal, including when no client WebSocket received the
+  error, and a confirmed successful start clears it.
+
+### Fixed
+
+- **Drop TX frames that lost admission during audio-session convergence
+  (MOR-3149, #4004).** A TX frame could pass admission, await audio
+  session convergence and reach the radio after revocation. The
+  submission guard is now rechecked immediately before the radio push,
+  and non-confirming results drop the frame.
+
+- **Declare the resolved audio route in server info (#4025).**
+  `/api/v1/info` omitted the active audio route, leaving remote
+  consumers unable to select one. The response now carries the
+  canonical route from the existing resolver, or null without an
+  attached radio; existing fields and protocol version 1 are unchanged.
+
+- **Request 50 ms input latency for Linux ALSA capture (MOR-3140,
+  #4001).** The Linux ALSA capture path now requests a 50 ms input
+  latency.
+
+### Known issues
+
+- Linux hardware audio acceptance remains pending.
+
+## [3.0.0b14] — 2026-10-06
+
+### Fixed
+
+- **Resolve Windows radio USB audio within the selection deadline
+  (MOR-3132, MOR-3136, #3988, #3990, #3993).** Optional device discovery
+  no longer consumes the entire startup budget. IC-7300 serial and audio
+  functions can be associated through their USB topology, including the
+  supported Parallels guest layout and split RX/TX endpoint names.
+  Ambiguous or conflicting identities are rejected instead of selecting
+  an unrelated device.
+
+- **Keep Windows native audio resources alive until streams close
+  (#3994).** Audio workers balance COM initialization, and streams retain
+  the Windows MTA while native handles are open. Failed starts and refused
+  closes retain cleanup ownership so a later cleanup can finish.
+
+- **Prevent overlapping audio opens after a timeout or cancellation
+  (#3995).** A pending native start keeps its endpoint reserved until it
+  settles and cleanup succeeds. An immediate retry cannot replace that
+  unfinished stream. Callbacks from a retired RX session are discarded
+  before reaching current subscribers or changing capture health.
+
+- **Report RX startup refusals and distinguish audio failure stages
+  (#3994).** The Web UI reports a refused radio capture start and permits
+  an explicit retry. Native playback failures are recorded separately
+  from decoder failures.
+
+- **Keep frequency values and their evidence coherent (#3996).** Public
+  frequency aliases use the value, timestamp and provenance of the same
+  winning observation. Keyboard tuning immediately after an absolute
+  frequency jump follows the requested destination while its radio echo
+  is pending.
+
+- **Wait for a complete CI-V discovery reply (MOR-3133, #3989).** Serial
+  discovery handles fragmented model-ID replies and skips unrelated
+  frames while preserving the probe's open, read, parse and close failure
+  distinctions.
+
+- **Match native selector colors to the selected theme
+  (MOR-3123, #3981).** Native selects and their options now use the
+  application's light or dark color scheme.
+
+- **Refuse unrelated Linux audio devices when radio USB auto selection
+  cannot resolve both endpoints (#3999).** Serial-bound automatic
+  selection fails before opening a stream when the radio's USB capture
+  or playback endpoint is missing. Explicit device selection remains
+  available.
+
+### Added
+
+- **Show the actual serial port-open failure category (MOR-3128).**
+  Startup and reconnect diagnostics distinguish permission denied, busy,
+  missing device, timeout and unknown failures through runtime health
+  and translated Web UI messages.
+
+- **Retain bounded local audio diagnostics (MOR-3130, #3987, #3991,
+  #3992).** Runtime diagnostics expose client-reported playback context
+  state, frame/decode/scheduling counters, PCM peak and safe resume
+  outcomes. Microphone acquisition failures retain their actual safe
+  category instead of treating every rejection as permission denied.
+  These reports do not establish audible output.
+
+### Known issues
+
+- Linux hardware audio acceptance remains pending.
+
+## [3.0.0b13] — 2026-10-02
+
+### Fixed
+
+- **Select the declared DATA1/LAN input for single-DATA radios such as
+  the IC-7300MK2 (MOR-3115, #3974).** When the direct backend declares
+  LAN input 5 and supports its DATA1 setter, the shared packet-audio
+  route selects DATA1 and that input instead of the legacy no-input
+  policy. A rejected input change still aborts packet-mode setup.
+
+- **Deliver freshness for accepted CI-V observations whose value stays
+  the same (MOR-3117, #3975).** The runtime now notifies Web delivery
+  about the state store's accepted observed paths, so an unchanged
+  observation can refresh `lastObserved` without inventing a semantic
+  value change. Generation rejection and existing Web throttling remain
+  in force.
+
+- **Complete LAN recovery cleanup and retain the advertised CI-V port
+  (MOR-3118, #3976).** Exhausted watchdog-owned recovery can release its
+  token and close its control transport without cancelling its own waiter.
+  Cancelled recovery does not rearm a watchdog. An occupied advertised
+  port uses the existing bounded retries instead of reporting success
+  on an unadvertised ephemeral port; external cancellation still works.
+
+- **Reject already completed shared acquisition requests (MOR-3116).**
+  A drain now checks the scheduler's pending request identity before
+  claiming an envelope captured before another drain completed it.
+  This prevents duplicate sends and orphan claims from that race.
+
+- **Keep grouped meter polling due after a client reads only SWR
+  (MOR-3116).** A successful singleton read no longer postpones the
+  shared cadence for unread Power, ALC, Comp and Id meters. Successful
+  partial replies accumulate across a grouped request before its
+  cadence advances; failed siblings do not count as acquired.
+
+### Known issues
+
+- IC-7300 Power, ALC and Id telemetry can intermittently be absent
+  while PTT is reported true (MOR-3116). Investigation remains open.
+  These source fixes do not establish physical-radio acceptance or
+  complete resolution of the reported audio and reconnect symptoms.
+
+## [3.0.0b12] — 2026-10-02
+
+### Fixed
+
+- **Complete the rigctld `get_lock_mode` reply for Hamlib clients
+  (MOR-3113, #3972).** A successful normal reply now sends the lock
+  value followed by `RPRT 0`, as expected by netrigctl, so its second
+  read can finish before the next CAT command. Ordinary GET replies
+  keep their existing framing, errors stay one status line, and
+  extended replies keep exactly one status footer.
+
+## [3.0.0b11] — 2026-10-01
+
+### Added
+
+- **Serial discovery marks each probe's open and close in the DEBUG log
+  (MOR-3040).** The CI-V, Xiegu model-ID and Yaesu CAT probes log
+  `opening <port> @ <baud>` before every serial open, and `closing
+  <port>` before and `closed <port>` after every close, the close
+  after a failed read included. Each probe keeps
+  its own prefix — `probe_serial_civ`, `probe_xiegu_model_id` and
+  `probe_serial_yaesu_cat` — and only the device name and the baud
+  rate are logged. Discovery itself is unchanged.
+
+- **The IC-7300MK2 gets its own manual-derived profile (MOR-3091).**
+  It declares the MK2's identity, single-receiver topology, LAN/serial
+  routing and documented modulation, menu and scope commands instead
+  of borrowing the IC-7610 profile. IC-7300 and IC-7610 profiles stay
+  unchanged. The MK2 profile has not been validated on hardware.
+
+- **`WebConfig.trusted_origins` and `web --trusted-origin ORIGIN` opt
+  in to an explicit public HTTP(S) origin behind a reverse proxy
+  (MOR-3108).** Invalid bare origins fail startup. Origin matching uses
+  scheme, host case and effective port; Host, read-only, TX and CSRF
+  checks still apply, and forwarded headers confer no trust. The proxy
+  owns authentication and access control. See the
+  [remote-operation guide](guide/remote-operation.md).
+
+### Changed
+
+- **The README front page and the bug-report form describe the 3.0 beta
+  (MOR-2934).** The stale "v2.0.0 — renamed from `icom-lan`" callout
+  is replaced by a beta callout that gives `pip install --pre rigplane`,
+  links What's New in 3.0 and the beta known limitations, and offers a
+  beta report form. The three "Full guides" links point at the `/3.0/`
+  pages, the intro paragraph drops the "Tested in production" sentence
+  and describes the library, the web UI and the rigctld server
+  instead, and the Supported radios table now says what was tested on
+  3.0 hardware: the IC-7610 over LAN, with its MAIN+SUB dual-receive
+  marked as not hardware-certified this beta, the IC-7300 and the
+  FTX-1 as tested, the IC-9700 as reported by a user, and the X6100
+  and TX-500 as profile only with no backend yet. The old "Radio
+  Compatibility Report" template is replaced by a 3.0 beta report form
+  that asks for the radio model, the connection, the OS, the Python
+  version and the install command, and asks for the ZIP that
+  `rigplane diagnose` writes.
+
+### Fixed
+
+- **A piped `rigplane` command keeps the output it printed
+  (MOR-3010).** Radio commands end in `os._exit`, which skips
+  interpreter shutdown, so a block-buffered piped stdout was dropped:
+  `rigplane ... status > out` exited 0 with an empty file. stdout and
+  stderr are now flushed immediately before that forced exit. The
+  shutdown backstop's forced exit still does not flush, because on the
+  event-loop thread a flush can block on a full pipe or a held
+  BufferedWriter lock and defeat the bounded shutdown.
+
+- **The panorama thins its frequency labels so they stop overlapping on
+  a phone (MOR-3011).** The renderer measures each label and draws
+  every k-th one — the smallest stride whose clamped label boxes clear
+  each other by 4 px — and always keeps the first and the last. At
+  1440 px the stride is 1, so all eleven labels draw exactly where they
+  did. The grid lines are unchanged, and a context without
+  `measureText` keeps the full draw.
+
+- **A clean IC-7300 start no longer logs undeclared-command warnings
+  (MOR-3012).** `get_data2_mod_input`, `get_data3_mod_input` and
+  `get_scope_rbw` are reads the IC-7300 Advanced Manual 11a does not
+  document, and the profile records all three as declared absent with
+  the manual page that shows it. Asking for one now refuses with
+  `declared absent by this profile` instead of logging the "not declared
+  by profile IC-7300 and not recorded as absent" warning. The matching
+  `set_*` commands are untouched.
+
+- **The installation guide and the README Quickstart install 3.0
+  (MOR-2897).** `pip install rigplane` still installs the latest 2.x
+  release while 3.0 is only a beta, so both texts now give
+  `pip install --pre rigplane`, and the README's one-line comment says
+  why. The guide's "No 3.0 build is on PyPI yet; to run 3.0, install
+  from source" paragraph is gone.
+
+- **The Icom serial connect waits for the radio's identity answer and
+  publishes `connection.identity` (MOR-3071, MOR-3064).** The connect
+  reads the addressed radio's model ID before marking it connected.
+  Silence reports `no_response` while retaining the open port for a
+  later answer; polling and TX stay gated. `/api/v1/info` exposes the
+  expected and answered identity, including an unverified result when
+  the profile has no expected-ID metadata.
+
+- **A known model mismatch is rejected instead of used (MOR-3064).**
+  Icom serial/LAN and Yaesu CAT compare the native identity answer
+  with the selected profile before readiness. Held sessions can finish
+  on a matching late answer; reconnect keeps one current serial reader,
+  and teardown retires held readers and CI-V tasks. An answer from a
+  replaced connection cannot initialize the new connection's state.
+
+- **`rigplane web` keeps serving while the serial identity read gets
+  no answer (MOR-3081, MOR-3078).** Startup no longer exits with
+  "managed TX provider is not current" during `checking` or
+  `no_response`. TX remains refused, automatic bridge startup waits for
+  readiness, and a late answer completes the reconnect tail once.
+
+- **The web password warning suggests the supported flag (MOR-3092).**
+  `web --radio-password` and its `--password` alias now recommend
+  `--radio-pass-file PATH` rather than unsupported `--pass-file`.
+
+- **A radio that declares `vfoReadback: none` keeps its raw hardware
+  waterfall (MOR-3094).** Matching connected control and provider
+  generations allow the raw hardware-scope display without inventing
+  MAIN/SUB authority. Receiver-dependent controls remain unavailable.
+
+- **A managed-TX lifecycle release no longer switches the antenna tuner
+  off (MOR-3072).** Release, shutdown, disconnect and transport switch
+  preserve the idle persistent ATU setting instead of sending implicit
+  STOP_TUNE. Receive/CW safety and explicit STOP_TUNE stay unchanged;
+  active-tune and RF paths were not re-validated.
+
+- **`ICOM_DEBUG` enables DEBUG for the diagnostic log at startup
+  (MOR-3107).** When no embedding application has configured the named
+  `rigplane` logger's level, `ICOM_DEBUG` — any value other than empty,
+  `0`, `false` or `no` — now sets DEBUG, and the default stays INFO. An
+  explicitly configured level is respected: only the records that pass
+  it reach the diagnostic file.
+
+## [3.0.0b10] — 2026-09-29
+
+### Added
+
+- **The RIT/XIT offset slider is the fader and owns its arrow keys
+  (MOR-2524, MOR-2727).** The offset moves from a raw range input onto
+  the shared bipolar control: on the Standard face it draws the
+  hardware-illuminated fader with its centre mark, and the other faces
+  draw the modern bipolar track. A click focuses it, and while it is
+  editable the arrow keys step the offset instead of tuning the VFO.
+  One press is one step of the profile's RIT domain — 1 Hz on every
+  profile that declares one, 50 Hz without a domain — centred on the
+  domain origin, so one press and its reverse return to exactly zero.
+  Shift+arrow gives the same step, Home and End go to the bounds, and
+  CLEAR stays the reset. The old raw input swallowed global shortcuts
+  while focused; the fader does not, so Escape still clears the offset.
+  An unread offset draws no value text and no aria-valuenow.
+
+- **The page says when the server receives only digital silence from
+  the radio (MOR-2792).** The RX audio surface shows a plain message
+  in English, Russian and Japanese instead of playing silence. The
+  flag rides the existing `audio_session` event as `rxSilent`, and a
+  page that connects after the silence edge still sees it: the current
+  value arrives on the control WebSocket after `hello` and the initial
+  state. The USB driver's silence watchdog owns detection; a LAN radio
+  reports false. The first non-zero frame clears the flag.
+
+- **The phone keeps the scope controls in a SCOPE chip tab
+  (MOR-2851).** Nothing is drawn above the panorama any more. The
+  SCOPE chip, present only when the radio has a spectrum and placed
+  right after BAND, holds VIEW (when a managed scope region exists),
+  AVG, PEAK and BANDS, plus the existing semantic scope controls. The
+  bottom tuning bar still carries STEP.
+
+- **The phone meta row shows bandwidth, AGC, NB and NR beside mode
+  and filter (MOR-2852, MOR-2873).** The chips appear in that order
+  after mode and filter and follow the MAIN/SUB switch. NB and NR
+  show a bare label, lit when on and dimmed while unread; the
+  bandwidth chip keeps the unit's case (`BW 2400 Hz`). The other
+  indicator-row appearances are unchanged.
+
+- **Filter Shape SHARP/SOFT gets the shared choice feedback on both
+  seats (MOR-1689).** The `set_filter_shape` command now runs through
+  one lifecycle shared by the semantic FilterInstrumentHost snippet and
+  the FilterPanel settings modal. Each seat's buttons carry
+  `data-command-phase` and `aria-busy`, a status sentence names the
+  requested shape, and each transition makes one polite live
+  announcement. While a change is pending the confirmed shape stays
+  selected and the requested one is marked separately. A radio without
+  the filter-shape capability renders and dispatches nothing.
+
+- **The phone header readout shows the in-flight tune target
+  (MOR-2911).** While a tune is pending, the phone frequency readout
+  shows the target digits as the desktop does, and the confirmed
+  frequency returns when the radio confirms, refuses or the request
+  times out.
+
+- **The legacy panels show scalar command feedback on RF power and AF
+  level lanes (MOR-2910).** The panels the phone and LCD skins share —
+  the TX panel's RF power lane and the AF level lanes of the RX audio
+  and essentials panels — now show requested, confirmed and error
+  through the shared scalar feedback, with `aria-busy` while a request
+  is pending, the same way their mic, drive, comp and mon lanes
+  already do. RF power shows its target once the server admits the
+  command, as on the Standard face.
+
+- **The tone squelch type is read through the profile's code table
+  (MOR-2955).** A profile can carry a `[tone_squelch_types]` table
+  mapping each selector code to a neutral type. With the IC-705's
+  table, its CI-V guide's `16 5D` selector now reads as OFF, TONE,
+  TSQL, DTCS or one of the four cross modes. The state gains
+  `tone_squelch_type`, a string under each receiver's
+  `operator_controls`, and the web payload carries `toneSquelchType`
+  for MAIN and SUB with its field status.
+
+- **`web`, `serve` and `station` take `--listen` for the address the
+  server binds (MOR-2954).** The defaults are unchanged.
+
+- **The phone SCOPE tab hosts the radio's scope-controls row
+  (MOR-2895).** The tab now renders the same semantic scope surface
+  the desktop panorama toolbar hosts — CTR/FIX, SPAN, REF, HOLD,
+  MAIN/SUB and the More panel with the full mode choice, EDGE for
+  the FIX modes, CENTRE, RBW, SPEED, DUAL, During TX and VBW
+  narrow — through the same handlers and facts, with no second
+  scope command and no new scope state; these controls had no home
+  on the phone before. The row wraps, and the surface's
+  narrow-width hide-bands are switched off, so REF and HOLD stay
+  directly visible; labels and stepper values get the 16 px floor
+  beside the keys' 16 px/44 px portrait floors. Lit keys inside the
+  tab light the layout's cyan accent instead of red, with the lamp
+  glow off, and nothing outside the SCOPE tab changes colour.
+
+- **`--backend` is inferred from the radio's model when omitted
+  (MOR-2926).** A `yaesu_cat` profile starts on `yaesu-cat`, so
+  `rigplane --model FTX-1 --serial-port <port> web` no longer picks
+  the Icom CI-V serial backend, and a `civ` profile still infers
+  `serial` with `--serial-port` and `lan` otherwise. Any other
+  protocol is refused before any radio discovery, with exit code 1
+  and an error naming the model and its protocol, such as
+  `Error: Model 'TX-500' uses protocol 'kenwood_cat', which no
+  backend supports`. `--host` given with a
+  `yaesu-cat` backend, explicit or inferred, is ignored with a
+  warning. An explicit `--backend` still wins, `rigctld` is never
+  inferred, and without `--model` the old inference — `serial` with
+  `--serial-port`, else `lan` — is unchanged. The `--backend` help
+  text now says the backend is inferred from the model.
+
+- **The IC-705 reads and sets its repeater shift direction over the
+  CI-V split command 0F (MOR-2930).** The CI-V guide carries the duplex
+  direction on that command: setting writes 10 for simplex, 11 for DUP−
+  and 12 for DUP+, and a reply maps 00 and 01 to simplex, 11 to DUP−
+  and 12 to DUP+. The IC-705 profile declares the `repeater_shift`
+  capability and the `get_repeater_shift` and `set_repeater_shift`
+  keys, and polls `receiver.main.operator_controls.repeater_shift`
+  beside split; the other CI-V profiles — IC-7300, IC-7610, IC-9700,
+  X6100 and X6200 — declare neither key. A 0F observation now
+  publishes the direction under the receiver's `operator_controls`,
+  only where the profile declares the getter. `set_repeater_shift`
+  takes SIMPLEX, MINUS or PLUS only: any other direction, ARS
+  included, raises `ValueError` before anything is sent, and both
+  `CoreRadio` methods refuse an unsupported receiver first. A reply
+  byte that maps to no direction fails the read with a command error,
+  and a NAK answer fails the set with one; the web reaches the set
+  through its existing `set_repeater_shift` dispatch entry, unchanged.
+
+- **The FTX-1 CT read publishes its tone squelch type through the
+  profile table (MOR-2969).** The FTX-1 profile gains a
+  `[tone_squelch_types]` table — its CAT `CT` "SQL TYPE" codes 0 to 5
+  map to off, tone, tsql, dtcs, pr_freq and rev_tone — and `pr_freq`
+  and `rev_tone` join the neutral type vocabulary. The CT read now
+  publishes the code's type under each receiver's
+  `operator_controls.tone_squelch_type`, on MAIN and SUB, riding the
+  same CT query and the two CTCSS booleans' own cadence and freshness.
+  The booleans are derived from the type through the same neutral rule
+  the IC-705's CI-V decode uses, so every code keeps the pair it
+  produced before. A profile that declares a `get_sql_type` read must
+  now carry the table, as a `get_tone_squelch_type` profile already
+  had to.
+
+### Changed
+
+- **The phone portrait layout drops the VFO / RX-TX deck and scrolls
+  as one column (MOR-2816).** The header shows the active VFO, the
+  chip tabs hold the controls, and the FAB and TX chip hold transmit.
+  The S-meter on top is the receiver's own compact meter, following
+  the receiver the header shows. Every portrait button has a label of
+  at least 16 px and a touch height of at least 44 px; labels wrap
+  rather than clip. The panorama keeps at least 190 px at a 375 px
+  width.
+
+- **The package declares `Development Status :: 4 - Beta` instead of
+  `5 - Production/Stable` (MOR-2897).** The classifier on PyPI
+  matches a beta release.
+
+- **A passband drag sends at most one request, on release
+  (MOR-1691).** On the default skin's filter surface and on the v2
+  FilterPanel, the IF shift, PBT inner and PBT outer rows hold every
+  intermediate position of a pointer drag as a local draft and send
+  nothing to the radio while the drag lasts: at most one command
+  leaves the row, when the pointer is released, and a cancelled drag
+  sends nothing. During the drag the thumb follows the pointer, and on
+  the filter surface's PBT rows the visible number follows the draft,
+  then the pending target once the request is out, and the confirmed
+  readback only when neither exists — the input's command phase and
+  aria-busy stay the unconfirmed marker. Keyboard and reset still
+  dispatch at once on the filter surface, the panel keeps its 50 ms
+  debounce for keyboard and reset, and Filter Width keeps its
+  immediate dispatch.
+
+### Deprecated
+
+- **On `web`, `serve` and `station`, `--host` becomes a deprecated
+  alias for `--listen` (MOR-2954).** It prints one warning to stderr,
+  `Warning: --host is deprecated, use --listen instead`, and its value
+  still sets the bind address when `--listen` is absent. When both are
+  given, `--listen` wins in either order, and the warning adds
+  `(both given; --listen wins)`. The global `--host` — the radio's
+  address — and every other subcommand are unchanged.
+
+### Fixed
+
+- **The segmentline and needle S-meters draw only what an uncalibrated
+  radio can show (MOR-2720).** On a profile without an S-meter
+  calibration the segmentline LCD meter keeps its moving bar but draws
+  no S label, no S9 threshold line and no scale marks, and the dual-SDR
+  needle meter keeps its arc and moves with the raw reading but draws
+  no S scale marks. The needle meter's accessible name is "S meter" in
+  every state; an uncalibrated radio used to read "S meter unavailable"
+  there and the needle did not move at all. Calibration decides, never
+  the radio's name, and a calibrated radio's meter is unchanged.
+
+- **Every HTTP response says Connection: close, and a failed first
+  layout load recovers once (MOR-2680).** The server closes the socket
+  after every response but never said so; a keep-alive HTTP/1.1 client
+  that reused the connection got a reset, and a pooled proxy could
+  answer a stylesheet request with a 502 that left the UI on "This
+  layout failed to load". Every response now carries Connection: close
+  after the caller's own headers, so no caller can override it; the
+  WebSocket 101 response keeps Connection: Upgrade. When a CSS preload
+  of the first layout still fails, the page now reloads itself once —
+  never after a layout has mounted, and never twice within 60 seconds.
+
+- **A TX meter without a calibration table shows only its bar
+  (MOR-2722).** The Po, SWR, ALC, COMP, Vd and Id tiles no longer print
+  a device-scale number tagged "raw": the formatters render nothing for
+  a raw domain and for the no-domain, no-table fallback, the bar keeps
+  moving on the neutral raw fraction, and the meter's accessible name
+  is its label alone. The segmentline telemetry rail applies the same
+  rule through the meter's own domain. This reaches the FTX-1's power,
+  ALC and compressor meters, every IC-705 and IC-9700 TX meter but SWR,
+  and the TX-500, X6100 and X6200. Calibrated meters render as before.
+
+- **The S-meter reading and its dBm keep one left edge (MOR-2521).**
+  The S-meter readouts were middle-anchored, so the left edge moved
+  whenever the text changed length. Each readout now starts at the left
+  edge of a slot as wide as the widest text the mounted profile's
+  calibration points can print, so an unread, a short and a long
+  reading hold one edge — on the default face's S tile and in the
+  phone layout. The STATION METERS S caption reserves the same widths
+  in its own font, measured again once the web fonts have loaded, and
+  its dBm span is rendered whenever the radio is calibrated and stays
+  empty until a reading arrives, so the first reading no longer
+  pushes the value aside. Without a calibration the readout keeps its
+  centred anchor. The station-meter bars keep a constant set of cells
+  instead of re-creating them. Every bar renders its ten fill cells on
+  every update and changes only their width and visibility as the
+  value moves. An unread value lights no cell. The peak marker still
+  appears only while a peak is armed.
+
+- **A read value stays visible while its control is unavailable
+  (MOR-2704).** A field's value text now follows its reading alone;
+  whether the control can act stays on the usability gate. On the scope
+  controls the span and speed labels show their read value, on RIT/XIT
+  the offset text, the slider thumb and the scan START/STOP label keep
+  the read state instead of blanking, and on the DSP surface the NR
+  level and its thumb show the read level. The controls themselves stay
+  disabled with their reason and dispatch nothing.
+
+- **The AF slider steps in raw units (MOR-1676).** Where the profile
+  publishes an AF raw range, the AF LEVEL slider and the AF MAIN / AF
+  SUB knobs step one raw unit at a time. The command keeps its
+  normalized value and the server rounds it back to the same raw unit,
+  so a step and its reverse restore the exact value. The FTX-1 profile
+  publishes AF as raw 0–255, the range of its CAT AG command. Browser
+  volume and radios that publish no range keep the 0.01 step.
+
+- **No Notch width control is drawn on a radio without one
+  (MOR-2726).** The web capabilities publish the manual-notch-width
+  tags only for receivers whose profile declares the width field, and
+  the DSP surfaces treat the width as present only with the notch
+  capability and that tag. The FTX-1, TX-500, X6100 and X6200 no longer
+  draw a permanently disabled width slider, and the IC-705 and IC-9700
+  lose a choice group that was always dimmed, because they declare the
+  width command without the polled field. The IC-7300 keeps its WIDE /
+  MID / NAR group, and the IC-7610 keeps it on MAIN and SUB.
+
+- **FTX-1 break-in is on/off from its profile, and an undeclared value
+  is never sent (MOR-2729).** The FTX-1 profile declares break-in as
+  OFF and ON, the two values its CAT command takes; SEMI and FULL are a
+  separate radio menu, not wire values. `/api/v1/info` and
+  `/api/v1/capabilities` publish the profile's `breakInChoices` as
+  value and label pairs — OFF/SEMI/FULL on the Icom profiles that
+  declare three levels, and an empty list where none is declared. A
+  break-in value outside the profile's list is refused with a command
+  error and nothing is written: on the FTX-1 a FULL request used to be
+  written as ON. The Yaesu poller passes the mode through instead of
+  collapsing every non-OFF value to ON, and a profile that declares a
+  break-in value without a label fails to load. The break-in control
+  offers exactly the radio's choices. On the phone CW panel there is
+  one button per published choice, and a click sends that value. On
+  the desktop CW keyer the published labels draw, and with no
+  published choices there is no break-in block. On the LCD face the
+  BK key cycles through the published values — OFF and ON on the
+  FTX-1 — and shows `BK-<label>` once read; while unread it shows
+  `BK`, is disabled and sends nothing. A radio that publishes no
+  choices, like the X6100 and X6200, shows no break-in control.
+  While break-in is unread no choice is lit anywhere.
+
+- **The phone and LCD faces draw no S-meter reading until one is read
+  (MOR-2730, MOR-2740).** The phone passed a zero for an unread
+  S-meter, which a calibrated radio drew as a lit S9 with its dBm
+  value — in the portrait meter and in the TX dock's S row. An unread
+  S-meter now draws no text and no fill, the accessible name is the
+  bare meter name, and the readouts keep their size. The lcd-cockpit
+  and lcd-scope faces did the same through their defaults, which drew
+  S9 and S0 on a calibrated radio; an unread value now lights no
+  segment and hides the readout text while the readout box keeps its
+  size. A read S9 renders exactly as before.
+
+- **The IC-7610 opens without waiting on the main receiver's filter
+  shape (MOR-2733).** With MAIN in a mode that has no DSP filter shape
+  — RTTY on the live radio — the radio refuses the filter-shape read
+  with a bare negative acknowledgement, and startup waited on that one
+  field indefinitely. Both receivers' filter-shape paths are now
+  startup-optional: the server completes startup without them, keeps
+  polling the field, and takes its value from the radio's answer when
+  one arrives.
+
+- **The legacy DSP panel lights no notch width until one is read, and
+  draws none on a radio without one (MOR-2735).** The WIDE / MID / NAR
+  group in the manual-notch settings lit WIDE whenever no width reading
+  existed, on every radio. The width now comes from the reading alone
+  and lights no choice while unread, and the group is drawn only on a
+  radio whose profile declares the width field, through the same
+  per-receiver tag as the v3 surfaces. This covers the LCD sidebars,
+  the RadioLayout DSP panel and the phone DSP section.
+
+- **The Escape key that ends a wheel adjustment no longer clears
+  the RIT/XIT offset (MOR-2754).** While a value control is armed
+  for the mouse wheel, its Escape is consumed there instead of
+  reaching the global keyboard layer, which binds Escape to clearing
+  RIT/XIT. Finishing a wheel adjustment on AF level, RF gain,
+  squelch or the RIT/XIT offset itself leaves the offset alone. An
+  Escape on a focused control that is not armed still clears RIT/XIT,
+  and with an armed control inside the TX settings popover the first
+  Escape ends the adjustment and the second closes the popover.
+
+- **Opening a radio waits only for safety-critical fields; any
+  other field stops blocking after 10 seconds (MOR-2749).** The
+  safety-critical fields are frequency and mode plus PTT, split and
+  the TX target. A field outside that set that never answers
+  is served unread — its control stays dimmed — while polling
+  continues, and one warning names the lapsed fields. A
+  safety-critical field
+  still unanswered after 3 failed reads ends startup with an error
+  naming the field and the CI-V command. On Yaesu CAT a refused read
+  still ends startup at once.
+
+- **A refused CI-V read settles only the request that caused it,
+  and the IC-7610 filter shape is read only in SSB and CW
+  (MOR-2748).** The scheduler skips a poll group whose every field
+  the profile declares unavailable, and resumes it on the first pass
+  after it becomes available again. On the IC-7610 the MAIN and SUB
+  filter-shape reads are declared available only when that receiver's
+  mode is USB, LSB, CW or CW-R, so with MAIN in RTTY no `16 56` read
+  goes out. While the mode itself is unread the read still goes out.
+  A bare refusal now settles only the request that caused it: a
+  refused background read no longer answers a waiting write, which
+  gets its own acknowledgement.
+
+- **On Yaesu CAT, a safety-critical field that never answers ends
+  startup with a named error (MOR-2757).** Consecutive unanswered
+  reads of a safety-critical field are counted, and any answer
+  resets the count. On the third unanswered read startup aborts,
+  naming the field, and for every field but PTT also the CAT command
+  the radio never answered. A refused read is still retried once, as
+  before. The rigctld client ends startup after three unanswered
+  critical reads. PTT, frequency and mode reads that time out three
+  times in a row record a declared defect and refuse the startup bind,
+  matching the Yaesu path. A connection drop never counts, so a link
+  loss cannot build the defect, and a successful read resets the
+  tally. A read timeout no longer ends polling for good: the poller
+  reopens the transport before the next cycle. An operator disconnect
+  stays disconnected.
+
+- **On a single-receiver radio the active receiver reads MAIN from
+  startup and survives reconnects (MOR-2784).** The server publishes
+  `MAIN` as the active receiver itself and re-publishes it after
+  every provider-generation advance, such as an operator disconnect
+  or a soft reconnect. Before, the fact was dropped and the active
+  receiver read null, so the panorama drew no passband and ignored
+  waterfall clicks. Single-receiver radios are the IC-705, IC-7300,
+  TX-500, X6100 and X6200.
+
+- **Plain-hertz filter width text follows the locale in the sidebar
+  and phone filter panel (MOR-1687).** It reads `Гц` in Russian and
+  `Hz` in English and Japanese. Kilohertz forms such as `2.4kHz` still
+  show `Hz`.
+
+- **The station-meter bars honour forced-colors like the S-meter
+  (MOR-1250).** Under Windows High Contrast Mode the bars repaint
+  onto system colours: lit fills and the peak marker use Highlight,
+  unlit segments GrayText, ink CanvasText, faces Canvas. Normal
+  rendering is unchanged.
+
+- **The page's own service-worker cleanup runs from the bundle
+  under the core server's CSP (MOR-2242).** The inline script's
+  pinned hash never matched the served page, so the stale pre-2.x
+  service-worker cleanup never ran. The cleanup now runs from the
+  bundle before the app mounts and unregisters every registration it
+  can see, so stale registrations that hijack fetch are dropped on
+  load; a failed cleanup never blocks startup. The CSP carries no
+  inline allowance: `script-src 'self'`.
+
+- **The IC-7300 S-meter draws the S-unit numerals its linear
+  calibration places (MOR-2790).** An odd S-unit numeral is drawn
+  when the declared S-labelled knots bracket it, and a `+dB` numeral
+  when S9 and a declared `S9+<N>` bracket it. From its S0/S9/S9+60
+  anchors the IC-7300 now draws `1 3 5 7 9 +20 +40 +60`, each where
+  the meter's own pointer reaches that level. The FTX-1 and IC-7610
+  are unchanged, and an uncalibrated radio still draws no numerals.
+
+- **The reconnect recovery pass runs with managed transmit
+  installed (MOR-2798).** After a serial soft reconnect the server
+  refetches radio state and re-enables the scope, which never ran on
+  that path before.
+
+- **The Standard face shows shortcut hints, and Alt-hold edge cases
+  are fixed (MOR-2793).** The keyboard-bound instrument controls —
+  mode, DATA, filter, RIT/XIT/CLEAR, RF gain, ATT, PRE and AF —
+  carry the same hints the legacy panels expose, drawn as an overlay
+  while Alt is held, so no element moves. Hints appear only while
+  Alt/Option is the only modifier held. A held Alt that auto-repeats
+  after a chord no longer restarts the hint timer, and disabling the
+  keyboard mid-hold clears the scheduled timer.
+
+- **On the single composition, an unavailable receiver's select is
+  disabled with its reason (MOR-1342, MOR-1347).** The unsliced VFO
+  surface applies the same per-receiver operational disable the
+  cockpit strips derive; the LCD face mounts this composition
+  directly. The select of a receiver that is not available right now
+  is disabled and names the reason; the transmit key stays enabled.
+
+- **Fixed-width modes publish the profile's declared width for the
+  selected slot (MOR-2503).** In a fixed-width mode the radio
+  reports no filter width, so the filter width was null in FM and
+  the scope drew no passband. The server now publishes the declared
+  slot width from the profile, marked declared rather than measured.
+  A `1A 03` answer in a fixed-width mode no longer overwrites it
+  with a raw index. Covered: FM on the IC-7610, IC-7300 and IC-9700,
+  and FM, WFM and DV on the IC-705.
+
+- **The break-in row shows a visible label on the Standard face
+  (MOR-2797).** The row now carries a shared Break-in label above the
+  choice keys, in English, Russian and Japanese, so a two-value OFF/ON
+  domain is no longer a lone unlabelled button. The choice keys are
+  unchanged. The phone CwPanel break-in block gets the same label and
+  draws neither label nor keys when the profile publishes no break-in
+  choices.
+
+- **On the FTX-1, Width is unavailable while NARROW is on
+  (MOR-2803).** While a receiver's NARROW reads true the profile
+  declares that receiver's `filter_width` absent: the width row stays
+  disabled with its reason and dispatches nothing, and the Yaesu
+  adapter withholds the width read. The per-mode NAR WIDTH menu owns
+  the passband then. The first medium poll pass primes an unobserved
+  NARROW so the gate can resolve in that same pass; a failed prime
+  leaves the width read withheld. A path whose condition is still
+  unobserved stays in the startup gate's outstanding set.
+
+- **A fixed-width `1A 03` answer no longer poisons the FM filter
+  cache (MOR-2823).** In a fixed-width mode the answer is a raw index,
+  and the legacy cache still stored it, so rigctld `\m` answered
+  `FM 0` before the first observation. The cache now skips that answer
+  and keeps the last decoded width; `\m` answers the handler table's
+  passband for the selected slot instead. Non-fixed modes keep writing
+  the measured width.
+
+- **The RF/SQL screen-reader status text stays off the screen
+  (MOR-2843).** Moving the RF slider no longer paints the combined
+  control's "confirmed" status line on screen. The DualParamRenderer
+  now defines its own visually-hidden rule; the status spans stay in
+  the accessibility tree with polite live announcements.
+
+- **The desktop status bar stays usable under the power-off overlay
+  (MOR-1240).** While the radio is powered off the overlay covers the
+  window below the status bar and keeps its Power ON action. The bar
+  publishes its bottom edge as a document-level custom property; a
+  layout without a status bar keeps the full-screen overlay. The
+  orphaned powered-off hint string is gone.
+
+- **Missing mic capture on a plain-HTTP page blames the connection,
+  not the browser (MOR-2845).** Pressing PTT on a non-secure context
+  now says the microphone needs a secure connection: open the page
+  over https (the server's `--tls` address) or on localhost. The old
+  "not supported by this browser" message remains for a secure context
+  without `getUserMedia`.
+
+- **A command cancelled by a radio link drop shows a plain operator
+  message (MOR-2846, MOR-2847).** The toast reads "Connection to the
+  radio was interrupted; the command was cancelled. Try again."
+  instead of the internal fencing reason. The server marks those
+  outcomes structurally and sends a `commandLinkLost` notification
+  code; other failures keep `commandExecutionFailed` with their
+  reason. While the link is down those per-command toasts are
+  suppressed in favour of the persistent link indicator.
+
+- **The audio bridge TX gate fails closed on unknown or stale state
+  (MOR-2863).** Host audio reaches the radio only when the managed TX
+  intent is keyed or a fresh observed PTT is ON. Unknown or stale
+  observations, a missing authority, snapshot errors, gate-callable
+  exceptions and startup before acquisition all drop frames. The
+  standalone bridge CLI without a gate keeps its ungated behaviour;
+  the keyed path still passes the first frame immediately.
+
+- **An Icom unkey waits for the radio's answer (MOR-2860).** A
+  FORCE_RECEIVE now settles only on an answer that can be attributed
+  to it: FB accepts, FA rejects, silence stays uncertain. Uncertain
+  and rejected releases keep the release debt and retry. Every release
+  is logged, with a warning when the answer stays uncertain. The PTT-on
+  path is unchanged.
+
+- **A silent serial CI-V link with polls outstanding declares
+  link-down and parks TX (MOR-2861).** The watchdog no longer treats a
+  merely ready session as liveness. While fresh polls are outstanding
+  and no CI-V frame is parsed for about two answer windows plus one
+  watchdog tick, the link is declared down and managed TX is parked.
+  A lost fire-and-forget sink cannot hold that clock on a quiet
+  healthy radio.
+
+- **Browser TX audio is gated on the managed TX predicate
+  (MOR-2870).** Microphone frames on the WebSocket audio handler and
+  the WebRTC audio channel reach the radio only while the managed TX
+  intent is keyed or a fresh observed PTT is ON. A frame after key
+  release, or while the observation is stale, is dropped and counted.
+
+- **A field carries `command_response` or `poll_response` only when
+  the radio answered (MOR-2893).** The connect-time scan seed and the
+  fire-and-forget ScanStart, ScanStop and ScanSetResume echoes still
+  write their values, but as `local_reconcile`: CI-V 0x0E is set-only,
+  so those fields were never radio-confirmed. The sync facade's
+  expected-value echo after fire-and-forget CI-V setters takes the same
+  label. Writers that parse a real answer are unchanged, so a directed
+  ACK still records `command_response`. On a silent link `/api/v1/state`
+  no longer shows `scanning` and `scanResumeMode` with
+  `command_response`, and that fake observation no longer clears the
+  "radio probably off" verdict.
+
+- **`/api/v1/info` answers on the rigctld backend instead of dropping
+  the connection (MOR-2899).** With a radio whose model matches no
+  RigPlane profile — the external rigctld client's default "External
+  rigctld" — the endpoint used to close the socket with no HTTP answer.
+  It now answers 200 with the radio's own model name and the capability
+  tags, and omits every profile-derived key. Any exception that escapes
+  an HTTP handler is answered with `500 {"error":"internal server
+  error"}` and logged with its route at ERROR; the client gets no
+  exception text.
+
+- **A radio that answers nothing at startup no longer stops the server
+  (MOR-2841).** The startup gate releases with one WARNING naming the
+  radio-not-answering state, and the listener binds. A silent link is
+  zero radio observations plus a durable record that the serial
+  link-down detector fired since connect; the record survives the
+  watchdog's soft reconnect of a present-but-silent port. Nothing is
+  fabricated: `radioHealth` keeps reporting `radio_powered_off_likely`
+  until the radio's first observation, whatever the live link state
+  reports in between. The power-off overlay shows "Radio does not
+  answer — it may be switched off" and offers Power ON when
+  `/api/v1/capabilities` publishes `powerOnCommand` — true only where
+  the profile declares `power_on`; otherwise it says "This radio
+  cannot be powered on from RigPlane." Transmit stays refused while
+  the safety-critical fields are unobserved. A radio that answers some
+  reads but leaves a safety-critical path unanswered still fails
+  startup with the named MOR-2749 error.
+
+- **A filter-width table Reset takes the radio's own default
+  (MOR-2519).** The filter panel's table-branch Reset returns the width
+  to the radio's own mode-dependent default through the shared
+  `reset_filter_width` handler instead of writing a hard-coded 3200 Hz.
+  The reset key stays visible because it also owns the IF-shift reset,
+  and a radio without the `filter_width_radio_default` capability
+  dispatches no width write.
+
+- **The Standard face takes its hertz unit from the i18n catalog
+  (MOR-2905).** The filter surface's exact width and its passband
+  announcements, the RIT/XIT offset, the TX-target line and the
+  BW/RIT/XIT chips read the unit from the shared `core.filter.unit.hz`
+  catalog key: `Гц` in Russian instead of a literal `Hz`. English and
+  Japanese text is unchanged.
+
+- **The IC-705 meter scales and band-stack codes come from its CI-V
+  guide (MOR-2916).** The profile calibrated only SWR, so the S-meter,
+  Po, ALC, COMP, Vd and Id published raw bytes flagged uncalibrated.
+  Their scales now come from the guide's meter rows — Vd and Id differ
+  from the IC-7300's — and Po is stated in watts of the 10 W rating.
+  2200m, 630m and 60m, which have no band-stack code of their own, no
+  longer send the undocumented code 00 that fell back to the 2200m
+  default; they jump straight to their default frequency, and Air
+  takes the guide's code 12.
+
+- **The IC-705 declares absent the commands its CI-V guide does not
+  document (MOR-2917).** The profile still carried drive gain,
+  DIGI-SEL shift, APF level, audio peak filter, RX antenna and antenna
+  select from wfview's IC-705 rig, so the TX surface drew a Drive Gain
+  control and the CW keyer an APF control that were never observed and
+  stayed disabled for the session. Those declarations are gone; the
+  radio has one antenna connector and no antenna select.
+
+- **The IC-705 acquires the fields its v3 controls show (MOR-2915).**
+  The profile still carried its 2.x acquisition membership, so filter
+  width, PBT, the NR/NB level, notch, RIT, the CW keyer setpoints,
+  VOX/monitor, the mic and VOX gains and the tone and TSQL frequencies
+  were never read. The reads the CI-V guide documents are now declared:
+  fourteen polled panel knobs and TX-aux levels plus fifteen menu
+  settings read on demand. The web layer serves the IC-705's manual
+  notch width, and the four TX meters poll at 0.25 s.
+
+- **The legacy RIT/XIT and PBT panels follow the Standard track-reset
+  and arrow rulings (MOR-2909).** A double-click on the RIT/XIT track
+  sends nothing and CLEAR stays the reset; the arrow keys step by the
+  domain's raw step at once, with no debounce. A double-click on a PBT
+  lane sends no per-lane command: the lane's default is null, the
+  bipolar policy's reset returns the domain's default instead of
+  inventing 0, and the PBT reset goes only through the Reset button.
+  A click on the track still sets the position, as on the Standard
+  face.
+
+- **The USB audio driver and the AudioBridge run their PortAudio calls
+  off the event loop, bounded (MOR-2892).** A pending macOS
+  microphone-permission prompt used to block the RX relay's format probe
+  on the event-loop thread and freeze the whole server — HTTP,
+  WebSockets, the PTT release path and the watchdogs — until SIGKILL.
+  The format probe, device enumeration, serial-port topology resolution
+  and the stop/close paths now run on the driver's worker pool, bounded
+  by `capture_open_timeout` (8 s default); when the bound is exceeded
+  the audio request fails with one warning while HTTP and WebSockets
+  keep answering. The AudioBridge's device enumeration and its RX, TX
+  and duplex stream starts and stops, reached from `/api/v1/bridge`
+  and from the shutdown path, go through the same shared pool, and a
+  stuck call fails within the bound with one warning.
+  `find_loopback_device` and `list_audio_devices` stay synchronous;
+  only the CLI calls them, before serving.
+
+- **The portrait PTT button lives in the fixed bottom tuning strip
+  (MOR-2874).** It no longer floats over the scrolling content, so no
+  scrolling control can sit under it at any scroll position. It stays
+  72×72 px, and the phone's 44 px touch floor now reaches it through
+  the layout.
+
+- **`rigplane web` and `station` keep serving when the radio's serial
+  port cannot be opened (MOR-2876).** A missing or unopenable port used
+  to end the process at startup. On the CI-V serial backend family —
+  IC-7300, IC-705, IC-9700, IC-7610 and X6200 — the backend now enters
+  its watchdog's retry loop and the server serves a not-connected
+  state; Yaesu models on `--backend serial` are unchanged, and every
+  other startup failure still exits. Radio health reports
+  `radio_not_connected` with the port's open error until the port
+  opens, then `radio_powered_off_likely` until the radio first
+  answers, and transmit stays refused until the port opens.
+  While the backend retries a port that has never opened,
+  `/api/v1/radio/connect` and the power-on path in `/api/v1/radio/power`
+  answer `409` with `backend_recovering`. The web UI's power-off
+  overlay covers this state with the label "Radio not connected — the
+  serial port did not open" and offers no Power ON button in it. Once
+  the port opens and the radio stays silent, the overlay becomes the
+  not-answering one — "Radio does not answer — it may be switched
+  off".
+
+- **A DUP−/DUP+ readback no longer reads as split ON (MOR-2929).** The
+  CI-V split command 0F answers 00 for split OFF, 01 for split ON, 11
+  for DUP− and 12 for DUP+, but the shared CI-V observation decoder
+  and `get_split` read every non-zero byte as split ON. A radio
+  working a repeater in DUP− or DUP+ lit the SPLIT indicator and fed a
+  split fact to the TX-target rule. Split is now ON only for 01.
+
+- **The rigctld backend serves a profile-less projection of the radio
+  (MOR-2901).** A rigctld radio with no RigPlane profile — a Hamlib
+  radio with no bundled profile, started without `--model` — used to
+  be refused by the web layer as unidentified. The server now serves
+  `/api/v1/state`, `/api/v1/capabilities` and the WebSocket state from
+  what the backend itself reports and invents nothing: the
+  capabilities payload carries only backend-reported keys, and
+  profile-derived keys such as `powerOnCommand` are absent. Profiled
+  rigctld radios keep every key they had, and every other backend
+  still refuses an unidentified radio.
+
+- **`audio probe` refuses before probing when no radio profile
+  resolves (MOR-2952).** `rigplane --host <ip> audio probe` with no
+  `--model`, no profile and no `--radio-addr` that a loaded profile
+  declares used to run the candidates anyway, record the profile
+  refusal as a failed candidate and exit 0; the dry run exited 0 with
+  every candidate skipped. The command now resolves the profile first
+  and exits 1 with `Error: ...` on stderr before any candidate is
+  attempted — no artifact is written and nothing goes to stdout. With
+  `--model`, or a `--radio-addr` that a loaded profile declares, the
+  probe runs as before.
+
+- **A VOX delay menu reply decodes at the active profile's own
+  control number (MOR-2975).** The shared CI-V decoder recognized a
+  1A 05 reply as a VOX delay only when its control number was the
+  IC-7610's 02 92 or the IC-7300's 01 91, whatever radio sent it:
+  the IC-705's and IC-9700's VOX delay readings never populated, and
+  a reply at the IC-705's own 01 91 — a scope FIX Edges setting —
+  would have been read as a VOX delay. The control number now
+  resolves through the active profile, so each radio decodes its
+  own — 02 92 on the IC-7610, 01 91 on the IC-7300, 03 59 on the
+  IC-705, 03 30 on the IC-9700 — and a control number the profile
+  does not map to that getter publishes nothing.
+
+- **The phone tune strip buttons carry accessible names
+  (MOR-2949).** The four icon-only buttons of the phone layout's
+  bottom tuning strip — the one-step and the fast key in each
+  direction — had no accessible name. Each now takes an aria-label
+  from the i18n catalog, localized in English, Russian and Japanese,
+  naming the direction and whether it is the one-step or the fast
+  key: a screen reader announces "Tune down fast", "Tune down one
+  step", "Tune up one step" and "Tune up fast". Nothing visual
+  changes.
+
+- **The Yaesu and rigctld unkey reads the transmit state back
+  before it is accepted (MOR-2862).** A Yaesu set is answered with
+  silence and rigctld's `RPRT 0` speaks for the daemon, so neither
+  proved the transmitter unkeyed. For a FORCE_RECEIVE the Yaesu CAT
+  backend — the FTX-1's — and the external rigctld client now read
+  the transmit state once inside the same actuation, the Yaesu
+  `TX;` read and the rigctld `t` round trip after `T 0`, riding the
+  unkey's own exchange urgency and currency. The unkey is ACCEPTED only
+  when that read says receive; a read that says TX, silence, a
+  malformed answer or a raised read returns UNCERTAIN, which keeps
+  the release debt for the existing RetryForceReceive pacing.
+  PTT_ON and TRANSMIT_ON still return right after the write.
+
+- **The Standard face shows an honest pressed state and its pending
+  targets (MOR-2907).** The compact NB/NR/NOTCH/A-NOTCH keys, the
+  APF key and the Standard mode keys take their pressed or selected
+  state from the shared confirmed getters, and an unread reading
+  renders no `aria-pressed` at all instead of "false"; the mode grid
+  is now a radiogroup of radio keys. While a mode, AGC,
+  attenuator, NB, NR or notch change is in flight, its target key
+  is marked through the same armed signal and vocabulary the
+  desktop-v2 panels consume, with the existing pending
+  announcements, and the confirmed reading stays the only selection
+  source — an armed target is marked, never lit. The attenuator's
+  quick keys and its overflow key arm the pending value, and a
+  pending notch target of `off` arms the key whose confirmed
+  reading the click asked to leave.
+
+- **A `web` or `station` shutdown is bounded, so a hung await cannot
+  keep the process alive (MOR-2875).** A backstop in the CLI, armed by
+  the server's first SIGTERM or SIGINT and disarmed when the command
+  finishes, bounds the shutdown at the sum of its named waits: 16 s to
+  stop the web server, 10 s for rigctld, 3 s plus 4 s for the
+  managed-TX shutdown, 5 s for the radio's serial CI-V watchdog
+  teardown and a 2 s margin — 40 s in all. At the bound the backstop
+  first lets a protected TX release — the managed-TX shutdown, the
+  rigctld stop or the web PTT drain — finish inside its own bound; if
+  the shutdown still runs it logs the pending tasks with their await
+  chains, cancels the shutdown task, and if that is still running 3 s
+  later the process exits with code 130. The managed-TX shutdown
+  drains 3 s, then terminates and waits 4 s more; an unkey that stays
+  unconfirmed is logged at ERROR as "unkey not confirmed", naming the
+  session keyed at shutdown, the provider generation and the release
+  attempt, read without waiting on the authority. Each rigctld wait on
+  a departing session's TX handback now lasts at most 4 s — the wait
+  is abandoned, not the handback, with the same named ERROR — and its
+  stop() waits at most 2 s for the listener. Before, the managed-TX
+  termination and the rigctld handback were awaited without a bound,
+  so one hung await could keep the process alive indefinitely. A
+  shutdown that ends cancelled now exits with code 130
+  instead of a CancelledError traceback.
+
+- **The legacy DSP panel's NR level and NB depth sliders show command
+  feedback (MOR-2932).** The NR Level slider in the NR settings modal
+  and the NB Depth slider in the NB settings modal used to show the
+  reading alone; both now ride the shared command-feedback scalar for
+  `set_nr_level` and `set_nb_depth`, joining the NB level, NB width,
+  notch position and AGC time lanes. Raw DSP feedback is projected to
+  display units through the same adapter projection the semantic radio
+  surfaces already use for these two lanes. While a request is pending
+  the slider carries `aria-busy` and its description names the
+  requested target; when the radio confirms, the confirmed display
+  value lands, and an error keeps the confirmed reading and shows the
+  error text. Dispatch follows the shared 50 ms discrete policy, and a
+  lane whose feedback is unavailable keeps its slider disabled.
+
+- **The power-off overlay's label is centred on the phone and keeps a
+  side margin (MOR-2997).** The powered-off, not-answering and
+  not-connected labels share one element, which was left-aligned while
+  the icon above it was centred, and on the phone a wrapped line ran
+  to the screen edge. The label is now centred, and the overlay
+  content keeps the side margin the phone's mod-input warning uses —
+  `max(12px, env(safe-area-inset-*, 0px))` on each side, with
+  `max-width: 100%` — so a wrapped line never touches the edge. The
+  desktop one-line label is unchanged.
+
+- **The Xiegu X6200 reads the controls its 2.x state sweep read
+  (MOR-3002).** The v3 poll follows the profile's declarations, and
+  the X6200's declared only frequency, mode and filter width beside
+  its S-meter and power meters, so the radio's other controls were
+  never read. The profile now polls ATT, AF level, RF gain, squelch,
+  preamp, AGC, NB, RF power, mic gain, monitor, PTT and tuner
+  status, and reads CW pitch and key speed on demand; each read is a
+  GET row of the X6200 CI-V implementation V1.0.6 Table 1, and the
+  first poll tick sends 16 queries where it sent 4. NR and COMP
+  on/off stay unread — V1.0.6 documents only their set commands.
+  The web capabilities now serve the X6200's `attenuator_main` and
+  `preamp_main` control tags. Not verified on hardware; the X6100
+  profile still declares the minimal set.
+
+- **The legacy choice keys expose the confirmed selection
+  (MOR-2978).** ControlButton and HardwareButton take a tri-state
+  `pressed`: true and false render `aria-pressed` "true" and
+  "false", and an unread reading omits the attribute rather than
+  deriving it from `active`. The desktop-v2 panels' choice keys —
+  the mode panel's mode and DATA keys, the AGC panel's keys, the
+  antenna panel's ANT1/ANT2 and RX ANT, and the filter panel's
+  FIL1–3 and SHARP/SOFT — now carry the confirmed selection and
+  render disabled while their reading is unread. `dataMode`,
+  `txAntenna`, `rxAnt` and `filterShape` are null while their field
+  is unobserved, where the props used to carry a fabricated OFF,
+  port 1, off and SHARP; `rxAnt` needs the port and the port's own
+  override both observed.
+
+- **POWER ON is sent without waiting for its acknowledgement.**
+  After POWER ON the radio can stop sending CI-V data for longer
+  than the 2 s answer window while it starts — about 3 s in the
+  reporter's IC-9700 log — so the wait ran out and the UI reported a
+  failure although the radio powered on. On the CI-V power path —
+  the profiles that declare the 0x18 commands: the IC-705, IC-7300,
+  IC-7610 and IC-9700 — `set_powerstat` now sends POWER ON once with
+  no response waiter and observes no power from an acknowledgement:
+  the retained state keeps the acknowledged OFF until the radio's
+  first CI-V answer after startup, which observes ON. POWER OFF
+  still waits for its acknowledgement and raises `CommandError`
+  when the radio NAKs it.
+
+- **The phone SCOPE ⋯ menu is a sheet with one setting per row
+  (MOR-2987).** The ⋯ key on the phone SCOPE tab now opens a
+  full-width modal sheet over a dimmed backdrop instead of the
+  anchored More panel; the desktop popover is unchanged. The sheet
+  carries one setting per row — MODE, EDGE for the FIX modes,
+  CENTRE, RBW, SPEED, and the on/off rows DUAL, During TX and VBW
+  narrow — through the same handlers and facts, with no new command
+  or scope state. An on/off row is its label plus two keys, Off and
+  On: the key matching the confirmed state is lit, while the state
+  is unread both keys are disabled and neither carries
+  `aria-checked`, and a key dispatches the toggle's existing intent
+  only when it does not already match the confirmed value, so
+  tapping the selected option does nothing. The Off and On labels
+  are localized in English, Russian and Japanese.
+
+- **The legacy on/off toggle keys expose the confirmed state and stay
+  disabled while their reading is unread (MOR-2979).** The RF
+  front-end panel's ATT, DIGI-SEL and IP+, the TX panel's ATU, TUNE,
+  VOX, COMP and MON, the RIT/XIT panel's RIT and XIT, the scan
+  panel's STOP, the essentials panel's SPLIT, NB, NR and NOTCH, and
+  the DSP panel's NB, NR, NOTCH and A-NOTCH with the NB settings
+  modal's ON/OFF ride the tri-state `pressed` seam the choice keys
+  took in MOR-2978: a known reading renders `aria-pressed` true or
+  false, an unread reading omits the attribute, and the key stays
+  disabled until its reading is observed, OR-ed with the key's
+  existing disabled conditions. The panel props carry the knownness —
+  splitKnown, ritKnown, xitKnown, scanningKnown, nbKnown, nrKnown,
+  manualNotchKnown and autoNotchKnown — beside the new hasVox and
+  hasComp capability gates. MOR-1536's armed markup and the DSP
+  panel's scalar feedback are unchanged.
+
+- **The FTX-1's RF power floor is 5 W, so the bottom of the range
+  sends `PC2005;` (MOR-2998).** The FTX-1 CAT manual's PC POWER
+  CONTROL table gives the SPA-1 head a 005–100 W span, and the radio
+  refuses anything lower: the bottom of the normalized range used to
+  go out as `PC2000;`, which the radio answered `?;` on the bench.
+  The profile declares `[power] min_watts = 5`, the loader parses it
+  and refuses a `min_watts` above `max_watts`, and on a watts-native
+  radio the power target clamps to the [min, max] span for a
+  normalized float and a bare watt count alike, so the stored
+  `power_level`, the reply's `admitted_level` and the wire target all
+  show the floor. Every path that passes `max_watts` — the intent
+  builder, both web control paths and the sync wrapper — passes
+  `min_watts` beside it, the Yaesu CAT backend clamps to the same
+  floor before the wire, and a profile without `min_watts` keeps
+  today's behaviour.
+
+### Security
+
+- **A rigctld connection whose first line is an HTTP request line is
+  refused (MOR-2890).** A web page's no-cors POST to the rigctld port
+  used to earn ENIMPL per line and then run its body as a command,
+  including PTT. The connection is now closed before anything is
+  parsed or run, with one throttled warning per peer. Normal rigctld
+  sessions are unchanged; lowercase or partial request lines are not
+  refused.
+
+- **Foreign Hosts are refused on every route and foreign Origins on
+  WebSocket upgrades and state-changing HTTP requests (MOR-2880,
+  MOR-2881).** Every HTTP route and WebSocket upgrade runs a Host
+  allowlist before any handler: IP literals, simple local labels, and
+  names ending in `.localhost`, `.local`, `.home.arpa` or `.internal`.
+  Any other present value gets 421; a request without a `Host` header
+  is admitted. `--allowed-host NAME` (repeatable) on `web` admits more
+  names. A present Origin on the four WebSocket upgrades must be
+  same-origin and pass the Host rule, otherwise 403 before the upgrade;
+  a missing Origin is admitted. The same rule covers POST, PUT, PATCH,
+  DELETE and the state-changing GET `/clearcache`. The diagnose routes'
+  separate Origin check and its loopback skip are gone.
+
+### Documentation
+
+- **The published 3.0 documentation is corrected against the code, and
+  rigplane.dev serves two versions (no ticket).** The getting-started,
+  installation, CLI, configuration, radio, command, radio-setup,
+  troubleshooting, migration and security pages, the API reference
+  pages and the internal skin guide were checked against the code and
+  rewritten where they described behaviour that does not exist: CLI
+  examples that talk to a radio over the lan or serial backend now
+  name its model, and LAN discovery results are listed by IP. The
+  migration guide gains a section saying the `lan` and `serial`
+  backends need an explicit radio model — before 3.0 a missing model
+  fell back to the IC-7610 profile. The site is published as two
+  documentation versions, 2.11 and 3.0, with a version selector. A
+  follow-up pass checked the Python API, web API and Web UI pages —
+  the radio, audio, command-catalog and web API references, and the
+  web UI, diagnostic-reports, audio-recipes and troubleshooting guides
+  — against the code and corrected them where they were wrong. A new
+  FTX-1 USB setup guide joins the radio-setup guides, and the Quick
+  Start gains USB radio examples for the IC-7300 and the FTX-1. A
+  What's New in 3.0 page and an operating-away-from-home guide are
+  added, and the beta limitations register is refreshed. The IC-705's
+  README row, radios-page entry and USB setup guide are corrected
+  where the v3 profile fixes had made their prose false. The Quick
+  Start's `discover` sample is corrected to what the CLI really
+  prints — a LAN result is its own group under its IP address, apart
+  from the same radio's USB entry — and the CLI reference's discover
+  section now says serial discovery also finds Yaesu CAT radios,
+  grouped by the model ID the radio reports. The CLI reference's
+  examples no longer use the author's own bench address. The
+  `--listen` pass reaches the guides: the CLI reference's `serve` and
+  `station` tables, its `web` flag table and the rigctld serve table
+  now say `--listen`; the Web UI example and the
+  operating-away-from-home guide pass `--listen` where they passed
+  `--host` after the subcommand; and the CLI reference now says the
+  old spelling still works with a warning and loses to `--listen`
+  when both are given. The What's New page gains a Command Line
+  section with the same facts. The backend-inference pass reaches the
+  guides: the Quick Start's USB section, the FTX-1 USB setup guide and
+  the CLI reference now start the FTX-1 with `--model FTX-1
+  --serial-port`, and the last two say `--backend yaesu-cat` does the
+  same. The CLI
+  reference's `--backend` and `--serial-port` rows and its backend
+  section describe how the backend follows the model — `rigctld` is
+  never inferred — and say the serial port is auto-discovered for
+  `yaesu-cat` as for `serial`; its inference list drops the old
+  serial-port-else-`lan` rule, and the `lan`-is-the-default claims
+  leave the configuration page and the radio-protocol page, whose
+  Default Backend Selection table now names all four backend configs
+  for the Python API. The What's New page says the backend comes from
+  the radio's profile. The CLI reference's serial-baud rows are
+  corrected too: a port found by the USB scan keeps the rate the scan
+  found, and with `--serial-port` the `serial` backend uses the model
+  profile's `default_baud` — `115200` without a model — while
+  `yaesu-cat` keeps `38400`. The README's supported-radios table
+  gains the Xiegu X6200 — USB CI-V, `CI-V 0xA4`, 19200 baud, QRP
+  8 W — marked validated on 2.x hardware and not yet validated
+  on 3.0.
+
+## [3.0.0b9] — 2026-09-27
+
+### Added
+
+- **Repeater controls are a side panel on the receiver tuned to a
+  repeater band (MOR-2111).** On the Standard face the panel sits in
+  the left column after RIT / XIT, and only while a receiver's
+  frequency is in a range the profile flags `repeater`. The FTX-1 and
+  IC-705 flag 2 m and 70 cm; the IC-7300 and IC-7610 flag none, so the
+  panel never draws there. It shows OFF / TONE / TSQL, shift SIMP / −
+  / +, and a CTCSS stepper through the profile's tone chart. On a
+  radio that declares automatic repeater shift — the FTX-1 does — the
+  shift row adds ARS; a reported ARS value on a radio without that
+  declaration lights no key. The panel names the receiver it controls:
+  the one in a repeater range, or the selected receiver when both are.
+  The FTX-1 band selector also names 6 m, 4 m, 2 m and 70 cm, so those
+  bands can be selected. The IC-9700 profile now lists its own 2 m,
+  70 cm and 23 cm bands, each flagged as a repeater band, instead of
+  HF and 6 m (MOR-2567).
+
+- **`set_monitor_mute` saves each receiver's AF and writes 0, or
+  restores the saved levels (MOR-2583).** The state payload carries
+  `monitorMute` with `on` and the saved levels. A reload while muted
+  still shows MUTE, and leaving MUTE restores the levels the server
+  saved. On a dual-receiver radio that admits a SUB AF write — the
+  FTX-1 and IC-7610 do, the IC-9700 does not — RX AUDIO shows AF MAIN
+  and AF SUB side by side, and MUTE mutes both (MOR-2579).
+
+- **The capabilities payload lists the profile's manual-notch-width
+  choices (MOR-1685).** `/api/v1/info` and `/api/v1/capabilities` carry
+  `notchWidthChoices` as value and label pairs, in the profile's
+  order. The IC-7300, IC-7610, IC-705 and IC-9700 publish WIDE, MID
+  and NAR; a profile with no notch widths publishes an empty list. A
+  profile that declares a width without a label fails to load. Where
+  that list is published and non-empty, Manual Notch Width is a choice
+  group of those labels instead of a slider, on the native DSP row and
+  the compact scalar path. The lit choice is the confirmed reading. A
+  radio that publishes no list keeps the slider.
+
+- **NARROW can be set from the web API and toggled on the filter
+  surface (MOR-2636, MOR-2640).** The command is `set_narrow` with
+  `{on, receiver}` for MAIN and SUB, gated by the profile's `narrow`
+  capability; the FTX-1 declares it, and a profile that does not
+  refuses the command. On the filter surface a NARROW toggle acts on
+  the active receiver and is drawn only on radios whose capabilities
+  include `narrow`. The toggle's pressed state follows the confirmed
+  reading, and the pending mark shows until readback confirms.
+
+- **Filter Shape SHARP/SOFT choices show pending feedback
+  (MOR-1689).** The clicked choice is marked pending while
+  `set_filter_shape` is in flight, and the selection moves only after
+  the confirming readback of the shape.
+
+### Changed
+
+- **Pollable fields take an acquisition class, and the scheduler
+  fits those cadences to the transport budget (MOR-2576, MOR-2586,
+  MOR-2590, MOR-2593).** A pollable path with no field-policy entry
+  takes its class cadence. On the IC-7610 the hand-written entries are
+  gone except the S-meter, the transmit meters (including Id, now
+  transmit-only), and the transmit target. On the IC-7300 the same is
+  true except the S-meter, the transmit meters (Id now transmit-only
+  and gated on PTT), and the on-demand fields that are primed once and
+  do not expire. On a MAIN/SUB radio that reports the selected
+  receiver, the non-selected receiver's class-derived polls run one
+  class slower (MOR-2599). Settings and menu fields stay fresh while
+  the link is up; they are dropped on link loss, a session change, or
+  disconnect (MOR-2615).
+
+- **The audio bridge defaults to the RigPlane Virtual Cable and no
+  longer looks for BlackHole (MOR-2590).** With no device names given,
+  RX is "RigPlane Virtual Cable Output" and TX is "RigPlane Virtual
+  Cable Input". While a managed transmit authority is in receive and
+  observed PTT is off, captured audio is not sent to the radio; the
+  standalone bridge CLI still sends. The setup guides name the cable
+  the same way.
+
+- **The panorama row uses the Standard face's raised keys (MOR-2545).**
+  Lit keys show the cyan left-edge bar; unread keys use the family's
+  disabled look. On a narrow row, controls hide into More in a fixed
+  order and stay reachable there. The More label reads More / Ещё /
+  その他.
+
+- **The phone shows only the active VFO (MOR-2662).** One tile in the
+  portrait deck, and the other VFO's frequency is no longer drawn in
+  the sticky header; the receiver pills, swap, equalize and the A/B
+  selectors stay outside the tile. Before any receiver reports an
+  active slot, the startup view keeps one unlit tile instead of
+  inventing an active receiver.
+
+- **The design-language choice is stored per skin (MOR-2218).** The
+  workspace payload moves to schema version 2 with a
+  `designLanguageBySkin` map; the retired global value is dropped on
+  read, not migrated, so each skin starts at its declared default.
+  The settings panel offers only the current skin's declared
+  languages, and a skin with none shows no design-language select.
+
+- **On a core-only server the web UI stops calling /api/local
+  (MOR-2242).** The local-extension manifest and the tuning-step
+  mirror run only when the station supervisor advertises itself with
+  a `<meta name="rigplane-local-supervisor">` tag; the core tuning
+  step keeps working through /api/v1. The CSP carries the hash of the
+  inline service-worker cleanup and allows `media-src 'self' data:`.
+
+- **Filter Width gives the same feedback in every mount
+  (MOR-1703).** Desktop, narrow mobile and a workspace-selected
+  filter mount share one lifecycle — phase, busy and confirmed ARIA —
+  for the same command.
+
+### Removed
+
+- **The unreachable queue-PTT path is retired; every key goes through
+  the managed TX lane (MOR-2563).** `docs/api/web.md` no longer
+  documents a `radio_not_ready` error for PTT, because nothing emitted
+  it. Behaviour did not change for any supported entry point.
+
+### Fixed
+
+- **A dropped IC-7610 LAN session comes back on the radio's "session
+  free" notice (MOR-2627, MOR-2625, MOR-2623).** A quiet link that
+  still exchanges packets is left alone. A silent port is handed to
+  recovery in 5 seconds instead of 60. If a CI-V-only reconnect
+  restores no data, the next handoff does one full reconnect with a
+  fresh radio session. When the radio itself reports the session free,
+  recovery starts then, not after the watchdog wait. On the IC-7610
+  stand that gap was about 1 second, against about 71 seconds before. A
+  second
+  server's busy notice does not start recovery.
+
+- **A refused LAN session says what the error code means
+  (MOR-2630).** `0xFFFFFFFF` tells you to stop the other client on
+  this computer; `0xFDFFFFFF` says a client on another computer holds
+  the session. Other codes keep a hedged retry hint. The old "wait
+  30-60s and retry" line is gone.
+
+- **The IC-7610 names its transmitting receiver, so TUNE is no longer
+  blocked by an unknown TX target (MOR-2540).** It polls CI-V `1C 03`
+  and labels the target MAIN, or SUB while split is on and that fact
+  is fresh. COMP, Vd and Id in the station-meter strip read dB, V and
+  A from the CI-V reference guide instead of raw device bytes. An idle
+  field's poll no longer slows past half its freshness window, on
+  every CI-V radio that uses adaptive decay (MOR-2540).
+
+- **The TUNE badge clears on the control-class poll (MOR-2596).**
+  `tuner_status` polls with the control class (2 seconds nominal,
+  5 second ceiling) instead of the setting class.
+
+- **CI-V queries are spaced from the send, not from the reply
+  (MOR-2595).** A slow answer no longer adds the gap on top of the
+  round trip. The default gap is 10 ms on LAN and 25 ms on Icom
+  serial; the X6200 keeps 50 ms.
+
+- **Transmit meters start polling when managed transmit keys, not
+  after the radio confirms PTT (MOR-2616).** Radios without a managed
+  transmit authority still wait for observed PTT.
+
+- **A lost CI-V answer is asked again before the field's freshness
+  window ends (MOR-2614).** A poll the commander drops at its cap is
+  not recorded as sent, and the next cadence tick asks again
+  (MOR-2602). An answer that arrives while its request is still being
+  sent is credited (MOR-2617). A write confirmation that arrives in
+  that same window gets its own read, so a reply from before the
+  write cannot confirm it (MOR-2592, MOR-2594).
+
+- **The IC-705 repeater tone mode is read from `16 5D` (MOR-2573).**
+  That one selector is OFF, TONE or TSQL. The old pair of on/off reads
+  never showed TSQL, so the panel could not step the tone-squelch
+  frequency.
+
+- **On the FTX-1, DCS, PR FREQ and REV TONE light no tone key
+  (MOR-2572).** Those squelch-type codes are reported as not known,
+  not as OFF. rigctld answers `ENAVAIL` for TONE and TSQL in that
+  state. A VFO select the radio rejects answers `RIG_ERJCTED` instead
+  of an internal error (MOR-2621).
+
+- **The FTX-1 server starts while SUB is the active receiver
+  (MOR-2581).** The MAIN attenuator read is withheld unless MAIN is
+  selected; the radio refuses that read while SUB is active. A
+  declared Yaesu read the radio refuses skips that field instead of
+  aborting the poll cycle (MOR-2578). A refusal that does not repeat
+  is read once more before it counts as a startup defect (MOR-2584).
+
+- **The scope SPAN control stays in its row, unlit, while the scope
+  mode is unread (MOR-2565).** It hides only for a read FIX or
+  S-F mode.
+
+- **ATT, P.AMP and the AGC time constant appear only where that
+  receiver declares them (MOR-2588).** A radio that admits the command
+  but does not poll the MAIN field no longer shows a permanently dark
+  MAIN lamp.
+
+- **The band-plan overlay fetches a frequency range once (MOR-2605).**
+  Panning inside the last fetched range does not ask again. An idle
+  page refetches managed transmit only when a transmit input changes,
+  not on every radio-state frame (MOR-2607).
+
+- **S-meter geometry updates only when a whole pixel changes, and the
+  needle animation stops once it has settled (MOR-2613).** The peak
+  hold ticker runs only while the needle is still moving or the peak
+  sits above the value.
+
+- **An undrained audio queue no longer logs one warning per dropped
+  packet (MOR-2612).** The first drop is logged at once; while drops
+  continue, at most one summary every 5 seconds. Stopping RX discards
+  incoming audio packets instead of filling the queue. Cancelling an
+  audio subscription raises `CancelledError` instead of ending the
+  stream as if it had finished (MOR-2620).
+
+- **A DX-cluster connect that never completes times out after 10
+  seconds and enters the reconnect backoff (MOR-2619).**
+
+- **A second SIGTERM during shutdown no longer crashes the CLI
+  (MOR-2626).** The first signal starts shutdown; a later one is
+  ignored, and the process still exits.
+
+- **The notch choice shows the requested mode until the radio confirms
+  it (MOR-2236).** AUTO, MANUAL or OFF is marked pending as soon as it
+  is sent, the same way NB and NR already were. The confirmed choice
+  stays lit; the requested one is marked pending.
+
+- **The FTX-1 manual-notch pending status shows the target and the
+  reading in the same unit (MOR-2635).** While a notch position
+  command is pending, the requested target is decoded through the
+  same contract as the confirmed reading, so both display in Hz.
+  When the reading falls back to the raw field, the target stays raw
+  too.
+
+- **A lost radio link no longer toasts once per in-flight command
+  (MOR-2241).** While the link is not connected, an error notification
+  whose code is `commandExecutionFailed` and whose reason is
+  `provider generation invalidated` is not shown. Other error toasts
+  still appear, including a different reason while disconnected and
+  the same termination after the link is connected again.
+
+- **RF gain and squelch step on the radio's raw lattice (MOR-1676).**
+  Where the profile publishes a raw range, the v3 sliders step one raw
+  unit, and a step and its reverse restore that raw value. The text
+  stays a percentage of the published range. The FTX-1 profile now
+  publishes RF gain and squelch as raw 0–255, the same shape as the
+  IC-7300. A radio that publishes no range keeps the old normalized
+  slider. The state snapshot is still a normalized 0.0–1.0 float.
+  Keyboard RF-gain steps without an explicit delta move by five
+  percent of that raw span, in raw units. Squelch has no keyboard
+  step; it moves only from its slider.
+
+- **The hardware validator skips an unreadable filter width
+  (MOR-2519).** If `get_filter_width` returns no width, the filter-width
+  set check is SKIP with a reason, and no write is attempted. That is
+  the FTX-1 in C4FM, whose code 00 is outside the width table.
+  `get_filter_width` is typed `int | None` for that answer. The profile
+  schema documents `[filters].first_code` and no longer lists a
+  `[filters].style` field the loader does not read.
+
+- **On a Yaesu radio whose NB or NR level is also the switch, off and
+  on restore the operator's level (MOR-2632).** Off reads the live
+  level and, when it is nonzero, remembers it for that receiver, then
+  writes 0. On writes the live level if it is nonzero, otherwise the
+  remembered level, otherwise the existing midpoint default. The memory
+  stays on the radio object. The FTX-1 is this shape: CAT level 000 is
+  OFF. A radio that has its own `set_nb` or `set_nr` write command
+  still uses that command.
+
+- **Values the radio has not reported no longer draw "?", dashes,
+  "unknown" or invented defaults, on screen or in accessible names
+  (MOR-2644, MOR-2647–MOR-2655, MOR-2657–MOR-2659, MOR-2667, MOR-2668,
+  MOR-2673, MOR-2674, MOR-2682, MOR-2683, MOR-2690–MOR-2692).** An
+  unread reading is an empty, unlit slot reserved for the widest text
+  the slot can show, sized from the profile's own mode and filter
+  lists where the text depends on the radio, so nothing moves when
+  the first reading arrives. Empty memory channels render an empty
+  row instead of "-- empty --"; an antenna's blocked reason sits on
+  the disabled control's title rather than visible text; and an
+  unread compressor, monitor-gain or filter value is no longer
+  replaced by a number or by the first choice's label.
+
+- **The uncertain TX state reads "TX" with a hollow lamp (MOR-2671).**
+  Confirmed and unconfirmed states now differ by shape — filled versus
+  hollow or dashed outline — which survives forced-colors mode; the
+  accessible name says "transmit not confirmed" in words.
+
+- **A control refused while the radio is transmitting names why
+  (MOR-1890).** The refusal reason the server already delivers to the
+  command's issuer now reaches the operator: the aria-live status
+  attached to the touched control names the catalog reason — the
+  radio is transmitting, or its RF state is unknown — instead of the
+  raw English wire message.
+
+- **A TX key blocked while idle renders inert (MOR-1276).** In
+  studioline and fieldline it no longer paints the idle accent
+  colour; visual treatment only, no TX path changes.
+
+- **The active VFO tile and the unavailable channel strip carry
+  non-colour state (MOR-1260).** The active tile gets a double inner
+  outline that survives forced-colors with no geometry change; an
+  operationally unavailable strip now shows its reason as visible
+  text, and its active bar is pinned to CanvasText under
+  forced-colors.
+
+- **The linear S-meter honours forced-colors mode (MOR-1250).** Its
+  SVG segments use system colours instead of the fixed palette, and
+  the lit/unlit split is carried in the DOM as a data attribute, with
+  the reading also in text and aria-labels.
+
+- **Screen readers hear less noise and better reasons (MOR-1283,
+  MOR-1350).** The decorative RF mark in the meters surface is
+  aria-hidden, and the TX-aux surface points its aria-describedby at
+  the joined TUNE blocked reasons.
+
+- **Per-digit VFO tuning clamps to the band's declared edges
+  (MOR-1331).** Wheel and key steps stop at the mounted profile's
+  `tuneMinHz`/`tuneMaxHz`; when an edge is unknown the old wide
+  limit keeps applying. A +1 MHz step at 14.250 MHz on a
+  14.200–14.300 MHz band lands on 14.300, not outside it.
+
+- **The mobile MOD-input TX banner shows exactly once (MOR-1245).**
+  Portrait no longer renders it twice, and the open TX-settings
+  sheet no longer duplicates the fixed overlay copy.
+
+- **Canvas displays inside a CSS-scaled stage stay sharp and repaint
+  on window resizes (MOR-1161).** Backing stores are sized by CSS
+  size × devicePixelRatio × stage scale, so the stage no longer
+  resamples a devicePixelRatio-only bitmap and a resize redraws it.
+
+- **The legacy mobile CW panel no longer throws
+  state_unsafe_mutation when provider authority is lost (MOR-2433).**
+  Its break-in delay view is reconciled through one renderer lease
+  and an effect, as the desktop keyer does.
+
+- **A corrupt stored workspace object falls back to legacy migration
+  (MOR-1300).** A stored read that yields a reset no longer
+  short-circuits the legacy migration when its sentinel is absent.
+
+- **PCM16 TX audio follows the negotiated sample rate (MOR-1794).**
+  When the server admits a PCM16 TX codec at 8, 16, 24 or 48 kHz,
+  each 20 ms capture frame is resampled to that rate and carries it
+  in the frame header; a malformed or unsupported admitted rate is
+  refused through the existing TX fault path, and an absent rate
+  keeps 48 kHz.
+
+- **Post-write confirmations are not born expired (MOR-1898).** The
+  rigctld drain can no longer drop a confirmation built with an
+  epsilon freshness budget before sending it; such requests now get
+  a liveness budget of one answer window, so a false acquisition
+  timeout can no longer re-base the cadence clock.
+
+- **A legacy band or preset selection can no longer be moved by a
+  stray tuning frame (MOR-1435).** The bandless band fallback,
+  preset select and the BSR path now go through the tuning
+  accumulator, which clears any pending burst before the chosen
+  target is sent.
+
+- **PSK and PSK-R modes light on the mode panel (MOR-2508).** The
+  store's enum token is mapped to the profile's label before the
+  strict comparison, so PSK-R no longer stays dark.
+
+- **Hardware validation reads each control's band from the rig
+  profile (MOR-2476).** The hard-coded ranges survive only as an
+  interim for a radio with no profile; a profiled radio that declares
+  no band skips that check honestly instead of assuming one.
+
+- **The scope display recaptures the passband after a hard retirement
+  while tuning continues (MOR-2440).** Retirement now requires a
+  live tuple, so the display recaptures once a complete
+  post-retirement geometry set exists, without the operator having
+  to stop tuning.
+
+- **The TX-target frequency keeps its space before Hz (MOR-2711).**
+  The RX/TX surface used to glue the unit onto the number
+  (`14250000Hz`); the pair now renders as one expression, the
+  number and the unit joined by a no-break space, so on a narrow
+  phone line they wrap together and the unit never sits alone on
+  the next line. An unread target still shows neither number nor
+  unit.
+
+- **The phone's unread S-meter, dBm and offset readouts draw empty
+  reserved slots (MOR-2675).** `---` and `--- dBm` are gone; the
+  meter slots keep one width in every state with tabular digits and
+  a zero-width strut, and the RIT/XIT badge keeps its label with an
+  empty offset in a slot sized for `RIT +9999`. Known values render
+  exactly as before.
+
+- **No dash on the band row, and the permit caption keeps one width
+  (MOR-2684, MOR-2672).** An unread tuning range and an
+  unrecognised reason code render no text instead of `—`. A denial
+  whose reason cannot be named draws no visible text — never a dash
+  — while a screen reader hears the catalog sentence "the reason
+  for this denial is not available"; the caveat sentence uses the
+  same words instead of leaving a dangling ": ". Each band choice's
+  TX permit caption reserves one width for allowed and denied in
+  every locale, measured in the caption's own font, so the first
+  verdict cannot move the row.
+
+- **Value slots reserve the widest value of the mounted radio
+  (MOR-2706).** The CW keyer's RX-mode slot sizes itself to the
+  longest mode name in the profile's catalog, the pitch and
+  key-speed slots to their domain maxima in their own units, and
+  the VFO indicator's BW fact to the widest filter width across the
+  profile's modes. Each reservation is fixed when capabilities
+  load; a reading never changes it. The old fixed widths stay as
+  floors for a radio that publishes no domain.
+
+- **The active VFO tile says ACTIVE on selected/unselected radios
+  (MOR-2656).** On a radio that reports only selected versus
+  unselected — the IC-7300 and IC-705 — the active tile shows the
+  one localized word (ACTIVE / АКТИВЕН / 使用中) and the other tile
+  an empty plaque, instead of the English "Selected VFO" and
+  "Unselected VFO" pair. The plaque reserves one width for the
+  widest catalog word, so a locale switch moves nothing.
+
+- **The RX/TX surface speaks in sentences and names no internal
+  slot kind (MOR-2705).** The blocked list used to print raw
+  `field: code` pairs; every code now resolves to a catalog
+  sentence, on screen and in the accessible description. The
+  TX-target line names a slot only for a slotted radio (`MAIN A`);
+  unslotted and relative targets show no kind word.
+
+- **Readouts that cannot know a value show nothing, not a word
+  (MOR-2705).** The RX-audio readiness badge renders an empty
+  reserved slot for not-applicable instead of `n/a`; the break-in
+  delay prints its unit only with a value; a dBm that cannot be
+  computed renders nothing instead of "uncalibrated", and the
+  phone's dBm slot is sized for the widest real value (`−127 dBm`).
+  While the TX state is unknown, the phone's TX indicator carries
+  no title.
+
+- **An uncalibrated S-meter shows its bar and nothing it cannot
+  know (MOR-2705).** The bar still moves on the raw fraction, but
+  no number, no `raw`/`level` scale word and no "uncalibrated" line
+  is drawn; the accessible name is the bare "S meter". On the phone
+  the S-unit and dBm readouts are not drawn at all for an
+  uncalibrated radio; on the Amber LCD the readout box stays put
+  but empty for the S source, and the S/dB scale words hide. An
+  engineering dB reading prints its value with its unit and no
+  state word.
+
+- **Meter accessible names carry the label and the value, never a
+  status word (MOR-2705).** Unread, unknown and idle meters name
+  the label alone — "Po", "PWR" — with no "No reading", "Not
+  measuring in receive" or "Unsupported". A retained value reads as
+  label plus value, the same for current and stale. Visible text
+  does not change.
+
+- **The band TX reason sentences are translated into Japanese
+  (MOR-2715).** The out-of-band, unknown-target and
+  ranges-not-configured sentences no longer fall back to English,
+  in the band denial and in the RX/TX blocked list that reuses
+  them.
+
+- **The remaining catalog keys that fell back to English are
+  translated (MOR-2717).** Nineteen Russian workspace-settings
+  strings and eighty-three Japanese strings — RX/TX, band permit,
+  pending-announcement and the rest — now render in the operator's
+  locale, and the permit caption's reservation covers the Japanese
+  許可 / 禁止 verdicts.
+
+### Documentation
+
+- **Run one RigPlane server per radio (MOR-2622, MOR-2628).** The CLI
+  guide says so. Measured on an IC-7610: a second server on the same
+  computer is refused with `error=0xFFFFFFFF`, and about 90 seconds
+  later the radio also drops the first session; a second server on
+  another computer is refused with `error=0xFDFFFFFF`, and the first
+  session keeps running.
+
+- **The web UI guide describes class poll cadences (no ticket).** A
+  pollable path with no field-policy entry takes its acquisition-class
+  policy, which the scheduler may stretch to the transport budget,
+  instead of the profile default.
+
+## [3.0.0b7] — 2026-09-23
+
+### Added
+
+- **The FTX-1's repeater tone and tone squelch are on (MOR-2111).**
+  The `repeater_tone` and `tsql` capability tags join the FTX-1
+  features, so `set_repeater_tone`, `set_repeater_tsql`,
+  `set_tone_freq` and `set_tsql_freq` are admitted on the radio, on
+  MAIN and SUB. rigctld `set_func TONE` / `TSQL` reaches the matching
+  toggle on the resolved receiver (an explicit VFOB, or no VFO
+  argument or `currVFO` while SUB is active, gives SUB; otherwise
+  MAIN), and `get_func` reads the toggle state with the live radio
+  read as fallback. A backend refusal — tone off with TSQL on, or a
+  toggle over a DCS/PR FREQ/REV TONE mode — answers `RPRT -9`. The
+  Yaesu rigctld `dump_state` function mask now advertises TONE and
+  TSQL. The four web commands now travel the descriptor path, so a
+  refusal reaches the caller as an error instead of an immediate
+  success echo, and on a radio without these capability tags a
+  single-command HTTP call for them answers 409 `unsupported_command`
+  instead of 400 `invalid_request`.
+
+### Changed
+
+- **The panorama controls on the Standard face are one toolbar row,
+  with the screen controls behind More (MOR-2545).** The row holds
+  CTR/FIX · SPAN · REF · HOLD · MAIN/SUB · ⋯, then STEP, BANDS, the
+  scope status and fullscreen; the other screen controls — VIEW,
+  AUTO, AVG, PEAK, brightness, palette and band-plan layers — move
+  into the More panel with the same handlers. In the toolbar the
+  scope status becomes a compact indicator — a tone dot and the SRC
+  chip — whose tooltip and accessible name carry the read parts
+  (e.g. "SRC hardware · inactive · HW off"); unread parts are
+  omitted, never shown as placeholders. The scope area fills the
+  center column's 320 px minimum instead of stopping at its own
+  280 px floor — up to 40 px more on short windows — and the page is
+  not taller.
+
+- **The scope divider and the filter-width handle light only on
+  hover intent, thin and translucent (MOR-2562).** The
+  spectrum/waterfall divider used to flash a solid 4 px accent bar
+  every time the mouse crossed it, and the filter-width handle drew
+  a 3 px outlined bar all the time. Both are now invisible at rest —
+  the passband overlay's dashed edges still mark the filter edge,
+  and the faint divider stripe stays — and show a thin 1 px line at
+  low opacity on hover after a 200 ms delay, so entering waits and
+  leaving is instant; while dragging, 2 px at higher opacity with no
+  delay.
+
+### Fixed
+
+- **FTX-1 RX audio survives TX audio on one USB device (MOR-546).**
+  On macOS, when a radio's RX and TX audio resolve to the same
+  physical USB device, arming TX audio used to open a second stream
+  on that device; macOS answered AUHAL -50 and the running RX
+  capture went silent. Arming TX now opens one duplex stream and the
+  RX callback carries on through it; stopping TX reopens plain RX
+  when an RX callback is still wired. Both USB backends — Yaesu CAT
+  and Icom serial — get the handoff unchanged; separate-device
+  behaviour is unchanged, and arming TX audio sends no CAT or PTT
+  command.
+
+## [3.0.0b6] — 2026-09-23
+
+### Added
+
+- **The FTX-1 gains tone and tone-squelch control in the backend, on
+  MAIN and SUB (MOR-2111).** All eight RepeaterControlCapable methods
+  are implemented on the Yaesu CAT radio over the CT (SQL type) and CN
+  (CTCSS tone frequency) commands, both receiver-routed (MAIN / SUB).
+  Setting a tone frequency validates exact membership in the profile's
+  CTCSS table before any wire traffic; the TSQL frequency getters and
+  setters are aliases of the single CN register; the repeater tone and
+  TSQL toggles derive from CT, read-modify-write, and refuse loudly —
+  writing nothing — when the current code is a DCS/PR FREQ/REV TONE
+  mode. Capability tags stay off, and neither the web server nor
+  rigctld dispatches these commands on the FTX-1.
+
+### Fixed
+
+- **FTX-1 startup no longer hangs with rigctld running in the same
+  process (MOR-2557).** With the embedded rigctld built after the web
+  server, the rigctld bootstrap created a fallback state store and
+  overwrote the web seat's state services on the radio, so the
+  conditional ATT and manual-notch-frequency reads were withheld and
+  the web startup gate waited on those fields forever. The store and
+  model-service lookups now return the services already attached to
+  the radio before creating a fallback.
+
+## [3.0.0b5] — 2026-09-23
+
+### Added
+
+- **The panorama controls are one row of flat, indicator-style keys,
+  with the rest behind a ⋯ More panel (MOR-2545).** The row holds
+  CTR / FIX, SPAN, REF and HOLD, plus MAIN / SUB on a dual-receiver
+  radio; on a narrow container, MAIN / SUB, HOLD, REF and then SPAN
+  move into More, which closes on an outside click, Esc or any scroll.
+
+### Fixed
+
+- **The desktop Standard face no longer scrolls as a whole page
+  (MOR-2542).** The side columns now contain their positioned content;
+  the columns still scroll their own content.
+- **AGC-T and dual-receiver audio routing appear only where the radio
+  declares them (MOR-2527).** Radios that do not declare the AGC
+  time-constant field no longer draw a permanently disabled `AGC-T ?s`,
+  and the audio-routing controls are IC-7610-only; unread focus and
+  gain text is empty with the width reserved instead of `—`.
+- **Status-bar and power confirmations happen inside the page, not in
+  native browser dialogs (MOR-2543).** The in-page dialog shows
+  failures in place. The power label no longer reads UNKNOWN — an
+  unknown state shows the control's own name, unlit.
+- **The RF gain annunciator lights only while RF gain is reduced
+  (MOR-2546).** At 100 % and while the reading is unknown, the VFO deck
+  lamp and the older indicator row show no text and keep their reserved
+  width; the row's `—` fallback is gone.
+- **The LCD faces show RFG only while RF gain is reduced (MOR-2546).**
+  The same rule as the VFO deck: at a displayed 100 % (raw 254/255
+  included), the RFG chip prints no text, keeps its reserved slot and
+  draws no frame; a radio without RF gain shows no RFG chip.
+- **The IC-7610 and IC-7300 power state now comes from the radio's
+  answers and acknowledged power commands (MOR-2544).** IC-705 and
+  IC-9700 are included, while the X6100, X6200 and TX-500 are excluded,
+  because their power control covers only the RF-power level.
+- **No placeholder text on the RX audio, RF front-end and DSP surfaces
+  (MOR-2527).** Unread values are drawn in place, unlit, with the label
+  only and no value text, and the layout does not shift when the value
+  arrives; the MOD select no longer offers a `—` option.
+
+## [3.0.0b4] — 2026-09-23
+
+### Fixed
+
+- **The IC-7610, IC-705 and IC-9700 no longer poll the Po, SWR, ALC and
+  COMP meters while receiving (MOR-2540).** Their profiles gate these four
+  meters on PTT, as the IC-7300 and FTX-1 profiles already did; on a live
+  IC-7610 over LAN the polling had crowded the other fields and the
+  station meters blinked.
+- **A transmit-only station meter stays in its place, unlit, while
+  receiving (MOR-2540).** It lights up on transmit, so the meter row does
+  not shift. Bar meters and the segment-line display no longer show a `?`
+  in place of or after a reading.
+
+## [3.0.0b3] — 2026-09-22
+
+### Breaking changes
+
+- **The component-kit `vfoOperations` family has five handles instead of
+  eight (MOR-2538).** The `quickSplit`, `quickDualWatch` and `speak` handles
+  are removed with the SPEAK, QUICK SPLIT and QUICK DW actions; a kit face
+  that renders them must drop them.
+
+### Removed
+
+- **SPEAK, QUICK SPLIT and QUICK DW are gone from the web UI (MOR-2538).**
+  SPLIT and DW are single-click toggles; the backend WebSocket `speak`,
+  `quick_split` and `quick_dualwatch` commands and the `get_/set_quick_*`
+  menu toggles remain.
+
+### Changed
+
+- **Keyboard focus draws no frame (MOR-2522).** The focus outlines, rings
+  and focus-only border or background recolours are removed; value controls
+  and range sliders keep their focus illumination, and forced-colors mode
+  keeps the system outline.
+
+## [3.0.0b2] — 2026-09-22
+
+### Breaking changes
+
+- **The `commands` CW-pitch and key-speed builders take the raw level
+  (MOR-2473, MOR-2481).** `rigplane.commands.set_cw_pitch` and
+  `rigplane.commands.set_key_speed` now take the raw 0-255 level instead
+  of Hz/WPM; a caller still passing Hz gets `ValueError` (Hz 300-900 is
+  outside the 0-255 level band), but a caller still passing WPM does not:
+  6-48 are valid levels and are sent as raw levels. The Hz/WPM conversion
+  moved into `CoreRadio.set_cw_pitch` /
+  `CoreRadio.set_key_speed`, which encode through the active profile's
+  `[controls.cw_pitch]` / `[controls.key_speed]` band and its new
+  `encode_rounding` key (`"ceil"` / `"nearest_half_down"`) via
+  `rigplane.profiles.control_domain.encode_legacy_control`. A CI-V
+  profile control without `encode_rounding` makes the `CoreRadio` setter
+  raise. The X6100's CW pitch and key speed move to its documented
+  400-1200 Hz (10 Hz step) and 5-50 WPM bands, and the X6200 now writes
+  its documented 400-1200 Hz CW-pitch band instead of raising above
+  900 Hz. Callers of the `Radio` protocol methods are unaffected.
+- **The `RigctldFallbackCache` protocol is deleted (MOR-2483).** Removed
+  the exported `rigplane.core.radio_protocol.RigctldFallbackCache`
+  protocol. `RigctldRoutable.rigctld_routing`, `create_routing`,
+  `YaesuRouting.__init__` and `YaesuCatRadio.rigctld_routing` no longer
+  take `cache`; a third-party backend implementing `rigctld_routing`
+  must drop that parameter.
+
+## [3.0.0b1] — 2026-09-05
+
+### Migration from 2.11.1
+
+- Core 3.0 beta uses selective compatibility. The [migration guide](https://rigplane.dev/migrate/)
+  maps the frozen compatibility decisions to Python, receiver-state, HTTP,
+  extension-host, CLI, profile and rigctld consumer examples. All TX consumers
+  must adopt canonical ownership, admission, completion and OFF; the former
+  leave-keyed lifecycle is not emulated. Momentary PTT and latched TRANSMIT
+  are distinct operations.
+- The package version is `3.0.0b1`. HTTP contract version 1 and the
+  extension-host contract (numeric 2, manifest `host_api: "2.0"`) are separate
+  contracts. The host requires the explicit new declaration while retaining
+  manifest schema version 1. Installed-candidate compatibility is a separate
+  release gate; no full 2.x compatibility is claimed.
+- Core includes SDR preservation against the 2.11.1 behavior baseline.
+  Browser, packaging/rollback and hardware acceptance remain release gates;
+  Pro packaging and release follow separately.
+
+- **Profile aliases retain their released behavior.** The 3.0
+  compatibility bridge restores the deprecated read-only
+  `RadioProfile.vfo_swap_code` and `RadioProfile.vfo_equal_code` properties
+  after their development removal. Their exact released expressions are
+  `swap_main_sub_code or swap_ab_code` and
+  `equal_main_sub_code or equal_ab_code`. New consumers should select the
+  explicit A/B or MAIN/SUB operation appropriate to their radio; see the
+  [migration guide](https://rigplane.dev/migrate/).
+- Icom CTCSS tone/TSQL setters accept the public integer-centiHz `freq_hz`
+  keyword and retain `freq_centihz` as an alternative. Supplying both
+  non-`None` spellings or neither raises `TypeError` before transport; there
+  is no unit scaling. See `src/rigplane/runtime/radio.py: CoreRadio.set_tone_freq`
+  and `CoreRadio.set_tsql_freq`, and the [migration guide](https://rigplane.dev/migrate/).
+
+### Breaking changes
+
+- **Tone-capable rig profiles must now declare a named CTCSS table (MOR-2129).**
+  Any profile with `repeater_tone`, `tsql`, or `sql_type` must include
+  `[ctcss] table = "<name>"`, resolving through the versioned sibling catalog
+  `rigs/_ctcss_tables_v1.toml`. Missing, unknown, or malformed references now
+  fail profile loading. The resolved `RigConfig.ctcss_tones_centihz` and
+  `RadioProfile.ctcss_tones_centihz` values are immutable ordered integer
+  centiHz tuples (`8850` = 88.5 Hz); order defines provider index mapping, but
+  a reference does not add capabilities or grant a setter. The four shipped
+  tone profiles (IC-705, IC-7300, IC-9700, FTX-1) reference `standard_50`;
+  IC-7610 remains deliberately unreferenced.
+- **The shared state-cache poll helpers are deleted.** Removed:
+  `rigplane.runtime._shared_state_runtime` (the whole module — its
+  `DEFAULT_STATE_CACHE_TTL`, `is_cache_fresh`, `poll_frequency`,
+  `poll_mode` and `poll_standard_fields`) and the legacy alias shim
+  `rigplane._shared_state_runtime`. Importing either module path now
+  raises `ModuleNotFoundError`. `rigctld` keeps its own TTL in
+  `RigctldConfig.cache_ttl`.
+- **The `rigctld` server's `_poller` constructor hook is deleted.** Removed
+  from `rigplane.rigctld.server`: the `_poller` keyword argument of
+  `RigctldServer.__init__`, the `self._poller` attribute, and the poller
+  start/stop and `write_busy`/`hold_for` pacing sites that read it in
+  `RigctldServer.stop`, `RigctldServer._on_client_done`,
+  `RigctldServer._wsjtx_compat_prewarm` and `RigctldServer._handle_client`,
+  together with the module-level `_is_packet_mode_set` helper that gated the
+  packet-mode hold. Passing `_poller=` to `RigctldServer` now raises
+  `TypeError`.
+- **`rigplane.commands.parse_scope_span_response` and
+  `rigplane.commands.scope_set_span` require the span-preset table as an
+  argument (MOR-2258).** The module constant that held the eight Icom
+  CI-V span values (span code 0-7 -> Hz) inside
+  `src/rigplane/commands/scope.py` is deleted; the table now lives only in
+  `rigs/*.toml` (`[scope].span_presets_hz`) and reaches these two
+  functions as `RadioProfile.scope_span_presets_hz`, passed in by the
+  caller because `commands/` may not import `profiles/`
+  (`.importlinter`). `parse_scope_span_response` takes it as a second
+  positional parameter, `scope_set_span` as a required keyword-only
+  `presets=`; both raise `TypeError` if it is omitted. The legal span
+  index range is now `0..len(presets) - 1` rather than a fixed `0..7`.
+  Every caller in this repository (`runtime/_civ_rx.py: CivRuntime`,
+  `runtime/_scope_runtime.py: ScopeRuntimeMixin`) reads the resolved
+  profile and passes it; an external caller must do the same. At this
+  commit every shipped profile that declares `get_scope_span`
+  (`ic7300`, `ic705`, `ic7610`, `ic9700`) also declares
+  `[scope].span_presets_hz` with the same eight values, so no shipped
+  radio changes behaviour.
+- **The `rigctld` `RadioPoller` is deleted.** Removed: `rigplane.rigctld.poller`
+  (the module, its `RadioPoller` class, `_mode_to_hamlib_str`,
+  `_get_mode_reader`, and `_STATS_LOG_INTERVAL`) and its `## RadioPoller`
+  section in `docs/api/rigctld.md`. At that entry's parent commit nothing
+  under `src/` constructed the class.
+- **The misnamed `tx_freq_monitor` field and commands are deleted; XFC is
+  the real transmit-frequency monitor (MOR-2246).** Removed: the
+  `TransceiverStatusCapable` protocol (and its `rigplane.TransceiverStatusCapable`
+  export) with its `get_tx_freq_monitor`/`set_tx_freq_monitor` methods; the
+  concrete `CoreRadio.get_tx_freq_monitor`/`CoreRadio.set_tx_freq_monitor`
+  implementations; the `rigplane.commands.get_tx_freq_monitor`/
+  `set_tx_freq_monitor` builders (0x1C 0x03); the `get_tx_freq_monitor`/
+  `set_tx_freq_monitor` web command-API entries (`docs/api/command-catalog.md`);
+  the `tx_freq_monitor` key in
+  `RadioState.to_dict()`; and the `txFreqMonitor` field on the JSON/WebSocket
+  state API. `Radio` (the core `Protocol` consumers depend on) never declared
+  `get_tx_freq_monitor`/`set_tx_freq_monitor` — they lived only on
+  `TransceiverStatusCapable`, which `Radio` did not inherit. Every shipped
+  profile already declared these commands absent or left them undeclared,
+  since 0x1C 0x03 is Read transmit frequency, not a transmit-frequency
+  monitor toggle; `get_xfc_status`/`set_xfc_status` (0x1C 0x02) remain the
+  real, unaffected transmit-frequency monitor.
+- **`rigplane.commands.config` builders require `cmd_map`; there is no
+  hardcoded fallback (MOR-2006, Steps 5..N module 1 of
+  `docs/plans/2026-08-29-profile-driven-command-bytes.md`).**
+  `get_acc1_mod_level`/`set_acc1_mod_level`, the USB/LAN mod-level pair,
+  the DATA-OFF/1/2/3 mod-input pairs, and `get_civ_transceive`/
+  `set_civ_transceive`/`get_civ_output_ant`/`set_civ_output_ant` all took
+  an optional `cmd_map` that, unused, fell back to bytes written into the
+  source years ago — on the IC-7300 those bytes collided with `set_mic_gain`
+  (both built `14 0B`), so the ACC1 slider moved MIC gain (MOR-1992). `cmd_map`
+  is now a required keyword-only argument on all eighteen; a call that omits
+  it raises `TypeError` (naming the migration and pointing at
+  `commands/bound.py: BoundCommands` in the message) rather than silently
+  emitting the old, sometimes-wrong bytes. The only production caller in
+  this repository, `runtime/radio.py: CoreRadio`, moved onto
+  `self._commands.<builder>(...)` in the same change, which supplies the
+  map — but an external caller of the free function must do the same:
+  reach these builders through a radio's bound commands rather than
+  calling `rigplane.commands.get_acc1_mod_level(...)` (or any of its
+  seventeen siblings above) directly with no map.
+- **`rigplane.commands.levels` builders require `cmd_map`; there is no
+  hardcoded fallback (MOR-2006, Steps 5..N module 2 of
+  `docs/plans/2026-08-29-profile-driven-command-bytes.md`).** The other
+  half of the ACC1/MIC-gain collision above: `set_mic_gain`'s fallback
+  built the same eight bytes on the IC-7300 as `set_acc1_mod_level`'s did.
+  All fifty builders in this module — RF power/gain, AF level, squelch,
+  APF/NR/PBT/notch/compressor/break-in/NB/DIGI-SEL/drive/monitor/VOX/anti-VOX
+  levels, CW pitch, mic gain, key speed, and the REF-adjust/dash-ratio/NB-depth/
+  NB-width/VOX-delay menu-address group — now require `cmd_map` as a required
+  keyword-only argument; a call that omits it raises `TypeError` the same way
+  as `rigplane.commands.config`'s eighteen. The only production caller,
+  `runtime/radio.py: CoreRadio`, moved onto `self._commands.<builder>(...)`
+  in the same change — an external caller of a free function must do the
+  same rather than calling it directly with no map.
+- **`rigplane.commands.vfo` builders require `cmd_map`; there is no
+  hardcoded fallback (MOR-2007, Steps 5..N module 3 of
+  `docs/plans/2026-08-29-profile-driven-command-bytes.md`).** VFO select/
+  swap/equal, split, tuning step, scan start/stop/type/df-span/resume, and
+  dual-watch get/set now require `cmd_map` as a required keyword-only
+  argument, the same way as `rigplane.commands.config`/`levels` above.
+  Three behaviour changes ride along with the migration:
+  - `set_dual_watch_off`/`set_dual_watch_on` resolve the split,
+    get_/set_-prefixed command names `set_dual_watch_off`/
+    `set_dual_watch_on` instead of the bare `set_dual_watch` the fallback
+    used to resolve — IC-7610/IC-9700 declare the two directions at
+    different wire addresses, which one shared name could never carry.
+  - `quick_dual_watch()`/`quick_split()` are deleted. Bench-confirmed on
+    the live IC-7300, `1A 05 0030`/`0032` are persistent, readable/
+    writable menu toggles, not the one-shot triggers their names implied
+    — the deleted builders always sent a bare read frame and their only
+    caller never read the reply, so they fired nothing. Replaced by real
+    `get_quick_split`/`set_quick_split`/`get_quick_dual_watch`/
+    `set_quick_dual_watch` pairs; `runtime/radio.py: CoreRadio` gained
+    matching methods and `web/radio_poller.py`'s `QuickSplit`/
+    `QuickDualWatch` WS commands now call the getter (a strict read
+    improvement over the old fire-and-discard; writing a caller-supplied
+    value through the web layer is not wired yet — the WS handler never
+    parsed one for this intent even before this change).
+  - `scan_start_type`/`scan_set_resume` no longer validate their sub-byte
+    against a code-level frozenset (the deleted `VALID_SCAN_TYPES`, which
+    omitted the documented 0x13 fine-ΔF scan on IC-7300/IC-7610/IC-9700
+    and IC-705's 0x24 mode-select scan; and `VALID_SCAN_RESUME`, which
+    accepted 0xD0-0xD3 where every documented CI-V guide lists only
+    0xD0/0xD3). Domain validation moves to `runtime/radio.py:
+    CoreRadio.scan_start`/`scan_set_resume`, reading the new
+    `RadioProfile.scan_type_values`/`scan_resume_values` (declared per
+    radio in `rigs/*.toml`'s new `[scan_types]`/`[scan_resume]` sections),
+    the same shape `commands/dsp.py: set_agc` already uses for AGC-mode
+    domain validation. `scan_set_df_span`'s `VALID_DF_SPANS` check is
+    unaffected — every profile with a citation for it declares the
+    identical 0xA1-0xA7 table, so it stays a wire-format constant.
+  The only production caller, `runtime/radio.py: CoreRadio`, moved onto
+  `self._commands.<builder>(...)` in the same change — an external caller
+  of a free function must do the same rather than calling it directly
+  with no map.
+- **`rigplane.commands.vfo_a_equals_b` and `rigplane.commands.vfo_swap` are
+  removed** (mechanism audit D1; see
+  `.claude/audits/2026-08-30-mechanism-audit-vfo-swap-equalize.md`). The
+  MOR-2007 migration above made `cmd_map` required on both without
+  changing their bytes; this change deletes them outright. Both had zero
+  production call sites and built the identical frame to `set_vfo(0xA0, ...)`
+  and `set_vfo(0xB0, ...)` respectively — both go through the same
+  `_build_from_map(cmd_map, "set_vfo", ...)` call, so a caller wanting the
+  raw bytes gets identical frames from `set_vfo` either way. The
+  profile-driven replacements are
+  `DualReceiverCapable.swap_main_sub`/`equalize_main_sub` and
+  `VfoSlotCapable.swap_vfo_ab`/`equalize_vfo_ab` on the `Radio` protocol.
+  `vfo_a_equals_b`'s hardcoded `0xA0` equalize byte matched no shipped
+  dual-RX profile: IC-7610 and IC-9700, the only two `main_sub`-scheme
+  profiles, both declare `equal_main_sub = [0xB1]`.
+- **`rigplane.commands.ptt` builders require `cmd_map`; there is no
+  hardcoded fallback (MOR-2007, Steps 5..N module 4 of
+  `docs/plans/2026-08-29-profile-driven-command-bytes.md`).** `ptt_on`/
+  `ptt_off` now require `cmd_map` as a required keyword-only argument, the
+  same way as `rigplane.commands.config`/`levels`/`vfo` above. No wire
+  bytes changed: every CI-V profile already declared the identical
+  `[0x1C, 0x00, 0x01]`/`[0x1C, 0x00, 0x00]` tuple the deleted fallback
+  built (the one profile that used to disagree, X6100, was already fixed
+  before this migration). The two production call sites, both in
+  `runtime/radio.py: CoreRadio` — `set_ptt` and the managed-TX
+  `_write_managed_ptt` — moved onto `self._commands.ptt_on`/`.ptt_off` in
+  the same change, touching only the frame-building expression and
+  nothing else in either method (the latter sits in the managed-TX
+  transmit-interlock path).
+- **`rigplane.commands.scope` builders require `cmd_map`; there is no
+  hardcoded fallback (MOR-2007, Steps 5..N module 5 -- the last module of
+  this migration series --
+  `docs/plans/2026-08-29-profile-driven-command-bytes.md`).** All
+  thirty-three scope/waterfall builders (`scope_on`/`scope_off`, data
+  output, main/sub, single/dual, mode, span, edge, hold, ref, speed,
+  during-TX, center type, VBW, fixed edge, RBW — each get/set pair) now
+  require `cmd_map` as a required keyword-only argument, the same way as
+  `rigplane.commands.config`/`levels`/`vfo`/`ptt` above. No wire bytes
+  changed: every CI-V profile already declared the identical `[0x27, sub]`
+  tuple the deleted fallback built (this module's own 4 divergence rows —
+  `get_scope_center_type` with `receiver=0` — closed earlier, in #2821).
+  One behaviour change rides along: **`scope_set_center_type` no longer
+  accepts a `receiver` keyword** — the latent setter-side twin of the
+  `get_scope_center_type` fix in #2821 (MOR-1981). `0x27 0x1C` takes
+  exactly one data byte, no selector, on all four official CI-V references
+  and the two bench sessions behind #2821; a `receiver` byte built a
+  genuinely different, wrong frame rather than addressing Main/Sub. No
+  production caller ever passed it. The production call sites, in
+  `runtime/_scope_runtime.py: ScopeRuntimeMixin` and
+  `backends/_icom_serial_base.py`, moved onto `self._commands.<builder>`
+  in the same change.
+- **`rigplane.commands.scope`'s fifteen `parse_scope_*_response` functions
+  take a map-derived `command`/`sub`, closing the response-side gap the
+  builder migration above left open (MOR-2008).** Each now accepts
+  optional `command`/`sub` keywords, defaulting to the same `_CMD_SCOPE`/
+  `_SUB_SCOPE_*` constants checked before this change, so a caller that
+  never passes them — `runtime/_civ_rx.py`'s unsolicited-frame decoding
+  (no command-map entry to derive a shape from) and every pre-migration
+  direct test call — keeps working unchanged. The sixteen production call
+  sites in `runtime/_scope_runtime.py: ScopeRuntimeMixin` (fifteen getters
+  plus `set_scope_fixed_edge`'s self-reparse of the frame it just built,
+  which shares `get_scope_fixed_edge`'s reply shape) now derive both
+  values via `runtime/radio.py: CoreRadio._expect_shape`, the mechanism
+  batch 1's `system.py` date/time/UTC parsers and batch 3's twelve
+  dsp.py getters already use. No observable behaviour change on any of
+  the four CI-V profiles that declare scope commands: every one already
+  declares the identical `[0x27, sub]` tuple these constants held (this
+  module's own divergence-free history, noted in the entry above).
+  Registered in `tests/test_response_shape_from_profile.py` as three
+  dedicated cases (one generic, covering thirteen of the fifteen parsers;
+  one for `get_scope_session_state`'s two-key round trip; one for
+  `set_scope_fixed_edge`'s self-reparse) rather than a `MATCHER_BACKED_GETTERS`
+  row, since none of the fifteen route through `_get_bcd_level`/
+  `_get_bool_value` — the same reason batch 1's date/time/UTC trio and
+  `get_dual_watch` are each a dedicated case there instead of a table row.
+- **`rigplane.commands.system`/`cw`/`speech`/`power` builders require
+  `cmd_map`; there is no hardcoded fallback (MOR-2008, batch 1 of
+  `docs/plans/2026-08-29-profile-driven-command-bytes.md`).** All 26
+  builders across the four modules — transceiver ID, band-edge frequency,
+  tuner/XFC/TX-freq-monitor status, RIT/XIT (system.py); CW keying (cw.py);
+  voice announcement (speech.py); power on/off/status (power.py) — now
+  require `cmd_map` as a required keyword-only argument. 20 of the 26 carry
+  no behaviour change at all: every declaring CI-V profile already held
+  the identical wire tuple the deleted fallback built. **The other
+  six — `get_system_date`/`set_system_date`, `get_system_time`/
+  `set_system_time`, `get_utc_offset`/`set_utc_offset` — carry an intended
+  byte-level behaviour change on IC-7300.** Their pre-migration `cmd_map`
+  branches resolved the bare keys `"system_date"`/`"system_time"`/
+  `"utc_offset"`, which no profile TOML has ever declared (every one
+  spells the direction-prefixed `get_/set_system_date` etc.), so those
+  branches raised `KeyError` for every profile a real `CommandMap` ever
+  reached — dead code, invisible to the divergence sweep, since it never
+  produced a frame to compare. The builders now resolve the
+  direction-prefixed keys the TOML files actually declare. IC-7610's own
+  tuple (`0x01 0x58`/`0x59`/`0x62`) is byte-identical to the deleted
+  fallback's, so nothing changes there; **IC-7300 declares its own family
+  numbers (`0x00 0x94`/`0x95`/`0x96`) and now sends them for the first
+  time**, instead of IC-7610's. `parse_system_date_response`/
+  `parse_system_time_response`/`parse_utc_offset_response` moved with the
+  request: each now takes the map-derived `prefix` the reply must start
+  with (`runtime/radio.py: CoreRadio._expect_shape`), rather than checking
+  a hardcoded constant unconditionally. The only production callers,
+  `runtime/radio.py: CoreRadio`'s own methods, moved onto
+  `self._commands.<builder>(...)` in the same change. Also deleted: the
+  orphaned bare `quick_split`/`quick_dual_watch` rows in `rigs/ic7300.toml`
+  and `rigs/ic9700.toml` — no builder has resolved either since MOR-2007
+  ruling 2 replaced their one-shot triggers with real `get_/set_` pairs;
+  the prefixed rows already carry the recorded D2 sources.
+- **CLI: `rigplane ptt on` no longer returns while the rig is keyed.** The
+  command now holds the key for as long as the process runs and unkeys on the
+  way out, so the process that keyed the rig is the one that releases it. A
+  script that ran `rigplane ptt on`, did some work, and then ran
+  `rigplane ptt off` must move to `rigplane ptt on --for SEC` (or keep the
+  `ptt on` process alive for the length of the transmission) — the old shape
+  now blocks at the first command. SIGINT / SIGTERM / SIGHUP unkey and exit
+  128 + the signal (130 / 143 / 129); a duration that simply runs out exits 0;
+  a failed or stuck unkey exits 1 with a warning that the radio may still be
+  transmitting. `ptt off` remains the recovery path for a rig left transmitting
+  by some other process; under a managed runtime it now escalates to an
+  operator-forced unkey (see Changed below) and its exit code is meaningful
+  (MOR-1184, MOR-1199).
+- **`rigplane.commands.set_vfo` takes a selector byte, not a VFO name**
+  (MOR-1986). The builder held its own `{"A": 0x00, "B": 0x01, "MAIN": 0xD0,
+  "SUB": 0xD1}` table — rig-specific bytes inside a builder, and a second
+  implementation of a mapping the rig TOMLs declare as `[vfo] main_select` /
+  `sub_select`. It now takes the byte and the profile supplies it:
+  `set_vfo("MAIN", to_addr=...)` becomes
+  `set_vfo(radio.profile.vfo_main_code, to_addr=...)` — but those fields are
+  `int | None`, and four shipped profiles (X6100, X6200, TX-500, FTX-1)
+  declare neither, so a caller must handle `None` rather than pass it
+  through. Callers that passed a name outside those four keys used to select
+  VFO A silently; there is no such fallback now.
+  `IcomRadio`'s signature and accepted alphabet are unchanged —
+  `_set_vfo_wire` still takes "A"/"B"/"MAIN"/"SUB" — but its bytes are not:
+  it now resolves them from the loaded profile, so "A" on a `main_sub`
+  profile sends 0xD0 where it sent 0x00, "MAIN" on an `ab` profile sends
+  0x00 where it sent 0xD0, and a profile declaring no code raises
+  `CommandError` where it used to emit. Every *guarded* caller
+  (`select_receiver`, `swap_vfo_ab`, `equalize_vfo_ab`, the per-receiver
+  VFO fallback) passes "MAIN"/"SUB" on a dual-RX profile. On the dual-RX
+  profiles that declare `main_select`/`sub_select` (IC-7610, IC-9700) the
+  bytes are identical, so a `snapshot_state` → `restore_state` round-trip is
+  unchanged. `restore_state` itself forwards whatever dict it is handed,
+  though: `radio.restore_state({"vfo": "A"})` against a `main_sub` profile
+  now selects the MAIN receiver (0xD0) where it used to select VFO A
+  (0x00), and `restore_state` swallows per-field failures at DEBUG, so
+  nothing surfaces. Hand-built restore dicts should use "MAIN"/"SUB".
+- **`rigplane.commands.get_scope_center_type` takes no `receiver` argument**
+  (MOR-1981, MOR-2002). The parameter let a caller name the MAIN or SUB
+  scope for this reading, like the library's other eight scope-selector
+  getters, but 0x1C is not one of them: on the wire, `27 1C 00` is a SET of
+  center_type=0 (Filter center), not a selector prefix on a read — confirmed
+  by a live IC-7300 bench recheck and by all four official Icom CI-V
+  references (IC-705, IC-7300, IC-7610, IC-9700). The `cmd_map` branch never
+  accepted the argument, so passing `receiver=` produced a write the caller
+  believed was a read. No shipped caller passed it — `runtime/_scope_runtime.py`
+  and the `Radio` protocol method never took a receiver for this reading —
+  so this closes a footgun rather than changing observed behaviour; a caller
+  that did pass `receiver=` now gets a `TypeError` instead of a silent SET.
+
+- **`rigplane.commands.mode`/`tone`/`antenna`/`meters` builders require
+  `cmd_map`; there is no hardcoded fallback (MOR-2008, batch 2 of
+  `docs/plans/2026-08-29-profile-driven-command-bytes.md`).** All 40
+  builders across the four modules — operating mode, DATA mode, filter
+  shape/width, SSB TX bandwidth, Main/Sub tracking, AGC time constant
+  (mode.py); repeater tone/TSQL and tone/TSQL frequency (tone.py); ANT1/
+  ANT2 select/read and RX-ANT-state select/read for both antennas
+  (antenna.py); S/SWR/ALC/power/comp/Vd/Id meters, S-meter-squelch/
+  overflow/various-squelch status (meters.py) — plus
+  `rigplane.commands.freq`'s `get_freq`/`set_freq` (2
+  more, 42 in total this batch) now require `cmd_map` as a required
+  keyword-only argument. `freq.py`'s other five builders
+  (`get_selected_freq`/`get_unselected_freq`/`get_selected_mode`/
+  `get_unselected_mode`/`set_selected_mode`) have no `cmd_map` parameter at
+  all and stay out of scope — MOR-2008's Group B (these five plus
+  `memory.py` and `tx_band.py`), ruled by the owner to migrate later, after
+  the missing/inconsistent TOML declarations are filled in from the
+  manuals. Most of these 42 carry no behaviour change: every declaring CI-V
+  profile already held the identical wire tuple the deleted fallback
+  built. **`set_repeater_tone`/`set_repeater_tsql`/`set_tone_freq`/
+  `set_tsql_freq` (and their `get_` twins) are the exception on IC-7610:**
+  `rigs/ic7610.toml` documents that this whole family is intentionally
+  *not* declared, following a live-bench readback (recorded in the TOML,
+  citing MOR-660/661/682) that found the old hardcoded fallback's bytes
+  decoded to garbage (16.5 Hz) on this radio. Before this migration the
+  fallback still built and sent those bytes regardless; now, on IC-7610,
+  the same call raises `CommandError` (undeclared-command refusal) instead
+  — a correction, not a regression: trusting what the profile actually
+  declares over a blind fallback, the same principle behind batch 1's
+  `system.py` IC-7300 date/time fix (there the profile's own bytes replace
+  the fallback's; here the profile's declared *absence* does).
+  `antenna.py`'s `get_antenna`/
+  `set_antenna` ANT1/ANT2 selector is documented in the module's own
+  docstring as deliberately *not* wired through `runtime/radio.py:
+  CoreRadio._expect_shape`: the selector is a CI-V protocol invariant
+  supplied as caller data, not a value the command map declares as a
+  `sub` byte (the TOML's `get_antenna = [0x12]` tuple carries no `sub` at
+  all). The production call sites, in `runtime/radio.py: CoreRadio` and
+  `runtime/_dual_rx_runtime.py: DualRxRuntimeMixin` (the real callers of
+  `get_freq`/`set_freq`/`get_mode`/`set_mode`), moved onto
+  `self._commands.<builder>(...)` in the same change.
+- **`rigplane.commands.dsp` builders require `cmd_map`; there is no
+  hardcoded fallback (MOR-2008, batch 3 of
+  `docs/plans/2026-08-29-profile-driven-command-bytes.md`).** All 37
+  builders — attenuator, preamp, DIGI-SEL, NB, NR, IP+, AF mute, AGC,
+  audio peak filter, auto-notch, compressor, monitor, VOX, break-in,
+  manual notch, manual notch width, twin peak filter, dial lock — now
+  require `cmd_map` as a required keyword-only argument, the same
+  contract as batches 1/2. `set_attenuator` is a compatibility wrapper
+  with no command-map key of its own (it delegates to
+  `set_attenuator_level`, whose key is `"set_attenuator"`) and carries
+  `@require_cmd_map` without `@expose_command_key`, the same shape
+  `commands/vfo.py: set_dual_watch` already uses. Zero divergence: every
+  declaring CI-V profile already held the identical wire tuple the
+  deleted fallback built. Twelve getters (`get_agc`,
+  `get_audio_peak_filter`, `get_break_in`, `get_manual_notch_width`,
+  `get_auto_notch`, `get_compressor`, `get_monitor`, `get_vox`,
+  `get_manual_notch`, `get_twin_peak_filter`, `get_dial_lock`,
+  `get_af_mute`) also moved their reply matcher onto
+  `runtime/radio.py: CoreRadio._expect_shape`, registered in
+  `tests/test_response_shape_from_profile.py`'s
+  `MATCHER_BACKED_GETTERS` keystone table; `get_attenuator`/`get_preamp`/
+  `get_digisel`/`get_nb`/`get_nr`/`get_ip_plus` are excluded because each
+  reaches its reply through a transaction-correlated wait with no
+  command/sub matching at all, never through the two matcher functions.
+  **X6100/X6200 gain three controls, lose three others, both corrections
+  discovered by this migration, not created by it:** `get_/set_nr`,
+  `get_/set_compressor` and `get_/set_auto_notch` are newly declared
+  present at `[0x16, 0x40]`/`[0x16, 0x44]`/`[0x16, 0x41]` — the project's
+  own cat-audit (`docs/validation/cat-audits/x6200.md`) already confirmed
+  these opcodes correct and in use by the deleted fallback; left
+  undeclared, the migration would have turned three already-working
+  controls into a refusal, a regression rather than a correction.
+  `get_/set_vox`, `get_/set_break_in` and `get_/set_manual_notch` are
+  newly declared absent, promoted from a comment-only note already on
+  both profiles: the V1.0.6 documentation has no VOX row at all, no
+  BK-IN-mode register (only QSK hang time), and no manual-notch register
+  (the real notch mechanism is the DNF toggle this same migration
+  declares present as `get_/set_auto_notch`) — calling these three pairs
+  now raises `CommandError` instead of silently sending an opcode the
+  manufacturer's own table never documented. `get_/set_manual_notch_width`
+  stays an undeclared gap on both profiles (neither present nor absent):
+  the opcode's own table-presence, unlike the three above, was never
+  confirmed either way, and the X6200 unit that could have settled it
+  with a live capture was destroyed 2026-08-11. The production call
+  sites, in `runtime/radio.py: CoreRadio` (dsp.py has none in
+  `runtime/_dual_rx_runtime.py`), moved onto `self._commands.<builder>(...)`
+  in the same change.
+  `tests/test_command_fallback_audit.py`'s representative builder
+  (`get_attenuator`) has no fallback left either, and a repo-wide census
+  found no builder anywhere in `commands/*.py` with an optional `cmd_map`
+  remaining to repoint at — its four tests that used to assert "no
+  exception, fallback bytes returned" now assert "the wrapper's warning
+  still fires, then the builder's own `TypeError` propagates unchanged."
+- **`rigplane.commands.memory`/`tx_band` builders, and `freq.py`'s five
+  remaining selected-receiver builders, require `cmd_map`; none ever had a
+  hardcoded fallback to delete (MOR-2008, batch 4 of
+  `docs/plans/2026-08-29-profile-driven-command-bytes.md`, "Group B" —
+  the last 16 builders in `commands/` with no `cmd_map` parameter at
+  all).** Covers `memory.py`'s nine (`build_memory_mode_get`/`_set`,
+  `build_memory_write`, `build_memory_to_vfo`, `build_memory_clear`,
+  `build_memory_contents_get`/`_set`, `get_bsr`/`set_bsr`), `tx_band.py`'s
+  two (`get_tx_band_count`, `get_tx_band_edge`), and `freq.py`'s five
+  (`get_selected_freq`/`get_unselected_freq`/`get_selected_mode`/
+  `get_unselected_mode`/`set_selected_mode`). Python function names are
+  unchanged — the seven `memory.py` builders with the anomalous
+  `build_X_get`/`build_X_set`/`build_X` shape keep it; only the TOML key
+  spellings were reconciled. Canonical key naming (owner ruling): a
+  genuine get/set value pair keeps its `get_`/`set_` prefix; a
+  single-wire-form action command uses the bare name, matching
+  `power_on`/`ptt_on`/`scan_start` — so `build_memory_write`/
+  `build_memory_to_vfo`/`build_memory_clear` resolve `"memory_write"`/
+  `"memory_to_vfo"`/`"memory_clear"`, not a `get_`/`set_`-prefixed key.
+  IC-705 previously declared redundant `get_X`/`set_X` pairs for these
+  three one-shot actions; the orphan half of each pair is deleted, with a
+  fresh source citation on the single surviving bare-named row (neither
+  half carried one before). The four Icom profiles' 57 DECLARE cells are
+  byte-identical to what these builders sent before migration (verified
+  directly against the deleted hardcoded output, not merely asserted).
+  **Two commands are left deliberately undeclared (D1 state 3) rather
+  than guessed:** `get_memory_mode` on all four Icom profiles (the
+  manuals phrase 0x08 as "Select the Memory mode", imperative, not
+  "Send/read" like the package's other bidirectional rows, and no
+  live-bench probe has settled whether it answers a bare read), and
+  `set_selected_mode` on IC-7300/IC-7610/IC-9700 (the exact
+  (mode, data_mode, filter) SET payload convention was not independently
+  confirmed against those three manuals' own detail pages before this
+  batch — IC-705/X6200/X6100 already declare it and are unaffected).
+  Calling either now raises `CommandError` (undeclared-command refusal)
+  on the affected profiles instead of unconditionally sending the byte
+  the old hardcoded fallback always sent — the honest outcome until a
+  live probe or a manual detail-page read settles the open question.
+  **X6200/X6100 declare all 11 memory.py/tx_band.py keys formally
+  absent:** none of the nine memory-family opcodes nor the two TX-band
+  opcodes appear anywhere in the Radioddity X6200 CI-V V1.0.6 documented
+  opcode table (Table 1, pp.5-9); `get_bsr`/`set_bsr` specifically
+  because the one opcode the table does document at `[0x1A, 0x01]`
+  (already exposed as `get_band_spectrum_display`) is a different,
+  2-byte-payload command, not Icom's own 9-byte band-stacking-register
+  record — same opcode, structurally incompatible wire contract. This
+  migration also **corrects a pre-existing false claim** in
+  `rigs/x6200.toml`'s own "PROVENANCE OPEN" note, which said the
+  band-stacking WRITE side of `[0x1A, 0x01]` was undeclared/undocumented;
+  the same manual page the file already cited documents that SET row too
+  (just not as Icom's `set_bsr`). **`ftx1.toml`/`tx500.toml` (CAT-only,
+  no CI-V command table) declare all 16 canonical keys formally absent**,
+  citing the protocol mismatch rather than leaving them as a silent gap —
+  this removes both profiles from `tests/test_command_map_parity.py`'s
+  `cat_only_profiles` census/`cat-only` rows, since that classification
+  means literally "every `[commands]` entry is `CatCommandSpec`", which a
+  declared-absent row no longer satisfies even though both profiles
+  remain cat-only in every functional sense. The orphan TOML keys
+  `set_selected_freq`/`set_unselected_freq`/`set_unselected_mode` (no
+  Python builder resolves any of the three) are kept, not deleted, on
+  X6200/X6100 — each documents a real, sourced capability the same
+  0x25/0x26 opcodes above confirm — with a one-line comment added noting
+  the absent builder; IC-705's own copies of the same three keys, which
+  carry no source at all, are left untouched. **Hard boundary (MOR-2055,
+  explicitly not touched by this migration):** `build_memory_to_vfo`/
+  `build_memory_clear` still append a 2-byte BCD channel payload that all
+  four Icom manuals show 0x0A/0x0B accepting no data field for at all —
+  this migration re-plumbs the command-map lookup only and does not
+  change those wire bytes; the payload question is MOR-2055's to settle.
+  Three now-dead constants (`_CMD_MEMORY_WRITE`, `_CMD_MEMORY_TO_VFO`,
+  `_CMD_MEMORY_CLEAR`) are deleted from `commands/_frame.py` — an
+  AST-verified census found zero importers anywhere for any of the
+  three once `memory.py`'s own builders stopped reading them directly.
+  The production call sites, in `runtime/radio.py: CoreRadio` and
+  `runtime/_dual_rx_runtime.py: DualRxRuntimeMixin` (the selected/
+  unselected freq/mode readers and the X6200 selected-mode SET path),
+  moved onto `self._commands.<builder>(...)` in the same change.
+  `tests/test_command_fallback_audit.py`'s census is updated: 256 public
+  builders now require `cmd_map` (was 238), and the 33 that lack the
+  parameter entirely are, for the first time, exclusively `parse_*`
+  response decoders — no byte-emitting builder anywhere in `commands/`
+  lacks `cmd_map` any longer.
+- **The command-builder fallback machinery is deleted (Step Z, cmd-map
+  epic).** With every builder's `cmd_map` required and keyword-only, the
+  Step 1 measurement scaffolding that logged a call reaching the
+  hardcoded fallback path has nothing left to catch:
+  `commands/_fallback_audit.py`, its install call in
+  `commands/__init__.py`, the `RIGPLANE_COMMAND_FALLBACK_AUDIT` env var
+  and `core/env_config.py: get_command_fallback_audit_enabled`, and the
+  charter exception recording it in `commands/LAYER.md` are all deleted,
+  along with `tests/test_command_fallback_audit.py` (its tests pinned
+  "wrapper logs then `TypeError` propagates", a behaviour that dies with
+  the wrapper). A regression test
+  (`tests/test_commands.py: TestFallbackAuditRemoved`) pins all three
+  staying gone.
+  Re-running an AST-based reference census over `commands/_frame.py`'s
+  78 private module-level constants — gated on an actual import binding
+  from this module, so a same-named local literal in a test file (several
+  build synthetic CI-V frames independently of `_frame.py`, e.g.
+  `tests/mock_server.py`'s own `_CMD_ATT`) does not count as a reader —
+  found three with zero readers anywhere, internal or external:
+  `_SUB_RX_ANT_ANT1`/`_SUB_RX_ANT_ANT2` (flagged dead but left out of
+  scope at cmd-map batch 2) and `_SUB_AGC_TIME_CONSTANT` (superseded by
+  `mode.py`'s `get_agc_time_constant`/`set_agc_time_constant` reading the
+  byte from the profile's `CommandMap` by name). All three are deleted;
+  the other 75 survive, and the module docstring now names each
+  survivor's actual reader. `docs/api/commands.md` is rewritten: it
+  claimed every builder's `cmd_map` was optional, false since batch 1 —
+  it now documents the required keyword-only contract, the `TypeError`
+  raised for a call that omits it or passes `None`, `commands/bound.py:
+  BoundCommands` as the recommended calling path, and D1's three-state
+  undeclared-command policy (declared / declared-absent-with-source /
+  unknown-refusal). `tests/command_map_parity_divergences.txt` is kept,
+  not retired, despite reading all-zero: reintroducing a builder with a
+  `cmd_map is not None` branch was tested against this file's own
+  machinery (a temporary, reverted mutation) and it still goes red, with
+  the per-row hex frames the bare census in
+  `tests/command_map_parity_uncovered.txt` does not carry; the file is
+  also cited as evidence in ten docstring passages across five other
+  test files, which a deletion would have left dangling.
+- **`rigplane.commands.set_attenuator` (the boolean CI-V frame builder) is
+  deleted (MOR-2086).** It hardcoded `18 if on else 0` -- an IC-7610 dB
+  step invalid on the five other CI-V profiles (IC-705, IC-7300, IC-9700,
+  X6100, X6200 declare a single, *different* non-zero attenuator value;
+  bench-confirmed on the IC-7300, where the radio silently ignored the
+  frame). The released 2.11.1 carries this bug (`git show
+  v2.11.1:src/rigplane/commands/dsp.py` still has the identical constant).
+  `runtime/radio.py: CoreRadio.set_attenuator` no longer builds a frame
+  through the deleted function; it resolves `on` from the connected
+  profile's own declared `[attenuator] values` instead: `on=False` always
+  resolves to 0, `on=True` resolves to the profile's single non-zero
+  value. Each of the five now sends its own declared value on the wire
+  (`fe fe 94 e0 11 20 fd` on the IC-7300); the pre-fix `11 18` frame was
+  bench-confirmed ignored on the IC-7300. A profile that declares more
+  than one non-zero value (IC-7610's 3..45 dB steps) has no well-defined
+  boolean "on", so
+  `CoreRadio.set_attenuator(on=True)` now raises `CommandError` naming
+  `set_attenuator_level` as the call to make instead of guessing a step;
+  the same refusal applies to a profile that declares no `[attenuator]
+  values` at all. `set_attenuator_level` itself is unchanged.
+- **`rigplane.runtime._state_queries.build_state_queries(profile,
+  capabilities, *, is_serial=False)` drops the `capabilities` and
+  `is_serial` parameters (MOR-2244).** After MOR-1983 (#3020, merge
+  `3683b297`) rewrote query membership to come from the profile's own
+  field-level acquisition capabilities, both parameters went unread in the
+  function body. The two production callers,
+  `runtime/radio_initial_state.py: fetch_initial_state` and
+  `web/radio_poller.py: RadioPoller._build_state_queries`, now call
+  `build_state_queries(profile)`; a call still passing either as a keyword
+  now raises `TypeError`. The compatibility re-export at
+  `rigplane._state_queries` (a `sys.modules` alias of the canonical module)
+  carries the same signature change.
+
+### Changed
+
+- **TX consumers migrate to canonical ownership and release.** Earlier
+  development entries described per-consumer leases, poller watchdogs and
+  UI-local teardown behavior that are superseded by the managed TX contract.
+  Use stable-owner WebSocket momentary PTT, explicit latched TRANSMIT only
+  when intended, and canonical ForceOff for unconditional release. Admission
+  is distinct from settlement and observed radio state. The concrete API and
+  timed CLI migration examples, source references and focused witnesses are
+  in the [migration guide](https://rigplane.dev/migrate/).
+
+### Removed
+
+- The unused pre-v2 `src/rigplane/web/static.old/index.html` source copy was
+  removed in #2400 (`32eb20bd`). The supported UI is built from `frontend/`
+  and bundled with the Python artifact. Rollback uses a known complete
+  package/frontend artifact and retained user preferences, not the deleted
+  snapshot; source removal alone does not prove installed or active-session
+  rollback acceptance.
+- **`rigplane.backends.icom7610.drivers.serial_stub` no longer ships in the
+  package (#2129, #2131).** `SerialMockRadio` and the serial framing test
+  doubles were test-only code living inside the wheel; they moved to
+  `tests/serial_stub.py` (non-shipping) so TX-safety audits of the shipping
+  package (`grep -rn "\.set_ptt(" src/`, MOR-999/MOR-1015/MOR-1016) contain no
+  test-double false positives. Nothing in the shipping package imported the
+  module and it was never a documented public API; external code that imported
+  the old path should vendor the double from the repo's test tree instead.
+
+### Fixed
+
+- **WS `set_quick_split`/`set_quick_dual_watch` now write instead of
+  re-reading (MOR-2007 ruling 2 follow-up, MOR-2045).** Both intents parse
+  `on` from `params` and enqueue new `SetQuickSplit`/`SetQuickDualWatch`
+  poller commands, which write through `CoreRadio.set_quick_split`/
+  `set_quick_dual_watch`. Previously they enqueued the same bare read
+  marker as their `get_` twins and silently re-read the current toggle
+  state instead of changing it.
+- **`get_tone_freq`/`set_tone_freq`/`get_tsql_freq`/`set_tsql_freq` used
+  the wrong CI-V byte layout, on every profile that declares the family
+  (IC-705, IC-7300, IC-9700; IC-7610 declares it `absent`) (MOR-2091).**
+  `commands/tone.py`'s codec packed/read the 3-byte BCD payload as
+  `[hundreds][tens+units][tenths]`; the documented layout (identical in
+  the IC-705, IC-7300, IC-9700 and IC-7610 CI-V references) is six packed
+  BCD digits read as tenths of a Hz: `[0][0][100Hz][10Hz][1Hz][0.1Hz]`.
+  `get_tone_freq`/`get_tsql_freq` returned wrong values -- a live IC-7300
+  capture of an 88.5 Hz tone decoded as 16.5 Hz. `set_tone_freq`/
+  `set_tsql_freq` encoded a 100 Hz BCD digit outside its documented 0-2
+  range for most tones (88.5 Hz encoded as `00 88 05`, digit 8). The
+  released 2.11.1 carries this bug.
+- **FTX-1 `set_sql_type` write template used two digits where the
+  manual documents one (MOR-2104).** `rigs/ftx1.toml`'s write template
+  rendered `CT002;` for squelch-type value 2; the FTX-1 CAT OM ENG
+  2508-C's `CT SQL TYPE` table documents P2 as a single digit (0-5).
+  Narrowed the template to `CT0{type};`, matching the read side's
+  parse, which already used the correct width.
+
+## [2.11.1] — 2026-06-22
+
+### Fixed
+
+- **AudioSession declarative reconciler — TX-only strand after reconnect (#1226, #1212).** `AudioSession` is now a declarative reconciler: a pure `_desired()` computes the target state and a single idempotent `_converge()` drives toward it. Push events converge instead of rejecting, and the reconnect/reestablish path now handles `TX_ONLY`, fixing audio left stranded TX-only after a reconnect. TX arming is intent-gated, preserving the MOR-556 ordering invariant; public API unchanged.
+- **Control WS broadcast flood (#1876).** The control WS fanout now uses `put_drop_oldest` instead of `put_nowait`+warning, ending the broadcast flood under backpressure.
+- **Diagnostics logger default (#1879).** The rigplane logger now defaults to INFO instead of DEBUG.
+- **Idle state-build gate (#1877).** `_broadcast_state_update` is demand-gated on subscriber count, skipping idle state-builds when no client is subscribed.
+
+## [2.11.0] — 2026-06-22
+
+### Added
+
+- **Unified radio session lifecycle.** New `RadioSessionLifecycle` (public SDK) owns connect / disconnect / scan / recovery as one state machine with a guaranteed graceful session close (token-remove + OpenClose) on every exit path, plus a rich observable event/status surface (state transitions, cooldown countdown, error reasons, recovery events). New blessed public symbols: `RadioSessionLifecycle`, `LifecycleState`, `LifecycleErrorReason`, `RadioPresence`, `LifecycleEvent`, `LifecycleStatus`.
+
+### Fixed
+
+- **IC-7610 LAN connect livelock.** A failed network-CI-V connect now always releases the held session (token-remove) before any cooldown wait, and retry is cooldown-aware and resident in-process — eliminating the previous cross-process restart storm that reopened UDP 50001 inside the radio's keepalive window and got rejected with error 0xFFFFFFFF ("previous session active"). Graceful connect/disconnect now leaves the radio immediately free (no cooldown).
+
+### Changed
+
+- **Recovery unified + soft_reconnect semantics.** CI-V data-watchdog now only DETECTS stalls; the lifecycle owns retry/backoff/exhaustion (preserving the #1217 anti-freeze: detached recovery, self-cancel guard, unconditional re-arm). `CoreRadio.soft_reconnect()` is now multi-attempt and releases the session on exhaustion (previously a single non-releasing attempt) — direct callers already handle the connection-error raise.
+
+## [2.10.8] — 2026-06-20
+
+### Fixed
+
+- **Operating-UI frequency/mode display stuck during an external CAT session.** During a WSJT-X / external-CAT session the display could remain pinned to the last value tuned via the Pro UI while the radio was actually on a different frequency, because the optimistic command overlay was never displaced (the readback poller is paused for the session). The optimistic overlay is now suppressed during an external-CAT session, so the display tracks the radio's real frequency/mode from CI-V readback. Normal Pro-dial responsiveness is unchanged when no external-CAT session is active. (#1219)
+
+## [2.10.7] — 2026-06-20
+
+### Fixed
+
+- **Radio control link now auto-recovers after the radio drops.** After a radio power-cycle or network blip, the CI-V control reconnect stalled after a single attempt (`already_open_stalled`) and the watchdog never re-armed, so the "Radio link recovering" state hung until a manual retry or app restart. Reconnect now rebuilds and keeps retrying with bounded backoff, recovering automatically once the radio answers again. (#1217)
+
+### Added
+
+- **Distinguish "radio reachable but remote-control server not responding" from "radio offline".** When the radio's IP is up but its CI-V/remote-control server isn't answering (e.g. Network/Remote control left off after a power-cycle), the app now reports a distinct cause so it can show an actionable hint instead of a generic recovering message. (#1217)
+
+## [2.10.6] — 2026-06-19
+
+### Fixed
+
+- **Web RX audio went silent after a reconnect until app restart.** On reconnect the
+  browser reopened the audio WebSocket, but the prior half-open socket was not reaped
+  (it still reported alive until the pong timeout), so the audio broadcaster kept a
+  zombie subscriber and the live tab stopped rendering audio. A stable per-client audio
+  identity now coalesces a reconnecting client's prior subscription (dropping the
+  superseded socket), so web audio recovers automatically without an app restart. (#1216)
+
+## [2.10.5] — 2026-06-19
+
+### Fixed
+
+- **RX audio did not recover after the radio's LAN session dropped.** `soft_reconnect`
+  rebuilt only the CI-V control transport; the audio transport was never torn down,
+  leaking the audio-UDP socket file descriptor so RX could not re-arm (`File descriptor
+  … is used by transport`). The audio transport is now torn down and re-armed on
+  `soft_reconnect`, and `_ensure_audio_transport` is idempotent against a stale FD,
+  so RX audio auto-recovers without an app restart. (#1215)
+
+## [2.10.4] — 2026-06-19
+
+### Fixed
+
+- **Digital/FT8 transmit produced no modulation over LAN.** A TX-only audio
+  client (e.g. WSJT-X over the companion) holds a TX lease without subscribing
+  to RX; `AudioSession` gated TX arming on RX demand, so the LAN audio stream
+  was never armed and every TX frame was rejected (`AudioNotStartedError`),
+  leaving the radio keyed with an unmodulated carrier. `AudioSession` now lazily
+  arms TX on first push for full-duplex transports (new `TX_ONLY` state),
+  preserving RX-before-TX and teardown ordering. Regression introduced by the
+  2.9.0 AudioSession demand-driven migration.
+
+## [2.10.3] — 2026-06-18
+
+### Fixed
+
+- **rigctld `get_mode` no longer clobbers canonical StateStore.** The WSJT-X
+  CAT `get_mode` poll was a read that wrote back `bool(data_mode)` and the
+  filter number into the `filter_width` slot of the canonical StateStore,
+  corrupting `/api/v1/state` mid-session (DATA mode blanked on the web UI,
+  filter forced to "1", scope/passband narrowed) whenever WSJT-X connected.
+  `get_mode`/`set_mode` are now read-only on the data_mode/filter projection;
+  `data_mode` stays an int (PR #1884).
+- **rigctld `get_vfo` first-connect and mid-session EIO resolved.** `get_vfo`
+  returned `RPRT -6` (EIO / "IO error") when the VFO projection was stale or
+  not yet fresh, dropping active WSJT-X FT8 sessions mid-run; it now returns
+  the active VFO name (VFOA). The `get_mode` passband now reads the
+  filter-number projection instead of `filter_width` (Hz), and `set_mode`
+  overlays the filter-number path (PR #1884).
+
+### Added
+
+- Canonical state-payload schema with TypeScript codegen as a reference
+  contract pattern (MOR-881, dev tooling; PR #1883).
+
+## [2.10.2] — 2026-06-18
+
+### Fixed
+
+- IC-7610 state-acquisition regression with an external CAT master: when a
+  separate CAT client (e.g. WSJT-X via rigctld) was polling the radio, false
+  `acquisition_request_timeout`s drove the adaptive cadence of frequency,
+  mode and data-mode polling to decay all the way to 30 s, so the web VFO,
+  mode and DATA readouts went stale and appeared to "revert". The fix makes
+  acquisition deadlines send-relative, gates adaptive decay on transport
+  health, and adds a bounded grace before a healthy-link expiry is treated
+  as a real timeout (rigplane-pro#1198, MOR-874).
+
+## [2.10.1] — 2026-06-17
+
+### Fixed
+
+- IC-7610 S-meter no longer stuck at S0: repaired the MOR-334 state-pipeline
+  reconciliation (1bd57e10), applied the first meter sample immediately
+  instead of holding it in the coalescer (53374bcc), and raised
+  streaming-meter freshness TTLs above the live poll cadence so the value
+  no longer decays to the calibrated floor between frames (8a64942f).
+- Mode, data-mode, RF gain, AF level and squelch no longer revert ~1 s after
+  being set: optimistic command-response overlay plus correct normalized
+  level scaling (53374bcc); digital modes D1/D2/D3 now reflect correctly
+  (1bd57e10).
+- IC-7610 MOD-input source (MIC/ACC/USB/LAN) no longer reverts to a blank
+  value after selection (ae0bd583, MOR-616).
+- Operating-UI control units: RF gain (5ef3d9ef) and the mobile TX-power
+  readout (4e62a5af) now consume the backend's normalized 0–1 scale instead
+  of a raw 0–255 range, so they show the real percentage / watts.
+- Waterfall tuning now holds the commanded frequency via the optimistic
+  overlay instead of snapping back after a click or drag (4e62a5af).
+- LAN radio discovery retransmits the UDP probe within the scan window with
+  dedup, so a network radio is found on the first scan instead of after
+  several attempts (2ea0bf2e).
+
+## [2.10.0] — 2026-06-11
+
+### Added
+
+- **`rigplane validate` — multi-level radio regression-validation harness
+  (epic MOR-634).** A new CLI subcommand that exercises a radio against a
+  universal capability matrix and reports per-check results. Highlights:
+  read-modify-verify-restore (RMVR) round-trip checks for frequency, mode,
+  levels, scope controls and MOD-input routing; a committed **golden gate**
+  (`--gate` / `--regen-golden`) that pins each radio's dry-run plan
+  (MOR-636/648, #1801, #1809, #1814); a **hamlib-external provider**
+  (`--provider hamlib`) to validate arbitrary rigctld-backed rigs
+  (MOR-638, #1805); command-coverage families for scope, tone, VFO, memory
+  and system commands (MOR-642–646, #1811, #1813); automated audio-pipeline
+  probe checks plus live-RX `audio.rx.rms` / `scope.fft.presence` against
+  the hardware stream (MOR-639–641/668, #1810, #1822); `--interactive`
+  operator-confirmed manual-perception checks (MOR-667, #1820); and
+  `--tx-actuate` to key PTT and run a tuner tune-cycle behind a full gate
+  with explicit confirmation (MOR-666, #1821). The registry is split into
+  per-domain modules and its layer boundaries are import-linter-pinned
+  (MOR-649, #1807, #1808).
+- IC-7610 MOD-input routing validation guard — RMVR over `0x1A 05 0089–0094`
+  (MOR-678, #1828).
+- `if_shift.set` and `contour.set` RMVR validation checks (MOR-671, #1825).
+- Backend session-teardown now restores the MOD-input source on an abnormal
+  disconnect (MOR-624, #1796).
+
+### Changed
+
+- **No silent IC-7610 impersonation (behaviour change — MOR-174, #1798).**
+  An unknown/unresolved radio model no longer silently inherits IC-7610
+  capabilities, scope and CI-V address: the serial backend now raises on an
+  unknown model, and the web profile path logs a WARNING and falls through
+  the normal default-resolution chain. The CLI always injects the real model,
+  so CLI runtime behaviour is unchanged — only library/embedding consumers
+  that relied on the old silent `"IC-7610"` default are affected.
+- Capability-accuracy / CAT corrections surfaced by the validation harness:
+  IC-7300 band-stack-register read implemented and dead `apf 14 05` dropped
+  (MOR-681, #1827); TX-500 profile mode-map + power CAT control corrected and
+  divergent profiles consolidated (MOR-684, #1826); scope `vbw`/`rbw`/`dual`
+  receiver-prefix corrected on SET, live-proven on the IC-7610 (MOR-664,
+  #1829); FTX-1 tone checks repointed to `sql_type`/`ctcss_tone` and DT clock
+  command strings added (MOR-672, #1830); Icom level checks upgraded to RMVR
+  round-trips (rf_power, mic_gain, comp, nr/nb, cw_pitch) and made
+  control-range-aware (MOR-679/695, #1831, #1832).
+- A radio operation raising `NotImplementedError` now resolves to UNSUPPORTED
+  in validation instead of FAIL (MOR-670, #1823).
+
+### Removed
+
+These are corrections of **over-declared** capabilities — capabilities the
+profiles advertised but the radios do not actually expose over CI-V, confirmed
+against live hardware. A radio that previously advertised them no longer does;
+this is an accuracy fix, not a feature regression.
+
+- **Xiegu X6200**: dropped the tone family (`repeater_tone` / `tsql`,
+  `0x16 42/43` + `0x1B`) — live-confirmed to time out (MOR-683, #1833) — and
+  twin-PBT (`pbt`, `0x14 07/08`) — live-confirmed to time out in AM and USB
+  (MOR-699, #1835). `filter_width` is intentionally not advertised: the radio
+  uses a raw-hex (non-BCD) filter codec that needs its own implementation,
+  tracked in MOR-706.
+- **Xiegu X6100**: dropped `repeater_tone` / `tsql` / `pbt` by X6100/X6200
+  shared-firmware inference (the two share a CAT caps struct), pending direct
+  X6100-hardware confirmation (MOR-634, #1836).
+- **IC-7610**: removed dead `[commands]` tone/TSQL entries (`0x16 42/43`,
+  `0x1B 00/01`) that had no declared capability (MOR-682, #1839).
+
+### Fixed
+
+- FTX-1 web poller no longer floods the log every cycle with `sub.s_meter`
+  parse warnings (the radio answers the sub `SM1;` query in main form
+  `SM0000;`): the warning is now emitted once per field then demoted to
+  DEBUG, and the `break_in_delay` parse accepts the FTX-1's 2-digit reply
+  (MOR-561, #1838).
+- IC-7610 scope fixed-edge read: send the range + edge selector so the radio
+  answers `get_scope_fixed_edge` (MOR-662, #1816).
+- `preamp.set` validation clears and restores the DIGI-SEL prerequisite before
+  testing PREAMP (MOR-665, #1819); per-check exceptions and non-primitive
+  evidence are contained so one bad RMVR value can't abort the run or crash
+  artifact emission (MOR-659/663, #1815, #1818).
+- Linux USB-audio device pairing: normalize ALSA device names so topology
+  matching succeeds (MOR-549, #1806).
+- Refresh radio credentials on reconnect (MOR-252, #1799).
+- Frontend `connection.test.ts` order-dependent flake fixed with a per-test
+  store reset (MOR-611, #1837).
+- Python 3.11 test-suite fixes — CI-V timeout / serial RX, web-server, audio
+  Protocol/async-mock, and rigctld async-dispatch failures — plus pinning the
+  test interpreter to the matrix version (MOR-590, #1800, #1802, #1803, #1804).
+- Cleared the mypy baseline (all 21 remaining type errors fixed, #1797).
+
+### Docs
+
+- CAT-manual-vs-implementation gap audits for five radios under
+  `docs/validation/cat-audits/` (#1824), plus an X6200 unofficial/community
+  CI-V reference distilled from the Hamlib `xiegu.c` backend (#1834).
+- Mark the IC-9700 as Community-validated (field report #1719, #1795); use
+  absolute README image/badge URLs so they render on PyPI (#1794).
+
+## [2.9.0] — 2026-06-11
+
+### Breaking changes
+
+- **CLI: option abbreviations are no longer accepted.** The `rigplane`
+  argument parser now sets `allow_abbrev=False`, so abbreviated long options
+  (e.g. `--ser-port` for `--serial-port`) are rejected — scripts must spell
+  options out in full. This also fixes `rigplane discover --serial` exiting
+  with an argparse ambiguity error on Python 3.11, where prefix matching
+  collided with the global `--serial-port`/`--serial-baud`/`--serial-ptt-mode`
+  options (MOR-589, #1776, 878ff355).
+
+### Added
+
+- Adaptive audio egress codec (opt-in): new `WebConfig.audio_adaptive_egress`
+  flag, **default off**. When enabled, the server switches each browser
+  client between PCM16 and Opus per connection based on observed link
+  quality (client-reported playback underruns + server-side send-queue
+  drops), with dwell windows to prevent flapping; bridge/digital paths stay
+  lossless. With the flag off (the default) egress behavior is unchanged and
+  a client's codec never changes mid-stream (MOR-588, #1775, 1cc5e72a;
+  link-quality `audio_stats` uplink MOR-585, #1773, 2dc28f84).
+- IC-7610 MOD-input routing in the Web UI (epic MOR-614, #1786–#1791): the
+  current MOD Input source for each DATA group (DATA OFF/D1/D2/D3 MOD, CI-V
+  `0x1A 05 00 0x91`–`0x94`) is now read into state and exposed in the web
+  `state_update` snapshot (MOR-615, #1788, 5bbf22d2), and the ModePanel shows
+  a "MOD IN" selector for the active DATA group with the six IC-7610 sources
+  (MIC/ACC/MIC+ACC/USB/MIC+USB/LAN) (MOR-616, #1789, dcd7f8e5). Radios
+  without MOD-input routing never render the control.
+- Network-voice-TX preflight guard: keying web voice TX while the active
+  mode group's MOD input is not LAN now shows a warn-only banner with a
+  one-click "Set LAN" action — TX is never blocked or delayed (MOR-617,
+  #1790, 87cd5f58). An **opt-in** (off by default) auto-set-LAN-on-TX
+  setting switches the active group to LAN when TX starts and restores the
+  previous source when TX stops (MOR-618, #1791, 1b9cfc14).
+- Docs: new troubleshooting section for the IC-7610 MOD-input requirement —
+  why network voice TX produces broadband noise, feedback squeal, or silence
+  when MIC is in the MOD-input source list, with the per-mode-group fix
+  (MOR-619, #1786, 25ead3ba).
+
+### Changed
+
+- Per-client web RX audio codec: each browser client now gets its own egress
+  codec (client preference → profile policy → PCM16 default) instead of one
+  aggregate codec for all clients — a PCM16-only client no longer forces
+  PCM16 on an Opus-capable client. After `audio_start` the server sends an
+  advisory `audio_format` ack `{codec, sample_rate, channels, frame_ms}`;
+  legacy clients ignore it and keep header-driven decode (MOR-584, #1771,
+  ddd8c232).
+- Audio RX-start failures now surface instead of being swallowed: a failed
+  radio RX start raises to the demanding consumer, and the web audio handler
+  sends an `error` envelope to subscribed clients instead of presenting a
+  "subscribed" stream that never delivers frames (MOR-582, #1769, 593e0815).
+- Audio TX lifecycle is now owned by a radio-owned `AudioSession`: web TX
+  and the audio bridge share one refcounted session per radio, so a stray
+  `audio_stop` from one consumer can no longer disarm another consumer's
+  active TX (MOR-576/577/579/580, #1763/#1765/#1766/#1767). Related internal
+  work in this cycle — session health watchdog + liveness events (MOR-581),
+  unified reconnect recovery via `AudioSession.reestablish()` (MOR-586), RX
+  tap surface (MOR-565), additive `PcmFrame` decode-at-ingress carrier
+  (MOR-591) — changes no default behavior.
+- Audio bridge degrades to RX-only (with a warning) when a neutral-surface
+  radio negotiates a non-PCM TX codec, instead of pushing mis-typed raw PCM;
+  no shipping backend produces this configuration (MOR-545, #1749, a52263d9).
+- PTT over the web control channel is now truthful: keying is rejected with
+  a `radio_not_ready` error envelope when the radio session is not ready or
+  a reconnect cycle is in flight, instead of falsely reporting success while
+  the radio never keyed; unkeying always goes through. The status bar now
+  degrades the radio indicator (with a tooltip) on a connected-but-not-ready
+  session, built on the new reconnect-status surface (MOR-620, #1787,
+  58781f6d; reconnect status + attempt countdown MOR-594, #1784, 88a3b9b6).
+
+### Fixed
+
+- FTX-1 / Yaesu CAT: `start_audio_tx_opus` was a silent no-op, so the web
+  handler's Opus TX branch did nothing on Yaesu backends; it now arms real
+  TX via the neutral transport surface (MOR-541, #1745, d9b8caad).
+- Web audio TX double-start: the benign poller-first re-arm on USB-audio
+  radios (`AudioDriverLifecycleError("TX stream already started.")`) is now
+  tolerated instead of closing the audio WebSocket (MOR-544, #1748,
+  438930e7).
+- Audio bridge stop ordering: stopping the bridge with TX armed leaked a
+  running LAN RX stream (RX demand was dropped before radio TX was stopped);
+  the bridge now stops TX first, then tears down RX (MOR-574, #1762,
+  3f08f659).
+- FM/AM-family waterfall passband (FM, FM-N, WFM, DATA-FM, AM-N, and the
+  digital FM modes) now renders symmetric about the carrier (±width/2)
+  instead of one-sided to the right like USB; display geometry only, no
+  audio or filter behavior change (#1719, #1792, 4a082e17).
+- A failed `connect()` now fully unwinds the commander and keep-alive tasks
+  it started, eliminating orphaned-future warnings after a connection
+  failure (MOR-595, #1785, 49c5ff93).
+
+## [2.8.0] — 2026-06-02
+
+### Added
+
+- Web transport: added a backend-neutral `Connection` protocol and retargeted
+  the control, scope, and audio handlers to depend on that transport seam rather
+  than the concrete WebSocket wrapper. This is a no-behaviour-change foundation
+  for alternate transports (MOR-274, #1701, 8f2b6c5b).
+- WebRTC transport foundation: added optional `WebRtcDataChannelConnection`
+  support behind the `[webrtc]` extra, including an ordered/reliable `control`
+  DataChannel that drives the unchanged control handler with the same wire frame
+  shape as the WebSocket path (MOR-312, #1707, 047dea74).
+- WebRTC multi-channel support: added `scope` and `audio` DataChannel helpers
+  on the same peer connection, configured unordered and lossy
+  (`maxRetransmits=0`) while reusing the same connection adapter and unchanged
+  handlers (MOR-306, #1710, f1dad721).
+- Discovery: `DiscoveryResponder` can now advertise a station fleet through an
+  additive `radios[]` array with per-radio ids, models, urls, status, and
+  connection state, while preserving the legacy single-radio top-level fields
+  for existing discovery clients (MOR-303, #1705, eb4e2a98).
+
+### Changed
+
+- Audio bus lifecycle: subscriptions now have an awaited close path and bridge
+  teardown waits for subscriber removal, reducing restart races and keeping
+  rapid start/stop diagnostics deterministic (#1568, #1708, dae97577).
+- Realtime TX queue policy: bridge TX overflow now evicts the oldest queued
+  audio frame and keeps the newest live capture frame, preserving bounded
+  latency while continuing to count overruns (#1565, #1708, dae97577).
+- Public docs now clarify WSJT-X loopback device direction, advisory
+  `/api/v1/audio` `frame_ms` semantics, validation workflow status, and command
+  catalog stability boundaries (#1567, #1708, dae97577).
+
+### Fixed
+
+- External CAT reconnect: a leaked external-CAT ownership flag is now reset on
+  radio reconnect, so rigctld and web pollers resume instead of serving stale
+  frequency/state after a managed runtime restart (MOR-301, #1703, c3cb411d).
+- Hamlib bridge startup: partial `open_transport()` failures after CAT session
+  acquisition now release ownership, preventing a failed listener/server setup
+  from leaving pollers paused (#1703, c3cb411d).
+- Web audio TX cleanup: active PCM/Opus TX is now stopped or safely released
+  when an audio websocket disconnects, is cancelled, or exits with an exception;
+  explicit `audio_stop` behavior is preserved (#1566, #1708, dae97577).
+
+## [2.7.3] — 2026-05-31
+
+### Fixed
+
+- Windows FT8 TX delivered no audio (Po=0 W): the callback/`blocksize=0` TX
+  capture emitted 960-byte (10 ms) frames while the PCM TX validator requires
+  1920-byte (20 ms) frames; capture now re-chunks the continuous callback stream
+  into fixed 20 ms frames (keeps the ~50 Hz comb fix; lossless) (MOR-256, #1699,
+  17492be6)
+
+### Changed
+
+- Build (packaging): build the web UI during packaging so source/git installs
+  bundle the SPA (#1698, 55a0f81f)
+
+## [2.7.2] — 2026-05-30
+
+### Fixed
+
+- Desktop RX audio: resume the `AudioContext` from the LIVE user-gesture so streamed RX audio plays under WKWebView/autoplay-restricted contexts, and recover from suspended-context frame drops instead of silently dropping them (MOR-239, #1694, 921f4c88)
+- Audio scope: dispatch audio-FFT frames to `/api/v1/audio-scope` for radios without a hardware scope (e.g. Xiegu X6200), fixing the blank AUDIO SCOPE panel; hardware-scope radios (IC-7610) are unchanged (MOR-241, #1695, 4e98ab0d)
+- Serial USB-audio TX: arm the PCM TX path in the shared serial Icom base so bridge TX reaches the radio (IC-705/IC-7300/IC-9700/X6200) instead of raising "PCM TX not started" per frame; the audio bridge now degrades to RX-only on TX failure instead of spamming (MOR-242, #1696, 37fe3d0a)
+
+## [2.7.1] — 2026-05-29
+
+### Fixed
+- USB audio now clamps the requested channel count to the device's real
+  capability (`input_channels` for RX, `output_channels` for TX) at stream
+  open, mirroring the existing sample-rate negotiation. Any mono USB codec
+  self-heals instead of failing the global stereo default with PortAudio
+  `-9998` ("Invalid number of channels") and starving the stream; the Xiegu
+  X6200 mono RX path no longer depends on its profile `codec_preference`
+  entry (verified on hardware). The effective channel count and its source
+  are recorded on the stream contract for diagnostics (#1692).
+
+## [2.7.0] — 2026-05-29
+
+### Added
+- USB-audio topology resolution on **Linux** (`/sys` sysfs) and **Windows**
+  (USB PnP / SetupAPI), extending the macOS resolver so USB radios — notably
+  the Xiegu X6200's WCH CH342 CDC-ACM bridge (`/dev/ttyACM*`, `COMx`) — map
+  their host USB audio device by physical USB topology with a VID:PID identity
+  fallback (#1687, #1686).
+
+### Changed
+- USB audio↔serial device pairing is now by device **identity** (product name
+  + same-name rank) instead of positional enumeration order, correcting
+  selection on mixed-vendor multi-radio hosts (#1685).
+
+### Fixed
+- Xiegu X6200 browser "LIVE" RX audio now flows: the mono C-Media USB codec is
+  opened as 1-channel PCM via an `[audio] codec_preference` profile entry,
+  instead of failing the global stereo default (PortAudio `-9998`) and starving
+  the stream (#1688).
+- Xiegu X6200 CH342 serial session stabilized: the reconnect watchdog uses
+  capped exponential backoff and no longer floods the log on transient USB
+  renumbering, and CI-V RX framing tolerates short/partial frequency frames
+  instead of raising `BCD data must be exactly 5 bytes` (#1689).
+
+## [2.6.0] — 2026-05-29
+
+### Added
+- Universal real-radio validation matrix: JSON schema, per-radio templates, and
+  a headless dry-run runner (#1652, #1653).
+- `rigplane validate --provider hamlib | both` — validate the native rigplane
+  path against a Hamlib `rigctld` and surface native-vs-Hamlib comparison
+  dimensions, with tolerance-aware readback (#1654, #1655, #1673, #1672, #1671).
+- Profile-driven matrix generation: a capability→check-spec registry with
+  generic `_check_from_spec` dispatch, Generator A (from profile capabilities)
+  and Generator B (registry → Hamlib-filtered template) (#1659, #1660, #1661,
+  #1670, #1671, #1668).
+- `rigplane radio-validate` — profile-driven wrapper over the validate run path
+  (#1675).
+- `rigplane convert` — bootstrap a draft rig TOML from Hamlib `dump_caps` with
+  cross-check (#1674, #1679).
+- Override files for generated matrices: a pure, check_id-keyed,
+  safety-invariant merge layer wired into the generate path with metadata audit
+  (#1676, #1678).
+- Set-and-observe engine path for write-only controls, with per-radio
+  write-only classification (#1663, #1664).
+- Disambiguate the Xiegu X6200 from the Icom IC-705 (shared CI-V address `0xA4`)
+  by the Xiegu-only model-ID opcode `0x1D 0x19` when the USB hwid is
+  inconclusive (#1682).
+
+### Fixed
+- Xiegu X6200 USB RX audio now resolves in the browser "LIVE" stream on macOS:
+  the topology resolver handles CDC-ACM `usbmodem` ports and the C-Media codec
+  identity (#1677).
+- Xiegu X6200 (and other CDC-ACM / Windows COM serial radios) are no longer
+  skipped during discovery — port acceptance anchors on USB identity (VID:PID /
+  hwid) instead of the device-name substring (#1680).
+- Set mode via CI-V `0x26` selected-mode when the profile declares it (#1657).
+- Send plain ATT/PREAMP commands on single-RX radios (#1656).
+- Classify the X6200 manual notch as a write-only control (#1665, #1667).
+- Harden rigctld-client response alignment over the bridge (#1669).
+- Derive TX/tuner authorization from the capability registry rather than the
+  mutable template flag (#1683).
+
+### Docs
+- Open-source universal validation matrix guide — `radio-validate`, `convert`,
+  overrides, evidence (#1681); "Running the radio validation matrix" run recipes
+  (#1666).
+- ADR for the universal profile-driven validation matrix (#1658), reconciled
+  with the tracked tickets (#1662).
+
+## [2.5.1] — 2026-05-28
+
+### Fixed
+- Use the selected serial rig profile's `default_baud` when `--model` is
+  provided without `--serial-baud`, fixing Xiegu X6200 managed/local launches
+  that otherwise fell back to 115200 baud and timed out CAT/control reads
+  (#1642).
+
+## [2.5.0] — 2026-05-28
+
+### Added
+- Added ordered HTTP command batches so local automation can run structured
+  commands in request order with per-step results and timeout handling (#1606,
+  31c41425).
+- Published the full HTTP/WebSocket command catalog in the API docs so client
+  authors can discover the supported command names, parameters, and response
+  shapes without reading server code (#1607, f4c113e7).
+- Exposed a queued, fire-and-forget raw CI-V `send_civ` command through the
+  HTTP/WS command surface and ordered batch endpoint so automation clients can
+  send vendor-specific CI-V without opening a competing radio session (#1616,
+  fb2965ee).
+- Added `POST /api/v1/civ/transaction` for scoped raw CI-V transactions with
+  explicit `expect` modes (`none`, `ack`, `data`), deterministic ACK/NAK/data
+  JSON results, bounded timeouts, and CI-V ownership guarding (#1622, #1623).
+- Added response-capable raw CI-V transaction steps to ordered HTTP batches via
+  `type: "raw_civ_transaction"`, preserving order when mixed with queued
+  command steps (#1637, 06c4c7b0).
+- Added an internal raw CI-V pipe and local Hamlib A1 bridge runner for
+  development of transparent external-CAT ownership over CI-V serial backends
+  (#1610, #1612, #1614, #1615, c371bc3b, 085cd617, c3a09e1e, deabb95d).
+- Added a distinct Xiegu X6200 native rig profile and discovery
+  disambiguation from IC-705 despite the shared factory CI-V address `0xA4`
+  (#1630, 7b593eee).
+- Documented Python usage for response-capable raw CI-V HTTP transactions
+  (#1626).
+
+### Changed
+- Cleaned up type-checking visible at integration boundaries, including raw
+  CI-V transaction coverage and audio TX PCM signatures, reducing false
+  positives for typed downstream users (#1628, #1629, db90a992, bda2ed0a,
+  a356a1ab).
+
+### Fixed
+- Registered Xiegu X6200 in the CLI model registry so `--model X6200` resolves
+  to the X6200 preset instead of silently falling back to IC-7610 (#1631,
+  204aea24).
+- Stopped sending LAN `OpenClose` packets on the serial CI-V wire, avoiding an
+  X6200 flicker/wedge failure mode observed on hardware (#1632, 28a962d0).
+
+### Docs
+- Clarified raw CI-V transaction and batch contracts, including the split
+  between public/dev-facing raw transaction APIs and the internal experimental
+  Hamlib A1 raw-pipe bridge path (#1616, #1637, #1638).
+
+## [2.4.0] — 2026-05-24
+
+### Added
+- External rigctld client backend that talks to a separately managed `rigctld`
+  process so Core can interoperate with Hamlib-managed transports without
+  hosting its own rigctld (#1579, 32753adf).
+- Safe Hamlib probe ranking internals that score candidate transports without
+  committing to them, used by the discover flow (#1581, 68907f6c).
+- Serial inventory now includes Hamlib metadata for each enumerated port so
+  upstream UIs can present capability and provenance hints (#1580, f6b4ca35).
+- Hamlib provider validation in the discover CLI to confirm a candidate probe
+  matches the expected radio profile before activation (#1582, 7e2f04a0).
+
+### Fixed
+- Hardened the Windows core runtime — process lifecycle, signal handling, and
+  cleanup paths now align with the desktop shell's expectations on Windows
+  (#1594, 4ec683f8).
+
+### Docs
+- Defined the public Hamlib provider contract, the provider strategy
+  alignment, the agent handoff, and the rigplane.dev provider guide so external
+  integrations have a single source of truth for the Hamlib path (#1577,
+  #1583, #1590, #1592, f6b0c099, bd9cbbf4, 3e6c5a8e, c2d73d74).
+
+## [2.3.1] — 2026-05-23
+
+### Added
+- TX audio streams now expose write-health snapshots with queued, dropped,
+  attempted, completed, failed, and last-error counters for diagnosing local
+  transmit paths (#1553, 9125216b).
+
+### Fixed
+- PortAudio playback now uses the callback ring, coalesces small writes,
+  increases write chunk size, and keeps playback writes nonblocking to reduce
+  local audio underruns (#1554, #1555, #1556, #1557, #1559, 2dcf7973,
+  f7021beb, 763f2fd0, af51ce12).
+- CI-V reconnect recovery now stays tied to the current generation, retries
+  with ephemeral local ports when needed, and avoids spurious recovery after
+  benign transport churn (#1546, #1550, c29a8a9a, 2169cc4a, 11e682be).
+- rigctld power status responses are now compatible with WSJT-X clients
+  (c064e5f4).
+- Opus TX fails closed when no transcoder is available instead of accepting
+  unsupported PCM-through-Opus paths (#1569, c86da7b0).
+- LAN data-port cooldown recovery now reconnects cleanly after the radio holds
+  the port in cooldown (#1572, #1573, a6976a2c).
+
+### Docs
+- Added public docs-site analytics and IndexNow post-deploy pings, and tuned
+  the indexing policy for rigplane.dev (#1552, #1571, #1574, c50cadfb,
+  a513a0ad, 36662cb7).
+- Documented the PortAudio callback-ring intent and kept audio implementation
+  comments public-safe (#1561, #1562, 94884a98, fdd37686).
+
+## [2.3.0] — 2026-05-20
+
+### Added
+- Added the Core Svelte i18n runtime, locale store, pluralization helpers,
+  pseudo-locale tooling, and bundled `en-US`, `ru-RU`, and `ja-JP` locale
+  catalogs for the first localized Core web surfaces (#1528, #1534, #1536).
+- Added the Core language preference UX and the cross-app locale preference
+  contract used by local shells and integrations to hand off language hints
+  without overwriting the user's stable Core preference (#1529, #1531).
+- Added localization QA coverage: string inventory, runtime/unit tests,
+  pseudo-locale smoke tests, visual QA fixtures, and Playwright i18n
+  screenshot coverage for desktop and mobile app surfaces (#1530, #1533).
+- Added localized server toast reason codes and migrated the P0 Core web
+  surfaces to the i18n runtime, including app shell, status bar, install
+  prompt, language selector, diagnostics dialog, and shared toasts (#1532).
+
+### Changed
+- Moved quick/full/rebrand/agent-review CI workflows to the Mac mini
+  build-tier runner while preserving the existing required gates (#1512,
+  #1513, #1514).
+- Moved the lightweight rebrand and agent-review gate jobs to GitHub-hosted
+  runners so protected-branch release fixes are not blocked when the
+  self-hosted gate runner is unavailable.
+- Refined public packaging metadata and docs SEO/navigation for the
+  multi-vendor RigPlane framing, including Project Overview, migration
+  guidance, per-page descriptions, and setup-guide download CTAs (#1510,
+  #1511, #1538, #1540, #1541, #1542).
+
+### Fixed
+- Stabilized the audio-scope aspect ratio in the web UI (#1519).
+- Fixed WebView/Tauri audio compatibility by allowing browser clients to
+  request PCM16 RX transport, adding a PCM16 TX microphone fallback when
+  WebCodecs are unavailable, and guarding async PTT startup/release races
+  before keying transmit (#1543).
+- Fixed Japanese pilot copy after linguistic validation (#1537).
+- Fixed release packaging so the generated frontend bundle is included in
+  sdist/wheel artifacts without relying on a local absolute `web/static`
+  symlink.
+- Fixed PyPI runtime dependency metadata so installed wheels can import and
+  serve the Web UI diagnostics upload path without relying on dev-only
+  dependencies.
+- Refreshed the frontend lockfile to pick up Svelte/devalue security fixes;
+  `npm audit --omit=dev` now reports zero vulnerabilities.
+
+### Docs
+- Added the Core user-facing string inventory, locale contract, translator
+  guide, i18n contribution notes, and visual QA documentation (#1527, #1535).
+
+## [2.2.0] — 2026-05-11
+
+### Added
+- Added a friendly station-server discovery and status contract for desktop
+  supervisors: UDP discovery now advertises the station-server schema, endpoint
+  URLs, readiness, auth-required, backend, display name, and radio metadata
+  while preserving legacy discovery fields (#1498).
+- Added `GET /api/v1/station` and exposed station readiness in
+  `GET /api/v1/runtime`, giving setup tools a stable machine-readable and
+  human-readable status payload for LAN station-server discovery (#1498).
+
+### Docs
+- Documented the new station-server discovery/status payloads and readiness
+  states for supervisors and setup tools (#1498).
+
+## [2.1.2] — 2026-05-09
+
+### Added
+- Web state now exposes classified radio health with separate server reachability, radio link, readiness, likely-cause, and health revision fields (#1500).
+
+### Changed
+- `/api/v1/state` ETags now include both radio state revision and health revision, so health-only transitions reach UI clients instead of being hidden behind `304 Not Modified` responses (#1501).
+- The web client accepts health-only state updates, stores radio health separately from legacy readiness flags, maps degraded causes into status-bar state, and blocks live-radio commands before optimistic updates while radio health is degraded (#1501, #1503).
+
+### Fixed
+- Radios with no prior runtime evidence now remain classified as `unknown` instead of being prematurely reported as `radio_not_responding` (#1503).
+
+### Docs
+- Documented IC-7610 VPN/tunnel MTU fragmentation symptoms and the `ICOM_AUDIO_SAMPLE_RATE=16000` low-bandwidth workaround (#1504).
+
+### CI
+- GitHub workflows were migrated to current Node 24-compatible action versions, and release-related docs/full-matrix workflows were manually validated after merge (#1499).
+
+## [2.1.1] — 2026-05-09
+
+### Added
+- Direct CW send/stop HTTP endpoints for local app integrations, plus clearer CLI launch guidance and web radio aliases (#1496).
+
+### Fixed
+- Web TX audio on IC-7610 LAN now starts the accepted radio-native TX contract instead of starting Opus against the radio's PCM-only TX stream (#1493).
+- Web RX LIVE toggling now sends `audio_start` / `audio_stop` even when the audio WebSocket is already open, fixing the first-click silence after page load (#1495).
+- IC-7610 LAN audio keeps 48 kHz PCM as the full-fidelity profile default; troubleshooting docs now call out VPN/tunnel MTU fragmentation issues and the `ICOM_AUDIO_SAMPLE_RATE=16000` low-bandwidth workaround (#1494).
+- Existing Svelte check warnings in touched frontend files were removed so `npm run check` is clean for the hotfix branch (#1497).
+
+## [2.1.0] — 2026-05-08
+
+### Added
+- Managed station runtime support for Pro/supervisor integrations: runtime mode, health endpoints, startup events, token-file auth, setup-wizard discovery JSON, and stable supervisor API documentation (#1439, #1440, #1441, #1442, #1443, #1444, #1445).
+- LAN/USB audio capability groundwork: radio-native audio policy contracts, USB audio device contracts and diagnostics, safe RX-only LAN audio probe CLI, JSON probe artifacts, cooldown/retry controls, and guarded profile proposal tooling (#1464, #1479, #1480, #1481, #1483, #1488).
+- Automated audio regression harnesses for WSJT-X and TX pipeline work: in-process TX pipeline, rigctld WSJT-X replay, opt-in OS audio smoke, and IC-7610 hardware validation tests (#1450, #1451, #1452, #1453).
+
+### Changed
+- WSJT-X compatibility now derives DATA/LAN policy from the resolved audio route instead of backend-name guards, preserving DATA1 as user-owned while selecting DATA2/LAN only for direct LAN radios that support it (#1446).
+- Icom LAN audio profiles now carry evidence-backed PCM-first policies for IC-705, IC-9700, and IC-7610; IC-7610 defaults to the hardware-probed 48 kHz matrix with mono PCM TX (#1477, #1490).
+- Browser audio routing keeps Opus as a consumer/web transport policy only; direct stock-radio LAN stream defaults remain radio-native PCM/u-law.
+
+### Fixed
+- LAN discovery now advertises the RigPlane service identity after the v2 rebrand (#1485).
+- Removed stale rebrand paths from agent commands and docs SEO metadata.
+
+### Docs
+- Added audio codec policy, audio capability probing, audio profile audit, USB audio negotiation, managed runtime packaging, CLI, API, and audio recipe documentation for the new runtime/audio contracts.
+
+## [2.0.3] — 2026-05-07
+
+### Fixed
+- WSJT-X LAN TX audio on direct Icom LAN: send raw PCM when conninfo negotiates `PCM_1CH_16BIT` instead of pushing Opus bytes into the radio's PCM TX stream (#1430, #1448, 999953e2). Adds explicit TX codec tracking; routes WSJT-X packet modes to DATA2/LAN only for direct Icom multi-DATA radios; keeps DATA1 user-owned (prewarm/profile-apply/state-restore no longer rewrite DATA1 MOD input). Validated on IC-7610 LAN — continuous TX audio reaches the radio.
+
+### Other
+- Align `tests/test_pcm_e2e.py` with the new PCM-passthrough TX path: pin `_audio_tx_codec = AudioCodec.OPUS_1CH` on the test radio so the dummy transcoder is exercised, and use a properly-sized 1920-byte synthetic frame for loopback TX (6ad40e91, #1448 follow-up).
+
+## [2.0.2] — 2026-05-06
+
+### Added
+- Tailored in-repo release skill (`.claude/skills/release/SKILL.md`) replacing the stale global slash command (#1436).
+
+### Fixed
+- Frontend e2e: closed pre-existing Wave 2 rebrand leak in `playwright.config.ts` and `v2-ui-interactive.impl.ts`; removed obsolete `ICOM_LAN_V2_URL` fallback (#1437).
+
+### Docs
+- IC-7610 WSJT-X TX level workaround for FT8/JS8/fldigi multi-peak waterfall (#1382, #1384).
+- GitHub Project workflow for Codex-style agents: `AGENTS.md`, project doc, `CLAUDE.md` link (#1431).
+
+## [2.0.1] — 2026-05-06
+
+### Fixed
+- LAN TX audio bridge: fix audio not flowing in transmit direction (#1434, ba364e54)
+
+## [2.0.0] — 2026-05-05
+
+**Headline:** project renamed from `icom-lan` to **`rigplane`**. The old name was always misleading — the project shipped multi-vendor support (Icom CI-V, Yaesu CAT, Discovery TX-500, Xiegu X6200) over LAN, USB, and serial. Carrying "icom-lan" through a paid Pro tier also created a trademark risk on a vendor name we don't own. New brand at https://rigplane.dev.
+
+### Migration
+
+Existing v1.x scripts continue to work without modification:
+
+```python
+# This still works, emits DeprecationWarning on first import:
+from icom_lan import IcomRadio, LanBackendConfig, create_radio
+import icom_lan.web
+
+# Canonical v2 form:
+from rigplane import IcomRadio, LanBackendConfig, create_radio
+import rigplane.web
+```
+
+The `icom-lan` CLI binary remains as a deprecated alias of `rigplane` (prints a notice to stderr, then forwards `argv`).
+
+User-facing data (web-UI panel layouts, theme, auth token, memory channels, log directories) is migrated automatically on first launch — no re-login or reconfigure.
+
+### Breaking changes
+
+- **PyPI package**: `icom-lan` → `rigplane`. Preferred install: `pip install rigplane`. The old `icom-lan` package on PyPI is frozen at v1.1.0; future releases ship as `rigplane`.
+- **Python import path**: `icom_lan.*` → `rigplane.*`. The `icom_lan` shim re-exports from `rigplane` with `DeprecationWarning` and will be removed in a future major release.
+- **CLI binary**: `icom-lan` → `rigplane`. `icom-lan` retained as deprecated alias.
+- **Environment variables**: `ICOM_LAN_REPORT_ENDPOINT`, `ICOM_LAN_DISABLE_DIAGNOSTIC_LOGGING`, `ICOM_LAN_LOG_DIR` → `RIGPLANE_*`. LAN discovery now uses `b"RIGPLANE_DISCOVER\n"` with `b"ICOM_LAN_DISCOVER\n"` accepted as a legacy request.
+- **Diagnostic bundle schema**: default emission is now `rigplane-bundle-v2` (was `icom-lan-bundle-v1`). The maintainer-operated triage service accepts both v1 and v2 for at least 12 months.
+- **Exception class**: `IcomLanError` → `RigplaneError`. Class is re-exported from `icom_lan` shim under both names.
+
+### Preserved (not renamed — vendor identifiers stay)
+
+- Vendor classes: `IcomRadio`, `IcomBackend`, `IcomCommander`, `Icom7610Profile`, `YaesuRadio`, `YaesuCatRadio`, etc. These name supported hardware vendors, not the product brand.
+- Backend directories: `src/rigplane/backends/icom7610/`, `…/yaesu_cat/`, etc. The vendor-model component is preserved.
+- Vendor-config env vars: `ICOM_HOST`, `ICOM_USER`, `ICOM_PASS`, `ICOM_PORT`, `ICOM_AUDIO_*`, `ICOM_CIV_*`, etc.
+- LAN discovery wire contract: magic byte sequence + service token unchanged in v2.0.0.
+
+### Added
+
+- **`rigplane-bundle-v2`** diagnostic-bundle wire-format spec (`docs/contracts/diagnostic-bundle-v2.md`). Bundle producer emits v2 by default; v1 emission preserved as opt-in.
+- **Brand identity v1**: wordmark, mark, lockup (light/dark/mono SVG), favicon set, app icons (Tauri + PWA), social cards, README banner, color palette, typography spec. Color palette: Ink `#0E1A28`, Paper `#F4F1EA`, Signal `#2D5F8A`. Typography: IBM Plex Sans + IBM Plex Mono.
+- **First-run platformdirs migration** (`rigplane._platformdirs_migration`). Copies legacy `~/.cache/icom-lan/`, `~/.config/icom-lan/`, etc. to corresponding `rigplane` paths. Best-effort, idempotent, sentinel-guarded.
+- **First-run localStorage migration** (`frontend/src/lib/migrate-legacy-storage.ts`). Auto-runs at module import (boot-order critical — stores read localStorage at module-init). Migrates 17 legacy keys to the new namespace.
+- **`window.rigplaneExtensionHost`** primary global for Pro local-extensions. `window.icomLanExtensionHost` alias preserved for v1.x extensions.
+- **CI grep gate** (`.github/workflows/rebrand-gate.yml`) prevents accidental brand-string regressions.
+
+### Changed
+
+- Default product description across docs, README, mkdocs `site_description`, and PyPI metadata acknowledges multi-vendor support instead of the legacy Icom-only framing.
+- Docs site: `https://morozsm.github.io/icom-lan/` → **https://rigplane.dev/**.
+- GitHub repo: `morozsm/icom-lan` → `rigplane/rigplane-core`. Auto-redirects active.
+
+## [1.1.0] — 2026-05-04
+
+Two headline items:
+
+1. **Critical fix for the WSJT-X / JS8Call audio regression on IC-7610 LAN
+   bridges (#1381).** Since v0.17.0 the LAN audio bridge fed stereo
+   radio bytes (the new dual-RX `PCM_2CH_16BIT` default) into a mono
+   PortAudio stream, halving the effective sample-rate. Users observed
+   1.5 kHz audio with the 3 kHz USB filter and TX silence. Fixed: the
+   bridge now auto-detects the radio's negotiated channel count and
+   downmixes (L+R)/2 → mono inside the bridge, mirroring the web UI
+   broadcaster pattern. WSJT-X / JS8Call / fldigi see a clean mono
+   stream at full sample-rate again. Single-RX rigs and the dual-RX
+   web routing path are unaffected.
+
+2. **Opt-in diagnostic reporting end-to-end** (epic #1385). New
+   `icom-lan diagnose` CLI subcommand + Web UI "Send diagnostic
+   report" dialog build a redacted bundle from 9 contributors and
+   (only on explicit user action) post to a maintainer-operated
+   triage service.
+
+Plus frontend tech-debt closeout (#1369 cluster) and a configurable RX
+audio jitter buffer for unreliable LAN links (#1363).
+
+### Added
+
+- **Diagnostic data collection (epic #1385).** New `icom-lan diagnose`
+  CLI subcommand and Web UI "Send diagnostic report" dialog (Settings
+  panel) collect a structured ZIP from 9 contributors (`system`,
+  `invocation`, `radio`, `audio`, `logs`, `state`, `errors`,
+  `dependencies`, `config`) with PII redaction (paths, IPs,
+  credentials, tokens). Default is local save; explicit `--upload`
+  opt-in posts to `https://reports.msmsoft.net/v1/diagnostics/upload`
+  (override via `ICOM_LAN_REPORT_ENDPOINT`). Privacy invariants per
+  `docs/architecture/open-core-policy.md` §2 carve-out.
+- **Public contract `docs/contracts/diagnostic-bundle-v1.md`** documents
+  the anonymous-tier upload protocol; third-party self-hosters can
+  implement against it (#1398).
+- **`DiagnosticContributor` protocol + entry-point discovery**
+  (`icom_lan.diagnostics` group) lets `icom-lan-pro` plug in additional
+  data sources without touching open-core (#1389).
+- **HTTP upload client** with typed errors (`RateLimited`,
+  `BundleTooLarge`, `ForbiddenContent`, `MetadataInvalid`,
+  `NetworkError`) and a `header_provider` hook for Pro-side signed
+  uploads (#1394).
+- **Always-on rotating diagnostic log** (`SafeRotatingFileHandler`,
+  `~/.cache/icom-lan/logs/`, ~15 MiB cap) scoped to
+  `logging.getLogger("icom_lan")` so library-mode use stays clean (#1387).
+- **Configurable RX audio jitter buffer** for unreliable LAN links (#1363).
+- **User documentation:** `docs/guide/diagnostic-reports.md` walkthrough
+  with privacy invariants, troubleshooting, and CLI reference (#1401).
+
+### Changed
+
+- `pip install icom-lan` no longer transitively imports `aiohttp` —
+  the `icom_lan.diagnostics.upload` module is lazy-loaded via PEP 562
+  `__getattr__` so all CLI commands work without aiohttp installed (a
+  dev-only dependency). `icom-lan diagnose --upload` emits a friendly
+  install hint instead of a Python traceback when aiohttp is missing
+  (#1417, #1420).
+- Open-core policy formally documents the **carve-out for user-initiated
+  diagnostic support reports** alongside the existing "no telemetry"
+  rule (`docs/architecture/open-core-policy.md` §2).
+
+### Fixed
+
+- **`AudioBridge` stereo-to-mono downmix for hamlib clients (#1381).**
+  See headline #1 above. Critical regression fix for IC-7610 LAN
+  bridge users running WSJT-X / JS8Call / fldigi via
+  `icom-lan web --bridge`.
+- IPv6 redaction handles compressed `::` forms correctly via
+  `ipaddress.ip_address()` validation; previously public addresses
+  ending in `::1` were misclassified as loopback (#1418).
+- Path redaction skips URL-embedded paths via negative lookbehind (#1418).
+- Web UI `handle_send` race condition: atomic CSRF check-and-set under
+  the session lock prevents concurrent double-uploads (#1419).
+- Web UI modal `handleCancel` respects `busy` state (Escape and
+  backdrop click ignored while a request is in flight) (#1419).
+- macOS device labels with embedded usernames scrubbed in the audio
+  contributor (#1418).
+- Hostname redaction (`*.example.com`, `*.local`) for the radio
+  contributor's `host` field (#1418).
+- Bundle assembler cleans up partial output from failed contributors
+  so it doesn't leak into the ZIP (#1418).
+- PATH env var redacted per-segment so the `:` separator no longer
+  breaks the lookbehind guard (#1418).
+- Threading exceptions captured by `_error_ring` via
+  `threading.excepthook` alongside `sys.excepthook` (#1418).
+- Frontend tech-debt cluster cleared (epic #1369): 173 svelte-check
+  errors from self-wired panel migration (#1370), 8 misc type errors
+  (#1374), nullable narrowing + Promise generic in HTTP client (#1372),
+  vitest 4 mock signatures (#1371), invalid jitter env-var
+  half-apply (#1366), ruff format sweep (#1368).
+- CI gate: `npm run check` + vitest now blocks frontend regressions (#1375).
+
+### Docs
+
+- Diagnostic data collection design spec, 530 LOC (#1386).
+- Public bundle contract `diagnostic-bundle-v1.md` (#1398).
+- User guide for diagnostic reports (#1401).
+- Open-core policy carve-out for user-initiated reports (#1418).
+
+## [1.0.1] — 2026-05-01
+
+Docs build + internal-import canonicalization patch. **No runtime behaviour
+changes**, no public API changes — `pip install --upgrade icom-lan` from
+1.0.0 is mechanical.
+
+### Fixed
+
+- **Docs build:** mkdocstrings autorefs in `docs/api/{radios,audio,commander,sync,types}.md` resolve cleanly (#1338). Previously `icom_lan.<shim>.X` references could not be traversed by griffe through `sys.modules`-alias shims, breaking the `docs.yml` workflow.
+- **Docs build:** `[Followup]` markdown brackets in `docs/plans/issue-drafts/00-epic.md` are backtick-quoted so `mkdocs_autorefs` stops trying to resolve them as cross-reference targets under `--strict`.
+
+### Internal
+
+- **Canonicalised 60 in-package imports off shim paths (#1338).** Files in `src/icom_lan/<layer>/*.py` now import siblings via canonical paths (e.g. `icom_lan.commands.commander` instead of the top-level `icom_lan.commander` shim). Public API shims are preserved verbatim — downstream `from icom_lan.commander import …` keeps working.
+- **Canonicalised 13 mkdocstrings refs in `docs/api/*.md` (#1338).** Tutorial code examples in `docs/guide/*.md` and `docs/radio-protocol.md` deliberately keep using public-stable shim paths.
+- Tagged release artefact (`RELEASE_NOTES.md`) removed from the repo per the post-release housekeeping convention; the GitHub release body remains canonical.
+
+## [1.0.0] — 2026-05-01
+
+**Public API stability commitment.** The Tier 1 surface documented in
+`docs/api/public-api-surface.md` — the `Radio` protocol, capability
+protocols (`AudioCapable`, `ScopeCapable`, `MetersCapable`,
+`LevelsCapable`, `StatePollable`, `RigctldRoutable`, `UsbAudioCapable`,
+…), `create_radio` / `BackendConfig`, and the `frontend/src/lib/local-extensions/`
+host API — is now under SemVer. No public API breaking changes vs
+v0.19.0; every prior import path continues to work via `sys.modules`-aliased
+re-export shims.
+
+### Added
+
+- **Tier 1 Capability Protocols extended (epic #1322).** Four new
+  protocols on `icom_lan.radio_protocol` enable `isinstance`-based feature
+  detection — backends are now selected by capability, not by backend-id
+  string:
+  - `StatePollable` + `StatePoller` (#1322, #1323) — replaces backend-id
+    branching in `web_startup`.
+  - `RigctldRoutable` (#1322, #1324) — pluggable rigctld routing.
+  - `UsbAudioCapable` (#1322, #1326) — uniform USB audio device contract.
+  - `PowerControlCapable.native_power_unit` (#1322, #1325) — drops the last
+    backend-id discriminator from `web/handlers/control.py`.
+- **rigctld per-VFO routing (#1342–#1346).** Parser now accepts the
+  Hamlib `chk_vfo=1` leading VFO argument and routes `f`/`m`/`t`/`s`/`S`/`j`/`l`/`L`/`u`/`U`
+  per-VFO. `RigctldRouting` Protocol gains an optional `vfo` kwarg;
+  `AuditRecord` gains a `vfo` column. `chk_vfo='1'` is re-enabled for
+  dual-RX (Variant A complete).
+- **`YaesuCatRadio.set_rf_power` (#1331)** — Yaesu CAT backend now
+  conforms to `PowerControlCapable`; `web/handlers/control.set_power`
+  switched from string-cap to `isinstance(PowerControlCapable)`.
+
+### Changed
+
+- **Internal: source code reorganized into explicit layered structure
+  (epic #1283).** `src/icom_lan/` is now organised into 11 layered
+  packages — `core/`, `commands/`, `profiles/`, `audio/`, `scope/`,
+  `dsp/`, `runtime/`, `backends/`, `web/`, `rigctld/`, `cli/` — with
+  per-layer `LAYER.md` charters and the full layer matrix in
+  `docs/plans/2026-04-29-modularization-plan.md`. **No public API
+  changes:** every existing `from icom_lan.<old_path> import …` keeps
+  working via `sys.modules`-aliased re-export shims, and the Tier 1 / Tier 2
+  lazy surface in `icom_lan/__init__.py` is unchanged. New code SHOULD use
+  canonical layer paths (`icom_lan.runtime.radio`, `icom_lan.backends.discovery`,
+  …); see `ARCHITECTURE.md`.
+- **`import-linter` enforces layer boundaries.** Repo-root `.importlinter`
+  declares one layered contract plus three sibling-independence contracts
+  (`web`⊥`rigctld`, `profiles`⊥`audio`, `commands`⊥`scope`⊥`dsp`); run
+  locally via `uv run lint-imports`. CI gates every PR.
+- **`AudioStats.jitter_ms` renamed to `reorder_depth_ema_ms` (#1231).** The
+  field measures reorder-depth EMA, not RFC 3550 jitter. Internal field; no
+  back-compat alias.
+- **`_require_*()` helpers for optional deps (#1274).** New
+  `src/icom_lan/_optional_deps.py` provides `_require_numpy`,
+  `_require_sounddevice`, `_require_opuslib`, `_require_pillow`. Ad-hoc
+  `try/except ImportError` blocks across the codebase now share uniform
+  error messages.
+
+### Fixed
+
+#### rigctld
+
+- **`chk_vfo` now returns `"0"` unconditionally for all radio profiles
+  (#1319).** The dual-RX `"1"` advertising introduced in v0.17.0 caused
+  WSJT-X / fldigi / JS8Call to fail with "Hamlib error: Feature not
+  implemented" on IC-7610, IC-9700, and FTX-1 because Hamlib's `vfo_opt`
+  mode prefixes every command with a VFO token. After the rollback,
+  Variant A (#1342–#1346) re-enabled `chk_vfo='1'` for dual-RX with
+  full parser + per-VFO routing — WSJT-X / fldigi / JS8Call golden replay
+  now passes.
+
+#### Web server
+
+- **Blocking file I/O offloaded via `asyncio.to_thread` (#1332).**
+  `server._handle_band_plan_config` and `eibi.load_cache` no longer block
+  the event loop on disk reads.
+- **`runtime_capabilities` fallback recognises `UsbAudioCapable` (#1356).**
+  USB-audio detection now matches the Capability Protocol path.
+
+#### Sync API
+
+- **`get_alc_meter` exposed on `sync.IcomRadio` (#1228, refs #1226).**
+  Was missing after the v0.19 `get_alc` removal.
+
+#### CI
+
+- **Subdirectory tests now actually run (#1352).** The `tests/test_*.py`
+  glob silently skipped suites in nested directories; the glob now
+  recurses.
+
+### Removed
+
+These deprecation closures were announced in v0.19 and dropped on schedule.
+
+- **`IcomRadio.set_split_mode` (#1205).** Use `set_split` (`SplitCapable`).
+- **`IcomRadio.get_alc` / `sync.IcomRadio.get_alc` (#1207).** Use
+  `get_alc_meter` (`MetersCapable`).
+- **`icom_lan.commands.levels` aliases (#1208):** `get_power`, `set_power`,
+  `get_sql`, `set_sql`. Use canonical `get_rf_power` / `set_rf_power` /
+  `get_squelch` / `set_squelch`.
+- **`IcomRadio.set_vfo("A"/"B"/"MAIN"/"SUB")` legacy overload + `select_vfo`
+  alias (#1206).** Use `ReceiverBankCapable.select_receiver` (MAIN/SUB) and
+  `VfoSlotCapable.set_vfo_slot` (A/B). Legacy fallback paths in
+  `web/radio_poller.py` and `rigctld/handler.py` remain for third-party
+  backends.
+- **`meter_cal._TABLES` and `meter_cal.calibrate()` (#1209).** Unreachable
+  since #1173 shipped per-rig TOML calibration. `MeterType` and
+  `interpolate_swr` remain exported.
+- **Web UI v1 layout shell (#1216, #1217, #1218, #1220, #1227).** Legacy
+  `AppShell` / `DesktopLayout` / `MobileLayout` removed. v2
+  (`RadioLayoutV2` + `frontend/src/components-v2/`) has been the default
+  since v0.15.1 and is now the only supported path. The `?ui=v1` URL
+  fallback and the `ui-version` store are gone.
+
+### Internal
+
+#### Frontend
+
+- **Panel → adapter migration complete (#1240, #1244–#1248, #1241).** All
+  18 panels under `components-v2/panels/` no longer import directly from
+  `$lib/stores/*`; capability flags and live radio state flow via panel
+  adapters in `wiring/`. ESLint `no-restricted-imports` enforces the
+  boundary (tests exempt for mocking).
+- **`ControlButtonDemo` is now lazy-loaded (#1232).** Code-split out of
+  the main bundle.
+- **Type safety: removed `as any` casts in `command-bus.ts` (#1233).**
+- **ESLint tightened — v2 layering only (#1219).** Banned `$lib/transport/*`
+  and `$lib/audio/audio-manager` from panels and layouts.
+
+#### `radio.py` god-object decomposition (#1063 wave 3)
+
+- **`_fetch_initial_state` extracted to `radio_initial_state.py` (#1260).**
+- **`_reconnect_loop` / `_watchdog_loop` extracted to `radio_reconnect.py`
+  (#1259).**
+- **`snapshot_state` / `restore_state` extracted to
+  `radio_state_snapshot.py` (#1258).**
+
+#### Dispatch-table refactors
+
+- **`_civ_rx._update_radio_state_from_frame` → table-driven dispatch
+  (#1257).** The 400-line if/elif over CI-V commands now dispatches via
+  `_HANDLERS: dict[int, Callable]`. Behaviour preserved — verified by 72
+  golden-test fixtures (#1266). Dead code at lines 1082-1093 (duplicate
+  cmd 0x12 block) collapsed.
+- **`transport._handle_packet` → dispatch table (#1239).** Six packet
+  types now dispatch via a dict.
+- **`web/handlers/control._enqueue_read_only` → dispatch table (#1263).**
+
+#### Web server decomposition (#1063 wave 4)
+
+- **`WebServer.start()` / `stop()` orchestration extracted to
+  `web_startup.py` (#1261).** ~200 LOC moved out; `WebServer.start()` /
+  `stop()` are thin delegators.
+- **Method/path routing extracted to `web_routing.py` (#1262).**
+
+#### Shared helpers
+
+- **`BoundedQueue` extracted to `_bounded_queue.py` (#1230).** Four
+  asyncio call sites (transport RX, radio scope/civ event queues, web
+  fanout) now share one bounded-queue implementation.
+
+#### Tests
+
+- **Public-API surface regression test (#1273).** New
+  `tests/test_public_api_surface.py` asserts every Tier 1 symbol from
+  `docs/api/public-api-surface.md` imports cleanly AND that Tier 1 imports
+  do not transitively pull Tier 3 modules into `sys.modules`.
+- **Golden-test fixtures for `_civ_rx` (#1256).** 72 synthetic frame
+  fixtures + parametrized dispatch test fence the upcoming refactor.
+- **rigctld parser VFO-prefix tests + CI consistency guard +
+  `dump_state` snapshots (#1342).** Wire-level integration test
+  + golden replay fixtures (Variant A foundation).
+- **Lazy-resolution contract test (#1284).** Locks down PEP 562
+  `__getattr__` Tier 2 surface.
+
+#### Documentation
+
+- **`docs/architecture/open-core-policy.md` (#1276)** — codifies hard
+  constraints: no telemetry, headless mode is sacred, no hollowing out,
+  Radio protocol + `local-extensions/` as the Pro boundary, frontend
+  WebKitGTK-floor compatibility.
+- **`local-extensions/` documented as Tier 1 Pro-facing contract
+  (#1277).** `docs/api/public-api-surface.md` lists exported types and
+  functions from `frontend/src/lib/local-extensions/{host-api,manifest}.ts`
+  with breakage policy.
+- **`AudioBackend` Protocol Tier 2 stability marker (#1275).**
+- **`ARCHITECTURE.md` refreshed for layered structure** + per-layer
+  `LAYER.md` charters (11 files) + CLAUDE.md "Layer boundaries" section.
+
+## [0.19.0] — 2026-04-29
+
+### Tier-1 API stability commitment
+
+- **API: tier-1 stability commitment from v0.19 (#1195).** The public API
+  surface is now organised into three explicit tiers (stable / best-effort /
+  internal) with a documented migration policy. See
+  `docs/api/public-api-surface.md` for the tier policy, full symbol lists,
+  and import examples.
+- **Lazy `__init__.py` via PEP 562 (#1194).** Trimmed eager imports from 203
+  to 71 lines; tier-2 symbols now lazy-load on first access. `from icom_lan
+  import Radio` no longer transitively pulls in `web/`, `cli`, `rigctld/`,
+  or `audio.backend` — measured ~13 % fewer submodules in `sys.modules`.
+- **Layering enforcement via ruff TID251 (#1196).** Tier-3 internals
+  (`icom_lan.web.*`, `icom_lan.rigctld.*`, `icom_lan.cli`) now banned from
+  cross-tree imports. Pre-existing `icom_lan.radio.IcomRadio` ban preserved
+  in web modules (#1201).
+
+### Added
+
+- **Receiver-tier protocols on backends.** `ReceiverBankCapable` and
+  `VfoSlotCapable` (declared since #711, never implemented) now have
+  concrete impls on both Icom (#1170) and Yaesu CAT (#1171) backends.
+  Profile-driven dispatch covers IC-7610 / IC-9700 / IC-7300 / IC-705 and
+  FTX-1 / Lab599 / X6100 single-RX rigs.
+- **`SplitCapable` protocol (#1108)** — universal split control across all
+  supported HF/VHF rigs. `set_split_mode` deprecated, alias retained until
+  v0.20.
+- **`RitXitCapable` protocol (#1099)** — extracted from
+  `TransceiverStatusCapable`. Six canonical `*_rit_*` methods on
+  YaesuCatRadio plus read-modify-write fix preserving the unaffected RX/TX
+  bit on CF000.
+- **17 protocol declarations** added across existing capability protocols:
+  `DspControlCapable` (filter family, notch, agc), `LevelsCapable`
+  (af_level/rf_gain getters, squelch), `MetersCapable` (power_meter,
+  alc_meter, swr_meter), `AudioCapable` (codec/sample_rate properties),
+  `ScopeCapable` (getters, scope_stream), `VoiceControlCapable`
+  (get_compressor), `CwControlCapable` (break_in), `AntennaControlCapable`
+  (get_attenuator), `PowerControlCapable` (get_rf_power lift).
+- **Default web UX (#1087):** `icom-lan web` now auto-detects loopback and
+  enables the audio bridge by default; rigctld serves on 4532 by default
+  with `--no-rigctld` opt-out (#1088, #1089).
+- **`[bridge]` extras folded into core (#1090).** `pip install icom-lan`
+  ships `opuslib`, `sounddevice`, and `numpy` out of the box. Legacy
+  `[audio]` and `[bridge]` extras retained as no-op aliases.
+- **Calibrated SWR float on Icom rigs (#1173).** `IcomRadio.get_swr` now
+  returns calibrated SWR (1.0–6.0+) via TOML calibration tables (5 anchor
+  points per rig, sourced from official Icom CI-V references). New
+  `get_swr_meter()` on async + sync API for raw 0-255 access.
+- **`SetPower` poller dataclass unit-tagged (#1168)** — explicit
+  `unit="raw_255"` (Icom default) vs `"watts"` (Yaesu) ends silent
+  Icom/Yaesu unit mismatch.
+- **State-contract sweep (#1169):** `RadioState.cw_spot` is now tri-state
+  (`bool | None`); Yaesu-specific `rx_func_mode`/`tx_func_mode` moved into
+  `YaesuStateExtension`.
+- **Frontend runtime architecture (epic #708 follow-up).** `FrontendRuntime`
+  singleton with `ScopeController`, lib/runtime/ pattern, panel-props /
+  panel-commands separation enforced via ESLint.
+
+### Changed
+
+- **`__init__.py` is now ~80 lines** (was 203). Tier-1 symbols eager;
+  everything else lazy via PEP 562 `__getattr__`.
+- **Audio extras simplified.** `opuslib`, `sounddevice`, `numpy` moved from
+  `[bridge]` extra into the main `dependencies` list. `[dsp]` extra now
+  installs only `scipy>=1.11`. Documentation updated accordingly (#1090).
+- **`set_vfo("A"/"B"/"MAIN"/"SUB")` overload deprecated** (#1187, #1172).
+  Web and rigctld migrated to `select_receiver` / `set_vfo_slot`. Legacy
+  overload emits `DeprecationWarning`; removal scheduled for v0.20.
+- **Filter-width unified on segmented BCD index (#1157)** per wfview
+  reference. Removed `direct_bcd_hz` profile encoding (was incorrect for
+  IC-705 / IC-9700). Added per-mode segment tables to all four Icom rigs.
+- **Scope poller uses public ScopeCapable getters (#1166)** with bounded
+  per-call timeout (#1186). Eliminates raw `_civ(0x27, …)` layering
+  violation while preserving fire-and-forget semantics (#1188).
+
+### Fixed
+
+- **6 rigctld consistency fixes (consolidating P0-classified findings now
+  reclassified P3 — only Yaesu-routing path was active):**
+  dial-lock (#1092), tuner-status (#1094), squelch dispatch (#1093),
+  notch-filter (#1102), powerstat stub (#1095), set_level SQL set-side
+  (#1163).
+- **Yaesu compressor-level alias delegation (#1098)** — was returning
+  hardcoded 0; now correctly forwards to `*_processor_level`.
+- **Yaesu APF mode reachable from web (#1110)** — poller no longer drops
+  `SetApf` actions; mode-1 toggle preserves user-tuned freq (#1141).
+- **`set_vfo` legacy fallback for backends without `ReceiverBankCapable`
+  (#1189)** — `SerialMockRadio` and similar legacy backends no longer
+  silently no-op `V VFOA` / `V VFOB`.
+- **`get_split` cache fallback honors `TimeoutError` (#1158)**, not just
+  `CommandError` — completes the documented fallback contract.
+- **CW pitch idx ↔ Hz conversion on Yaesu (#1162)** — `get_cw_pitch` /
+  `set_cw_pitch` now correctly translate Yaesu's 0-75 idx to/from 300-1050
+  Hz, fixing silent state corruption in `state.cw_pitch`.
+- **CI-V worker cancel propagation (#1188)** — caller-side `wait_for`
+  cancel now cancels the in-flight CI-V command at worker level, preventing
+  cascade-skipping of subsequent queued commands.
+- **Layering violation in scope poller (#1166)** and **filter-width
+  encoding** (#1101) — moved from raw `_civ` in web/ into backend
+  protocol methods.
+- **IC-7300 GET decode bug** — silently read 2 BCD bytes when radio sent 1;
+  fixed during filter-width unification.
+- **VfoSlotCapable RTW bug on Yaesu (#1099)** — `set_rit_status` /
+  `set_rit_tx_status` now read CF000 first to preserve the unaffected
+  RX/TX bit (P1-02 from audit catalog).
+- **Numerous Codex post-merge review fixes** — covering dispatch table
+  gaps, capability fallbacks, type-signature drift, and exception-narrowing
+  across `web/` and `rigctld/`.
+
+### Removed
+
+- **`vfo_exchange` / `vfo_equalize` aliases (#1114)** — deprecated since
+  v0.17, removed per accelerated Q4 deprecation policy.
+- **Seven LAN audio aliases overdue from v0.15 (#1111)** —
+  `start_audio_rx`, `stop_audio_rx`, `start_audio_tx`, `push_audio_tx`,
+  `start_audio`, `stop_audio`, `stop_audio_tx`. Use the canonical
+  `*_opus`-suffixed names.
+- **Internal facade helpers privatised (#1112):** `_push_pcm_tx`,
+  `_push_tx_pcm`, `_has_command`, `_has_write_command`. Public
+  `supports_command` is the canonical introspection API.
+- **`audio_capabilities()` instance method** — use module-level
+  `types.get_audio_capabilities()`.
+- **`direct_bcd_hz` filter-width encoding** — no Icom rig actually used it;
+  unified on segmented BCD index per wfview.
+
+### Deprecated
+
+- **`icom_lan.commands.levels` backward-compat aliases (#1167):**
+  `get_power`, `set_power`, `get_sql`, `set_sql`. Removal v0.20. Use
+  canonical `get_rf_power` / `set_rf_power` / `get_squelch` / `set_squelch`.
+- **`set_split_mode` (Icom)** — replaced by `set_split` (`SplitCapable`).
+  Removal v0.20.
+- **`set_vfo("A"/"B"/"MAIN"/"SUB")` overload** — replaced by
+  `select_receiver` + `set_vfo_slot`. Removal v0.20.
+- **`get_alc` (Icom)** — replaced by `get_alc_meter` (`MetersCapable`).
+
+### Docs
+
+- New "Stability tiers" section in `docs/api/public-api-surface.md`
+  documents tier-1 / 2 / 3 policy with full symbol lists and migration
+  rules.
+- Per-rig SWR calibration anchor tables documented in `rigs/*.toml` per R1
+  research (sourced from official Icom CI-V References + wfview).
+
+### Internal
+
+- 47 PRs landed across this release cycle including audit work, Tier-1
+  stabilization, Form H UX defaults, Form F sealing, and Codex automated
+  review follow-ups.
+- 7 architectural epics closed: API audit (#1071), v0.18.1 hotfix bundle
+  (#1091), Tier-1 stabilization (#1096), Form H UX defaults (#1087),
+  Codex post-merge sweep (#1140), audit closure (#1165), Form F sealing
+  (#1193).
+
+## [0.18.0] — 2026-04-19
+
+### Added
+
+- **Meter responsiveness (epic #936)** — backend priority polling tier plus
+  frontend rAF needle smoothing. S-meter on RX jumps from ~3 Hz to an
+  effective 16 Hz with asymmetric visual smoothing (50 ms attack /
+  150 ms release); Pwr/SWR/ALC on TX go from ~3 Hz to 6.7 Hz each.
+  PTT-on skips the LOW tier so TX-tier meters meet the smooth-needle
+  acceptance target; Vd/Id/Comp deferred to a LOW tier (~750 ms each).
+  (#936, #937, #938, #941)
+- **Amber-LCD twin skins (epic #887)** — `lcd-cockpit` and `lcd-scope`
+  skin variants with dedicated wrappers, 60/40 scope-dominant grid for
+  single-RX, peer dual-cockpit grid for dual-RX, per-VFO indicator
+  zones + global strip, AmberAfScope dominant mode + running-max line,
+  ghost-graticule fallback when AF-FFT is unavailable, memory /
+  recent-QSY strip, telemetry strip (VD/TEMP/ID + sparklines), Display
+  Mode effects (vintage / CRT / flicker), LCD contrast in the
+  control-strip, warm-dark theme. (#808, #823, #836, #837, #838, #861,
+  #864, #877, #887-#895, #896-#900, #902, #904-#908, #911, #914, #915,
+  #916, #918, #919, #920, #921, #929, #932, #933)
+- **Mobile IA overhaul** — chip-scroll navigation + ESSENTIALS panel;
+  persistent guarded PTT FAB; container-query collapse + aux row
+  reserve; first-class RIT/XIT mobile chip; auto-collapse mode-specific
+  panels. (#810, #839, #840, #842, #843, #857, #885, #894, #912, #926,
+  #928, #930)
+- **MetersDockPanel (epic #820)** — new station-health dock with
+  Po/SWR/ALC/S tiles plus Id/Vd/COMP tiles gated by capabilities;
+  peak-hold and SWR/ALC fault highlighting; replaced legacy bottom-dock
+  cards; audio spectrum relocated accordingly. (#820, #821, #822, #823,
+  #848, #866, #872, #878, #880)
+- **Active-receiver UI (epic #825)** — `ActiveReceiverToggle` segmented
+  `[M|S]` control; keyboard bindings for active-receiver switch with
+  audio-focus sync; legacy activate-chip + adapter removed. (#825,
+  #827, #828, #856, #858, #868, #875)
+- **Skin system** — StatusBar dropdown skin-switcher; `lcd-cockpit` /
+  `lcd-scope` registered as first-class skin IDs; variant prop threaded
+  through dedicated wrappers. (#888, #889, #895, #901, #902, #904,
+  #909, #913)
+- **Spectrum toolbar** — keyboard shortcuts; grouping + separators +
+  visual spec. (#830, #831, #847, #855)
+- **Settings reorg** — settings gear moved into StatusBar; subgrid VFO
+  digit/badge layout resolves crowding. (#807, #860, #865, #871)
+
+### Changed
+
+- **LCD token cascade + contrast core** — unified grid scaffold,
+  AmberCockpit extracted, behavior-preserving refactors. (#833, #844,
+  #853, #859, #890, #903)
+- **Panel simplification** — removed panel-wide click-to-activate and
+  STANDBY/ACTIVE pill; consolidated ON/OFF into a single power toggle;
+  renamed SETTINGS → SETUP and pruned chip-duplicated panels;
+  strengthened active/inactive VFO panel treatment. (#805, #824, #826,
+  #841, #849, #854, #867, #925)
+- **Bottom-dock reshuffle** — replaced bottom-dock cards with
+  `MetersDockPanel`; relocated `AudioSpectrumPanel`; BRT/REF moved to
+  mobile spectrum gear; SCOPE status moved to `VfoHeader` bridge. (#812,
+  #821, #832, #869, #870, #880)
+
+### Fixed
+
+- **Scope reconnect deadlock** — break scope re-enable deadlock on
+  reconnect. (#881)
+- **CI-V watchdog** — self-cancel + patient OpenClose recovery. (#851)
+- **Session rejection** — retry-with-mono fallback on stereo `rx_codec`
+  session rejection. (#797, #802)
+- **SWR calibration** — honor TOML calibration table at `raw=0`;
+  non-linear calibration from TOML config. (#440, #924, #927)
+- **hamlib rig model** — read from TOML in Yaesu `dump_state`. (#441,
+  #923)
+- **TX meter telemetry** — preserved when SUB is active; Vd tile
+  readable in RX idle. (#822, #872, #891, #910)
+- **AmberScope / AmberCockpit fallbacks** — VFO A filter-width fallback
+  restored; ghost fallback when AF-FFT unavailable. (#918, #919, #920,
+  #921)
+- **Scope controls on mobile + v1** — restored source/dual controls;
+  SCOPE pills no longer cropped by VFO bridge column overflow. (#832,
+  #873, #883)
+- **lcd-scope variant reachability** — end-to-end variant plumbing via
+  dedicated skin wrappers. (#895, #909, #913)
+- **v2-control-button** — distinguish idle vs disabled states. (#804,
+  #879)
+- **RightSidebar** — restored `AudioSpectrumPanel`; preserve
+  cross-sidebar drag in `loadPanelOrder`. (#884, #886)
+- **Codex review batches** — P1/P2 findings resolved across mobile grid
+  rows, IP+ per-RX, legacy LCD, QSY debounce + orientation PTT release,
+  tile-smoother pruning on capability toggle. (#887, #917, #931, #934,
+  #935, #941)
+
+### Docs
+
+- LCD twin-skin redesign plan (epic #887).
+- UI refinement design spikes (epic #818, #819).
+
+### Chores
+
+- Repo-wide `ruff format` pass (#922).
+- 53 Svelte build warnings cleared — build now emits 0 warnings.
+- `chore(#828)` VFO area tooltip audit + standardization (#882).
+- `chore(#829)` StatusBar tooltip audit + standardization (#876).
+
+## [0.17.0] — 2026-04-18
+
+### Added
+
+- **Dual-RX stereo LAN audio (epic #787)** — IC-7610 now delivers true stereo
+  L=MAIN, R=SUB over LAN.  Backend negotiates `PCM_2CH_16BIT` in conninfo,
+  locks `Phones L/R Mix = OFF` at relay start, and gates the behaviour on a
+  new `lan_dual_rx_audio_routing` capability so IC-9700 / FTX-1 aren't
+  affected.  Frontend resolves `focus` × `split_stereo` via a WebAudio
+  ChannelSplitter + per-channel gain + panner graph — no CI-V round-trip
+  for routing. (#752, #753, #756, #757, #770, #775, #776, #777, #778, #779,
+  #781, #787, #788, #789, #790, #791, #792, #793, #794, #795, #798, #799,
+  #800)
+- **Dual VFO / dual receiver model (epic #708)** — new `ReceiverBankCapable`,
+  `VfoSlotCapable`, `TransceiverBankCapable` protocols; per-receiver A/B
+  `VfoSlotState`; split `swap_ab` / `swap_main_sub` command codes;
+  `DualVfoDisplay` showing both MAIN+SUB on the desktop skin; receiver
+  focus selector on the mobile skin. (#708, #709, #710, #711, #712, #714,
+  #715, #716, #717, #718, #719, #722)
+- **rigctld full VFOA/VFOB protocol** — implements the complete Hamlib
+  per-VFO command set so split-aware digital-mode clients (WSJT-X, fldigi,
+  JS8Call) round-trip cleanly. (#722, #723)
+- **Composite WS commands** — `quick_dualwatch` and `quick_split` batch the
+  radio side of the DW/split setup into single commands with
+  double-click / long-press affordances in the UI. (#775, #776, #778, #779)
+- **CLI log rotation** — `RotatingFileHandler` controlled by
+  `ICOM_LOG_MAX_BYTES` and `ICOM_LOG_BACKUP_COUNT` env vars; prevents
+  unbounded growth of `logs/icom-lan.log`.
+
+### Changed
+
+- **IC-7610 profile** declares `lan_dual_rx_audio_routing` capability and
+  migrates VFO codes to `swap_main_sub` / `equal_main_sub` plus a new
+  `0x14 0x0D` cmd29 route. (#748)
+- **IC-9700 profile** correctly declares the MAIN/SUB scheme with proper
+  byte codes. (#713)
+- **IC-705 / IC-7300** migrated from legacy `swap` / `equal` keys to
+  `swap_ab` / `equal_ab`.
+- **VfoPanel** now uses `receiverLabel` + `vfoSlotLabel` for correct
+  dual-VFO display naming. (#747, #728)
+- **RFC §11** documents the dual-RX LAN routing contract: wire format,
+  the Phones L/R Mix-OFF invariant, the focus × split_stereo gain/pan
+  table, and the historical context of the `0x02` / `0x03` trap.
+
+### Fixed
+
+- **IC-7610 LAN session allocation** — decoupled `tx_codec` from
+  `rx_codec` in conninfo; stock firmware rejected the session with
+  `error=0xFFFFFFFF` when `tx_codec` was a 2-channel value (mic path is
+  mono-only; wfview UI enforces the same constraint). (#794, #795)
+- **CollapsiblePanel phantom-collapse on hover** — left-sidebar panels
+  spontaneously toggled when the mouse passed over their headers.  Root
+  cause was an uninitialised swipe-tracking state that was updated on
+  plain `pointermove`; now gated on `swipeActive` set only by
+  `pointerdown`. (#796)
+- **Audio WebSocket queue** — `audio_config` WS send is queued when the
+  socket is not yet open and flushed on `onopen`, so ACTIVATE on
+  MAIN/SUB always reaches the radio. (#786)
+- **Optimistic UI state** — equalize / swap operations update the UI
+  immediately; audio focus follows ACTIVATE. (#785)
+- **Scope follows active receiver** — spectrum/waterfall switches to the
+  newly selected MAIN/SUB band on every `0x07 0xD0/0xD1`. (#784)
+- **Broadcaster mid-stream codec refresh** — picks up codec / channel /
+  sample-rate changes without reconnecting. (#766, #769)
+- **Broadcaster frame_ms** — derived from actual payload size, not
+  hard-coded 20 ms; fixes label mismatch on IC-7610 PCM16 packets. (#765)
+- **VFO MAIN/SUB buttons** now emit proper receiver-select
+  (`0x07 0xD0/0xD1`), not the MAIN↔SUB swap hack. (#773)
+- **MAIN↔SUB poller flip** on IC-7610 + silence `Radio.__del__` test
+  warnings. (#751)
+- **sync.py default codec** aligned with the async `IcomRadio` default —
+  both paths now return `PCM_2CH_16BIT` by default. (#798)
+- **vitest flakiness** — split into fast + isolated projects to stabilise
+  keyboard-wiring tests. (#771, #782)
+- **post-review P1** — `swap_vfo_ab` safety + rigctld split rollback. (#746)
+- **rig loader** parses `transceiver_count` from `[radio]` section. (#745)
+- **DualVfoDisplay** — dedicated activate button resolves WCAG 4.1.2. (#744)
+- **command-bus** — tighten focus→mode handoff race. (#720)
+
+### Docs
+
+- Dual-RX / transceiver / receiver / VFO model primer in
+  `docs/internals`. (#724)
+- IC-7610 cmd29 parity reconciled with wfview's `IC-7610.rig`. (#725)
+- Opus DSP/tap gate behavior + one-shot warning documented. (#762)
+
+### Chores
+
+- `chore: mypy cleanup` — zero errors on default install; `numpy` /
+  `sounddevice` / `opuslib` optional-dep imports now ignored via
+  `[[tool.mypy.overrides]]`.
+- Delete speculative `AudioBufferPool` + PCM-8 mapping. (#765, #768)
+
+## [0.16.4] — 2026-04-16
+
+### Fixed
+- **Web UI TX audio:** transcoder now uses the radio's negotiated sample rate
+  (was hard-coded to 48 kHz, silently dropped TX on radios negotiated at 24 kHz) (#691)
+
+### Changed
+- **Test suite performance:** backend 87.6s → 64s (−27%), frontend 10.6s → 5.8s (−45%);
+  CI per matrix job ~4m30s → ~2m00s (−55%) (#706, #707)
+
+## [0.16.3] — 2026-04-16
+
+### Fixed
+- **Web UI:** resolve 33 issues across controls, sync, errors, layout, a11y, and
+  performance — wiring layer (DW/VFO targeting), control panels (freq keyboard,
+  ATU/ATT/APF), canvas perf (rAF idle loop, DX cap, gradient cache), error
+  notifications (Toast mounted in v2 layouts), connection state (WS reconnect,
+  scope/audio indicators), waterfall resize preservation (#693, #694–#702)
+- **DSP pipeline:** add sample rate validation and auto-resampling for RNNoise (#692)
+- **Audio broadcaster:** resolve subscriber leak and pong-timeout loop (#687, #690)
+- **Audio WebSocket:** fix crash loop on PTT (#684, #688)
+- **CLI:** hard errors for invalid inputs, silent ignores, startup ordering (#689)
+- **CLI:** hard errors for explicitly requested features with validation (#686)
+
+## [0.16.2] — 2026-04-15
+
+### Added
+- **Companion tuning step sync** — tuning step is now synced to the RC-28
+  companion dispatcher via `PUT /api/local/v1/rc28/tuning-step`; incoming
+  `companion_state` WS messages update the step in real time
+- **WsChannel.reconnect()** — reconnects a WebSocket channel using its
+  last-known URL, enabling full lifecycle restore after disconnect
+
+### Fixed
+- **Connect/Disconnect lifecycle** — the web UI button now controls the
+  entire frontend connection: all WebSocket channels (control, scope,
+  audio), HTTP polling, and MediaSession are torn down on Disconnect and
+  restored on Connect; the server↔radio connection is never affected
+- **Scope/audio channels survive reconnect** — `reconnectAll()` reopens
+  all named WS channels (scope, audio-scope) after a disconnect+connect
+  cycle; previously they stayed dead until page reload
+- **StatusBar state tracking** — connect button now tracks `controlState`
+  (WS+HTTP) instead of `radioState` (server↔radio), so the UI updates
+  immediately on disconnect/connect
+- **Transport warning noise** — suppressed misleading `_packet_pump`
+  warning and reduced UDP error log verbosity
+- **Companion auto-step preservation** — `setTuningStepFromCompanion()`
+  preserves the auto-step preference when syncing from companion
+
+## [0.16.1] — 2026-04-14
+
+### Fixed
+- **LAN discovery crash** — `OSError: [Errno 65] No route to host` when network
+  is unavailable no longer produces a raw traceback; CLI prints a clear message
+  and suggests using `--host` explicitly
+- **CI strict mypy** — resolved `no-any-return` in `radio_poller.py` for
+  `mypy --strict` boundary check
+- **Dynamic CI badges** — tests, version, and mypy badges in README now
+  auto-update from CI via gist-backed shields.io endpoints
+
+## [0.16.0] — 2026-04-14
+
+### Added
+- **DSP Pipeline** (Epic #682) — pluggable audio processing framework:
+  - `DSPNode` Protocol, `DSPPipeline` engine, `PassthroughNode`, `GainNode`
+  - `NRScipyNode` — spectral subtraction noise reduction (scipy FFT)
+  - `TapRegistry` — multi-consumer PCM analysis bus
+  - Inter-node resampling utility; `[dsp]` optional dependency group
+- **CW Auto Tuner** (#675, #677, #678) — FFT peak detection engine (`CwAutoTuner`),
+  backend `cw_auto_tune` command, restored AUTO TUNE button in Web UI
+- **AudioAnalyzer** (#679) — realtime SNR estimation from PCM stream
+- **UDP Discovery Responder** — companion apps can broadcast `RIGPLANE_DISCOVER` on
+  UDP 8470 and receive server URL, version, and radio status via unicast;
+  `--no-discovery` CLI flag to opt out
+- **Unified frontend architecture** (Epics #647–#653, #662–#665) — `FrontendRuntime`
+  singleton, skin registry, runtime adapters, self-wired panels (AGC, Mode, Antenna,
+  RfFrontEnd, RIT/XIT, Scan, CW, DSP, TX, Filter, BandSelector), eslint import
+  boundary guardrails, LCD and mobile layout migration to unified runtime path
+- **SUB receiver polling** (#562, #563) — TOML commands, receiver routing, AF/RF/squelch
+  level polling in slow loop
+- **TX meters** (#559) — ALC, Power, COMP, SWR polling during transmit
+- **Scope backpressure** (#533) — adaptive poller gap, scope backlog shedding hook,
+  `queue_pressure` metric on `IcomTransport`
+- **Initial state fetch** (#532) — `_fetch_initial_state()` on connect and reconnect,
+  readiness-gated state snapshot in WebServer
+- **Cross-sidebar drag** (#566–#568) — move panels between left/right sidebars,
+  localStorage persistence, dynamic panel rendering
+- **Yaesu FTX-1 enhancements** (#551) — IF bulk query, clarifier clear, APF, CW spot,
+  break-in delay, power switch (PS), data mode methods
+- **IC-7300 improvements** (#545, #546, #564) — segmented BCD filter width encoding,
+  scope marker TOML entry, cleanup of NOT_IMPLEMENTED comments
+- **Meter calibration** (#556) — power/SWR/ALC tables in `ic7610.toml`, scope REF
+  range constraints, `meter_redlines` in RadioProfile, generic calibration accessors
+- **SystemController** (#665) — centralized HTTP system actions
+- **Skin abstraction** (#326) — `ProfessionalSkin` (Phase 1)
+- **Frontend test coverage** (#555) — component-level tests for LCD, Mobile, Spectrum,
+  BandPlan, DspPanel, CwPanel, SpectrumToolbar, DxOverlay, EiBi, state-adapter,
+  ws-client, radio store, audio subsystem
+- **FTX-1 polling tests** (#551) — integration test suite for Yaesu CAT poller
+
+### Changed
+- **Single version source** — `__version__` now reads from `pyproject.toml` via
+  `importlib.metadata` instead of being hardcoded in `__init__.py`
+- **Frontend panel architecture** — extracted DspPanel + CwPanel logic to dedicated
+  panel-logic modules (#594); extracted SpectrumToolbar, BandPlanOverlay,
+  MobileRadioLayout, SpectrumPanel inline logic to separate files (#590–#593)
+- **LCD layout** (#636) — adapts to reduced viewport height
+
+### Fixed
+- **CW auto tune** (#671) — reverted incorrect `cw_sync_tune`, removed broken
+  AUTO TUNE button before reimplementing correctly
+- **Shutdown reliability** (#634) — `os._exit()` for orphaned threads, manual loop
+  with executor timeout, PortAudio stream close before task cancel, shutdown step
+  timeouts
+- **Audio stability** — drop frames while `AudioContext` suspended, resume once in
+  `start()` instead of per-frame
+- **Yaesu serial** — report `disconnected` status correctly, show serial port in
+  startup banner, graceful poller disconnect handling
+- **Connection readiness** (#602) — expose readiness fields from backend state
+- **Frontend null guards** (#603–#605) — null receiver state, null numeric fields
+  coerced to defaults, encoder revision for initial state snapshot
+- **Disconnect cleanup** (#600) — clear stale state, reset delta and radio store
+- **Code review fixes** (#670, #576) — 5 findings from session audit, layering and
+  model guards, reconnect timing
+- **Drag-reorder** — unregister instances from registry on component destroy
+- **All mypy errors resolved** — `ControlPhaseHost` protocol gap, `YaesuCatRadio`
+  missing `get_data_mode`/`set_data_mode`, scipy stubs, `no-any-return` fixes
+- **All ruff errors resolved** — unused imports in test_cli.py
+
+### Documentation
+- Refreshed Web UI guide for v2 runtime and skin workflows (#681)
+
+## [0.15.1] — 2026-04-10
+
+### Changed
+- **Web UI v2 is now the default layout.** New visitors and fresh installs see the
+  redesigned RadioLayout v2 interface. Users who previously selected v1 keep their
+  choice (persisted in localStorage). Switch manually with `?ui=v1` or `?ui=v2`.
+
+## [0.15.0] — 2026-04-10
+
+### Added
+- **Zero-config CLI startup** (Epic #526) — `icom-lan web` auto-discovers radio via LAN broadcast,
+  `--preset hamradio|digimode|serial|headless` for common scenarios, smart startup banner with
+  loopback device hints (#527, #528, #529, #530).
+- **Drag-and-drop panel reorder** — drag handles on right sidebar panels (#557).
+- **Complete CI-V command coverage** (Epic #535) — scope settings popover (#538), missing polling
+  entries (#539), VOX/CW/DSP panels (#540), TX band edge support (#541), memory channel
+  manager + scan modes (#542, #543), TX meters + scope toolbar controls (#536, #537).
+- **Center dead zone for RF/SQL dual slider** — prevents accidental threshold jumps.
+- **Poller deadlock regression tests** (#554) — state consistency + deadlock detection tests.
+- **Yaesu CAT backend and CLI factory routing** — `--backend yaesu-cat`, capability-based polling,
+  rigctl routing strategy, Web ControlHandler support, meters/advanced-control conformance,
+  and follow-up code review fixes for issues #427-#445.
+- **Universal radio profile system** — declarative `OperatingProfile` / `apply_profile()` /
+  `PRESETS`, packet/data profile helpers for IC-705, and additional sync control methods.
+- **TLS/HTTPS for Web UI** — HTTPS listener support with automatic self-signed certificates (#205).
+- **Audio FFT UI work** — full-color `AudioSpectrumPanel`, standard-layout integration, audio-scope
+  WebSocket channel, variable FFT bandwidth handling, and audio spectrum rendering fixes.
+- **Expanded Web/rigctld command coverage** — raw CI-V passthrough, levels/functions support,
+  data mode inputs/levels, VOX, tone/TSQL, CW text/stop, band/split, system/config,
+  selected/unselected freq+mode, memory API support, and scope toolbar controls.
+- **Capability/tag cleanup** — extracted `capabilities.py`, added `system_settings` tag,
+  `supports_command()` on the Radio protocol, and removed remaining protocol abstraction gaps.
+- **Issue #448 UI/antenna work** — v2 antenna panel, capability/state tracking, corrected IC-7610
+  TX ANT vs RX ANT semantics, and startup readiness checks split between connect-time validation
+  and server-side guards.
+
+### Changed
+- **Connection readiness contract** — `radio.connect()` now owns bounded wait-for-ready and fails
+  if the radio never becomes usable; Web UI and rigctld startup now perform instant guards only.
+- **Protocol/capability routing** — replaced several `isinstance(AdvancedControlCapable)` checks with
+  capability tags and centralized capability constants.
+- **Spectrum/waterfall interaction architecture** — clean separation of gesture, drag, and tune layers.
+- **Frontend/test hygiene** — resolved Svelte/type issues, fixed frontend redesign regressions,
+  refreshed API docs and badges, and updated test fixtures for stricter protocol mocks.
+
+### Fixed
+- **Meter calibration** (#536) — corrected S-meter, RF power, SWR, ALC calibration tables per
+  IC-7610 CI-V Reference p.4; dimmed irrelevant meter rows.
+- **Scope REF BCD encode/decode** (#553) — fixed to match IC-7610 CI-V Reference p.15.
+- **CENTER Type polling** (#552) — fixed root cause: poller was overwriting scope CENTER Type
+  to Filter on every poll cycle; restored CTR mode indicator at center position.
+- **Tuning indicator** (#552) — proportional positioning + scope REF display.
+- **Deadlock: EnableScope** — EnableScope await blocked all commands during initial fetch.
+- **Click-to-tune** — only on waterfall, not spectrum area; via pointerup instead of click event.
+- **Reliable shutdown** — 3-tier signal handling, reuse_address for TIME_WAIT, force exit on
+  second Ctrl-C, proper audio relay shutdown order.
+- **AF scope** — bandwidth tracks actual filter width, crash fix when center_freq is 0.
+- **Power-off state** not detected on server restart.
+- **Startup fail-fast** — added pre-flight port check (#422), fail-fast on `civ_port=0` (#424),
+  and eliminated half-working Web/rigctld startups when the radio transport is not actually ready.
+- **IC-705 Wi-Fi binding** — hardened routed local bind handling and validated LAN support.
+- **Audio/runtime stability** — fixed broadcaster restart behavior, audio handler lifecycle,
+  control transport queue overflow after long runs, and Python 3.13 flaky tests (#398).
+- **Scope/UI correctness** — fixed scope dispatch capability checks, scope polling/state updates,
+  step-control width, BCD span payloads, speed arrow direction, PTT TX wiring, and optimistic
+  state sync for antenna/scope controls.
+- **Type-check/lint cleanup** — resolved all 188 ruff lint errors and 499 mypy type errors:
+  file-level noqa for re-export modules, mixin TYPE_CHECKING base pattern, per-module mypy
+  overrides for duck-typing consumers, and ControlPhaseHost protocol expansion.
+
+### Documentation
+- Added/updated Radio Profiles guide, web/rigctld API references, and test badges/documentation sync.
+
+## [0.14.2] — 2026-03-27
+
+### Changed
+- **Git cleanup** — removed 83 tracked files (-33k lines): backups, internal dev docs
+  (plans/sprints/reviews/audits), scripts, mockups, references, credentials in run-dev.sh
+- **Documentation refresh** — index.md, radios.md, README.md updated for multi-vendor reality;
+  FTX-1 moved from "planned" to "tested"; mkdocs nav expanded with 12 missing pages;
+  5 broken links fixed; mkdocs build --strict passes clean
+- **CI fixed** — removed parity matrix tests (depended on deleted files); marked 2 flaky
+  reconnect tests as xfail (#398); CI green on Python 3.11/3.12/3.13
+
+## [0.14.1] — 2026-03-27
+
+### Fixed
+- FTX-1 LCD layout, band indicator, DSP/TX panel redesign, CAT fixes (feature/ftx1-filter-width)
+- Removed FTX-1 monitor tests (ML command not supported via CAT)
+- Fixed tuner routing through command queue for Yaesu radios
+
+## [0.14.0] — 2026-03-27
+
+### Added
+
+- **Multi-vendor rig profile support** — TOML schema extended for non-Icom radios:
+  - `rigs/ftx1.toml` — Yaesu FTX-1 (Yaesu CAT, 17 modes, dual RX, meter calibration)
+  - `rigs/x6100.toml` — Xiegu X6100 (CI-V 0x70, IC-705 compatible, QRP 8W)
+  - `rigs/tx500.toml` — Lab599 TX-500 (Kenwood CAT, minimal command set, QRP 10W)
+- **`[protocol]` section** — `type = "civ" | "kenwood_cat" | "yaesu_cat"` (default: `"civ"`)
+- **`[controls]` section** — UI control styles: `toggle`, `stepped`, `selector`,
+  `toggle_and_level`, `level_is_toggle`
+- **`[meters]` section** — Non-linear calibration tables for S-meter and TX meters
+  with `redline_raw` threshold
+- **`[[rules]]` section** — Declarative constraint rules: `mutex`, `disables`,
+  `requires`, `value_limit`
+- **Extended VFO schemes** — added `"ab_shared"` (FTX-1) and `"single"` (simple QRP)
+- **`[commands]` now optional** — non-CI-V radios may have empty command maps
+- **`civ_addr` now optional** — defaults to 0 for Kenwood/Yaesu CAT radios
+- `RadioProfile` and `RigConfig` extended with `protocol_type`, `controls`,
+  `meter_calibrations`, `rules`
+- **Yaesu CAT backend** (Epic #107) — full implementation for Yaesu FTX-1/FT-710/FT-991A:
+  - YaesuCatTransport (async line protocol, `;` terminated, echo handling)
+  - CAT template formatter + response parser (compile-once)
+  - Polling scheduler for smooth meters (fast meters, slower state)
+  - Full Web UI integration (command dispatch, levels, audio)
+- **Audio FFT Scope** (Epic #383) — IF waterfall from USB/LAN audio stream:
+  - AudioFftScope class (real-time FFT processor, consumes PCM, produces ScopeFrame)
+  - Backend-agnostic (works with any AudioCapable radio)
+  - Reuses existing scope protocol (SpectrumPanel + WaterfallCanvas)
+- **Amber LCD display** (#389, #386) — retro KX3-style UI for radios without hardware spectrum:
+  - 7-segment font, segmented bargraph, status indicators
+  - Embedded Audio FFT strip (trapezoid filter visualization)
+  - Grouped indicators (ATT/PRE/ATU/Contour/PROC/VOX)
+  - Adaptive lerp (smooth animated filter width transitions)
+- **Profile-driven command dispatch** (Epic #390-#396) — auto-wire all TOML commands to Web UI:
+  - Frontend capability guards for multi-radio (hide unsupported controls)
+  - Optimistic UI updates for NB/NR levels
+  - Auto-reconnect on persistent serial errors
+- **Serial discovery** (Epic #222) — `icom-lan discover` scans LAN + USB serial:
+  - Multi-protocol probing (CI-V auto baud, Yaesu CAT, Kenwood CAT)
+  - Deduplication (same radio found via LAN and serial)
+- 42 new tests in `test_rig_multi_vendor.py` + 636 new tests total (3934 passed, 0 regressions)
+
+## [0.12.0] — 2026-03-15
+
+### Added
+
+- **Data-driven rig profiles** (Epic #251) — radio configuration moved from hardcoded Python
+  to TOML files in `rigs/`:
+  - `rigs/ic7610.toml` — IC-7610 reference profile (full feature set, dual receiver)
+  - `rigs/ic7300.toml` — IC-7300 profile (single receiver, VFO A/B, no DIGI-SEL/IP+)
+  - `rigs/_schema.md` — TOML schema specification
+  - `rig_loader.py` — `load_rig()`, `discover_rigs()`, `RigConfig`, `RigLoadError`
+  - `command_map.py` — `CommandMap` (immutable CI-V wire byte lookup)
+- **IC-7300 support** — tested via USB serial backend; rig profile defines all 200+
+  supported commands, VFO A/B scheme, and IC-7300-specific wire byte overrides
+- **`cmd_map` parameter on all 223 command functions** — every builder function in
+  `commands.py` now accepts `cmd_map: CommandMap | None = None`; when provided, wire bytes
+  come from the TOML profile instead of hardcoded IC-7610 defaults
+- **`RadioProfile` additions** — `vfo_scheme` (`"ab"` | `"main_sub"`), `has_lan` fields
+- **Web UI capability guards** — UI controls for DIGI-SEL, IP+, and dual-receiver
+  features are automatically hidden when the active profile doesn't support them
+- **Dynamic VFO labels** — Web UI shows "MAIN" / "SUB" for IC-7610 (main_sub scheme)
+  and "VFO A" / "VFO B" for IC-7300 (ab scheme)
+- **`/api/v1/info` enriched** — `capabilities` object now includes `vfoScheme`, `hasLan`,
+  `maxReceivers`, `modes`, `filters` from the active rig profile
+- **`/api/v1/capabilities` additions** — `receivers`, `vfoScheme` fields
+- **`/api/v1/state` adapts** — omits `sub` receiver state for single-receiver rigs
+
+### Changed
+
+- +3497 lines, 236 new tests across `test_rig_loader.py`, `test_command_map.py`,
+  `test_rig_ic7610.py`, `test_rig_ic7300.py`, `test_commands_cmd_map.py`
+- Hardcoded IC-7610 wire bytes remain as defaults when `cmd_map=None` — fully backward-compatible
+
+## [0.11.0] — 2026-03-12
+
+### Added
+- **Abstract Radio Protocol** (`radio_protocol.py`) — vendor-neutral interface with `Radio`, `AudioCapable`, `ScopeCapable`, `DualReceiverCapable` protocols
+- **Epic #140 complete** — 100% CI-V command coverage (134/134 IC-7610 commands implemented)
+- **Epic #215 complete** — Post-audit cleanup: mypy 197→0 errors, dead code removed (-616 lines), `__all__` API surface defined
+- `IcomRadio.model`, `.capabilities`, `.radio_state` properties
+- `set_state_change_callback()`, `set_reconnect_callback()` public methods
+- `control_connected` property for transport health status
+- `get_mode()` now returns Protocol-compatible `tuple[str, int | None]`
+- Graceful shutdown: SIGTERM handler ensures clean radio disconnect on kill
+- `_force_cleanup_civ()` for unconditional CI-V transport teardown
+- Retry mechanism for `civ_port=0` (radio session not ready): 3×10s retries
+- Connection indicators in Web UI update from `/api/v1/state` poll (200ms)
+- `/api/v1/capabilities` endpoint uses `radio.capabilities`
+
+### Fixed
+- **Sequence counter overflow** — `_civ_send_seq` / `_audio_send_seq` now wrap at uint16 (was unbounded, crashed after ~1.5h)
+- **Broken pipe recovery** — watchdog falls back to full reconnect when soft_reconnect fails
+- **CI-V indicator accuracy** — `connected` property checks actual transport health, not just state enum
+- UDP error logging rate-limited (first 3, then every 100th)
+- `0x16` added to `_COMMANDS_WITH_SUB` (NB/NR/DIGI-SEL sub-command parsing)
+- `server.stop()` uses full `disconnect()` instead of `soft_disconnect()` for complete session cleanup
+
+### Changed
+- All Web UI/rigctld consumers now use `Radio` Protocol type hints instead of `IcomRadio`
+- `isinstance(radio, AudioCapable)` guards instead of `hasattr`
+- Test coverage: 85% → 95% (3173 tests, +1434 from v0.10.0)
+- **Type safety** — 0 mypy errors, full protocol-based typing for Radio/AudioCapable/ScopeCapable/DualReceiverCapable
+
+## [0.8.0] — 2026-02-28
+
+### Added
+
+- **Web UI v1** — full-featured browser interface at `icom-lan web`:
+    - Real-time spectrum and waterfall display (Canvas2D, click-to-tune)
+    - Radio controls: VFO A/B, mode, filter, power, ATT, preamp, PTT
+    - Band selector buttons (160m–6m with FT8 defaults)
+    - Frequency entry, tuning step selector with snap, arrow keys, scroll wheel
+    - Frequency marker and filter passband overlay on spectrum/waterfall
+    - Eight real-time meter bars (S-meter, Power, SWR, ALC, COMP, Id, Vd, TEMP)
+    - RX audio playback and TX audio capture in the browser (WebSocket binary)
+    - Responsive layout, light/dark theme toggle, keyboard shortcuts
+    - WebSocket pub/sub for scope, meters, audio, and control channels
+- **Connect/Disconnect button** in Web UI — toggle radio connection without restarting server
+- **Soft reconnect** — disconnect closes only CI-V/audio, keeps control transport alive.
+  Reconnect re-opens CI-V instantly (~1s) without discovery or re-authentication.
+  Audio auto-restarts after reconnect.
+- **Skip discovery on reconnect** — `transport.reconnect()` reuses cached `remote_id`,
+  eliminating the 30-60s discovery timeout on IC-7610.
+- **Connection state machine** — `RadioConnectionState` enum formalizing connect lifecycle (#61)
+- **State cache with TTL** — cached GET fallback values with configurable TTL
+  (10s freq/mode, 30s power) via `cache_ttl_s` parameter (#63)
+- **API docs from docstrings** — mkdocstrings-generated API reference (#65)
+- **Scope assembly timeout** — 5s default prevents memory leak on incomplete frames (#62)
+
+### Changed
+
+- **CI-V commander: fire-and-forget for SET commands** — SET operations no longer wait
+  for ACK from the radio, matching wfview behavior. GET commands retain 2s timeout
+  with cache fallback on timeout. NAK silently logged at debug level. (#56)
+- **`radio.py` refactored into focused modules** — split from 2395 to 1549 lines (#60):
+    - `_control_phase.py` (452 lines) — authentication, conninfo, connection setup
+    - `_civ_rx.py` (418 lines) — CI-V frame dispatch and RX pump
+    - `_audio_recovery.py` (132 lines) — audio stream snapshot/resume
+    - `_connection_state.py` — FSM enum for connection lifecycle
+    - Public API surface unchanged (mixin pattern)
+- **Optimistic port connection** — uses default ports (control+1, control+2) immediately
+  instead of blocking on status packet. Status read in background with 2s timeout;
+  if radio reports different ports, uses those instead. Eliminates up to 24s connection
+  delay when radio returns `civ_port=0` after rapid reconnects.
+- **CLI `--port` renamed to `--control-port`** to avoid confusion (#54)
+
+### Fixed
+
+- **CI-V GET timeout during scope streaming** (release blocker, #66) — RX pump now
+  drains ALL pending packets from the transport queue each iteration instead of
+  processing one at a time. Scope flood (~225 pkt/sec) no longer starves ACK/response
+  packets behind hundreds of scope frames.
+- **Conninfo local ports** — send reserved ephemeral UDP ports in conninfo packet
+  (wfview-style `socket.bind(("", 0))`). Root cause of CI-V instability: radio
+  didn't know where to send responses when local ports were 0.
+- **Safari iOS audio** — AudioContext resume after background via `visibilitychange`
+  listener; increased jitter buffer pre-roll from 50ms to 200ms for VPN use.
+- **Flaky `test_hello_on_connect`** — race condition fix, pytest-asyncio dependency (#64)
+- **Duplicate WebSocket connections** on page load/reconnect (#50)
+- **Scope enable** — single entry point via `server.ensure_scope_enabled()` (#51)
+- **PTT button** — toggle mode for click vs hold (#57)
+- **Filter sync** after band change (#58)
+- **PTT wait_response** restored after fire-and-forget refactor (#59)
+- **Watchdog false disconnect** — use packet counter instead of qsize
+- **Tuning flood** — throttle tuning commands to prevent CI-V timeout cascade
+- **Frequency clamping** — valid range 30 kHz – 60 MHz
+
+### Documentation
+
+- Web UI user guide (`docs/guide/web-ui.md`)
+- RFC for Web UI v1 protocol spec and architecture
+- Updated architecture docs with mixin pattern and new module structure
+- Updated test count: 1202 tests (was 1040)
+- Roadmap Phase 8: Virtual Audio Bridge
+
+## [0.7.0] — 2026-02-26
+
+### Added
+
+- Internal PCM<->Opus transcoder foundation for upcoming high-level PCM audio APIs.
+- Typed audio exceptions: `AudioCodecBackendError`, `AudioFormatError`, `AudioTranscodeError`.
+- High-level async PCM audio APIs: `start_audio_rx_pcm()` / `stop_audio_rx_pcm()`,
+  `start_audio_tx_pcm()` / `push_audio_tx_pcm()` / `stop_audio_tx_pcm()`.
+- Audio capability introspection: `audio_capabilities()`, `AudioCapabilities`.
+- CLI: `icom-lan audio caps`, `audio rx`, `audio tx`, `audio loopback`.
+- Runtime audio stats: `get_audio_stats()` with packet loss, jitter, latency metrics.
+- Rigctld WSJT-X compatibility: `icom-lan serve --wsjtx-compat`.
+- Golden protocol test suite: 45 parametrized fixtures.
+- TCP server wire integration tests.
+
+### Changed
+
+- Audio API names explicit with `_opus` suffix.
+- Rigctld mode mapping includes `PKTRTTY`.
+
+### Fixed
+
+- First-TX latency spikes in WSJT-X workflows.
+- Abandoned rigctld requests no longer execute in background.
+
+### Deprecated
+
+- Ambiguous audio aliases (two-minor-release deprecation window).
+
+## [0.6.0] — 2026-02-25
+
+### Added
+
+- Scope/waterfall API with `ScopeFrame`, `ScopeAssembler`, callbacks.
+- Scope rendering: `render_spectrum()`, `render_waterfall()`, `render_scope_image()`.
+- CLI `icom-lan scope` with themes, capture, JSON output.
+- Mock radio server for integration testing (30 new tests).
+
+## [0.5.1] — 2026-02-25
+
+### Fixed
+
+- `_ensure_audio_transport()` raises `ConnectionError` when audio port is 0.
+- Ruff lint warnings resolved.
+
+## [0.5.0] — 2026-02-25
+
+### Added
+
+- Command29 support for dual-receiver radios (IC-7610).
+- Attenuator and preamp CLI commands with Command29 framing.
+
+## [0.4.0] — 2026-02-25
+
+### Changed
+
+- Faster non-audio connect path (lazy audio port init).
+
+## [0.3.2] — 2026-02-25
+
+### Added
+
+- Commander layer with priority queue, pacing, dedupe, transactions.
+- New APIs: `get_mode_info()`, `get_filter()`, `set_filter()`, `snapshot_state()`.
+- Extended integration test coverage.
+
+## [0.3.0] — 2026-02-25
+
+### Added
+
+- Audio streaming (full-duplex, JitterBuffer, codec enum).
+- Synchronous API (`icom_lan.sync`).
+- Radio model presets (IC-7610, IC-7300, IC-705, IC-9700, IC-R8600, IC-7851).
+- Token renewal and auto-reconnect with watchdog.
+
+## [0.2.0] — 2026-02-25
+
+### Added
+
+- CLI tool with full command set.
+- VFO control, RF controls, CW keying, power control, network discovery.
+
+## [0.1.0] — 2026-02-24
+
+### Added
+
+- Transport layer, authentication, CI-V commands, meters, PTT, keep-alive.
+- Clean-room Icom LAN UDP protocol implementation.
+
+[Unreleased]: https://github.com/rigplane/rigplane-core/compare/v3.2.0rc9...HEAD
+[3.2.0rc9]: https://github.com/rigplane/rigplane-core/compare/v3.2.0rc8...v3.2.0rc9
+[3.2.0rc8]: https://github.com/rigplane/rigplane-core/compare/v3.2.0rc7...v3.2.0rc8
+[3.2.0rc7]: https://github.com/rigplane/rigplane-core/compare/v3.2.0rc6...v3.2.0rc7
+[3.2.0rc6]: https://github.com/rigplane/rigplane-core/compare/v3.2.0rc5...v3.2.0rc6
+[3.2.0rc5]: https://github.com/rigplane/rigplane-core/compare/v3.2.0rc4...v3.2.0rc5
+[3.2.0rc4]: https://github.com/rigplane/rigplane-core/compare/v3.2.0rc3...v3.2.0rc4
+[3.2.0rc3]: https://github.com/rigplane/rigplane-core/compare/v3.2.0rc2...v3.2.0rc3
+[3.2.0rc2]: https://github.com/rigplane/rigplane-core/compare/v3.2.0rc1...v3.2.0rc2
+[3.2.0rc1]: https://github.com/rigplane/rigplane-core/compare/v3.1.4...v3.2.0rc1
+[3.1.4]: https://github.com/rigplane/rigplane-core/compare/v3.1.3...v3.1.4
+[3.1.3]: https://github.com/rigplane/rigplane-core/compare/v3.1.2...v3.1.3
+[3.1.2rc4]: https://github.com/rigplane/rigplane-core/compare/v3.1.2rc3...v3.1.2rc4
+[3.1.2rc3]: https://github.com/rigplane/rigplane-core/compare/v3.1.2rc2...v3.1.2rc3
+[3.1.2rc2]: https://github.com/rigplane/rigplane-core/compare/v3.1.2rc1...v3.1.2rc2
+[3.1.2rc1]: https://github.com/rigplane/rigplane-core/compare/v3.1.1...v3.1.2rc1
+[3.1.0rc1]: https://github.com/rigplane/rigplane-core/compare/v3.0.1...v3.1.0rc1
+[3.0.1]: https://github.com/rigplane/rigplane-core/compare/v3.0.0...v3.0.1
+[3.0.0]: https://github.com/rigplane/rigplane-core/compare/v3.0.0rc1...v3.0.0
+[3.0.0rc1]: https://github.com/rigplane/rigplane-core/compare/v3.0.0b21...v3.0.0rc1
+[3.0.0b21]: https://github.com/rigplane/rigplane-core/compare/v3.0.0b20...v3.0.0b21
+[3.0.0b20]: https://github.com/rigplane/rigplane-core/compare/v3.0.0b19...v3.0.0b20
+[3.0.0b19]: https://github.com/rigplane/rigplane-core/compare/v3.0.0b18...v3.0.0b19
+[3.0.0b18]: https://github.com/rigplane/rigplane-core/compare/v3.0.0b17...v3.0.0b18
+[3.0.0b17]: https://github.com/rigplane/rigplane-core/compare/v3.0.0b16...v3.0.0b17
+[3.0.0b16]: https://github.com/rigplane/rigplane-core/compare/v3.0.0b15...v3.0.0b16
+[3.0.0b15]: https://github.com/rigplane/rigplane-core/compare/v3.0.0b14...v3.0.0b15
+[3.0.0b14]: https://github.com/rigplane/rigplane-core/compare/v3.0.0b13...v3.0.0b14
+[3.0.0b13]: https://github.com/rigplane/rigplane-core/compare/v3.0.0b12...v3.0.0b13
+[3.0.0b12]: https://github.com/rigplane/rigplane-core/compare/v3.0.0b11...v3.0.0b12
+[3.0.0b11]: https://github.com/rigplane/rigplane-core/compare/v3.0.0b10...v3.0.0b11
+[3.0.0b10]: https://github.com/rigplane/rigplane-core/compare/v3.0.0b9...v3.0.0b10
+[3.0.0b9]: https://github.com/rigplane/rigplane-core/compare/v3.0.0b8...v3.0.0b9
+[3.0.0b7]: https://github.com/rigplane/rigplane-core/compare/v3.0.0b6...v3.0.0b7
+[3.0.0b6]: https://github.com/rigplane/rigplane-core/compare/v3.0.0b5...v3.0.0b6
+[3.0.0b5]: https://github.com/rigplane/rigplane-core/compare/v3.0.0b4...v3.0.0b5
+[3.0.0b4]: https://github.com/rigplane/rigplane-core/compare/v3.0.0b3...v3.0.0b4
+[3.0.0b3]: https://github.com/rigplane/rigplane-core/compare/v3.0.0b2...v3.0.0b3
+[3.0.0b2]: https://github.com/rigplane/rigplane-core/compare/v2.11.1...v3.0.0b2
+[3.0.0b1]: https://github.com/rigplane/rigplane-core/compare/v2.11.1...v3.0.0b1
+[2.10.2]: https://github.com/rigplane/rigplane-core/compare/v2.10.1...v2.10.2
+[2.10.1]: https://github.com/rigplane/rigplane-core/compare/v2.10.0...v2.10.1
+[2.10.0]: https://github.com/rigplane/rigplane-core/compare/v2.9.0...v2.10.0
+[2.9.0]: https://github.com/rigplane/rigplane-core/compare/v2.8.0...v2.9.0
+[2.8.0]: https://github.com/rigplane/rigplane-core/compare/v2.7.3...v2.8.0
+[2.7.3]: https://github.com/rigplane/rigplane-core/compare/v2.7.2...v2.7.3
+[2.7.2]: https://github.com/rigplane/rigplane-core/compare/v2.7.1...v2.7.2
+[2.7.1]: https://github.com/rigplane/rigplane-core/compare/v2.7.0...v2.7.1
+[2.7.0]: https://github.com/rigplane/rigplane-core/compare/v2.6.0...v2.7.0
+[2.6.0]: https://github.com/rigplane/rigplane-core/compare/v2.5.1...v2.6.0
+[2.5.1]: https://github.com/rigplane/rigplane-core/compare/v2.5.0...v2.5.1
+[2.5.0]: https://github.com/rigplane/rigplane-core/compare/v2.4.0...v2.5.0
+[2.4.0]: https://github.com/rigplane/rigplane-core/compare/v2.3.1...v2.4.0
+[2.3.1]: https://github.com/rigplane/rigplane-core/compare/v2.3.0...v2.3.1
+[2.3.0]: https://github.com/rigplane/rigplane-core/compare/v2.2.0...v2.3.0
+[2.2.0]: https://github.com/rigplane/rigplane-core/compare/v2.1.2...v2.2.0
+[2.1.2]: https://github.com/rigplane/rigplane-core/compare/v2.1.1...v2.1.2
+[2.1.1]: https://github.com/rigplane/rigplane-core/compare/v2.1.0...v2.1.1
+[2.1.0]: https://github.com/rigplane/rigplane-core/compare/v2.0.3...v2.1.0
+[2.0.3]: https://github.com/rigplane/rigplane-core/compare/v2.0.2...v2.0.3
+[2.0.2]: https://github.com/rigplane/rigplane-core/compare/v2.0.1...v2.0.2
+[2.0.1]: https://github.com/rigplane/rigplane-core/compare/v2.0.0...v2.0.1
+[2.0.0]: https://github.com/rigplane/rigplane-core/compare/v1.1.0...v2.0.0
+[1.1.0]: https://github.com/morozsm/icom-lan/compare/v1.0.1...v1.1.0
+[1.0.1]: https://github.com/morozsm/icom-lan/compare/v1.0.0...v1.0.1
+[1.0.0]: https://github.com/morozsm/icom-lan/compare/v0.19.0...v1.0.0
+[0.19.0]: https://github.com/morozsm/icom-lan/compare/v0.18.0...v0.19.0
+[0.18.0]: https://github.com/morozsm/icom-lan/compare/v0.17.0...v0.18.0
+[0.17.0]: https://github.com/morozsm/icom-lan/compare/v0.16.4...v0.17.0
+[0.16.4]: https://github.com/morozsm/icom-lan/compare/v0.16.3...v0.16.4
+[0.16.3]: https://github.com/morozsm/icom-lan/compare/v0.16.2...v0.16.3
+[0.16.2]: https://github.com/morozsm/icom-lan/compare/v0.16.1...v0.16.2
+[0.16.1]: https://github.com/morozsm/icom-lan/compare/v0.16.0...v0.16.1
+[0.16.0]: https://github.com/morozsm/icom-lan/compare/v0.15.1...v0.16.0
+[0.15.1]: https://github.com/morozsm/icom-lan/compare/v0.15.0...v0.15.1
+[0.15.0]: https://github.com/morozsm/icom-lan/compare/v0.14.2...v0.15.0
+[0.14.2]: https://github.com/morozsm/icom-lan/compare/v0.14.1...v0.14.2
+[0.14.1]: https://github.com/morozsm/icom-lan/compare/v0.14.0...v0.14.1
+[0.14.0]: https://github.com/morozsm/icom-lan/compare/v0.12.0...v0.14.0
+[0.12.0]: https://github.com/morozsm/icom-lan/compare/v0.11.0...v0.12.0
+[0.11.0]: https://github.com/morozsm/icom-lan/compare/v0.8.0...v0.11.0
+[0.8.0]: https://github.com/morozsm/icom-lan/compare/v0.7.0...v0.8.0
+[0.7.0]: https://github.com/morozsm/icom-lan/compare/v0.6.0...v0.7.0
+[0.6.0]: https://github.com/morozsm/icom-lan/compare/v0.5.1...v0.6.0
+[0.5.1]: https://github.com/morozsm/icom-lan/compare/v0.5.0...v0.5.1
+[0.5.0]: https://github.com/morozsm/icom-lan/compare/v0.4.0...v0.5.0
+[0.4.0]: https://github.com/morozsm/icom-lan/compare/v0.3.2...v0.4.0
+[0.3.2]: https://github.com/morozsm/icom-lan/compare/v0.3.1...v0.3.2
+[0.3.0]: https://github.com/morozsm/icom-lan/compare/v0.2.0...v0.3.0
+[0.2.0]: https://github.com/morozsm/icom-lan/compare/v0.1.0...v0.2.0
+[0.1.0]: https://github.com/morozsm/icom-lan/releases/tag/v0.1.0

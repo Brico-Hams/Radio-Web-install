@@ -1,0 +1,5552 @@
+"""Additional coverage tests for rigplane.web.server without real sockets."""
+
+from __future__ import annotations
+
+import asyncio
+import inspect
+import io
+import json
+import pathlib
+import time
+from collections.abc import Callable
+from types import SimpleNamespace
+from typing import Any
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+from test_icom7610_serial_radio import _FakeSerialCivLink, _FakeUsbAudioDriver
+
+from rigplane._bounded_queue import BoundedQueue
+from rigplane.backends.icom7610 import Icom7610SerialRadio
+from rigplane.testing.timing import await_until
+from rigplane.web.state_schema import StateUpdateEnvelope
+from rigplane.core.command_service import (
+    COMMAND_OUTCOME_INVALIDATED,
+    CommandExecutionInvalidatedError,
+    CommandExecutionResult,
+    CommandService,
+    command_intent_from_request,
+    command_response_observation,
+)
+from rigplane.core.acquisition_scheduler import (
+    AcquisitionScheduler,
+    RadioStateModelService,
+    StateFreshnessService,
+)
+from rigplane.core.state_pipeline_contracts import (
+    CommandIntent,
+    CommandLifecycleEvent,
+    FieldPath,
+    Observation,
+    SourceMetadata,
+)
+from rigplane.core.state_store import FreshnessClock, StateStore
+from rigplane.core.tx_observation import (
+    OBSERVED_PTT_PATH,
+    ObservedPtt,
+    project_observed_ptt,
+)
+from rigplane.scope.hub import ScopeHealth
+from rigplane.scope.models import Coverage
+from rigplane.core.radio_protocol import ScopeCapable
+from rigplane.profiles import resolve_radio_profile
+from rigplane.scope import ScopeFrame
+from rigplane.testing.timing import VirtualClock
+from rigplane.radio import IcomRadio
+from rigplane.radio_state import RadioState
+from rigplane.web import runtime_helpers
+from rigplane.web import server as server_module
+from rigplane.web.handlers.control import ControlHandler
+from rigplane.web.radio_poller import (
+    CommandQueue,
+    CommandQueueEntry,
+    EnableScope,
+    RadioPoller,
+)
+from rigplane.web.server import WebConfig, WebServer, _send_response, run_web_server
+from rigplane.web.web_startup import attach_managed_tx_composition
+from test_radio_poller_coverage import (
+    _instrument_guarded_vfo_wire,
+    _make_radio,
+)
+
+
+async def _await_condition(
+    predicate: Callable[[], bool], *, timeout: float = 5.0, interval: float = 0.01
+) -> None:
+    """Wait until ``predicate()`` is true, bounded by ``timeout`` seconds."""
+    deadline = time.monotonic() + timeout
+    while not predicate():
+        if time.monotonic() >= deadline:
+            raise AssertionError(f"condition not met within {timeout} s")
+        await asyncio.sleep(interval)
+
+
+class _FakeSocket:
+    def __init__(self, host: str = "127.0.0.1", port: int = 4242) -> None:
+        self._host = host
+        self._port = port
+
+    def getsockname(self):
+        return (self._host, self._port)
+
+
+class _FakeAsyncServer:
+    def __init__(self) -> None:
+        self.sockets = [_FakeSocket()]
+        self.closed = False
+
+    def close(self) -> None:
+        self.closed = True
+
+    async def wait_closed(self) -> None:
+        return None
+
+
+class _FakeWriter:
+    def __init__(self) -> None:
+        self.buffer = bytearray()
+        self.closed = False
+        self.wait_closed_called = False
+
+    def write(self, data: bytes) -> None:
+        self.buffer.extend(data)
+
+    async def drain(self) -> None:
+        return None
+
+    def close(self) -> None:
+        self.closed = True
+
+    async def wait_closed(self) -> None:
+        self.wait_closed_called = True
+
+    def get_extra_info(self, name: str, default=None):
+        if name == "peername":
+            return ("127.0.0.1", 55555)
+        return default
+
+
+class _GenerationAdvanceOnApplyStore(StateStore):
+    """Deterministically retire a captured lifecycle token during apply."""
+
+    def __init__(self, *, advance_on_apply: int) -> None:
+        super().__init__()
+        self.advance_on_apply = advance_on_apply
+        self.apply_calls = 0
+
+    def apply(self, observation: Observation):  # type: ignore[no-untyped-def]
+        self.apply_calls += 1
+        if self.apply_calls == self.advance_on_apply:
+            self.begin_provider_generation()
+        return super().apply(observation)
+
+
+class _GenerationAdvanceEveryApplyStore(StateStore):
+    """Force bounded lifecycle publication to fail closed under continuous churn."""
+
+    def apply(self, observation: Observation):  # type: ignore[no-untyped-def]
+        self.begin_provider_generation()
+        return super().apply(observation)
+
+
+def _reader_with(data: bytes) -> asyncio.StreamReader:
+    reader = asyncio.StreamReader()
+    reader.feed_data(data)
+    reader.feed_eof()
+    return reader
+
+
+def _response_json(writer: _FakeWriter) -> tuple[int, dict]:
+    text = writer.buffer.decode("ascii", errors="replace")
+    status = int(text.split(" ", 2)[1])
+    body_start = text.index("\r\n\r\n") + 4
+    return status, json.loads(text[body_start:] or "{}")
+
+
+class _DelayedBridgeBody(asyncio.StreamReader):
+    def __init__(self) -> None:
+        super().__init__()
+        self.read_started = asyncio.Event()
+
+    async def readexactly(self, n: int) -> bytes:
+        self.read_started.set()
+        return await super().readexactly(n)
+
+
+def _drain_queue(queue: asyncio.Queue[object]) -> None:
+    while True:
+        try:
+            queue.get_nowait()
+        except asyncio.QueueEmpty:
+            return
+
+
+def _state_event_ws_clients(event: dict[str, object]) -> dict[str, int]:
+    assert event["type"] == "state_update"
+    envelope = event["data"]
+    assert isinstance(envelope, dict)
+    if envelope["type"] == "full":
+        state = envelope["data"]
+    else:
+        state = envelope["changed"]
+    assert isinstance(state, dict)
+    ws_clients = state["wsClients"]
+    assert isinstance(ws_clients, dict)
+    return {str(key): int(value) for key, value in ws_clients.items()}
+
+
+class _RunOnceControlWs:
+    def __init__(self) -> None:
+        self.sent: list[dict[str, object]] = []
+
+    async def send_text(self, payload: str) -> None:
+        self.sent.append(json.loads(payload))
+
+    async def recv(self) -> tuple[int, bytes]:
+        raise EOFError
+
+
+def _state_store_source() -> SourceMetadata:
+    return SourceMetadata(
+        source="poll_response",
+        provider="test",
+        transport="fake",
+        native_id="test",
+    )
+
+
+def _store_observation(
+    path: FieldPath,
+    value: object,
+    *,
+    at: float,
+    max_age: float | None = None,
+    generation: int = 0,
+) -> Observation:
+    return Observation(
+        path=path,
+        value=value,
+        source=_state_store_source(),
+        timestamp_monotonic=at,
+        max_age=max_age,
+        provider_generation=generation,
+    )
+
+
+def _scope_radio(
+    *, ready: bool = True, connected: bool = True, cls: type = MagicMock
+) -> MagicMock:
+    radio = cls()
+    radio.radio_ready = ready
+    radio.connected = connected
+    radio.capabilities = {"scope"}
+
+    # ScopeCapable protocol attrs (Python 3.12+ runtime_checkable)
+    radio.on_scope_data = MagicMock()
+    radio.scope_stream = MagicMock()
+    radio.enable_scope = AsyncMock()
+    radio.disable_scope = AsyncMock()
+    radio.capture_scope_frame = AsyncMock()
+    radio.capture_scope_frames = AsyncMock()
+    radio.get_scope_during_tx = AsyncMock(return_value=False)
+    radio.set_scope_during_tx = AsyncMock()
+    radio.get_scope_center_type = AsyncMock(return_value=0)
+    radio.set_scope_center_type = AsyncMock()
+    radio.get_scope_fixed_edge = AsyncMock()
+    radio.set_scope_fixed_edge = AsyncMock()
+    radio.get_scope_edge = AsyncMock(return_value=1)
+    radio.set_scope_edge = AsyncMock()
+    radio.get_scope_rbw = AsyncMock(return_value=0)
+    radio.set_scope_rbw = AsyncMock()
+    radio.get_scope_vbw = AsyncMock(return_value=False)
+    radio.set_scope_vbw = AsyncMock()
+
+    # Scope control settings (0x27 sub-commands)
+    radio.get_scope_receiver = AsyncMock(return_value=0)
+    radio.set_scope_receiver = AsyncMock()
+    radio.get_scope_dual = AsyncMock(return_value=False)
+    radio.set_scope_dual = AsyncMock()
+    radio.get_scope_mode = AsyncMock(return_value=0)
+    radio.set_scope_mode = AsyncMock()
+    radio.get_scope_span = AsyncMock(return_value=0)
+    radio.set_scope_span = AsyncMock()
+    radio.get_scope_speed = AsyncMock(return_value=0)
+    radio.set_scope_speed = AsyncMock()
+    radio.get_scope_ref = AsyncMock(return_value=0.0)
+    radio.set_scope_ref = AsyncMock()
+    radio.get_scope_hold = AsyncMock(return_value=False)
+    radio.set_scope_hold = AsyncMock()
+
+    from test_web_server import _add_scope_capable_attrs
+
+    return _add_scope_capable_attrs(radio)
+
+
+class _StateNotifyRadio(MagicMock):
+    """Minimal mock that satisfies StateNotifyCapable so server registers callbacks."""
+
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        super().__init__(*args, **kwargs)
+        # Python 3.11 runtime-checkable Protocol isinstance() uses hasattr(),
+        # which the MagicMock base always satisfies — start_web_server would
+        # then take the observation-poller branch and spawn the auto-generated
+        # MagicMock poller.start() as a coroutine (TypeError). Python 3.12+
+        # uses inspect.getattr_static() (gh-102433) and is immune. Deleting
+        # the factory attrs makes both interpreters take the RadioPoller
+        # branch, which is what this fake's StateNotifyCapable methods test.
+        del self.create_observation_poller
+        del self.create_state_poller
+
+    def set_state_change_callback(self, callback: object) -> None:
+        self._state_change_callback = callback
+
+    def set_reconnect_callback(self, callback: object) -> None:
+        self._reconnect_callback = callback
+
+
+class _ProfiledStateNotifyRadio(_StateNotifyRadio):
+    @property
+    def state_store(self) -> StateStore:
+        return self._state_store
+
+
+class _FakeObservationPoller:
+    def __init__(self, callback: object) -> None:
+        self._callback = callback
+        self.started = False
+        self.stopped = False
+
+    async def start(self) -> None:
+        self.started = True
+        path = FieldPath.active("main", "freq_mode", "freq_hz")
+        self._callback(
+            (
+                _store_observation(
+                    path,
+                    14_074_000,
+                    at=time.monotonic(),
+                ),
+            )
+        )
+
+    async def stop(self) -> None:
+        self.stopped = True
+
+    def bind_provider_generation(
+        self, *, capture: object, advance: object = None
+    ) -> None:
+        self.capture = capture
+        self.advance = advance
+
+
+class _ObservationStatePollableRadio:
+    backend_id = "yaesu_cat"
+    capabilities: set[str] = set()
+    connected = True
+    control_connected = True
+    model = "FTX-1"
+    radio_ready = True
+
+    def __init__(self) -> None:
+        self.radio_state = RadioState()
+        self._state_store = StateStore()
+        self.observation_poller: _FakeObservationPoller | None = None
+
+    @property
+    def state_store(self) -> StateStore:
+        return self._state_store
+
+    def supports_command(self, _command: str) -> bool:
+        return False
+
+    def create_state_poller(self, **_kwargs: object) -> object:
+        raise AssertionError("legacy RadioState state poller must not be used")
+
+    def create_observation_poller(
+        self, *, callback: object, **_kwargs: object
+    ) -> object:
+        self.observation_poller = _FakeObservationPoller(callback)
+        return self.observation_poller
+
+
+class _FallbackObservationPollableRadio:
+    backend_id = model = "fallback"
+    capabilities: set[str] = set()
+    connected = control_connected = radio_ready = True
+    radio_state = RadioState()
+
+    def __init__(self, bound: bool = True) -> None:
+        self.bound = bound
+        self.observation_poller: object | None = None
+
+    def create_observation_poller(
+        self, *, callback: object, **_kwargs: object
+    ) -> object:
+        self.observation_poller = (
+            _FakeObservationPoller(callback) if self.bound else object()
+        )
+        return self.observation_poller
+
+
+@pytest.mark.asyncio
+async def test_start_and_stop_with_radio_sets_callbacks() -> None:
+    radio = _StateNotifyRadio()
+    radio.state_cache = MagicMock()
+    radio.disconnect = AsyncMock()
+    radio.connected = True
+    radio.radio_ready = True
+    radio.control_connected = True
+    fake_server = _FakeAsyncServer()
+    # MOR-1181: stop_web_server now awaits a final TX-safety drain on the
+    # poller it stopped, so the stand-in has to answer that call too.
+    fake_poller = MagicMock(
+        drain_tx_safety_commands=AsyncMock(), select_vfo_a_on_connect=AsyncMock()
+    )
+
+    srv = WebServer(radio, WebConfig(host="127.0.0.1", port=0))
+    with (
+        patch(
+            "rigplane.web.web_startup.asyncio.start_server",
+            new=AsyncMock(return_value=fake_server),
+        ),
+        patch("rigplane.web.web_startup.RadioPoller", return_value=fake_poller),
+    ):
+        await srv.start()
+        assert srv.port == 4242
+        assert radio._state_change_callback is not None
+        assert radio._state_change_callback == srv._on_radio_state_change
+        assert radio._reconnect_callback is not None
+        assert radio._reconnect_callback == srv._on_radio_reconnect
+        fake_poller.start.assert_called_once()
+        await srv.stop()
+
+    fake_poller.stop.assert_called_once()
+    # radio.disconnect is NOT called by WebServer.stop() — it's the caller's
+    # responsibility via the context manager (async with radio:).
+    radio.disconnect.assert_not_awaited()
+    assert fake_server.closed is True
+
+
+class _FakeManagedTxPort:
+    """Minimal ManagedTxCompositionPort stand-in for startup wiring tests."""
+
+    def __init__(self) -> None:
+        self.authority = object()
+        self.validated: list[object] = []
+
+    def validate_state_store(self, store: object) -> None:
+        self.validated.append(store)
+
+
+class _ManagedTxStateNotifyRadio(_StateNotifyRadio):
+    """StateNotifyCapable radio with a managed TX composition installed."""
+
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        super().__init__(*args, **kwargs)
+        self.managed_tx_port = _FakeManagedTxPort()
+        self._managed_tx_composition = self.managed_tx_port
+        # ``capabilities`` carries the "scope" tag that runtime_capabilities
+        # starts from, and the reconnect recovery pass calls ``on_scope_data``.
+        # The class itself is registered as a ScopeCapable virtual subclass
+        # (below) because on Python 3.12+ isinstance() checks Protocol
+        # members with inspect.getattr_static(), which a MagicMock's dynamic
+        # attributes do not satisfy.
+        self.capabilities = {"scope"}
+        self.on_scope_data = MagicMock()
+        from test_web_server import _add_scope_capable_attrs
+
+        _add_scope_capable_attrs(self)
+
+
+ScopeCapable.register(_ManagedTxStateNotifyRadio)
+
+
+@pytest.mark.asyncio
+async def test_managed_tx_start_still_registers_reconnect_recovery_pass() -> None:
+    """MOR-2798: managed TX must not leave the reconnect recovery unregistered.
+
+    ``rigplane web`` always installs a managed TX composition (cli/__init__.py
+    builds one or exits), so gating ``set_reconnect_callback`` on the
+    composition's absence left every production web session without the
+    post-soft-reconnect state refetch and scope re-enable.
+    """
+    radio = _ManagedTxStateNotifyRadio()
+    radio.state_cache = MagicMock()
+    radio.disconnect = AsyncMock()
+    radio.connected = True
+    radio.radio_ready = True
+    radio.control_connected = True
+    radio._fetch_initial_state = AsyncMock()
+    fake_server = _FakeAsyncServer()
+    fake_poller = MagicMock(
+        drain_tx_safety_commands=AsyncMock(), select_vfo_a_on_connect=AsyncMock()
+    )
+
+    srv = WebServer(radio, WebConfig(host="127.0.0.1", port=0))
+    attach_managed_tx_composition(srv, radio.managed_tx_port)
+
+    with (
+        patch(
+            "rigplane.web.web_startup.asyncio.start_server",
+            new=AsyncMock(return_value=fake_server),
+        ),
+        patch("rigplane.web.web_startup.RadioPoller", return_value=fake_poller),
+    ):
+        await srv.start()
+        # The managed TX composition is installed and validated on this server,
+        # so the guard that previously skipped registration is genuinely taken.
+        assert radio._managed_tx_composition is radio.managed_tx_port
+        assert vars(srv)["_production_managed_tx_port"] is radio.managed_tx_port
+        assert radio.managed_tx_port.validated  # _validate_managed_tx ran
+        # The soft-reconnect recovery pass must stay registered.
+        assert radio._reconnect_callback == srv._on_radio_reconnect
+
+        # Simulate the radio's post-soft_reconnect edge: the radio layer
+        # owns the one initial fetch of the recovery (MOR-4382) and lands
+        # it before the registered callback runs; the callback must queue
+        # the scope re-enable — and must not fetch a second time.
+        srv._scope_handlers.add(MagicMock())  # noqa: SLF001
+        srv.scope_hub
+        await srv._radio_scope_session.set_output(True)
+        radio.enable_scope.reset_mock()
+        await radio._fetch_initial_state()
+        radio._reconnect_callback()
+        await _await_condition(lambda: radio.enable_scope.await_count == 1)
+
+        radio._fetch_initial_state.assert_awaited_once()
+        radio.enable_scope.assert_awaited_once()
+        assert srv._radio_scope_session.enabled
+        await srv.stop()
+
+    fake_poller.stop.assert_called_once()
+    assert fake_server.closed is True
+
+
+@pytest.mark.asyncio
+async def test_start_attaches_shared_state_model_service_for_acquisition_profile() -> (
+    None
+):
+    radio = _ProfiledStateNotifyRadio()
+    radio.profile = resolve_radio_profile(model="IC-7610")
+    radio.model = radio.profile.model
+    radio.capabilities = set(radio.profile.capabilities)
+    radio._state_store = StateStore()
+    radio.state_cache = MagicMock()
+    radio.disconnect = AsyncMock()
+    radio.connected = True
+    radio.radio_ready = True
+    radio.control_connected = True
+    fake_server = _FakeAsyncServer()
+    fake_poller = MagicMock(
+        drain_tx_safety_commands=AsyncMock(), select_vfo_a_on_connect=AsyncMock()
+    )  # MOR-1181
+
+    srv = WebServer(radio, WebConfig(host="127.0.0.1", port=0))
+    with (
+        patch(
+            "rigplane.web.web_startup.asyncio.start_server",
+            new=AsyncMock(return_value=fake_server),
+        ),
+        patch(
+            "rigplane.web.web_startup.RadioPoller", return_value=fake_poller
+        ) as poller_cls,
+    ):
+        await srv.start()
+        await srv.stop()
+
+    assert srv.command_state_store is radio.state_store
+    assert isinstance(radio._acquisition_scheduler, AcquisitionScheduler)
+    assert isinstance(radio.state_model_service, RadioStateModelService)
+    assert isinstance(radio._state_freshness_service, StateFreshnessService)
+    assert srv._state_freshness_service is radio._state_freshness_service
+    assert radio._meter_observation_coalescer is not None
+    assert poller_cls.call_args.kwargs["state_store"] is radio.state_store
+
+
+@pytest.mark.asyncio
+async def test_start_routes_observation_pollable_radio_through_observation_store() -> (
+    None
+):
+    radio = _ObservationStatePollableRadio()
+    fake_server = _FakeAsyncServer()
+    srv = WebServer(radio, WebConfig(host="127.0.0.1", port=0, discovery=False))
+    srv.sync_state_store_from_radio_state = MagicMock(
+        side_effect=AssertionError("legacy RadioState bulk sync must not be used")
+    )
+
+    with patch(
+        "rigplane.web.web_startup.asyncio.start_server",
+        new=AsyncMock(return_value=fake_server),
+    ):
+        await srv.start()
+        await asyncio.sleep(0)
+        await srv.stop()
+
+    assert radio.observation_poller is not None
+    assert radio.observation_poller.started is True
+    assert radio.observation_poller.stopped is True
+    snapshot = srv.command_state_store.snapshot()
+    values = {str(field.path): field.value for field in snapshot.fields}
+    assert values["receiver.main.active.freq_mode.freq_hz"] == 14_074_000
+    assert radio.state_store.provider_generation == 0
+
+
+@pytest.mark.asyncio
+async def test_observation_pollable_web_path_builds_no_radio_poller() -> None:
+    """An ObservationPollable radio's web path carries no AcquisitionDrain.
+
+    ``RadioPoller`` is the only web-side builder of an ``AcquisitionDrain``,
+    and ``start_web_server`` builds it only on its trailing Icom CI-V branch.
+    An ``ObservationPollable`` radio (FTX-1 via ``YaesuCatRadio``) takes the
+    observation-poller branch instead, so the ``AcquisitionScheduler`` is
+    never drained for it and the ``cadence_seconds`` values in
+    ``rigs/ftx1.toml`` cannot reach the CAT link -- they drive
+    ``StateStore.mark_stale_due`` bookkeeping and nothing else.
+    """
+    radio = _ObservationStatePollableRadio()
+    srv = WebServer(radio, WebConfig(host="127.0.0.1", port=0, discovery=False))
+
+    with (
+        patch(
+            "rigplane.web.web_startup.asyncio.start_server",
+            new=AsyncMock(return_value=_FakeAsyncServer()),
+        ),
+        patch(
+            "rigplane.web.web_startup.RadioPoller",
+            side_effect=AssertionError(
+                "an ObservationPollable radio must not get a RadioPoller"
+            ),
+        ),
+    ):
+        await srv.start()
+        await asyncio.sleep(0)
+        await srv.stop()
+
+    assert srv._radio_poller is None  # noqa: SLF001
+    assert radio.observation_poller is not None
+
+
+@pytest.mark.asyncio
+async def test_web_fallback_observation_store_advances_before_attach_and_detach() -> (
+    None
+):
+    radio = _FallbackObservationPollableRadio()
+    server = WebServer(radio, WebConfig(host="127.0.0.1", port=0, discovery=False))
+    with patch(
+        "rigplane.web.web_startup.asyncio.start_server",
+        new=AsyncMock(return_value=_FakeAsyncServer()),
+    ):
+        await server.start()
+        await asyncio.sleep(0)
+        poller = radio.observation_poller
+        assert isinstance(poller, _FakeObservationPoller)
+        assert server.command_state_store.provider_generation == 1
+        assert poller.capture() == 1  # type: ignore[operator]
+        server._broadcast_state_update = MagicMock()
+        path = FieldPath.active("main", "freq_mode", "freq_hz")
+        stale = _store_observation(path, 7_074_000, at=time.monotonic())
+        poller._callback((stale,))
+        assert path not in {
+            item.path for item in server.command_state_store.snapshot().fields
+        }
+        server._broadcast_state_update.assert_not_called()
+        current = _store_observation(path, 7_074_000, at=time.monotonic(), generation=1)
+        poller._callback((current,))
+        poller._callback((current,))
+        assert server._broadcast_state_update.call_count == 2
+        await server.stop()
+
+    assert server.command_state_store.provider_generation == 2
+
+
+@pytest.mark.asyncio
+async def test_web_fallback_rejects_unbound_observation_poller() -> None:
+    server = WebServer(
+        _FallbackObservationPollableRadio(False),
+        WebConfig(host="127.0.0.1", port=0, discovery=False),
+    )
+    with (
+        patch(
+            "rigplane.web.web_startup.asyncio.start_server",
+            new=AsyncMock(return_value=_FakeAsyncServer()),
+        ),
+        pytest.raises(RuntimeError, match="must bind provider generation"),
+    ):
+        await server.start()
+
+
+def test_state_store_s_meter_change_broadcasts_without_legacy_revision_event() -> None:
+    radio = MagicMock()
+    radio.profile = resolve_radio_profile(model="IC-7610")
+    radio.model = radio.profile.model
+    radio.capabilities = set(radio.profile.capabilities)
+    srv = WebServer(radio, WebConfig(state_diagnostics=True))
+    queue = BoundedQueue[dict[str, object]](maxsize=4)
+    srv.register_control_event_queue(queue)
+    path = FieldPath.receiver("0", "meters", "s_meter")
+    srv.command_state_store.apply(_store_observation(path, 73, at=time.monotonic()))
+
+    srv._on_radio_state_change("state_store_changed", {"paths": [str(path)]})
+
+    event = queue.get_nowait()
+    state_update = queue.get_nowait()
+    assert event == {
+        "type": "event",
+        "name": "state_store_changed",
+        "data": {"paths": [str(path)]},
+    }
+    assert state_update["type"] == "state_update"
+    payload = srv.build_public_state()
+    assert payload["main"]["sMeter"] == 73
+    assert not any(
+        item.kind == "revision_producing_event"
+        for item in srv.state_diagnostics.events()
+    )
+
+
+@pytest.mark.asyncio
+async def test_control_run_initial_full_state_counts_registered_client() -> None:
+    srv = WebServer(None, WebConfig(radio_model="IC-7610"))
+    ws = _RunOnceControlWs()
+    handler = ControlHandler(ws, None, "0.0.0-test", "IC-TEST", server=srv)
+
+    await handler.run()
+
+    updates = [msg for msg in ws.sent if msg.get("type") == "state_update"]
+    assert updates[0]["data"]["type"] == "full"  # type: ignore[index]
+    body = updates[0]["data"]["data"]  # type: ignore[index]
+    assert body["wsClients"]["control"] == 1
+    assert srv._control_event_queues == set()  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+async def test_control_delivers_simulator_liveness_on_cached_state(
+    connected_radio: IcomRadio, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from test_web_server import _close_ws, _ws_connect, _ws_recv_frame
+
+    radio = connected_radio
+    await radio.get_freq()
+    assert radio.last_valid_frame_monotonic is not None
+    age = 0.0
+    monkeypatch.setattr(
+        runtime_helpers,
+        "time",
+        SimpleNamespace(monotonic=lambda: radio.last_valid_frame_monotonic + age),
+    )
+    srv = WebServer(radio, WebConfig(host="127.0.0.1", port=0, radio_model="IC-7610"))
+    listener = await asyncio.start_server(srv._handle_connection, "127.0.0.1", 0)
+    async with listener:
+        port = listener.sockets[0].getsockname()[1]
+        reader, writer, _ = await _ws_connect("127.0.0.1", port, "/api/v1/ws")
+        try:
+            _, hello = await _ws_recv_frame(reader)
+            assert json.loads(hello)["type"] == "hello"
+            _, payload = await _ws_recv_frame(reader)
+            initial = json.loads(payload)
+            assert initial["type"] == "state_update"
+            assert initial["data"]["type"] == "full"
+            first = initial["data"]["data"]
+            cached_payload = srv._cached_public_state_payload
+            store_before = srv.command_state_store.snapshot()
+            age = 0.5
+            srv._broadcast_state_update(force=True)
+            assert srv._cached_public_state_payload is cached_payload
+            async with asyncio.timeout(2.0):
+                while True:
+                    _, payload = await _ws_recv_frame(reader)
+                    update = json.loads(payload)
+                    if update["type"] == "state_update":
+                        break
+            envelope = update["data"]
+            second = envelope.get("changed", envelope.get("data"))
+            assert first["connection"]["liveness"]["lastFrameAgeMs"] == 0
+            assert second["connection"]["liveness"]["lastFrameAgeMs"] == 500
+            assert first["connection"]["liveness"]["source"] == "radio"
+            store_after = srv.command_state_store.snapshot()
+            assert store_after.state_revision == store_before.state_revision
+            assert store_after.freshness_revision == store_before.freshness_revision
+            assert store_after.observation_seq == store_before.observation_seq
+            assert store_after.fields == store_before.fields
+        finally:
+            await _close_ws(writer)
+            await _await_condition(lambda: not srv._control_event_queues)
+
+
+def test_control_queue_lifecycle_broadcasts_ws_client_count_changes() -> None:
+    srv = WebServer(None, WebConfig(radio_model="IC-7610"))
+    observer: BoundedQueue[dict[str, object]] = BoundedQueue(maxsize=8)
+    peer: BoundedQueue[dict[str, object]] = BoundedQueue(maxsize=8)
+    srv.register_control_event_queue(observer)
+    _drain_queue(observer)
+
+    srv.register_control_event_queue(peer)
+    event = observer.get_nowait()
+
+    assert _state_event_ws_clients(event)["control"] == 2
+
+    _drain_queue(observer)
+    srv.unregister_control_event_queue(peer)
+    event = observer.get_nowait()
+
+    assert _state_event_ws_clients(event)["control"] == 1
+
+
+def test_ws_client_lifecycle_delta_includes_public_state_sequence() -> None:
+    srv = WebServer(None, WebConfig(radio_model="IC-7610"))
+    observer: BoundedQueue[dict[str, object]] = BoundedQueue(maxsize=8)
+    peer: BoundedQueue[dict[str, object]] = BoundedQueue(maxsize=8)
+    first_envelope = srv.register_control_event_queue(observer)
+    assert first_envelope["type"] == "full"
+    initial = first_envelope["data"]
+    assert isinstance(initial, dict)
+
+    srv.register_control_event_queue(peer)
+    event = observer.get_nowait()
+    assert event["type"] == "state_update"
+    envelope = event["data"]
+    assert isinstance(envelope, dict)
+    changed = envelope["changed"]
+    assert isinstance(changed, dict)
+
+    assert envelope["type"] == "delta"
+    assert envelope["stateRevision"] == initial["stateRevision"]
+    assert envelope["freshnessRevision"] == initial["freshnessRevision"]
+    assert envelope["observationSeq"] == initial["observationSeq"]
+    assert changed["wsClients"] == {"scope": 0, "control": 2, "audio": 0}
+    assert changed["publicStateSeq"] > initial["publicStateSeq"]
+
+
+@pytest.mark.asyncio
+async def test_scope_lifecycle_broadcasts_ws_client_count_changes() -> None:
+    srv = WebServer(None, WebConfig(radio_model="IC-7610"))
+    observer: BoundedQueue[dict[str, object]] = BoundedQueue(maxsize=8)
+    scope_handler = object()
+    srv.register_control_event_queue(observer)
+    _drain_queue(observer)
+
+    srv.register_scope_handler(scope_handler)
+    event = observer.get_nowait()
+
+    assert _state_event_ws_clients(event)["scope"] == 1
+
+    _drain_queue(observer)
+    srv.unregister_scope_handler(scope_handler)
+    event = observer.get_nowait()
+
+    assert _state_event_ws_clients(event)["scope"] == 0
+
+
+@pytest.mark.asyncio
+async def test_audio_rx_lifecycle_broadcasts_ws_client_count_changes() -> None:
+    srv = WebServer(None, WebConfig(radio_model="IC-7610"))
+    observer: BoundedQueue[dict[str, object]] = BoundedQueue(maxsize=8)
+    srv.register_control_event_queue(observer)
+    _drain_queue(observer)
+
+    audio_queue = await srv._audio_broadcaster.subscribe()  # noqa: SLF001
+    event = observer.get_nowait()
+
+    assert _state_event_ws_clients(event)["audio"] == 1
+
+    _drain_queue(observer)
+    await srv._audio_broadcaster.unsubscribe(audio_queue)  # noqa: SLF001
+    event = observer.get_nowait()
+
+    assert _state_event_ws_clients(event)["audio"] == 0
+
+
+def test_state_store_freshness_refresh_broadcasts_without_semantic_change() -> None:
+    radio = MagicMock()
+    radio.profile = resolve_radio_profile(model="IC-7610")
+    radio.model = radio.profile.model
+    radio.capabilities = set(radio.profile.capabilities)
+    srv = WebServer(radio, WebConfig(state_diagnostics=True))
+    queue = BoundedQueue[dict[str, object]](maxsize=4)
+    srv.register_control_event_queue(queue)
+    path = FieldPath.receiver("0", "meters", "s_meter")
+    clock = FreshnessClock(start=10.0)
+    store = StateStore(freshness_clock=clock)
+    srv.command_state_store = store
+    store.apply(_store_observation(path, 73, at=clock.now(), max_age=0.5))
+    clock.advance(0.6)
+    store.mark_stale_due()
+    refreshed = store.apply(_store_observation(path, 73, at=clock.now(), max_age=0.5))
+
+    assert refreshed.changes == ()
+    srv._on_radio_state_change("state_store_changed", {"paths": [str(path)]})
+
+    event = queue.get_nowait()
+    state_update = queue.get_nowait()
+    assert event == {
+        "type": "event",
+        "name": "state_store_changed",
+        "data": {"paths": [str(path)]},
+    }
+    assert state_update["type"] == "state_update"
+    assert any(
+        item.kind == "web_delivery_trigger"
+        and item.details["freshness_revision"]
+        == srv.command_state_store.snapshot().freshness_revision
+        for item in srv.state_diagnostics.events()
+    )
+    assert not any(
+        item.kind == "revision_producing_event"
+        for item in srv.state_diagnostics.events()
+    )
+
+
+@pytest.mark.asyncio
+async def test_start_never_requests_reuse_port() -> None:
+    """MOR-1572: the web listener must never opt into SO_REUSEPORT.
+
+    Unlike the UDP discovery responder (best-effort, meant to be shared by
+    co-located instances), this TCP listener guards an exclusive radio
+    session — a second rigplane instance silently sharing the port (as
+    SO_REUSEPORT allowed on macOS/BSD) means two instances race for the
+    same radio with no error. Guard against the kwarg being reintroduced.
+    """
+    srv = WebServer(None, WebConfig(host="127.0.0.1", port=0, discovery=False))
+    fake_server = _FakeAsyncServer()
+
+    with patch(
+        "rigplane.web.web_startup.asyncio.start_server",
+        new=AsyncMock(return_value=fake_server),
+    ) as start_server:
+        await srv.start()
+        await srv.stop()
+
+    assert "reuse_port" not in start_server.await_args.kwargs
+
+
+def test_shutdown_signal_handler_falls_back_when_loop_does_not_support_signals(
+    monkeypatch,
+) -> None:
+    calls: list[tuple[int, object]] = []
+    triggered = 0
+
+    class FakeLoop:
+        def add_signal_handler(self, *_args: object) -> None:
+            raise NotImplementedError
+
+    def fake_signal(sig: int, handler: object) -> None:
+        calls.append((sig, handler))
+
+    def on_signal() -> None:
+        nonlocal triggered
+        triggered += 1
+
+    monkeypatch.setattr(server_module._signal, "signal", fake_signal)
+
+    server_module._install_shutdown_signal_handlers(FakeLoop(), on_signal)
+
+    assert [sig for sig, _handler in calls] == [
+        server_module._signal.SIGTERM,
+        server_module._signal.SIGINT,
+    ]
+    calls[0][1](server_module._signal.SIGTERM, None)  # type: ignore[operator]
+    assert triggered == 1
+
+
+async def test_stop_hands_its_ptt_drain_to_the_tx_release_hook(monkeypatch) -> None:
+    """MOR-2875: the shutdown's PTT drain reaches ``serve_forever``'s
+    ``on_tx_release`` with its own bound, so the CLI's shutdown bound can let
+    it finish."""
+    from rigplane.web.radio_poller import _SHUTDOWN_TX_DRAIN_TIMEOUT_S
+
+    handlers: list[object] = []
+    monkeypatch.setattr(
+        server_module,
+        "_install_shutdown_signal_handlers",
+        lambda _loop, on_signal: handlers.append(on_signal),
+    )
+    srv = WebServer(None, WebConfig(host="127.0.0.1", port=0, discovery=False))
+    drained = asyncio.Event()
+
+    class _Poller:
+        def stop(self) -> None:
+            pass
+
+        async def drain_tx_safety_commands(self, *, timeout: float) -> None:
+            drained.set()
+
+    releases: list[tuple[object, ...]] = []
+    with patch(
+        "rigplane.web.web_startup.asyncio.start_server",
+        new=AsyncMock(return_value=_FakeAsyncServer()),
+    ):
+        serve = asyncio.create_task(
+            srv.serve_forever(on_tx_release=lambda *args: releases.append(args))
+        )
+        while not handlers:
+            await asyncio.sleep(0)
+        srv._radio_poller = _Poller()
+        handlers[0]()  # type: ignore[operator]
+        await asyncio.wait_for(serve, 1.0)
+
+    ((drain, name, bound),) = releases
+    assert (name, bound) == ("web PTT drain", _SHUTDOWN_TX_DRAIN_TIMEOUT_S)
+    assert isinstance(drain, asyncio.Future) and drain.done() and drained.is_set()
+
+
+def test_web_stop_timeout_is_the_sum_of_its_timed_waits() -> None:
+    """MOR-2875: ``WEB_STOP_TIMEOUT_S`` sums the ``timeout=`` of every wait
+    ``_stop_web_server`` makes, each a named constant."""
+    import ast
+    import inspect
+
+    from rigplane.web import web_startup
+
+    timeouts = [
+        keyword.value
+        for node in ast.walk(ast.parse(inspect.getsource(web_startup._stop_web_server)))
+        if isinstance(node, ast.Call)
+        for keyword in node.keywords
+        if keyword.arg == "timeout"
+    ]
+    assert timeouts and all(isinstance(value, ast.Name) for value in timeouts)
+    assert web_startup.WEB_STOP_TIMEOUT_S == sum(
+        getattr(web_startup, value.id)
+        for value in timeouts
+        if isinstance(value, ast.Name)
+    )
+
+
+async def test_first_signal_leaves_the_shutdown_bound_to_the_caller(
+    monkeypatch,
+) -> None:
+    """MOR-2875: ``serve_forever`` reports the first signal and arms nothing.
+
+    The bound that force-ends a hung shutdown belongs to the CLI, which owns
+    the process; a library caller of ``serve_forever`` must not get one.
+    """
+    handlers: list[object] = []
+    monkeypatch.setattr(
+        server_module,
+        "_install_shutdown_signal_handlers",
+        lambda _loop, on_signal: handlers.append(on_signal),
+    )
+    srv = WebServer(None, WebConfig(host="127.0.0.1", port=0, discovery=False))
+    stopping, release = asyncio.Event(), asyncio.Event()
+
+    async def slow_stop() -> None:
+        stopping.set()
+        await release.wait()
+
+    monkeypatch.setattr(srv, "stop", slow_stop)
+    signals: list[str] = []
+    with patch(
+        "rigplane.web.web_startup.asyncio.start_server",
+        new=AsyncMock(return_value=_FakeAsyncServer()),
+    ):
+        serve = asyncio.create_task(
+            srv.serve_forever(on_shutdown_signal=lambda: signals.append("first"))
+        )
+        while not handlers:
+            await asyncio.sleep(0)
+        before = asyncio.all_tasks()
+        handlers[0]()  # type: ignore[operator]
+        scheduled_by_the_signal = asyncio.all_tasks() - before
+        await asyncio.wait_for(stopping.wait(), 1.0)
+        release.set()
+        await asyncio.wait_for(serve, 1.0)
+        await WebServer.stop(srv)
+
+    assert signals == ["first"]
+    assert scheduled_by_the_signal == set()
+
+
+@pytest.mark.asyncio
+async def test_stop_handles_disconnect_failure_and_cancels_client_tasks() -> None:
+    radio = MagicMock()
+    radio.disconnect = AsyncMock(side_effect=RuntimeError("disconnect failed"))
+    srv = WebServer(radio)
+    srv._server = _FakeAsyncServer()
+    srv._radio_poller = MagicMock(
+        drain_tx_safety_commands=AsyncMock(), select_vfo_a_on_connect=AsyncMock()
+    )
+
+    blocker = asyncio.Event()
+
+    async def slow_client() -> None:
+        await blocker.wait()
+
+    task = asyncio.create_task(slow_client())
+    srv._client_tasks.add(task)
+    await srv.stop()
+    assert task.cancelled() or task.done()
+
+
+@pytest.mark.asyncio
+async def test_start_aborts_before_listening_when_radio_not_ready() -> None:
+    radio = MagicMock()
+    srv = WebServer(radio, WebConfig(host="127.0.0.1", port=0))
+
+    with (
+        patch(
+            "rigplane.web.web_startup.assert_radio_startup_ready",
+            side_effect=RuntimeError("web startup aborted"),
+        ),
+        patch(
+            "rigplane.web.web_startup.asyncio.start_server", new=AsyncMock()
+        ) as start_server,
+    ):
+        with pytest.raises(RuntimeError, match="web startup aborted"):
+            await srv.start()
+    start_server.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_accept_client_max_clients_and_normal_path() -> None:
+    srv = WebServer(None, WebConfig(max_clients=0))
+    writer = _FakeWriter()
+    srv._accept_client(_reader_with(b""), writer)
+    assert writer.closed is True
+
+    srv2 = WebServer(None, WebConfig(max_clients=10))
+    with patch.object(srv2, "_handle_connection", new=AsyncMock()) as handle_conn:
+        writer2 = _FakeWriter()
+        srv2._accept_client(_reader_with(b""), writer2)
+        await asyncio.sleep(0)
+    handle_conn.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_read_request_parses_and_handles_invalid_cases() -> None:
+    srv = WebServer(None)
+    reader = _reader_with(
+        b"GET /x%20y?q=1 HTTP/1.1\r\nHost: localhost\r\nX-Test: abc\r\n\r\n"
+    )
+    method, path, headers, query = await srv._read_request(reader)  # noqa: SLF001
+    assert method == "GET"
+    assert path == "/x y"
+    assert headers["host"] == "localhost"
+    assert headers["x-test"] == "abc"
+    assert query == {"q": ["1"]}
+
+    bad = _reader_with(b"BROKEN\r\n\r\n")
+    assert await srv._read_request(bad) is None  # noqa: SLF001
+
+    async def timeout_wait_for(coro, timeout):
+        del timeout
+        if hasattr(coro, "close"):
+            coro.close()
+        raise asyncio.TimeoutError
+
+    with patch("rigplane.web.server.asyncio.wait_for", side_effect=timeout_wait_for):
+        assert await srv._read_request(_reader_with(b"GET / HTTP/1.1\r\n")) is None  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+async def test_handle_http_routes_and_405_404() -> None:
+    srv = WebServer(None)
+    writer = _FakeWriter()
+    with patch("rigplane.web.server._send_response", new=AsyncMock()) as send_resp:
+        await srv._handle_http(writer, "POST", "/")  # noqa: SLF001
+    send_resp.assert_awaited_once()
+
+    srv2 = WebServer(None)
+    writer2 = _FakeWriter()
+    srv2._serve_info = AsyncMock()
+    srv2._serve_state = AsyncMock()
+    srv2._serve_capabilities = AsyncMock()
+    srv2._serve_station_status = AsyncMock()
+    srv2._serve_static = AsyncMock()
+    with patch("rigplane.web.server._send_response", new=AsyncMock()) as send_resp2:
+        await srv2._handle_http(writer2, "GET", "/api/v1/info")  # noqa: SLF001
+        await srv2._handle_http(writer2, "GET", "/api/v1/state")  # noqa: SLF001
+        await srv2._handle_http(writer2, "GET", "/api/v1/capabilities")  # noqa: SLF001
+        await srv2._handle_http(writer2, "GET", "/api/v1/station")  # noqa: SLF001
+        await srv2._handle_http(writer2, "GET", "/")  # noqa: SLF001
+        await srv2._handle_http(writer2, "GET", "/file.js")  # noqa: SLF001
+        await srv2._handle_http(writer2, "GET", "relative-path")  # noqa: SLF001
+    assert srv2._serve_info.await_count == 1
+    assert srv2._serve_state.await_count == 1
+    assert srv2._serve_capabilities.await_count == 1
+    assert srv2._serve_station_status.await_count == 1
+    assert srv2._serve_static.await_count == 2
+    send_resp2.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_http_single_command_uses_http_command_service_source() -> None:
+    """POST /api/v1/commands queues with the http source and answers after execution.
+
+    The single command runs the batch step path: the queued entry carries
+    source "http" (never the websocket default), and the 200 reply goes out
+    only after a poller-like drain settles the ordered future.
+    """
+    profile = resolve_radio_profile(model="IC-9700")
+    radio = MagicMock()
+    radio.profile = profile
+    radio.model = profile.model
+    radio.capabilities = set(profile.capabilities)
+    radio.send_civ = AsyncMock()
+    srv = WebServer(radio, WebConfig())
+    writer = _FakeWriter()
+    settled: list[CommandQueueEntry] = []
+
+    async def _settle_one() -> None:
+        await srv.command_queue.wait(timeout=5.0)
+        for entry in srv.command_queue.drain_entries():
+            settled.append(entry)
+            if entry.future is not None and not entry.future.done():
+                entry.future.set_result(None)
+
+    consumer = asyncio.create_task(_settle_one())
+    await srv._handle_http_single_command(  # noqa: SLF001
+        writer,
+        {
+            "id": "http-set-freq",
+            "name": "set_freq",
+            "params": {"freq": 14_074_000, "receiver": 0},
+        },
+    )
+    await asyncio.wait_for(consumer, timeout=5.0)
+
+    status, body = _response_json(writer)
+    assert status == 200
+    assert body["ok"] is True
+    assert body["id"] == "http-set-freq"
+    assert len(settled) == 1
+    assert settled[0].source == "http"
+
+
+@pytest.mark.asyncio
+async def test_http_off_domain_published_control_answers_400_invalid_request() -> None:
+    """POST /api/v1/commands refuses an off-domain FTX-1 value with 400.
+
+    MOR-2510: ``set_if_shift`` offset 30 is off the published 20 Hz
+    lattice, so the HTTP ingress answers ``invalid_request`` instead of
+    ``ok: true`` for a command the radio path would silently drop.
+    """
+    profile = resolve_radio_profile(model="FTX-1")
+    radio = SimpleNamespace(
+        connected=True,
+        capabilities=set(profile.capabilities),
+        profile=profile,
+        supports_command=lambda command, receiver=None: receiver in (None, 0),
+    )
+    srv = WebServer(radio, WebConfig())
+    writer = _FakeWriter()
+
+    await srv._handle_http_single_command(  # noqa: SLF001
+        writer,
+        {
+            "id": "off-domain",
+            "name": "set_if_shift",
+            "params": {"offset": 30, "receiver": 0},
+        },
+    )
+
+    status, body = _response_json(writer)
+    assert status == 400
+    assert body["error"] == "invalid_request"
+    assert "if_shift" in body["message"]
+
+
+@pytest.mark.asyncio
+async def test_http_raw_civ_transaction_enters_command_lifecycle() -> None:
+    frame = SimpleNamespace(command=0x03, sub=None, data=b"\x01")
+    radio = SimpleNamespace(
+        connected=True,
+        capabilities=set(),
+        send_civ_transaction=AsyncMock(
+            return_value=SimpleNamespace(
+                status="response",
+                frame=frame,
+                frame_bytes=b"\xfe\xfe\xe0\x98\x03\x01\xfd",
+            )
+        ),
+    )
+    srv = WebServer(radio, WebConfig())
+    writer = _FakeWriter()
+    payload = json.dumps(
+        {"id": "raw-1", "command": 0x03, "data": "", "expect": "data"}
+    ).encode()
+
+    await srv._handle_http_civ_transaction(  # noqa: SLF001
+        writer,
+        headers={"content-length": str(len(payload))},
+        reader=_reader_with(payload),
+    )
+
+    status, body = _response_json(writer)
+    assert status == 200
+    assert body["id"] == "raw-1"
+    radio.send_civ_transaction.assert_awaited_once_with(
+        0x03,
+        sub=None,
+        data=b"",
+        expect="data",
+        timeout=None,
+    )
+    events = srv._http_command_service.lifecycle_events()  # noqa: SLF001
+    assert [event.state for event in events[:4]] == [
+        "accepted",
+        "queued",
+        "sent",
+        "acknowledged",
+    ]
+    assert events[0].command_id == "raw-1"
+    assert events[0].source == "http"
+
+
+@pytest.mark.asyncio
+async def test_http_power_is_lifecycle_only_until_provider_observation() -> None:
+    radio = SimpleNamespace(
+        connected=True,
+        control_connected=True,
+        capabilities={"power_control"},
+        set_powerstat=AsyncMock(),
+    )
+    srv = WebServer(radio, WebConfig(radio_model="IC-7610"))
+    srv._radio_state.power_on = True  # noqa: SLF001
+    state_change = MagicMock()
+    srv._on_radio_state_change = state_change  # type: ignore[method-assign]
+    before_public = srv.build_public_state()
+    before_ws = srv.build_state_update_envelope(force_full=True)["data"]
+    before_snapshot = srv.command_state_store.snapshot()
+    writer = _FakeWriter()
+    payload = json.dumps({"state": "off"}).encode()
+
+    await srv._handle_http(  # noqa: SLF001
+        writer,
+        "POST",
+        "/api/v1/radio/power",
+        headers={"content-length": str(len(payload))},
+        reader=_reader_with(payload),
+    )
+
+    status, body = _response_json(writer)
+    assert status == 200
+    assert body == {"status": "ok", "power": "off"}
+    radio.set_powerstat.assert_awaited_once_with(False)
+    assert srv._radio_state.power_on is True  # noqa: SLF001
+    state_change.assert_not_called()
+    after_snapshot = srv.command_state_store.snapshot()
+    assert after_snapshot.state_revision == before_snapshot.state_revision
+    assert after_snapshot.observation_seq == before_snapshot.observation_seq
+    assert srv.build_public_state() == before_public
+    assert srv.build_state_update_envelope(force_full=True)["data"] == before_ws
+    with pytest.raises(KeyError):
+        srv.command_state_store.snapshot().field("global.tx_state.power_on")
+
+
+@pytest.mark.asyncio
+@pytest.mark.realtime(
+    reason="real serial RX pump and request tracker on a fake hardware link"
+)
+async def test_http_power_endpoint_matches_the_golden_documents() -> None:
+    golden = json.loads(
+        (
+            pathlib.Path(__file__).resolve().parents[1]
+            / "frontend/src/lib/transport/__tests__/fixtures/radio-power.json"
+        ).read_text()
+    )
+    assert golden["requestHeaderNames"] == ["Content-Type"]
+
+    class PowerLink(_FakeSerialCivLink):
+        async def send(self, frame: bytes) -> None:
+            await super().send(frame)
+            command = frame[4:-1]
+            if command in (b"\x18\x00", b"\x18\x01"):
+                reply = b"\xfb" if command[-1] == 0 else b"\x18\x01"
+                self.queue_response(
+                    bytes((0xFE, 0xFE, frame[3], frame[2])) + reply + b"\xfd"
+                )
+
+    link = PowerLink()
+    radio = Icom7610SerialRadio(
+        device="/dev/rigplane-test-no-hardware",
+        civ_link=link,
+        audio_driver=_FakeUsbAudioDriver(),
+        timeout=0.1,
+        _enumerate_serial_ports_fn=lambda: [],
+    )
+    try:
+        await radio.connect()
+        srv = WebServer(radio, WebConfig(radio_model=golden["model"]))
+        for case in (golden["turnOff"], golden["turnOn"]):
+            writer = _FakeWriter()
+            payload = json.dumps(case["requestBody"]).encode()
+            await srv._handle_http(  # noqa: SLF001
+                writer,
+                "POST",
+                golden["endpoint"],
+                headers={
+                    "content-length": str(len(payload)),
+                    "content-type": "application/json",
+                },
+                reader=_reader_with(payload),
+            )
+            status, body = _response_json(writer)
+            assert status == 200
+            assert body == case["reply"]
+            expected = case["envelope"]["set"][0][1]
+            await await_until(
+                lambda: srv.build_public_state()["powerOn"] is expected,
+                description="Core power observation reaches served state",
+            )
+            state_writer = _FakeWriter()
+            await srv._serve_state(state_writer)  # noqa: SLF001
+            state_status, served = _response_json(state_writer)
+            assert state_status == 200
+            envelope = srv.build_state_update_envelope(force_full=True)
+            StateUpdateEnvelope.model_validate(envelope)
+            for document in (served, envelope["data"]):
+                for path, expected in case["envelope"]["set"]:
+                    actual: Any = document
+                    for key in path:
+                        actual = actual[key]
+                    if path[0] == "fieldStatus":
+                        actual = {key: actual[key] for key in expected}
+                    assert actual == expected
+        power_commands = [frame[4:-1] for frame in link.sent_frames if frame[4] == 0x18]
+        assert power_commands == [b"\x18\x00", b"\x18\x01"]
+    finally:
+        await radio.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_http_command_batch_preparation_uses_shared_command_service(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    radio = SimpleNamespace(connected=True, capabilities={"tuner"})
+    srv = WebServer(radio, WebConfig())
+    writer = _FakeWriter()
+    seen: dict[str, object] = {}
+
+    def fake_put_ordered(
+        command: object,
+        *,
+        future: asyncio.Future[None] | None = None,
+        command_id: str | None = None,
+        source: str | None = None,
+        command_service=None,
+    ) -> None:
+        del command
+        seen.update(
+            {
+                "command_id": command_id,
+                "source": source,
+                "command_service": command_service,
+                "overlays": command_service.pending_overlays(
+                    source="http",
+                    session_id=None,
+                    command_id=command_id,
+                ),
+            }
+        )
+        assert command_id is not None
+        intent = command_intent_from_request(
+            "set_freq",
+            {"freq": 14_074_000, "receiver": 0},
+            source="http",
+            command_id=command_id,
+        )
+        command_service.apply_observation(
+            command_response_observation(
+                intent,
+                timestamp_monotonic=123.0,
+                provider="test",
+            )
+        )
+        assert future is not None
+        future.set_result(None)
+
+    monkeypatch.setattr(srv.command_queue, "put_ordered", fake_put_ordered)
+    payload = json.dumps(
+        {
+            "steps": [
+                {
+                    "id": "http-batch-freq",
+                    "name": "set_freq",
+                    "params": {"freq": 14_074_000, "receiver": 0},
+                }
+            ]
+        }
+    ).encode()
+
+    await srv._handle_http_commands(  # noqa: SLF001
+        "/api/v1/commands/batch",
+        writer,
+        headers={"content-length": str(len(payload))},
+        reader=_reader_with(payload),
+    )
+
+    status, body = _response_json(writer)
+    assert status == 200
+    assert body["ok"] is True
+    assert body["results"][0]["ok"] is True
+    assert isinstance(seen["command_id"], str)
+    assert seen["source"] == "http"
+    assert seen["command_service"] is srv.command_service
+    assert seen["command_service"]._state_store is srv.command_state_store  # noqa: SLF001
+    assert seen["overlays"] != ()
+    assert (
+        srv.command_state_store.snapshot().field("receiver.0.freq_mode.freq_hz").value
+        == 14_074_000
+    )
+    assert (
+        seen["command_service"].pending_overlays(
+            source="http",
+            session_id=None,
+            command_id=seen["command_id"],
+        )
+        == ()
+    )
+
+
+@pytest.mark.asyncio
+async def test_set_freq_success_does_not_publish_main_truth_before_readback() -> None:
+    radio = SimpleNamespace(connected=True, capabilities=set())
+    srv = WebServer(radio, WebConfig())
+    srv.command_queue.put = lambda *a, **k: None  # type: ignore[method-assign]
+
+    intent = command_intent_from_request(
+        "set_freq",
+        {"freq": 14_074_000, "receiver": 0},
+        source="websocket",
+        command_id="ws-freq-main",
+    )
+    await srv.command_service.execute(intent)
+
+    with pytest.raises(KeyError):
+        srv.command_state_store.snapshot().field(
+            FieldPath.active("0", "freq_mode", "freq_hz")
+        )
+
+
+@pytest.mark.asyncio
+async def test_set_freq_success_does_not_publish_sub_truth_before_readback() -> None:
+    radio = SimpleNamespace(
+        connected=True,
+        capabilities={"dual_rx"},
+        profile=resolve_radio_profile(model="IC-7610"),
+    )
+    srv = WebServer(radio, WebConfig())
+    srv.command_queue.put = lambda *a, **k: None  # type: ignore[method-assign]
+
+    intent = command_intent_from_request(
+        "set_freq",
+        {"freq": 7_074_000, "receiver": 1},
+        source="websocket",
+        command_id="ws-freq-sub",
+    )
+    await srv.command_service.execute(intent)
+
+    with pytest.raises(KeyError):
+        srv.command_state_store.snapshot().field(
+            FieldPath.active("1", "freq_mode", "freq_hz")
+        )
+
+
+@pytest.mark.asyncio
+async def test_set_freq_command_overlay_reconciles_with_matching_readback() -> None:
+    # MOR-485: a poll readback carrying the same freq must not leak an overlay
+    # or change the stored value (reconcile, not regress).
+    radio = SimpleNamespace(connected=True, capabilities=set())
+    srv = WebServer(radio, WebConfig())
+    srv.command_queue.put = lambda *a, **k: None  # type: ignore[method-assign]
+
+    intent = command_intent_from_request(
+        "set_freq",
+        {"freq": 14_074_000, "receiver": 0},
+        source="websocket",
+        command_id="ws-freq-reconcile",
+    )
+    await srv.command_service.execute(intent)
+
+    freq_path = FieldPath.active("0", "freq_mode", "freq_hz")
+    srv.command_service.apply_observation(
+        Observation(
+            path=freq_path,
+            value=14_074_000,
+            source=SourceMetadata(source="poll_response", provider="icom_civ"),
+            timestamp_monotonic=time.monotonic(),
+            correlation_id=None,
+        )
+    )
+
+    assert srv.command_state_store.snapshot().field(freq_path).value == 14_074_000
+
+
+@pytest.mark.asyncio
+async def test_set_freq_command_overlay_yields_to_newer_external_readback() -> None:
+    # MOR-484 guard: a later front-panel readback with a DIFFERENT value must
+    # win (last-writer-wins); the optimistic overlay must not pin the value.
+    radio = SimpleNamespace(connected=True, capabilities=set())
+    srv = WebServer(radio, WebConfig())
+    srv.command_queue.put = lambda *a, **k: None  # type: ignore[method-assign]
+
+    intent = command_intent_from_request(
+        "set_freq",
+        {"freq": 14_074_000, "receiver": 0},
+        source="websocket",
+        command_id="ws-freq-external",
+    )
+    await srv.command_service.execute(intent)
+
+    freq_path = FieldPath.active("0", "freq_mode", "freq_hz")
+    srv.command_service.apply_observation(
+        Observation(
+            path=freq_path,
+            value=14_200_000,
+            source=SourceMetadata(source="poll_response", provider="icom_civ"),
+            timestamp_monotonic=time.monotonic(),
+            correlation_id=None,
+        )
+    )
+
+    assert srv.command_state_store.snapshot().field(freq_path).value == 14_200_000
+
+
+@pytest.mark.asyncio
+async def test_set_freq_optimistic_overlay_suppressed_during_external_cat() -> None:
+    # Regression: during an external-CAT session (WSJT-X/rigctld owns the wire),
+    # RigPlane's own poller pauses and rigctld get_freq serves the cached store
+    # projection — so an optimistic set_freq overlay can never be reconciled by a
+    # readback and pins a fabricated freq the radio is not on. The freq display
+    # then sticks at the command echo for the whole session. The overlay must NOT
+    # be planted while an external-CAT session is active: the projection must
+    # keep tracking the radio's real last-known/live frequency instead.
+    radio = SimpleNamespace(
+        connected=True,
+        capabilities=set(),
+        external_cat_session_active=True,
+    )
+    srv = WebServer(radio, WebConfig(radio_model="IC-7610"))
+    srv.command_queue.put = lambda *a, **k: None  # type: ignore[method-assign]
+
+    freq_path = FieldPath.active("0", "freq_mode", "freq_hz")
+    # Seed the store with the radio's REAL frequency (last poll readback before
+    # the external-CAT pause took hold).
+    srv.command_service.apply_observation(
+        Observation(
+            path=freq_path,
+            value=14_074_000,
+            source=SourceMetadata(source="poll_response", provider="icom_civ"),
+            timestamp_monotonic=time.monotonic(),
+            correlation_id=None,
+        )
+    )
+
+    # A web set_freq fires during the external-CAT session, commanding a freq the
+    # radio is NOT on (the live-log 14.260 echo).
+    intent = command_intent_from_request(
+        "set_freq",
+        {"freq": 14_260_000, "receiver": 0},
+        source="websocket",
+        command_id="ws-freq-extcat",
+    )
+    await srv.command_service.execute(intent)
+
+    # The real frequency must survive: no un-reconcilable optimistic overlay.
+    assert srv.command_state_store.snapshot().field(freq_path).value == 14_074_000
+    assert srv.build_public_state()["main"]["freqHz"] == 14_074_000
+
+
+@pytest.mark.asyncio
+async def test_set_freq_success_never_becomes_truth_without_readback() -> None:
+    radio = SimpleNamespace(
+        connected=True,
+        capabilities=set(),
+        external_cat_session_active=False,
+    )
+    srv = WebServer(radio, WebConfig())
+    srv.command_queue.put = lambda *a, **k: None  # type: ignore[method-assign]
+
+    intent = command_intent_from_request(
+        "set_freq",
+        {"freq": 14_260_000, "receiver": 0},
+        source="websocket",
+        command_id="ws-freq-normal",
+    )
+    await srv.command_service.execute(intent)
+
+    with pytest.raises(KeyError):
+        srv.command_state_store.snapshot().field(
+            FieldPath.active("0", "freq_mode", "freq_hz")
+        )
+
+
+@pytest.mark.asyncio
+async def test_set_freq_failure_does_not_publish_command_overlay() -> None:
+    # MOR-485: the optimistic overlay is emitted ONLY on enqueue success — a
+    # raised enqueue must leave the command_state_store untouched.
+    radio = SimpleNamespace(connected=True, capabilities=set())
+    srv = WebServer(radio, WebConfig())
+
+    def _boom(*_a: object, **_k: object) -> None:
+        raise RuntimeError("radio rejected command")
+
+    srv.command_queue.put = _boom  # type: ignore[method-assign]
+
+    intent = command_intent_from_request(
+        "set_freq",
+        {"freq": 14_074_000, "receiver": 0},
+        source="websocket",
+        command_id="ws-freq-fail",
+    )
+    with pytest.raises(RuntimeError, match="radio rejected command"):
+        await srv.command_service.execute(intent)
+
+    freq_path = FieldPath.active("0", "freq_mode", "freq_hz")
+    snapshot = srv.command_state_store.snapshot()
+    with pytest.raises(KeyError):
+        snapshot.field(freq_path)
+
+
+@pytest.mark.asyncio
+async def test_set_mode_success_does_not_publish_truth_before_readback() -> None:
+    radio = SimpleNamespace(connected=True, capabilities=set())
+    srv = WebServer(radio, WebConfig())
+    srv.command_queue.put = lambda *a, **k: None  # type: ignore[method-assign]
+
+    intent = command_intent_from_request(
+        "set_mode",
+        {"mode": "CW", "receiver": 0},
+        source="websocket",
+        command_id="ws-mode-main",
+    )
+    await srv.command_service.execute(intent)
+
+    with pytest.raises(KeyError):
+        srv.command_state_store.snapshot().field(
+            FieldPath.active("0", "freq_mode", "mode")
+        )
+
+
+@pytest.mark.asyncio
+async def test_set_mode_overlay_yields_to_newer_external_readback() -> None:
+    # MOR-334 regression: front-panel tracking preserved. A later readback with
+    # a DIFFERENT mode must win (last-writer-wins); the optimistic value must
+    # not pin the mode.
+    radio = SimpleNamespace(connected=True, capabilities=set())
+    srv = WebServer(radio, WebConfig())
+    srv.command_queue.put = lambda *a, **k: None  # type: ignore[method-assign]
+
+    intent = command_intent_from_request(
+        "set_mode",
+        {"mode": "CW", "receiver": 0},
+        source="websocket",
+        command_id="ws-mode-external",
+    )
+    await srv.command_service.execute(intent)
+
+    mode_path = FieldPath.active("0", "freq_mode", "mode")
+    srv.command_service.apply_observation(
+        Observation(
+            path=mode_path,
+            value="USB",
+            source=SourceMetadata(source="poll_response", provider="icom_civ"),
+            timestamp_monotonic=time.monotonic(),
+            correlation_id=None,
+        )
+    )
+
+    assert srv.command_state_store.snapshot().field(mode_path).value == "USB"
+
+
+@pytest.mark.asyncio
+async def test_set_mode_failure_does_not_publish_command_overlay() -> None:
+    # MOR-334 regression: the optimistic overlay is emitted ONLY on enqueue
+    # success — a raised enqueue must leave the command_state_store untouched.
+    radio = SimpleNamespace(connected=True, capabilities=set())
+    srv = WebServer(radio, WebConfig())
+
+    def _boom(*_a: object, **_k: object) -> None:
+        raise RuntimeError("radio rejected command")
+
+    srv.command_queue.put = _boom  # type: ignore[method-assign]
+
+    intent = command_intent_from_request(
+        "set_mode",
+        {"mode": "CW", "receiver": 0},
+        source="websocket",
+        command_id="ws-mode-fail",
+    )
+    with pytest.raises(RuntimeError, match="radio rejected command"):
+        await srv.command_service.execute(intent)
+
+    snapshot = srv.command_state_store.snapshot()
+    with pytest.raises(KeyError):
+        snapshot.field(FieldPath.active("0", "freq_mode", "mode"))
+
+
+@pytest.mark.asyncio
+async def test_set_data_mode_success_does_not_publish_truth_before_readback() -> None:
+    radio = SimpleNamespace(connected=True, capabilities={"data_mode"})
+    srv = WebServer(radio, WebConfig())
+    srv.command_queue.put = lambda *a, **k: None  # type: ignore[method-assign]
+
+    intent = command_intent_from_request(
+        "set_data_mode",
+        {"mode": 1, "receiver": 0},
+        source="websocket",
+        command_id="ws-data-mode-main",
+    )
+    await srv.command_service.execute(intent)
+
+    with pytest.raises(KeyError):
+        srv.command_state_store.snapshot().field(
+            FieldPath.active("0", "freq_mode", "data_mode")
+        )
+
+
+@pytest.mark.asyncio
+async def test_set_mod_input_success_does_not_publish_truth_before_readback() -> None:
+    radio = SimpleNamespace(connected=True, capabilities={"data_mode"})
+    srv = WebServer(radio, WebConfig())
+    srv.command_queue.put = lambda *a, **k: None  # type: ignore[method-assign]
+
+    intent = command_intent_from_request(
+        "set_data2_mod_input",
+        {"source": 5},
+        source="websocket",
+        command_id="ws-mod-input-data2",
+    )
+    await srv.command_service.execute(intent)
+
+    with pytest.raises(KeyError):
+        srv.command_state_store.snapshot().field(
+            FieldPath.global_("slow_state", "data2_mod_input")
+        )
+
+
+@pytest.mark.asyncio
+async def test_set_mod_input_overlay_yields_to_newer_external_readback() -> None:
+    # MOR-616 regression: front-panel tracking preserved. A later poll readback
+    # with a DIFFERENT source must win (last-writer-wins); the optimistic value
+    # must not pin the source.
+    radio = SimpleNamespace(connected=True, capabilities={"data_mode"})
+    srv = WebServer(radio, WebConfig(radio_model="IC-7610"))
+    srv.command_queue.put = lambda *a, **k: None  # type: ignore[method-assign]
+
+    intent = command_intent_from_request(
+        "set_data_off_mod_input",
+        {"source": 0},
+        source="websocket",
+        command_id="ws-mod-input-external",
+    )
+    await srv.command_service.execute(intent)
+
+    mod_path = FieldPath.global_("slow_state", "data_off_mod_input")
+    srv.command_service.apply_observation(
+        Observation(
+            path=mod_path,
+            value=3,
+            source=SourceMetadata(source="poll_response", provider="web_poller"),
+            timestamp_monotonic=time.monotonic(),
+            correlation_id=None,
+        )
+    )
+
+    assert srv.command_state_store.snapshot().field(mod_path).value == 3
+    assert srv.build_public_state()["dataOffModInput"] == 3
+
+
+@pytest.mark.asyncio
+async def test_set_mod_input_failure_does_not_publish_command_overlay() -> None:
+    # MOR-616 regression: the optimistic overlay is emitted ONLY on enqueue
+    # success — a raised enqueue must leave the command_state_store untouched.
+    radio = SimpleNamespace(connected=True, capabilities={"data_mode"})
+    srv = WebServer(radio, WebConfig())
+
+    def _boom(*_a: object, **_k: object) -> None:
+        raise RuntimeError("radio rejected command")
+
+    srv.command_queue.put = _boom  # type: ignore[method-assign]
+
+    intent = command_intent_from_request(
+        "set_data1_mod_input",
+        {"source": 2},
+        source="websocket",
+        command_id="ws-mod-input-fail",
+    )
+    with pytest.raises(RuntimeError, match="radio rejected command"):
+        await srv.command_service.execute(intent)
+
+    snapshot = srv.command_state_store.snapshot()
+    with pytest.raises(KeyError):
+        snapshot.field(FieldPath.global_("slow_state", "data1_mod_input"))
+
+
+@pytest.mark.asyncio
+async def test_websocket_reused_command_ids_are_scoped_per_connection() -> None:
+    radio = SimpleNamespace(connected=True, capabilities=set())
+    srv = WebServer(radio, WebConfig())
+    handler_a = ControlHandler(
+        SimpleNamespace(send_text=AsyncMock(), recv=AsyncMock()),
+        radio,
+        "9.9.9",
+        "IC-7610",
+        server=srv,
+        session_id="ws-a",
+    )
+    handler_b = ControlHandler(
+        SimpleNamespace(send_text=AsyncMock(), recv=AsyncMock()),
+        radio,
+        "9.9.9",
+        "IC-7610",
+        server=srv,
+        session_id="ws-b",
+    )
+
+    await handler_a._enqueue_command(  # noqa: SLF001
+        "set_freq",
+        {"freq": 14_074_000, "receiver": 0},
+        command_id="ws-shared",
+        source="websocket",
+    )
+    await handler_b._enqueue_command(  # noqa: SLF001
+        "set_freq",
+        {"freq": 14_075_000, "receiver": 0},
+        command_id="ws-shared",
+        source="websocket",
+    )
+
+    overlays_a = srv.command_service.pending_overlays(
+        source="websocket",
+        session_id="ws-a",
+        command_id="ws-shared",
+    )
+    overlays_b = srv.command_service.pending_overlays(
+        source="websocket",
+        session_id="ws-b",
+        command_id="ws-shared",
+    )
+
+    assert len(overlays_a) == 1
+    assert overlays_a[0].value == 14_074_000
+    assert len(overlays_b) == 1
+    assert overlays_b[0].value == 14_075_000
+    accepted = [
+        event
+        for event in srv.command_service.lifecycle_events()
+        if event.command_id == "ws-shared" and event.state == "accepted"
+    ]
+    assert [event.details["session_id"] for event in accepted] == ["ws-a", "ws-b"]
+
+
+@pytest.mark.asyncio
+async def test_http_command_batch_timeout_marks_command_timed_out_and_expires_overlay(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    radio = SimpleNamespace(connected=True, capabilities=set())
+    srv = WebServer(radio, WebConfig())
+    writer = _FakeWriter()
+    seen: dict[str, object] = {}
+    real_wait_for = asyncio.wait_for
+
+    def fake_put_ordered(
+        command: object,
+        *,
+        future: asyncio.Future[None] | None = None,
+        command_id: str | None = None,
+        source: str | None = None,
+        command_service=None,
+    ) -> None:
+        del command
+        assert future is not None
+        seen.update(
+            {
+                "future": future,
+                "command_id": command_id,
+                "source": source,
+                "command_service": command_service,
+                "overlays": command_service.pending_overlays(
+                    source="http",
+                    session_id=None,
+                    command_id=command_id,
+                ),
+            }
+        )
+
+    async def fake_wait_for(awaitable, timeout):
+        if awaitable is seen.get("future"):
+            awaitable.cancel()
+            raise TimeoutError("batch step timed out")
+        return await real_wait_for(awaitable, timeout)
+
+    monkeypatch.setattr(srv.command_queue, "put_ordered", fake_put_ordered)
+    monkeypatch.setattr("rigplane.web.server.asyncio.wait_for", fake_wait_for)
+    payload = json.dumps(
+        {
+            "steps": [
+                {
+                    "id": "http-timeout",
+                    "name": "set_freq",
+                    "params": {"freq": 14_074_000, "receiver": 0},
+                }
+            ]
+        }
+    ).encode()
+
+    await srv._handle_http_commands(  # noqa: SLF001
+        "/api/v1/commands/batch",
+        writer,
+        headers={"content-length": str(len(payload))},
+        reader=_reader_with(payload),
+    )
+
+    status, body = _response_json(writer)
+    assert status == 200
+    assert body["ok"] is False
+    assert body["results"][0]["status"] == "timed_out"
+    assert seen["overlays"] != ()
+    assert (
+        srv.command_service.pending_overlays(
+            source="http",
+            session_id=None,
+            command_id=seen["command_id"],
+        )
+        == ()
+    )
+    timed_out = [
+        event
+        for event in srv.command_service.lifecycle_events()
+        if event.command_id == seen["command_id"] and event.state == "timed_out"
+    ]
+    assert len(timed_out) == 1
+    assert timed_out[0].source == "http"
+    assert timed_out[0].message == "batch step timed out"
+
+
+@pytest.mark.asyncio
+async def test_healthz_reports_process_liveness() -> None:
+    srv = WebServer(None, WebConfig(host="127.0.0.1", port=0))
+    writer = _FakeWriter()
+
+    await srv._handle_http(writer, "GET", "/healthz")  # noqa: SLF001
+
+    status, data = _response_json(writer)
+    assert status == 200
+    assert data["status"] == "ok"
+    assert data["version"]
+    assert isinstance(data["pid"], int)
+
+
+@pytest.mark.asyncio
+async def test_readyz_reflects_station_readiness() -> None:
+    ready_radio = SimpleNamespace(radio_ready=True, connected=True, capabilities=set())
+    ready_srv = WebServer(ready_radio, WebConfig(host="127.0.0.1", port=0))
+    ready_writer = _FakeWriter()
+
+    await ready_srv._handle_http(ready_writer, "GET", "/readyz")  # noqa: SLF001
+
+    status, data = _response_json(ready_writer)
+    assert status == 200
+    assert data == {"status": "ready", "radioReady": True}
+
+    not_ready_srv = WebServer(None, WebConfig(host="127.0.0.1", port=0))
+    not_ready_writer = _FakeWriter()
+
+    await not_ready_srv._handle_http(not_ready_writer, "GET", "/readyz")  # noqa: SLF001
+
+    status, data = _response_json(not_ready_writer)
+    assert status == 503
+    assert data == {"status": "not_ready", "radioReady": False}
+
+
+@pytest.mark.asyncio
+async def test_runtime_endpoint_reports_process_bind_radio_and_bridge_status() -> None:
+    radio = SimpleNamespace(
+        model="IC-7610",
+        backend_id="rigplane",
+        connected=True,
+        control_connected=True,
+        radio_ready=True,
+        capabilities=set(),
+    )
+    srv = WebServer(radio, WebConfig(host="127.0.0.1", port=0))
+    srv._server = _FakeAsyncServer()  # noqa: SLF001
+    srv._audio_bridge = SimpleNamespace(  # noqa: SLF001
+        running=True,
+        stats={"rx_frames": 3, "tx_frames": 4},
+    )
+    srv._runtime_log_path = "/tmp/rigplane.log"  # noqa: SLF001
+    srv._runtime_rigctld_addr = "127.0.0.1:4532"  # noqa: SLF001
+    writer = _FakeWriter()
+
+    await srv._handle_http(  # noqa: SLF001
+        writer,
+        "GET",
+        "/api/v1/runtime",
+        headers={},
+    )
+
+    status, data = _response_json(writer)
+    assert status == 200
+    assert data["pid"] > 0
+    assert data["uptimeSeconds"] >= 0
+    assert data["version"]
+    assert data["bind"] == {"host": "127.0.0.1", "port": 4242}
+    assert data["logPath"] == "/tmp/rigplane.log"
+    assert data["authRequired"] is False
+    assert data["station"]["authRequired"] is False
+    assert data["backend"] == "rigplane"
+    assert data["radio"] == {
+        "model": "IC-7610",
+        "connected": True,
+        "controlConnected": True,
+        "radioReady": True,
+    }
+    assert data["station"]["readiness"] == "ready_with_radio"
+    assert data["station"]["radioAvailable"] is True
+    assert data["station"]["backend"] == "rigplane"
+    assert data["rigctld"] == {"enabled": True, "address": "127.0.0.1:4532"}
+    assert data["bridge"]["running"] is True
+    assert data["bridge"]["stats"] == {"rx_frames": 3, "tx_frames": 4}
+    assert data["lastError"] is None
+    srv._server = None  # noqa: SLF001
+
+
+@pytest.mark.parametrize(
+    "method_name", ["start_audio_bridge", "defer_audio_bridge_start"]
+)
+def test_bridge_methods_preserve_legacy_positional_arguments(method_name) -> None:
+    srv = WebServer(None)
+    bound = inspect.signature(getattr(srv, method_name)).bind(
+        "rx-device", "tx-device", False, "legacy-label", 3, 0.25
+    )
+    bound.apply_defaults()
+
+    assert bound.arguments == {
+        "device_name": "rx-device",
+        "tx_device_name": "tx-device",
+        "tx_enabled": False,
+        "label": "legacy-label",
+        "max_retries": 3,
+        "retry_base_delay": 0.25,
+        "input_gain_db": 0.0,
+        "output_gain_db": 0.0,
+    }
+
+
+def test_deferred_bridge_preserves_legacy_positional_configuration() -> None:
+    srv = WebServer(None)
+
+    srv.defer_audio_bridge_start(
+        "rx-device", "tx-device", False, "legacy-label", 3, 0.25
+    )
+
+    assert srv._deferred_bridge_start == {  # noqa: SLF001
+        "device_name": "rx-device",
+        "tx_device_name": "tx-device",
+        "tx_enabled": False,
+        "label": "legacy-label",
+        "max_retries": 3,
+        "retry_base_delay": 0.25,
+        "input_gain_db": 0.0,
+        "output_gain_db": 0.0,
+    }
+
+
+@pytest.fixture
+async def gain_bridge_server(monkeypatch: pytest.MonkeyPatch):
+    from rigplane.audio import bridge as bridge_module
+    from test_audio_bridge import _bridge_backend
+    from test_managed_tx_web_projection import _GatePort, _gate_authority
+    from test_web_audio_tx_session import _SessionLanRadio
+
+    backend = _bridge_backend()
+    monkeypatch.setattr(bridge_module, "PortAudioBackend", lambda: backend)
+    radio = _SessionLanRadio()
+    srv = WebServer(radio, WebConfig(host="127.0.0.1", port=0))
+    managed = _gate_authority()
+    srv._production_managed_tx_port = _GatePort(managed)  # type: ignore[assignment]  # noqa: SLF001
+    try:
+        await managed.ptt_down("bridge-test")
+        await srv.start_audio_bridge(device_name="RigPlane Virtual Cable")
+        yield srv, radio, backend
+    finally:
+        await srv.stop_audio_bridge()
+        srv._controller.revoke()  # noqa: SLF001
+        await srv._controller.settle()  # noqa: SLF001
+        await managed.ptt_up("bridge-test")
+        await managed.close()
+
+
+async def _bridge_http_request(
+    srv: WebServer,
+    method: str,
+    payload: dict | None = None,
+    *,
+    path: str = "/api/v1/bridge",
+    controller_key: str | None = None,
+) -> tuple[int, dict]:
+    body = json.dumps(payload).encode() if payload is not None else b""
+    headers = {"content-length": str(len(body))}
+    if controller_key is not None:
+        headers["x-rigplane-controller"] = controller_key
+    writer = _FakeWriter()
+    await srv._handle_http(  # noqa: SLF001
+        writer, method, path, headers=headers, reader=_reader_with(body)
+    )
+    return _response_json(writer)
+
+
+@pytest.mark.asyncio
+async def test_bridge_patch_updates_running_gain_and_get_reports_values(
+    gain_bridge_server,
+) -> None:
+    from rigplane.audio.bridge import SAMPLES_PER_FRAME
+    from rigplane.audio.lan_stream import AudioPacket
+
+    srv, radio, backend = gain_bridge_server
+    pcm = (2_000).to_bytes(2, "little", signed=True) * SAMPLES_PER_FRAME
+    gain = 6.020599913279624
+    stages = [
+        (None, 2_000, 2_000),
+        ({"outputGainDb": -gain}, 2_000, 1_000),
+        ({"inputGainDb": gain}, 4_000, 1_000),
+    ]
+    for sequence, (payload, tx_sample, rx_sample) in enumerate(stages, 1):
+        if payload is not None:
+            status, _ = await _bridge_http_request(srv, "PATCH", payload)
+            assert status == 200
+        radio.audio_bus._on_opus_packet(  # noqa: SLF001
+            AudioPacket(ident=0x80, send_seq=sequence, data=pcm)
+        )
+        backend.rx_streams[0].inject_frame(pcm)
+        await _await_condition(
+            lambda: (
+                len(radio.pushed) == sequence
+                and len(backend.tx_streams[0].written_frames) == sequence
+            )
+        )
+        assert radio.pushed[-1] == (
+            tx_sample.to_bytes(2, "little", signed=True) * SAMPLES_PER_FRAME
+        )
+        assert backend.tx_streams[0].written_frames[-1] == (
+            rx_sample.to_bytes(2, "little", signed=True) * SAMPLES_PER_FRAME
+        )
+
+    status, data = await _bridge_http_request(srv, "GET")
+    assert status == 200
+    assert data["inputGainDb"] == gain
+    assert data["outputGainDb"] == -gain
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("replace_bridge", [False, True])
+async def test_bridge_patch_rejects_bridge_stopped_during_body(
+    gain_bridge_server, replace_bridge: bool
+) -> None:
+    srv, _, _ = gain_bridge_server
+    original = srv._audio_bridge  # noqa: SLF001
+    assert original is not None
+    reader = _DelayedBridgeBody()
+    writer = _FakeWriter()
+    body = json.dumps({"inputGainDb": 6.0, "outputGainDb": -10.0}).encode()
+    pending = asyncio.create_task(
+        srv._handle_http(  # noqa: SLF001
+            writer,
+            "PATCH",
+            "/api/v1/bridge",
+            headers={"content-length": str(len(body))},
+            reader=reader,
+        )
+    )
+    try:
+        await asyncio.wait_for(reader.read_started.wait(), timeout=2.0)
+        status, _ = await _bridge_http_request(srv, "DELETE")
+        assert status == 200
+        assert not original.running
+        if replace_bridge:
+            status, _ = await _bridge_http_request(srv, "POST")
+            assert status == 200
+        replacement = srv._audio_bridge  # noqa: SLF001
+        reader.feed_data(body)
+        await asyncio.wait_for(pending, timeout=2.0)
+        status, data = _response_json(writer)
+        assert status == 409
+        assert data["error"] == "bridge_not_running"
+        assert (original.input_gain_db, original.output_gain_db) == (0.0, 0.0)
+        if replace_bridge:
+            assert replacement is not None and replacement is not original
+            assert replacement.running
+            assert (replacement.input_gain_db, replacement.output_gain_db) == (0.0, 0.0)
+        else:
+            assert replacement is None
+    finally:
+        pending.cancel()
+        await asyncio.gather(pending, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_bridge_patch_rejects_controller_released_during_body(
+    gain_bridge_server,
+) -> None:
+    srv, _, _ = gain_bridge_server
+    status, session = await _bridge_http_request(
+        srv, "POST", {"kind": "browser"}, path="/api/v1/controller"
+    )
+    assert status == 201
+    key = session["controller_key"]
+    bridge = srv._audio_bridge  # noqa: SLF001
+    assert bridge is not None
+    reader = _DelayedBridgeBody()
+    writer = _FakeWriter()
+    body = json.dumps({"inputGainDb": 6.0, "outputGainDb": -10.0}).encode()
+    pending = asyncio.create_task(
+        srv._handle_http(  # noqa: SLF001
+            writer,
+            "PATCH",
+            "/api/v1/bridge",
+            headers={"content-length": str(len(body)), "x-rigplane-controller": key},
+            reader=reader,
+        )
+    )
+    try:
+        await asyncio.wait_for(reader.read_started.wait(), timeout=2.0)
+        status, _ = await _bridge_http_request(
+            srv, "DELETE", path="/api/v1/controller", controller_key=key
+        )
+        assert status == 200
+        reader.feed_data(body)
+        await asyncio.wait_for(pending, timeout=2.0)
+        status, data = _response_json(writer)
+        assert status == 403
+        assert data["error"] == "controller_invalid"
+        assert srv._audio_bridge is bridge and bridge.running  # noqa: SLF001
+        assert (bridge.input_gain_db, bridge.output_gain_db) == (0.0, 0.0)
+    finally:
+        pending.cancel()
+        await asyncio.gather(pending, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("payload", "expected_status"),
+    [
+        ({}, 400),
+        ({"inputGainDb": "loud"}, 400),
+        ({"outputGainDb": float("nan")}, 400),
+        ({"inputGainDb": True}, 400),
+        ({"outputGainDb": float("inf")}, 400),
+        ({"inputGainDb": 10**400}, 400),
+        ({"unknownGainDb": 1.0}, 400),
+    ],
+)
+async def test_bridge_patch_rejects_invalid_gain_payloads(
+    gain_bridge_server, payload: dict[str, object], expected_status: int
+) -> None:
+    srv, _, _ = gain_bridge_server
+    body = json.dumps(payload).encode()
+    writer = _FakeWriter()
+
+    await srv._handle_http(  # noqa: SLF001
+        writer,
+        "PATCH",
+        "/api/v1/bridge",
+        headers={"content-length": str(len(body))},
+        reader=_reader_with(body),
+    )
+
+    status, _data = _response_json(writer)
+    assert status == expected_status
+
+
+@pytest.mark.asyncio
+async def test_bridge_patch_requires_running_bridge() -> None:
+    srv = WebServer(None, WebConfig(host="127.0.0.1", port=0))
+    payload = json.dumps({"inputGainDb": 3.0}).encode()
+    writer = _FakeWriter()
+
+    await srv._handle_http(  # noqa: SLF001
+        writer,
+        "PATCH",
+        "/api/v1/bridge",
+        headers={"content-length": str(len(payload))},
+        reader=_reader_with(payload),
+    )
+
+    status, _data = _response_json(writer)
+    assert status == 409
+
+
+@pytest.mark.asyncio
+async def test_station_endpoint_reports_selection_metadata_and_guidance() -> None:
+    serial_radio = SimpleNamespace(
+        model="IC-7300",
+        backend_id="icom_serial",
+        connected=False,
+        control_connected=False,
+        radio_ready=False,
+        capabilities=set(),
+    )
+    srv = WebServer(serial_radio, WebConfig(host="127.0.0.1", port=0))
+    srv._server = _FakeAsyncServer()  # noqa: SLF001
+    writer = _FakeWriter()
+
+    await srv._handle_http(writer, "GET", "/api/v1/station")  # noqa: SLF001
+
+    status, data = _response_json(writer)
+    assert status == 200
+    assert data["schema"] == "rigplane.station.status.v1"
+    assert data["displayName"] == "IC-7300"
+    assert data["baseUrl"] == "http://127.0.0.1:4242"
+    assert data["healthUrl"] == "http://127.0.0.1:4242/healthz"
+    assert data["runtimeUrl"] == "http://127.0.0.1:4242/api/v1/runtime"
+    assert data["station"]["readiness"] == "no_usb_radio_connected"
+    assert data["station"]["radioAvailable"] is False
+    assert "Connect the radio by USB" in data["station"]["message"]
+    assert data["radio"] == {
+        "model": "IC-7300",
+        "connected": False,
+        "controlConnected": False,
+        "radioReady": False,
+    }
+    srv._server = None  # noqa: SLF001
+
+
+def test_startup_event_reports_actual_runtime_urls_and_log_path() -> None:
+    srv = WebServer(
+        None,
+        WebConfig(
+            host="127.0.0.1",
+            port=0,
+            emit_startup_event=True,
+        ),
+    )
+    srv._server = _FakeAsyncServer()  # noqa: SLF001
+    srv._runtime_log_path = "/tmp/rigplane-managed.log"  # noqa: SLF001
+    out = io.StringIO()
+
+    srv.emit_startup_event(out)
+
+    payload = json.loads(out.getvalue())
+    assert payload["type"] == "rigplane.runtime.started"
+    assert payload["pid"] > 0
+    assert payload["baseUrl"] == "http://127.0.0.1:4242"
+    assert payload["healthUrl"] == "http://127.0.0.1:4242/healthz"
+    assert payload["runtimeUrl"] == "http://127.0.0.1:4242/api/v1/runtime"
+    assert payload["logPath"] == "/tmp/rigplane-managed.log"
+
+
+@pytest.mark.asyncio
+async def test_serve_static_forbidden_missing_read_error_and_success(tmp_path) -> None:
+    static_dir = tmp_path / "static"
+    static_dir.mkdir()
+    index = static_dir / "index.html"
+    index.write_text("<html>ok</html>", encoding="utf-8")
+
+    srv = WebServer(None, WebConfig(static_dir=static_dir))
+    writer = _FakeWriter()
+
+    await srv._serve_static(writer, "../secret")  # noqa: SLF001
+    assert b"403 Forbidden" in writer.buffer
+
+    writer = _FakeWriter()
+    await srv._serve_static(writer, "missing.txt")  # noqa: SLF001
+    assert b"404 Not Found" in writer.buffer
+
+    writer = _FakeWriter()
+    with patch.object(pathlib.Path, "read_bytes", side_effect=OSError("read fail")):
+        await srv._serve_static(writer, "index.html")  # noqa: SLF001
+    assert b"500 Internal Server Error" in writer.buffer
+
+    writer = _FakeWriter()
+    await srv._serve_static(writer, "index.html")  # noqa: SLF001
+    text = writer.buffer.decode("ascii", errors="replace")
+    assert "200 OK" in text
+    assert "Cache-Control: no-cache, no-store, must-revalidate" in text
+
+
+@pytest.mark.asyncio
+async def test_serve_static_assets_immutable_others_no_cache(tmp_path) -> None:
+    """Content-hashed files under assets/ get long-lived immutable caching;
+    non-hashed entries (index.html, top-level files) keep no-cache."""
+    static_dir = tmp_path / "static"
+    assets = static_dir / "assets"
+    assets.mkdir(parents=True)
+    (static_dir / "index.html").write_text("<html>ok</html>", encoding="utf-8")
+    (static_dir / "favicon.svg").write_text("<svg/>", encoding="utf-8")
+    (assets / "index-BvQ0Yc9H.js").write_text("console.log(1)", encoding="utf-8")
+    (assets / "Orbitron-D3ZWvfzD.woff2").write_bytes(b"\x00font")
+
+    srv = WebServer(None, WebConfig(static_dir=static_dir))
+    immutable = "Cache-Control: public, max-age=31536000, immutable"
+    no_cache = "Cache-Control: no-cache, no-store, must-revalidate"
+
+    for asset in ("assets/index-BvQ0Yc9H.js", "assets/Orbitron-D3ZWvfzD.woff2"):
+        writer = _FakeWriter()
+        await srv._serve_static(writer, asset)  # noqa: SLF001
+        text = writer.buffer.decode("ascii", errors="replace")
+        assert "200 OK" in text
+        assert immutable in text, f"{asset}: expected immutable caching"
+        assert no_cache not in text
+
+    for plain in ("index.html", "favicon.svg"):
+        writer = _FakeWriter()
+        await srv._serve_static(writer, plain)  # noqa: SLF001
+        text = writer.buffer.decode("ascii", errors="replace")
+        assert "200 OK" in text
+        assert no_cache in text, f"{plain}: expected no-cache"
+        assert immutable not in text
+
+
+@pytest.mark.asyncio
+async def test_serve_static_rejects_name_prefix_sibling_dir(tmp_path) -> None:
+    """A sibling dir whose name starts with the static dir's name (e.g.
+    static.old next to static) must get 403, not file contents or a
+    connection-killing exception."""
+    static_dir = tmp_path / "static"
+    static_dir.mkdir()
+    sibling = tmp_path / "static.old"
+    sibling.mkdir()
+    (sibling / "secret.html").write_text("<html>secret</html>", encoding="utf-8")
+
+    srv = WebServer(None, WebConfig(static_dir=static_dir))
+    writer = _FakeWriter()
+    await srv._serve_static(writer, "../static.old/secret.html")  # noqa: SLF001
+    text = writer.buffer.decode("ascii", errors="replace")
+    assert "403 Forbidden" in text
+    assert "secret" not in text
+
+
+@pytest.mark.asyncio
+async def test_handle_websocket_missing_key_unknown_channel_and_control_handler() -> (
+    None
+):
+    srv = WebServer(None)
+    writer = _FakeWriter()
+    with patch("rigplane.web.server._send_response", new=AsyncMock()) as send_resp:
+        await srv._handle_websocket(_reader_with(b""), writer, "/api/v1/ws", {})  # noqa: SLF001
+    send_resp.assert_awaited_once()
+
+    ws_unknown = MagicMock()
+    ws_unknown.close = AsyncMock()
+    ws_unknown.keepalive_loop = AsyncMock()
+    with patch("rigplane.web.server.WebSocketConnection", return_value=ws_unknown):
+        await srv._handle_websocket(  # noqa: SLF001
+            _reader_with(b""),
+            _FakeWriter(),
+            "/api/v1/unknown",
+            {"sec-websocket-key": "abc"},
+        )
+    ws_unknown.close.assert_awaited_once_with(1008, "unknown channel")
+
+    ws_ok = MagicMock()
+
+    async def keepalive_loop(_interval: float) -> None:
+        await asyncio.sleep(3600)
+
+    ws_ok.keepalive_loop = keepalive_loop
+    ws_ok.close = AsyncMock()
+    handler = MagicMock()
+    handler.run = AsyncMock(side_effect=RuntimeError("handler failed"))
+    writer_ok = _FakeWriter()
+    with (
+        patch("rigplane.web.server.WebSocketConnection", return_value=ws_ok),
+        patch("rigplane.web.server.ControlHandler", return_value=handler),
+    ):
+        await srv._handle_websocket(  # noqa: SLF001
+            _reader_with(b""),
+            writer_ok,
+            "/api/v1/ws",
+            {"sec-websocket-key": "abc"},
+        )
+    assert b"101 Switching Protocols" in writer_ok.buffer
+    handler.run.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_handle_connection_none_http_ws_and_exception() -> None:
+    srv = WebServer(None)
+    writer = _FakeWriter()
+
+    srv._read_request = AsyncMock(return_value=None)
+    await srv._handle_connection(_reader_with(b""), writer)  # noqa: SLF001
+    assert writer.closed is True
+
+    writer2 = _FakeWriter()
+    srv._read_request = AsyncMock(return_value=("GET", "/api/v1/info", {}, {}))
+    srv._handle_http = AsyncMock()
+    await srv._handle_connection(_reader_with(b""), writer2)  # noqa: SLF001
+    srv._handle_http.assert_awaited_once()
+
+    writer3 = _FakeWriter()
+    srv._read_request = AsyncMock(
+        return_value=(
+            "GET",
+            "/api/v1/ws",
+            {"upgrade": "websocket", "connection": "Upgrade"},
+            {},
+        )
+    )
+    srv._handle_websocket = AsyncMock()
+    await srv._handle_connection(_reader_with(b""), writer3)  # noqa: SLF001
+    srv._handle_websocket.assert_awaited_once()
+
+    writer4 = _FakeWriter()
+    srv._read_request = AsyncMock(side_effect=RuntimeError("boom"))
+    await srv._handle_connection(_reader_with(b""), writer4)  # noqa: SLF001
+    assert writer4.closed is True
+
+
+@pytest.mark.asyncio
+async def test_http_snapshot_matches_initial_ws_full_state_for_same_store_revision() -> (
+    None
+):
+    srv = WebServer(None, WebConfig(radio_model="IC-7610"))
+    srv.command_state_store.apply(
+        _store_observation(
+            FieldPath.active("0", "freq_mode", "freq_hz"),
+            14_074_000,
+            at=1.0,
+            max_age=10.0,
+        )
+    )
+    srv.command_state_store.apply(
+        _store_observation(
+            FieldPath.receiver("0", "meters", "s_meter"),
+            42,
+            at=1.1,
+            max_age=0.5,
+        )
+    )
+
+    writer = _FakeWriter()
+    await srv._serve_state(writer)  # noqa: SLF001
+    _, http_body = _response_json(writer)
+
+    ws = MagicMock()
+    sent: list[dict[str, object]] = []
+
+    async def _send_text(payload: str) -> None:
+        sent.append(json.loads(payload))
+
+    ws.send_text = _send_text
+
+    handler = ControlHandler(ws, None, "0.0.0-test", "IC-TEST", server=srv)
+    await handler._send_state_snapshot()  # noqa: SLF001
+
+    assert sent == []
+    ws_body = handler._event_queue.get_nowait()["data"]["data"]  # noqa: SLF001
+    assert ws_body == http_body
+    assert http_body["fieldStatus"] == ws_body["fieldStatus"]
+    assert http_body["fieldStatus"]["main.freqHz"]["observed"] is True
+    assert http_body["fieldStatus"]["main.sMeter"]["freshness"] == "fresh"
+
+
+@pytest.mark.asyncio
+async def test_same_value_observation_metadata_updates_http_and_initial_ws_full_state() -> (
+    None
+):
+    srv = WebServer(None, WebConfig(radio_model="IC-7610"))
+    path = FieldPath.active("0", "freq_mode", "freq_hz")
+    srv.command_state_store.apply(
+        Observation(
+            path=path,
+            value=14_074_000,
+            source=SourceMetadata(
+                source="poll_response",
+                provider="first",
+                transport="fake",
+                native_id="first",
+            ),
+            timestamp_monotonic=1.0,
+            max_age=1.0,
+        )
+    )
+    first_status = srv.build_public_state()["fieldStatus"]["main.freqHz"]
+    assert first_status["lastObservedMonotonic"] == 1.0
+    assert first_status["maxAge"] == 1.0
+    assert first_status["source"]["provider"] == "first"
+
+    srv.command_state_store.apply(
+        Observation(
+            path=path,
+            value=14_074_000,
+            source=SourceMetadata(
+                source="poll_response",
+                provider="second",
+                transport="fake",
+                native_id="second",
+            ),
+            timestamp_monotonic=2.0,
+            max_age=10.0,
+        )
+    )
+
+    writer = _FakeWriter()
+    await srv._serve_state(writer)  # noqa: SLF001
+    _, http_body = _response_json(writer)
+
+    ws = MagicMock()
+    sent: list[dict[str, object]] = []
+
+    async def _send_text(payload: str) -> None:
+        sent.append(json.loads(payload))
+
+    ws.send_text = _send_text
+
+    handler = ControlHandler(ws, None, "0.0.0-test", "IC-TEST", server=srv)
+    await handler._send_state_snapshot()  # noqa: SLF001
+
+    assert sent == []
+    ws_body = handler._event_queue.get_nowait()["data"]["data"]  # noqa: SLF001
+    assert ws_body == http_body
+    field_status = http_body["fieldStatus"]["main.freqHz"]
+    assert field_status["lastObservedMonotonic"] == 2.0
+    assert field_status["maxAge"] == 10.0
+    assert field_status["source"]["provider"] == "second"
+    assert (
+        http_body["observationSeq"]
+        == srv.command_state_store.snapshot().observation_seq
+    )
+    assert (
+        ws_body["observationSeq"] == srv.command_state_store.snapshot().observation_seq
+    )
+
+
+def test_empty_state_store_publishes_null_not_legacy_defaults() -> None:
+    """No observation, so no legacy default is presented as confirmed state.
+
+    MOR-2513: the key stays present but its value is null. The absence
+    reason stays in ``fieldStatus``; ``powerOn`` reads ``undeclared``
+    rather than ``missing``: ``rigs/ic7610.toml`` names
+    ``global.tx_state.power_on`` in neither
+    ``[state_acquisition.field_policies]`` nor
+    ``[state_acquisition.capabilities]`` (MOR-2425/T201; the value was
+    ``missing`` before, when the projection had no other answer).
+    """
+
+    srv = WebServer(None, WebConfig(radio_model="IC-7610"))
+
+    public_state = srv.build_public_state()
+
+    assert public_state["powerOn"] is None
+    assert public_state["main"]["freqHz"] is None
+    assert public_state["main"]["mode"] is None
+    assert public_state["fieldStatus"]["powerOn"] == {
+        "storePath": "global.tx_state.power_on",
+        "observed": False,
+        "freshness": "unknown",
+        "availability": "undeclared",
+    }
+    assert public_state["fieldStatus"]["main.freqHz"] == {
+        "storePath": "receiver.main.active.freq_mode.freq_hz",
+        "observed": False,
+        "freshness": "unknown",
+        "availability": "missing",
+    }
+    assert public_state["fieldStatus"]["main.mode"] == {
+        "storePath": "receiver.main.active.freq_mode.mode",
+        "observed": False,
+        "freshness": "unknown",
+        "availability": "missing",
+    }
+
+
+def test_partial_state_store_marks_observed_and_unread_fields_separately() -> None:
+    """One observed path; the rest keep whichever absence the profile gives.
+
+    ``main.mode`` is declared and simply unobserved (``missing``);
+    ``powerOn`` is undeclared for the IC-7610 (see the test above).
+    """
+
+    srv = WebServer(None, WebConfig(radio_model="IC-7610"))
+    srv.command_state_store.apply(
+        _store_observation(
+            FieldPath.active("0", "freq_mode", "freq_hz"),
+            14_074_000,
+            at=1.0,
+            max_age=10.0,
+        )
+    )
+
+    public_state = srv.build_public_state()
+
+    assert public_state["main"]["freqHz"] == 14_074_000
+    assert public_state["main"]["mode"] is None
+    freq_status = public_state["fieldStatus"]["main.freqHz"]
+    assert freq_status["storePath"] == "receiver.0.active.freq_mode.freq_hz"
+    assert freq_status["observed"] is True
+    assert freq_status["freshness"] == "fresh"
+    assert freq_status["availability"] == "available"
+    assert freq_status["lastObservedMonotonic"] == 1.0
+    assert freq_status["maxAge"] == 10.0
+    assert freq_status["source"]["provider"] == "test"
+    assert public_state["fieldStatus"]["main.mode"] == {
+        "storePath": "receiver.main.active.freq_mode.mode",
+        "observed": False,
+        "freshness": "unknown",
+        "availability": "missing",
+    }
+    assert public_state["fieldStatus"]["powerOn"] == {
+        "storePath": "global.tx_state.power_on",
+        "observed": False,
+        "freshness": "unknown",
+        "availability": "undeclared",
+    }
+
+
+def test_meter_only_state_store_change_emits_web_delta_without_legacy_revision() -> (
+    None
+):
+    srv = WebServer(None, WebConfig(radio_model="IC-7610"))
+    q: BoundedQueue[dict[str, object]] = BoundedQueue(maxsize=16)
+    srv.register_control_event_queue(q)
+    srv.command_state_store.apply(
+        _store_observation(
+            FieldPath.active("0", "freq_mode", "freq_hz"),
+            14_074_000,
+            at=1.0,
+            max_age=10.0,
+        )
+    )
+    srv._broadcast_state_update()  # noqa: SLF001
+    q.get_nowait()
+
+    srv.command_state_store.apply(
+        _store_observation(
+            FieldPath.receiver("0", "meters", "s_meter"),
+            55,
+            at=1.1,
+            max_age=0.5,
+        )
+    )
+    srv._last_state_broadcast = 0.0  # noqa: SLF001
+    srv._broadcast_state_update()  # noqa: SLF001
+    event = q.get_nowait()
+
+    assert event["type"] == "state_update"
+    assert event["data"]["type"] == "delta"
+    assert event["data"]["changed"]["main"]["sMeter"] == 55
+    assert (
+        event["data"]["stateRevision"]
+        == srv.command_state_store.snapshot().state_revision
+    )
+    assert (
+        event["data"]["revision"] == srv.command_state_store.snapshot().state_revision
+    )
+
+
+def test_freshness_only_state_store_change_emits_web_delta() -> None:
+    clock = FreshnessClock(start=5.0)
+    store = StateStore(freshness_clock=clock)
+    srv = WebServer(None, WebConfig(radio_model="IC-7610"))
+    srv.command_state_store = store
+    srv.command_service._state_store = store  # noqa: SLF001
+    srv._http_command_service._state_store = store  # noqa: SLF001
+    q: BoundedQueue[dict[str, object]] = BoundedQueue(maxsize=16)
+    srv.register_control_event_queue(q)
+
+    store.apply(
+        _store_observation(
+            FieldPath.receiver("0", "meters", "s_meter"),
+            12,
+            at=clock.now(),
+            max_age=0.5,
+        )
+    )
+    srv._broadcast_state_update()  # noqa: SLF001
+    q.get_nowait()
+
+    clock.advance(0.6)
+    delta = store.mark_stale_due()
+    assert delta.freshness
+
+    srv._last_state_broadcast = 0.0  # noqa: SLF001
+    srv._broadcast_state_update()  # noqa: SLF001
+    event = q.get_nowait()
+
+    assert event["type"] == "state_update"
+    assert event["data"]["type"] == "delta"
+    assert (
+        event["data"]["changed"]["freshnessRevision"]
+        == store.snapshot().freshness_revision
+    )
+    field_status = event["data"]["changed"]["fieldStatus"]["main.sMeter"]
+    assert field_status["observed"] is True
+    assert field_status["freshness"] == "stale"
+    assert field_status["availability"] == "stale"
+    assert event["data"]["stateRevision"] == store.snapshot().state_revision
+
+
+def test_same_value_observation_metadata_change_emits_web_delta() -> None:
+    srv = WebServer(None, WebConfig(radio_model="IC-7610"))
+    q: BoundedQueue[dict[str, object]] = BoundedQueue(maxsize=16)
+    srv.register_control_event_queue(q)
+    path = FieldPath.active("0", "freq_mode", "freq_hz")
+    srv.command_state_store.apply(
+        Observation(
+            path=path,
+            value=14_074_000,
+            source=SourceMetadata(
+                source="poll_response",
+                provider="first",
+                transport="fake",
+                native_id="first",
+            ),
+            timestamp_monotonic=1.0,
+            max_age=1.0,
+        )
+    )
+    srv._broadcast_state_update()  # noqa: SLF001
+    q.get_nowait()
+
+    srv.command_state_store.apply(
+        Observation(
+            path=path,
+            value=14_074_000,
+            source=SourceMetadata(
+                source="poll_response",
+                provider="second",
+                transport="fake",
+                native_id="second",
+            ),
+            timestamp_monotonic=2.0,
+            max_age=10.0,
+        )
+    )
+
+    srv._last_state_broadcast = 0.0  # noqa: SLF001
+    srv._broadcast_state_update()  # noqa: SLF001
+    event = q.get_nowait()
+
+    assert event["type"] == "state_update"
+    assert event["data"]["type"] == "delta"
+    field_status = event["data"]["changed"]["fieldStatus"]["main.freqHz"]
+    assert field_status["lastObservedMonotonic"] == 2.0
+    assert field_status["maxAge"] == 10.0
+    assert field_status["source"]["provider"] == "second"
+    assert (
+        event["data"]["stateRevision"]
+        == srv.command_state_store.snapshot().state_revision
+    )
+    assert (
+        event["data"]["observationSeq"]
+        == srv.command_state_store.snapshot().observation_seq
+    )
+
+
+def test_initial_full_state_envelope_does_not_consume_broadcast_delta() -> None:
+    srv = WebServer(None, WebConfig(radio_model="IC-7610"))
+    q: BoundedQueue[dict[str, object]] = BoundedQueue(maxsize=16)
+    srv.register_control_event_queue(q)
+    srv.command_state_store.apply(
+        _store_observation(
+            FieldPath.active("0", "freq_mode", "freq_hz"),
+            14_074_000,
+            at=1.0,
+        )
+    )
+    srv._broadcast_state_update()  # noqa: SLF001
+    q.get_nowait()
+
+    srv.command_state_store.apply(
+        _store_observation(
+            FieldPath.global_("tx_state", "ptt"),
+            True,
+            at=1.1,
+        )
+    )
+    initial = srv.build_state_update_envelope(force_full=True)
+    assert initial["type"] == "full"
+    assert initial["data"]["ptt"] is True
+
+    srv.command_state_store.apply(
+        _store_observation(
+            FieldPath.global_("tx_state", "ptt"),
+            False,
+            at=1.2,
+        )
+    )
+
+    srv._last_state_broadcast = 0.0  # noqa: SLF001
+    srv._broadcast_state_update()  # noqa: SLF001
+    event = q.get_nowait()
+
+    assert event["data"]["type"] == "delta"
+    assert event["data"]["changed"]["ptt"] is False
+    assert (
+        event["data"]["stateRevision"]
+        == srv.command_state_store.snapshot().state_revision
+    )
+
+
+def test_state_delivery_contract_is_bound_to_store_generation() -> None:
+    """Web delivery never derives its epoch from provider-private counters."""
+    radio = SimpleNamespace(
+        connected=True,
+        control_connected=True,
+        radio_ready=True,
+        capabilities=set(),
+        _civ_epoch=99,
+        managed_tx_generation=123,
+    )
+    srv = WebServer(radio, WebConfig(radio_model="IC-7610"))
+    generation = srv.command_state_store.begin_provider_generation()
+
+    envelope = srv.build_state_update_envelope()
+
+    assert envelope["type"] == "full"
+    assert envelope["stateContractVersion"] == 1
+    assert envelope["providerGeneration"] == generation
+    assert envelope["data"]["stateContractVersion"] == 1
+    assert envelope["data"]["providerGeneration"] == generation
+
+
+def test_generation_transition_forces_existing_encoder_to_emit_full() -> None:
+    srv = WebServer(None, WebConfig(radio_model="IC-7610"))
+    first = srv.build_state_update_envelope()
+    first_seq = first["data"]["publicStateSeq"]
+
+    generation = srv.command_state_store.begin_provider_generation()
+    next_frame = srv.build_state_update_envelope()
+
+    assert first["type"] == "full"
+    assert next_frame["type"] == "full"
+    assert next_frame["providerGeneration"] == generation
+    assert next_frame["data"]["providerGeneration"] == generation
+    assert next_frame["data"]["publicStateSeq"] > first_seq
+
+    same_generation = srv.build_state_update_envelope()
+    assert same_generation["type"] == "delta"
+    assert same_generation["stateContractVersion"] == 1
+    assert same_generation["providerGeneration"] == generation
+    assert "data" not in same_generation
+
+
+def test_lifecycle_observations_are_current_generation_and_idempotent() -> None:
+    radio = SimpleNamespace(
+        connected=True,
+        control_connected=False,
+        radio_ready=True,
+        capabilities=set(),
+    )
+    srv = WebServer(radio, WebConfig(radio_model="IC-7610"))
+    generation = srv.command_state_store.begin_provider_generation()
+
+    srv.build_public_state()
+    after_first = srv.command_state_store.snapshot()
+    expected = {
+        "connection.connection.connected",
+        "connection.connection.radio_ready",
+        "connection.connection.control_connected",
+        "connection.connection.status",
+        "health.health.server_reachable",
+        "health.health.radio_link",
+        "health.health.readiness",
+        "health.health.likely_cause",
+        "health.health.last_error",
+    }
+    fields = {str(field.path): field for field in after_first.fields}
+
+    assert expected <= fields.keys()
+    assert {fields[path].provider_generation for path in expected} == {generation}
+    assert {fields[path].source.source for path in expected} == {"local_reconcile"}
+    assert {fields[path].source.provider for path in expected} == {"web_lifecycle"}
+    assert len({fields[path].last_observed_monotonic for path in expected}) == 1
+
+    srv.build_public_state()
+    after_second = srv.command_state_store.snapshot()
+    assert after_second.state_revision == after_first.state_revision
+    assert after_second.freshness_revision == after_first.freshness_revision
+    assert after_second.observation_seq == after_first.observation_seq
+
+
+@pytest.mark.parametrize("advance_on_apply", [1, 5])
+def test_lifecycle_retry_after_generation_advance_has_one_complete_current_tuple(
+    advance_on_apply: int,
+) -> None:
+    srv = WebServer(None, WebConfig(radio_model="IC-7610"))
+    store = _GenerationAdvanceOnApplyStore(advance_on_apply=advance_on_apply)
+    srv.command_state_store = store
+
+    payload = srv.build_public_state()
+    snapshot = store.snapshot()
+    lifecycle = {
+        field
+        for field in snapshot.fields
+        if str(field.path).startswith(("connection.connection.", "health.health."))
+    }
+    before_repeat = (
+        snapshot.state_revision,
+        snapshot.freshness_revision,
+        snapshot.observation_seq,
+    )
+
+    assert payload["providerGeneration"] == 1
+    assert snapshot.provider_generation == 1
+    assert len(lifecycle) == 9
+    assert {field.provider_generation for field in lifecycle} == {1}
+    assert {field.source.provider for field in lifecycle} == {"web_lifecycle"}
+    assert len({field.last_observed_monotonic for field in lifecycle}) == 1
+
+    srv.build_public_state()
+    repeated = store.snapshot()
+    assert (
+        repeated.state_revision,
+        repeated.freshness_revision,
+        repeated.observation_seq,
+    ) == before_repeat
+
+
+@pytest.mark.parametrize("wire", ["public", "websocket"])
+def test_public_and_ws_retry_when_profile_projection_retires_generation(
+    wire: str,
+) -> None:
+    srv = WebServer(None, WebConfig(radio_model="IC-7610"))
+    store = srv.command_state_store
+    get_profile = srv._get_profile  # noqa: SLF001
+    fired = False
+
+    def advancing_profile():
+        nonlocal fired
+        if not fired:
+            fired = True
+            store.begin_provider_generation()
+        return get_profile()
+
+    srv._get_profile = advancing_profile  # type: ignore[method-assign]
+    payload = (
+        srv.build_public_state()
+        if wire == "public"
+        else srv.build_state_update_envelope()["data"]
+    )
+
+    assert payload["providerGeneration"] == store.provider_generation == 1
+    assert payload["stateContractVersion"] == 1
+
+
+@pytest.mark.asyncio
+async def test_capabilities_retry_when_profile_build_retires_generation() -> None:
+    srv = WebServer(None, WebConfig(radio_model="IC-7610"))
+    store = srv.command_state_store
+    get_profile = srv._get_profile  # noqa: SLF001
+    fired = False
+
+    def advancing_profile():
+        nonlocal fired
+        if not fired:
+            fired = True
+            store.begin_provider_generation()
+        return get_profile()
+
+    srv._get_profile = advancing_profile  # type: ignore[method-assign]
+    writer = _FakeWriter()
+    await srv._serve_capabilities(writer)  # noqa: SLF001
+    status, payload = _response_json(writer)
+
+    assert status == 200
+    assert payload["providerGeneration"] == store.provider_generation == 1
+    assert payload["stateContractVersion"] == 1
+
+
+@pytest.mark.asyncio
+async def test_continuous_lifecycle_generation_churn_fails_closed_without_state_event() -> (
+    None
+):
+    srv = WebServer(None)
+    srv.command_state_store = _GenerationAdvanceEveryApplyStore()
+    queue: BoundedQueue[dict[str, object]] = BoundedQueue(maxsize=2)
+    with pytest.raises(RuntimeError, match="lifecycle ensure"):
+        srv.register_control_event_queue(queue)
+
+    with pytest.raises(RuntimeError, match="lifecycle ensure"):
+        srv.build_public_state()
+    srv._broadcast_state_update(force=True)  # noqa: SLF001
+    assert queue.empty()
+
+    writer = _FakeWriter()
+    await srv._serve_capabilities(writer)  # noqa: SLF001
+    status, payload = _response_json(writer)
+    assert status == 503
+    assert payload == {"error": "provider_generation_churn"}
+
+
+@pytest.mark.asyncio
+async def test_http_and_capabilities_share_the_current_store_generation() -> None:
+    srv = WebServer(None, WebConfig(radio_model="IC-7610"))
+    generation = srv.command_state_store.begin_provider_generation()
+
+    state_writer = _FakeWriter()
+    await srv._serve_state(state_writer)  # noqa: SLF001
+    _, state_body = _response_json(state_writer)
+    caps_writer = _FakeWriter()
+    await srv._serve_capabilities(caps_writer)  # noqa: SLF001
+    _, caps_body = _response_json(caps_writer)
+
+    assert state_body["stateContractVersion"] == 1
+    assert state_body["providerGeneration"] == generation
+    assert caps_body["stateContractVersion"] == 1
+    assert caps_body["providerGeneration"] == generation
+
+
+@pytest.mark.asyncio
+async def test_capabilities_reports_combined_rf_sql_control_model_for_ic7300() -> None:
+    """MOR-1447 leg 2: IC-7300's declared combined RF/SQL knob reaches the wire."""
+
+    class _Ic7300Radio:
+        model = "IC-7300"
+        capabilities: set[str] = set()
+
+    srv = WebServer(_Ic7300Radio())
+    writer = _FakeWriter()
+    await srv._serve_capabilities(writer)  # noqa: SLF001
+    _, payload = _response_json(writer)
+
+    assert payload["rfSqlControlModel"] == "combined"
+    assert payload["dataModeInputs"] == [
+        {"value": 0, "label": "MIC"},
+        {"value": 1, "label": "ACC"},
+        {"value": 2, "label": "MIC+ACC"},
+        {"value": 3, "label": "USB"},
+        {"value": 4, "label": "MIC+USB"},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_capabilities_defaults_to_separate_rf_sql_control_model() -> None:
+    """A profile that doesn't declare the combined knob (IC-9700) stays
+    "separate" (MOR-2467 moved IC-7610 to an explicit "combined")."""
+
+    class _Ic9700Radio:
+        model = "IC-9700"
+        capabilities: set[str] = set()
+
+    srv = WebServer(_Ic9700Radio())
+    writer = _FakeWriter()
+    await srv._serve_capabilities(writer)  # noqa: SLF001
+    _, payload = _response_json(writer)
+
+    assert payload["rfSqlControlModel"] == "separate"
+
+
+@pytest.mark.asyncio
+async def test_generation_transition_changes_state_etag() -> None:
+    srv = WebServer(None, WebConfig(radio_model="IC-7610"))
+    first_writer = _FakeWriter()
+    await srv._serve_state(first_writer)  # noqa: SLF001
+    first_header = first_writer.buffer.decode("ascii", errors="replace").split(
+        "\r\n\r\n", 1
+    )[0]
+    first_etag = next(
+        line for line in first_header.splitlines() if line.startswith("ETag:")
+    )
+
+    srv.command_state_store.begin_provider_generation()
+    next_writer = _FakeWriter()
+    await srv._serve_state(next_writer)  # noqa: SLF001
+    next_header = next_writer.buffer.decode("ascii", errors="replace").split(
+        "\r\n\r\n", 1
+    )[0]
+    next_etag = next(
+        line for line in next_header.splitlines() if line.startswith("ETag:")
+    )
+
+    assert next_etag != first_etag
+
+
+@pytest.mark.asyncio
+async def test_initial_full_state_envelope_revisions_match_ingested_legacy_state() -> (
+    None
+):
+    srv = WebServer(None, WebConfig(radio_model="IC-7610"))
+    legacy = RadioState()
+    legacy.main.freq = 14_250_000
+    legacy.main.mode = "USB"
+    legacy.ptt = True
+    srv.sync_state_store_from_radio_state(legacy)
+
+    envelope = srv.build_state_update_envelope(force_full=True)
+    assert envelope["type"] == "full"
+    ws_state = envelope["data"]
+
+    assert envelope["revision"] == ws_state["stateRevision"]
+    assert envelope["stateRevision"] == ws_state["stateRevision"]
+    assert envelope["freshnessRevision"] == ws_state["freshnessRevision"]
+    assert envelope["observationSeq"] == ws_state["observationSeq"]
+
+    writer = _FakeWriter()
+    await srv._serve_state(writer)  # noqa: SLF001
+    status, http_state = _response_json(writer)
+
+    assert status == 200
+    assert http_state == ws_state
+    assert http_state["revision"] == http_state["stateRevision"]
+    assert http_state["freshnessRevision"] == ws_state["freshnessRevision"]
+    assert http_state["observationSeq"] == ws_state["observationSeq"]
+
+
+@pytest.mark.asyncio
+async def test_state_response_refreshes_live_connection_payload_without_revisions() -> (
+    None
+):
+    class _LiveConnectionRadio:
+        connected = True
+        control_connected = False
+        radio_ready = True
+        capabilities: set[str] = set()
+
+    radio = _LiveConnectionRadio()
+    srv = WebServer(radio, WebConfig(radio_model="IC-7610"))
+
+    writer = _FakeWriter()
+    await srv._serve_state(writer)  # noqa: SLF001
+    status, initial = _response_json(writer)
+
+    assert status == 200
+    assert initial["connection"]["rigConnected"] is True
+    assert initial["connection"]["controlConnected"] is False
+    assert initial["connection"]["radioReady"] is True
+
+    radio.control_connected = True
+
+    writer2 = _FakeWriter()
+    await srv._serve_state(writer2)  # noqa: SLF001
+    status2, control_changed = _response_json(writer2)
+
+    assert status2 == 200
+    assert control_changed["stateRevision"] > initial["stateRevision"]
+    assert control_changed["freshnessRevision"] == initial["freshnessRevision"]
+    assert control_changed["healthRevision"] == initial["healthRevision"]
+    assert control_changed["connection"]["controlConnected"] is True
+
+    radio.connected = False
+
+    writer3 = _FakeWriter()
+    await srv._serve_state(writer3)  # noqa: SLF001
+    status3, connected_changed = _response_json(writer3)
+
+    assert status3 == 200
+    assert connected_changed["stateRevision"] > control_changed["stateRevision"]
+    assert (
+        connected_changed["freshnessRevision"] == control_changed["freshnessRevision"]
+    )
+    assert connected_changed["healthRevision"] == initial["healthRevision"]
+    assert connected_changed["connection"]["rigConnected"] is False
+    assert connected_changed["connection"]["radioReady"] is True
+
+
+def test_broadcast_state_update_refreshes_live_connection_payload_without_revisions() -> (
+    None
+):
+    class _LiveConnectionRadio:
+        connected = True
+        control_connected = False
+        radio_ready = True
+        capabilities: set[str] = set()
+
+    radio = _LiveConnectionRadio()
+    srv = WebServer(radio, WebConfig(radio_model="IC-7610"))
+    q: BoundedQueue[dict[str, object]] = BoundedQueue(maxsize=16)
+    first = srv.register_control_event_queue(q)
+    initial = first["data"]
+
+    radio.control_connected = True
+
+    srv._last_state_broadcast = 0.0  # noqa: SLF001
+    srv._broadcast_state_update()  # noqa: SLF001
+    event = q.get_nowait()
+
+    assert event["type"] == "state_update"
+    assert event["data"]["type"] == "delta"
+    assert event["data"]["stateRevision"] > initial["stateRevision"]
+    assert event["data"]["freshnessRevision"] == initial["freshnessRevision"]
+    assert event["data"]["changed"]["connection"]["controlConnected"] is True
+
+
+def test_legacy_state_store_sync_can_clear_default_boolean_values() -> None:
+    srv = WebServer(None, WebConfig(radio_model="IC-7610"))
+    transmitting = RadioState()
+    transmitting.ptt = True
+    srv.sync_state_store_from_radio_state(transmitting)
+    assert srv.build_public_state()["ptt"] is True
+
+    idle = RadioState()
+    idle.ptt = False
+    srv.sync_state_store_from_radio_state(idle)
+
+    assert srv.build_public_state()["ptt"] is False
+
+
+def test_legacy_state_store_sync_preserves_receiver_fields() -> None:
+    srv = WebServer(None, WebConfig(radio_model="IC-7610"))
+    legacy = RadioState()
+    legacy.main.data_mode = 2
+    legacy.main.filter_width = 1_800
+    legacy.main.nr_level = 42
+
+    srv.sync_state_store_from_radio_state(legacy)
+
+    public_state = srv.build_public_state()
+    assert public_state["main"]["dataMode"] == 2
+    assert public_state["main"]["filterWidth"] == 1_800
+    assert public_state["main"]["nrLevel"] == 42
+
+
+def test_legacy_sync_does_not_override_present_store_value_on_contended_path() -> None:
+    """Legacy sync must not re-apply over a present Store value on a shared path.
+
+    ``sync_state_store_from_radio_state`` short-circuits a path that the Store
+    already holds at the legacy value (server.py:1374-1375), so no competing
+    ``state_poller`` observation is emitted. The earlier Store observation's
+    value and source survive and the observation sequence does not advance,
+    unlike the existing legacy-sync tests that only fill UNtouched paths.
+    """
+
+    srv = WebServer(None, WebConfig(radio_model="IC-7610"))
+    path = FieldPath.global_("tx_state", "ptt")
+    store_source = SourceMetadata(
+        source="civ_unsolicited",
+        provider="radio",
+        transport="fake",
+        native_id="unsolicited",
+    )
+    srv.command_state_store.apply(
+        Observation(
+            path=path,
+            value=True,
+            source=store_source,
+            timestamp_monotonic=1.0,
+        )
+    )
+    seq_before_sync = srv.command_state_store.snapshot().observation_seq
+
+    legacy = RadioState()
+    legacy.ptt = True
+    srv.sync_state_store_from_radio_state(legacy)
+
+    field = srv.command_state_store.snapshot().field(path)
+    assert field.value is True
+    assert field.source == store_source
+    assert srv.command_state_store.snapshot().observation_seq == seq_before_sync
+
+
+def test_legacy_state_store_sync_can_clear_default_receiver_values() -> None:
+    srv = WebServer(None, WebConfig(radio_model="IC-7610"))
+    legacy = RadioState()
+    legacy.main.data_mode = 2
+    srv.sync_state_store_from_radio_state(legacy)
+    assert srv.build_public_state()["main"]["dataMode"] == 2
+
+    cleared = RadioState()
+    cleared.main.data_mode = 0
+    srv.sync_state_store_from_radio_state(cleared)
+
+    assert srv.build_public_state()["main"]["dataMode"] == 0
+
+
+def test_legacy_state_store_sync_preserves_global_rit_on() -> None:
+    srv = WebServer(None, WebConfig(radio_model="IC-7610"))
+    legacy = RadioState()
+    legacy.rit_on = True
+
+    srv.sync_state_store_from_radio_state(legacy)
+
+    assert srv.build_public_state()["ritOn"] is True
+
+
+def test_public_state_uses_ingested_legacy_active_after_state_store_observations() -> (
+    None
+):
+    srv = WebServer(None, WebConfig(radio_model="IC-7610"))
+    srv.command_state_store.apply(
+        _store_observation(
+            FieldPath.active("0", "freq_mode", "freq_hz"),
+            14_074_000,
+            at=1.0,
+        )
+    )
+    legacy = RadioState()
+    legacy.active = "SUB"
+    srv.sync_state_store_from_radio_state(legacy, changed_legacy_keys={"active"})
+
+    public_state = srv.build_public_state()
+
+    assert public_state["main"]["freqHz"] == 14_074_000
+    assert public_state["active"] == "SUB"
+
+
+def test_public_state_uses_ingested_legacy_global_toggle_after_observations() -> None:
+    srv = WebServer(None, WebConfig(radio_model="IC-7610"))
+    srv.command_state_store.apply(
+        _store_observation(
+            FieldPath.active("0", "freq_mode", "freq_hz"),
+            14_074_000,
+            at=1.0,
+        )
+    )
+    legacy = RadioState()
+    legacy.dual_watch = True
+    srv.sync_state_store_from_radio_state(legacy, changed_legacy_keys={"dual_watch"})
+
+    public_state = srv.build_public_state()
+
+    assert public_state["dualWatch"] is True
+
+
+def test_public_state_sync_can_clear_legacy_global_toggle_default() -> None:
+    srv = WebServer(None, WebConfig(radio_model="IC-7610"))
+    srv.command_state_store.apply(
+        _store_observation(
+            FieldPath.active("0", "freq_mode", "freq_hz"),
+            14_074_000,
+            at=1.0,
+        )
+    )
+    enabled = RadioState()
+    enabled.split = True
+    srv.sync_state_store_from_radio_state(enabled)
+    assert srv.build_public_state()["split"] is True
+
+    cleared = RadioState()
+    cleared.split = False
+    srv.sync_state_store_from_radio_state(cleared)
+
+    assert srv.build_public_state()["split"] is False
+
+
+@pytest.mark.asyncio
+async def test_http_and_ws_full_state_share_post_sync_legacy_snapshot() -> None:
+    srv = WebServer(None, WebConfig(radio_model="IC-7610"))
+    srv.command_state_store.apply(
+        _store_observation(
+            FieldPath.active("0", "freq_mode", "freq_hz"),
+            14_074_000,
+            at=1.0,
+        )
+    )
+    legacy = RadioState()
+    legacy.active = "SUB"
+    legacy.dual_watch = True
+    srv.sync_state_store_from_radio_state(
+        legacy,
+        changed_legacy_keys={"active", "dual_watch"},
+    )
+
+    envelope = srv.build_state_update_envelope(force_full=True)
+    assert envelope["type"] == "full"
+    ws_state = envelope["data"]
+
+    writer = _FakeWriter()
+    await srv._serve_state(writer)  # noqa: SLF001
+    status, http_state = _response_json(writer)
+
+    assert status == 200
+    assert http_state == ws_state
+    assert http_state["active"] == "SUB"
+    assert http_state["dualWatch"] is True
+    assert envelope["revision"] == ws_state["stateRevision"]
+    assert envelope["stateRevision"] == ws_state["stateRevision"]
+    assert envelope["freshnessRevision"] == ws_state["freshnessRevision"]
+
+
+@pytest.mark.asyncio
+async def test_on_radio_reconnect_enables_scope_without_waiting_for_broadcast() -> None:
+    """Reconnect must queue EnableScope even while ``radio_ready`` is False.
+
+    Deadlock background: ``radio_ready`` waits for CI-V broadcast to resume,
+    but in the "deaf" firmware state observed on IC-7610 the broadcast may
+    not resume until a scope-enable CI-V command is sent.  Gating scope
+    re-enable behind ``radio_ready`` turned the two into a mutual wait
+    that timed out with "scope: radio not ready after 30s" every minute.
+
+    The reconnect path now trusts that ``soft_reconnect`` already brought
+    the session up (UDP + auth + discovery), and queues EnableScope
+    immediately.  If the radio is genuinely dead the command will fail
+    on its own — strictly better than a silent 30-second wait every cycle.
+    """
+    radio = _scope_radio(ready=False)
+    radio._fetch_initial_state = AsyncMock()
+    srv = WebServer(radio)
+    srv._scope_handlers.add(MagicMock())
+    srv.scope_hub
+    await srv._radio_scope_session.set_output(True)
+    radio.enable_scope.reset_mock()
+    srv._on_radio_reconnect()  # noqa: SLF001
+    # The scope re-enable is what must not wait: the Web reacquire queues
+    # it directly. MOR-4382: the initial fetch is the radio layer's, and
+    # with ``radio_ready`` False the radio layer skips it — it is never
+    # the Web's to run, so nothing here may wait on it.
+    await _await_condition(lambda: radio.enable_scope.await_count == 1)
+
+    radio.enable_scope.assert_awaited_once()
+    assert srv._radio_scope_session.enabled
+    assert radio.radio_ready is False  # gate was bypassed, not flipped
+    radio._fetch_initial_state.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_passive_reconnect_attempts_no_vfo_select_or_swap() -> None:
+    radio = _make_radio(model="IC-7300")
+    radio.radio_ready = False
+    radio._fetch_initial_state = AsyncMock()
+    ledger = _instrument_guarded_vfo_wire(radio)
+    srv = WebServer(radio)
+
+    store = StateStore()
+    generation = store.begin_provider_generation()
+    store.apply(
+        Observation(
+            path=FieldPath.active_slot("0"),
+            value="B",
+            source=SourceMetadata(source="command_response", provider="test"),
+            timestamp_monotonic=time.monotonic(),
+            provider_generation=generation,
+        )
+    )
+    poller = RadioPoller(radio, CommandQueue(), state_store=store)
+    srv._radio_poller = poller  # noqa: SLF001
+
+    srv._on_radio_reconnect()  # noqa: SLF001
+    await _await_condition(poller._initial_fetch_done.is_set)  # noqa: SLF001
+
+    assert poller._initial_fetch_done.is_set()  # noqa: SLF001
+    assert ledger.mutation_counts() == {
+        "attempted_guard_blocked": {"07 00": 0, "07 01": 0, "07 B0": 0},
+        "actual_admitted": {"07 00": 0, "07 01": 0, "07 B0": 0},
+    }
+    assert "receiver.0.vfo.active_slot" not in store.snapshot().as_dict()
+
+
+@pytest.mark.asyncio
+async def test_on_radio_reconnect_reseeds_scan_facts() -> None:
+    """The scan-facts seed must re-run on every soft-reconnect."""
+    radio = _scope_radio(ready=False)
+    radio._fetch_initial_state = AsyncMock()
+    radio.profile = resolve_radio_profile(model="IC-7300")
+    radio.model = radio.profile.model
+    srv = WebServer(radio)
+
+    store = StateStore()
+    poller = RadioPoller(radio, CommandQueue(), state_store=store)
+    seed_call_count = 0
+    real_seed = poller._seed_scan_facts_at_connect  # noqa: SLF001
+
+    def _tracking_seed() -> None:
+        nonlocal seed_call_count
+        seed_call_count += 1
+        real_seed()
+
+    poller._seed_scan_facts_at_connect = _tracking_seed  # type: ignore[method-assign]  # noqa: SLF001
+    srv._radio_poller = poller  # noqa: SLF001
+
+    srv._on_radio_reconnect()  # noqa: SLF001
+    await _await_condition(lambda: seed_call_count >= 1)
+
+    assert seed_call_count == 1
+    field = store.snapshot().field(FieldPath.global_("slow_state", "scanning"))
+    assert field.value is False
+    assert field.source.source != "poll_response"
+
+
+@pytest.mark.timeout(30)
+async def test_scope_health_monitor_link_down_then_menu_silence(
+    virtual_clock: VirtualClock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """MOR-3690: link down resets the frame clock; menu silence (no frames,
+    CI-V healthy) publishes hidden and never enqueues an enable."""
+    srv, radio, queued = await _virtual_scope_server(monkeypatch, virtual_clock)
+    radio.connected = False
+    radio.radio_ready = False
+    srv._scope_started_at = 0.0  # noqa: SLF001
+
+    monitor = asyncio.create_task(srv._scope_health_monitor())  # noqa: SLF001
+    try:
+        await _elapse_scope_windows(virtual_clock, 2)
+        # Link down: the frame clock is reset inside the monitor window.
+        assert (
+            srv._radio_scope_session.health(
+                civ_flowing=True, link_ready=radio.radio_ready
+            ).hidden
+            is None
+        )  # noqa: SLF001
+        radio.connected = True
+        radio.radio_ready = True
+        await _elapse_scope_windows(
+            virtual_clock,
+            3,
+            between=lambda: setattr(
+                radio, "last_valid_frame_monotonic", virtual_clock()
+            ),
+        )
+    finally:
+        monitor.cancel()
+        await asyncio.gather(monitor, return_exceptions=True)
+
+    assert queued == []
+    assert _scope_hidden_verdict(srv) is True
+
+
+@pytest.mark.asyncio
+async def test_scope_health_monitor_unconfirmed_session_does_not_reenable() -> None:
+    radio = _scope_radio(ready=True, connected=True)
+    srv = WebServer(radio)
+    srv._scope_handlers.add(MagicMock())
+    srv._radio_scope_demand = True
+    srv._scope_enabled = False
+    srv._scope_health_interval = 0.01
+    srv._scope_started_at = time.monotonic() - 1.0
+
+    task = asyncio.create_task(srv._scope_health_monitor())  # noqa: SLF001
+    await asyncio.sleep(0.03)
+    task.cancel()
+    await asyncio.gather(task, return_exceptions=True)
+
+    assert not srv.command_queue.has_commands
+
+
+def _record_scope_commands_completing_like_a_poller(
+    srv: WebServer,
+    queued: list[EnableScope],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Record EnableScope entries and complete them so the monitor advances."""
+    put_ordered = srv.command_queue.put_ordered
+
+    def observe_and_complete(command: object, **kwargs: object) -> object:
+        entry = put_ordered(command, **kwargs)
+        if isinstance(command, EnableScope):
+            queued.append(command)
+            future = kwargs.get("future")
+            if isinstance(future, asyncio.Future) and not future.done():
+                future.set_result(None)
+        return entry
+
+    monkeypatch.setattr(srv.command_queue, "put_ordered", observe_and_complete)
+
+
+SCOPE_HIDDEN_PATH = FieldPath.parse("health.health.scope_hidden")
+
+_ZERO_SCOPE_PIXELS = bytes(479)
+_LIVE_SCOPE_PIXELS = b"\x00" * 200 + b"\x05\x20" + b"\x00" * 277
+
+
+def _zero_scope_frame() -> ScopeFrame:
+    """A producer-typed blank frame: the exact type the radio callback delivers."""
+    return ScopeFrame(
+        receiver=0,
+        mode=0,
+        start_freq_hz=14_000_000,
+        end_freq_hz=14_350_000,
+        pixels=_ZERO_SCOPE_PIXELS,
+        out_of_range=False,
+    )
+
+
+def _live_scope_frame() -> ScopeFrame:
+    """A producer-typed frame carrying real pixel data."""
+    return ScopeFrame(
+        receiver=0,
+        mode=0,
+        start_freq_hz=14_000_000,
+        end_freq_hz=14_350_000,
+        pixels=_LIVE_SCOPE_PIXELS,
+        out_of_range=False,
+    )
+
+
+def test_scope_frame_fixtures_are_producer_typed() -> None:
+    """The scope-health fixtures are the producer's own type — the real
+    ``rigplane.scope.ScopeFrame`` the hardware scope callback delivers, with
+    every field the actual delivery path carries."""
+    for factory in (_zero_scope_frame, _live_scope_frame):
+        frame = factory()
+        assert isinstance(frame, ScopeFrame)
+        assert isinstance(frame.pixels, bytes)
+
+
+def _feed_scope_health(srv: WebServer, frame: ScopeFrame) -> None:
+    now = asyncio.get_running_loop().time()
+    if srv._radio_scope_session is not None:
+        srv._radio_scope_session.on_frame(frame)
+    hub = srv.scope_hub
+    hub._sources["radio"].health[frame.receiver] = ScopeHealth(
+        now,
+        now if frame.pixels else None,
+        frame.out_of_range,
+        Coverage(frame.start_freq_hz, frame.end_freq_hz),
+    )
+
+
+def _scope_hidden_verdict(srv: WebServer) -> object:
+    """The published scope-hidden fact value, or None when never published."""
+    for field in srv.command_state_store.snapshot().fields:
+        if field.path == SCOPE_HIDDEN_PATH:
+            return field.value
+    return None
+
+
+async def _virtual_scope_server(
+    monkeypatch: pytest.MonkeyPatch,
+    clock: VirtualClock,
+    *,
+    interval: float = 10.0,
+    on_enable: Callable[[], None] | None = None,
+    radio: Any | None = None,
+) -> tuple[WebServer, Any, list[EnableScope]]:
+    """A scope WebServer whose monitor/reconnect paths run on a VirtualClock.
+
+    MOR-3690 (reopened): ``clock.scope_to`` points the server module's own
+    ``time`` / ``asyncio`` names at the clock, so one monitor window is one
+    clock jump, never a real wait. ``on_enable`` fires inside the queue hook
+    when an EnableScope lands — the beta.13 race seam (a frame stamped
+    newer than the window's ``now`` while the write is in flight).
+    ``radio`` lets a test supply a producer with a specific liveness
+    surface (e.g. one that honors only the public Radio contract stamp).
+    """
+    if radio is None:
+        radio = _scope_radio()
+    radio._fetch_initial_state = AsyncMock()  # noqa: SLF001
+    from _scope_session_fake import attach_scope_session
+    from rigplane.scope.models import ScopeDemand
+
+    radio.get_scope_session_state.return_value = (True, True)
+    session = attach_scope_session(radio, clock=clock, silence_seconds=interval)
+    srv = WebServer(radio, WebConfig(radio_model="IC-7610"))
+    srv.scope_hub
+    srv._scope_handlers.add(MagicMock())
+    await session.set_demand(ScopeDemand(1, 1))
+    srv._scope_health_interval = interval  # noqa: SLF001
+    queued: list[EnableScope] = []
+
+    async def record_enable(**kwargs):
+        queued.append(EnableScope())
+        if on_enable is not None:
+            on_enable()
+
+    radio.enable_scope.side_effect = record_enable
+    clock.scope_to(monkeypatch, server_module)
+    return srv, radio, queued
+
+
+async def _elapse_scope_windows(
+    clock: VirtualClock,
+    windows: int,
+    *,
+    interval: float = 10.0,
+    between: Callable[[], None] | None = None,
+) -> None:
+    """Let the scope-health monitor run ``windows`` windows on the clock.
+
+    The monitor's scoped ``asyncio.sleep`` jumps the clock by one interval
+    and yields once, so each bare loop turn here is one window; ``between``
+    runs before each turn (feed frames, refresh the CI-V stamp).
+    """
+    target = clock() + windows * interval
+    for _ in range(windows * 20 + 100):
+        if clock() >= target:
+            break
+        if between is not None:
+            between()
+        await asyncio.sleep(0)
+    else:
+        raise AssertionError("scope-health monitor stopped advancing the clock")
+    # The scoped sleep advances the clock BEFORE the window body runs, so
+    # the last window's body is still parked in its yield: settle it (and
+    # one more turn) now that the target is reached.
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+
+
+def _observe_scope_ptt(srv: WebServer, value: ObservedPtt, max_age: float) -> None:
+    srv.command_state_store.apply_current(
+        _store_observation(
+            OBSERVED_PTT_PATH, value, at=time.monotonic(), max_age=max_age
+        )
+    )
+
+
+@pytest.mark.asyncio
+async def test_scope_health_monitor_keyed_tx_queues_nothing(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """MOR-2859: keyed managed TX pauses scope re-enable writes and retries."""
+    radio = _scope_radio(ready=True, connected=True)
+    srv = WebServer(radio)
+    srv._scope_handlers.add(MagicMock())
+    srv._radio_scope_demand = True
+    srv._scope_enabled = True
+    srv._scope_health_interval = 0.01
+    srv._scope_started_at = time.monotonic() - 1.0
+    srv._managed_tx_keyed = True  # noqa: SLF001
+    queued: list[EnableScope] = []
+    _record_scope_commands_completing_like_a_poller(srv, queued, monkeypatch)
+
+    task = asyncio.create_task(srv._scope_health_monitor())  # noqa: SLF001
+    try:
+        await asyncio.sleep(0.06)  # several monitor intervals under TX
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+    assert queued == []
+    assert "giving up" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_scope_health_monitor_observed_ptt_on_queues_nothing(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """MOR-2859: fresh observed PTT ON pauses scope writes without keyed intent."""
+    radio = _scope_radio(ready=True, connected=True)
+    srv = WebServer(radio)
+    srv._scope_handlers.add(MagicMock())
+    srv._radio_scope_demand = True
+    srv._scope_enabled = True
+    srv._scope_health_interval = 0.01
+    srv._scope_started_at = time.monotonic() - 1.0
+    _observe_scope_ptt(srv, ObservedPtt.ON, max_age=60.0)
+    assert srv._managed_tx_keyed is False  # noqa: SLF001
+    queued: list[EnableScope] = []
+    _record_scope_commands_completing_like_a_poller(srv, queued, monkeypatch)
+
+    task = asyncio.create_task(srv._scope_health_monitor())  # noqa: SLF001
+    try:
+        await asyncio.sleep(0.06)  # several monitor intervals under TX
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+    assert queued == []
+    assert "giving up" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_scope_health_monitor_long_tx_never_gives_up(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """MOR-2859: a TX longer than the retry budget logs no give-up."""
+    radio = _scope_radio(ready=True, connected=True)
+    srv = WebServer(radio)
+    srv._scope_handlers.add(MagicMock())
+    srv._radio_scope_demand = True
+    srv._scope_enabled = True
+    srv._scope_health_interval = 0.01
+    srv._scope_started_at = time.monotonic() - 1.0
+    srv._managed_tx_keyed = True  # noqa: SLF001
+    queued: list[EnableScope] = []
+    _record_scope_commands_completing_like_a_poller(srv, queued, monkeypatch)
+
+    task = asyncio.create_task(srv._scope_health_monitor())  # noqa: SLF001
+    try:
+        await asyncio.sleep(0.15)  # well past three retries under TX
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+    assert queued == []
+    assert "giving up" not in caplog.text
+
+
+@pytest.mark.timeout(30)
+async def test_scope_health_monitor_verdicts_around_tx(
+    virtual_clock: VirtualClock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """MOR-2859/MOR-3690: TX pauses judgement; live frames publish visible;
+    a later menu silence publishes hidden — all without a single write."""
+    srv, radio, queued = await _virtual_scope_server(monkeypatch, virtual_clock)
+    srv._managed_tx_keyed = True  # noqa: SLF001
+
+    monitor = asyncio.create_task(srv._scope_health_monitor())  # noqa: SLF001
+    try:
+        await _elapse_scope_windows(virtual_clock, 3)
+        assert _scope_hidden_verdict(srv) is None  # TX: no judgement
+        srv._managed_tx_keyed = False  # noqa: SLF001 — de-key, traffic resumes
+        await _elapse_scope_windows(
+            virtual_clock,
+            2,
+            between=lambda: _feed_scope_health(srv, _live_scope_frame()),  # noqa: SLF001
+        )
+        assert _scope_hidden_verdict(srv) is False
+        # Menu opens: frames stop entirely, CI-V keeps answering (IC-705).
+        await _elapse_scope_windows(
+            virtual_clock,
+            3,
+            between=lambda: setattr(
+                radio, "last_valid_frame_monotonic", virtual_clock()
+            ),
+        )
+        assert _scope_hidden_verdict(srv) is True
+    finally:
+        monitor.cancel()
+        await asyncio.gather(monitor, return_exceptions=True)
+
+    assert queued == []
+
+
+@pytest.mark.timeout(30)
+async def test_scope_health_monitor_stale_ptt_writes_nothing(
+    virtual_clock: VirtualClock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """MOR-2859/MOR-3690: stale observed PTT is not TX — the monitor judges
+    the stall normally (publishes hidden) and still never writes."""
+    srv, radio, queued = await _virtual_scope_server(monkeypatch, virtual_clock)
+    # The ON observation is already stale: stamped 100 s behind the clock.
+    srv.command_state_store.apply_current(
+        _store_observation(
+            OBSERVED_PTT_PATH, ObservedPtt.ON, at=virtual_clock() - 100.0, max_age=1.0
+        )
+    )
+    assert srv._managed_tx_keyed is False  # noqa: SLF001
+    assert (
+        project_observed_ptt(srv.command_state_store.snapshot()) is ObservedPtt.UNKNOWN
+    )
+
+    monitor = asyncio.create_task(srv._scope_health_monitor())  # noqa: SLF001
+    try:
+        await _elapse_scope_windows(
+            virtual_clock,
+            3,
+            between=lambda: setattr(
+                radio, "last_valid_frame_monotonic", virtual_clock()
+            ),
+        )
+    finally:
+        monitor.cancel()
+        await asyncio.gather(monitor, return_exceptions=True)
+
+    assert queued == []
+    assert _scope_hidden_verdict(srv) is True
+
+
+@pytest.mark.asyncio
+async def test_send_response_and_run_web_server() -> None:
+    writer = _FakeWriter()
+    await _send_response(writer, 200, "OK", b"abc", {"Content-Type": "text/plain"})
+    assert b"HTTP/1.1 200 OK" in writer.buffer
+    assert b"Content-Length: 3" in writer.buffer
+
+    fake_server = MagicMock()
+    fake_server.serve_forever = AsyncMock()
+    with patch("rigplane.web.server.WebServer", return_value=fake_server):
+        await run_web_server(None, host="127.0.0.1", port=8000)
+    fake_server.serve_forever.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_broadcast_notification_puts_to_all_queues() -> None:
+    """broadcast_notification pushes notification dict to all registered queues."""
+    srv = WebServer(None, WebConfig(radio_model="IC-7610"))
+    q1: BoundedQueue[dict[str, object]] = BoundedQueue(maxsize=16)
+    q2: BoundedQueue[dict[str, object]] = BoundedQueue(maxsize=16)
+    srv.register_control_event_queue(q1)
+    srv.register_control_event_queue(q2)
+    _drain_queue(q1)
+    _drain_queue(q2)
+
+    srv.broadcast_notification("success", "Radio connected", "connection")
+
+    assert not q1.empty()
+    assert not q2.empty()
+    n1 = q1.get_nowait()
+    n2 = q2.get_nowait()
+    assert n1["type"] == "notification"
+    assert n1["level"] == "success"
+    assert n1["message"] == "Radio connected"
+    assert n1["category"] == "connection"
+    assert n1 == n2
+
+
+@pytest.mark.asyncio
+async def test_broadcast_notification_default_category() -> None:
+    """broadcast_notification uses 'system' as default category."""
+    srv = WebServer(None, WebConfig(radio_model="IC-7610"))
+    q: BoundedQueue[dict[str, object]] = BoundedQueue(maxsize=16)
+    srv.register_control_event_queue(q)
+
+    srv.broadcast_notification("info", "Hello")
+
+    n = q.get_nowait()
+    assert n["category"] == "system"
+
+
+@pytest.mark.asyncio
+async def test_broadcast_notification_full_queue_no_crash() -> None:
+    """broadcast_notification silently skips full queues (dead clients)."""
+    srv = WebServer(None, WebConfig(radio_model="IC-7610"))
+    q: BoundedQueue[dict[str, object]] = BoundedQueue(maxsize=1)
+    q.put_nowait({"type": "other"})  # fill the queue
+    srv.register_control_event_queue(q)
+
+    # Should not raise even though queue is full; drop-oldest evicts stale items
+    srv.broadcast_notification("warning", "Test")
+    # Note: with drop-oldest semantics, the full BoundedQueue evicts oldest on overflow
+    # so the queue will still have 1 item (the dropped-oldest replacement)
+    assert q.qsize() == 1
+
+
+@pytest.mark.asyncio
+async def test_broadcast_notification_includes_reason_code_when_set() -> None:
+    """broadcast_notification emits the optional `code` field for i18n resolution.
+
+    Wire-schema decision (RP-ML-005): the payload is additive — `code` and
+    `params` are present only when the caller supplies them, so legacy
+    consumers that only read `message` keep working.
+    """
+    srv = WebServer(None, WebConfig(radio_model="IC-7610"))
+    q: BoundedQueue[dict[str, object]] = BoundedQueue(maxsize=16)
+    srv.register_control_event_queue(q)
+
+    srv.broadcast_notification(
+        "success",
+        "Radio connected",
+        "connection",
+        code="radioConnected",
+    )
+
+    n = q.get_nowait()
+    assert n["type"] == "notification"
+    assert n["level"] == "success"
+    assert n["message"] == "Radio connected"
+    assert n["category"] == "connection"
+    assert n["code"] == "radioConnected"
+    assert "params" not in n
+
+
+@pytest.mark.asyncio
+async def test_broadcast_notification_threads_params_through() -> None:
+    """broadcast_notification copies `params` into the payload when provided."""
+    srv = WebServer(None, WebConfig(radio_model="IC-7610"))
+    q: BoundedQueue[dict[str, object]] = BoundedQueue(maxsize=16)
+    srv.register_control_event_queue(q)
+
+    srv.broadcast_notification(
+        "info",
+        "An update is available: 2.1.0.",
+        "system",
+        code="updateAvailable",
+        params={"version": "2.1.0"},
+    )
+
+    n = q.get_nowait()
+    assert n["code"] == "updateAvailable"
+    assert n["params"] == {"version": "2.1.0"}
+
+
+@pytest.mark.asyncio
+async def test_broadcast_notification_omits_code_for_legacy_path() -> None:
+    """Calls without an explicit `code` keep the legacy English-only shape."""
+    srv = WebServer(None, WebConfig(radio_model="IC-7610"))
+    q: BoundedQueue[dict[str, object]] = BoundedQueue(maxsize=16)
+    srv.register_control_event_queue(q)
+
+    srv.broadcast_notification("info", "Legacy notification")
+
+    n = q.get_nowait()
+    assert "code" not in n
+    assert "params" not in n
+    assert n["message"] == "Legacy notification"
+
+
+# ---------------------------------------------------------------------------
+# Post-ack command execution failure -> issuer-only notification (MOR-1445)
+#
+# A websocket-queued command (e.g. set_attenuator) is acknowledged at
+# enqueue time and only actually fails later, once RadioPoller executes it
+# against the radio. CommandService already has NAK semantics for this via
+# fail_command()/lifecycle "failed"/"timed_out", but nothing was subscribed
+# to it, so the operator never learned the command silently failed.
+#
+# Per owner ruling, delivery is scoped to the session that issued the
+# command only — never a broadcast to every connected client — unifying
+# with the MOR-1422 refusal-toast doctrine (error feedback belongs to
+# whoever acted; other clients saw no state change and would get noise).
+#
+# These tests drive the real CommandService.execute() round trip (accepted
+# -> queued -> sent -> acknowledged is production code, not hand-emitted
+# states) through a stub executor, with WebServer's actual subscriber
+# (_on_command_lifecycle_event) wired the same way __init__ wires it. Only
+# the later, separate fail_command() call — the real entry point
+# RadioPoller._mark_queued_command_failed() uses — stands in for the poller
+# discovering the failure after the fact.
+# ---------------------------------------------------------------------------
+
+
+class _StubCommandExecutor:
+    """Executor test double: succeeds, or raises synchronously like a
+    real executor rejecting a command before it ever reaches the queue."""
+
+    def __init__(self, *, raises: Exception | None = None) -> None:
+        self._raises = raises
+
+    async def execute(self, intent: CommandIntent) -> CommandExecutionResult:
+        if self._raises is not None:
+            raise self._raises
+        return CommandExecutionResult()
+
+
+def _wire_stub_command_service(
+    srv: WebServer, executor: _StubCommandExecutor
+) -> CommandService:
+    """Swap in a stub executor, keeping the production notification wiring
+    under test (same subscribe_lifecycle call WebServer.__init__ makes)."""
+    service = CommandService(executor=executor, state_store=srv.command_state_store)
+    service.subscribe_lifecycle(srv._on_command_lifecycle_event)  # noqa: SLF001
+    srv.command_service = service
+    return service
+
+
+def _register_two_sessions(
+    srv: WebServer,
+) -> tuple[BoundedQueue[dict[str, object]], BoundedQueue[dict[str, object]]]:
+    """Register an issuing session's queue and a bystander session's queue.
+
+    Drains both afterwards: registering the second queue pushes a baseline
+    state_update to existing peers, which would otherwise be the first
+    (unrelated) message a test reads back out.
+    """
+    issuer_q: BoundedQueue[dict[str, object]] = BoundedQueue(maxsize=16)
+    bystander_q: BoundedQueue[dict[str, object]] = BoundedQueue(maxsize=16)
+    srv.register_control_event_queue(issuer_q, session_id="session-issuer")
+    srv.register_control_event_queue(bystander_q, session_id="session-bystander")
+    _drain_queue(issuer_q)
+    _drain_queue(bystander_q)
+    return issuer_q, bystander_q
+
+
+def _hold(**overrides: object) -> dict[str, object]:
+    details: dict[str, object] = {
+        "session_id": "session-issuer",
+        "heldBy": "tx_interlock",
+        "reason": "tx_active",
+        "expiresAt": 15.0,
+    }
+    return details | overrides
+
+
+def _life(**overrides: object) -> CommandLifecycleEvent:
+    values: dict[str, object] = {
+        "command_id": "cmd-held",
+        "state": "queued",
+        "timestamp_monotonic": 12.5,
+        "source": "websocket",
+        "target": FieldPath.active("main", "freq_mode", "freq_hz"),
+        "message": None,
+        "details": _hold(),
+    }
+    return CommandLifecycleEvent(**(values | overrides))  # type: ignore[arg-type]
+
+
+def _terminal(**overrides: object) -> dict[str, object]:
+    return {"state": "failed", "details": {"session_id": "session-issuer"}, **overrides}
+
+
+async def _ack_held(srv: WebServer) -> None:
+    srv.command_service._executor = _StubCommandExecutor()  # noqa: SLF001
+    await srv.command_service.execute(
+        command_intent_from_request(
+            "set_freq",
+            {"freq_hz": 1},
+            source="websocket",
+            command_id="cmd-held",
+            session_id="session-issuer",
+        )
+    )
+
+
+@pytest.mark.asyncio
+async def test_deferred_lifecycle_is_delivered_only_to_its_issuer() -> None:
+    srv = WebServer(None, WebConfig(radio_model="IC-7610"))
+    issuer_q, bystander_q = _register_two_sessions(srv)
+    await _ack_held(srv)
+
+    srv._on_command_lifecycle_event(_life())  # noqa: SLF001
+
+    payload = issuer_q.get_nowait()
+    assert payload["type"] == "command_lifecycle" and payload["commandId"] == "cmd-held"
+    assert payload["state"] == "queued" and payload["timestampMonotonic"] == 12.5
+    assert payload["source"] == "websocket"
+    assert payload["target"] == "receiver.main.active.freq_mode.freq_hz"
+    assert payload["details"] == {
+        "heldBy": "tx_interlock",
+        "reason": "tx_active",
+        "expiresAt": 15.0,
+    }
+    srv._on_command_lifecycle_event(
+        _life(state="superseded", details={"session_id": "session-issuer"})
+    )  # noqa: SLF001
+    assert issuer_q.get_nowait()["state"] == "superseded" and issuer_q.empty()
+    assert bystander_q.empty()
+
+
+class _EqualsReasonCode:
+    """Equal to a known reason code without being one.
+
+    The whitelist's membership test is ``__eq__``-based, so the published
+    payload must be rebuilt from literals rather than passed through — this is
+    the object that rides onto the wire if it ever is not.
+    """
+
+    def __init__(self, code: str) -> None:
+        self._code = code
+
+    def __eq__(self, other: object) -> bool:
+        return other == self._code
+
+    def __hash__(self) -> int:
+        return hash(self._code)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reason", ("rf_state_unknown", "radio_transmitting"))
+async def test_interlock_refusal_reaches_only_its_issuer_machine_readably(
+    reason: str,
+) -> None:
+    """MOR-1879: a failed lifecycle may carry the interlock refusal code."""
+    srv = WebServer(None, WebConfig(radio_model="IC-7610"))
+    issuer_q, bystander_q = _register_two_sessions(srv)
+    await _ack_held(srv)
+
+    srv._on_command_lifecycle_event(  # noqa: SLF001
+        _life(
+            state="failed",
+            message="refused by the TX interlock",
+            details={
+                "session_id": "session-issuer",
+                "blockedBy": "tx_interlock",
+                "reason": reason,
+            },
+        )
+    )
+
+    # The pre-existing failure notification still goes out first, unchanged.
+    assert issuer_q.get_nowait()["type"] == "notification"
+    payload = issuer_q.get_nowait()
+    assert payload["type"] == "command_lifecycle"
+    assert payload["state"] == "failed"
+    assert payload["details"] == {"blockedBy": "tx_interlock", "reason": reason}
+    assert issuer_q.empty()
+    assert bystander_q.empty()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "details",
+    (
+        {"session_id": "session-issuer", "blockedBy": "tx_interlock"},
+        {"session_id": "session-issuer", "reason": "rf_state_unknown"},
+        {
+            "session_id": "session-issuer",
+            "blockedBy": "elsewhere",
+            "reason": "rf_state_unknown",
+        },
+        {
+            "session_id": "session-issuer",
+            "blockedBy": "tx_interlock",
+            "reason": "made_up_code",
+        },
+        {
+            "session_id": "session-issuer",
+            "blockedBy": "tx_interlock",
+            "reason": "rf_state_unknown",
+            "extra": 1,
+        },
+        {
+            "session_id": "session-issuer",
+            "blockedBy": "tx_interlock",
+            "reason": _EqualsReasonCode("rf_state_unknown"),
+        },
+    ),
+    ids=(
+        "missing-reason",
+        "missing-blocked-by",
+        "wrong-seat",
+        "unknown-code",
+        "extra-key",
+        "merely-equal-code",
+    ),
+)
+async def test_forged_interlock_refusal_details_are_rejected(
+    details: dict[str, object],
+) -> None:
+    srv = WebServer(None, WebConfig(radio_model="IC-7610"))
+    issuer_q, bystander_q = _register_two_sessions(srv)
+    await _ack_held(srv)
+
+    srv._on_command_lifecycle_event(_life(state="failed", details=details))  # noqa: SLF001
+
+    assert issuer_q.empty()
+    assert bystander_q.empty()
+
+
+@pytest.mark.asyncio
+async def test_provider_generation_invalidates_only_active_web_commands() -> None:
+    srv = WebServer(None, WebConfig(radio_model="IC-7610"))
+    issuer_q, bystander_q = _register_two_sessions(srv)
+    service = srv.command_service
+    service._executor = _StubCommandExecutor()  # noqa: SLF001
+    await service.execute(
+        command_intent_from_request(
+            "set_freq",
+            {"freq_hz": 1},
+            source="websocket",
+            command_id="same-id",
+            session_id="session-issuer",
+        )
+    )
+    await service.execute(
+        command_intent_from_request(
+            "set_freq",
+            {"freq_hz": 2},
+            source="public_api",
+            command_id="same-id",
+        )
+    )
+
+    def broken_subscriber(_generation: int) -> None:
+        raise RuntimeError("subscriber broke")
+
+    unsubscribe = srv.command_state_store.subscribe_provider_generation(
+        broken_subscriber
+    )
+    assert srv.command_state_store.begin_provider_generation() == 1
+    unsubscribe()
+    srv._broadcast_state_update(force=True)  # noqa: SLF001
+    issuer = []
+    while not issuer_q.empty():
+        issuer.append(issuer_q.get_nowait())
+    bystander = []
+    while not bystander_q.empty():
+        bystander.append(bystander_q.get_nowait())
+    assert [
+        item["state"] for item in issuer if item["type"] == "command_lifecycle"
+    ] == ["failed"]
+    assert not any(item["type"] == "command_lifecycle" for item in bystander)
+    assert service.terminate_active_commands("probe", source="websocket") == 0
+    assert service.terminate_active_commands("probe", source="public_api") == 1
+    service.apply_observation(
+        Observation(
+            path=FieldPath.receiver("0", "freq_mode", "freq_hz"),
+            value=1,
+            source=SourceMetadata(
+                source="poll_response",
+                provider="stale",
+                command_source="websocket",
+                session_id="session-issuer",
+            ),
+            timestamp_monotonic=time.monotonic(),
+            correlation_id="same-id",
+            provider_generation=0,
+        )
+    )
+    assert issuer_q.empty() and bystander_q.empty()
+
+
+def test_provider_generation_subscribers_serialize_reentrant_advances() -> None:
+    store = StateStore()
+    trace: list[tuple[str, int]] = []
+
+    def first(generation: int) -> None:
+        trace.append(("first", generation))
+        if generation == 1:
+            store.begin_provider_generation()
+
+    store.subscribe_provider_generation(first)
+    unsubscribe = store.subscribe_provider_generation(
+        lambda value: trace.append(("second", value))
+    )
+    assert store.begin_provider_generation() == 2
+    assert trace == [("first", 1), ("second", 1), ("first", 2), ("second", 2)]
+    unsubscribe()
+    unsubscribe()
+
+
+@pytest.mark.asyncio
+async def test_physical_reconciled_lifecycle_is_issuer_only_and_strict() -> None:
+    srv = WebServer(None, WebConfig(radio_model="IC-7610"))
+    issuer_q, bystander_q = _register_two_sessions(srv)
+    await _ack_held(srv)
+    malformed = _life(
+        state="reconciled",
+        message="confirmed by matching observation",
+        details={
+            "session_id": "session-issuer",
+            "revision": 1,
+            "observationSeq": 1,
+        },
+    )
+    srv._on_command_lifecycle_event(malformed)  # noqa: SLF001
+    assert issuer_q.empty() and bystander_q.empty()
+    srv.command_service.apply_observation(
+        Observation(
+            path=FieldPath.receiver("0", "freq_mode", "freq_hz"),
+            value=1,
+            source=SourceMetadata(
+                source="poll_response",
+                provider="physical",
+                command_source="websocket",
+                session_id="session-issuer",
+            ),
+            timestamp_monotonic=time.monotonic(),
+            correlation_id="cmd-held",
+            provider_generation=srv.command_state_store.provider_generation,
+        )
+    )
+    payload = issuer_q.get_nowait()
+    reconciled = srv.command_service.lifecycle_events()[-1]
+    assert payload["state"] == "reconciled"
+    assert payload["details"] == {
+        "revision": reconciled.details["revision"],
+        "observationSeq": reconciled.details["observationSeq"],
+    }
+    assert payload["commandId"] == "cmd-held" and issuer_q.empty()
+    assert bystander_q.empty()
+
+
+@pytest.mark.parametrize(
+    "details",
+    [
+        {"session_id": "session-issuer", "observationSeq": 1},
+        {"session_id": "session-issuer", "revision": 1},
+        {"session_id": "session-issuer", "revision": True, "observationSeq": 1},
+        {"session_id": "session-issuer", "revision": -1, "observationSeq": 1},
+        {"session_id": "session-issuer", "revision": 1.0, "observationSeq": 1},
+        {"session_id": "session-issuer", "revision": 1, "observationSeq": False},
+        {"session_id": "session-issuer", "revision": 1, "observationSeq": -1},
+        {
+            "session_id": "session-issuer",
+            "revision": 1,
+            "observationSeq": 1,
+            "private": "drop",
+        },
+    ],
+)
+@pytest.mark.asyncio
+async def test_malformed_reconciled_evidence_is_not_delivered(
+    details: dict[str, object],
+) -> None:
+    srv = WebServer(None, WebConfig(radio_model="IC-7610"))
+    issuer_q, bystander_q = _register_two_sessions(srv)
+    await _ack_held(srv)
+    event = _life(
+        state="reconciled",
+        message="confirmed by matching observation",
+        details=details,
+    )
+    srv.command_service._events.append(event)  # noqa: SLF001
+    srv._on_command_lifecycle_event(event)  # noqa: SLF001
+    assert issuer_q.empty() and bystander_q.empty()
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"command_id": ""},
+        _terminal(source="public_api"),
+        {"state": "confirmed"},
+        _terminal(timestamp_monotonic=True),
+        _terminal(state="timed_out", timestamp_monotonic=float("nan")),
+        {"target": "not-a-field-path"},
+        {"message": 7},
+        {"details": {"session_id": "session-issuer"}},
+        {"details": _hold(heldBy="wrong")},
+        {"details": _hold(expiresAt=False)},
+        {"details": _hold(expiresAt=float("inf"), extra=1)},
+    ],
+)
+@pytest.mark.asyncio
+async def test_malformed_deferred_lifecycle_is_ignored(
+    overrides: dict[str, object],
+) -> None:
+    srv = WebServer(None, WebConfig(radio_model="IC-7610"))
+    issuer_q, bystander_q = _register_two_sessions(srv)
+    await _ack_held(srv)
+
+    srv._on_command_lifecycle_event(_life(**overrides))  # noqa: SLF001
+
+    assert issuer_q.empty() and bystander_q.empty()
+
+
+@pytest.mark.asyncio
+async def test_deferred_lifecycle_ack_identity_and_bounded_queue() -> None:
+    srv = WebServer(None, WebConfig(radio_model="IC-7610"))
+    issuer_q, bystander_q = _register_two_sessions(srv)
+    event = _life()
+    srv._on_command_lifecycle_event(event)  # noqa: SLF001
+    assert issuer_q.empty()
+
+    await _ack_held(srv)
+    cross_session = _life(state="failed", details={"session_id": "session-bystander"})
+    srv._on_command_lifecycle_event(cross_session)  # noqa: SLF001
+    assert issuer_q.empty() and bystander_q.empty()
+
+    issuer_q.put_nowait({"sentinel": True})
+    srv._on_command_lifecycle_event(event)  # noqa: SLF001
+    assert issuer_q.get_nowait() == {"sentinel": True}
+    srv.unregister_control_event_queue(issuer_q, session_id="session-issuer")
+    _drain_queue(bystander_q)
+    srv._on_command_lifecycle_event(event)  # noqa: SLF001
+    assert bystander_q.empty()
+    srv.command_service._events.append(
+        _life(state="acknowledged", details={"session_id": "unknown"})
+    )  # noqa: SLF001
+    srv._on_command_lifecycle_event(_life(details=_hold(session_id="unknown")))  # noqa: SLF001
+    assert bystander_q.empty()
+
+
+@pytest.mark.asyncio
+async def test_provider_generation_fencing_notifies_command_link_lost() -> None:
+    """MOR-2847: a link-loss fencing termination notifies its issuer with
+    the stable ``commandLinkLost`` code (resolved by the frontend via
+    ``messageFromReasonCode`` to ``core.toast.commandLinkLost``), never with
+    the free-text reason as the match key. The reason stays as a diagnostic
+    param.
+
+    Also pins the MOR-2241 contract with
+    frontend/src/components/shared/Toast.svelte: the page suppresses
+    per-command toasts while disconnected only for this code.
+    """
+    srv = WebServer(None, WebConfig(radio_model="IC-7610"))
+    issuer_q, bystander_q = _register_two_sessions(srv)
+    srv.command_service._executor = _StubCommandExecutor()  # noqa: SLF001
+    service = srv.command_service
+
+    intent = command_intent_from_request(
+        "set_freq",
+        {"freq_hz": 14250000},
+        source="websocket",
+        command_id="cmd-link-loss-1",
+        session_id="session-issuer",
+    )
+    await service.execute(intent)  # real accepted/queued/sent/acknowledged path
+
+    # The real provider-invalidation edge: __init__ subscribed
+    # _on_provider_generation, which calls terminate_active_commands.
+    srv.command_state_store.begin_provider_generation()
+
+    n = issuer_q.get_nowait()
+    assert n["type"] == "notification"
+    assert n["level"] == "error"
+    assert n["category"] == "command"
+    assert n["code"] == "commandLinkLost"
+    assert n["params"] == {"reason": "provider generation invalidated"}
+    lifecycle = issuer_q.get_nowait()
+    assert lifecycle["type"] == "command_lifecycle"
+    assert lifecycle["state"] == "failed"
+    assert lifecycle["details"] == {"outcome": COMMAND_OUTCOME_INVALIDATED}
+    assert lifecycle["commandId"] == "cmd-link-loss-1" and issuer_q.empty()
+    assert bystander_q.empty()  # zero — never broadcast
+
+
+class _GatedCommandExecutor:
+    """Executor double that blocks until released, racing an in-flight
+    invalidation against a completing executor (command_service.py)."""
+
+    def __init__(self) -> None:
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def execute(self, intent: CommandIntent) -> CommandExecutionResult:
+        self.started.set()
+        await self.release.wait()
+        return CommandExecutionResult()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("provider_generation_changed", "reason"),
+    [
+        (True, "command invalidated during provider generation change"),
+        (False, "command invalidated during execution"),
+    ],
+)
+async def test_in_flight_invalidation_notifies_command_link_lost(
+    provider_generation_changed: bool, reason: str
+) -> None:
+    """MOR-2847: the CommandService.execute fencing invalidations — the
+    executor completes after the command's in-flight seat was silently
+    detached — record a failed lifecycle event carrying the structured
+    fencing outcome, and the notification seam resolves that outcome to
+    ``commandLinkLost`` by kind, never by matching the reason text.
+
+    The acknowledged-history precondition mirrors production: the
+    issuer-only notification doctrine (MOR-1445) delivers only post-ack
+    failures, and was_acknowledged is derived per command_id from
+    CommandService's recorded history.
+    """
+    srv = WebServer(None, WebConfig(radio_model="IC-7610"))
+    issuer_q, bystander_q = _register_two_sessions(srv)
+    service = srv.command_service
+
+    intent = command_intent_from_request(
+        "set_freq",
+        {"freq_hz": 14250000},
+        source="websocket",
+        command_id="cmd-fence-1",
+        session_id="session-issuer",
+    )
+    srv.command_service._executor = _StubCommandExecutor()  # noqa: SLF001
+    await service.execute(intent)  # acknowledged history for this command id
+    _drain_queue(issuer_q)
+
+    gated = _GatedCommandExecutor()
+    srv.command_service._executor = gated  # noqa: SLF001
+    execution = asyncio.create_task(service.execute(intent))
+    await gated.started.wait()
+    # Silently detach the in-flight seat (the acknowledged-seat capacity
+    # eviction class — no terminal event for this id), leaving the
+    # invalidation branch as the only failure reporter.
+    service._active_commands.pop(  # noqa: SLF001
+        ("websocket", "session-issuer", "cmd-fence-1")
+    )
+    if provider_generation_changed:
+        srv.command_state_store.begin_provider_generation()
+        _drain_queue(issuer_q)
+    gated.release.set()
+    with pytest.raises(CommandExecutionInvalidatedError, match=reason):
+        await execution
+
+    n = issuer_q.get_nowait()
+    assert n["type"] == "notification"
+    assert n["level"] == "error"
+    assert n["category"] == "command"
+    assert n["code"] == "commandLinkLost"
+    assert n["params"] == {"reason": reason}
+    lifecycle = issuer_q.get_nowait()
+    assert lifecycle["type"] == "command_lifecycle"
+    assert lifecycle["state"] == "failed"
+    assert lifecycle["details"] == {"outcome": COMMAND_OUTCOME_INVALIDATED}
+    assert issuer_q.empty()
+    assert bystander_q.empty()  # zero — never broadcast
+
+
+@pytest.mark.asyncio
+async def test_command_failure_notification_codes_resolve_in_every_locale() -> None:
+    """MOR-2847 contract: every notification code the server can send for
+    command failures resolves to a ``core.toast.<code>`` key in every
+    shipped locale (frontend ``messageFromReasonCode``). The code list is
+    derived from the server's two real command-failure notification paths —
+    the fencing outcome and the ordinary post-ack failure — not from a
+    hand-written copy.
+    """
+    srv = WebServer(None, WebConfig(radio_model="IC-7610"))
+    issuer_q, _ = _register_two_sessions(srv)
+    srv.command_service._executor = _StubCommandExecutor()  # noqa: SLF001
+    service = srv.command_service
+
+    fencing = command_intent_from_request(
+        "set_freq",
+        {"freq_hz": 14250000},
+        source="websocket",
+        command_id="cmd-code-a",
+        session_id="session-issuer",
+    )
+    await service.execute(fencing)
+    srv.command_state_store.begin_provider_generation()
+
+    ordinary = command_intent_from_request(
+        "set_attenuator",
+        {"db": 20, "receiver": 0},
+        source="websocket",
+        command_id="cmd-code-b",
+        session_id="session-issuer",
+    )
+    await service.execute(ordinary)
+    assert service.fail_command("cmd-code-b", message="radio did not respond")
+
+    codes: set[str] = set()
+    while not issuer_q.empty():
+        item = issuer_q.get_nowait()
+        if item.get("type") == "notification" and item.get("category") == "command":
+            codes.add(item["code"])
+    # Pins the derived set: growing it requires the locale keys below.
+    assert codes == {"commandLinkLost", "commandExecutionFailed"}
+
+    locales = (
+        pathlib.Path(__file__).resolve().parents[1]
+        / "frontend"
+        / "src"
+        / "lib"
+        / "i18n"
+        / "locales"
+    )
+    shipped = sorted(path.stem for path in locales.glob("*.json"))
+    assert shipped == ["en-US", "ja-JP", "ru-RU"]
+    for path in sorted(locales.glob("*.json")):
+        catalog = json.loads(path.read_text())
+        for code in codes:
+            assert f"core.toast.{code}" in catalog, (path.name, code)
+
+
+@pytest.mark.asyncio
+async def test_post_ack_command_failure_notifies_issuer_only() -> None:
+    """A command that fails AFTER being acknowledged reaches the session
+    that issued it, and only that session — a second connected client
+    (bystander) gets nothing.
+
+    Keeps the __init__-created ``srv.command_service`` (with its real
+    ``subscribe_lifecycle`` wiring) and swaps only its executor, instead of
+    replacing the service via ``_wire_stub_command_service``. Deleting the
+    production ``subscribe_lifecycle`` call in ``WebServer.__init__`` must
+    turn this test red; a test-side redundant subscribe would mask that.
+    """
+    srv = WebServer(None, WebConfig(radio_model="IC-7610"))
+    issuer_q, bystander_q = _register_two_sessions(srv)
+    srv.command_service._executor = _StubCommandExecutor()  # noqa: SLF001
+    service = srv.command_service
+
+    intent = command_intent_from_request(
+        "set_attenuator",
+        {"db": 20, "receiver": 0},
+        source="websocket",
+        command_id="cmd-att-1",
+        session_id="session-issuer",
+    )
+    await service.execute(intent)  # real accepted/queued/sent/acknowledged path
+
+    fired = service.fail_command(
+        "cmd-att-1",
+        message="Attenuator level must be one of [0, 20] dB for IC-7300, got 18",
+    )
+
+    assert fired is True
+    n = issuer_q.get_nowait()
+    assert n["type"] == "notification"
+    assert n["level"] == "error"
+    assert n["category"] == "command"
+    assert n["code"] == "commandExecutionFailed"
+    assert "Attenuator level" in n["params"]["reason"]
+    lifecycle = issuer_q.get_nowait()
+    assert lifecycle["type"] == "command_lifecycle"
+    assert lifecycle["state"] == "failed"
+    assert lifecycle["details"] == {}
+    assert lifecycle["commandId"] == "cmd-att-1" and issuer_q.empty()
+    assert bystander_q.empty()  # zero — never broadcast
+
+
+@pytest.mark.asyncio
+async def test_command_failure_before_ack_notifies_no_one() -> None:
+    """A command rejected before enqueue/ack must not notify anyone here.
+
+    That synchronous rejection is already returned to the requesting client
+    as a WS response (and, client-side, as a refusal toast per MOR-1422) —
+    a second notification from this seam would be a duplicate.
+    """
+    srv = WebServer(None, WebConfig(radio_model="IC-7610"))
+    issuer_q, bystander_q = _register_two_sessions(srv)
+    service = _wire_stub_command_service(
+        srv, _StubCommandExecutor(raises=ValueError("bad db value"))
+    )
+
+    intent = command_intent_from_request(
+        "set_attenuator",
+        {"db": 999, "receiver": 0},
+        source="websocket",
+        command_id="cmd-att-2",
+        session_id="session-issuer",
+    )
+    with pytest.raises(ValueError, match="bad db value"):
+        await service.execute(intent)  # mirrors a synchronous executor rejection
+
+    assert issuer_q.empty()
+    assert bystander_q.empty()
+
+
+@pytest.mark.asyncio
+async def test_command_timed_out_after_ack_notifies_issuer_only() -> None:
+    """timed_out is a terminal failure too and must also reach only the
+    issuing session, not a broadcast.
+
+    Also keeps the __init__-created ``srv.command_service`` (see the
+    docstring on test_post_ack_command_failure_notifies_issuer_only above)
+    so the session_id threading exercised through
+    handlers/control.py's register_control_event_queue(session_id=...)
+    call sites runs against production wiring in more than one test.
+    """
+    srv = WebServer(None, WebConfig(radio_model="IC-7610"))
+    issuer_q, bystander_q = _register_two_sessions(srv)
+    srv.command_service._executor = _StubCommandExecutor()  # noqa: SLF001
+    service = srv.command_service
+
+    intent = command_intent_from_request(
+        "set_attenuator",
+        {"db": 20, "receiver": 0},
+        source="websocket",
+        command_id="cmd-att-3",
+        session_id="session-issuer",
+    )
+    await service.execute(intent)
+
+    service.fail_command("cmd-att-3", message="radio did not respond", timed_out=True)
+
+    n = issuer_q.get_nowait()
+    assert n["level"] == "error"
+    assert n["code"] == "commandExecutionFailed"
+    assert n["params"]["reason"] == "radio did not respond"
+    lifecycle = issuer_q.get_nowait()
+    assert lifecycle["state"] == "timed_out"
+    assert lifecycle["details"] == {}
+    assert bystander_q.empty()
+
+
+@pytest.mark.asyncio
+async def test_send_notification_to_session_unknown_session_is_a_noop() -> None:
+    """A session that already disconnected (or never existed) is not an
+    error — the send is just dropped, matching the queue-full drop pattern
+    used elsewhere on this class."""
+    srv = WebServer()
+    assert srv.send_notification_to_session("nonexistent", "error", "x") is False
+
+
+@pytest.mark.asyncio
+async def test_target_none_and_scoped_commands_do_not_leak_state_on_success() -> None:
+    """Repro from code review: a command whose _command_target() is None
+    (e.g. set_tuner) gets pending_policy="none" and never reaches a
+    "reconciled" state; a scoped command's overlay can also expire with no
+    terminal lifecycle event at all. A hand-maintained "currently
+    acknowledged" id set would leak forever in both cases. The fix removed
+    that dict entirely — _on_command_lifecycle_event recomputes "was this
+    acknowledged" from CommandService's own history on demand, so there is
+    no WebServer-owned per-command state to leak in the first place.
+    """
+    srv = WebServer(None, WebConfig(radio_model="IC-7610"))
+    q: BoundedQueue[dict[str, object]] = BoundedQueue(maxsize=16)
+    srv.register_control_event_queue(q)
+    service = _wire_stub_command_service(srv, _StubCommandExecutor())
+
+    # set_tuner: unmapped by _command_target() -> target=None -> pending_policy="none".
+    tuner_intent = command_intent_from_request(
+        "set_tuner", {"on": True}, source="websocket", command_id="cmd-tuner-1"
+    )
+    assert tuner_intent.target is None
+    await service.execute(tuner_intent)
+
+    # set_attenuator: scoped (target is not None) but still just acknowledged,
+    # never explicitly reconciled/confirmed in this test.
+    att_intent = command_intent_from_request(
+        "set_attenuator",
+        {"db": 20, "receiver": 0},
+        source="websocket",
+        command_id="cmd-att-5",
+    )
+    assert att_intent.target is not None
+    await service.execute(att_intent)
+
+    # No notification for either — both succeeded — and no per-command
+    # bookkeeping attribute exists on WebServer to have accumulated entries.
+    assert q.empty()
+    assert not hasattr(srv, "_acked_command_ids")
+
+
+# ---------------------------------------------------------------------------
+# Sprint 0B compatibility: canonical state revision + updatedAt (#158)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_state_response_includes_revision_and_updated_at() -> None:
+    """_serve_state adds revision (int) and updatedAt (ISO 8601) to JSON."""
+    import datetime as _dt
+    import json as _json
+
+    srv = WebServer(None, WebConfig(radio_model="IC-7610"))
+    writer = _FakeWriter()
+    await srv._serve_state(writer)  # noqa: SLF001
+
+    text = writer.buffer.decode("ascii", errors="replace")
+    assert "200 OK" in text
+    # Extract JSON body (after blank line)
+    body_start = text.index("\r\n\r\n") + 4
+    data = _json.loads(text[body_start:])
+    assert "revision" in data
+    assert isinstance(data["revision"], int)
+    assert "updatedAt" in data
+    # Must parse as valid ISO 8601 UTC datetime
+    ts = _dt.datetime.fromisoformat(data["updatedAt"])
+    assert ts.tzinfo is not None
+
+
+@pytest.mark.asyncio
+async def test_state_response_includes_lifecycle_observations_without_poller() -> None:
+    """A first delivery synchronously seeds the Store-owned lifecycle tuple."""
+    import json as _json
+
+    srv = WebServer(None, WebConfig(radio_model="IC-7610"))
+    assert srv._radio_poller is None  # noqa: SLF001
+    writer = _FakeWriter()
+    await srv._serve_state(writer)  # noqa: SLF001
+    text = writer.buffer.decode("ascii", errors="replace")
+    body_start = text.index("\r\n\r\n") + 4
+    data = _json.loads(text[body_start:])
+    assert data["revision"] == data["stateRevision"]
+    assert data["stateRevision"] > 0
+
+
+@pytest.mark.asyncio
+async def test_on_radio_state_change_broadcasts_canonical_state_payload() -> None:
+    """State callbacks broadcast StateStore-backed payloads without poller revision."""
+    radio = MagicMock()
+    radio.capabilities = set()
+    radio.profile = MagicMock()
+    radio.profile.receiver_count = 1
+    radio.profile.model = "IC-7300"
+    radio.profile.supports_receiver = MagicMock(return_value=True)
+    radio.profile.supports_cmd29 = MagicMock(return_value=False)
+    radio.profile.vfo_sub_code = None
+    radio.profile.vfo_main_code = None
+
+    srv = WebServer(radio, WebConfig(radio_model="IC-7610"))
+    queue = BoundedQueue[dict[str, object]](maxsize=4)
+    srv.register_control_event_queue(queue)
+    srv.command_state_store.apply(
+        _store_observation(
+            FieldPath.active("0", "freq_mode", "freq_hz"),
+            14_074_000,
+            at=time.monotonic(),
+        )
+    )
+
+    srv._on_radio_state_change("freq_changed", {"freq": 14074000})  # noqa: SLF001
+
+    event = queue.get_nowait()
+    state_update = queue.get_nowait()
+    assert event["type"] == "event"
+    assert state_update["type"] == "state_update"
+    assert (
+        state_update["data"]["stateRevision"]
+        == srv.command_state_store.snapshot().state_revision
+    )
+    assert (
+        state_update["data"]["revision"]
+        == srv.command_state_store.snapshot().state_revision
+    )
+
+
+@pytest.mark.asyncio
+async def test_info_endpoint_returns_structured_capabilities() -> None:
+    """/api/v1/info returns model, capabilities, and connection objects."""
+    import json as _json
+
+    from rigplane.radio_protocol import AudioCapable, DualReceiverCapable, ScopeCapable
+
+    class _FakeRadio(ScopeCapable, AudioCapable, DualReceiverCapable):
+        def __init__(self) -> None:
+            self.model = "IC-7610"
+            self.connected = True
+            self.control_connected = False
+            self.radio_ready = True
+            self.capabilities = {"scope", "audio", "dual_rx"}
+
+    radio = _FakeRadio()
+
+    srv = WebServer(radio)
+    writer = _FakeWriter()
+    await srv._serve_info(writer)  # noqa: SLF001
+
+    text = writer.buffer.decode("ascii", errors="replace")
+    assert "200 OK" in text
+    body_start = text.index("\r\n\r\n") + 4
+    data = _json.loads(text[body_start:])
+
+    # Legacy fields still present (backward compat)
+    assert data["server"] == "rigplane"
+    assert data["proto"] == 1
+    assert data["radio"] == "IC-7610"
+
+    # New structured fields
+    assert data["model"] == "IC-7610"
+    caps = data["capabilities"]
+    assert caps["hasSpectrum"] is True
+    assert caps["hasAudio"] is True
+    assert caps["hasDualReceiver"] is True
+    assert caps["maxReceivers"] == 2
+    assert isinstance(caps["tags"], list)
+    assert isinstance(caps["modes"], list)
+    assert isinstance(caps["filters"], list)
+    assert caps["dataModeInputs"] == [
+        {"value": 0, "label": "MIC"},
+        {"value": 1, "label": "ACC"},
+        {"value": 3, "label": "USB"},
+        {"value": 5, "label": "LAN"},
+        {"value": 2, "label": "MIC+ACC"},
+        {"value": 4, "label": "MIC+USB"},
+    ]
+
+    conn = data["connection"]
+    assert conn["rigConnected"] is True
+    assert conn["controlConnected"] is False
+    assert isinstance(conn["wsClients"], int)
+
+
+@pytest.mark.asyncio
+async def test_info_endpoint_no_radio_serves_with_rig_connected_false() -> None:
+    """/api/v1/info works with no radio attached and no model configured
+    (all capabilities false) -- "no radio attached" is not "an
+    unidentified radio": WebServer must not call the profile resolver at
+    all in that state, and must not raise (MOR-2012 follow-up)."""
+    import json as _json
+
+    srv = WebServer(None)
+    writer = _FakeWriter()
+    await srv._serve_info(writer)  # noqa: SLF001
+
+    text = writer.buffer.decode("ascii", errors="replace")
+    body_start = text.index("\r\n\r\n") + 4
+    data = _json.loads(text[body_start:])
+    assert data["proto"] == 1
+    caps = data["capabilities"]
+    assert caps["hasSpectrum"] is False
+    assert caps["hasAudio"] is False
+    assert caps["hasDualReceiver"] is False
+    assert caps["maxReceivers"] == 1
+    assert caps["tags"] == []
+    conn = data["connection"]
+    assert conn["rigConnected"] is False
+    assert conn["radioReady"] is False
+
+
+# ---------------------------------------------------------------------------
+# Sprint 0 fixes: _camel_case_state transform (C2)
+# ---------------------------------------------------------------------------
+
+
+from rigplane.web.runtime_helpers import _camel_case_state  # noqa: E402
+
+
+class TestCamelCaseState:
+    """Unit tests for the _camel_case_state serialisation helper."""
+
+    def _minimal_dict(self) -> dict:
+        """Return the smallest valid state dict for testing."""
+        return {
+            "active": "MAIN",
+            "dual_watch": False,
+            "tuner_status": 0,
+            "connected": False,
+            "radio_ready": False,
+            "control_connected": False,
+            "revision": 1,
+            "updatedAt": "2026-01-01T00:00:00+00:00",
+            "main": {
+                "freq": 14074000,
+                "data_mode": False,
+                "s_meter": 10,
+                "af_level": 128,
+                "rf_gain": 200,
+            },
+            "sub": {
+                "freq": 7100000,
+                "data_mode": True,
+                "s_meter": 0,
+                "af_level": 64,
+                "rf_gain": 100,
+            },
+            "scope_controls": {"ref_db": -13.5, "vbw_narrow": False},
+        }
+
+    def test_snake_case_keys_become_camel_case(self) -> None:
+        result = _camel_case_state(self._minimal_dict())
+        assert "dualWatch" in result
+        assert "dual_watch" not in result
+        assert "tunerStatus" in result
+        assert "tuner_status" not in result
+
+    def test_freq_renamed_to_freq_hz_in_receiver_dicts(self) -> None:
+        result = _camel_case_state(self._minimal_dict())
+        assert "freqHz" in result["main"]
+        assert "freq" not in result["main"]
+        assert result["main"]["freqHz"] == 14074000
+        assert "freqHz" in result["sub"]
+        assert result["sub"]["freqHz"] == 7100000
+
+    def test_receiver_snake_keys_become_camel_case(self) -> None:
+        result = _camel_case_state(self._minimal_dict())
+        assert "dataMode" in result["main"]
+        assert "data_mode" not in result["main"]
+        assert "sMeter" in result["main"]
+        assert "afLevel" in result["main"]
+        assert "rfGain" in result["main"]
+
+    def test_connection_fields_wrapped_into_object(self) -> None:
+        d = self._minimal_dict()
+        d["connected"] = True
+        d["radio_ready"] = True
+        d["control_connected"] = False
+        result = _camel_case_state(d)
+        assert "connected" not in result
+        assert "radio_ready" not in result
+        assert "control_connected" not in result
+        conn = result["connection"]
+        assert conn["rigConnected"] is True
+        assert conn["radioReady"] is True
+        assert conn["controlConnected"] is False
+
+    def test_revision_and_updated_at_preserved(self) -> None:
+        result = _camel_case_state(self._minimal_dict())
+        assert result["revision"] == 1
+        assert result["updatedAt"] == "2026-01-01T00:00:00+00:00"
+
+    def test_scope_controls_keys_converted(self) -> None:
+        result = _camel_case_state(self._minimal_dict())
+        sc = result["scopeControls"]
+        assert "refDb" in sc
+        assert "vbwNarrow" in sc
+        assert "ref_db" not in sc
+
+    @pytest.mark.asyncio
+    async def test_state_response_is_camel_case(self) -> None:
+        """Integration: _serve_state HTTP response body is camelCase."""
+        import json as _json
+
+        srv = WebServer(None, WebConfig(radio_model="IC-7610"))
+        writer = _FakeWriter()
+        await srv._serve_state(writer)  # noqa: SLF001
+        text = writer.buffer.decode("ascii", errors="replace")
+        body_start = text.index("\r\n\r\n") + 4
+        data = _json.loads(text[body_start:])
+        assert "dualWatch" in data
+        assert "dual_watch" not in data
+        assert "tunerStatus" in data
+        assert "connection" in data
+        assert "rigConnected" in data["connection"]
+
+
+# ---------------------------------------------------------------------------
+# ETag / 304 behaviour for /api/v1/state (#248)
+# ---------------------------------------------------------------------------
+
+
+class TestStateEtag:
+    """Backend ETag/304 support for /api/v1/state."""
+
+    @pytest.mark.asyncio
+    async def test_http_conditional_state_delivers_aged_simulator_liveness(
+        self, connected_radio: IcomRadio, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        radio = connected_radio
+        await radio.get_freq()
+        assert radio.last_valid_frame_monotonic is not None
+        age = 0.0
+        monkeypatch.setattr(
+            runtime_helpers,
+            "time",
+            SimpleNamespace(monotonic=lambda: radio.last_valid_frame_monotonic + age),
+        )
+        srv = WebServer(radio, WebConfig(radio_model="IC-7610"))
+        writer = _FakeWriter()
+        await srv._handle_http(writer, "GET", "/api/v1/state", {})
+        status, first = _response_json(writer)
+        assert status == 200
+        assert first["connection"]["liveness"]["lastFrameAgeMs"] == 0
+        etag = next(
+            line.split(":", 1)[1].strip()
+            for line in writer.buffer.decode().split("\r\n\r\n", 1)[0].splitlines()
+            if line.startswith("ETag:")
+        )
+        cached_payload = srv._cached_public_state_payload
+        store_before = srv.command_state_store.snapshot()
+        age = 0.5
+        writer2 = _FakeWriter()
+        await srv._handle_http(writer2, "GET", "/api/v1/state", {"if-none-match": etag})
+        status, second = _response_json(writer2)
+        assert status == 200
+        assert second["connection"]["liveness"]["lastFrameAgeMs"] == 500
+        assert srv._cached_public_state_payload is cached_payload
+        store_after = srv.command_state_store.snapshot()
+        assert store_after.state_revision == store_before.state_revision
+        assert store_after.freshness_revision == store_before.freshness_revision
+        assert store_after.observation_seq == store_before.observation_seq
+        assert store_after.fields == store_before.fields
+        assert second["publicStateSeq"] > first["publicStateSeq"]
+
+    @pytest.mark.asyncio
+    async def test_state_response_includes_etag(self) -> None:
+        """GET /api/v1/state returns an ETag header."""
+        srv = WebServer(None, WebConfig(radio_model="IC-7610"))
+        writer = _FakeWriter()
+        await srv._serve_state(writer)
+        text = writer.buffer.decode("ascii", errors="replace")
+        header_block = text[: text.index("\r\n\r\n")]
+        assert "ETag:" in header_block, f"No ETag in response headers:\n{header_block}"
+
+    @pytest.mark.asyncio
+    async def test_state_304_when_etag_matches(self) -> None:
+        """GET /api/v1/state with matching If-None-Match returns 304 and empty body."""
+
+        # First request — get the ETag
+        srv = WebServer(None, WebConfig(radio_model="IC-7610"))
+        writer = _FakeWriter()
+        await srv._serve_state(writer)
+        text = writer.buffer.decode("ascii", errors="replace")
+        header_block = text[: text.index("\r\n\r\n")]
+        etag_line = next(
+            line for line in header_block.splitlines() if line.startswith("ETag:")
+        )
+        etag = etag_line.split(":", 1)[1].strip()
+
+        # Second request — send If-None-Match with the same ETag
+        writer2 = _FakeWriter()
+        fake_headers = {"if-none-match": etag}
+        await srv._serve_state(writer2, fake_headers)
+        text2 = writer2.buffer.decode("ascii", errors="replace")
+        status_line = text2.split("\r\n", 1)[0]
+        assert "304" in status_line, f"Expected 304, got: {status_line}"
+        body_start = text2.index("\r\n\r\n") + 4
+        assert text2[body_start:] == "", "304 response must have empty body"
+
+    @pytest.mark.asyncio
+    async def test_state_etag_changes_when_live_connection_metadata_changes(
+        self,
+    ) -> None:
+        """Live connection metadata changes must invalidate conditional state GETs."""
+
+        class _ConnectionRadio:
+            connected = False
+            control_connected = False
+            radio_ready = False
+            capabilities: set[str] = set()
+
+        radio = _ConnectionRadio()
+        srv = WebServer(radio, WebConfig(radio_model="IC-7610"))
+
+        writer = _FakeWriter()
+        await srv._serve_state(writer)  # noqa: SLF001
+        text = writer.buffer.decode("ascii", errors="replace")
+        header_block = text[: text.index("\r\n\r\n")]
+        etag = next(
+            line.split(":", 1)[1].strip()
+            for line in header_block.splitlines()
+            if line.startswith("ETag:")
+        )
+
+        radio.control_connected = True
+
+        writer2 = _FakeWriter()
+        await srv._serve_state(writer2, {"if-none-match": etag})  # noqa: SLF001
+        status, body = _response_json(writer2)
+
+        assert status == 200
+        assert body["connection"]["controlConnected"] is True
+
+    @pytest.mark.asyncio
+    async def test_state_etag_changes_when_ws_client_counts_change(self) -> None:
+        """WS client counts are part of the public state payload and ETag."""
+        srv = WebServer(None, WebConfig(radio_model="IC-7610"))
+
+        writer = _FakeWriter()
+        await srv._serve_state(writer)  # noqa: SLF001
+        text = writer.buffer.decode("ascii", errors="replace")
+        header_block = text[: text.index("\r\n\r\n")]
+        etag = next(
+            line.split(":", 1)[1].strip()
+            for line in header_block.splitlines()
+            if line.startswith("ETag:")
+        )
+
+        srv.register_control_event_queue(BoundedQueue(maxsize=16))
+
+        writer2 = _FakeWriter()
+        await srv._serve_state(writer2, {"if-none-match": etag})  # noqa: SLF001
+        status, body = _response_json(writer2)
+
+        assert status == 200
+        assert body["wsClients"]["control"] == 1
+
+    @pytest.mark.asyncio
+    async def test_state_etag_changes_when_ws_client_count_returns_to_prior_value(
+        self,
+    ) -> None:
+        """publicStateSeq distinguishes repeated live metadata values."""
+        srv = WebServer(None, WebConfig(radio_model="IC-7610"))
+
+        writer = _FakeWriter()
+        await srv._serve_state(writer)  # noqa: SLF001
+        text = writer.buffer.decode("ascii", errors="replace")
+        header_block = text[: text.index("\r\n\r\n")]
+        initial_etag = next(
+            line.split(":", 1)[1].strip()
+            for line in header_block.splitlines()
+            if line.startswith("ETag:")
+        )
+        initial_status, initial_body = _response_json(writer)
+        assert initial_status == 200
+        assert initial_body["wsClients"]["control"] == 0
+
+        queue: BoundedQueue[dict[str, object]] = BoundedQueue(maxsize=16)
+        srv.register_control_event_queue(queue)
+        writer2 = _FakeWriter()
+        await srv._serve_state(writer2)  # noqa: SLF001
+        added_status, added_body = _response_json(writer2)
+        assert added_status == 200
+        assert added_body["wsClients"]["control"] == 1
+        assert added_body["publicStateSeq"] > initial_body["publicStateSeq"]
+
+        srv.unregister_control_event_queue(queue)
+        writer3 = _FakeWriter()
+        await srv._serve_state(writer3, {"if-none-match": initial_etag})  # noqa: SLF001
+        final_status, final_body = _response_json(writer3)
+        final_text = writer3.buffer.decode("ascii", errors="replace")
+        final_headers = final_text[: final_text.index("\r\n\r\n")]
+        final_etag = next(
+            line.split(":", 1)[1].strip()
+            for line in final_headers.splitlines()
+            if line.startswith("ETag:")
+        )
+
+        assert final_status == 200
+        assert final_body["wsClients"]["control"] == 0
+        assert final_body["publicStateSeq"] > added_body["publicStateSeq"]
+        assert final_etag != initial_etag
+
+    @pytest.mark.asyncio
+    async def test_state_etag_changes_when_health_changes_without_revision(
+        self,
+    ) -> None:
+        """Health-only transitions must not be hidden behind a revision-only ETag."""
+
+        class _HealthRadio:
+            connected = True
+            control_connected = True
+            radio_ready = True
+            capabilities: set[str] = set()
+
+        radio = _HealthRadio()
+        srv = WebServer(radio, WebConfig(radio_model="IC-7610"))
+        writer = _FakeWriter()
+        await srv._serve_state(writer)
+        text = writer.buffer.decode("ascii", errors="replace")
+        header_block = text[: text.index("\r\n\r\n")]
+        etag = next(
+            line.split(":", 1)[1].strip()
+            for line in header_block.splitlines()
+            if line.startswith("ETag:")
+        )
+
+        radio.radio_ready = False
+        radio._last_civ_data_received = 0.0
+        radio._civ_ready_idle_timeout = 1.0
+
+        writer2 = _FakeWriter()
+        await srv._serve_state(writer2, {"if-none-match": etag})
+        text2 = writer2.buffer.decode("ascii", errors="replace")
+        assert "200 OK" in text2.split("\r\n", 1)[0]
+        body = json.loads(text2[text2.index("\r\n\r\n") + 4 :])
+        assert body["revision"] > 0
+        assert body["healthRevision"] == 2
+        assert body["radioHealth"]["likelyCause"] == "radio_not_responding"
+
+    @pytest.mark.asyncio
+    async def test_state_etag_changes_when_same_value_field_metadata_changes(
+        self,
+    ) -> None:
+        """Same-value observations update fieldStatus and must invalidate ETag."""
+        srv = WebServer(None, WebConfig(radio_model="IC-7610"))
+        path = FieldPath.active("0", "freq_mode", "freq_hz")
+        srv.command_state_store.apply(
+            Observation(
+                path=path,
+                value=14_074_000,
+                source=SourceMetadata(
+                    source="poll_response",
+                    provider="first",
+                    transport="fake",
+                    native_id="first",
+                ),
+                timestamp_monotonic=1.0,
+                max_age=1.0,
+            )
+        )
+
+        writer = _FakeWriter()
+        await srv._serve_state(writer)  # noqa: SLF001
+        text = writer.buffer.decode("ascii", errors="replace")
+        header_block = text[: text.index("\r\n\r\n")]
+        etag = next(
+            line.split(":", 1)[1].strip()
+            for line in header_block.splitlines()
+            if line.startswith("ETag:")
+        )
+
+        srv.command_state_store.apply(
+            Observation(
+                path=path,
+                value=14_074_000,
+                source=SourceMetadata(
+                    source="poll_response",
+                    provider="second",
+                    transport="fake",
+                    native_id="second",
+                ),
+                timestamp_monotonic=2.0,
+                max_age=10.0,
+            )
+        )
+
+        writer2 = _FakeWriter()
+        await srv._serve_state(writer2, {"if-none-match": etag})  # noqa: SLF001
+        status, body = _response_json(writer2)
+
+        assert status == 200
+        assert (
+            body["observationSeq"] == srv.command_state_store.snapshot().observation_seq
+        )
+        field_status = body["fieldStatus"]["main.freqHz"]
+        assert field_status["lastObservedMonotonic"] == 2.0
+        assert field_status["maxAge"] == 10.0
+        assert field_status["source"]["provider"] == "second"
+
+    @pytest.mark.asyncio
+    async def test_state_200_when_etag_differs(self) -> None:
+        """GET /api/v1/state with stale If-None-Match returns 200 with full body."""
+        srv = WebServer(None, WebConfig(radio_model="IC-7610"))
+        writer = _FakeWriter()
+        fake_headers = {"if-none-match": '"stale-etag-999"'}
+        await srv._serve_state(writer, fake_headers)
+        text = writer.buffer.decode("ascii", errors="replace")
+        status_line = text.split("\r\n", 1)[0]
+        assert "200" in status_line, f"Expected 200, got: {status_line}"
+        body_start = text.index("\r\n\r\n") + 4
+        assert len(text[body_start:]) > 0, "200 response must have a body"
+
+
+@pytest.mark.parametrize("signal", ["tx", "readiness"])
+async def test_health_snapshot_cannot_delay_fresh_scope_resume(
+    signal, virtual_clock, monkeypatch
+):
+    srv, radio, _ = await _virtual_scope_server(monkeypatch, virtual_clock)
+    session = srv._radio_scope_session
+    transmitting = False
+    radio.radio_ready = signal != "readiness"
+    monkeypatch.setattr(srv, "_scope_tx_known", lambda: transmitting)
+    session.tx_probe = lambda: transmitting
+    await session.set_output(False, release=False)
+    transmitting = signal == "tx"
+    monitor = asyncio.create_task(srv._scope_health_monitor())
+    try:
+        await _elapse_scope_windows(virtual_clock, 1)
+    finally:
+        monitor.cancel()
+        await asyncio.gather(monitor, return_exceptions=True)
+    transmitting = False
+    radio.radio_ready = True
+    started = virtual_clock()
+    await session.set_output(True)
+    assert session.enabled
+    assert virtual_clock() - started <= 0.1
+
+
+async def test_scope_monitor_survives_pending_restore_failure(
+    virtual_clock, monkeypatch
+):
+    from rigplane.core.exceptions import CommandError
+
+    srv, radio, _ = await _virtual_scope_server(monkeypatch, virtual_clock)
+    session = srv._radio_scope_session
+    await session.set_output(False, release=False)
+    radio.enable_scope.side_effect = CommandError("external CAT owns wire")
+    with pytest.raises(CommandError):
+        await session.set_output(False)
+    monitor = asyncio.create_task(srv._scope_health_monitor())
+    try:
+        await _elapse_scope_windows(virtual_clock, 1)
+        assert not monitor.done()
+        radio.enable_scope.side_effect = None
+        await _elapse_scope_windows(virtual_clock, 1)
+        assert not session.restoring
+    finally:
+        monitor.cancel()
+        await asyncio.gather(monitor, return_exceptions=True)

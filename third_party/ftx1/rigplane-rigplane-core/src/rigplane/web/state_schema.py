@@ -1,0 +1,680 @@
+"""Canonical pydantic schema for the public radio-state WIRE payload (MOR-881).
+
+This module is the **single source of truth** for the shape of the public web
+state payload emitted by
+:func:`rigplane.web.runtime_helpers.build_public_state_payload` and
+:func:`~rigplane.web.runtime_helpers.build_public_state_payload_from_snapshot`.
+
+It models the *union / superset* of the two emit paths (dataclass + snapshot):
+fields that only the snapshot path emits (``dcd``, ``fieldStatus``) are marked
+optional, while fields that are always present in both paths are required.
+
+Uses (each dev/CI-side; see the zero-runtime-dep guarantee below):
+
+1. The conformance tests (``tests/web/test_state_schema_conformance.py``,
+   ``tests/web/test_control_ws_fact_records.py``) validate real payloads
+   from the producers against these models — including the server-injected
+   fact-record leaves (identity/session, ``audioReceive``) and the
+   managed-transmit document record carried by the control-WS
+   ``managed_transmit_changed`` event (MOR-4279; the pydantic-free SDK
+   mirror of those records lives in ``web/api_contract.py`` and a drift
+   test keeps the two equal).
+2. The codegen script (``scripts/gen_state_types.py``) reads
+   ``ServerStatePublic.model_json_schema()`` and
+   ``StateUpdateEnvelope.model_json_schema()`` to regenerate the server-sent
+   portion of ``frontend/src/lib/types/state.ts``.
+
+**Zero-runtime-dep guarantee:** pydantic is a DEV/optional dependency. This
+module imports pydantic at load time, so it MUST NOT be imported by any live
+request-path module (``runtime_helpers.py`` / ``server.py``). The producers
+stay dict-based and pydantic-free. Do not wire ``model_validate`` into the
+live request path.
+"""
+
+from __future__ import annotations
+
+from typing import Annotated, Literal
+
+from pydantic import BaseModel, ConfigDict, Field
+
+__all__ = [
+    "VfoSlotPublic",
+    "ReceiverStatePublic",
+    "FixedEdgePublic",
+    "ScopeControlsPublic",
+    "FieldStatusPublic",
+    "KnownTxTargetPublic",
+    "UnknownTxTargetPublic",
+    "TxTargetPublic",
+    "ConnectionIdentityPublic",
+    "ConnectionSessionPublic",
+    "ConnectionPublic",
+    "RadioHealthPublic",
+    "RadioDetailPublic",
+    "MonitorMuteSavedAfPublic",
+    "MonitorMutePublic",
+    "AudioDeviceCandidatePublic",
+    "AudioReceiveFailurePublic",
+    "AudioReceivePublic",
+    "ManagedTxIntentPublic",
+    "ManagedTxActuationPublic",
+    "ManagedTxAbortErrorPublic",
+    "ManagedTxTotPublic",
+    "ManagedTransmitBlockPublic",
+    "TxObservationPublic",
+    "ManagedTransmitDocumentPublic",
+    "SdrStatusPublic",
+    "WsClientsPublic",
+    "ServerStatePublic",
+    "StateUpdateEnvelope",
+]
+
+
+class _Strict(BaseModel):
+    """Base model with ``extra="forbid"`` so generated TS has no index signature.
+
+    ``additionalProperties: false`` in the emitted JSON Schema suppresses the
+    ``[k: string]: unknown`` index signature ``json-schema-to-typescript`` would
+    otherwise add (contract-spike REPORT, Path 3 caveat).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class VfoSlotPublic(_Strict):
+    """One VFO slot (A or B) within a receiver."""
+
+    freqHz: int | None = None
+    mode: str | None = None
+    filterNum: int | None = None
+    dataMode: int | None = None
+
+
+class ReceiverStatePublic(_Strict):
+    """Per-receiver (``main`` / ``sub``) public state.
+
+    Carries BOTH the slot view (``vfoA`` / ``vfoB`` / ``activeSlot``) and the
+    legacy active-slot scalars (``freqHz`` / ``mode`` / ``filter`` /
+    ``dataMode``). The redundancy is intentional back-compat (radio_state.py
+    ``_receiver_to_dict``); the slot view is the canonical source-of-truth and
+    the scalars are derived from ``activeSlot``.
+    """
+
+    # Slot view (MOR-881: previously absent from state.ts).
+    vfoA: VfoSlotPublic
+    vfoB: VfoSlotPublic
+    activeSlot: str | None = None
+    # Relative inactive-VFO readback for providers that cannot prove absolute
+    # A/B identity. Additive and optional for older providers/clients.
+    unselectedVfo: VfoSlotPublic | None = None
+
+    # Legacy active-slot scalars (derived from the active slot). ``freq`` is
+    # renamed to ``freqHz`` by ``_RECEIVER_KEY_MAP``; the rest pass through.
+    freqHz: int | None = None
+    mode: str | None = None
+    filter: int | None = None
+    dataMode: int | None = None
+
+    filterWidth: int | None = None
+    # True when the radio's width answer is the profile-declared
+    # ``radio_default_code`` (no Hz value); the ``filterWidth`` leaf is null
+    # then. This observation leaf shares its snake_case name with the
+    # ``filter_width_radio_default`` CAPABILITY tag, which is a different
+    # namespace: the tag means "the reset command is writeable"
+    # (``capabilities.py``), this leaf means "the last read WAS the
+    # radio default" (MOR-3677).
+    filterWidthRadioDefault: bool | None = None
+    att: int | None = None
+    preamp: int | None = None
+    nb: bool | None = None
+    nr: bool | None = None
+    digisel: bool | None = None
+    ipplus: bool | None = None
+    sMeterSqlOpen: bool | None = None
+    agc: int | None = None
+    audioPeakFilter: int | None = None
+    autoNotch: bool | None = None
+    manualNotch: bool | None = None
+    twinPeakFilter: bool | None = None
+    filterShape: int | None = None
+    agcTimeConstant: int | None = None
+    # These three are normalized to float in [0, 1] by the snapshot path
+    # (_normalize_public_level_snapshot_value in runtime_helpers.py).  Pydantic
+    # lax mode coerces the int(0) from the dataclass path, so float is the
+    # correct canonical type for both producers.
+    afLevel: float | None = None
+    rfGain: float | None = None
+    squelch: float | None = None
+    sMeter: int | None = None
+    apfTypeLevel: int | None = None
+    apfOn: bool | None = None
+    apfFreq: int | None = None
+    nrLevel: int | None = None
+    pbtInner: int | None = None
+    pbtOuter: int | None = None
+    nbLevel: int | None = None
+    digiselShift: int | None = None
+    afMute: bool | None = None
+    contour: int | None = None
+    ifShift: int | None = None
+    narrow: bool | None = None
+    manualNotchFreq: int | None = None
+    manualNotchWidth: int | None = None
+    # notch_filter (MOR-1548): reclassified from global to receiver-scoped,
+    # matching the ic7610.toml cmd29 route's own per-receiver rationale.
+    notchFilter: int | None = None
+    repeaterTone: bool | None = None
+    repeaterTsql: bool | None = None
+    toneFreq: int | None = None
+    tsqlFreq: int | None = None
+    repeaterShift: int | None = None
+    # Neutral tone squelch type (MOR-3377): the observation adapters publish
+    # the ``core/types.py: ToneSquelchType`` member value as a string, or
+    # ``None`` for a selector code outside the profile's
+    # ``[tone_squelch_types]`` table (``backends/yaesu_cat/observations.py:
+    # poll_slow_controls``; ``runtime/_civ_rx.py: _observations_from_frame``).
+    # Pinned to the enum members both ways by ``tests/web/
+    # test_state_schema_conformance.py``: a member the Literal omits fails
+    # ``test_every_tone_squelch_type_value_conforms``, and a stale extra
+    # Literal member fails the set-equality test
+    # ``test_tone_squelch_type_literal_members_equal_the_enum``.
+    toneSquelchType: (
+        Literal[
+            "off",
+            "tone",
+            "tsql",
+            "dtcs",
+            "dtcs_t",
+            "tone_t_dtcs_r",
+            "dtcs_t_tsql_r",
+            "tone_t_tsql_r",
+            "pr_freq",
+            "rev_tone",
+        ]
+        | None
+    ) = None
+
+    # Snapshot-path only: ``dcd`` is the canonical squelch-open status; it is
+    # also dual-published as the deprecated ``sMeterSqlOpen`` alias (MOR-466).
+    # Absent in the plain ``to_dict()`` path, so optional.
+    dcd: bool | None = None
+
+
+class FixedEdgePublic(_Strict):
+    """Scope fixed-edge sub-object."""
+
+    rangeIndex: int = 0
+    edge: int = 0
+    startHz: int = 0
+    endHz: int = 0
+
+
+class ScopeControlsPublic(_Strict):
+    """Spectrum-scope control state."""
+
+    receiver: int | None = None
+    dual: bool | None = None
+    mode: int | None = None
+    span: int | None = None
+    edge: int | None = None
+    hold: bool | None = None
+    refDb: float | None = None
+    speed: int | None = None
+    duringTx: bool | None = None
+    centerType: int | None = None
+    vbwNarrow: bool | None = None
+    rbw: int | None = None
+    fixedEdge: FixedEdgePublic | None = None
+
+
+class FieldStatusPublic(_Strict):
+    """Per-field freshness / availability entry (snapshot path only).
+
+    ``observed=False`` entries carry only the first four fields; observed
+    entries add ``lastObservedMonotonic`` / ``maxAge`` / ``source`` /
+    ``quality``. All five extras are therefore optional. ``quality`` (a
+    ``string[]``) is emitted at runtime but was absent from the old TS
+    interface (MOR-881 contract correction).
+
+    ``available`` and ``stale`` come from an observed entry's freshness
+    (``runtime_helpers._freshness_availability``). ``missing``,
+    ``unavailable`` and ``undeclared`` are what
+    ``runtime_helpers._absence_availability`` makes of a path with no
+    observation: ``undeclared`` when the caller's declared set does not
+    carry it, ``unavailable`` when the caller's resolved availability map
+    reads its ``available_when`` clauses as ``False`` or ``None``
+    (``acquisition_scheduler.resolve_available_when``), ``missing``
+    otherwise. ``unavailable`` needs the availability argument and
+    ``undeclared`` needs the declared argument at
+    ``runtime_helpers.build_public_state_payload_from_snapshot``; either can
+    be emitted when its corresponding argument is passed alone. A caller that
+    passes neither gets ``missing``.
+    """
+
+    storePath: str
+    observed: bool
+    freshness: Literal["unknown", "fresh", "stale"]
+    availability: Literal["missing", "available", "stale", "unavailable", "undeclared"]
+    lastObservedMonotonic: float | None = None
+    maxAge: float | None = None
+    source: dict[str, object] | None = None
+    quality: list[str] = Field(default_factory=list)
+
+
+class KnownTxTargetPublic(_Strict):
+    """Fresh backend-neutral transmit-target identity."""
+
+    status: Literal["known"]
+    receiver: Literal["MAIN", "SUB"]
+    slot: Literal["A", "B"] | None
+    frequencyHz: Annotated[int, Field(strict=True, gt=0)] | None
+
+
+class UnknownTxTargetPublic(_Strict):
+    """Fail-closed transmit target when current identity is unavailable."""
+
+    status: Literal["unknown"] = "unknown"
+    reason: Literal[
+        "not-observed",
+        "stale",
+        "unsupported",
+        "contradiction",
+    ]
+
+
+TxTargetPublic = Annotated[
+    KnownTxTargetPublic | UnknownTxTargetPublic,
+    Field(discriminator="status"),
+]
+
+
+class ConnectionLivenessPublic(_Strict):
+    """MOR-3845: decode-point radio liveness (additive).
+
+    ``lastFrameAgeMs`` is computed server-side at payload-build time from
+    the backend's ``last_valid_frame_monotonic`` stamp; ``None`` when the
+    radio has never answered on this connection generation.
+    """
+
+    lastFrameAgeMs: int | None
+    staleAfterMs: int
+    source: Literal["radio", "daemon", "simulator"]
+
+
+class ConnectionIdentityPublic(_Strict):
+    """Connect-time radio identity (MOR-3071), served by ``GET
+    /api/v1/info`` and pushed on the control WS inside the state payload's
+    ``connection`` object (MOR-4279).
+
+    Serialized from ``core/radio_protocol.py: RadioIdentity`` by the one
+    producer ``WebServer._connection_identity_payload``. Optional here:
+    only the web server injects it.
+    """
+
+    status: Literal[
+        "checking", "verified", "identity_mismatch", "no_response", "unverified"
+    ]
+    expectedModel: str | None = None
+    answeredModel: str | None = None
+    answeredId: str | None = None
+
+
+class ConnectionSessionPublic(_Strict):
+    """Start-up busy-session hold state (MOR-3391 part 2), served by
+    ``GET /api/v1/info`` and pushed on the control WS inside the state
+    payload's ``connection`` object (MOR-4279).
+
+    Always ``{"busy": false, "retryInSeconds": null}`` outside a hold;
+    produced by the one producer ``_startup_busy_session_payload``.
+    Optional here: only the web server injects it.
+    """
+
+    busy: bool
+    retryInSeconds: float | None = None
+
+
+class ConnectionPublic(_Strict):
+    """Synthetic connection object injected from the backend connection scalars."""
+
+    rigConnected: bool = False
+    radioReady: bool = False
+    controlConnected: bool = False
+    # MOR-3845: additive; ``None`` when no radio is attached.
+    liveness: ConnectionLivenessPublic | None = None
+    # MOR-4279: additive server-injected identity/session fact records,
+    # the same records ``GET /api/v1/info`` serves. ``None`` on payloads
+    # built without a web server (the serverless helper paths).
+    identity: ConnectionIdentityPublic | None = None
+    session: ConnectionSessionPublic | None = None
+
+
+class RadioHealthPublic(_Strict):
+    """Classified server/radio health (``classify_radio_health``)."""
+
+    serverReachable: bool
+    radioLink: Literal["connected", "reconnecting", "disconnected", "unknown"]
+    readiness: Literal["ready", "delayed", "stalled", "recovering", "idle"]
+    likelyCause: Literal[
+        "server_unreachable",
+        "radio_network_lost",
+        "radio_remote_control_unreachable",
+        "radio_not_responding",
+        "radio_powered_off_likely",
+        "radio_not_connected",
+        "radio_session_busy",
+        "operator_disconnected",
+        "unknown",
+    ]
+    sinceMs: int
+    lastError: str | None = None
+
+
+class RadioDetailPublic(_Strict):
+    """Radio connection detail. Carries ONLY ``status`` in the state payload.
+
+    MOR-881 contract correction: the old TS declared a required
+    ``uptimeSeconds`` here, but that field belongs to ``/api/v1/runtime`` and
+    ``/api/v1/radio`` — it is NEVER in the state payload.
+    """
+
+    status: str
+
+
+class MonitorMuteSavedAfPublic(_Strict):
+    """AF levels monitor MUTE saved, one per receiver the radio has.
+
+    ``sub`` is absent when the radio has one receiver, matching the
+    top-level ``sub`` rule (MOR-2583).
+    """
+
+    main: float | None = None
+    sub: float | None = None
+
+
+class MonitorMutePublic(_Strict):
+    """Server-owned monitor MUTE (MOR-2583).
+
+    Process state, not a radio observation: it survives a page reload and a
+    radio reconnect. ``savedAf`` holds the levels unmute restores.
+    """
+
+    on: bool = False
+    savedAf: MonitorMuteSavedAfPublic = Field(default_factory=MonitorMuteSavedAfPublic)
+
+
+class AudioDeviceCandidatePublic(_Strict):
+    """One offered audio device of an RX-start failure record."""
+
+    stableId: str
+    displayName: str
+    direction: str
+    hostApi: str
+    portAudioIndex: int
+    nearRadio: bool
+
+
+class AudioReceiveFailurePublic(_Strict):
+    """The latest RX-start failure Core retained (schema version 1)."""
+
+    stage: str
+    code: str
+    reason: str
+    holder: str | None = None
+    candidates: list[AudioDeviceCandidatePublic] = Field(default_factory=list)
+
+
+class AudioReceivePublic(_Strict):
+    """Structured RX-audio start facts (MOR-4279), served by ``GET
+    /api/v1/info`` and pushed on the control WS as a state-payload leaf.
+
+    Produced by the one producer ``AudioBroadcaster.rx_start_status``;
+    ``failure`` is ``None`` while the last RX start succeeded. Optional on
+    :class:`ServerStatePublic`: only the web server injects it.
+    """
+
+    schemaVersion: int
+    failure: AudioReceiveFailurePublic | None
+
+
+class ManagedTxIntentPublic(_Strict):
+    """``managedTransmit.intent`` of the managed-transmit document record."""
+
+    kind: Literal["rx", "transmit", "ptt"]
+    owner: str | None = None
+
+
+class ManagedTxActuationPublic(_Strict):
+    """``managedTransmit.lastActuation`` of the managed-transmit record."""
+
+    operation: str
+    result: str
+    attemptId: str
+
+
+class ManagedTxAbortErrorPublic(_Strict):
+    """One ``managedTransmit.abortErrors`` entry of the managed-transmit
+    document record."""
+
+    operation: str
+    error: str
+
+
+class ManagedTxTotPublic(_Strict):
+    """``managedTransmit.tot`` of the managed-transmit document record."""
+
+    configuredSeconds: float | None
+    active: bool
+    remainingMs: int | None
+    expiresAt: str | None
+
+
+class ManagedTransmitBlockPublic(_Strict):
+    """The ``managedTransmit`` block of the managed-transmit document."""
+
+    status: Literal["available", "unavailable"]
+    reason: str | None = None
+    intent: ManagedTxIntentPublic | None = None
+    releaseRequired: bool | None = None
+    lastError: str | None = None
+    lastActuation: ManagedTxActuationPublic | None = None
+    abortErrors: list[ManagedTxAbortErrorPublic] = Field(default_factory=list)
+    tot: ManagedTxTotPublic | None = None
+
+
+class TxObservationPublic(_Strict):
+    """The ``txObservation`` block: canonical observed-PTT evidence
+    (``core.tx_observation.ObservedPtt``), independent of the managed
+    authority."""
+
+    observedPtt: Literal["on", "off", "unknown"]
+
+
+class ManagedTransmitDocumentPublic(_Strict):
+    """The managed-transmit document record (MOR-4279): the wire shape of
+    ``GET /api/v1/managed-transmit`` AND of the control-WS
+    ``managed_transmit_changed`` event payload — both serialize the same
+    record from the one producer ``WebServer._managed_tx_document``
+    (``web/managed_tx_view.py: build_managed_tx_view``).
+
+    Not part of :class:`ServerStatePublic`: the document changes on the
+    managed-TX authority's own cadence and is pushed as an event, not as
+    a state leaf. ``sampledAt`` / ``expiresAt`` are UTC millisecond
+    ISO-8601 strings ending in ``Z``.
+    """
+
+    schemaVersion: int
+    sampledAt: str
+    managedTransmit: ManagedTransmitBlockPublic
+    txObservation: TxObservationPublic
+
+
+class SdrStatusPublic(_Strict):
+    """Live SDR panadapter status (MOR-3201), injected by the web server
+    into every public state payload; absent on server-less payloads, so
+    the field on :class:`ServerStatePublic` is optional."""
+
+    state: Literal["disabled", "starting", "streaming", "reconnecting", "error"]
+    device: str
+    sampleRateHz: int
+    spanHz: int
+    txFrozen: bool
+    overflowCount: int
+    lastError: str | None = None
+
+
+class WsClientsPublic(_Strict):
+    """WebSocket client counts per channel."""
+
+    scope: int = 0
+    control: int = 0
+    audio: int = 0
+
+
+class ServerStatePublic(_Strict):
+    """The full public radio-state payload (server-sent portion).
+
+    Excludes the client-only ``meterSource`` (never server-sent) and the
+    frontend-only ``UiState`` / ``PendingCommand`` types (MOR-881).
+    Leaves with a ``fieldStatus`` entry publish ``null`` while unobserved
+    and keep their value when stale; ``txTarget`` excepted — it encodes
+    absence in-band (an unknown-status object), not as null (MOR-2513;
+    pinned by ``tests/web/test_state_schema_conformance.py::
+    test_snapshot_path_unobserved_null_leaves_conform``).
+    """
+
+    # Revisions / sequence counters.
+    revision: int
+    stateRevision: int
+    freshnessRevision: int
+    observationSeq: int
+    healthRevision: int = 0
+    updatedAt: str
+    # Additive wire-contract metadata. Runtime B2 emission requires both;
+    # defaults preserve generated compile-time compatibility for old consumers.
+    stateContractVersion: Literal[1] = 1
+    providerGeneration: int = 0
+
+    # Global slow-state / TX flags.
+    # ``active`` is set to "MAIN"/"SUB" in exactly three places:
+    #   _civ_rx.py (0xD2 frame), _dual_rx_runtime.py, and RadioState default.
+    # No other values are produced; the Literal is safe.
+    active: Literal["MAIN", "SUB"] | None = None
+    powerOn: bool | None = None
+    ptt: bool | None = None
+    # Normalized to float in [0, 1] by the snapshot path via
+    # _normalize_public_level_snapshot_value (runtime_helpers.py).
+    powerLevel: float | None = None
+    split: bool | None = None
+    dualWatch: bool | None = None
+    scanning: bool | None = None
+    scanType: int | None = None
+    scanResumeMode: int | None = None
+    tuningStep: int | None = None
+    overflow: bool | None = None
+    tunerStatus: int | None = None
+    ritFreq: int | None = None
+    ritOn: bool | None = None
+    ritTx: bool | None = None
+    compMeter: float | None = None
+    vdMeter: float | None = None
+    idMeter: float | None = None
+    powerMeter: float | None = None
+    swrMeter: float | None = None
+    alcMeter: float | None = None
+    cwPitch: int | None = None
+    micGain: int | None = None
+    keySpeed: int | None = None
+    mainSubTracking: bool | None = None
+    compressorOn: bool | None = None
+    compressorLevel: int | None = None
+    monitorOn: bool | None = None
+    breakInDelay: int | None = None
+    cwSpot: bool | None = None
+    breakIn: int | None = None
+    dialLock: bool | None = None
+    driveGain: int | None = None
+    monitorGain: int | None = None
+    # Compatibility alias derived from canonical ``active``; never Store truth.
+    vfoSelect: int | None = None
+    # Opaque compatibility only; generic controls must not treat it as truth.
+    yaesu: dict[str, int | None] | None = None
+    voxOn: bool | None = None
+    voxGain: int | None = None
+    antiVoxGain: int | None = None
+    voxDelay: int | None = None
+    ssbTxBandwidth: int | None = None
+    refAdjust: int | None = None
+    dashRatio: int | None = None
+    nbDepth: int | None = None
+    nbWidth: int | None = None
+    txAntenna: int | None = None
+    rxAntenna1: bool | None = None
+    rxAntenna2: bool | None = None
+    dataOffModInput: int | None = None
+    data1ModInput: int | None = None
+    data2ModInput: int | None = None
+    data3ModInput: int | None = None
+    txBandEdges: list[dict[str, int]] | None = None
+    scopeControls: ScopeControlsPublic
+    txTarget: TxTargetPublic
+
+    # Receivers. ``sub`` is dropped from the payload when ``receiver_count < 2``.
+    main: ReceiverStatePublic
+    sub: ReceiverStatePublic | None = None
+
+    # Synthetic / injected objects.
+    connection: ConnectionPublic
+    radioDetail: RadioDetailPublic
+    radioHealth: RadioHealthPublic
+    wsClients: WsClientsPublic
+    # Server process state, injected by the web server after the radio
+    # projection. Absent on a payload built without a server (MOR-2583).
+    monitorMute: MonitorMutePublic | None = None
+    # Live SDR panadapter status, likewise server-injected only (MOR-3201).
+    sdr: SdrStatusPublic | None = None
+    # Structured RX-audio start facts, likewise server-injected only
+    # (MOR-4279); the same record ``GET /api/v1/info`` serves as its
+    # ``audioReceive`` object.
+    audioReceive: AudioReceivePublic | None = None
+
+    # Snapshot path only — absent on the dataclass path, never null when
+    # present (generated TS: ``fieldStatus?: Record<string, FieldStatusPublic>``).
+    fieldStatus: dict[str, FieldStatusPublic] = Field(default_factory=dict)
+
+    # Added by the server seq counter, not the helper. Always an int when
+    # present (the producer omits the key otherwise), so the generated TS is
+    # ``publicStateSeq?: number`` — never nullable.
+    publicStateSeq: int = 0
+
+
+class StateUpdateEnvelope(_Strict):
+    """WS ``state_update`` delta/full envelope (``_delta_encoder.py``).
+
+    The full frame carries ``data`` (a complete :class:`ServerStatePublic`).
+    A delta frame comes in one of two renderings of the same diff:
+
+    - top-level (no ``deltaVersion``): ``changed`` holds each changed
+      top-level value whole and ``removed`` the dropped top-level keys;
+    - leaf (``deltaVersion: 2``, sent to a ``/api/v1/ws?state_delta=2``
+      client): ``set`` holds ``[path, value]`` pairs and ``unset`` paths,
+      a path being the object keys from the state root.
+
+    Envelope-only sequence fields (``transportSeq`` etc.) live here, not
+    inside the state object.
+    """
+
+    type: Literal["full", "delta"]
+    revision: int
+    transportSeq: int
+    # Additive declarations; PR B begins emitting both on every frame.
+    stateContractVersion: Literal[1] = 1
+    providerGeneration: int = 0
+    data: ServerStatePublic | None = None
+    changed: dict[str, object] | None = None
+    removed: list[str] | None = None
+    deltaVersion: Literal[2] | None = None
+    set: list[tuple[list[str], object]] | None = None
+    unset: list[list[str]] | None = None
+    stateRevision: int | None = None
+    freshnessRevision: int | None = None
+    observationSeq: int | None = None

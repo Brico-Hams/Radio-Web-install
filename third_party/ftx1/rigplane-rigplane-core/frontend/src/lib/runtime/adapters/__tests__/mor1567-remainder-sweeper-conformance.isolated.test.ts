@@ -1,0 +1,309 @@
+/**
+ * MOR-1567 (C13) — Remainder-sweeper family walk, over the same
+ * profile-parameterized harness MOR-1428/MOR-1555 established
+ * (`./conformance/harness.ts`, `./conformance/profiles.ts`). This is the
+ * FINAL Tier-2 family walk of the MOR-1426 conformance program — its own
+ * acceptance criterion is `WAIVED_INTENTS` in `./conformance/waived.ts`
+ * going to zero (16 → 0).
+ *
+ * FAMILY (per `waived.ts`'s SWEEPER tag, 16 intents, spanning 5 factories):
+ * `scan_start`/`scan_stop`/`scan_set_df_span`/`scan_set_resume`
+ * (`makeScanHandlers()`, `panel-commands.ts:392-410`); `set_dial_lock`/
+ * `set_powerstat` (`makeSystemHandlers()`, `:1239-1255`);
+ * `set_antenna_1`/`set_antenna_2`/`set_rx_antenna_ant1`/
+ * `set_rx_antenna_ant2` (`makeAntennaHandlers()`, `:286-316`);
+ * `set_digisel`/`set_ip_plus` (`makeRfFrontEndHandlers()`, `:342-351`);
+ * `memory_clear` (`makeMemoryHandlers()`, `:205-228`); plus the 3 orphaned
+ * RIT/XIT intents `set_rit_status`/`set_rit_tx_status`/`set_rit_frequency`
+ * (`makeRitXitHandlers()`, `:357-388`) that `waived.ts`'s own header
+ * documents as a genuine hole in MOR-1426's per-family prose (no C6-C13
+ * ticket names them in text; they land here because C13 is the closing
+ * sweeper). All 16 dispatch through `dispatchRadioIntent`, which validates
+ * every call against `radio-intents.ts`'s `intentSpecs` table (declared
+ * param shapes — a mismatched shape THROWS, not just silently diverges) —
+ * every frame claimed below is asserted against that exact shape.
+ *
+ * PARTITION: 10 genuinely REFUSE and 6 genuinely DISPATCH. Six refusals are
+ * honest field-status gates: `dialLock`, `main.digisel`, `main.ipplus`,
+ * `ritOn`, `ritTx`, and `ritFreq` are unobserved on this fixture. The four
+ * antenna intents refuse on the structural `caps.antennas === 1 < 2` gate;
+ * `set_rx_antenna_ant1`/`set_rx_antenna_ant2` also lack the independent
+ * `rx_antenna` capability and share `onToggleRxAnt`, so neither can reach its
+ * `state.txAntenna` branch. The six dispatches are all four scan intents
+ * (declared `scan`, no observed scan state), `set_powerstat` (declared
+ * `power_control`), and
+ * `memory_clear`. `memory_clear` alone resolves `currentMemorySnapshot()`;
+ * it requires a non-null resolved snapshot but does not inspect its
+ * `frequencyHz`/`mode` contents. `onStore` is the sibling that checks those
+ * contents against caller values.
+ *
+ * MOR-1574 CONTRAST (RIT/XIT, cited per this ticket's instruction — now
+ * HISTORICAL): MOR-1574 was the ADAPTER-SEAM finding that `toRitXitProps`
+ * (the READ path, `panel-props.ts:496`, walked in
+ * `mor1562-adapter-seams-conformance.isolated.test.ts:311-323`) had NO
+ * fieldStatus gate on `ritOn`/`ritFreq`/`ritTx` at all — an honesty gap on
+ * the props side. That gap is CLOSED by MOR-1574/PR #2488: `hasRit`/
+ * `hasXit` now gate on field availability the same way `toAgcProps`/
+ * `toRfFrontEndProps` already did, so an unobserved `ritOn`/`ritFreq`/
+ * `ritTx` no longer reads back as a confirmed "RIT/XIT OFF". The WRITE
+ * path walked here (`makeRitXitHandlers()`) was always separately honest:
+ * `onRitToggle`/`onXitToggle`/`onRitOffsetChange`/
+ * `onXitOffsetChange`/`onClear` all DO check `knownTopLevelField('ritOn'
+ * | 'ritTx' | 'ritFreq')` before dispatching — on this fixture all three
+ * leaves are genuinely unobserved (confirmed below), so all 3 write-side
+ * intents correctly REFUSE. Post-#2488 the two paths now AGREE (both fail
+ * closed / hide on the SAME unobserved data) — MOR-1574 closed what used
+ * to be the read-side half of that asymmetry; not re-derived here.
+ *
+ * RED-FIRST EVIDENCE (MOR-1567 build process, not part of this diff): the
+ * `set_powerstat` case below was first authored with a deliberately wrong
+ * claim, `[['set_powerstat', { on: true }]]` (guessing the toggle inverts
+ * the current state, the shape most other boolean intents in this codebase
+ * follow). `vitest run` on that version failed with (verbatim vitest 4
+ * output): `AssertionError: expected [ [ 'set_powerstat', { on: false } ] ]
+ * to deeply equal [ [ 'set_powerstat', { on: true } ] ]`, followed by an
+ * `- Expected` / `+ Received` diff showing `- "on": true,` / `+ "on":
+ * false,` (RED) — `onPowerOff` hardcodes `{ on: false }` unconditionally
+ * (`panel-commands.ts:1251`), it does not read or negate any current-state
+ * field. Replacing the claim with `{ on: false }` turned it GREEN — see
+ * that case below.
+ *
+ * DISCRIMINATION EVIDENCE (MOR-1567 build process, not part of this diff):
+ * to prove the `set_dial_lock` refusal below isn't vacuous, its `run` was
+ * scratch-edited locally to set `h.state.fieldStatus.dialLock =
+ * { availability: 'available', observed: true, freshness: 'fresh' }` before
+ * calling `onDialLock(true)`, keeping the row's claim at `frames: []`
+ * (REFUSES) — `vitest run` on that version failed with (verbatim vitest 4
+ * output): `AssertionError: expected "vi.fn()" to not be called at all, but
+ * actually been called 1 times` followed by the received call, `[
+ * 'set_dial_lock', { on: true }, '<uuid>' ]` (RED — the handler dispatched
+ * once the gate was forced open), confirming the refusal genuinely depends
+ * on that one field-status gate, not a vacuous assertion. The scratch edit
+ * was staged (`git add`) in its clean form first, then reverted with
+ * `git checkout --` (not `git stash`) after observing the failure,
+ * restoring the green state before this file was committed.
+ *
+ * DYNAMIC MOD-INPUT DISPATCH (per this ticket's explicit instruction, NOT
+ * one of the 85-name literal universe — `onModInputChange` builds its
+ * intent via `modInputCommand(dataMode)`; see `waived.ts`'s header and
+ * `panel-commands-completeness.test.ts`'s "dynamic mod-input call site"
+ * block, which already asserts exactly one such call exists and is this
+ * one): this fixture's `main.dataMode` currently reads `0` (DATA OFF), and
+ * `dataOffModInput` (that group's field) is UNOBSERVED — so THIS fixture's
+ * OWN current reading refuses. But `data1ModInput`/`data2ModInput`/
+ * `data3ModInput` (groups 1/2/3) are ALL observed on this same fixture — a
+ * real, fixture-relevant, mixed reading, not a hypothetical. The 4-case
+ * table below mutates only `h.state.main.dataMode` (never the underlying
+ * fixture file) to walk all four DATA groups' observation state through the
+ * real handler, covering every stored group while respecting the IC-7300's
+ * one-DATA-group capability — group 0's refusal is the ACTUAL current-state
+ * behavior; group 1 dispatches once observed; groups 2-3 refuse even when
+ * observed because this radio does not expose those DATA groups. This
+ * coverage is ADDITIVE — it claims no new name in
+ * `claimed.ts` and changes no count, since these 4 names live outside the
+ * 85-name universe by design (see header cited above).
+ */
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import {
+  expectFrames,
+  expectRefusal,
+  fixtureCaps,
+  fixtureState,
+  h,
+} from './conformance/harness';
+import { PROFILES } from './conformance/profiles';
+import {
+  makeAntennaHandlers,
+  makeMemoryHandlers,
+  makeModeHandlers,
+  makeRfFrontEndHandlers,
+  makeRitXitHandlers,
+  makeScanHandlers,
+  makeSystemHandlers,
+} from '../../commands/panel-commands';
+import { resetCommandLifecycle } from '$lib/stores/commands.svelte';
+
+const profile = PROFILES.ic7300;
+const IC7300_STATE = profile.state;
+const IC7300_CAPABILITIES = profile.caps;
+
+interface IntentCase {
+  readonly label: string;
+  readonly run: () => void;
+  /** Empty = REFUSES. Non-empty = exact frames dispatched, in order. */
+  readonly frames: Array<[string, Record<string, unknown>]>;
+  readonly gate: string;
+}
+
+const CASES: readonly IntentCase[] = [
+  { label: 'scan_start', run: () => makeScanHandlers().onScanStart(1),
+    frames: [['scan_start', { type: 1 }]],
+    gate: 'scan capability declared; type is an integer; no observed scan state required' },
+  { label: 'scan_stop', run: () => makeScanHandlers().onScanStop(),
+    frames: [['scan_stop', {}]],
+    gate: 'scan capability declared; no observed scan state required' },
+  { label: 'scan_set_df_span', run: () => makeScanHandlers().onDfSpanChange(5),
+    frames: [['scan_set_df_span', { span: 5 }]],
+    gate: 'scan capability declared; span is an integer; no observed scan state required' },
+  { label: 'scan_set_resume', run: () => makeScanHandlers().onResumeChange(2),
+    frames: [['scan_set_resume', { mode: 2 }]],
+    gate: 'scan capability declared; mode is an integer; no observed scan state required' },
+  { label: 'set_dial_lock', run: () => makeSystemHandlers().onDialLock(true),
+    frames: [],
+    gate: 'currentA03cContext() resolves (state/caps present, receiver count matches vfoScheme) before the top-level dialLock unobserved gate fires (dial_lock capability IS declared) — discrimination evidence in file header' },
+  { label: 'set_powerstat', run: () => makeSystemHandlers().onPowerOff(),
+    frames: [['set_powerstat', { on: false }]],
+    gate: 'currentA03cContext() resolves; power_control capability declared; no field-observation gate beyond that — RED-FIRST target, see file header' },
+  { label: 'set_antenna_1', run: () => makeAntennaHandlers().onSelectAnt1(),
+    frames: [],
+    gate: 'caps.antennas=1 < 2 structural gate (fires before the also-unobserved rxAntenna1 field check)' },
+  { label: 'set_antenna_2', run: () => makeAntennaHandlers().onSelectAnt2(),
+    frames: [],
+    gate: 'caps.antennas=1 < 2 structural gate (fires before the also-unobserved rxAntenna2 field check)' },
+  { label: 'set_rx_antenna_ant1', run: () => makeAntennaHandlers().onToggleRxAnt(),
+    frames: [],
+    gate: 'TWO independent structural gates on this fixture: caps.antennas=1 < 2 AND rx_antenna capability undeclared — SHARED onToggleRxAnt() call site with set_rx_antenna_ant2; fires before the txAntenna branch that would pick between the two names is ever reached' },
+  { label: 'set_rx_antenna_ant2', run: () => makeAntennaHandlers().onToggleRxAnt(),
+    frames: [],
+    gate: 'same shared onToggleRxAnt() call site and same two-layer structural gate as set_rx_antenna_ant1 above — see that row' },
+  { label: 'set_digisel', run: () => makeRfFrontEndHandlers().onDigiSelToggle(true),
+    frames: [],
+    gate: "main.digisel unobserved (via knownActiveReceiver('digisel')'s field check)" },
+  { label: 'set_ip_plus', run: () => makeRfFrontEndHandlers().onIpPlusToggle(true),
+    frames: [],
+    gate: "main.ipplus unobserved (via knownActiveReceiver('ipplus')'s field check)" },
+  { label: 'memory_clear', run: () => makeMemoryHandlers().onClear(1),
+    frames: [['memory_clear', { channel: 1 }]],
+    gate: 'currentMemorySnapshot() resolves via relativeVfoIdentityUnknown\'s selected_unselected fallback to main.freqHz/main.mode (both observed, see block below); validMemoryChannel(1) true' },
+  { label: 'set_rit_status', run: () => makeRitXitHandlers().onRitToggle(),
+    frames: [],
+    gate: 'top-level ritOn unobserved (rit capability IS declared) — contrast MOR-1574, see file header' },
+  { label: 'set_rit_tx_status', run: () => makeRitXitHandlers().onXitToggle(),
+    frames: [],
+    gate: 'top-level ritTx unobserved (xit capability IS declared)' },
+  { label: 'set_rit_frequency', run: () => makeRitXitHandlers().onRitOffsetChange(100),
+    frames: [],
+    gate: 'top-level ritFreq unobserved — 2 more call sites for this SAME intent walked in the EXTENSION block below' },
+];
+
+describe('IC-7300 fixture — remainder-sweeper family conformance (MOR-1567)', () => {
+  beforeEach(() => {
+    h.state = fixtureState(profile);
+    h.caps = {
+      ...fixtureCaps(profile),
+      dataModeCount: 1,
+      dataModeInputs: [0, 1, 2, 3, 4].map(value => ({ value, label: String(value) })),
+    };
+    h.sendCommand.mockClear();
+  });
+
+  afterEach(() => {
+    resetCommandLifecycle();
+  });
+
+  it('covers exactly the 16 SWEEPER-tagged intents', () => {
+    // 16 distinct labels — set_rx_antenna_ant1/ant2 get their own labeled
+    // rows (see above) even though they share one onToggleRxAnt() call site.
+    expect(new Set(CASES.map((c) => c.label)).size).toBe(16);
+    expect(CASES).toHaveLength(16);
+  });
+
+  it('caps/fieldStatus sanity underlying the gates above', () => {
+    expect(IC7300_CAPABILITIES.antennas).toBe(1);
+    expect(IC7300_CAPABILITIES.capabilities).toEqual(expect.arrayContaining([
+      'scan', 'power_control', 'dial_lock', 'rit', 'xit',
+    ]));
+    for (const field of ['dialLock', 'ritOn', 'ritTx', 'ritFreq', 'rxAntenna1', 'rxAntenna2', 'txAntenna']) {
+      expect(IC7300_STATE.fieldStatus?.[field as keyof typeof IC7300_STATE.fieldStatus]?.observed).toBe(false);
+    }
+    expect(IC7300_STATE.fieldStatus?.['main.digisel']?.observed).toBe(false);
+    expect(IC7300_STATE.fieldStatus?.['main.ipplus']?.observed).toBe(false);
+    expect(IC7300_STATE.fieldStatus?.['main.freqHz']?.observed).toBe(true);
+    expect(IC7300_STATE.fieldStatus?.['main.mode']?.observed).toBe(true);
+    expect(IC7300_STATE.fieldStatus?.['main.activeSlot']?.observed).toBe(false);
+    expect(IC7300_CAPABILITIES.vfoScheme).toBe('ab');
+    expect(IC7300_CAPABILITIES.vfoReadback).toBe('selected_unselected');
+  });
+
+  for (const c of CASES) {
+    const outcome = c.frames.length > 0 ? 'DISPATCHES' : 'REFUSES';
+    it(`${c.label}: ${outcome} — ${c.gate}`, () => {
+      if (c.frames.length > 0) {
+        expectFrames(c.run, c.frames);
+      } else {
+        expectRefusal(c.run);
+      }
+    });
+  }
+
+  describe('C13 scan commands', () => {
+    const withoutScan: ReadonlyArray<readonly [string, () => void]> = [
+      ['scan_start', () => makeScanHandlers().onScanStart(1)],
+      ['scan_stop', () => makeScanHandlers().onScanStop()],
+      ['scan_set_df_span', () => makeScanHandlers().onDfSpanChange(5)],
+      ['scan_set_resume', () => makeScanHandlers().onResumeChange(2)],
+    ];
+
+    for (const [name, run] of withoutScan) {
+      it(`${name}: REFUSES without scan capability`, () => {
+        h.caps = { ...fixtureCaps(profile), capabilities: [] };
+        expectRefusal(run);
+      });
+    }
+
+    it('dispatches all four exact frames with scan capability and absent radio state', () => {
+      h.caps = { ...fixtureCaps(profile), capabilities: ['scan'] };
+      h.state = null;
+      const scan = makeScanHandlers();
+      expectFrames(() => {
+        scan.onScanStart(1);
+        scan.onScanStop();
+        scan.onDfSpanChange(5);
+        scan.onResumeChange(2);
+      }, [
+        ['scan_start', { type: 1 }],
+        ['scan_stop', {}],
+        ['scan_set_df_span', { span: 5 }],
+        ['scan_set_resume', { mode: 2 }],
+      ]);
+    });
+  });
+
+  describe('EXTENSION — set_rit_frequency: the other 2 call sites for the same wire intent (RIT and XIT share one offset register, per panel-commands.ts:377 comment)', () => {
+    it('onXitOffsetChange(100): REFUSES — same ritFreq-unobserved gate as onRitOffsetChange above', () => {
+      expectRefusal(() => makeRitXitHandlers().onXitOffsetChange(100));
+    });
+
+    it("onClear() (the RIT/XIT clear-both action): REFUSES — same ritFreq-unobserved gate, reached via '(!hasCapability('rit') && !hasCapability('xit'))' being false (both ARE declared) so the field check is what actually fires", () => {
+      expectRefusal(() => makeRitXitHandlers().onClear());
+    });
+  });
+
+  describe('EXTENSION — dynamic mod-input dispatch: onModInputChange over all 4 DATA groups (see file header)', () => {
+    const GROUPS: ReadonlyArray<{
+      readonly dataMode: number;
+      readonly stateKey: string;
+      readonly frames: Array<[string, Record<string, unknown>]>;
+    }> = [
+      { dataMode: 0, stateKey: 'dataOffModInput', frames: [] },
+      { dataMode: 1, stateKey: 'data1ModInput', frames: [['set_data1_mod_input', { source: 4 }]] },
+      { dataMode: 2, stateKey: 'data2ModInput', frames: [] },
+      { dataMode: 3, stateKey: 'data3ModInput', frames: [] },
+    ];
+
+    for (const g of GROUPS) {
+      const observed = IC7300_STATE.fieldStatus?.[g.stateKey as keyof typeof IC7300_STATE.fieldStatus]?.observed;
+      const outcome = g.frames.length > 0 ? 'DISPATCHES' : 'REFUSES';
+      it(`dataMode=${g.dataMode} (${g.stateKey}, observed=${observed}): ${outcome}`, () => {
+        expect(h.state?.main).toBeTruthy();
+        h.state!.main!.dataMode = g.dataMode;
+        const run = () => makeModeHandlers().onModInputChange(4);
+        if (g.frames.length > 0) {
+          expectFrames(run, g.frames);
+        } else {
+          expectRefusal(run);
+        }
+      });
+    }
+  });
+});

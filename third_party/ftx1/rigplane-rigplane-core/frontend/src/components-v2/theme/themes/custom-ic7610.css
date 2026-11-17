@@ -1,0 +1,60 @@
+/**
+ * Custom IC-7610 Theme — Per-Receiver Badge Color Example
+ * 
+ * Demonstrates three customization levels:
+ * 1. Receiver-specific badge colors (MAIN vs SUB)
+ * 2. Shared badge colors (both receivers)
+ * 3. Receiver accent fallback (automatic MAIN/SUB distinction)
+ * 
+ * Based on default dark theme with custom badge colors.
+ */
+
+[data-theme="custom-ic7610"] {
+  /* ── Base Theme (inherit from default dark) ────────────── */
+  /* Most colors inherited from :root defaults */
+
+  /* ── Receiver Accents ───────────────────────────────────── */
+  /* Default accent colors for badges without specific overrides */
+  --v2-receiver-main-accent: #00D4FF;     /* MAIN receiver badges → cyan */
+  --v2-receiver-sub-accent: #FF6A00;    /* SUB receiver badges → orange */
+
+  /* ── VFO Frequency Display Colors ───────────────────────── */
+  /* Per-receiver frequency digit colors */
+  --v2-vfo-main-freq-active: #7CFCE5;        /* MAIN active: bright cyan */
+  --v2-vfo-main-freq-inactive: #607890;      /* MAIN inactive: dimmed */
+  --v2-vfo-main-freq-hover: #FFFFFF;         /* MAIN hover: white */
+  --v2-vfo-main-freq-selected-bg: #00D4FF;   /* MAIN selected bg: cyan */
+  --v2-vfo-main-freq-selected-text: #FFFFFF; /* MAIN selected text: white */
+  
+  --v2-vfo-sub-freq-active: #FFB86C;         /* SUB active: orange */
+  --v2-vfo-sub-freq-inactive: #607890;       /* SUB inactive: dimmed */
+  --v2-vfo-sub-freq-hover: #FFFFFF;          /* SUB hover: white */
+  --v2-vfo-sub-freq-selected-bg: #FF6A00;    /* SUB selected bg: orange */
+  --v2-vfo-sub-freq-selected-text: #FFFFFF;  /* SUB selected text: white */
+
+  /* ── Receiver-Specific Badge Colors ─────────────────────── */
+  /* Override specific badges for one receiver only */
+  --v2-badge-main-digi-sel-color: #00D4FF;    /* MAIN DIGI-SEL → cyan */
+  --v2-badge-sub-digi-sel-color: #00CC66;    /* SUB DIGI-SEL → green (different!) */
+  
+  --v2-badge-main-nr-color: #00D4FF;          /* MAIN NR → cyan */
+  --v2-badge-sub-nr-color: #FF2020;            /* SUB NR → red (different!) */
+
+  /* ── Shared Badge Colors (both receivers) ───────────────── */
+  /* These apply to both MAIN and SUB unless overridden above */
+  --v2-badge-comp-color: #FF2020;              /* COMP → red (both receivers) */
+  --v2-badge-ip-plus-color: #00CC66;         /* IP+ → green (both receivers) */
+  --v2-badge-tune-color: #FF2020;              /* TUNE → red (critical, both) */
+  
+  /* ── Fallback Behavior ───────────────────────────────────── */
+  /* Badges without specific color use receiver accent:
+   * - MAIN PRE/ATT/NB/ANF → cyan (from --v2-receiver-main-accent)
+   * - SUB PRE/ATT/NB/ANF → orange (from --v2-receiver-sub-accent)
+   * 
+   * Override chain:
+   * 1. --v2-badge-{receiver}-{type}-color (most specific)
+   * 2. --v2-badge-{type}-color (shared)
+   * 3. --v2-receiver-{receiver}-accent (automatic)
+   * 4. --v2-badge-default-color (fallback)
+   */
+}

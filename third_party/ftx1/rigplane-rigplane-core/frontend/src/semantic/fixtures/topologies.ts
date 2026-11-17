@@ -1,0 +1,555 @@
+/**
+ * The four canonical topology fixtures (MOR-1062).
+ *
+ * Each is a complete, valid `RadioViewModel` instance for one of the
+ * backend's four VFO schemes (`single | ab | ab_shared | main_sub`, see
+ * `$lib/types/capabilities::VfoScheme`), paired with the structural receiver
+ * count that scheme implies. MOR-1085's browser fixture matrix consumes
+ * these by `topologyId`. Test assets — excluded from the MOR-1062 200-LOC
+ * production guard (see the ticket's "Size guard" note).
+ *
+ * `withAudioOnlyScope` (review cycle 1, S1) is a composable scope-variant
+ * helper: audio-only scope is a fifth, orthogonal condition in MOR-1085's
+ * matrix ("4 topology pairs + audio-only scope"), not a property of any one
+ * topology, so it can be applied to any of the four fixtures below.
+ */
+import type {
+  AntennaField, AntennaViewModel,
+  Availability, BandField, BandViewModel, CwKeyerField, CwKeyerViewModel,
+  DspField, DspViewModel, FilterPassbandField, FilterPassbandViewModel,
+  MeterField, MeterRfState, MetersViewModel,
+  ModeFilterField, ModeFilterViewModel,
+  ModInputReadiness, RadioViewModel, RfFrontEndField, RfFrontEndViewModel,
+  RitXitField, RitXitViewModel, RxAudioField, RxAudioViewModel,
+  ScanField, ScanViewModel,
+  ScopeControlsField, ScopeControlsViewModel,
+  ScopeDisplayField, ScopeDisplayViewModel,
+  TxAuxField, TxAuxViewModel,
+} from '../radio-view-model';
+
+const singleReceiver: RadioViewModel = {
+  topologyId: '1/single',
+  vfoScheme: 'single',
+  activeReceiver: { status: 'known', receiver: 'MAIN' },
+  vfos: [
+    {
+      receiver: 'MAIN', slot: { kind: 'unslotted' }, label: 'MAIN', frequencyHz: 14195000,
+      mode: 'USB', filter: 'WIDE', isActive: true, isActiveSlot: true, isTxTarget: true,
+    },
+  ],
+  split: { status: 'known', value: false },
+  dualWatch: { status: 'known', value: false },
+  txTarget: {
+    status: 'known', receiver: 'MAIN', slot: { kind: 'unslotted' }, frequencyHz: 14195000,
+  },
+  txPermit: { status: 'allowed', band: '20m' },
+  scope: {
+    hardwareScope: { structural: true, operational: true },
+    audioFftScope: { structural: false, operational: false },
+  },
+  disabledReasons: [],
+};
+
+const singleAb: RadioViewModel = {
+  topologyId: '1/ab',
+  vfoScheme: 'ab',
+  activeReceiver: { status: 'known', receiver: 'MAIN' },
+  vfos: [
+    {
+      receiver: 'MAIN', slot: { kind: 'slotted', id: 'A' }, label: 'VFO A', frequencyHz: 7100000,
+      mode: 'LSB', filter: 'NARROW', isActive: true, isActiveSlot: true, isTxTarget: false,
+    },
+    {
+      receiver: 'MAIN', slot: { kind: 'slotted', id: 'B' }, label: 'VFO B', frequencyHz: 7150000,
+      mode: 'LSB', filter: 'NARROW', isActive: false, isActiveSlot: false, isTxTarget: false,
+    },
+  ],
+  // dualWatch deliberately unknown: this fixture models an early/partial
+  // observation window, same story as its unobserved txTarget below.
+  split: { status: 'known', value: true },
+  dualWatch: { status: 'unknown' },
+  txTarget: { status: 'unknown', reason: 'not-observed' },
+  txPermit: { status: 'unknown', reason: 'tx-target-unknown' },
+  scope: {
+    hardwareScope: { structural: false, operational: false },
+    audioFftScope: { structural: false, operational: false },
+  },
+  disabledReasons: [{ field: 'txTarget', code: 'field-not-observed' }],
+};
+
+const dualAbShared: RadioViewModel = {
+  topologyId: '2/ab_shared',
+  vfoScheme: 'ab_shared',
+  activeReceiver: { status: 'known', receiver: 'SUB' },
+  vfos: [
+    {
+      receiver: 'MAIN', slot: { kind: 'unslotted' }, label: 'MAIN', frequencyHz: 3573000,
+      mode: 'CW', filter: 'NARROW', isActive: false, isActiveSlot: true, isTxTarget: false,
+    },
+    {
+      receiver: 'SUB', slot: { kind: 'unslotted' }, label: 'SUB', frequencyHz: 3573000,
+      mode: 'CW', filter: 'NARROW', isActive: true, isActiveSlot: true, isTxTarget: true,
+    },
+  ],
+  split: { status: 'known', value: false },
+  dualWatch: { status: 'known', value: true },
+  txTarget: {
+    status: 'known', receiver: 'SUB', slot: { kind: 'unslotted' }, frequencyHz: 3573000,
+  },
+  txPermit: { status: 'denied', reason: 'outside-configured-ranges' },
+  scope: {
+    hardwareScope: { structural: true, operational: false },
+    audioFftScope: { structural: false, operational: false },
+  },
+  disabledReasons: [{ field: 'scope.hardwareScope', code: 'field-not-observed' }],
+};
+
+// MOR-2467: MAIN and SUB are receiver-level, unslotted surfaces — the
+// IC-7610 has no per-receiver A/B slots, so each receiver models exactly
+// one unslotted record (same shape as `2/ab_shared`).
+const dualMainSub: RadioViewModel = {
+  topologyId: '2/main_sub',
+  vfoScheme: 'main_sub',
+  activeReceiver: { status: 'known', receiver: 'MAIN' },
+  vfos: [
+    {
+      receiver: 'MAIN', slot: { kind: 'unslotted' }, label: 'MAIN', frequencyHz: 14250000,
+      mode: 'USB', filter: 'WIDE', isActive: true, isActiveSlot: true, isTxTarget: true,
+    },
+    // MOR-1335 still holds without slots: SUB's single unslotted record IS
+    // its own active slot (`isActiveSlot` without `isActive`) while MAIN is
+    // the active receiver — the state the IC-7610 is in whenever the
+    // operator is listening on MAIN.
+    {
+      receiver: 'SUB', slot: { kind: 'unslotted' }, label: 'SUB', frequencyHz: 21295000,
+      mode: 'USB', filter: 'WIDE', isActive: false, isActiveSlot: true, isTxTarget: false,
+    },
+  ],
+  // Both true at once, proving the orthogonal split/dualWatch representation
+  // (review cycle 1, B2) actually admits the combination the old enum couldn't.
+  split: { status: 'known', value: true },
+  dualWatch: { status: 'known', value: true },
+  txTarget: {
+    status: 'known', receiver: 'MAIN', slot: { kind: 'unslotted' }, frequencyHz: 14250000,
+  },
+  txPermit: { status: 'allowed', band: '20m' },
+  scope: {
+    hardwareScope: { structural: true, operational: true },
+    audioFftScope: { structural: true, operational: false },
+  },
+  disabledReasons: [{ field: 'scope.audioFftScope', code: 'capability-unavailable' }],
+};
+
+export const topologyFixtures = {
+  '1/single': singleReceiver,
+  '1/ab': singleAb,
+  '2/ab_shared': dualAbShared,
+  '2/main_sub': dualMainSub,
+} as const satisfies Record<string, RadioViewModel>;
+
+export type TopologyFixtureId = keyof typeof topologyFixtures;
+
+/**
+ * Applies the "audio-only scope" condition (hardware scope absent, audio FFT
+ * present and live) to any topology fixture, leaving every other fact
+ * untouched. MOR-1085's browser matrix composes this onto whichever of the
+ * four canonical topologies it needs — it is not baked into one fixture.
+ */
+export function withAudioOnlyScope(fixture: RadioViewModel): RadioViewModel {
+  return {
+    ...fixture,
+    scope: {
+      hardwareScope: { structural: false, operational: false },
+      audioFftScope: { structural: true, operational: true },
+    },
+  };
+}
+
+/**
+ * Applies a fully-capable `txAux` group (MOR-1244) to any topology fixture —
+ * every control structurally present and operationally observed. Composable
+ * the same way `withAudioOnlyScope` is: TX-adjacent capability is an axis
+ * orthogonal to VFO topology, not a property of any one scheme, and "only
+ * where the radio genuinely has the capability" (governing scope) is left to
+ * the caller — this fixture models a radio that has all of them, it does not
+ * force txAux onto the four base topologies.
+ */
+export function withTxAux(fixture: RadioViewModel): RadioViewModel {
+  const avail: Availability = { structural: true, operational: true };
+  const known = <T>(value: T): TxAuxField<T> => ({ reading: { status: 'known', value }, availability: avail });
+  const txAux: TxAuxViewModel = {
+    atu: known('off'),
+    vox: known(false),
+    voxGain: known(50),
+    antiVoxGain: known(30),
+    voxDelay: known(20),
+    compressor: known(false),
+    compressorLevel: known(10),
+    monitor: known(false),
+    monitorLevel: known(128),
+    rfPower: known(0.8),
+    micGain: known(128),
+    driveGain: known(128),
+  };
+  return { ...fixture, txAux };
+}
+
+/**
+ * Applies a fully-observed `meters` group (MOR-1262 slice 2A) to any topology
+ * fixture, read against the RF state the caller names — meters are an axis
+ * orthogonal to VFO topology, same as `withTxAux` above. `rfState` is a
+ * PARAMETER rather than a constant precisely because TX relevance is the
+ * property under test: a fixture that hard-coded 'receiving' would make the
+ * MOR-1235 disagreement unobservable.
+ */
+export function withMeters(
+  fixture: RadioViewModel, rfState: MeterRfState = 'receiving',
+): RadioViewModel {
+  const avail: Availability = { structural: true, operational: true };
+  const tx = rfState !== 'receiving';
+  const field = (value: number, relevant: boolean): MeterField =>
+    ({ reading: { status: 'known', value }, availability: avail, relevant });
+  const meters: MetersViewModel = {
+    rfState,
+    signal: field(120, !tx),
+    power: field(0.6, tx),
+    swr: field(20, tx),
+    alc: field(40, tx),
+    compression: field(10, tx),
+    drainVoltage: field(200, true),
+    drainCurrent: field(80, tx),
+  };
+  return { ...fixture, meters };
+}
+
+/**
+ * Applies a fully-observed `rxAudio` group (MOR-1262 slice 3A) to any topology
+ * fixture. `readiness` is a PARAMETER for the same reason `withMeters`'s
+ * `rfState` is: MOD-input readiness is the safety-critical axis, and a fixture
+ * that hard-coded `ready` would make the "web voice TX = noise" mismatch
+ * unobservable in every consumer that composes this helper.
+ */
+export function withRxAudio(
+  fixture: RadioViewModel,
+  readiness: ModInputReadiness = { status: 'ready', source: 5 },
+): RadioViewModel {
+  const avail: Availability = { structural: true, operational: true };
+  const known = <T>(value: T): RxAudioField<T> => ({ reading: { status: 'known', value }, availability: avail });
+  const rxAudio: RxAudioViewModel = {
+    monitorMode: 'live',
+    liveAudio: avail,
+    afLevel: known(0.42),
+    routingFocus: known('both'),
+    routingSplit: known(false),
+    modInputSource: known(readiness.status === 'ready' || readiness.status === 'mismatch' ? readiness.source : 5),
+    modInputChoices: [
+      { value: 0, label: 'MIC' }, { value: 1, label: 'ACC' },
+      { value: 2, label: 'MIC+ACC' }, { value: 3, label: 'USB' },
+      { value: 4, label: 'MIC+USB' }, { value: 5, label: 'LAN' },
+    ],
+    modInputReadiness: readiness,
+    rxSilent: false,
+  };
+  return { ...fixture, rxAudio };
+}
+
+/**
+ * Applies a fully-observed `modeFilter` group (MOR-1262 slice 4A) to any
+ * topology fixture — capability-derived choice sets plus a known current
+ * selection, same composable-axis story as `withTxAux`/`withMeters` above.
+ */
+export function withModeFilter(fixture: RadioViewModel): RadioViewModel {
+  const avail: Availability = { structural: true, operational: true };
+  const known = <T>(value: T): ModeFilterField<T> => ({ reading: { status: 'known', value }, availability: avail });
+  const modeFilter: ModeFilterViewModel = {
+    activeFilterConfiguration: null,
+    currentMode: known('USB'),
+    modeChoices: ['USB', 'LSB', 'CW', 'RTTY', 'FM'],
+    currentFilter: known(1),
+    filterChoices: ['FIL1', 'FIL2', 'FIL3'],
+    filterWidth: known(2400),
+    // MOR-3677: a fully-observed group carries a known width display.
+    filterWidthDisplay: { state: 'known', hz: 2400, stale: false },
+    filterWidthMin: known(50),
+    filterWidthMax: known(3600),
+  };
+  return { ...fixture, modeFilter };
+}
+
+/**
+ * Applies a fully-observed `filterPassband` group (MOR-1262 slice 4A′) to any
+ * topology fixture — a SEPARATE group from `withModeFilter` above (see
+ * `FilterPassbandViewModel`'s doc comment for why), same composable-axis
+ * story as `withTxAux`/`withMeters`/`withRxAudio`.
+ */
+export function withFilterPassband(fixture: RadioViewModel): RadioViewModel {
+  const avail: Availability = { structural: true, operational: true };
+  const known = <T>(value: T): FilterPassbandField<T> =>
+    ({ reading: { status: 'known', value }, availability: avail });
+  const filterPassband: FilterPassbandViewModel = {
+    filterShape: known(1),
+    // MOR-1502 review round: "fully observed" means a radio with a REAL
+    // filter_shape command (e.g. IC-7300), so this base fixture defaults
+    // the control-presentation gate to true — tests exercising the FTX-1-
+    // shaped (no filter_shape) case override it explicitly via
+    // `withFilterShapeControlStructural` in the consuming test file.
+    filterShapeControlStructural: true,
+    ifShift: known(0),
+    // MOR-1494 review round: "fully observed" means a radio with a REAL
+    // if_shift command (e.g. FTX-1), so this base fixture defaults the
+    // control-presentation gate to true — tests exercising the IC-7300-
+    // shaped (no if_shift) case override it explicitly via
+    // `withIfShiftControlStructural` in the consuming test file.
+    ifShiftControlStructural: true,
+    pbtInner: known(0),
+    pbtOuter: known(0),
+    // MOR-2640: "fully observed" means a radio with a REAL `narrow`
+    // command (e.g. FTX-1) — tests exercising the narrow-less case
+    // override the field's availability explicitly.
+    narrow: known(false),
+    dataMode: known(0),
+    dataModeChoices: [{ value: 0, label: 'OFF' }, { value: 1, label: 'D1' }],
+    modInputSource: known(0),
+    modInputChoices: [{ value: 0, label: 'MIC' }, { value: 3, label: 'USB' }],
+  };
+  return { ...fixture, filterPassband };
+}
+
+/**
+ * Applies a fully-observed `dsp` group (MOR-1262 slice 5A) to any topology
+ * fixture — a SEPARATE group from `withFilterPassband` above (see
+ * `DspViewModel`'s doc comment for why), same composable-axis story as
+ * `withTxAux`/`withMeters`/`withRxAudio`/`withFilterPassband`.
+ */
+export function withDsp(fixture: RadioViewModel): RadioViewModel {
+  const avail: Availability = { structural: true, operational: true };
+  const known = <T>(value: T): DspField<T> => ({ reading: { status: 'known', value }, availability: avail });
+  const dsp: DspViewModel = {
+    nrActive: known(true),
+    nrLevel: known(8),
+    nbActive: known(false),
+    nbLevel: known(64),
+    nbDepth: known(5),
+    nbWidth: known(2),
+    notchMode: known('off'),
+    notchFreq: known(0),
+    manualNotchWidth: known(10),
+    agcMode: known(2),
+    agcModes: [1, 2, 3],
+    agcTimeConstant: known(0),
+  };
+  return { ...fixture, dsp };
+}
+
+/**
+ * Applies a fully-observed `rfFrontEnd` group (MOR-1262 slice 6A, MOR-1292;
+ * extended with `digiSel`/`ipPlus` by slice 6A′, MOR-1293) to any topology
+ * fixture — a SEPARATE group from `dsp` above (see `RfFrontEndViewModel`'s
+ * doc comment for why), same composable-axis story as
+ * `withTxAux`/`withMeters`/`withRxAudio`/`withFilterPassband`/`withDsp`.
+ * DIGI-SEL defaults to `known(false)` — mutex OFF, PRE not disabled by it —
+ * so this fixture stays a "nothing disabled" baseline; the mutex-ON/-unknown
+ * cases are exercised by the adapter's own dedicated tests, not this fixture.
+ */
+export function withRfFrontEnd(fixture: RadioViewModel): RadioViewModel {
+  const avail: Availability = { structural: true, operational: true };
+  const known = <T>(value: T): RfFrontEndField<T> =>
+    ({ reading: { status: 'known', value }, availability: avail });
+  const rfFrontEnd: RfFrontEndViewModel = {
+    preamp: known(1),
+    preValues: [0, 1, 2],
+    attenuator: known(6),
+    attValues: [0, 6, 12, 18],
+    rfGain: known(1),
+    squelch: known(0),
+    digiSel: known(false),
+    ipPlus: known(false),
+  };
+  return { ...fixture, rfFrontEnd };
+}
+
+/**
+ * Applies a fully-observed `band` group (MOR-1262 slice 7A, MOR-1294) to any
+ * topology fixture — same composable-axis story as `withRfFrontEnd`/`withDsp`
+ * above. `currentBandTx` is a PARAMETER for the same reason `withMeters`'s
+ * `rfState` and `withRxAudio`'s `readiness` are: TX permission is the
+ * safety-critical axis of this family, and a fixture that hard-coded
+ * `'allowed'` would make the fail-closed path unobservable in every consumer
+ * that composes this helper. Passing `'denied'` also switches the current
+ * band to `unknown`, because the contract's own cross-field invariant forbids
+ * an `'allowed'`-on-unknown pairing and this fixture must stay valid in both
+ * directions; the finer per-permit combinations are exercised by the
+ * adapter's own tests, not this fixture.
+ */
+export function withBand(
+  fixture: RadioViewModel, currentBandTx: 'allowed' | 'denied' = 'allowed',
+): RadioViewModel {
+  const avail: Availability = { structural: true, operational: true };
+  const known = <T>(value: T): BandField<T> => ({ reading: { status: 'known', value }, availability: avail });
+  const currentBand: BandField<string> = currentBandTx === 'allowed'
+    ? known('20m')
+    : { reading: { status: 'unknown' }, availability: avail };
+  const band: BandViewModel = {
+    currentBand,
+    // MOR-2526: `main` mirrors `currentBand` — every topology fixture's
+    // active receiver is MAIN, and the contract makes `currentBand` the
+    // active entry of this map, so the two must never disagree. `sub`
+    // stays honestly unknown: the dual fixtures park SUB at 21.295 MHz,
+    // outside the named bands listed below.
+    receiverBands: {
+      main: currentBand,
+      sub: { reading: { status: 'unknown' }, availability: avail },
+    },
+    bandChoices: [
+      {
+        name: '40m', startHz: 7000000, endHz: 7300000, defaultHz: 7100000, bsrCode: 2,
+        defaultHzTxPermit: { status: 'allowed', band: '40m' },
+      },
+      {
+        name: '20m', startHz: 14000000, endHz: 14350000, defaultHz: 14195000, bsrCode: 5,
+        defaultHzTxPermit: { status: 'allowed', band: '20m' },
+      },
+      {
+        name: 'MW', startHz: 520000, endHz: 1710000, defaultHz: 1000000, bsrCode: null,
+        defaultHzTxPermit: { status: 'denied', reason: 'outside-configured-ranges' },
+      },
+    ],
+    currentBandTx,
+    tuneMinHz: 30000,
+    tuneMaxHz: 60000000,
+  };
+  return { ...fixture, band };
+}
+
+/**
+ * Applies a fully-observed `ritXit` group (MOR-1262 slice 8A, MOR-1295) to
+ * any topology fixture — same composable-axis story as `withBand`/
+ * `withRfFrontEnd` above.
+ */
+export function withRitXit(fixture: RadioViewModel): RadioViewModel {
+  const avail: Availability = { structural: true, operational: true };
+  const known = <T>(value: T): RitXitField<T> => ({ reading: { status: 'known', value }, availability: avail });
+  const ritXit: RitXitViewModel = {
+    ritActive: known(true),
+    ritOffset: known(250),
+    xitActive: known(false),
+    xitOffset: known(250),
+  };
+  return { ...fixture, ritXit };
+}
+
+/**
+ * Applies a fully-observed `antenna` group (MOR-1262 slice 8A, MOR-1295) to
+ * any topology fixture — same composable-axis story as `withBand`/
+ * `withRfFrontEnd` above.
+ */
+export function withAntenna(fixture: RadioViewModel): RadioViewModel {
+  const avail: Availability = { structural: true, operational: true };
+  const known = <T>(value: T): AntennaField<T> => ({ reading: { status: 'known', value }, availability: avail });
+  const antenna: AntennaViewModel = {
+    txAntenna: known(1),
+    rxAnt: known(false),
+    antennaCount: 2,
+  };
+  return { ...fixture, antenna };
+}
+
+/**
+ * Applies a fully-observed `scan` group (MOR-1262 slice 8A, MOR-1295) to any
+ * topology fixture — same composable-axis story as `withBand`/
+ * `withRfFrontEnd` above.
+ */
+/**
+ * Applies a fully-observed `cwKeyer` group (MOR-1262 slice 9A, MOR-1296) to
+ * any topology fixture — same composable-axis story as `withScan`/`withBand`
+ * above, with one SAFETY-CRITICAL difference it cannot opt out of: break-in
+ * keys the transmitter, and `validateRadioViewModel` rejects a model carrying
+ * a structurally-available `breakIn` under a non-`'allowed'` `txPermit`
+ * unless the matching `disabledReasons` entry is present. So this helper adds
+ * that entry for exactly the fixtures that need it (`1/ab`, whose txPermit is
+ * unknown), rather than quietly weakening the invariant to keep a fixture
+ * valid. `breakIn` is `'semi'`, not `'off'`: a fixture whose keyer is idle
+ * would make every fail-closed consumer path unobservable.
+ */
+export function withCwKeyer(fixture: RadioViewModel): RadioViewModel {
+  const avail: Availability = { structural: true, operational: true };
+  const known = <T>(value: T): CwKeyerField<T> => ({ reading: { status: 'known', value }, availability: avail });
+  const cwKeyer: CwKeyerViewModel = {
+    breakIn: known('semi'),
+    breakInDelay: known(64),
+    keyerSpeed: known(24),
+    pitchHz: known(600),
+    reversePaddle: known(false),
+    apf: known(0),
+    twinPeak: known(false),
+  };
+  const disabledReasons = fixture.txPermit.status === 'allowed'
+    ? fixture.disabledReasons
+    : [...fixture.disabledReasons, { field: 'cwKeyer.breakIn', code: 'tx-target-unknown' as const }];
+  return { ...fixture, cwKeyer, disabledReasons };
+}
+
+export function withScan(fixture: RadioViewModel): RadioViewModel {
+  const avail: Availability = { structural: true, operational: true };
+  const known = <T>(value: T): ScanField<T> => ({ reading: { status: 'known', value }, availability: avail });
+  const scan: ScanViewModel = {
+    scanning: known(false),
+    scanType: known(0x01),
+    scanResumeMode: known(0),
+  };
+  return { ...fixture, scan };
+}
+
+/**
+ * Applies a fully-observed `scopeControls` group (MOR-1262 slice 11A/
+ * MOR-1298, extended by slice 11A′/MOR-1299 and slice 11A″/MOR-1330) to any
+ * topology fixture — same composable-axis story as `withScan`/`withCwKeyer`
+ * above. `fixedEdge` is deliberately excluded from the group — see
+ * `ScopeControlsViewModel`'s doc comment.
+ */
+export function withScopeControls(fixture: RadioViewModel): RadioViewModel {
+  const avail: Availability = { structural: true, operational: true };
+  const known = <T>(value: T): ScopeControlsField<T> => (
+    { reading: { status: 'known', value }, availability: avail }
+  );
+  const scopeControls: ScopeControlsViewModel = {
+    mode: known(1),
+    edge: known(2),
+    span: known(3),
+    speed: known(4),
+    hold: known(false),
+    refDb: known(-5),
+    // MOR-3694: the profile-declared REF range the adapter derives from
+    // capabilities. This fixture carries an IC-7610-shaped range; override
+    // to `null` for the fail-closed cases and to ±20 for the IC-705 shape.
+    refRange: Object.freeze({ min: -30, max: 10 }),
+    dual: known(false),
+    receiver: known(0),
+    duringTx: known(false),
+    centerType: known(5),
+    vbwNarrow: known(false),
+    rbw: known(6),
+  };
+  return { ...fixture, scopeControls };
+}
+
+/**
+ * Applies a fully-observed `scopeDisplay` group (MOR-1262 slice 12A/12B,
+ * MOR-1301/MOR-1312) to any topology fixture — same composable-axis story as
+ * `withScopeControls` above. `hardwareConnected` (12B) defaults to matching
+ * `source`/`health` (hardware, connected) — the case where the leaf is
+ * redundant with `health`; callers exercising the `audio_fft` residual
+ * (MOR-1352) override it explicitly.
+ */
+export function withScopeDisplay(fixture: RadioViewModel): RadioViewModel {
+  const avail: Availability = { structural: true, operational: true };
+  const known = <T>(value: T): ScopeDisplayField<T> => (
+    { reading: { status: 'known', value }, availability: avail }
+  );
+  const scopeDisplay: ScopeDisplayViewModel = {
+    source: known('hardware'),
+    health: known('connected'),
+    hardwareConnected: known(true),
+  };
+  return { ...fixture, scopeDisplay };
+}

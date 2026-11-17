@@ -1,0 +1,239 @@
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { mount, unmount, flushSync } from 'svelte';
+import MetersDockPanel from '../MetersDockPanel.svelte';
+
+// Peak-hold display ballistics (MOR-498). On a real radio the Po/ALC/SWR/Id
+// meters peak on each voice syllable and decay slowly; the web meter must do
+// the same so the displayed NUMBER does not collapse to the inter-syllable
+// trough. These tests drive the 100 ms decay ticker with fake timers and a
+// controllable Date.now so the held value is deterministic.
+//
+// The fill width goes through an rAF-driven smoother (disabled under fake
+// timers); the NUMBER is computed directly from the held raw, so we assert on
+// the NUMBER here. The fill<->held-raw coupling is covered by the pure
+// composition test in meter-utils.test.ts.
+
+// Capability state is seeded into the REAL store, not vi.mock'd: this file
+// runs in the `fast` pool (`isolate: false`), where a module-scope mock races
+// the shared module cache — a sibling file can leave the panel's dependency
+// chain bound to a different module instance than the one the mock applies
+// to (see #2408/#2409).
+import type { Capabilities } from '$lib/types/capabilities';
+import { clearCapabilities, setCapabilities } from '$lib/stores/capabilities.svelte';
+
+function makeCaps(): Capabilities {
+  return {
+    model: 'IC-7610',
+    scope: true,
+    audio: true,
+    tx: true,
+    capabilities: ['scope', 'tx'],
+    receivers: 2,
+    vfoScheme: 'main_sub',
+    freqRanges: [{ start: 1800000, end: 30000000, label: 'HF' }],
+    modes: ['USB', 'LSB', 'CW', 'AM', 'FM'],
+    filters: ['FIL1', 'FIL2', 'FIL3'],
+    audioConfig: { sampleRate: 48000, channels: 1, codecs: ['opus'] },
+    webrtc: { available: true, enabled: false },
+    txBands: null,
+    stateContractVersion: 1,
+    providerGeneration: 0,
+    // MOR-1470: declared tables put the panel in the engineering domain —
+    // props below are watts / amps / volts, exactly what the backend
+    // publishes for a rig with these tables (MOR-469).
+    meterCalibrations: {
+      power: [
+        { raw: 0, actual: 0, label: '0' },
+        { raw: 143, actual: 50, label: '50' },
+        { raw: 212, actual: 100, label: '100' },
+      ],
+      id: [
+        { raw: 0, actual: 0, label: '0' },
+        { raw: 151, actual: 10, label: '10' },
+        { raw: 212, actual: 25, label: '25' },
+      ],
+      vd: [
+        { raw: 0, actual: 0, label: '0' },
+        { raw: 184, actual: 13.8, label: '13.8' },
+        { raw: 241, actual: 16, label: '16' },
+      ],
+    },
+  };
+}
+
+let components: ReturnType<typeof mount>[] = [];
+let roots: HTMLElement[] = [];
+
+beforeEach(() => {
+  components = [];
+  roots = [];
+  setCapabilities(makeCaps());
+  vi.useFakeTimers();
+  // Anchor wall-clock time; stepAllPeaks() reads Date.now() for latch/decay.
+  vi.setSystemTime(0);
+});
+
+afterEach(() => {
+  components.forEach((c) => unmount(c));
+  roots.forEach((r) => r.remove());
+  components = [];
+  roots = [];
+  vi.useRealTimers();
+  clearCapabilities();
+});
+
+// A $state props proxy so prop mutations re-render the mounted component.
+function mountReactive(props: Record<string, unknown>) {
+  const state = $state(props);
+  const t = document.createElement('div');
+  document.body.appendChild(t);
+  roots.push(t);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const component = mount(MetersDockPanel as any, { target: t, props: state });
+  flushSync();
+  components.push(component);
+  return { t, state };
+}
+
+function poNumber(t: HTMLElement): string | null | undefined {
+  return t.querySelector('[data-meter="po"] .tile-value')?.textContent;
+}
+
+function peakMarkerCount(t: HTMLElement, meterKey = 'po'): number {
+  return t.querySelectorAll(`[data-meter="${meterKey}"] [data-testid="peak-marker"]`).length;
+}
+
+function fillWidth(t: HTMLElement, meterKey = 'po'): number {
+  const fill = t.querySelector(`[data-meter="${meterKey}"] .tile-bar-fill`) as HTMLElement | null;
+  return parseFloat(fill?.style.width ?? '0');
+}
+
+describe('MetersDockPanel TX peak-hold ballistics (MOR-498)', () => {
+  it('holds the Po NUMBER near a prior peak through the inter-syllable gap', () => {
+    // 100 W (a voice peak); 2 W (an inter-syllable trough) — engineering
+    // domain, the backend already interpolated (MOR-1470).
+    const { t, state } = mountReactive({ powerMeter: 100, txActive: true });
+    // Latch the peak on the first tick.
+    vi.advanceTimersByTime(100);
+    flushSync();
+    expect(poNumber(t)).toBe('100W');
+
+    // Signal drops into a gap. Without peak-hold the number would immediately
+    // read the trough (~2W); with peak-hold it must still read close to peak
+    // shortly after the drop (well within the ~1.5 s decay window).
+    state.powerMeter = 2;
+    vi.advanceTimersByTime(100); // t=200ms, ~133ms into decay of a 1500ms window
+    flushSync();
+    const held = parseInt(poNumber(t) ?? '0', 10);
+    // The instantaneous trough is 2 W; the held value is still near the
+    // 100 W peak. The exact figure tracks the linear decay (~91 W here), so
+    // we assert it is far above the trough rather than pinning the boundary.
+    expect(held).toBeGreaterThan(70);
+  });
+
+  it('decays the held Po NUMBER back to the live trough after ~1.5 s', () => {
+    const { t, state } = mountReactive({ powerMeter: 100, txActive: true });
+    vi.advanceTimersByTime(100); // latch peak at t=100
+    flushSync();
+    expect(poNumber(t)).toBe('100W');
+
+    state.powerMeter = 2; // drop to trough
+    // Advance past the 1.5 s decay window (relative to the latch at t=100).
+    vi.advanceTimersByTime(1600); // t=1700ms
+    flushSync();
+    const settled = parseInt(poNumber(t) ?? '0', 10);
+    // Fully decayed: reads the live trough (~2W), not the stale 100W peak.
+    expect(settled).toBeLessThan(10);
+  });
+
+  it('stays at 0W on RX (no stale TX peak bleed)', () => {
+    // Idle/RX: the value stays 0 -> 0W held value never rises.
+    const { t } = mountReactive({ powerMeter: 0, txActive: false });
+    vi.advanceTimersByTime(300);
+    flushSync();
+    expect(poNumber(t)).toBe('0W');
+  });
+
+  it('holds the Id NUMBER near a prior peak through a gap', () => {
+    // 25 A peak; 0 A trough.
+    const { t, state } = mountReactive({
+      powerMeter: 0,
+      idMeter: 25,
+      txActive: true,
+    });
+    vi.advanceTimersByTime(100);
+    flushSync();
+    // 25 A is this fixture's Id top knot, so it renders with the T164 "+".
+    expect(t.querySelector('[data-meter="id"] .tile-value')?.textContent).toBe('25.0+ A');
+
+    state.idMeter = 0;
+    vi.advanceTimersByTime(100); // shortly into decay
+    flushSync();
+    const amps = parseFloat(
+      t.querySelector('[data-meter="id"] .tile-value')?.textContent ?? '0',
+    );
+    // Live trough is 0.0 A; the held value stays well above it during the
+    // hold window (~23 A shortly into the linear decay — still far above
+    // the 0 A trough).
+    expect(amps).toBeGreaterThan(10);
+  });
+
+  it('leaves the Vd NUMBER instantaneous (no peak-hold on the supply rail)', () => {
+    const { t, state } = mountReactive({
+      powerMeter: 0,
+      vdMeter: 16, // this fixture's Vd top knot, so "16.0+ V" (T164)
+      txActive: false,
+    });
+    vi.advanceTimersByTime(100);
+    flushSync();
+    expect(t.querySelector('[data-meter="vd"] .tile-value')?.textContent).toBe('16.0+ V');
+
+    // A drop in supply voltage must be reflected immediately, not held.
+    state.vdMeter = 13.8;
+    vi.advanceTimersByTime(100);
+    flushSync();
+    expect(t.querySelector('[data-meter="vd"] .tile-value')?.textContent).toBe('13.8 V');
+  });
+
+  it('clears a removed channel immediately and reappears without its stale peak or smoother', () => {
+    const { t, state } = mountReactive({ powerMeter: 100, txActive: true });
+    vi.advanceTimersByTime(100);
+    flushSync();
+    expect(poNumber(t)).toBe('100W');
+    expect(peakMarkerCount(t)).toBe(1);
+
+    state.powerMeter = undefined;
+    flushSync();
+    expect(t.querySelector('[data-meter="po"]')).toBeNull();
+    state.powerMeter = 2;
+    flushSync();
+    expect(poNumber(t)).toBe('2W');
+    expect(peakMarkerCount(t)).toBe(0);
+    expect(fillWidth(t)).toBeLessThan(10);
+  });
+
+  it('resets only Po and relatches it on the next shared tick', () => {
+    const { t } = mountReactive({
+      powerMeter: 100,
+      swrMeter: 3,
+      alcMeter: 60,
+      idMeter: 25,
+      txActive: true,
+    });
+    vi.advanceTimersByTime(100);
+    flushSync();
+    for (const key of ['po', 'swr', 'alc', 'id']) expect(peakMarkerCount(t, key)).toBe(1);
+
+    t.querySelector('[data-meter="po"]')?.dispatchEvent(new Event('dblclick', { bubbles: true }));
+    flushSync();
+    expect(peakMarkerCount(t, 'po')).toBe(0);
+    for (const key of ['swr', 'alc', 'id']) expect(peakMarkerCount(t, key)).toBe(1);
+
+    vi.advanceTimersByTime(99);
+    flushSync();
+    expect(peakMarkerCount(t, 'po')).toBe(0);
+    vi.advanceTimersByTime(1);
+    flushSync();
+    expect(peakMarkerCount(t, 'po')).toBe(1);
+  });
+});

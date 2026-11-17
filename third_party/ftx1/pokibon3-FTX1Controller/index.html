@@ -1,0 +1,473 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>FTX-1 Controller</title>
+  <meta name="description" content="Yaesu FTX-1 CAT / USB Audio controller for Chrome">
+  <meta name="theme-color" content="#121316">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icons/icon-192.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Play:wght@700&family=Saira+Condensed:wght@600;700;800&family=Saira:ital,wdth,wght@0,100..125,100..900;1,100..125,100..900&display=swap">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <div id="unsupported" class="banner" hidden>
+    このブラウザは Web Serial API に対応していません。デスクトップ版 Google Chrome / Microsoft Edge で開いてください。
+  </div>
+
+  <div id="app">
+  <aside id="sidebar" aria-label="設定">
+    <!-- (in the browser, not installed: the install button comes up here, js/app.js) -->
+    <div class="inst-top" id="instTop" hidden></div>
+    <details open id="secCat">
+      <summary>CAT</summary>
+        <div class="field"><label>機種（変えるとページを読み込み直します）</label>
+          <select id="model"><option value="ftx1">FTX-1</option><option value="ft991a">FT-991A</option></select>
+        </div>
+        <div class="row">
+          <button class="btn" id="btnCat" title="前回のポートに接続 / 切断">接続</button>
+          <button class="btn" id="btnCatPick" title="ポートを選んで接続（別のポート・初めての接続）">ポートを選ぶ…</button>
+        </div>
+        <p class="hint" id="catState">未接続</p>
+        <label class="chk"><input type="checkbox" id="catAuto"> 起動時と本体の電源 ON で自動接続</label>
+    </details>
+    <details open id="secRx">
+      <summary>USB AUDIO <span class="tag">RX</span></summary>
+        <div class="field"><label>入力（<span class="model-name">FTX-1</span>）</label><select id="rxIn"></select></div>
+        <div class="field"><label>出力（スピーカー）</label><select id="rxOut"></select></div>
+        <div class="field"><label>音量</label><input type="range" id="rxVol" min="0" max="2" step="0.01"></div>
+        <label class="chk" title="本体の AF GAIN を 0 にして本体スピーカーを止め、AF ツマミで PC の音量を調整（USB 音声は AF GAIN の影響を受けません）"><input type="checkbox" id="spkMute"> 本体スピーカーを消音（AF ツマミ = PC 音量）</label>
+        <label class="chk" title="USB の受信音には本体のスケルチがかからないため、FM 系のモードで本体のスケルチが閉じている間は PC の再生音を消します（MAIN は本体の BUSY、SUB は S メーターと SQL から判断。FM 以外は連動しません）"><input type="checkbox" id="pcSql"> 本体のスケルチに連動（閉じている間は消音）</label>
+        <div class="vu"><i id="rxVu"></i></div>
+        <div class="row">
+          <button class="btn" id="btnRx">RX開始</button>
+          <button class="btn" id="btnMute">MUTE</button>
+          <button class="btn rec" id="btnRec" disabled>● REC</button>
+        </div>
+    </details>
+    <details open id="secTx">
+      <summary>USB AUDIO <span class="tag tag-tx">TX</span></summary>
+        <div class="field"><label>マイク（PC）</label><select id="txIn"></select></div>
+        <div class="field"><label>出力（<span class="model-name">FTX-1</span>）</label><select id="txOut"></select></div>
+        <div class="field"><label>送信レベル</label><input type="range" id="txGain" min="0" max="3" step="0.01"></div>
+        <div class="vu vu-tx"><i id="txVu"></i></div>
+        <div class="row">
+          <button class="btn" id="btnTx">TX音声 ON</button>
+          <label class="chk"><input type="checkbox" id="txGate"> PTT連動</label>
+          <label class="chk"><input type="checkbox" id="txTone"> 1kHz</label>
+        </div>
+    </details>
+    <details open id="secDec">
+      <summary>CW DECODER</summary>
+        <div class="field"><label>入力チャンネル</label>
+          <select id="decCh"><option value="L">L</option><option value="R">R</option><option value="MIX">L+R</option></select>
+          <label class="chk" title="適応型フィルタ（ALE によるノイズ低減）。弱い信号を拾いやすくなり、ノイズからの偽文字が減ります"><input type="checkbox" id="decNr"> 適応型フィルタ</label>
+        </div>
+        <div class="field"><label>入力ゲイン <span id="decGainV">0 dB</span></label><input type="range" id="decGain" min="-20" max="20" step="1"></div>
+        <p class="hint">デコーダは <a href="https://github.com/pokibon3/cw_decoder4" target="_blank" rel="noopener">CW Decoder 4</a> の WebAssembly 版（GPL）。RX音声に BPF（Q=3, トーン追従）をかけて入力します。</p>
+    </details>
+    <details open id="secVfo">
+      <summary>VFO</summary>
+        <div class="row vfo-keys">
+          <button class="btn" data-vfo="lock">LOCK</button><button class="btn" data-vfo="dual">DUAL RX</button>
+          <button class="btn" data-vfo="atob">A▸B</button><button class="btn" data-vfo="btoa">B▸A</button>
+          <button class="btn" data-vfo="step">DIAL STEP</button>
+        </div>
+    </details>
+    <details open id="secSet">
+      <summary>SETUP</summary>
+        <div class="row"><button class="btn" id="btnAppInst">アプリ</button><span class="hint" id="appInstHint"></span></div>
+        <div class="field"><label>PTT 方式</label>
+          <select id="pttMethod">
+            <option value="cat1">CAT (TX1)</option>
+            <option value="cat2">CAT (TX2 / DATA)</option>
+            <option value="rts">RTS</option>
+            <option value="dtr">DTR</option>
+          </select>
+        </div>
+        <label class="chk"><input type="checkbox" id="pttLatch"> TX ボタンを LATCH（クリックで送受切替）</label>
+    </details>
+    <details id="secAdv">
+      <summary>詳細設定</summary>
+        <div class="field"><label>CAT ボーレート</label>
+          <select id="baud">
+            <option value="auto" selected>自動検出</option><option>4800</option><option>9600</option><option>19200</option><option>38400</option><option>115200</option>
+          </select>
+        </div>
+        <div class="field"><label id="radioBaudLabel">本体の CAT-1 / CAT-2 ボーレート</label>
+          <div class="row">
+            <select id="radioBaud" style="flex:1"><option>115200</option><option>38400</option><option>19200</option><option>9600</option><option>4800</option></select>
+            <button class="btn" id="btnRadioBaud" title="本体のメニュー CAT-1 RATE / CAT-2 RATE に書き込み、新しい速度で再接続">書込</button>
+          </div>
+        </div>
+        <div class="row">
+          <button class="btn" id="btnPttPort" title="本体の 2 本目のシリアルポート（CAT 欄で選んだのとは別のポート。Windows では Standard COM Port）を開く。CW の直接キーイングと、RTS/DTR 方式の PTT に使う">CWキーイング</button>
+          <span class="hint" id="pttPortState">未接続（CATポートを使用）</span>
+        </div>
+        <div class="field"><label>ダイヤル分解能</label>
+          <select id="dialRes">
+            <option value="100">100 step/回転</option><option value="250">250 step/回転</option><option value="500">500 step/回転</option><option value="1000">1000 step/回転</option>
+          </select>
+        </div>
+        <div class="field"><label>TOT（送信タイマー）</label>
+          <select id="tot"><option value="60">1分</option><option value="180">3分</option><option value="300">5分</option><option value="600">10分</option><option value="0">OFF</option></select>
+        </div>
+        <div class="field"><label>AF-FFT 帯域</label>
+          <select id="scopeSpan"><option value="3000">3 kHz</option><option value="4000">4 kHz</option><option value="6000">6 kHz</option><option value="12000">12 kHz</option></select>
+        </div>
+        <p class="hint">キー操作: ↑↓ 同調 / Shift+↑↓ ×10 / PageUp・PageDown バンド / Space 送信</p>
+        <label class="chk"><input type="checkbox" id="showConsole"> CAT CONSOLE を表示</label>
+    </details>
+  </aside>
+
+  <div id="mainCol">
+  <main class="radio" id="radio">
+    <!-- top edge keys (long flat keys with the legend printed below, as on the field head) -->
+    <div class="top-edge">
+      <button class="tkey-cat" id="btnConnect" title="本体の電源 ON / OFF（CAT の接続は左の CAT 欄）"><span class="tled"></span>POWER</button>
+      <!-- top edge as on the radio: five flat keys with legends below + the orange model print, then three keys -->
+      <div class="te-main">
+        <div class="te-keys">
+          <div class="tk"><label>GM</label><button class="tbar" data-act="gm"></button></div>
+          <div class="tk"><label>S-DX</label><button class="tbar" data-act="sdx"></button></div>
+          <div class="tk"><label>PMG<em>PW</em></label><button class="tbar" data-act="pmg"></button></div>
+          <div class="tk"><label>MAG<em>BAND</em></label><button class="tbar" data-act="band"></button></div>
+          <div class="tk"><label>N/W<em>MODE</em></label><button class="tbar" data-act="nw"></button></div>
+        </div>
+      </div>
+      <span class="te-gap"></span>
+      <div class="te-right">
+        <div class="tk"><label>◢<em>SPLIT</em></label><button class="tkey" data-act="split" id="keySplit" title="押す: MAIN⇔SUB 入替 / 長押し: SPLIT"></button></div>
+        <div class="tk"><label>V/M<em>MW</em></label><button class="tkey" data-act="vm" title="押す: VFO⇔メモリー / 長押し: メモリーチャンネルリスト（リスト表示中の長押しで書込）"></button></div>
+        <div class="tk"><label>M▸V<em>MT</em></label><button class="tkey" data-act="mv" title="押す: メモリー→VFO / 長押し: メモリーチューン"></button></div>
+      </div>
+    </div>
+
+    <div class="head">
+      <!-- left: (menu) / SUB DIAL / TX / SUB AF-RF-SQL -->
+      <section class="h-left">
+        <button class="tkey-cat tkey-menu" id="btnMenu" title="USB AUDIO / CW DECODER / SETUP パネルの表示切替" aria-label="メニュー">&#9776;</button>
+        <div class="kw">
+          <label>SUB DIAL</label>
+          <div class="knob knob-r" id="knSubDial" title="SUB側の周波数 / クリックでMAIN⇔SUB入替"><div class="cap"><i></i></div></div>
+        </div>
+        <div class="kw">
+          <button class="txbtn" id="btnPtt" title="押している間送信（Space キーでも可。SETUP の LATCH でクリック切替）">TX</button>
+        </div>
+        <div class="kw">
+          <label>SUB <b>DSP</b><br><span class="kn" data-k="af">AF</span>/<span class="kn" data-k="rf">RF</span>/<span class="kn" data-k="sql">SQL</span><em id="knAF1mode">AF</em></label>
+          <div class="knob knob-r" id="knAF1" title="SUB AF / クリックで RF・SQL 切替"><div class="cap"><i></i></div></div>
+        </div>
+      </section>
+
+      <!-- center: 4.3" TFT -->
+      <!-- model print, in the space under the LCD -->
+      <div class="silk"><span>HF/VHF/UHF ALL MODE TRANSCEIVER</span><b>FTX-1</b><i>CAT Control</i></div>
+      <section class="h-screen">
+        <div class="lcd lay-ud" id="lcd">
+          <div class="st-bar" id="stBar"></div>
+
+          <div class="band" id="band0" data-vfo="0">
+            <div class="b-tags"><span class="tg-side">MAIN</span><span class="tg-vfo">VFO</span></div>
+            <canvas class="b-meter" id="meter0" title="タッチで送信メーター選択"></canvas>
+            <div class="b-freq"><div class="freq" id="freq0"></div></div>
+            <div class="b-side"><div class="b-func" id="funcBox">AF GAIN</div><button class="b-mode" data-vfo="0">USB</button><span class="b-txrx" id="txrx0">TXRX</span></div>
+            <div class="b-rx" id="rx0"></div>
+            <div class="b-filt"><canvas id="filt0"></canvas></div>
+          </div>
+
+          <div class="band" id="band1" data-vfo="1">
+            <div class="b-tags"><span class="tg-side">SUB</span><span class="tg-vfo">VFO</span></div>
+            <canvas class="b-meter" id="meter1" title="タッチで送信メーター選択"></canvas>
+            <div class="b-freq"><div class="freq" id="freq1"></div></div>
+            <div class="b-side"><button class="b-mode" data-vfo="1">LSB</button><span class="b-txrx" id="txrx1">RX</span></div>
+            <div class="b-rx" id="rx1"></div>
+            <div class="b-filt"><canvas id="filt1"></canvas></div>
+          </div>
+
+          <div class="scope"><canvas id="scope"></canvas><div class="sc-info" id="scInfo"></div></div>
+
+          <div class="softbar" id="softbar"></div>
+
+          <div class="pop" id="pop" hidden>
+            <div class="pop-title"><span id="popTitle">MODE</span><button class="pop-x" id="popClose">✕</button></div>
+            <div class="pop-grid" id="popGrid"></div>
+          </div>
+
+          <!-- settings menus (EX), opened from FUNC page 3/3 -->
+          <div class="exm" id="exm" hidden>
+            <div class="exm-title" id="exmTitle"></div>
+            <div class="exm-body"><div class="exm-groups" id="exmGroups"></div><div class="exm-items" id="exmItems"></div></div>
+            <div class="exm-foot"><button class="exm-back" id="exmBack">BACK</button><button class="exm-back exm-def" id="exmDef" hidden>初期値に戻す</button><span class="exm-hint" id="exmHint">項目を選んで FUNC ツマミ / ホイールで変更、値のクリックで次の値。「初期値に戻す」で選んだ項目だけ工場出荷時の値に戻ります</span></div>
+          </div>
+
+          <div class="lcd-popup" id="popup" hidden>
+            <div class="popup-label" id="popupLabel"></div>
+            <div class="popup-value" id="popupValue"></div>
+            <div class="popup-bar"><i id="popupBar"></i></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- right: keys hugging the MAIN DIAL, then FUNC / DISP / MAIN AF-RF-SQL -->
+      <section class="h-right">
+        <div class="cluster">
+          <button class="rk rk-tl" data-act="qmb" title="押す: QMB呼出 / 長押し: QMB登録"><b>QMB</b></button>
+          <button class="rk rk-tr" data-act="clar" id="keyClar" title="押す: CLAR RX→TX→RXTX→OFF / 長押し: オフセットクリア"><b>CLAR</b></button>
+          <button class="rk rk-bl" data-act="back"><b>BACK</b></button>
+          <button class="rk rk-br" data-act="fine" id="keyFine" title="押す: FINE / 長押し: FAST"><b>FINE<br>/FAST</b></button>
+          <div class="busy"><small>BUSY/TX<br>SUB&nbsp;&nbsp;MAIN</small><span class="slot"><i id="ledBusy1"></i><i id="ledBusy0"></i></span></div>
+          <div class="vfo-arc" id="vfoArc"></div>
+          <div class="dial" id="dial">
+            <div class="dial-ring"></div>
+            <div class="dial-disc"><div class="dial-dimple"></div></div>
+          </div>
+        </div>
+        <div class="rcol">
+          <div class="kw">
+            <label>FUNC</label>
+            <div class="knob knob-r" id="knFunc" title="FUNC（LCDで割当てた機能を調整）"><div class="cap"><i></i></div></div>
+          </div>
+          <button class="dispkey" data-act="disp">DISP</button>
+          <div class="kw">
+            <label>MAIN <b>DSP</b><br><span class="kn" data-k="af">AF</span>/<span class="kn" data-k="rf">RF</span>/<span class="kn" data-k="sql">SQL</span><em id="knAF0mode">AF</em></label>
+            <div class="knob knob-r" id="knAF0" title="MAIN AF / クリックで RF・SQL 切替"><div class="cap"><i></i></div></div>
+          </div>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <!-- FT-991A front panel (operation manual p.18-22), put in place of the field head above when SETUP selects it.
+       Element ids shared with the FTX-1 face are the ones app.js drives the same way on both. -->
+  <template id="head991">
+  <main class="radio r991" id="radio">
+    <button class="tkey-cat tkey-menu" id="btnMenu" title="USB AUDIO / CW DECODER / SETUP パネルの表示切替" aria-label="メニュー">&#9776;</button>
+    <div class="r9-pw"><span class="r9-lab">ON/OFF</span><button class="r9-power" id="btnConnect" title="本体の電源 ON / OFF（CAT の接続は左の CAT 欄）"><span class="tled"></span><svg class="r9-pwsym" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v8M7.1 6.6a7 7 0 1 0 9.8 0" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg></button></div>
+    <button class="txbtn r9-tx" id="btnPtt" title="押している間送信（Space キーでも可。SETUP の LATCH でクリック切替）">TX</button>
+
+    <div class="r9-bezel"></div>
+    <div class="r9-logo">YAESU</div>
+    <section class="r9-screen">
+      <div class="lcd lcd991" id="lcd">
+        <!-- placed as on the radio's screen (product photo): blue band with VFO-A, clock, mode box, MULTI function, frequency
+             and MULTI level bar; then the black VFO-B line with the icons, VFO-B (or CLAR) -->
+        <div class="band t9-a" id="band0" data-vfo="0">
+          <span class="t9-vfo" id="t9Vfo">VFO-A</span><span class="t9-ch" id="t9Ch"></span>
+          <span class="t9-clock" id="t9Clock"></span>
+          <button class="b-mode" data-vfo="0" title="MODE">USB</button>
+          <span class="t9-hiswr" id="t9Hiswr">HI-SWR</span>
+          <div class="b-func" id="funcBox" title="MULTI ツマミの機能">RF-P</div>
+          <div class="b-freq"><div class="freq" id="freq0"></div></div>
+          <div class="t9-lvl" title="MULTI ツマミの値"><i id="t9Lvl"></i></div>
+        </div>
+        <div class="t9-mid">
+          <div class="st-bar" id="stBar"></div>
+          <div class="band t9-b" id="band1" data-vfo="1">
+            <span class="t9-bl">VFO-B</span><button class="b-mode" data-vfo="1">USB</button>
+            <div class="t9-bf"><div class="freq" id="freq1"></div></div>
+            <b class="t9-clartag" id="t9ClarTag">CLAR</b><span class="t9-clarofs" id="t9ClarOfs">0Hz</span>
+          </div>
+        </div>
+        <canvas class="b-meter" id="meter0" title="タッチで送信メーター選択"></canvas>
+        <div class="scope"><canvas id="scope"></canvas><div class="sc-info" id="scInfo"></div></div>
+        <div class="softbar" id="softbar"></div>
+
+        <div class="pop" id="pop" hidden>
+          <div class="pop-title"><span id="popTitle">MODE</span><button class="pop-x" id="popClose">✕</button></div>
+          <div class="pop-grid" id="popGrid"></div>
+        </div>
+        <div class="exm" id="exm" hidden>
+          <div class="exm-title" id="exmTitle"></div>
+          <div class="exm-body"><div class="exm-groups" id="exmGroups"></div><div class="exm-items" id="exmItems"></div></div>
+          <div class="exm-foot"><button class="exm-back" id="exmBack">BACK</button><button class="exm-back exm-def" id="exmDef" hidden>初期値に戻す</button><button class="exm-back exm-sel" id="exmSel" title="選んだ項目の値を MULTI ツマミで変更 / もう一度押して確定">SELECT</button></div>
+        </div>
+        <div class="lcd-popup" id="popup" hidden>
+          <div class="popup-label" id="popupLabel"></div>
+          <div class="popup-value" id="popupValue"></div>
+          <div class="popup-bar"><i id="popupBar"></i></div>
+        </div>
+      </div>
+    </section>
+
+    <button class="r9k k-f" data-act="fkey" title="押す: ファンクションメニュー"><b>F</b><em>M-LIST</em></button>
+    <button class="r9k k-menu" data-act="menu991" title="押す: メニュー（001〜153）"><b>MENU</b><em>SETUP</em></button>
+    <button class="r9k k-band" data-act="band991" title="バンド選択"><b>BAND</b></button>
+    <button class="r9k k-mode" data-act="mode991" title="モード選択"><b>MODE</b></button>
+    <div class="r9-multi"><span class="r9-lab">MULTI</span><div class="knob" id="knFunc" title="MULTI（画面に出ている機能を調整）"><div class="cap"><i></i></div></div></div>
+
+    <div class="r9-silk"><span>HF/VHF/UHF ALL MODE TRANSCEIVER</span><b>FT-991<em>A</em></b></div>
+    <div class="r9-plate"></div>
+    <!-- LED strip: busy (speaker) / TX (antenna), then MEM / VFO-A / VFO-B with a green (receive) and a red (transmit) lamp
+         under each, FAST and LOCK -->
+    <div class="r9-leds">
+      <span class="r9-ico" id="led9Rx" title="受信（スケルチが開いている）">◀)))</span><span class="r9-ico tx" id="led9Tx" title="送信">((·))</span>
+      <span class="r9-vl" id="led9Mem"><b>MEM</b><i></i><i></i></span><span class="r9-vl" id="led9A"><b>VFO-A</b><i></i><i></i></span><span class="r9-vl" id="led9B"><b>VFO-B</b><i></i><i></i></span>
+      <span class="r9-sq" id="led9Fast">FAST</span><span class="r9-sq" id="led9Lock">LOCK</span>
+    </div>
+    <button class="r9s k-ab" data-act="ab" title="VFO-A を VFO-B にコピー">A=B</button>
+    <button class="r9s k-sw" data-act="swap" title="VFO-A と VFO-B を入れ替え">A/B</button>
+    <button class="r9s k-fast" data-act="fast" title="ダイアルの変化量 ×10">FAST</button>
+    <button class="r9s k-lock" data-act="lock" title="ダイアルロック">LOCK</button>
+    <button class="r9s col-l r1" data-act="qmb" title="押す: QMB 呼出 / 長押し: QMB 書込">RCL/STO</button>
+    <button class="r9s col-l r2" data-act="tune991" title="押す: チューナー ON/OFF / 長押し: オートチューン">TUNE</button>
+    <button class="r9s col-l r3" data-act="cs" title="カスタムスイッチ（CAT 不可）">C.S</button>
+    <button class="r9s col-l r4" data-act="txw" title="押している間 送信周波数を受信">TXW</button>
+    <button class="r9s col-r r1" data-act="clar991" title="押す: クラリファイア ON/OFF / 長押し: オフセットを 0 に">CLAR</button>
+    <button class="r9s col-r r2" data-act="vm" title="VFO ⇔ メモリー">V/M</button>
+    <button class="r9s col-r r3" data-act="am991" title="押す: メモリーチャンネル一覧 / 一覧表示中に長押し: VFO-A を選んだチャンネルに書込">A▸M</button>
+    <button class="r9s col-r r4" data-act="split991" title="押す: スプリット / 長押し: クイックスプリット">SPLIT</button>
+    <div class="dial" id="dial">
+      <div class="dial-ring"></div>
+      <div class="dial-disc"><div class="dial-dimple"></div></div>
+    </div>
+
+    <div class="r9-kn kn-clar"><div class="knob" id="knSubDial" title="CLAR/VFO-B（スプリット中は VFO-B、それ以外はクラリファイア）"><div class="cap"><i></i></div></div><span class="r9-lab">CLAR/VFO-B</span></div>
+    <div class="r9-kn kn-rf"><span class="r9-lab">RF GAIN</span><div class="knob" id="knRF" title="RF GAIN"><div class="cap"><i></i></div></div></div>
+    <div class="r9-kn kn-af"><span class="r9-lab">AF GAIN</span><div class="knob" id="knAF0" title="AF GAIN"><div class="cap"><i></i></div></div></div>
+  </main>
+  </template>
+
+  <!-- ===== PC side deck ===== -->
+  <section class="deck">
+    <!-- CW RX (left) / TX (right). RX shows what cw_decoder4's web page shows, with the same controls -->
+    <div class="panel cwp" id="panelDec">
+      <h2>CW <span class="tag">RX</span><span class="dec-led" id="decLed" title="キー判定"></span><span class="h2-sp"></span>
+        <button class="btn" id="btnDec" title="RX音声をデコード（USB AUDIO RX 開始中に動作）">DECODE</button></h2>
+      <div class="cwd-status">
+        <button class="btn" id="btnDecMode" title="欧文 / 和文">US</button>
+        <button class="btn" id="btnDecTone" title="トーン: AUTO → 600〜1000Hz 手動">AUTO</button>
+        <span class="cwd-sep"></span>
+        <span class="cwd-m"><b id="decWpm">--</b> WPM</span>
+        <span class="cwd-m hz">TONE <b id="decTone">---</b> Hz</span>
+        <span class="cwd-m pk">Peak <b id="decPeak">----</b></span>
+        <span class="cwd-sep"></span>
+        <span class="cwd-lvl"><i>LVL</i><span class="cwd-bar"><b id="decLvlBar"></b><s></s></span><span id="decLvl">-inf dBFS</span><span class="cwd-clip" id="decClip">CLIP</span><span class="cwd-rate" id="decRate"></span></span>
+        <span class="h2-sp"></span>
+        <button class="btn" id="btnDecCopy">コピー</button>
+        <button class="btn" id="btnDecClr">クリア</button>
+      </div>
+      <pre class="dec-text" id="decText"></pre>
+      <div class="cwd-panels">
+        <div class="cwd-card" id="decFftCard">
+          <div class="cwd-cap" id="decFftCap" title="グラフのクリックでトーン選択・ダブルクリックで全幅 / ここをクリックで全幅"><span>FFT スペクトラム</span></div>
+          <canvas id="decFft"></canvas>
+        </div>
+        <div class="cwd-card" id="decScopeCard">
+          <div class="cwd-cap" id="decScopeCap" title="クリックで全幅表示 / もう一度で元に戻す"><span>オシロスコープ</span><span class="grow" id="decScopeSpan"></span>
+            <label title="時間軸の倍率">x<input type="range" id="decZoom" min="1" max="3" step="0.5" value="2"><span id="decZoomV">2.0</span></label>
+            <button class="btn trace on" id="decKey">KEY</button><button class="btn trace on" id="decEnv">ENV</button><button class="btn trace on" id="decRaw">RAW</button></div>
+          <canvas id="decScope" title="クリックで全幅表示 / もう一度で元に戻す"></canvas>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel cwp" id="panelCw">
+      <h2>CW <span class="tag tag-tx">TX</span><span class="h2-sp"></span><span class="tag err" id="cwHow">送信不可</span></h2>
+      <div class="cw-ctl">
+      <div class="cw-keys" id="cwMem">
+        <button class="btn" id="btnCwSend" title="入力欄の文を送信（Enter でも可）。送信済みは色が変わって編集不可、その先は送信中も編集・追記できます">SEND</button>
+        <button class="btn" id="btnCwStop">STOP</button>
+      </div>
+      <!-- key speed (the radio's KEY SPEED, KS) -->
+      <div class="cw-speed"><span class="cwd-m"><b id="cwWpm">20</b> WPM</span><input type="range" id="cwSpeed" min="4" max="60" step="1" value="20" title="送信速度（本体の KEY SPEED）"></div>
+      </div>
+      <div class="cw-log" id="cwLog" title="送信ログ（送信済みの文字は明るく、本体に渡して送信待ちの文字は暗く表示）"></div>
+      <!-- the editor's text is drawn by the backdrop (sent / handed over / editable colours); the textarea on top is transparent -->
+      <div class="cw-edit-wrap">
+        <div class="cw-back" id="cwBack" aria-hidden="true"></div>
+        <textarea class="cw-box" id="cwText" placeholder="CQ CQ DE JA1XXX K" spellcheck="false" title="送信する文。送信済み（色付き）は編集できず、その先は送信中も編集できます"></textarea>
+      </div>
+    </div>
+
+    <!-- FT8 / FT4 receive / transmit: shown in DATA-U / DATA-L -->
+    <!-- receive on the left, transmit on the right (as the CW panels) -->
+    <div class="panel ft8p" id="panelFt8" hidden>
+      <h2><span class="ft8-title">FT8</span> <span class="tag">RX</span><span class="ft8-slot" id="ft8Slot"><i id="ft8Bar"></i></span><span class="h2-sp"></span><span class="tag" id="ft8Info">--</span></h2>
+      <div class="ft8-head"><span>UTC</span><span>dB</span><span>DT</span><span>Freq</span><span>Message</span></div>
+      <div class="ft8-list" id="ft8List"></div>
+      <div class="cw-keys ft8-keys">
+        <button class="btn" id="btnFt8" title="RX音声の FT8 / FT4 をデコード（USB AUDIO RX 開始中に動作）">DECODE</button>
+        <button class="btn" id="btnFt8Mode" title="FT8（15 秒周期）/ FT4（7.5 秒周期）を切替">FT8</button>
+        <button class="btn" id="btnFt8Clr">CLR</button>
+        <label class="chk"><input type="checkbox" id="ft8Cq"> CQ・自局宛のみ</label>
+      </div>
+      <p class="hint">FT8 は 15 秒ごと（UTC :00 / :15 / :30 / :45）、FT4 は 7.5 秒ごとに解読します。PC の時計が ±1 秒（FT4 は ±0.5 秒）以内に合っている必要があります。デコーダは ft8_lib（MIT）。</p>
+    </div>
+    <div class="panel ft8p" id="panelFt8Tx" hidden>
+      <h2><span class="ft8-title">FT8</span> <span class="tag tag-tx">TX</span><span class="h2-sp"></span><span class="tag err" id="ft8TxTag" hidden>送信中</span></h2>
+      <div class="ft8-txcfg">
+        <label>MY CALL<input type="text" id="ft8My" maxlength="11" spellcheck="false" placeholder="JA1XXX"></label>
+        <label>GRID<input type="text" id="ft8Grid" maxlength="6" spellcheck="false" placeholder="PM95"></label>
+        <label>DX CALL<input type="text" id="ft8Dx" maxlength="11" spellcheck="false"></label>
+        <label>RPT<input type="text" id="ft8Rpt" maxlength="3" spellcheck="false"></label>
+        <label>TX Hz<input type="number" id="ft8TxHz" min="200" max="3000" step="10"></label>
+        <label>LEVEL<input type="range" id="ft8Lvl" min="0.02" max="1" step="0.01"></label>
+      </div>
+      <div class="ft8-msgs" id="ft8Msgs">
+        <label class="ft8-msg"><input type="radio" name="ft8Sel"><b>Tx1</b><input type="text" spellcheck="false" maxlength="37"></label>
+        <label class="ft8-msg"><input type="radio" name="ft8Sel"><b>Tx2</b><input type="text" spellcheck="false" maxlength="37"></label>
+        <label class="ft8-msg"><input type="radio" name="ft8Sel"><b>Tx3</b><input type="text" spellcheck="false" maxlength="37"></label>
+        <label class="ft8-msg"><input type="radio" name="ft8Sel"><b>Tx4</b><input type="text" spellcheck="false" maxlength="37"></label>
+        <label class="ft8-msg"><input type="radio" name="ft8Sel"><b>Tx5</b><input type="text" spellcheck="false" maxlength="37"></label>
+        <label class="ft8-msg"><input type="radio" name="ft8Sel"><b>Tx6</b><input type="text" spellcheck="false" maxlength="37"></label>
+      </div>
+      <div class="cw-keys ft8-txkeys">
+        <button class="btn" id="btnFt8Tx" title="選択中の Tx メッセージを、選んだ周期で送信します">TX ON</button>
+        <button class="btn" id="btnFt8Halt" title="送信をすぐ止め、TX を OFF にします">HALT</button>
+        <button class="btn" id="btnFt8Per" title="送信する周期（UTC 秒）">00/30</button>
+        <label class="chk"><input type="checkbox" id="ft8Auto"> AUTO SEQ</label>
+      </div>
+      <p class="hint">一覧の行をクリックでその局を DX に設定（ダブルクリックで TX ON）。DATA-U・USB AUDIO TX（自動で開始）を使い、PTT は SETUP の方式。AUTO SEQ は WSJT-X と同じ順で Tx を進めます。</p>
+    </div>
+
+    <div class="panel panel-wide" id="panelConsole" hidden>
+      <h2>CAT CONSOLE <span class="tag" id="catErr">ERR 0</span></h2>
+      <div class="log" id="log"></div>
+      <div class="row">
+        <input type="text" id="rawCmd" placeholder="例: FA; / MD02; / EX040101;" spellcheck="false">
+        <button class="btn" id="btnRaw">SEND</button>
+        <label class="chk"><input type="checkbox" id="showPoll"> ポーリング表示</label>
+        <button class="btn" id="btnClearLog">CLR</button>
+      </div>
+    </div>
+
+  </section>
+  </div>
+
+  </div>
+
+  <dialog id="entryDlg" class="entry">
+    <form method="dialog">
+      <div class="entry-head"><span id="entryVfo">MAIN</span><output id="entryShow">-</output><span class="entry-unit">MHz</span></div>
+      <input id="entryInput" type="hidden">
+      <div class="keypad" id="keypad">
+        <button type="button" data-k="1">1</button><button type="button" data-k="2">2</button><button type="button" data-k="3">3</button><button type="button" data-k="bs">⌫</button>
+        <button type="button" data-k="4">4</button><button type="button" data-k="5">5</button><button type="button" data-k="6">6</button><button class="ent" value="ok" id="entryOk">ENT</button>
+        <button type="button" data-k="7">7</button><button type="button" data-k="8">8</button><button type="button" data-k="9">9</button>
+        <button type="button" data-k="0">0</button><button type="button" data-k=".">.</button><button type="button" data-k="ce">CE</button><button value="cancel">BACK</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- app status (not part of the radio's screen) -->
+  <footer id="statusbar">
+    <span class="sb-item" id="sbCat"><i></i><b>CAT</b><span>未接続</span></span>
+    <span class="sb-item" id="sbAudio"><i></i><b>USB AUDIO</b><span>停止</span></span>
+    <button class="sb-item sb-err" id="sbErr" hidden title="クリックで CAT CONSOLE を表示"></button>
+    <span class="sb-msg" id="sbMsg"></span>
+    <span class="sb-sp"></span>
+    <span class="sb-item" id="sbClock"></span>
+    <a class="sb-item sb-help" href="manual.html" target="_blank" rel="noopener" title="使い方（マニュアル）を開く">？ 使い方</a>
+    <span class="sb-item sb-ver" id="sbVer"></span>
+  </footer>
+
+  <div class="toast" id="toast" hidden></div>
+
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>

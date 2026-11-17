@@ -1,0 +1,137 @@
+import Foundation
+
+/// Which external logbook the app works with, and how to reach it —
+/// backed by `UserDefaults` directly (same pattern as `APRSSettings`) so
+/// non-View code (the future QSO logger and worked-before lookup) can read
+/// it too. Only MacLoggerDX so far; `Logger` is the seam for others.
+enum LogbookSettings {
+    enum Logger: String, CaseIterable {
+        case none
+        case macLoggerDX
+
+        var displayName: String {
+            switch self {
+            case .none: String(localized: "common.none")
+            case .macLoggerDX: "MacLoggerDX"
+            }
+        }
+    }
+
+    static let loggerKey = "logbook.logger"
+    /// A log file the user picked by hand; empty means "use the one
+    /// MacLoggerDX itself has open" (`MacLoggerDX.detectedLogPath`).
+    static let macLoggerDXLogPathKey = "logbook.macLoggerDX.logPath"
+    static let macLoggerDXUDPHostKey = "logbook.macLoggerDX.udpHost"
+    static let macLoggerDXUDPPortKey = "logbook.macLoggerDX.udpPort"
+
+    /// MacLoggerDX listens for WSJT-X's UDP messages on WSJT-X's own
+    /// default port (seen with `lsof` against MacLoggerDX 6.62).
+    static let defaultUDPHost = "127.0.0.1"
+    static let defaultUDPPort = 2237
+
+    static var logger: Logger {
+        get { Logger(rawValue: UserDefaults.standard.string(forKey: loggerKey) ?? "") ?? .none }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: loggerKey) }
+    }
+
+    static var macLoggerDXLogPathOverride: String {
+        get { UserDefaults.standard.string(forKey: macLoggerDXLogPathKey) ?? "" }
+        set { UserDefaults.standard.set(newValue, forKey: macLoggerDXLogPathKey) }
+    }
+
+    /// The log file to read: the hand-picked one if set, otherwise
+    /// whatever MacLoggerDX's own preferences say it has open.
+    static var macLoggerDXLogPath: String? {
+        let override = macLoggerDXLogPathOverride
+        return override.isEmpty ? MacLoggerDX.detectedLogPath : override
+    }
+
+    static var macLoggerDXUDPHost: String {
+        get {
+            let value = UserDefaults.standard.string(forKey: macLoggerDXUDPHostKey) ?? ""
+            return value.isEmpty ? defaultUDPHost : value
+        }
+        set { UserDefaults.standard.set(newValue, forKey: macLoggerDXUDPHostKey) }
+    }
+
+    static var macLoggerDXUDPPort: Int {
+        get {
+            let value = UserDefaults.standard.integer(forKey: macLoggerDXUDPPortKey)
+            return (1...65535).contains(value) ? value : defaultUDPPort
+        }
+        set { UserDefaults.standard.set(newValue, forKey: macLoggerDXUDPPortKey) }
+    }
+
+    // MARK: Wavelog
+
+    /// Wavelog is a second logbook beside `logger`, not one of its
+    /// choices: every QSO goes to both (user request, 2026-10-24). The API
+    /// v2 token is in the keychain (`WavelogToken`), not here.
+    static let wavelogEnabledKey = "logbook.wavelog.enabled"
+    static let wavelogURLKey = "logbook.wavelog.url"
+    static let wavelogStationIDKey = "logbook.wavelog.stationID"
+    /// The picked location's name and callsign, shown before the list has
+    /// been fetched again.
+    static let wavelogStationNameKey = "logbook.wavelog.stationName"
+    static let wavelogStationCallsignKey = "logbook.wavelog.stationCallsign"
+
+    /// Wavelog CAT (`WavelogRadioReporter`): the rig's frequency/mode sent
+    /// to Wavelog as the radio `wavelogRadioName`. Independent of logging,
+    /// though it uses the same URL and token.
+    static let wavelogCATEnabledKey = "logbook.wavelog.catEnabled"
+    static let wavelogRadioNameKey = "logbook.wavelog.radioName"
+    static let defaultWavelogRadioName = "FTX-1"
+
+    static var wavelogCATEnabled: Bool {
+        UserDefaults.standard.bool(forKey: wavelogCATEnabledKey)
+    }
+
+    /// Wavelog keys radios by name (≤250 characters).
+    static var wavelogRadioName: String {
+        let name = (UserDefaults.standard.string(forKey: wavelogRadioNameKey) ?? "").trimmingCharacters(in: .whitespaces)
+        return name.isEmpty ? defaultWavelogRadioName : String(name.prefix(250))
+    }
+
+    /// Wavelog → rig (`WavelogTuneListener`): Wavelog's pages tune the rig
+    /// through the radio's `cat_url`, `http://127.0.0.1:54321` by default.
+    static let wavelogTuneEnabledKey = "logbook.wavelog.tuneEnabled"
+    static let wavelogTunePortKey = "logbook.wavelog.tunePort"
+    static let defaultWavelogTunePort: UInt16 = 54321
+
+    static var wavelogTuneEnabled: Bool {
+        UserDefaults.standard.bool(forKey: wavelogTuneEnabledKey)
+    }
+
+    static var wavelogTunePort: UInt16 {
+        let value = UserDefaults.standard.integer(forKey: wavelogTunePortKey)
+        return (1024...65535).contains(value) ? UInt16(value) : defaultWavelogTunePort
+    }
+
+    static var wavelogEnabled: Bool {
+        UserDefaults.standard.bool(forKey: wavelogEnabledKey)
+    }
+
+    static var wavelogURL: String {
+        UserDefaults.standard.string(forKey: wavelogURLKey) ?? ""
+    }
+
+    static var wavelogStationID: String {
+        UserDefaults.standard.string(forKey: wavelogStationIDKey) ?? ""
+    }
+
+    /// Where QSOs go, or why they can't, in words for the Log pane.
+    static func wavelogTarget() -> Result<(url: String, token: String, stationID: String), WavelogSetupError> {
+        let url = wavelogURL.trimmingCharacters(in: .whitespaces)
+        guard !url.isEmpty else { return .failure(WavelogSetupError(String(localized: "logbookSettings.wavelogHasNoUrl"))) }
+        let token = WavelogToken.read()
+        guard !token.isEmpty else { return .failure(WavelogSetupError(String(localized: "logbookSettings.wavelogHasNoApi"))) }
+        let station = wavelogStationID
+        guard !station.isEmpty else { return .failure(WavelogSetupError(String(localized: "logbookSettings.noWavelogStationLocation"))) }
+        return .success((url, token, station))
+    }
+
+    struct WavelogSetupError: Error {
+        let message: String
+        init(_ message: String) { self.message = message }
+    }
+}

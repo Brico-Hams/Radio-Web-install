@@ -1,0 +1,14 @@
+[workspace]
+members = ["ftx1", "ftx1-ctl"]
+resolver = "3"
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.85"
+version = "0.1.0"
+repository = "https://github.com/ew1abz/yaesu-ftx-1-control"
+
+[workspace.dependencies]
+tokio = { version = "1", default-features = false, features = ["rt", "time"] }
+serialport = "4"
+thiserror = "2"

@@ -1,0 +1,836 @@
+"""Tests for Memory Subsystem API (Part A of issue #133).
+
+Covers:
+- MemoryCapable protocol type checking
+- CI-V command builders produce correct frames
+- Parsers handle valid/invalid data
+- Radio methods call correct builders
+- Web handler dispatch for memory commands
+"""
+
+from __future__ import annotations
+
+import pathlib
+from typing import Any
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+
+from rigplane.commands import (
+    CONTROLLER_ADDR,
+    bcd_encode_value,
+    build_memory_clear,
+    build_memory_contents_set,
+    build_memory_mode_set,
+    build_memory_to_vfo,
+    build_memory_write,
+    parse_memory_contents_response,
+)
+from rigplane.commands.bound import BoundCommands
+from rigplane.profiles import get_radio_profile
+from rigplane.radio_protocol import MemoryCapable
+from rigplane.rig_loader import load_rig
+from rigplane.types import BandStackRegister, CivFrame, MemoryChannel
+
+RIG_DIR = pathlib.Path(__file__).resolve().parents[1] / "rigs"
+
+
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
+
+RADIO_ADDR = 0x98  # IC-7610 default CI-V address
+
+
+@pytest.fixture()
+def cmd_map():
+    """IC-7610's bound command map -- all nine memory.py builders migrated
+    onto it in MOR-2008 batch 4; every builder this file exercises directly
+    (all but ``build_memory_mode_get``, which is PROVENANCE OPEN
+    everywhere) is declared here with the exact bytes this file's literal
+    frame assertions already expect.
+    """
+    rig = load_rig(RIG_DIR / "ic7610.toml")
+    return rig.to_command_map()
+
+
+@pytest.fixture()
+def ic7610_memory():
+    """The IC-7610's own ``[memory]`` section: the write builders take the
+    profile whose layout they build from (MOR-3644)."""
+    rig = load_rig(RIG_DIR / "ic7610.toml")
+    memory = rig.to_profile().memory
+    assert memory is not None
+    return memory
+
+
+# ---------------------------------------------------------------------------
+# MemoryCapable protocol type-checking
+# ---------------------------------------------------------------------------
+
+
+class TestMemoryCapableProtocol:
+    """Verify MemoryCapable is a runtime-checkable Protocol."""
+
+    def test_class_with_all_methods_is_memory_capable(self) -> None:
+        class FakeRadio:
+            async def set_memory_mode(self, channel: int) -> None: ...
+            async def memory_write(self) -> None: ...
+            async def memory_to_vfo(self, channel: int) -> None: ...
+            async def memory_clear(self, channel: int) -> None: ...
+            async def set_memory_contents(self, mem: MemoryChannel) -> None: ...
+            async def set_bsr(self, bsr: BandStackRegister) -> None: ...
+
+        assert isinstance(FakeRadio(), MemoryCapable)
+
+    def test_class_missing_method_is_not_memory_capable(self) -> None:
+        class IncompleteRadio:
+            async def set_memory_mode(self, channel: int) -> None: ...
+
+            # missing memory_write, etc.
+
+        assert not isinstance(IncompleteRadio(), MemoryCapable)
+
+    def test_protocol_in_all(self) -> None:
+        from rigplane import radio_protocol
+
+        assert "MemoryCapable" in radio_protocol.__all__
+
+
+# ---------------------------------------------------------------------------
+# CI-V command builders
+# ---------------------------------------------------------------------------
+
+
+class TestMemoryModeSetBuilder:
+    """build_memory_mode_set produces correct CI-V frames."""
+
+    def test_channel_1(self, cmd_map) -> None:
+        frame = build_memory_mode_set(1, to_addr=RADIO_ADDR, cmd_map=cmd_map)
+        # 0xFE 0xFE <to> <from> 0x08 <BCD channel 2 bytes> 0xFD
+        assert frame[:4] == b"\xfe\xfe\x98\xe0"
+        assert frame[4] == 0x08  # command
+        # Channel 1 in 2-byte BCD
+        assert frame[-1:] == b"\xfd"
+
+    def test_channel_101(self, cmd_map) -> None:
+        frame = build_memory_mode_set(101, to_addr=RADIO_ADDR, cmd_map=cmd_map)
+        assert frame[4] == 0x08
+
+    def test_channel_0_raises(self, cmd_map) -> None:
+        with pytest.raises(ValueError, match="Channel must be 1-101"):
+            build_memory_mode_set(0, to_addr=RADIO_ADDR, cmd_map=cmd_map)
+
+    def test_channel_102_raises(self, cmd_map) -> None:
+        with pytest.raises(ValueError, match="Channel must be 1-101"):
+            build_memory_mode_set(102, to_addr=RADIO_ADDR, cmd_map=cmd_map)
+
+    def test_requires_cmd_map(self) -> None:
+        """cmd_map is required keyword-only -- MOR-2006 Q6's API break."""
+        with pytest.raises(TypeError, match="MOR-2006"):
+            build_memory_mode_set(1, to_addr=RADIO_ADDR)  # type: ignore[call-arg]
+
+
+class TestMemoryWriteBuilder:
+    """build_memory_write produces correct CI-V frames."""
+
+    def test_basic_frame(self, cmd_map) -> None:
+        frame = build_memory_write(to_addr=RADIO_ADDR, cmd_map=cmd_map)
+        assert frame[:4] == b"\xfe\xfe\x98\xe0"
+        assert frame[4] == 0x09  # command
+        assert frame[-1:] == b"\xfd"
+
+    def test_requires_cmd_map(self) -> None:
+        """cmd_map is required keyword-only -- MOR-2006 Q6's API break."""
+        with pytest.raises(TypeError, match="MOR-2006"):
+            build_memory_write(to_addr=RADIO_ADDR)  # type: ignore[call-arg]
+
+
+class TestMemoryToVfoBuilder:
+    """build_memory_to_vfo produces correct CI-V frames."""
+
+    def test_channel_50(self, cmd_map) -> None:
+        frame = build_memory_to_vfo(50, to_addr=RADIO_ADDR, cmd_map=cmd_map)
+        assert frame[4] == 0x0A  # command
+
+    def test_channel_0_raises(self, cmd_map) -> None:
+        with pytest.raises(ValueError, match="Channel must be 1-101"):
+            build_memory_to_vfo(0, to_addr=RADIO_ADDR, cmd_map=cmd_map)
+
+
+class TestMemoryClearBuilder:
+    """build_memory_clear produces correct CI-V frames."""
+
+    def test_channel_10(self, cmd_map, ic7610_memory) -> None:
+        frame = build_memory_clear(
+            ic7610_memory, 0, 10, to_addr=RADIO_ADDR, cmd_map=cmd_map
+        )
+        assert frame[4] == 0x0B  # the IC-7610's declared legacy clear form
+
+    def test_channel_0_raises(self, cmd_map, ic7610_memory) -> None:
+        with pytest.raises(ValueError, match="memory channel must be 1-101"):
+            build_memory_clear(ic7610_memory, 0, 0, to_addr=RADIO_ADDR, cmd_map=cmd_map)
+
+
+class TestMemoryContentsSetBuilder:
+    """build_memory_contents_set produces correct CI-V frames."""
+
+    def test_basic_channel(self, cmd_map, ic7610_memory) -> None:
+        mem = MemoryChannel(
+            channel=1,
+            frequency_hz=14_074_000,
+            mode=0x01,  # USB
+            filter=1,
+            scan=0,
+            datamode=0,
+            tonemode=0,
+            name="FT8",
+        )
+        frame = build_memory_contents_set(
+            mem,
+            ic7610_memory,
+            to_addr=RADIO_ADDR,
+            cmd_map=cmd_map,
+            modes=get_radio_profile("IC-7610").modes,
+        )
+        assert frame[:4] == b"\xfe\xfe\x98\xe0"
+        assert frame[4] == 0x1A  # command
+        assert frame[5] == 0x00  # sub-command
+        assert frame[-1:] == b"\xfd"
+
+    def test_invalid_type_raises(self, cmd_map, ic7610_memory) -> None:
+        with pytest.raises(TypeError, match="Expected MemoryChannel"):
+            build_memory_contents_set(
+                {"channel": 1},
+                ic7610_memory,
+                to_addr=RADIO_ADDR,
+                cmd_map=cmd_map,
+                modes=get_radio_profile("IC-7610").modes,
+            )  # type: ignore[arg-type]
+
+    def test_invalid_channel_raises(self, cmd_map, ic7610_memory) -> None:
+        mem = MemoryChannel(
+            channel=0,
+            frequency_hz=14_074_000,
+            mode=0x01,
+            filter=1,
+            scan=0,
+            datamode=0,
+            tonemode=0,
+        )
+        with pytest.raises(ValueError, match="memory channel must be 1-101"):
+            build_memory_contents_set(
+                mem,
+                ic7610_memory,
+                to_addr=RADIO_ADDR,
+                cmd_map=cmd_map,
+                modes=get_radio_profile("IC-7610").modes,
+            )
+
+    def test_requires_cmd_map(self, ic7610_memory) -> None:
+        """cmd_map is required keyword-only -- MOR-2006 Q6's API break."""
+        mem = MemoryChannel(
+            channel=1,
+            frequency_hz=14_074_000,
+            mode=0x01,
+            filter=1,
+            scan=0,
+            datamode=0,
+            tonemode=0,
+        )
+        with pytest.raises(TypeError, match="MOR-2006"):
+            build_memory_contents_set(mem, ic7610_memory, to_addr=RADIO_ADDR)  # type: ignore[call-arg]
+
+
+# ---------------------------------------------------------------------------
+# Parser tests
+# ---------------------------------------------------------------------------
+
+
+class TestParseMemoryContentsResponse:
+    """parse_memory_contents_response handles valid/invalid data."""
+
+    def _make_frame(
+        self,
+        channel: int = 1,
+        freq_bcd: bytes = b"\x00\x00\x40\x07\x14",  # 14_074_000 BCD-LE
+        mode: int = 0x01,
+        filt: int = 0x01,
+        scan: int = 0x00,
+        datamode_tonemode: int = 0x00,
+        name: bytes = b"FT8\x00\x00\x00\x00\x00\x00\x00",
+    ) -> CivFrame:
+        """Build a synthetic memory contents response frame."""
+        ch_bcd = bcd_encode_value(channel, byte_count=2)
+        # 2(channel) + 1(scan) + 5(freq) + 1(mode) + 1(filter)
+        # + 1(datamode|tonemode) + 3(tone) + 3(tsql) + 10(name) = 27
+        # total data = channel(2) + payload(26) = 28
+        # channel(2) + scan(1) + freq(5) + mode(1) + filter(1)
+        # + datamode|tonemode(1) + tone(3) + tsql(3) + name(10) + padding(1) = 28
+        data = (
+            ch_bcd
+            + bytes([scan])
+            + freq_bcd
+            + bytes([mode, filt, datamode_tonemode])
+            + b"\x00\x00\x00"  # tone_freq
+            + b"\x00\x00\x00"  # tsql_freq
+            + name
+            + b"\x00"  # padding to reach 28 bytes
+        )
+        return CivFrame(
+            to_addr=CONTROLLER_ADDR,
+            from_addr=RADIO_ADDR,
+            command=0x1A,
+            sub=0x00,
+            data=data,
+        )
+
+    def test_valid_response(self) -> None:
+        frame = self._make_frame(channel=5)
+        mem = parse_memory_contents_response(frame)
+        assert mem.channel == 5
+        assert mem.mode == 1  # USB
+        assert mem.filter == 1
+        assert mem.name == "FT8"
+
+    def test_wrong_command_raises(self) -> None:
+        frame = CivFrame(
+            to_addr=CONTROLLER_ADDR,
+            from_addr=RADIO_ADDR,
+            command=0x03,
+            sub=None,
+            data=b"\x00" * 28,
+        )
+        with pytest.raises(ValueError, match="Not a memory contents response"):
+            parse_memory_contents_response(frame)
+
+    def test_too_short_data_raises(self) -> None:
+        frame = CivFrame(
+            to_addr=CONTROLLER_ADDR,
+            from_addr=RADIO_ADDR,
+            command=0x1A,
+            sub=0x00,
+            data=b"\x00" * 10,
+        )
+        with pytest.raises(ValueError, match="too short"):
+            parse_memory_contents_response(frame)
+
+
+# ---------------------------------------------------------------------------
+# Radio method tests (IcomRadio calls correct builders)
+# ---------------------------------------------------------------------------
+
+
+class TestIcomRadioMemoryMethods:
+    """Verify IcomRadio memory methods call the correct builders.
+
+    ``radio._commands`` is a real ``BoundCommands`` bound to IC-7610's own
+    map (MOR-2008 batch 4 moved these methods' internals onto
+    ``self._commands.<builder>``) -- a bare ``MagicMock`` here would
+    silently return another ``MagicMock`` in place of real frame bytes
+    (CLAUDE.md: "MagicMock hides signature bugs -- verify against real
+    dataclasses"), and this class's own assertions index into the frame
+    bytes each method sends, so a wrong wiring would surface as a
+    confusing ``TypeError``/comparison failure rather than a clean
+    assertion.
+    """
+
+    def _make_radio(self) -> MagicMock:
+        rig = load_rig(RIG_DIR / "ic7610.toml")
+        radio = MagicMock()
+        radio._radio_addr = RADIO_ADDR
+        # MOR-3644: the write gate reads the loaded profile; this mock
+        # radio stands for the IC-7610, whose profile declares the
+        # verified 26-byte write layout.
+        radio._profile = rig.to_profile()
+        radio._send_fire_and_forget = AsyncMock()
+        radio._send_civ_expect = AsyncMock(
+            return_value=CivFrame(0xE0, RADIO_ADDR, 0xFB, None, b"", 0x00)
+        )
+        radio._commands = BoundCommands(rig.to_command_map())
+        return radio
+
+    @pytest.mark.asyncio
+    async def test_set_memory_mode_calls_builder(self) -> None:
+        from rigplane.radio import IcomRadio
+
+        radio = self._make_radio()
+        # Bind the real method to our mock
+        bound = IcomRadio.set_memory_mode.__get__(radio, type(radio))
+        await bound(5)
+        radio._send_fire_and_forget.assert_called_once()
+        frame_arg = radio._send_fire_and_forget.call_args[0][0]
+        assert frame_arg[4] == 0x08  # memory mode command
+
+    @pytest.mark.asyncio
+    async def test_memory_write_calls_builder(self) -> None:
+        from rigplane.radio import IcomRadio
+
+        radio = self._make_radio()
+        bound = IcomRadio.memory_write.__get__(radio, type(radio))
+        await bound()
+        radio._send_fire_and_forget.assert_called_once()
+        frame_arg = radio._send_fire_and_forget.call_args[0][0]
+        assert frame_arg[4] == 0x09
+
+    @pytest.mark.asyncio
+    async def test_memory_to_vfo_calls_builder(self) -> None:
+        from rigplane.radio import IcomRadio
+
+        radio = self._make_radio()
+        bound = IcomRadio.memory_to_vfo.__get__(radio, type(radio))
+        await bound(42)
+        radio._send_fire_and_forget.assert_called_once()
+        frame_arg = radio._send_fire_and_forget.call_args[0][0]
+        assert frame_arg[4] == 0x0A
+
+    @pytest.mark.asyncio
+    async def test_memory_clear_calls_builder(self) -> None:
+        from rigplane.radio import IcomRadio
+
+        radio = self._make_radio()
+        bound = IcomRadio.memory_clear.__get__(radio, type(radio))
+        await bound(7)
+        radio._send_civ_expect.assert_called_once()
+        frame_arg = radio._send_civ_expect.call_args[0][0]
+        assert frame_arg[4] == 0x0B
+
+    @pytest.mark.asyncio
+    async def test_set_memory_mode_rejects_invalid_channel(self) -> None:
+        from rigplane.radio import IcomRadio
+
+        radio = self._make_radio()
+        bound = IcomRadio.set_memory_mode.__get__(radio, type(radio))
+        with pytest.raises(ValueError, match="Channel must be 1-101"):
+            await bound(0)
+
+    @pytest.mark.asyncio
+    async def test_set_memory_contents_calls_builder(self) -> None:
+        from rigplane.radio import IcomRadio
+
+        radio = self._make_radio()
+        bound = IcomRadio.set_memory_contents.__get__(radio, type(radio))
+        mem = MemoryChannel(
+            channel=1,
+            frequency_hz=14_074_000,
+            mode=0x01,
+            filter=1,
+            scan=0,
+            datamode=0,
+            tonemode=0,
+        )
+        await bound(mem)
+        radio._send_civ_expect.assert_called_once()
+        frame_arg = radio._send_civ_expect.call_args[0][0]
+        assert frame_arg[4] == 0x1A
+        assert frame_arg[5] == 0x00
+
+    @pytest.mark.asyncio
+    async def test_set_bsr_calls_builder(self) -> None:
+        from rigplane.radio import IcomRadio
+
+        radio = self._make_radio()
+        bound = IcomRadio.set_bsr.__get__(radio, type(radio))
+        bsr = BandStackRegister(
+            band=5,
+            register=1,
+            frequency_hz=14_074_000,
+            mode=0x01,
+            filter=1,
+        )
+        await bound(bsr)
+        radio._send_fire_and_forget.assert_called_once()
+        frame_arg = radio._send_fire_and_forget.call_args[0][0]
+        assert frame_arg[4] == 0x1A
+        assert frame_arg[5] == 0x01
+
+    @pytest.mark.asyncio
+    async def test_get_memory_mode_still_raises_not_implemented(self) -> None:
+        """Pins the T9 registry rationale (validation/registry/_memory.py) for get_memory_mode."""
+        from rigplane.radio import IcomRadio
+
+        radio = self._make_radio()
+        bound = IcomRadio.get_memory_mode.__get__(radio, type(radio))
+        with pytest.raises(NotImplementedError):
+            await bound()
+
+    @pytest.mark.asyncio
+    async def test_get_memory_contents_still_raises_not_implemented(self) -> None:
+        """Pins the T9 registry rationale (validation/registry/_memory.py) for get_memory_contents."""
+        from rigplane.radio import IcomRadio
+
+        radio = self._make_radio()
+        bound = IcomRadio.get_memory_contents.__get__(radio, type(radio))
+        with pytest.raises(NotImplementedError):
+            await bound(1)
+
+
+# ---------------------------------------------------------------------------
+# Band-stack READ (get_bsr) — MOR-681
+# ---------------------------------------------------------------------------
+
+
+class TestIcomRadioGetBsr:
+    """Verify IcomRadio.get_bsr issues 0x1A 0x01 and parses the response.
+
+    The IC-7300 (and other Icom rigs) firmware DOES answer a band-stack read;
+    the previous NotImplementedError was a stale IC-7610-era assumption.
+    get_bsr is shared backend code, so it must behave identically for both
+    the IC-7300 (addr 0x94) and the IC-7610 (addr 0x98).
+    """
+
+    IC7300_ADDR = 0x94
+    IC7610_ADDR = 0x98
+
+    def _make_radio(self, radio_addr: int) -> MagicMock:
+        """``radio._commands`` is a real ``BoundCommands`` over a synthetic
+        literal map (MOR-2008 batch 4 moved ``get_bsr`` onto
+        ``self._commands.get_bsr``) -- get_bsr's wire bytes are identical
+        on both radios this class exercises, so a synthetic single-key map
+        pins the shared byte-assembly behaviour without coupling this
+        generic test to either profile's own TOML file. A bare
+        ``MagicMock`` here would silently return another ``MagicMock`` in
+        place of the real request frame this class's own assertions index
+        into.
+        """
+        from rigplane.command_map import CommandMap
+
+        radio = MagicMock()
+        radio._radio_addr = radio_addr
+        radio._check_connected = MagicMock()
+        radio._send_civ_expect = AsyncMock()
+        radio._commands = BoundCommands(CommandMap({"get_bsr": (0x1A, 0x01)}))
+        return radio
+
+    def _band_stack_frame(self, radio_addr: int) -> CivFrame:
+        from rigplane.types import bcd_encode
+
+        # Band 5 / register 1 / 14.074 MHz / mode USB(0x01) / filter 1.
+        data = bytes([0x05, 0x01])
+        data += bcd_encode(14_074_000)
+        data += bcd_encode_value(0x01, byte_count=1)
+        data += bcd_encode_value(0x01, byte_count=1)
+        return CivFrame(
+            to_addr=CONTROLLER_ADDR,
+            from_addr=radio_addr,
+            command=0x1A,
+            sub=0x01,
+            data=data,
+        )
+
+    @pytest.mark.asyncio
+    async def test_get_bsr_ic7300_parses_band_stack_entry(self) -> None:
+        from rigplane.radio import IcomRadio
+
+        radio = self._make_radio(self.IC7300_ADDR)
+        radio._send_civ_expect.return_value = self._band_stack_frame(self.IC7300_ADDR)
+        bound = IcomRadio.get_bsr.__get__(radio, type(radio))
+
+        result = await bound(5, 1)
+
+        assert isinstance(result, BandStackRegister)
+        assert result.band == 5
+        assert result.register == 1
+        assert result.frequency_hz == 14_074_000
+        assert result.mode == 0x01
+        assert result.filter == 1
+        # It must actually issue a 0x1A 0x01 read frame.
+        radio._send_civ_expect.assert_awaited_once()
+        sent_frame = radio._send_civ_expect.call_args[0][0]
+        assert sent_frame[4] == 0x1A
+        assert sent_frame[5] == 0x01
+
+    @pytest.mark.asyncio
+    async def test_get_bsr_ic7610_still_works(self) -> None:
+        """Regression: shared path must not break the IC-7610."""
+        from rigplane.radio import IcomRadio
+
+        radio = self._make_radio(self.IC7610_ADDR)
+        radio._send_civ_expect.return_value = self._band_stack_frame(self.IC7610_ADDR)
+        bound = IcomRadio.get_bsr.__get__(radio, type(radio))
+
+        result = await bound(5, 1)
+
+        assert isinstance(result, BandStackRegister)
+        assert result.frequency_hz == 14_074_000
+        radio._send_civ_expect.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_get_bsr_no_longer_raises_not_implemented(self) -> None:
+        from rigplane.radio import IcomRadio
+
+        radio = self._make_radio(self.IC7300_ADDR)
+        radio._send_civ_expect.return_value = self._band_stack_frame(self.IC7300_ADDR)
+        bound = IcomRadio.get_bsr.__get__(radio, type(radio))
+        # Must not raise NotImplementedError anymore.
+        await bound(5, 1)
+
+    @pytest.mark.asyncio
+    async def test_get_bsr_rejects_invalid_band(self) -> None:
+        from rigplane.radio import IcomRadio
+
+        radio = self._make_radio(self.IC7300_ADDR)
+        bound = IcomRadio.get_bsr.__get__(radio, type(radio))
+        with pytest.raises(ValueError, match="Band must be 0-24"):
+            await bound(25, 1)
+
+    @pytest.mark.asyncio
+    async def test_get_bsr_rejects_invalid_register(self) -> None:
+        from rigplane.radio import IcomRadio
+
+        radio = self._make_radio(self.IC7300_ADDR)
+        bound = IcomRadio.get_bsr.__get__(radio, type(radio))
+        with pytest.raises(ValueError, match="Register must be 1-3"):
+            await bound(5, 4)
+
+
+# ---------------------------------------------------------------------------
+# Web handler dispatch tests
+# ---------------------------------------------------------------------------
+
+
+class TestHandlerMemoryDispatch:
+    """Verify ControlHandler dispatches memory commands correctly."""
+
+    def _make_handler(self, *, memory_capable: bool = True) -> Any:
+        from rigplane.web.handlers import ControlHandler
+
+        ws = MagicMock()
+        ws.send_text = AsyncMock()
+
+        radio = MagicMock()
+        radio.connected = True
+        radio.radio_ready = True
+        radio.model = "IC-7610"
+        radio.capabilities = {"memory"}
+        # MOR-3644: the dispatch write gate reads the loaded profile; this
+        # handler's radio stands for the IC-7610, the profile whose
+        # [memory] section declares the verified write layout.
+        radio.profile = load_rig(RIG_DIR / "ic7610.toml").to_profile()
+
+        if memory_capable:
+            radio.set_memory_mode = AsyncMock()
+            radio.memory_write = AsyncMock()
+            radio.memory_to_vfo = AsyncMock()
+            radio.memory_clear = AsyncMock()
+            radio.set_memory_contents = AsyncMock()
+            radio.set_bsr = AsyncMock()
+
+        server = MagicMock()
+        from rigplane.web.radio_poller import CommandQueue
+
+        server.command_queue = CommandQueue()
+
+        handler = ControlHandler(
+            ws=ws,
+            radio=radio,
+            server_version="test",
+            radio_model="IC-7610",
+            server=server,
+        )
+        return handler, server.command_queue
+
+    @pytest.mark.asyncio
+    async def test_set_memory_mode_dispatch(self) -> None:
+        handler, q = self._make_handler()
+        result = await handler._enqueue_command("set_memory_mode", {"channel": 5})
+        assert result == {"channel": 5}
+        cmds = q.drain()
+        assert len(cmds) == 1
+        from rigplane.web.radio_poller import SetMemoryMode
+
+        assert isinstance(cmds[0], SetMemoryMode)
+        assert cmds[0].channel == 5
+
+    @pytest.mark.asyncio
+    async def test_memory_write_dispatch(self) -> None:
+        handler, q = self._make_handler()
+        result = await handler._enqueue_command("memory_write", {})
+        assert result == {}
+        cmds = q.drain()
+        assert len(cmds) == 1
+        from rigplane.web.radio_poller import MemoryWrite
+
+        assert isinstance(cmds[0], MemoryWrite)
+
+    @pytest.mark.asyncio
+    async def test_memory_to_vfo_dispatch(self) -> None:
+        handler, q = self._make_handler()
+        result = await handler._enqueue_command("memory_to_vfo", {"channel": 42})
+        assert result == {"channel": 42}
+        cmds = q.drain()
+        assert len(cmds) == 1
+        from rigplane.web.radio_poller import MemoryToVfo
+
+        assert isinstance(cmds[0], MemoryToVfo)
+        assert cmds[0].channel == 42
+
+    @pytest.mark.asyncio
+    async def test_memory_clear_dispatch(self) -> None:
+        handler, q = self._make_handler()
+        result = await handler._enqueue_command("memory_clear", {"channel": 10})
+        assert result == {"channel": 10}
+        cmds = q.drain()
+        assert len(cmds) == 1
+        from rigplane.web.radio_poller import MemoryClear
+
+        assert isinstance(cmds[0], MemoryClear)
+        assert cmds[0].channel == 10
+
+    @pytest.mark.asyncio
+    async def test_set_memory_contents_dispatch(self) -> None:
+        handler, q = self._make_handler()
+        params = {
+            "channel": 1,
+            "frequency_hz": 14_074_000,
+            "mode": 1,
+            "filter": 1,
+            "scan": 0,
+            "datamode": 0,
+            "tonemode": 0,
+            "name": "FT8",
+        }
+        result = await handler._enqueue_command("set_memory_contents", params)
+        assert result == {"channel": 1}
+        cmds = q.drain()
+        assert len(cmds) == 1
+        from rigplane.web.radio_poller import SetMemoryContents
+
+        assert isinstance(cmds[0], SetMemoryContents)
+        assert cmds[0].mem.channel == 1
+        assert cmds[0].mem.frequency_hz == 14_074_000
+
+    @pytest.mark.asyncio
+    async def test_set_memory_contents_ignores_transport_session_id(self) -> None:
+        handler, q = self._make_handler()
+        params = {
+            "channel": 1,
+            "frequency_hz": 14_074_000,
+            "mode": 1,
+            "filter": 1,
+            "scan": 0,
+            "datamode": 0,
+            "tonemode": 0,
+            "name": "FT8",
+            "session_id": "ws-a",
+        }
+
+        result = await handler._enqueue_command("set_memory_contents", params)
+
+        assert result == {"channel": 1}
+        cmds = q.drain()
+        assert len(cmds) == 1
+        from rigplane.web.radio_poller import SetMemoryContents
+
+        assert isinstance(cmds[0], SetMemoryContents)
+        assert cmds[0].mem.channel == 1
+        assert cmds[0].mem.frequency_hz == 14_074_000
+
+    @pytest.mark.asyncio
+    async def test_set_bsr_dispatch(self) -> None:
+        handler, q = self._make_handler()
+        params = {
+            "band": 5,
+            "register": 1,
+            "frequency_hz": 14_074_000,
+            "mode": 1,
+            "filter": 1,
+        }
+        result = await handler._enqueue_command("set_bsr", params)
+        assert result == {"band": 5, "register": 1}
+        cmds = q.drain()
+        assert len(cmds) == 1
+        from rigplane.web.radio_poller import SetBsr
+
+        assert isinstance(cmds[0], SetBsr)
+        assert cmds[0].bsr.band == 5
+
+    @pytest.mark.asyncio
+    async def test_set_bsr_ignores_transport_session_id(self) -> None:
+        handler, q = self._make_handler()
+        params = {
+            "band": 5,
+            "register": 1,
+            "frequency_hz": 14_074_000,
+            "mode": 1,
+            "filter": 1,
+            "session_id": "ws-a",
+        }
+
+        result = await handler._enqueue_command("set_bsr", params)
+
+        assert result == {"band": 5, "register": 1}
+        cmds = q.drain()
+        assert len(cmds) == 1
+        from rigplane.web.radio_poller import SetBsr
+
+        assert isinstance(cmds[0], SetBsr)
+        assert cmds[0].bsr.band == 5
+
+    @pytest.mark.asyncio
+    async def test_memory_command_rejects_non_capable(self) -> None:
+        """A radio without memory methods should fail the MemoryCapable check."""
+        from rigplane.web.handlers import ControlHandler
+        from rigplane.web.radio_poller import CommandQueue
+
+        ws = MagicMock()
+        ws.send_text = AsyncMock()
+
+        # Use a minimal class that does NOT have memory methods
+        class BareRadio:
+            connected = True
+            radio_ready = True
+            model = "FakeRadio"
+            capabilities: set[str] = set()
+
+        radio = BareRadio()
+        server = MagicMock()
+        server.command_queue = CommandQueue()
+
+        handler = ControlHandler(
+            ws=ws,
+            radio=radio,  # type: ignore[arg-type]
+            server_version="test",
+            radio_model="FakeRadio",
+            server=server,
+        )
+        with pytest.raises(ValueError, match="MemoryCapable"):
+            await handler._enqueue_command("set_memory_mode", {"channel": 1})
+
+    @pytest.mark.asyncio
+    async def test_set_memory_mode_validates_channel(self) -> None:
+        handler, q = self._make_handler()
+        with pytest.raises(ValueError, match="channel must be 1-101"):
+            await handler._enqueue_command("set_memory_mode", {"channel": 200})
+
+
+# ---------------------------------------------------------------------------
+# TOML rig config tests
+# ---------------------------------------------------------------------------
+
+
+class TestIc7610TomlMemory:
+    """Verify memory commands are enabled in ic7610.toml."""
+
+    def test_memory_commands_in_toml(self) -> None:
+        from rigplane.rig_loader import load_rig
+        from pathlib import Path
+
+        toml_path = Path(__file__).parents[1] / "rigs" / "ic7610.toml"
+        config = load_rig(toml_path)
+        # All memory commands should be present (not commented out)
+        assert "set_memory_mode" in config.commands
+        assert "memory_write" in config.commands
+        assert "memory_to_vfo" in config.commands
+        assert "memory_clear" in config.commands
+        assert "set_memory_contents" in config.commands
+
+    def test_vox_delay_not_marked_unimplemented(self) -> None:
+        """VOX delay should be in commands without NOT_IMPLEMENTED flag."""
+        from rigplane.rig_loader import load_rig
+        from pathlib import Path
+
+        toml_path = Path(__file__).parents[1] / "rigs" / "ic7610.toml"
+        config = load_rig(toml_path)
+        assert "get_vox_delay" in config.commands
+        assert "set_vox_delay" in config.commands

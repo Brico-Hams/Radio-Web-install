@@ -1,0 +1,73 @@
+/**
+ * MOR-1092 — the two LCD/scope presentation entrypoints as v1 layout
+ * manifests (schema, validator and registry: `./contract.ts`, MOR-1066).
+ *
+ * Kept in their own file so `./declarations.ts` carries one aggregation line
+ * per family: the remaining migrations (MOR-1067/93/94) land beside this one
+ * without three tickets editing the same declaration block.
+ *
+ * A manifest is a DECLARATION, never behaviour. `stageSizing` records the
+ * assignment MOR-1160 froze without implementing it — the shared ScaledStage
+ * primitive owns measurement and the transform (MOR-1160 constraint 1), never
+ * a layout. Runtime components resolve only through `skins/registry.loadSkin`.
+ */
+import { registerLayout, type LayoutManifest } from './contract';
+
+/**
+ * MOR-1160: the incoming LCD directions are authored on a 1280x540 native
+ * stage and scaled as one uniform, letterboxed block — the LCD glass is the
+ * archetype instrument surface.
+ */
+const LCD_NATIVE_STAGE = {
+  mode: 'fixed-native', nativeW: 1280, nativeH: 540, minScale: 0.5,
+} as const;
+
+/**
+ * Both variants mount the same single semantic zone — `LcdLayout`'s right-
+ * hand control column, where `SemanticRadioSurfaces` now owns the VFO facts
+ * and the RX/TX action. The amber glass itself declares no zone: it stays
+ * legacy presentation for this slice and is redesigned by MOR-1162.
+ *
+ * `control-column` is CHROME, not the instrument stage: MOR-1162 is what
+ * declares the glass. It sits outside `stageSizing` below (MOR-1160/1247) —
+ * chrome stays fluid by doctrine regardless of this manifest's stage mode.
+ */
+const LCD_ZONES = [{ id: 'control-column', surfaces: ['vfo', 'rxTx'] }] as const;
+
+/**
+ * All four canonical classes. Each variant renders VFO A unconditionally and
+ * gates the second receiver on `hasDualReceiver`, so single- and dual-receiver
+ * topologies are both structurally supported — the declaration is what the
+ * layout does, not an aspiration.
+ */
+const LCD_TOPOLOGIES = ['1/single', '1/ab', '2/ab_shared', '2/main_sub'] as const;
+
+export const lcdCockpitLayout: LayoutManifest = {
+  schemaVersion: 1,
+  id: 'lcd-cockpit',
+  displayName: 'LCD Cockpit',
+  zones: LCD_ZONES,
+  compatibleTopologies: LCD_TOPOLOGIES,
+  requiredSemanticSurfaces: ['vfo', 'rxTx'],
+  stageSizing: LCD_NATIVE_STAGE,
+  // The family's universal variant — nothing left to fall back to.
+  fallbackLayoutId: null,
+};
+
+/**
+ * The scope-dominant variant names the cockpit as its single fallback hop:
+ * the cockpit is where the persisted `amber-lcd` preference already routes.
+ */
+export const lcdScopeLayout: LayoutManifest = {
+  schemaVersion: 1,
+  id: 'lcd-scope',
+  displayName: 'LCD Scope',
+  zones: LCD_ZONES,
+  compatibleTopologies: LCD_TOPOLOGIES,
+  requiredSemanticSurfaces: ['vfo', 'rxTx'],
+  stageSizing: LCD_NATIVE_STAGE,
+  fallbackLayoutId: 'lcd-cockpit',
+};
+
+registerLayout(lcdCockpitLayout);
+registerLayout(lcdScopeLayout);

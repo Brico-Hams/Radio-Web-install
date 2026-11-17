@@ -1,0 +1,25 @@
+{
+  "status": "PASS offline patch tool verification",
+  "reference": "MAIN V40 + DISPLAY V35",
+  "CW_V41_not_included": true,
+  "components": [
+    {
+      "component": "MAIN",
+      "sha256": "a66308b8efefb868899bf015d685ceedc46767e2866baee404ec85a3e5edb2f8",
+      "Python_JS_reference_byte_identical": true,
+      "negative_cases_PASS": true
+    },
+    {
+      "component": "DISPLAY",
+      "sha256": "82bee0eb41937819ec03be5a7528c595365850dad9cdf0582c9df7473849be7c",
+      "Python_JS_reference_byte_identical": true,
+      "negative_cases_PASS": true
+    }
+  ],
+  "README_page_copy_consistency_PL_EN": true,
+  "browser_UI": {
+    "PL_EN_rendering": "PASS",
+    "responsive_narrow_layout": "PASS",
+    "interactive_patching": "not yet tested in browser; Python and JS engine verified"
+  }
+}

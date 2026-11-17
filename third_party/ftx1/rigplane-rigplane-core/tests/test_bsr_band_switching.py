@@ -1,0 +1,914 @@
+"""Tests for Band Stack Register (BSR) recall band switching.
+
+Covers:
+- _civ_expects_response for BSR read (1A 01) — must return True
+- SetBand handler: BSR recall path (read → set_frequency → set_mode)
+- SetBand handler: fallback to default freq when BSR unavailable
+- SetBand handler: state update + event emission after BSR recall
+- SetBand handler: unknown bsr_code logged as warning
+- BandInfo.bsr_code in rig profiles (ic7300, ic7610)
+"""
+
+from __future__ import annotations
+
+import asyncio
+import time
+from collections.abc import Callable
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+
+from _helpers import CIV_HEADER_SIZE, observe_selected_receiver, wrap_civ_in_udp
+from test_radio import MockTransport
+from test_web_command_batch_http import _post_json
+
+from rigplane.backends.yaesu_cat.radio import YaesuCatRadio
+from rigplane.commands import CONTROLLER_ADDR, build_civ_frame, parse_civ_frame
+from rigplane.profiles import resolve_radio_profile
+from rigplane.rig_loader import load_rig
+from rigplane.runtime.radio import IcomRadio
+from rigplane.types import CivFrame, Mode, bcd_encode
+from rigplane.core.state_pipeline_contracts import (
+    FieldPath,
+    Observation,
+    SourceMetadata,
+)
+from rigplane.radio_state import RadioState
+from rigplane.rigctld.state_cache import StateCache
+from rigplane.web.radio_poller import (
+    CommandQueue,
+    RadioPoller,
+    SetBand,
+)
+from rigplane.web.server import WebConfig, WebServer
+
+# MOR-1884: this suite drives ``RadioPoller._execute`` directly to exercise
+# dispatch bodies; the interlock seat now lives at its head, so the RF
+# premise is stated once here (see the fixture docstring in conftest.py).
+pytestmark = pytest.mark.usefixtures("observed_rx_dispatch_premise")
+
+
+# ---------------------------------------------------------------------------
+# _civ_expects_response tests
+# ---------------------------------------------------------------------------
+
+
+class TestCivExpectsResponseBSR:
+    """Ensure 1A 01 <band> <register> is treated as a response-expected GET."""
+
+    def _make_frame(self, cmd: int, sub: int | None, data: bytes) -> SimpleNamespace:
+        return SimpleNamespace(command=cmd, sub=sub, data=data)
+
+    def test_bsr_read_expects_response(self) -> None:
+        """BSR read (1A 01 with 2 data bytes) should expect a response."""
+        from rigplane.runtime._civ_rx import CivRuntime
+
+        frame = self._make_frame(cmd=0x1A, sub=0x01, data=bytes([0x05, 0x01]))
+        assert CivRuntime._civ_expects_response(frame) is True
+
+    def test_bsr_write_does_not_expect_response(self) -> None:
+        """BSR write (1A 01 with >2 data bytes = full content) → fire-and-forget."""
+        from rigplane.runtime._civ_rx import CivRuntime
+
+        # Write: band(1) + register(1) + freq(5) + mode(1) + filter(1) = 9 bytes
+        data = bytes([0x05, 0x01, 0x00, 0x40, 0x26, 0x14, 0x00, 0x01, 0x01])
+        frame = self._make_frame(cmd=0x1A, sub=0x01, data=data)
+        assert CivRuntime._civ_expects_response(frame) is False
+
+    def test_config_read_still_works(self) -> None:
+        """Existing 1A 05 (config read, 2 data bytes) still expects response."""
+        from rigplane.runtime._civ_rx import CivRuntime
+
+        frame = self._make_frame(cmd=0x1A, sub=0x05, data=bytes([0x00, 0x71]))
+        assert CivRuntime._civ_expects_response(frame) is True
+
+
+# ---------------------------------------------------------------------------
+# Helpers for RadioPoller tests
+# ---------------------------------------------------------------------------
+
+
+def _make_radio(model: str = "IC-7610", active: str = "MAIN") -> MagicMock:
+    profile = resolve_radio_profile(model=model)
+    radio = MagicMock()
+    radio.profile = profile
+    radio.model = profile.model
+    radio.capabilities = set(profile.capabilities)
+    radio._radio_state = SimpleNamespace(active=active)
+    radio.send_civ = AsyncMock(return_value=None)
+    radio.set_freq = AsyncMock()
+    radio.set_mode = AsyncMock()
+    radio.enable_scope = AsyncMock()
+    radio.disable_scope = AsyncMock()
+    radio.on_scope_data = MagicMock()
+    radio.capture_scope_frame = AsyncMock()
+    radio.capture_scope_frames = AsyncMock()
+    radio.set_scope_during_tx = AsyncMock()
+    radio.set_scope_center_type = AsyncMock()
+    return radio
+
+
+def _make_poller(
+    radio: MagicMock,
+    events: list | None = None,
+    model: str = "IC-7610",
+) -> RadioPoller:
+    state = RadioState()
+    poller = RadioPoller(
+        radio,
+        StateCache(),
+        CommandQueue(),
+        on_state_event=(lambda name, data: events.append((name, data)))
+        if events is not None
+        else None,
+        radio_state=state,
+    )
+    return poller
+
+
+def _bsr_response_frame(
+    band: int, register: int, freq_bcd: bytes, mode: int, filt: int
+) -> SimpleNamespace:
+    """Build a fake CivFrame for BSR read response."""
+    data = bytes([band, register]) + freq_bcd + bytes([mode, filt])
+    return SimpleNamespace(
+        to_addr=0xE0,
+        from_addr=0x94,
+        command=0x1A,
+        sub=0x01,
+        data=data,
+        receiver=None,
+    )
+
+
+def _bootstrap_selected_unselected(poller: RadioPoller) -> None:
+    observed_at = time.monotonic()
+    source = SourceMetadata(
+        source="poll_response",
+        provider="test",
+        transport="fake",
+        native_id="initial_vfo_pair",
+    )
+    pair = tuple(
+        Observation(
+            path=path,
+            value=value,
+            source=source,
+            timestamp_monotonic=observed_at,
+        )
+        for path, value in (
+            (FieldPath.active("0", "freq_mode", "freq_hz"), 14_190_000),
+            (FieldPath.active("0", "freq_mode", "mode"), "USB"),
+            (FieldPath.unselected("0", "freq_mode", "freq_hz"), 14_075_000),
+            (FieldPath.unselected("0", "freq_mode", "mode"), "USB"),
+        )
+    )
+    generation = poller._provider_generation()  # noqa: SLF001
+    poller._state_store.apply_relative_vfo_observations(  # noqa: SLF001
+        pair, generation=generation
+    )
+    poller._state_store.apply(  # noqa: SLF001
+        Observation(
+            path=FieldPath.active_slot("0"),
+            value="A",
+            source=source,
+            timestamp_monotonic=observed_at,
+        )
+    )
+    poller._state_store.apply_relative_vfo_observations(  # noqa: SLF001
+        pair, generation=generation
+    )
+
+
+# ---------------------------------------------------------------------------
+# SetBand handler tests
+# ---------------------------------------------------------------------------
+
+
+class TestSetBandBSRRecall:
+    """Test BSR recall path in SetBand command handler."""
+
+    @pytest.mark.asyncio
+    async def test_bsr_recall_sets_freq_and_mode(self) -> None:
+        """BSR recall should read freq/mode from radio and apply them."""
+        radio = _make_radio(model="IC-7300")
+        # BSR response: 14.264 MHz, USB (mode=1), FIL1 (filter=1)
+        freq_bcd = b"\x00\x40\x26\x14\x00"  # 14264000 in BCD
+        bsr_resp = _bsr_response_frame(0x05, 0x01, freq_bcd, 0x01, 0x01)
+        radio.send_civ = AsyncMock(return_value=bsr_resp)
+
+        events: list[tuple[str, dict]] = []
+        poller = _make_poller(radio, events=events, model="IC-7300")
+
+        await poller._execute(SetBand(band=5))  # noqa: SLF001
+
+        radio.set_freq.assert_awaited_once_with(14264000)
+        radio.set_mode.assert_awaited_once_with("USB", 1)
+
+    @pytest.mark.asyncio
+    async def test_bsr_recall_updates_state(self) -> None:
+        """BSR recall should update StateStore and legacy RadioState immediately."""
+        radio = _make_radio(model="IC-7300")
+        freq_bcd = b"\x00\x70\x20\x07\x00"  # 7207000 in BCD
+        bsr_resp = _bsr_response_frame(0x03, 0x01, freq_bcd, 0x00, 0x01)
+        radio.send_civ = AsyncMock(return_value=bsr_resp)
+
+        poller = _make_poller(radio, model="IC-7300")
+        _bootstrap_selected_unselected(poller)
+        snapshot_before = poller._state_store.snapshot()  # noqa: SLF001
+
+        await poller._execute(SetBand(band=3))  # noqa: SLF001
+
+        snapshot_after = poller._state_store.snapshot()  # noqa: SLF001
+        assert snapshot_after.state_revision > snapshot_before.state_revision
+        freq_field = snapshot_after.field("receiver.0.active.freq_mode.freq_hz")
+        mode_field = snapshot_after.field("receiver.0.active.freq_mode.mode")
+        assert freq_field.value == 7207000
+        assert mode_field.value == "LSB"
+        assert freq_field.source.source == "poll_response"
+        assert freq_field.source.provider == "web_poller"
+        assert freq_field.source.native_id == "bsr_readback"
+        assert mode_field.source.source == "poll_response"
+        assert mode_field.source.provider == "web_poller"
+        assert mode_field.source.native_id == "bsr_readback"
+        assert (
+            snapshot_after.field("receiver.0.slot.A.freq_mode.freq_hz").value == 7207000
+        )
+        assert snapshot_after.field("receiver.0.slot.A.freq_mode.mode").value == "LSB"
+        assert poller._radio_state.main.freq == 7207000  # noqa: SLF001
+        assert poller._radio_state.main.mode == "LSB"  # noqa: SLF001
+
+    @pytest.mark.asyncio
+    async def test_bsr_readback_stages_until_initial_pair_is_complete(self) -> None:
+        radio = _make_radio(model="IC-7300")
+        freq_bcd = b"\x00\x70\x20\x07\x00"  # 7207000 in BCD
+        radio.send_civ = AsyncMock(
+            return_value=_bsr_response_frame(0x03, 0x01, freq_bcd, 0x00, 0x01)
+        )
+        poller = _make_poller(radio, model="IC-7300")
+
+        await poller._execute(SetBand(band=3))  # noqa: SLF001
+
+        assert poller._state_store.snapshot().fields == ()  # noqa: SLF001
+        observed_at = time.monotonic()
+        source = SourceMetadata(
+            source="poll_response",
+            provider="test",
+            transport="fake",
+            native_id="initial_unselected_pair",
+        )
+        poller._state_store.apply_relative_vfo_observations(  # noqa: SLF001
+            (
+                Observation(
+                    path=FieldPath.unselected("0", "freq_mode", "freq_hz"),
+                    value=14_075_000,
+                    source=source,
+                    timestamp_monotonic=observed_at,
+                ),
+                Observation(
+                    path=FieldPath.unselected("0", "freq_mode", "mode"),
+                    value="USB",
+                    source=source,
+                    timestamp_monotonic=observed_at,
+                ),
+            ),
+            generation=poller._provider_generation(),  # noqa: SLF001
+        )
+
+        snapshot = poller._state_store.snapshot()  # noqa: SLF001
+        assert snapshot.field("receiver.0.active.freq_mode.freq_hz").value == 7207000
+        assert snapshot.field("receiver.0.active.freq_mode.mode").value == "LSB"
+        assert (
+            snapshot.field("receiver.0.unselected.freq_mode.freq_hz").value
+            == 14_075_000
+        )
+        assert snapshot.field("receiver.0.unselected.freq_mode.mode").value == "USB"
+
+    @pytest.mark.asyncio
+    async def test_bsr_recall_emits_events(self) -> None:
+        """BSR recall should emit freq_changed and mode_changed events."""
+        radio = _make_radio(model="IC-7300")
+        freq_bcd = b"\x00\x40\x66\x03\x00"  # 3664000 in BCD (3.664 MHz)
+        bsr_resp = _bsr_response_frame(0x02, 0x01, freq_bcd, 0x00, 0x01)
+        radio.send_civ = AsyncMock(return_value=bsr_resp)
+
+        events: list[tuple[str, dict]] = []
+        poller = _make_poller(radio, events=events, model="IC-7300")
+
+        await poller._execute(SetBand(band=2))  # noqa: SLF001
+
+        event_names = [name for name, _ in events]
+        assert "freq_changed" in event_names
+        assert "mode_changed" in event_names
+
+        freq_event = next(d for n, d in events if n == "freq_changed")
+        assert freq_event["freq"] == 3664000
+
+    @pytest.mark.asyncio
+    async def test_bsr_recall_lsb_mode(self) -> None:
+        """Mode code 0x00 = LSB should be parsed correctly."""
+        radio = _make_radio(model="IC-7300")
+        freq_bcd = b"\x00\x00\x10\x07\x00"  # 7100000
+        bsr_resp = _bsr_response_frame(0x03, 0x01, freq_bcd, 0x00, 0x01)
+        radio.send_civ = AsyncMock(return_value=bsr_resp)
+
+        poller = _make_poller(radio, model="IC-7300")
+        await poller._execute(SetBand(band=3))  # noqa: SLF001
+
+        radio.set_mode.assert_awaited_once_with("LSB", 1)
+
+    @pytest.mark.asyncio
+    async def test_bsr_recall_cw_mode(self) -> None:
+        """Mode code 0x03 = CW should be parsed correctly."""
+        radio = _make_radio(model="IC-7300")
+        freq_bcd = b"\x00\x00\x20\x14\x00"  # 14200000
+        bsr_resp = _bsr_response_frame(0x05, 0x01, freq_bcd, 0x03, 0x02)
+        radio.send_civ = AsyncMock(return_value=bsr_resp)
+
+        poller = _make_poller(radio, model="IC-7300")
+        await poller._execute(SetBand(band=5))  # noqa: SLF001
+
+        radio.set_mode.assert_awaited_once_with("CW", 2)
+
+
+class TestSetBandFallback:
+    """Test fallback path when BSR is unavailable."""
+
+    @pytest.mark.asyncio
+    async def test_fallback_when_bsr_returns_none(self) -> None:
+        """When send_civ returns None, fall back to default freq from profile."""
+        radio = _make_radio(model="IC-7300")
+        radio.send_civ = AsyncMock(return_value=None)
+
+        poller = _make_poller(radio, model="IC-7300")
+        await poller._execute(SetBand(band=5))  # noqa: SLF001
+
+        # Fallback: default 20m freq from ic7300.toml
+        radio.set_freq.assert_awaited_once()
+        freq_arg = radio.set_freq.call_args[0][0]
+        assert 13_900_000 <= freq_arg <= 14_500_000  # within 20m band
+        assert poller._state_store.snapshot().fields == ()  # noqa: SLF001
+
+    @pytest.mark.asyncio
+    async def test_fallback_when_bsr_response_too_short(self) -> None:
+        """BSR response with insufficient data should trigger fallback."""
+        radio = _make_radio(model="IC-7300")
+        short_resp = SimpleNamespace(
+            to_addr=0xE0,
+            from_addr=0x94,
+            command=0x1A,
+            sub=0x01,
+            data=b"\x05\x01\x00",  # only 3 bytes, need >= 8
+            receiver=None,
+        )
+        radio.send_civ = AsyncMock(return_value=short_resp)
+
+        poller = _make_poller(radio, model="IC-7300")
+        await poller._execute(SetBand(band=5))  # noqa: SLF001
+
+        radio.set_freq.assert_awaited_once()
+        assert poller._state_store.snapshot().fields == ()  # noqa: SLF001
+
+    @pytest.mark.asyncio
+    async def test_fallback_when_send_civ_raises(self) -> None:
+        """Exception in send_civ should trigger fallback, not crash."""
+        radio = _make_radio(model="IC-7300")
+        radio.send_civ = AsyncMock(side_effect=TimeoutError("CI-V timeout"))
+
+        poller = _make_poller(radio, model="IC-7300")
+        await poller._execute(SetBand(band=3))  # noqa: SLF001
+
+        # Fallback: default 40m freq
+        radio.set_freq.assert_awaited_once()
+        freq_arg = radio.set_freq.call_args[0][0]
+        assert 6_900_000 <= freq_arg <= 7_500_000  # within 40m band
+        assert poller._state_store.snapshot().fields == ()  # noqa: SLF001
+
+    @pytest.mark.asyncio
+    async def test_unknown_bsr_code_no_crash(self) -> None:
+        """Unknown BSR code with no matching band should not crash."""
+        radio = _make_radio(model="IC-7300")
+        radio.send_civ = AsyncMock(return_value=None)
+
+        poller = _make_poller(radio, model="IC-7300")
+        # band=99 doesn't exist in any profile
+        await poller._execute(SetBand(band=99))  # noqa: SLF001
+
+        # No frequency set (unknown band, no fallback)
+        radio.set_freq.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# Rig profile BSR code tests
+# ---------------------------------------------------------------------------
+
+
+class TestRigProfileBSRCodes:
+    """Verify BSR codes are defined in rig profiles."""
+
+    @pytest.mark.parametrize("model", ["IC-7300", "IC-7610"])
+    def test_profile_has_bsr_codes(self, model: str) -> None:
+        """Rig profile bands should have bsr_code defined."""
+        profile = resolve_radio_profile(model=model)
+        bands_with_bsr = []
+        for fr in profile.freq_ranges:
+            for bi in fr.bands:
+                if bi.bsr_code is not None:
+                    bands_with_bsr.append(bi.name)
+        assert len(bands_with_bsr) >= 10, (
+            f"{model} should have BSR codes for >=10 bands"
+        )
+
+    @pytest.mark.parametrize("model", ["IC-7300", "IC-7610"])
+    def test_bsr_codes_unique_per_profile(self, model: str) -> None:
+        """BSR codes must be unique within a profile."""
+        profile = resolve_radio_profile(model=model)
+        codes = []
+        for fr in profile.freq_ranges:
+            for bi in fr.bands:
+                if bi.bsr_code is not None:
+                    codes.append(bi.bsr_code)
+        assert len(codes) == len(set(codes)), f"Duplicate BSR codes in {model}"
+
+    @pytest.mark.parametrize(
+        "model,band_name,expected_bsr",
+        [
+            ("IC-7300", "160m", 1),
+            ("IC-7300", "80m", 2),
+            ("IC-7300", "40m", 3),
+            ("IC-7300", "20m", 5),
+            ("IC-7300", "6m", 10),
+            ("IC-7610", "160m", 1),
+            ("IC-7610", "20m", 5),
+        ],
+    )
+    def test_specific_bsr_codes(
+        self, model: str, band_name: str, expected_bsr: int
+    ) -> None:
+        """Verify specific BSR codes match CI-V spec."""
+        profile = resolve_radio_profile(model=model)
+        for fr in profile.freq_ranges:
+            for bi in fr.bands:
+                if bi.name == band_name:
+                    assert bi.bsr_code == expected_bsr, (
+                        f"{model} {band_name}: expected BSR {expected_bsr}, got {bi.bsr_code}"
+                    )
+                    return
+        pytest.fail(f"Band {band_name} not found in {model} profile")
+
+
+# ---------------------------------------------------------------------------
+# FTX-1 (Yaesu) band-stacking codes (MOR-503)
+# ---------------------------------------------------------------------------
+
+
+class TestFtx1BandStackingCodes:
+    """Verify the FTX-1 bands carry CI-V band codes for set_band.
+
+    Without ``bsr_code`` the v2 UI band buttons fall through to
+    ``set_freq(default_hz)`` instead of issuing ``set_band``, which loses the
+    radio's per-band last-used frequency (MOR-503).  The codes must be valid
+    keys of ``YaesuCatPoller._CIV_TO_YAESU_BAND`` so they map to a Yaesu
+    ``BS0{nn};`` band-stack recall.
+    """
+
+    # CI-V band code per band. HF (Yaesu scheme: 160m=0 … 10m=9); the
+    # VHF/UHF codes are the BS BAND SELECT P2 codes (FTX-1 CAT OM 2508-C:
+    # 10 = 50 MHz, 11 = 70 MHz/GEN, 13 = 144 MHz, 14 = 430 MHz).
+    _EXPECTED_FTX1_BSR: dict[str, int] = {
+        "160m": 0,
+        "80m": 1,
+        "60m": 2,
+        "40m": 3,
+        "30m": 4,
+        "20m": 5,
+        "17m": 6,
+        "15m": 7,
+        "12m": 8,
+        "10m": 9,
+        "6m": 0x0A,
+        "4m": 0x0B,
+        "2m": 0x0D,
+        "70cm": 0x0E,
+    }
+
+    def _ftx1_bands(self) -> dict[str, int | None]:
+        profile = resolve_radio_profile(model="FTX-1")
+        return {bi.name: bi.bsr_code for fr in profile.freq_ranges for bi in fr.bands}
+
+    def test_all_hf_bands_have_bsr_code(self) -> None:
+        """Every FTX-1 band must define a band code (none left None)."""
+        bands = self._ftx1_bands()
+        for name in self._EXPECTED_FTX1_BSR:
+            assert bands.get(name) is not None, (
+                f"FTX-1 {name} is missing bsr_code; band-switch would fall back "
+                f"to default_hz instead of set_band"
+            )
+
+    @pytest.mark.parametrize(
+        "band_name,expected_bsr",
+        list(_EXPECTED_FTX1_BSR.items()),
+    )
+    def test_specific_ftx1_bsr_codes(self, band_name: str, expected_bsr: int) -> None:
+        """FTX-1 band codes must match the Yaesu CI-V band scheme."""
+        bands = self._ftx1_bands()
+        assert band_name in bands, f"Band {band_name} not found in FTX-1 profile"
+        assert bands[band_name] == expected_bsr, (
+            f"FTX-1 {band_name}: expected bsr_code {expected_bsr}, "
+            f"got {bands[band_name]}"
+        )
+
+    @pytest.mark.parametrize(
+        "band_name,start_hz,end_hz,default_hz",
+        [
+            ("6m", 50_000_000, 54_000_000, 50_125_000),
+            ("4m", 70_000_000, 70_500_000, 70_200_000),
+            ("2m", 144_000_000, 148_000_000, 146_520_000),
+            ("70cm", 430_000_000, 450_000_000, 446_000_000),
+        ],
+    )
+    def test_vhf_uhf_band_boundaries(
+        self,
+        band_name: str,
+        start_hz: int,
+        end_hz: int,
+        default_hz: int,
+    ) -> None:
+        """VHF/UHF bands must load with their full boundaries through the loader."""
+        profile = resolve_radio_profile(model="FTX-1")
+        for fr in profile.freq_ranges:
+            for bi in fr.bands:
+                if bi.name == band_name:
+                    assert bi.start == start_hz, (
+                        f"FTX-1 {band_name}: expected start {start_hz}, got {bi.start}"
+                    )
+                    assert bi.end == end_hz, (
+                        f"FTX-1 {band_name}: expected end {end_hz}, got {bi.end}"
+                    )
+                    assert bi.default == default_hz, (
+                        f"FTX-1 {band_name}: expected default {default_hz}, "
+                        f"got {bi.default}"
+                    )
+                    return
+        pytest.fail(f"Band {band_name} not found in FTX-1 profile")
+
+    def test_bsr_codes_are_valid_yaesu_band_keys(self) -> None:
+        """Each FTX-1 bsr_code must map through _CIV_TO_YAESU_BAND for set_band."""
+        from rigplane.backends.yaesu_cat.poller import YaesuCatPoller
+
+        bands = self._ftx1_bands()
+        for name, code in bands.items():
+            if code is None:
+                continue
+            assert code in YaesuCatPoller._CIV_TO_YAESU_BAND, (  # noqa: SLF001
+                f"FTX-1 {name} bsr_code {code} is not a valid Yaesu band key; "
+                f"set_band would silently no-op"
+            )
+
+
+# ---------------------------------------------------------------------------
+# IC-9700 band coverage (MOR-2567)
+# ---------------------------------------------------------------------------
+
+
+class TestIc9700Bands:
+    """Pin the IC-9700's three VHF/UHF/SHF bands through the loaded profile.
+
+    The IC-9700 is a 2 m / 70 cm / 23 cm transceiver: it has no HF and no
+    6 m. Band edges are the USA version coverage from the IC-9700 Basic
+    Manual, Specifications, "Frequency coverage (unit: MHz)" (USA Version
+    Receiver/Transmitter: 144.000000~148.000000, 430.000000~450.000000,
+    1240.000000~1300.000000). BSR codes are the Frequency band codes of the
+    IC-9700 CI-V Reference Guide's "Band stacking register" (1A 01) table:
+    01=VHF, 02=UHF, 03=1.2GHz. default_hz is an FM-suitable in-band
+    calling frequency with bandwidth clearance from the band edges (a
+    failed band-stack read tunes FM there, never the CW/EME lower edge),
+    paired with default_mode = "FM".
+    """
+
+    _EXPECTED: dict[str, tuple[int, int, int, int]] = {
+        # name: (start_hz, end_hz, default_hz, bsr_code)
+        "2m": (144_000_000, 148_000_000, 146_520_000, 0x01),
+        "70cm": (430_000_000, 450_000_000, 446_000_000, 0x02),
+        "23cm": (1_240_000_000, 1_300_000_000, 1_294_500_000, 0x03),
+    }
+
+    def _bands(self) -> dict[str, tuple[int, int, int, int]]:
+        profile = resolve_radio_profile(model="IC-9700")
+        return {
+            bi.name: (bi.start, bi.end, bi.default, bi.bsr_code or -1)
+            for fr in profile.freq_ranges
+            for bi in fr.bands
+        }
+
+    def test_exactly_three_bands(self) -> None:
+        """The IC-9700 has exactly its three bands - no HF, no 6 m."""
+        bands = self._bands()
+        assert set(bands) == set(self._EXPECTED), (
+            f"IC-9700 bands changed: {sorted(bands)} "
+            f"(expected exactly {sorted(self._EXPECTED)})"
+        )
+        labels = [fr.label for fr in resolve_radio_profile(model="IC-9700").freq_ranges]
+        assert "HF" not in labels and "6m" not in labels
+
+    @pytest.mark.parametrize(
+        ("band_name", "start_hz", "end_hz", "default_hz", "bsr_code"),
+        [(name, *values) for name, values in _EXPECTED.items()],
+    )
+    def test_band_edges_from_manual(
+        self,
+        band_name: str,
+        start_hz: int,
+        end_hz: int,
+        default_hz: int,
+        bsr_code: int,
+    ) -> None:
+        """Each band must load with its manual-given USA edges and BSR code."""
+        bands = self._bands()
+        assert bands[band_name] == (start_hz, end_hz, default_hz, bsr_code), (
+            f"IC-9700 {band_name}: expected "
+            f"(start={start_hz}, end={end_hz}, default={default_hz}, "
+            f"bsr={bsr_code}), got {bands[band_name]}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Per-band mode defaults (MOR-3631)
+# ---------------------------------------------------------------------------
+
+
+class TestBandDefaultModeLoader:
+    """Optional ``default_mode`` on a band row, used on BSR-miss fallback."""
+
+    @pytest.mark.parametrize(
+        "model,band_name,expected_mode",
+        [
+            ("IC-705", "6m", "USB"),
+            ("IC-705", "2m", "FM"),
+            ("IC-705", "70cm", "FM"),
+            ("IC-9700", "2m", "FM"),
+            ("IC-9700", "70cm", "FM"),
+            ("IC-9700", "23cm", "FM"),
+        ],
+    )
+    def test_vhf_bands_carry_default_mode(
+        self, model: str, band_name: str, expected_mode: str
+    ) -> None:
+        profile = resolve_radio_profile(model=model)
+        for fr in profile.freq_ranges:
+            for bi in fr.bands:
+                if bi.name == band_name:
+                    assert bi.default_mode == expected_mode, (
+                        f"{model} {band_name}: expected default_mode "
+                        f"{expected_mode}, got {bi.default_mode}"
+                    )
+                    return
+        pytest.fail(f"Band {band_name} not found in {model} profile")
+
+    def test_profile_without_key_has_none(self) -> None:
+        """IC-7300 HF bands carry no default_mode; they are unchanged."""
+        profile = resolve_radio_profile(model="IC-7300")
+        for fr in profile.freq_ranges:
+            for bi in fr.bands:
+                if bi.name == "20m":
+                    assert bi.default_mode is None
+                    return
+        pytest.fail("Band 20m not found in IC-7300 profile")
+
+
+class TestSetBandDefaultModeFallback:
+    """BSR-miss fallback tunes default freq AND default mode (MOR-3631)."""
+
+    @pytest.mark.asyncio
+    async def test_ic705_two_m_falls_back_to_fm(self) -> None:
+        radio = _make_radio(model="IC-705")
+        radio.send_civ = AsyncMock(return_value=None)
+        poller = _make_poller(radio, model="IC-705")
+        await poller._execute(SetBand(band=0x0D))  # noqa: SLF001
+        radio.set_freq.assert_awaited_once_with(146_520_000)
+        radio.set_mode.assert_awaited_once()
+        assert radio.set_mode.call_args[0][0] == "FM"
+
+    @pytest.mark.asyncio
+    async def test_ic705_six_m_falls_back_to_usb(self) -> None:
+        radio = _make_radio(model="IC-705")
+        radio.send_civ = AsyncMock(return_value=None)
+        poller = _make_poller(radio, model="IC-705")
+        await poller._execute(SetBand(band=0x0A))  # noqa: SLF001
+        radio.set_freq.assert_awaited_once_with(50_125_000)
+        radio.set_mode.assert_awaited_once()
+        assert radio.set_mode.call_args[0][0] == "USB"
+
+    @pytest.mark.asyncio
+    async def test_ic9700_70cm_falls_back_to_fm(self) -> None:
+        radio = _make_radio(model="IC-9700")
+        radio.send_civ = AsyncMock(return_value=None)
+        poller = _make_poller(radio, model="IC-9700")
+        await poller._execute(SetBand(band=0x02))  # noqa: SLF001
+        radio.set_freq.assert_awaited_once_with(446_000_000)
+        radio.set_mode.assert_awaited_once()
+        assert radio.set_mode.call_args[0][0] == "FM"
+
+    @pytest.mark.asyncio
+    async def test_no_key_means_no_mode_change(self) -> None:
+        """Bands without default_mode keep the old freq-only fallback."""
+        radio = _make_radio(model="IC-7300")
+        radio.send_civ = AsyncMock(return_value=None)
+        poller = _make_poller(radio, model="IC-7300")
+        await poller._execute(SetBand(band=5))  # noqa: SLF001
+        radio.set_freq.assert_awaited_once()
+        radio.set_mode.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_bsr_readback_wins_over_default(self) -> None:
+        """A successful BSR recall still applies the radio's mode, not FM."""
+        radio = _make_radio(model="IC-705")
+        freq_bcd = b"\x00\x00\x52\x46\x01"  # 146520000 in BCD
+        bsr_resp = _bsr_response_frame(0x0D, 0x01, freq_bcd, 0x01, 0x01)
+        radio.send_civ = AsyncMock(return_value=bsr_resp)
+        poller = _make_poller(radio, model="IC-705")
+        await poller._execute(SetBand(band=0x0D))  # noqa: SLF001
+        radio.set_freq.assert_awaited_once_with(146520000)
+        radio.set_mode.assert_awaited_once_with("USB", 1)
+
+
+# ---------------------------------------------------------------------------
+# set_band through each radio's production composition (finding 8b)
+# ---------------------------------------------------------------------------
+#
+# A real radio object per model on fake hardware, a real ``WebServer`` and
+# its HTTP route, and the poller the production startup builds for that
+# radio (``web_startup._start_web_server``): ``RadioPoller`` for the Icom
+# CI-V radios, ``YaesuCatPoller`` (``create_observation_poller``) for the
+# FTX-1. Nothing below calls ``poller._execute`` or builds the generic poller
+# for a radio that does not use it.
+
+
+class _FakeIcomHardware(MockTransport):
+    """A CI-V radio behind the transport: no band stack, plain freq/mode.
+
+    A band-stack read (``1A 01``) is answered with the NAK a radio without
+    that register gives (the BSR miss). A set-frequency / set-mode frame
+    (``05``, ``06`` or the selected-receiver ``26``) is ACKed and the new
+    value is echoed back, which is how the radio's public frequency and
+    mode change on the wire.
+    """
+
+    def __init__(self, civ_addr: int) -> None:
+        super().__init__()
+        self.civ_addr = civ_addr
+        self.civ_in: list[CivFrame] = []
+
+    def _reply(self, command: int, data: bytes = b"") -> None:
+        frame = build_civ_frame(CONTROLLER_ADDR, self.civ_addr, command, data=data)
+        self.queue_response(wrap_civ_in_udp(frame))
+
+    async def send_tracked(
+        self, data: bytes, *, is_current: Callable[[], bool] | None = None
+    ) -> None:
+        await super().send_tracked(data, is_current=is_current)
+        frame = parse_civ_frame(data[CIV_HEADER_SIZE:])
+        if frame.to_addr != self.civ_addr:
+            return
+        self.civ_in.append(frame)
+        if frame.command == 0x1A and frame.sub == 0x01:
+            self._reply(0xFA)  # NAK: nothing stored in the band stack
+        elif frame.command in (0x05, 0x06, 0x26):
+            self._reply(0xFB)
+            echo = {0x05: 0x00, 0x06: 0x01, 0x26: 0x26}[frame.command]
+            self._reply(echo, frame.data)
+
+
+class TestSetBandProductionComposition:
+    """``set_band`` over HTTP, per model, through the poller it really uses.
+
+    Failing-first: with the band-stack fallback removed from ``RadioPoller``
+    (or its freq/mode left out) the Icom cases never tune the radio;
+    with the Yaesu handler a no-op the FTX-1 case never writes ``BS``. The
+    old test forced ``RadioPoller`` onto the FTX-1 and asserted setter calls
+    on an ``AsyncMock``; the FTX-1 does not use that path at all.
+    """
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("model", "band", "expected_hz", "expected_mode"),
+        [
+            ("IC-705", 0x0A, 50_125_000, "USB"),  # 6 m
+            ("IC-705", 0x0D, 146_520_000, "FM"),  # 2 m
+            ("IC-705", 0x0E, 446_000_000, "FM"),  # 70 cm
+            ("IC-9700", 0x01, 146_520_000, "FM"),  # 2 m
+            ("IC-9700", 0x02, 446_000_000, "FM"),  # 70 cm
+            ("IC-9700", 0x03, 1_294_500_000, "FM"),  # 23 cm
+        ],
+    )
+    async def test_icom_bsr_miss_fallback_reaches_wire_and_radio_state(
+        self, model: str, band: int, expected_hz: int, expected_mode: str
+    ) -> None:
+        profile = resolve_radio_profile(model=model)
+        hardware = _FakeIcomHardware(profile.civ_addr)
+        radio = IcomRadio("192.0.2.1", model=model, timeout=2.0)
+        radio._civ_transport = hardware  # noqa: SLF001
+        radio._ctrl_transport = hardware  # noqa: SLF001
+        radio._connected = True  # noqa: SLF001
+        radio._civ_get_timeout = 0.5  # noqa: SLF001
+        # MOR-3591 (#4415): plain 0x05/0x06 writes on a dual-receiver
+        # profile (IC-9700) are admitted only for the selected receiver.
+        # The connect flow learns it from the radio's 0x07 0xD2 answer;
+        # this fixture bypasses connect, so deliver that answer here.
+        observe_selected_receiver(radio, 0)
+        srv = WebServer(radio, WebConfig(host="127.0.0.1", port=0))
+        poller = RadioPoller(
+            radio, srv.command_queue, state_store=srv.command_state_store
+        )
+        radio._civ_runtime.start_pump()  # noqa: SLF001
+
+        async def drain_one() -> None:
+            await srv.command_queue.wait(timeout=5.0)
+            entry = srv.command_queue.take_entry()
+            assert entry is not None
+            await poller._execute_queued_entry(entry)  # noqa: SLF001
+
+        consumer = asyncio.create_task(drain_one())
+        try:
+            writer = await asyncio.wait_for(
+                _post_json(
+                    srv,
+                    "/api/v1/commands",
+                    {"id": "bsr-miss", "name": "set_band", "params": {"band": band}},
+                ),
+                timeout=10.0,
+            )
+            await asyncio.wait_for(consumer, timeout=10.0)
+            assert writer.response_status == 200
+            assert writer.response_body["ok"] is True
+            assert writer.response_body["result"] == {"band": band}
+
+            # What the radio was told: the band-stack read, then the profile's
+            # default frequency and mode (never one without the other).
+            sent = [(f.command, f.sub, f.data) for f in hardware.civ_in]
+            assert (0x1A, 0x01, bytes([band, 0x01])) in sent
+            freq_writes = [d for c, _, d in sent if c == 0x05]
+            # Mode goes out as ``06 <mode>`` or, on radios with a selectable
+            # receiver, ``26 <receiver> <mode> <data> <filter>``.
+            mode_writes = [d[0] for c, _, d in sent if c == 0x06] + [
+                d[1] for c, _, d in sent if c == 0x26
+            ]
+            assert freq_writes == [bcd_encode(expected_hz)]
+            assert mode_writes == [Mode[expected_mode].value], sent
+
+            # What the radio itself reports afterwards: its echo of the new
+            # frequency and mode went through the real CI-V receive path.
+            async with asyncio.timeout(5.0):
+                while True:
+                    vfo = radio.radio_state.main.vfo_a  # type: ignore[union-attr]
+                    if vfo.freq_hz == expected_hz and vfo.mode == expected_mode:
+                        break
+                    await asyncio.sleep(0.01)
+        finally:
+            consumer.cancel()
+            await asyncio.gather(consumer, return_exceptions=True)
+            await radio._force_cleanup_civ()  # noqa: SLF001
+
+    @pytest.mark.asyncio
+    async def test_ftx1_uses_native_band_recall_not_the_profile_default(self) -> None:
+        """The FTX-1 recalls the band natively: ``BS013;``, no default freq/mode."""
+        profile = load_rig(Path(__file__).parents[1] / "rigs" / "ftx1.toml")
+        radio = YaesuCatRadio("/dev/null", profile=profile)
+        radio._transport._connected = True  # noqa: SLF001
+        written: list[str] = []
+
+        async def record(cmd: str) -> None:
+            written.append(cmd)
+
+        radio._transport.write = record  # type: ignore[method-assign]  # noqa: SLF001
+        srv = WebServer(radio, WebConfig(host="127.0.0.1", port=0))
+        poller = radio.create_observation_poller(
+            callback=lambda _obs: None, command_queue=srv.command_queue
+        )
+
+        async def drain_one() -> None:
+            await srv.command_queue.wait(timeout=5.0)
+            await poller._drain_commands()  # noqa: SLF001
+
+        consumer = asyncio.create_task(drain_one())
+        try:
+            writer = await asyncio.wait_for(
+                _post_json(
+                    srv,
+                    "/api/v1/commands",
+                    {"id": "ftx1-band", "name": "set_band", "params": {"band": 0x0D}},
+                ),
+                timeout=10.0,
+            )
+            await asyncio.wait_for(consumer, timeout=10.0)
+        finally:
+            consumer.cancel()
+            await asyncio.gather(consumer, return_exceptions=True)
+
+        assert writer.response_status == 200
+        assert writer.response_body["ok"] is True
+        assert "BS013;" in written, written
+        # No frequency/mode write: the radio's own band-stack contents win.
+        assert not [w for w in written if w.startswith(("FA", "FB", "MD"))], written

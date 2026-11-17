@@ -1,0 +1,889 @@
+/**
+ * Audio Manager — manages the /api/v1/audio WebSocket, RX playback, TX mic.
+ *
+ * Usage:
+ *   audioManager.startRx()  → opens WS, starts playback
+ *   audioManager.stopRx()   → stops playback
+ *   audioManager.startTx()  → captures mic, starts encoding
+ *   audioManager.stopTx()   → stops mic
+ */
+
+import { RxPlayer, type RxAudioFocus } from './rx-player';
+import { TxMic, type TxCodec } from './tx-mic';
+import { SAMPLE_RATE, TX_PCM_SAMPLE_RATES } from './constants';
+import { setAudioConnected } from '../stores/connection.svelte';
+import { setRxEnabled, setTxEnabled, setTxCodecFallback, setRxError, setTxError } from '../stores/audio.svelte';
+import { authenticatedWsUrl } from '../transport/ws-url';
+import type { ControllerRole } from '../transport/message-transport';
+import type { MessageTransport } from '../transport/message-transport';
+import { createMessageTransport } from '../transport/transport-factory';
+import { getCapabilities, subscribeCapabilities } from '$lib/stores/capabilities.svelte';
+
+export type AudioFocus = RxAudioFocus;
+
+export interface AudioRoutingConfig {
+  focus: AudioFocus;
+  split_stereo: boolean;
+  main_gain_db: number;
+  sub_gain_db: number;
+}
+
+const BACKOFF_MIN = 500;
+const BACKOFF_MAX = 10000;
+// Link-quality uplink rate (MOR-585, ADR §3.6): low — one audio_stats
+// message per 1.5 s while RX is active.
+const AUDIO_STATS_INTERVAL_MS = 1500;
+
+// Exact wire/reason strings from src/rigplane/web/handlers/audio.py
+// (_send_error) and tx-mic.ts, mapped to toast codes. An unrecognised
+// non-cancel start-failure reason falls back to txAudioStartFailed;
+// _failTxAudio (mid-TX death) falls back to txAudioStopped.
+const SERVER_TX_REFUSAL = 'audio_start: TX audio unavailable';
+const SERVER_RX_REFUSAL_PREFIX = 'audio_start: RX audio failed to start:';
+// The publishable RX-start failure categories (src/rigplane/audio/
+// usb_driver.py: audio_start_failure_reason) that mean the radio's USB
+// audio devices could not be paired automatically. The refusal frame
+// carries the category in `reason` (MOR-3823) and never exception text.
+const SERVER_RX_DEVICE_REASONS = new Set([
+  'usb_ambiguous',
+  'usb_topology_names',
+  'usb_topology_unavailable',
+]);
+// MOR-4030 case C: another program holds the radio's codec exclusively, so
+// neither the exclusive open nor the shared fallback could start RX.
+const SERVER_RX_DEVICE_IN_USE = 'device_in_use';
+// The server names the holding program by its executable FILE name only. Show
+// it only when it still looks like one (no path, no control characters, short).
+const HOLDER_PROGRAM_NAME = /^[^\\/\u0000-\u001f\u007f]{1,64}$/;
+const TX_START_SILENT_REASONS = new Set([
+  'TX MIC: capture start cancelled',
+  'TX MIC: capture stopped before start completed',
+]);
+const TX_START_REASON_CODES: Readonly<Record<string, string>> = {
+  'TX MIC: permission denied': 'txAudioMicPermissionDenied',
+  'TX MIC: microphone capture not supported': 'txAudioCaptureUnsupported',
+  'TX MIC: insecure context': 'txAudioInsecureContext',
+  'TX MIC: PCM capture not supported': 'txAudioCaptureUnsupported',
+};
+
+/** Sink for an operator-facing error banner: (level, message, code). */
+type OperatorNotifier = (
+  level: 'error',
+  message: string,
+  code: string,
+  params?: Record<string, string>,
+) => void;
+
+export interface AudioControllerBinding {
+  remote(): boolean;
+  ready(): boolean;
+  epoch(): number;
+  current(epoch: number): boolean;
+  protocols(): string[];
+  /** The controller session's role — the attach's `role` (an auxiliary
+   *  client attaches as auxiliary; an attach without one is refused). */
+  role(): ControllerRole;
+}
+
+/** Stable per-page-context token so the server can coalesce this audio
+ *  manager's reconnects (MOR-924). A soft_reconnect / audio re-arm drops the
+ *  audio WS; the browser reopens it and re-sends ``audio_start`` carrying the
+ *  same ``client_id``, letting the broadcaster drop the prior (now-zombie)
+ *  subscription synchronously instead of fanning RX out to two subscribers
+ *  until the half-open socket finally times out. Distinct AudioManager
+ *  instances (a genuine second tab) get distinct ids and are NOT coalesced. */
+function makeClientId(): string {
+  const c = (globalThis as { crypto?: { randomUUID?: () => string } }).crypto;
+  if (c?.randomUUID) return c.randomUUID();
+  return `audio-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+/** Rate the `audio_tx_format` ack names, or null when it names one we cannot
+ *  deliver. Absent means the server predates the field: keep 48 kHz. */
+function negotiatedTxSampleRate(value: unknown): number | null {
+  if (value === undefined) return SAMPLE_RATE;
+  if (typeof value !== 'number' || !Number.isInteger(value)) return null;
+  return (TX_PCM_SAMPLE_RATES as readonly number[]).includes(value) ? value : null;
+}
+
+function preferredRxCodec(): 'opus' | 'pcm16' {
+  const globals = globalThis as typeof globalThis & {
+    __TAURI__?: unknown;
+    __TAURI_INTERNALS__?: unknown;
+  };
+  if (globals.__TAURI__ !== undefined || globals.__TAURI_INTERNALS__ !== undefined) {
+    return 'pcm16';
+  }
+  return typeof AudioDecoder === 'undefined' ? 'pcm16' : 'opus';
+}
+
+/** MOR-3823: a loopback page URL is NOT proof the reader sits at the
+ *  station — the documented `ssh -L 8080:localhost:8080` tunnel
+ *  (docs/guide/remote-operation.md) gives a remote user a localhost URL —
+ *  and the controller MODE is not that signal either (a mode:"local" Core
+ *  reports local to every LAN client). The web UI therefore never guesses:
+ *  every USB pairing refusal shows the one neutral toast below, correct for
+ *  a remote reader and for whoever runs the station alike. */
+
+class AudioManager {
+  private ws: MessageTransport | null = null;
+  private readonly rxDiagnosticEnabled = import.meta.env.VITE_RX_AUDIO_DIAGNOSTIC === '1';
+  private rxPlayer = new RxPlayer(this.rxDiagnosticEnabled);
+  private rxDiagnosticOverlay: HTMLElement | null = null;
+  private rxDiagnosticTimer: ReturnType<typeof setInterval> | null = null;
+  private txMic: TxMic;
+  private _rxEnabled = false;
+  private _txEnabled = false;
+  // Manager cancellation identity; internal TxMic teardown is still a genuine result.
+  private txStartGeneration = 0;
+  private appliedAudioConfig: Readonly<Partial<AudioRoutingConfig>> | null = null;
+  private requestedAudioConfig: AudioRoutingConfig = {
+    focus: 'both', split_stereo: false, main_gain_db: 0, sub_gain_db: 0,
+  };
+  private capabilitiesUnsubscribe: (() => void) | null = null;
+  private backoff = BACKOFF_MIN;
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private statsTimer: ReturnType<typeof setInterval> | null = null;
+  private _listeners: Set<() => void> = new Set();
+  // Stable identity for reconnect coalescing (MOR-924); see makeClientId.
+  private readonly clientId = makeClientId();
+  // Injected by frontend-runtime.ts, which owns the transport import;
+  // lib/audio must not import it directly (radio-authority/structural-boundary).
+  private _operatorNotifier: OperatorNotifier | null = null;
+  private _lastRxResumeError: string | null = null;
+  private controller: AudioControllerBinding | null = null;
+  private txControllerEpoch = 0;
+  private txAdmission: {
+    promise: Promise<string | null>;
+    resolve: (error: string | null) => void;
+  } | null = null;
+
+  // Reactive state (read externally)
+  get rxEnabled(): boolean { return this._rxEnabled; }
+  get txEnabled(): boolean { return this._txEnabled; }
+  get wsConnected(): boolean { return this.ws?.state === 'open'; }
+  get txSupported(): boolean { return TxMic.supported(); }
+
+  constructor() {
+    let txFrames = 0;
+    let droppedFrames = 0;
+    this.txMic = new TxMic((data) => {
+      // Gate on local _txEnabled (set immediately on startTx), not
+      // getRadioState()?.ptt which has a full round-trip delay.
+      // IC-7610 LAN audio: RX stops during TX (not full-duplex).
+      if (!this._txEnabled || this.txAdmission !== null
+        || (this.controller && !this.controller.current(this.txControllerEpoch))) {
+        return;
+      }
+      
+      if (this.ws?.state === 'open') {
+        this.ws.send(data);
+        txFrames++;
+        if (txFrames <= 3 || txFrames % 50 === 0) {
+          console.log(`[audio-ws] TX frame #${txFrames} sent, size=${data.byteLength}`);
+        }
+      } else {
+        // Dropped! WS not ready
+        droppedFrames++;
+        if (droppedFrames <= 5) {
+          console.warn(`[audio-ws] TX frame dropped, transport state=${this.ws?.state}`);
+        }
+      }
+    }, (reason) => this._failTxAudio(reason));
+  }
+
+  /** Inject (or clear, with null) the sink for audio-failure banners. */
+  setOperatorNotifier(notify: OperatorNotifier | null): void {
+    this._operatorNotifier = notify;
+  }
+
+  setControllerBinding(binding: AudioControllerBinding): void {
+    this.controller = binding;
+    this.ensureCapabilitiesSubscription();
+  }
+
+  private ensureCapabilitiesSubscription(): void {
+    if (this.capabilitiesUnsubscribe !== null) return;
+    this.capabilitiesUnsubscribe = subscribeCapabilities(() => this.reconcileAudioCapabilities());
+  }
+
+  private reconcileAudioCapabilities(): void {
+    const supported = getCapabilities()?.capabilities.includes('lan_dual_rx_audio_routing') === true;
+    if (!supported) this._audioConfigPending = false;
+    const desired = supported ? this.requestedAudioConfig : {
+      focus: 'both' as const, split_stereo: false, main_gain_db: 0, sub_gain_db: 0,
+    };
+    const current = this.getAudioConfig();
+    if (current.focus === desired.focus && current.split_stereo === desired.split_stereo
+      && current.main_gain_db === desired.main_gain_db && current.sub_gain_db === desired.sub_gain_db) return;
+    if (current.focus !== desired.focus) this.rxPlayer.setFocus(desired.focus);
+    if (current.split_stereo !== desired.split_stereo) this.rxPlayer.setSplitStereo(desired.split_stereo);
+    if (current.main_gain_db !== desired.main_gain_db) this.rxPlayer.setChannelGainDb('main', desired.main_gain_db);
+    if (current.sub_gain_db !== desired.sub_gain_db) this.rxPlayer.setChannelGainDb('sub', desired.sub_gain_db);
+    this.appliedAudioConfig = Object.freeze(this.getAudioConfig());
+    this.notify();
+  }
+
+  /** Register a change callback for reactive UI updates. Returns unsubscribe fn. */
+  onChange(fn: () => void): () => void {
+    this._listeners.add(fn);
+    return () => { this._listeners.delete(fn); };
+  }
+
+  private notify(): void {
+    for (const fn of this._listeners) fn();
+  }
+
+  // ── RX ──
+
+  startRx(): void {
+    this.ensureCapabilitiesSubscription();
+    if (this.controller?.remote() && !this.controller.ready()) return;
+    if (this._rxEnabled) return;
+    this._rxEnabled = true;
+    setRxEnabled(true);
+    // MOR-3753: a new attempt supersedes a latched refusal; a fresh refusal
+    // below re-latches it.
+    setRxError(false);
+    const audioCfg = getCapabilities()?.audioConfig;
+    if (audioCfg?.jitterFloorMs !== undefined && audioCfg?.jitterCeilingMs !== undefined) {
+      this.rxPlayer.setJitterBounds(audioCfg.jitterFloorMs, audioCfg.jitterCeilingMs);
+    }
+    this.rxPlayer.start();
+    this._startRxDiagnosticOverlay();
+    this.connect();
+    if (this.ws?.state === 'open') {
+      this.ws.send(JSON.stringify({
+        type: 'audio_start',
+        direction: 'rx',
+        preferred_rx_codec: preferredRxCodec(),
+        client_id: this.clientId,
+      }));
+    }
+    this.notify();
+  }
+
+  stopRx(options?: { automatic?: boolean }): void {
+    this._clearRxDiagnosticOverlay();
+    this._lastRxResumeError = null;
+    // MOR-3753: an explicit stop clears a latched refusal — including the
+    // no-op stop after a refusal already cleared the demand. Automatic
+    // cleanup passes { automatic: true } and preserves the latch; it never
+    // sets one.
+    if (!options?.automatic) setRxError(false);
+    if (!this._rxEnabled) return;
+    this._rxEnabled = false;
+    setRxEnabled(false);
+    if (this.ws?.state === 'open') {
+      this.ws.send(JSON.stringify({ type: 'audio_stop', direction: 'rx' }));
+    }
+    this.rxPlayer.stop();
+    this.maybeDisconnect();
+    this.notify();
+  }
+
+  /** Apply MAIN/SUB focus + stereo split + per-channel gain (issue #753).
+   *
+   * Updates the local WebAudio graph and — when WS is open — sends the
+   * ``audio_config`` message to the backend so it can set CI-V Phones L/R
+   * Mix accordingly (handled server-side in #752/#755).  Gain values are
+   * applied locally only; the backend does not receive them.
+   *
+   * WS-delivery semantics: if the audio WS is not yet open (user hasn't
+   * started RX audio in the browser) we eagerly open it and queue the
+   * pending focus/split pair; ``_flushPendingAudioConfig`` fires the
+   * message once the socket is open.  Without this, clicking ACTIVATE on
+   * MAIN/SUB was a no-op on the radio's own Phones L/R Mix because the
+   * CI-V command never left the browser.
+   */
+  setAudioConfig(cfg: Partial<AudioRoutingConfig>): void {
+    this.ensureCapabilitiesSubscription();
+    this.requestedAudioConfig = { ...this.requestedAudioConfig, ...cfg };
+    const supported = getCapabilities()?.capabilities.includes('lan_dual_rx_audio_routing') === true;
+    if (!supported) {
+      cfg = { focus: 'both', split_stereo: false, main_gain_db: 0, sub_gain_db: 0 };
+      this._audioConfigPending = false;
+    }
+    this.audioConfigControllerEpoch = this.controller?.epoch() ?? 0;
+    if (cfg.focus !== undefined) this.rxPlayer.setFocus(cfg.focus);
+    if (cfg.split_stereo !== undefined) this.rxPlayer.setSplitStereo(cfg.split_stereo);
+    if (cfg.main_gain_db !== undefined) this.rxPlayer.setChannelGainDb('main', cfg.main_gain_db);
+    if (cfg.sub_gain_db !== undefined) this.rxPlayer.setChannelGainDb('sub', cfg.sub_gain_db);
+    const applied = this.getAudioConfig();
+    this.appliedAudioConfig = Object.freeze({
+      ...this.appliedAudioConfig,
+      ...(cfg.focus !== undefined && cfg.focus === applied.focus ? { focus: applied.focus } : {}),
+      ...(cfg.split_stereo !== undefined ? { split_stereo: applied.split_stereo } : {}),
+      ...(cfg.main_gain_db !== undefined ? { main_gain_db: applied.main_gain_db } : {}),
+      ...(cfg.sub_gain_db !== undefined ? { sub_gain_db: applied.sub_gain_db } : {}),
+    });
+    this.notify();
+    if (!supported) return;
+    // Only the focus + split_stereo pair maps to CI-V; gain is local.
+    if (cfg.focus === undefined && cfg.split_stereo === undefined) return;
+    if (this.ws?.state === 'open') {
+      this._flushPendingAudioConfig();
+      return;
+    }
+    // WS not open — remember that the next open should flush the config,
+    // and kick off the connect.  ``onopen`` will call the flush.
+    this._audioConfigPending = true;
+    this.connect();
+  }
+
+  private _audioConfigPending: boolean = false;
+  private audioConfigControllerEpoch = 0;
+
+  private _flushPendingAudioConfig(): void {
+    if (getCapabilities()?.capabilities.includes('lan_dual_rx_audio_routing') !== true) {
+      this._audioConfigPending = false;
+      return;
+    }
+    if (this.controller?.remote() && !this.controller.current(this.audioConfigControllerEpoch)) {
+      this._audioConfigPending = false;
+      return;
+    }
+    if (this.ws?.state !== 'open') return;
+    this.ws.send(JSON.stringify({
+      type: 'audio_config',
+      focus: this.rxPlayer.focus,
+      split_stereo: this.rxPlayer.splitStereo,
+    }));
+    this._audioConfigPending = false;
+  }
+
+  /** Current config snapshot — useful for UI state rehydration. */
+  getAudioConfig(): AudioRoutingConfig {
+    return {
+      focus: this.rxPlayer.focus,
+      split_stereo: this.rxPlayer.splitStereo,
+      main_gain_db: this.rxPlayer.mainGainDb,
+      sub_gain_db: this.rxPlayer.subGainDb,
+    };
+  }
+
+  getAppliedAudioConfig(): Readonly<Partial<AudioRoutingConfig>> | null {
+    return this.appliedAudioConfig;
+  }
+
+  setRxVolume(v: number): void {
+    this.rxPlayer.volume = v;
+  }
+
+  // ── TX ──
+
+  async startTx(): Promise<string | null> {
+    if (this.controller?.remote() && !this.controller.ready()) return 'Удалённое управление недоступно.';
+    const epoch = this.controller?.epoch() ?? 0;
+    if (this._txEnabled) return this.txAdmission?.promise ?? null;
+    const startGeneration = ++this.txStartGeneration;
+    // MOR-3753: a new attempt supersedes a latched TX failure — cleared at
+    // entry, after the guards, so a stale failure never outlives its retry
+    // while the fresh capture is still pending.
+    setTxError(false);
+    let err: string | null;
+    let captureEpoch = this.txMic.captureEpoch;
+    try {
+      const capture = this.txMic.start();
+      captureEpoch = this.txMic.captureEpoch;
+      err = await capture;
+    } catch (error) {
+      // Preserve the original rejection, but only the current capture and
+      // controller attempt may publish a new failure after this await.
+      if (startGeneration === this.txStartGeneration && captureEpoch === this.txMic.captureEpoch
+        && (!this.controller || this.controller.current(epoch))) setTxError(true);
+      throw error;
+    }
+    if (startGeneration !== this.txStartGeneration) return 'TX MIC: capture start cancelled';
+    if (this.controller && !this.controller.current(epoch)) {
+      this.txMic.stop();
+      return 'Удалённое управление потеряно. Подключитесь заново.';
+    }
+    if (err) {
+      // Reuse the existing RX stats socket; never open TX or a new connection
+      // merely to report a capture failure. Periodic stats retain the category.
+      this._sendAudioStats();
+      this._notifyTxStartFailure(err);
+      // MOR-3753: a genuine refusal latches the failed state; the silent
+      // cancellation reasons above latch nothing.
+      if (!TX_START_SILENT_REASONS.has(err)) setTxError(true);
+      return err;
+    }
+    if (!this.txMic.active) return 'TX MIC: capture stopped before start completed';
+    let admission: Promise<string | null> | null = null;
+    if (this.controller?.remote()) {
+      let resolve!: (error: string | null) => void;
+      admission = new Promise((settle) => { resolve = settle; });
+      this.txAdmission = { promise: admission, resolve };
+    }
+    this._txEnabled = true;
+    this.txControllerEpoch = epoch;
+    setTxEnabled(true);
+    // MOR-3753: a new attempt supersedes a latched TX failure.
+    setTxError(false);
+    this.connect();
+    if (this.ws?.state === 'open') {
+      this.ws.send(JSON.stringify({ type: 'audio_start', direction: 'tx' }));
+    }
+    this.notify();
+    return admission;
+  }
+
+  stopTx(options?: { automatic?: boolean }): void {
+    ++this.txStartGeneration;
+    // MOR-3753: an explicit stop clears a latched TX failure — including the
+    // no-op stop after a failure already cleared the demand. Automatic safety
+    // cleanup (ManagedTxController forceOff after _failTxAudio) passes
+    // { automatic: true } so the latch survives the de-key instead of the UI
+    // falsely returning to neutral/green.
+    if (!options?.automatic) setTxError(false);
+    const admission = this.txAdmission;
+    this.txAdmission = null;
+    admission?.resolve('TX MIC: capture start cancelled');
+    this.txMic.stop();
+    if (!this._txEnabled) return;
+    this._txEnabled = false;
+    setTxEnabled(false);
+    if (this.ws?.state === 'open') {
+      this.ws.send(JSON.stringify({ type: 'audio_stop', direction: 'tx' }));
+    }
+    if (admission !== null) {
+      this.close();
+      if (this._rxEnabled) this.connect();
+    } else this.maybeDisconnect();
+    this.notify();
+  }
+
+  /** A dead live socket under browser demand latches a fault per active
+   *  direction — failed/red, never an endless yellow attempt. Silent when
+   *  idle; a superseded socket cannot fault the live one. */
+  private _latchSocketFault(ws: MessageTransport): void {
+    if (this.ws !== ws) return;
+    if (this._rxEnabled) setRxError(true);
+    if (this._txEnabled) setTxError(true);
+  }
+
+  // ── WS lifecycle ──
+
+  private connect(): void {
+    if (this.controller?.remote() && !this.controller.ready()) return;
+    if (this.controller && !this.controller.remote() && !this.controller.ready()) {
+      // MOR-3535: a local session is being re-acquired — defer the socket
+      // while the re-acquire is in flight so it never races the fresh key
+      // sessionless; if the re-acquire itself fails, the client falls back
+      // to sessionless like an old Core.
+      if (this.reconnectTimer === null) {
+        const delay = this.backoff;
+        this.backoff = Math.min(Math.floor(this.backoff * 1.7), BACKOFF_MAX);
+        this.reconnectTimer = setTimeout(() => {
+          this.reconnectTimer = null;
+          this.connect();
+        }, delay);
+      }
+      return;
+    }
+    if (this.ws?.state === 'open' || this.ws?.state === 'connecting') {
+      return;
+    }
+    this.close();
+
+    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const url = `${proto}//${location.host}/api/v1/audio`;
+    const controller = this.controller;
+    const protocols = controller?.protocols() ?? [];
+    const epoch = controller?.epoch() ?? 0;
+    const ws = createMessageTransport();
+    this.ws = ws;
+    ws.open(authenticatedWsUrl(url), controller !== null && protocols.length > 0
+      ? { protocols, role: controller.role() }
+      : undefined);
+
+    ws.onOpen(() => {
+      if (protocols.length > 0
+        && (this.ws !== ws || this.controller?.current(epoch) !== true || ws.attachedProtocol !== protocols[0])) { ws.close(); return; }
+      this.backoff = BACKOFF_MIN;
+      setAudioConnected(true);
+      // The link is back under live demand: a fault latched while it was
+      // down no longer holds. A fresh refusal re-latches per direction.
+      if (this._rxEnabled) setRxError(false);
+      if (this._txEnabled) setTxError(false);
+      console.log('[audio-ws] connected');
+      if (this._rxEnabled) {
+        // Idempotent resume nudge: if the AudioContext re-entered
+        // 'suspended' while the WS was down (WKWebView backgrounding), wake
+        // it as we resubscribe so streamed frames are not dropped.
+        this.rxPlayer.start();
+        ws.send(JSON.stringify({
+          type: 'audio_start',
+          direction: 'rx',
+          preferred_rx_codec: preferredRxCodec(),
+          client_id: this.clientId,
+        }));
+      }
+      if (this._txEnabled) {
+        ws.send(JSON.stringify({ type: 'audio_start', direction: 'tx' }));
+      }
+      // If setAudioConfig was called before the WS was open, push the
+      // cached focus/split pair now so the backend can update CI-V
+      // Phones L/R Mix.  Keeps ACTIVATE on MAIN/SUB consistent regardless
+      // of whether the user has started RX audio in the browser.
+      if (this._audioConfigPending) {
+        this._flushPendingAudioConfig();
+      }
+      this._startStatsTimer();
+      this.rxPlayer.flush();
+      this.notify();
+    });
+
+    ws.onBinary((data) => {
+      if (protocols.length > 0 && (this.ws !== ws || this.controller?.current(epoch) !== true)) return;
+      this.rxPlayer.feed(data);
+    });
+
+    ws.onText((text) => {
+      if (protocols.length > 0 && (this.ws !== ws || this.controller?.current(epoch) !== true)) return;
+      this._handleServerMessage(text);
+    });
+
+    // The transport closes the socket on error by itself (the old
+    // `ws.onerror = () => ws.close()` wiring); latching is all that stays.
+    ws.onError(() => {
+      console.error('[audio-ws] error');
+      this._latchSocketFault(ws);
+    });
+
+    // `close()` below unsubscribes this handler first — the old
+    // `ws.onclose = null` — so an intentional close schedules no reconnect.
+    this.closeUnsub = ws.onClose((info) => {
+      console.warn(`[audio-ws] closed code=${info.code} reason=${info.reason}`);
+      // Socket death under demand is a real fault; the TX admission path
+      // below still owns its own resolve/notify/teardown unchanged.
+      this._latchSocketFault(ws);
+      this._clearStatsTimer();
+      this.ws = null;
+      setAudioConnected(false);
+      // MOR-3535: session-attached TX audio is pinned to its session — a
+      // socket that dies together with the session never resumes on its own.
+      // A start still awaiting its audio_tx_format acknowledgement fails on
+      // ANY socket close, regardless of session currency: it never keyed the
+      // radio, so there is nothing to resume, and holding it pending would
+      // hang the caller's PTT press through an unbounded reconnect backoff.
+      if (this._txEnabled
+        && (this.txAdmission !== null
+          || (protocols.length > 0 && this.controller?.current(epoch) !== true))) {
+        this._failTxAudio('Удалённое TX-аудио потеряно.');
+      }
+      // Decoder availability is a fact about the server we are talking to;
+      // once the link is gone we no longer know it. Re-learned at the next
+      // TX start (MOR-1791).
+      this._setTxCodecFallback(false);
+      this.notify();
+      if (!this._rxEnabled && !this._txEnabled) return;
+      // Reconnect with backoff
+      const delay = this.backoff;
+      this.backoff = Math.min(Math.floor(this.backoff * 1.7), BACKOFF_MAX);
+      this.reconnectTimer = setTimeout(() => this.connect(), delay);
+    });
+  }
+
+  // ── TX codec negotiation (MOR-1791) ──
+  //
+  // The server answers every ``audio_start direction=tx`` with an
+  // ``audio_tx_format`` ack naming the codec it can actually accept. Without
+  // it, a server with no native opus codec drops every browser Opus frame
+  // fail-closed: the radio keys and nothing reaches the air. Text frames on
+  // this socket were previously discarded, so consuming them is additive on
+  // both sides.
+
+  /** True while browser TX is pinned to PCM16 because the server cannot
+   *  decode Opus. Surfaced to the operator as a quiet status hint. */
+  get txCodecFallback(): boolean { return this._txCodecFallback; }
+
+  /** Codec the microphone is currently emitting, or null when not capturing. */
+  get txCodec(): TxCodec | null { return this.txMic.codec; }
+
+  private _txCodecFallback = false;
+
+  private txAudioDiedCallbacks = new Set<() => void>();
+
+  /** Notified when failed TX audio is torn down through _failTxAudio. */
+  onTxAudioDied(callback: () => void): () => void {
+    this.txAudioDiedCallbacks.add(callback);
+    return () => this.txAudioDiedCallbacks.delete(callback);
+  }
+
+  private _handleServerMessage(raw: string): void {
+    let msg: {
+      type?: unknown; codec?: unknown; opus_decode?: unknown;
+      sample_rate?: unknown; message?: unknown; reason?: unknown;
+    };
+    try {
+      msg = JSON.parse(raw) as typeof msg;
+    } catch {
+      return;
+    }
+    if (msg?.type === 'error') {
+      if (msg.message === SERVER_TX_REFUSAL
+        || (this.controller?.remote()
+          && (msg.message === 'controller_audio_busy' || msg.message === 'controller_invalid'))) {
+        this._failTxAudio(msg.message);
+      } else if (typeof msg.message === 'string'
+        && msg.message.startsWith(SERVER_RX_REFUSAL_PREFIX) && this._rxEnabled) {
+        // End only failed RX demand; keep concurrent TX and allow an explicit
+        // retry. Do not expose backend/native details in operator banners.
+        // MOR-3753: stopRx cleared the demand, so latch the refusal itself —
+        // demand alone would hide it as idle. Cleared by an explicit stop
+        // or a new attempt; a failed retry re-latches.
+        this.stopRx();
+        setRxError(true);
+        // MOR-3823: the frame's `reason` is the publishable category. A USB
+        // pairing refusal is actionable only on the station computer, but no
+        // client-side signal proves the reader sits there (see above), so
+        // every client gets the same neutral toast: no flags, no paths.
+        if (typeof msg.reason === 'string' && SERVER_RX_DEVICE_REASONS.has(msg.reason)) {
+          this._operatorNotifier?.(
+            'error',
+            'The radio\'s audio devices could not be paired automatically. The station\'s audio device has to be chosen on the station computer — whoever runs the station can do it in its audio device settings.',
+            'rxAudioStationDeviceNeeded',
+          );
+        } else if (msg.reason === SERVER_RX_DEVICE_IN_USE) {
+          const holder = (msg as { holder?: unknown }).holder;
+          if (typeof holder === 'string' && HOLDER_PROGRAM_NAME.test(holder)) {
+            this._operatorNotifier?.(
+              'error',
+              `The radio's audio input is in use by ${holder}. Close it, then turn the audio on again.`,
+              'rxAudioDeviceInUseBy',
+              { program: holder },
+            );
+          } else {
+            this._operatorNotifier?.(
+              'error',
+              'The radio\'s audio input is in use by another program. Close it, then turn the audio on again.',
+              'rxAudioDeviceInUse',
+            );
+          }
+        } else {
+          this._operatorNotifier?.('error', 'Radio audio capture could not start.', 'rxAudioStartFailed');
+        }
+      }
+      return;
+    }
+    if (msg?.type !== 'audio_tx_format') return;
+    const codec = msg.codec === 'pcm16' ? 'pcm16' : msg.codec === 'opus' ? 'opus' : null;
+    if (codec === null) {
+      if (this.txAdmission !== null) {
+        this._failTxAudio('TX MIC: negotiated codec is not supported');
+      }
+      return;
+    }
+    // The ack names the rate the radio will play PCM16 at (MOR-1794). An
+    // older server omits it; that keeps the 48 kHz the PCM leg always used.
+    // A present-but-unusable rate is refused through the same fault path as
+    // a PCM leg that will not start — never guessed and never played wrong.
+    const sampleRate = negotiatedTxSampleRate(msg.sample_rate);
+    if (sampleRate === null) {
+      this._failTxAudio(
+        `TX MIC: negotiated sample rate ${String(msg.sample_rate)} Hz is not supported`,
+      );
+      return;
+    }
+
+    const { switched, error } = this.txMic.applyServerCodec(codec, sampleRate);
+    if (error !== null) {
+      this._failTxAudio(error);
+      return;
+    }
+    if (switched) {
+      console.warn('[audio-ws] server cannot decode Opus — TX switched to PCM16');
+    }
+    this._setTxCodecFallback(msg.opus_decode === false);
+    const admission = this.txAdmission;
+    this.txAdmission = null;
+    admission?.resolve(null);
+  }
+
+  /** Surface a startTx failure reason to the operator. Operator-initiated
+   *  cancellations are silent (a console line at most). */
+  private _notifyTxStartFailure(reason: string): void {
+    if (TX_START_SILENT_REASONS.has(reason)) {
+      console.log(`[audio-ws] TX start cancelled: ${reason}`);
+      return;
+    }
+    const code = TX_START_REASON_CODES[reason] ?? 'txAudioStartFailed';
+    this._operatorNotifier?.('error', `TX audio failed to start: ${reason}`, code);
+  }
+
+  /** End failed capture/codec audio and notify the existing canonical de-key path. */
+  private _failTxAudio(reason: string): void {
+    // A failure during preparation is returned by startTx, before TX admission.
+    if (!this._txEnabled) return;
+    this.txAdmission?.resolve(reason);
+    console.error(`[audio-ws] TX audio failed, stopping TX audio: ${reason}`);
+    this._operatorNotifier?.(
+      'error',
+      `TX audio failed: ${reason}`,
+      reason === SERVER_TX_REFUSAL ? 'txAudioServerUnavailable' : 'txAudioStopped',
+    );
+    this._setTxCodecFallback(false);
+    this.stopTx();
+    // MOR-3753: stopTx cleared the demand, so latch the failure itself —
+    // demand alone would hide it as idle.
+    setTxError(true);
+    // Snapshot + isolate: one throwing subscriber must not starve the rest.
+    for (const callback of [...this.txAudioDiedCallbacks]) {
+      try {
+        callback();
+      } catch (error) {
+        console.error('[audio-ws] TX audio-died subscriber failed', error);
+      }
+    }
+  }
+
+  private _setTxCodecFallback(active: boolean): void {
+    if (active === this._txCodecFallback) return;
+    this._txCodecFallback = active;
+    setTxCodecFallback(active);
+    this.notify();
+  }
+
+  // ── Link-quality uplink (MOR-585, ADR §3.6) ──
+  //
+  // While RX is active, periodically reports the player's link-quality
+  // counters so the server can record them per client (the step-19
+  // adaptive codec controller's client-side signal). Stats only — the
+  // server changes no behavior on receipt.
+
+  private _startRxDiagnosticOverlay(): void {
+    if (!this.rxDiagnosticEnabled || this.rxDiagnosticOverlay || typeof document === 'undefined') return;
+    try {
+      const overlay = document.createElement('pre');
+      overlay.dataset.rxAudioDiagnostic = '';
+      overlay.setAttribute('aria-hidden', 'true');
+      overlay.style.position = 'fixed';
+      overlay.style.right = '4px';
+      overlay.style.bottom = '4px';
+      overlay.style.zIndex = '2147483647';
+      overlay.style.pointerEvents = 'none';
+      overlay.style.userSelect = 'none';
+      overlay.style.margin = '0';
+      overlay.style.padding = '6px';
+      overlay.style.maxWidth = 'calc(100vw - 20px)';
+      overlay.style.maxHeight = '30vh';
+      overlay.style.overflow = 'hidden';
+      overlay.style.backgroundColor = 'rgba(17, 17, 17, 0.93)';
+      overlay.style.color = '#fff';
+      overlay.style.font = '11px/1.3 monospace';
+      this.rxDiagnosticOverlay = overlay;
+      document.body.append(overlay);
+      this._refreshRxDiagnosticOverlay();
+      if (this.rxDiagnosticOverlay) {
+        this.rxDiagnosticTimer = setInterval(() => this._refreshRxDiagnosticOverlay(), 1000);
+      }
+    } catch {
+      this._clearRxDiagnosticOverlay();
+    }
+  }
+
+  private _refreshRxDiagnosticOverlay(): void {
+    try {
+      const snapshot = this.rxPlayer.diagnosticSnapshot();
+      if (!snapshot || !this.rxDiagnosticOverlay) return;
+      const number = (value: number | null) => value === null ? 'unavailable' : value.toPrecision(4);
+      const decoded = snapshot.preRouting;
+      this.rxDiagnosticOverlay.textContent = [
+        'RX diagnostic candidate | Physical output: unverified',
+        `Context: ${snapshot.playback.contextState} | rate: ${number(snapshot.playback.sampleRate)}`,
+        `Pre-routing: ${snapshot.decodedStatus} age ms=${number(snapshot.decodedAgeMs)} channels=${decoded?.channelCount ?? 'unavailable'} frames=${decoded?.frameCount ?? 'unavailable'}`,
+        ...(decoded?.channels.map((channel, index) =>
+          `ch${index}: RMS=${number(channel.rms)} peak=${number(channel.peak)}`) ?? []),
+        `Volume=${number(snapshot.volume)} focus=${snapshot.focus} split=${snapshot.splitStereo}`,
+        `Actual gain: pre=${number(snapshot.preGain)} main=${number(snapshot.mainGain)} sub=${number(snapshot.subGain)}`,
+        `Sink selection capability: ${snapshot.sinkSelection} | output route: unverified`,
+        `Received=${snapshot.playback.receivedFrames} valid=${snapshot.playback.validFrames} decoded=${snapshot.playback.decodedFrames}`,
+        `Scheduled=${snapshot.playback.scheduledFrames} drops=${snapshot.droppedFrames} suspended=${snapshot.playback.suspendedDrops}`,
+        `Underruns=${snapshot.underruns} scheduled ahead ms=${snapshot.bufferDepthMs}`,
+      ].join('\n');
+    } catch {
+      this._clearRxDiagnosticOverlay();
+    }
+  }
+
+  private _clearRxDiagnosticOverlay(): void {
+    if (this.rxDiagnosticTimer !== null) clearInterval(this.rxDiagnosticTimer);
+    this.rxDiagnosticTimer = null;
+    this.rxDiagnosticOverlay?.remove();
+    this.rxDiagnosticOverlay = null;
+  }
+
+  private _startStatsTimer(): void {
+    if (this.statsTimer) return;
+    this.statsTimer = setInterval(() => this._sendAudioStats(), AUDIO_STATS_INTERVAL_MS);
+  }
+
+  private _clearStatsTimer(): void {
+    if (this.statsTimer) {
+      clearInterval(this.statsTimer);
+      this.statsTimer = null;
+    }
+  }
+
+  private _sendAudioStats(): void {
+    if (!this._rxEnabled || this.ws?.state !== 'open') return;
+    const stats = this.rxPlayer.stats();
+    const error = stats.playback?.contextState === 'suspended' && stats.playback.resumeOutcome === 'rejected'
+      ? stats.playback.lastResumeError : null;
+    if (error !== null && error !== this._lastRxResumeError) {
+      this._operatorNotifier?.('error', 'Local audio could not resume. Check application sound permissions and output settings.', 'rxAudioResumeFailed');
+    }
+    if (error !== null) this._lastRxResumeError = error;
+    else if (stats.playback?.resumeOutcome === 'resolved' || stats.playback?.contextState === 'unavailable') {
+      this._lastRxResumeError = null;
+    }
+    this.ws.send(JSON.stringify({
+      type: 'audio_stats',
+      underruns: stats.underruns,
+      buffer_depth_ms: stats.bufferDepthMs,
+      dropped_frames: stats.droppedFrames,
+      playback: stats.playback,
+      microphoneCaptureError: this.txMic.lastCaptureFailureCategory,
+    }));
+  }
+
+  /** Unsubscribe for the live channel's close handler (the old `ws.onclose = null`). */
+  private closeUnsub: (() => void) | null = null;
+
+  private close(): void {
+    this._clearStatsTimer();
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    const ws = this.ws;
+    this.ws = null;
+    if (ws) {
+      this.closeUnsub?.();
+      this.closeUnsub = null;
+      ws.close();
+      setAudioConnected(false);
+    }
+  }
+
+  private maybeDisconnect(): void {
+    if (!this._rxEnabled && !this._txEnabled) {
+      this.close();
+      this.notify();
+    }
+  }
+
+  /** Full cleanup. Explicit by default: acknowledges latched audio errors.
+   *  { automatic: true } forwards to stopRx/stopTx and preserves them. */
+  destroy(options?: { automatic?: boolean }): void {
+    this.capabilitiesUnsubscribe?.();
+    this.capabilitiesUnsubscribe = null;
+    this.stopRx(options);
+    this.stopTx(options);
+    this.close();
+  }
+}
+
+export const audioManager = new AudioManager();

@@ -1,0 +1,21 @@
+# ftx1-ctl configuration
+
+port    = "/dev/ttyUSB0"
+baud    = 38_400
+base_hz = 14_074_000
+
+[[freq_memory]]
+label = "20m FT8"
+hz    = 14_074_000
+
+[[freq_memory]]
+label = "20m CW"
+hz    = 14_025_000
+
+[[freq_memory]]
+label = "40m FT8"
+hz    = 7_074_000
+
+[[freq_memory]]
+label = "40m CW"
+hz    = 7_025_000

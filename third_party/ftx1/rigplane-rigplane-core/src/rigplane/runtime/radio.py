@@ -1,0 +1,6478 @@
+# mypy: disable-error-code="no-any-return,misc,assignment"
+"""IcomRadio — high-level async API for Icom transceivers over LAN.
+
+Usage::
+
+    async with IcomRadio("192.168.1.100", username="u", password="p") as radio:
+        freq = await radio.get_freq()
+        print(f"Freq: {freq / 1e6:.3f} MHz")
+        await radio.set_freq(7_074_000)
+        await radio.set_mode("USB")
+"""
+
+from __future__ import annotations
+
+import asyncio
+import contextlib
+import logging
+import os
+import socket as _socket
+import time
+from collections.abc import Awaitable, Callable, Mapping, Sequence
+from dataclasses import replace as _replace_dataclass
+from typing import TYPE_CHECKING, ClassVar, Literal, cast
+
+if TYPE_CHECKING:
+    from typing import Any
+
+    from rigplane._runtime_protocols import ControlPhaseHost
+    from rigplane.core.acquisition_scheduler import RadioStateModelService
+    from rigplane.core.tx_safety import ProviderPttObservation
+    from rigplane.runtime.local_tx_work import LocalTxWorkRunner
+    from rigplane.runtime.managed_tx_composition import ManagedTxCompositionPort
+
+    def _managed_tx_runtime_satisfies_supervisor(
+        runtime: ManagedRadioRuntime,
+    ) -> ManagedTxSupervisor:
+        """Mypy-only: fails to type-check if ``ManagedRadioRuntime`` drifts
+        from :class:`~rigplane.core.radio_protocol.ManagedTxSupervisor`.
+
+        Guarded by ``TYPE_CHECKING`` — never defined and never called at
+        runtime, so it costs nothing now that :meth:`CoreRadio._arm_managed_tx`
+        builds ``self._managed_tx_runtime`` (MOR-1016). Its only job is to turn a
+        ``request_on``/``release_owner`` signature drift on either side into
+        a ``uv run mypy src/`` error here, since the assembly-time
+        ``getattr_static`` two-step (:meth:`ManagedTxApi.bind`) only checks
+        member presence, never shape.
+        """
+        return runtime
+
+
+from . import radio_initial_state as _initial_state
+from . import radio_reconnect as _reconnect
+from . import radio_state_snapshot as _state_snapshot
+from rigplane.runtime._audio_recovery import AudioRecoveryRuntime, AudioRecoveryState
+from rigplane.runtime._audio_runtime_mixin import AudioRuntimeMixin
+from rigplane.audio._transcoder import PcmOpusTranscoder
+from rigplane.audio.route import (
+    AudioStreamContract,
+    AudioStreamRequest,
+    audio_stream_contract_from_request,
+    resolve_lan_audio_stream_request,
+)
+from rigplane.core.civ import is_directed_ptt_reply
+from rigplane.runtime._civ_rx import (
+    CivRuntime,
+    RawCivExpectation,
+    RawCivTransactionResult,
+    _PttReadContext,
+    _PttNotQuiescent,
+)
+from rigplane.runtime._dual_rx_runtime import DualRxRuntimeMixin
+from rigplane.runtime._scope_runtime import ScopeRuntimeMixin
+from rigplane.runtime.callable_support import supports_callable
+from rigplane.runtime.managed_radio_runtime import ManagedRadioRuntime
+from rigplane.runtime.memory_slot_lock import memory_slot_operation
+from rigplane.runtime.managed_tx_effect_service import managed_tx_effect_service
+from rigplane.runtime.managed_tx_state import (
+    AbortOperation,
+    ActuationOperation,
+    ActuationResult,
+    EffectToken,
+)
+
+# Import split modules
+from rigplane.runtime._connection_state import RadioConnectionState
+from rigplane.runtime._control_phase import (
+    CONNINFO_SIZE,  # noqa: F401 (re-export for tests)
+    OPENCLOSE_SIZE,  # noqa: F401 (re-export for tests)
+    STATUS_SIZE,  # noqa: F401 (re-export for tests)
+    TOKEN_ACK_SIZE,  # noqa: F401 (re-export for tests)
+    ControlPhaseRuntime,
+    ControlPhaseSessionMechanism,
+)
+from rigplane.runtime.session_lifecycle import CoreRadioSessionLifecycle, LifecycleEvent
+from rigplane.audio import AudioPacket, AudioStream
+from rigplane.core.civ import CivRequestTracker
+from rigplane.commands.commander import IcomCommander, Priority
+from rigplane.commands import (
+    _SUB_REPEATER_TONE,
+    _SUB_REPEATER_TSQL,
+    _SUB_TONE_SQUELCH_TYPE,
+    CONTROLLER_ADDR,
+    RECEIVER_MAIN,
+    _level_bcd_decode,
+    build_civ_frame,
+    parse_civ_frame,
+    filter_index_to_hz,
+    get_acc1_mod_level,
+    get_af_mute,
+    get_agc,
+    get_agc_time_constant,
+    get_anti_vox_gain,
+    get_apf_type_level,
+    get_audio_peak_filter,
+    get_auto_notch,
+    get_break_in,
+    get_break_in_delay,
+    get_civ_output_ant,
+    get_civ_transceive,
+    get_compressor,
+    get_compressor_level,
+    get_cw_pitch,
+    get_dash_ratio,
+    get_data1_mod_input,
+    get_data2_mod_input,
+    get_data3_mod_input,
+    get_data_off_mod_input,
+    get_dial_lock,
+    get_digisel_shift,
+    get_drive_gain,
+    get_dual_watch,
+    get_filter_shape,
+    get_key_speed,
+    get_lan_mod_level,
+    get_manual_notch,
+    get_manual_notch_width,
+    get_mic_gain,
+    get_monitor,
+    get_monitor_gain,
+    get_nb_depth,
+    get_nb_level,
+    get_nb_width,
+    get_notch_filter,
+    get_nr_level,
+    get_overflow_status,
+    get_pbt_inner,
+    get_pbt_outer,
+    get_quick_dual_watch,
+    get_quick_split,
+    get_ref_adjust,
+    get_s_meter_sql_status,
+    get_squelch,
+    get_ssb_tx_bandwidth,
+    get_system_date,
+    get_system_time,
+    get_twin_peak_filter,
+    get_usb_mod_level,
+    get_utc_offset,
+    get_various_squelch,
+    get_vox,
+    get_vox_delay,
+    get_vox_gain,
+    parse_ack_nak,
+    parse_band_stack_response,
+    parse_bool_response,
+    parse_memory_entry,
+    parse_data_mode_response,
+    parse_frequency_response,
+    parse_level_response,
+    parse_meter_response,
+    parse_mode_response,
+    parse_repeater_shift_response,
+    parse_rit_frequency_response,
+    parse_system_date_response,
+    parse_system_time_response,
+    parse_tone_freq_response,
+    parse_tone_squelch_type_response,
+    parse_tsql_freq_response,
+    parse_utc_offset_response,
+    parse_powerstat,
+)
+from rigplane.commands import get_main_sub_tracking as _get_main_sub_tracking_cmd
+from rigplane.commands import get_repeater_tone as _get_repeater_tone_cmd
+from rigplane.commands import get_repeater_tsql as _get_repeater_tsql_cmd
+from rigplane.core.env_config import get_managed_tx_enabled
+from rigplane.core.exceptions import (
+    CommandError,
+    CommandRejectedError,
+    ConnectionError,
+    RadioNotReadyError,
+    ReceiverNotSelectedError,
+    StaleBeforeWireError,
+    TimeoutError,
+)
+from rigplane.runtime._dual_rx_runtime import (
+    RECEIVER_ADMISSION,
+    radio_not_ready,
+    receiver_not_selected,
+)
+from rigplane.core.radio_protocol import (
+    ManagedTxSupervisor,
+    RadioIdentity,
+    RadioIdentityStatus,
+)
+from rigplane.core.state_pipeline_contracts import FieldPath
+from rigplane.core.state_store import StateStore
+from rigplane.core.tx_observation import (
+    TX_READ_DEADLINE_SECONDS,
+    TxStateReading,
+)
+from rigplane.core.tx_safety import (
+    TxOutcome,
+    TxSafetySnapshot,
+)
+from rigplane.runtime.meter_cal import interpolate_swr
+from rigplane.commands.bound import BoundCommands
+from rigplane.commands.command_map import CommandMap
+from rigplane.profiles import (
+    RadioProfile,
+    admit_cw_text,
+    admit_memory_write,
+    await_fenced_cw_text,
+    cw_text_cancelled,
+    resolve_radio_profile,
+)
+from rigplane.profiles.control_domain import decode_legacy_control
+from rigplane.profiles.control_domain import encode_legacy_control
+from rigplane.core.radio_state import RadioState
+from rigplane.core.state_diagnostics import StateDiagnosticsRecorder
+from rigplane.core._state_cache import StateCache
+from rigplane.scope import ScopeAssembler, ScopeFrame
+from rigplane.core.transport import IcomTransport
+from rigplane.core.types import (
+    AgcMode,
+    AudioCodec,
+    AudioPeakFilter,
+    BandStackRegister,
+    BreakInMode,
+    CivFrame,
+    FilterShape,
+    MemoryChannel,
+    MemoryEntry,
+    Mode,
+    RepeaterShiftDirection,
+    ScopeCompletionPolicy,
+    SsbTxBandwidth,
+    ToneSquelchType,
+    get_audio_capabilities,
+)
+
+__all__ = [
+    "AudioRecoveryState",
+    "CoreRadio",
+    "IcomRadio",
+    "RawCivSubscription",
+    "RadioProfile",
+    "AudioCodec",
+    "RadioConnectionState",
+    "ScopeFrame",
+    "ScopeCompletionPolicy",
+]
+
+
+logger = logging.getLogger(__name__)
+
+
+_AUDIO_CAPABILITIES = get_audio_capabilities()
+_DEFAULT_AUDIO_CODEC = _AUDIO_CAPABILITIES.default_codec
+_DEFAULT_AUDIO_SAMPLE_RATE = _AUDIO_CAPABILITIES.default_sample_rate_hz
+
+#: MOR-3888: answer window of a client's live read (``get_split(strict=True)``).
+#: Recorded serial answers arrive in tens of milliseconds
+#: (``rigplane_testkit/sim/profiles/ic7300.toml``: 30 ms), so half a second is
+#: far outside a healthy answer and short enough that a lost answer does not
+#: park another client's write behind it for the full 2 s window.
+_LIVE_READ_ANSWER_WINDOW_S = 0.5
+# Default TTLs (seconds) for the GET-command cache fallback paths.
+_DEFAULT_CACHE_TTL: dict[str, float] = {"freq": 10.0, "mode": 10.0, "rf_power": 30.0}
+
+# Threshold for ``Radio.connected`` to treat a UDP transport as unhealthy.
+# A single transient ``error_received`` (e.g. EAGAIN/EWOULDBLOCK/Broken pipe)
+# should not latch the socket into a disconnected state — the counter counts
+# consecutive errors (any inbound datagram resets it) and ``soft_reconnect``
+# zeroes it for a fresh session.
+# Require >=3 consecutive errors before reporting ``connected = False``.
+_UDP_ERROR_THRESHOLD: int = 3
+
+# Deadline for the managed-TX arming probe (MOR-1016).  Deliberately shorter
+# than ``_civ_get_timeout``: by the time it runs the rig has already answered
+# a full initial-state fetch, so a PTT read that does not come back promptly
+# means the command is unsupported rather than merely slow — and the whole
+# point of the probe is to settle that *without* holding up ``connect()``.
+# Being wrong here costs supervised TX for one epoch, never the session.
+_MANAGED_TX_PROBE_TIMEOUT_S: float = 0.5
+
+# Deadline for the managed-TX teardown waits (MOR-1016): the shutdown that
+# carries a held lease's OFF out through a still-open CI-V path, and the
+# provider-park that shuts the gate ahead of a soft_disconnect.  Deliberately
+# longer than ``ManagedRadioRuntime``'s own 3 s effect-service bound, which is
+# what the durable OFF and its retries actually run under: an outer wait that
+# expired first would cut the release short rather than bound a wedged one, and
+# the remaining headroom covers ticker cancellation and port retirement.
+_MANAGED_TX_TEARDOWN_TIMEOUT_S: float = 5.0
+
+
+async def _managed_tx_provider_released_by_disconnect() -> None:
+    """``ManagedRadioRuntime.shutdown``'s release hook, deliberately empty.
+
+    The hook exists for an owner whose provider outlives the runtime — a server
+    handing a shared rig back. ``disconnect()`` is the other case: the shutdown
+    has already retired the managed CI-V port by the time this runs, and the
+    session under it is released on the very next line, so there is nothing
+    left here to hand back. Clearing the radio's own managed-TX members is
+    deliberately *not* done here: the shutdown task is shielded, so on the
+    bounded path this may run long after ``disconnect()`` returned.
+    """
+    return None
+
+
+class RawCivSubscription:
+    """Handle for a raw CI-V listener registered via ``add_raw_civ_listener``.
+
+    Part of the raw CI-V pipe seam (MOR-164) that lets a transparent Hamlib A1
+    bridge use RigPlane purely as a CI-V byte transport. Call :meth:`close` (or
+    use the handle as a context manager) to unregister the listener.
+    """
+
+    def __init__(
+        self,
+        registry: list[Callable[[bytes], Any]],
+        callback: Callable[[bytes], Any],
+    ) -> None:
+        self._registry = registry
+        self._callback = callback
+        self._closed = False
+
+    def close(self) -> None:
+        """Unregister the listener. Idempotent."""
+        if self._closed:
+            return
+        self._closed = True
+        try:
+            self._registry.remove(self._callback)
+        except ValueError:
+            pass
+
+    def __enter__(self) -> "RawCivSubscription":
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.close()
+
+
+class CoreRadio(ScopeRuntimeMixin, AudioRuntimeMixin, DualRxRuntimeMixin):
+    """High-level async interface for controlling an Icom transceiver over LAN.
+
+    Manages two UDP connections:
+    - Control port (default 50001): authentication and session management.
+    - CI-V port (default 50002): CI-V command exchange.
+
+    Args:
+        host: Radio IP address or hostname.
+        port: Radio control port.
+        username: Authentication username.
+        password: Authentication password.
+        radio_addr: Optional CI-V address override. If omitted, uses
+            the resolved profile default.
+        timeout: Default timeout for operations in seconds.
+
+    Example::
+
+        async with IcomRadio("192.168.1.100", username="u", password="p") as radio:
+            freq = await radio.get_freq()
+            await radio.set_freq(7_074_000)
+    """
+
+    # Watchdog timing (used by _watchdog_loop)
+    WATCHDOG_CHECK_INTERVAL = 0.5
+    _WATCHDOG_HEALTH_LOG_INTERVAL = 30.0
+
+    # Audio-only silence repair (MOR-3401): rebuild the LAN audio transport
+    # when the existing ``rx_silent`` liveness signal fires while CI-V stays
+    # healthy. Bounded per silence episode, with these backoff delays between
+    # the attempts (1 s before attempt 2, 2 s before attempt 3).
+    _LAN_AUDIO_SILENCE_REPAIR_ATTEMPTS: int = 3
+    _LAN_AUDIO_SILENCE_REPAIR_BACKOFF_S: tuple[float, ...] = (1.0, 2.0)
+
+    # The identity read is information only (MOR-4382): when the radio does
+    # not answer, it is asked again after these delays, then left alone.
+    _IDENTITY_READ_RETRY_DELAYS_S: tuple[float, ...] = (1.0, 2.0, 4.0, 8.0)
+
+    # CoreRadio publishes the exact CI-V transport identity at arm/rearm and
+    # withdraws that same identity before the transport closes. Mounted session
+    # wrappers must not replace it with the higher-level Radio object.
+    managed_tx_transport_lifecycle_owned = True
+
+    # PowerControlCapable: Icom CI-V uses a raw 0-255 scale on the wire
+    # (cmd 0x14 0x0A). Inspected by upper layers to decide unit
+    # translation before queueing SetPower. See
+    # :class:`rigplane.core.radio_protocol.PowerControlCapable`.
+    native_power_unit: Literal["raw_255", "watts"] = "raw_255"
+
+    def _log_undeclared_command(self, name: str) -> None:
+        """D1 state 3's WARNING (plan §4 Step 4 / §8.1): *name* is neither
+        declared nor declared absent. `commands/bound.py: BoundCommands`
+        calls this hook right before it refuses -- `commands/` performs no
+        logging itself (`commands/LAYER.md`).
+        """
+        logger.warning(
+            "%s is not declared by profile %s and not recorded as absent "
+            "-- refusing rather than guessing "
+            "(docs/plans/2026-08-29-profile-driven-command-bytes.md §8.1 D1)",
+            name,
+            self._profile.model,
+        )
+
+    def supports_command(self, command: str, *, receiver: int | None = None) -> bool:
+        """Return support derived from this radio's profile and call graph."""
+        supported = supports_callable(self._profile, command)
+        if receiver is None:
+            return supported
+        if (
+            not supported
+            or command
+            not in {
+                "set_af_level",
+                "set_rf_gain",
+                "set_squelch",
+                "set_attenuator_level",
+            }
+            or isinstance(receiver, bool)
+            or not isinstance(receiver, int)
+            or not self._profile.supports_receiver(receiver)
+            or not callable(getattr(self, command, None))
+            or not self._profile.supports_capability(
+                "attenuator"
+                if command == "set_attenuator_level"
+                else command.removeprefix("set_")
+            )
+        ):
+            return False
+        try:
+            if command == "set_attenuator_level":
+                command_map = self._profile.command_map
+                if (
+                    not self._profile.att_values
+                    or command_map is None
+                    or not command_map.has("set_attenuator")
+                ):
+                    return False
+                self._require_cmd29_route(
+                    0x11, None, receiver=receiver, operation=command
+                )
+                return True
+            return self._level_command29(command, receiver=receiver) is not None
+        except (ReceiverNotSelectedError, RadioNotReadyError):
+            # Admission stays the static, route-based answer: MAIN is
+            # admitted and the call itself refuses with the stable reason
+            # code while MAIN is not selected; SUB without a route is not
+            # admitted (MOR-3591). A silent-since-connect radio answers the
+            # same static admission: the refusal it would raise is the
+            # retriable not-ready timeout, not a capability fact
+            # (MOR-4382 follow-up).
+            return receiver == RECEIVER_MAIN
+        except CommandError:
+            return False
+        finally:
+            # A capability query sends nothing: leave no wire admission.
+            RECEIVER_ADMISSION.set(None)
+
+    def _level_command29(self, command: str, *, receiver: int) -> bool | None:
+        """Resolve the wrapper flag; leave missing-command refusal to the builder."""
+        command_map = self._profile.command_map
+        if command_map is None or not command_map.has(command):
+            return None
+        from rigplane.commands._frame import decode_wire_tuple
+
+        opcode, sub, _ = decode_wire_tuple(command_map.get(command))
+        self._require_cmd29_route(opcode, sub, receiver=receiver, operation=command)
+        return self._profile.supports_cmd29(opcode, sub)
+
+    def _stop_token_renewal(self) -> None:
+        """Delegate to control-phase runtime."""
+        self._control_phase._stop_token_renewal()
+
+    def __init__(
+        self,
+        host: str,
+        port: int = 50001,
+        username: str = "",
+        password: str = "",
+        radio_addr: int | None = None,
+        timeout: float = 5.0,
+        audio_codec: AudioCodec | int = _DEFAULT_AUDIO_CODEC,
+        audio_sample_rate: int | None = None,
+        audio_codec_explicit: bool | None = None,
+        audio_sample_rate_explicit: bool | None = None,
+        auto_reconnect: bool = False,
+        reconnect_delay: float = 2.0,
+        reconnect_max_delay: float = 60.0,
+        watchdog_timeout: float = 30.0,
+        auto_recover_audio: bool = True,
+        on_audio_recovery: "Callable[[AudioRecoveryState], None] | None" = None,
+        cache_ttl_s: "dict[str, float] | None" = None,
+        profile: RadioProfile | str | None = None,
+        model: str | None = None,
+    ) -> None:
+        self._host = host
+        self._port = port
+        self._username = username
+        self._password = password
+        if radio_addr is not None and not (0 <= radio_addr <= 0xFF):
+            raise ValueError("radio_addr must be a single byte (0..255).")
+        self._timeout = timeout
+        self._audio_codec = AudioCodec(audio_codec)
+        self._audio_tx_codec = AudioCodec.PCM_1CH_16BIT
+        requested_sample_rate = (
+            _DEFAULT_AUDIO_SAMPLE_RATE
+            if audio_sample_rate is None
+            else audio_sample_rate
+        )
+        self._audio_sample_rate = requested_sample_rate
+        self._audio_rx_sample_rate = requested_sample_rate
+        self._audio_tx_sample_rate = requested_sample_rate
+        self._audio_stream_request: AudioStreamRequest | None = None
+        self._audio_stream_contract: AudioStreamContract | None = None
+        self._ctrl_transport = IcomTransport()
+        self._civ_transport: IcomTransport | None = None
+        self._audio_transport: IcomTransport | None = None
+        # Single-flight lock for ``_ensure_audio_transport`` (MOR-3400): the
+        # whole rebuild runs under it; no teardown ever takes it.
+        self._audio_ensure_lock = asyncio.Lock()
+        self._audio_stream: AudioStream | None = None
+        self._pcm_transcoder: PcmOpusTranscoder | None = None
+        self._pcm_transcoder_fmt: tuple[int, int, int] | None = None
+        self._pcm_tx_fmt: tuple[int, int, int] | None = None
+        self._conn_state = RadioConnectionState.DISCONNECTED
+        self._token: int = 0
+        self._tok_request: int = 0
+        self._auth_seq: int = 0
+        self._civ_port: int = 0
+        self._audio_port: int = 0
+        self._local_bind_host: str | None = None
+        self._civ_sock_pending: _socket.socket | None = None
+        self._audio_sock_pending: _socket.socket | None = None
+        self._civ_send_seq: int = 0
+        self._audio_send_seq: int = 0
+        # ``send_seq`` of the CI-V transport last torn down. ``soft_reconnect``
+        # resumes from it; ``_connect_once``, ``disconnect`` and ``release``
+        # clear it.
+        self._civ_resume_seq: int | None = None
+        # ``send_seq`` of the audio transport last torn down on a kept
+        # session. ``_ensure_audio_transport`` resumes from it; a fresh login
+        # (``_connect_once``), ``disconnect`` and ``release`` clear it.
+        self._audio_resume_seq: int | None = None
+        self._last_civ_send_monotonic: float = 0.0
+        # MOR-2595: 10 ms LAN gap. IC-7610 over LAN, 2026-09-25: 03 round
+        # trip median 7.55 ms, p95 9.0 ms; 0 errors at a 0 ms post-reply gap.
+        self._civ_min_interval: float = (
+            float(os.environ.get("ICOM_CIV_MIN_INTERVAL_MS", "10")) / 1000.0
+        )
+        # MOR-2595: LAN round-trip estimate, the measured IC-7610 p95.
+        self._civ_rtt_estimate: float = 0.009
+        self._commander: IcomCommander | None = None
+        self._filter_width: int | None = None
+        self._attenuator_db: dict[int, int] = {}
+        self._preamp_level: int | None = None
+        self._last_split: bool | None = None
+        self._last_vfo: str | None = None
+        # MOR-3591: receiver selects in flight (their outcome is unknown, so
+        # the selection is too), and when the selection first became known
+        # in this CI-V generation (receiver-owned observations start there).
+        self._receiver_select_inflight: int = 0
+        self._selection_known_since: float | None = None
+        self._vfo_selection_epoch: int = 1
+        self._token_task: asyncio.Task[None] | None = None
+        self._auto_reconnect = auto_reconnect
+        self._reconnect_delay = reconnect_delay
+        self._reconnect_max_delay = reconnect_max_delay
+        self._watchdog_timeout = watchdog_timeout
+        self._watchdog_task: asyncio.Task[None] | None = None
+        self._reconnect_task: asyncio.Task[None] | None = None
+        # ``disconnect`` increments this before it stops the resident loops.
+        # ``radio_reconnect.reconnect_loop`` and ``CivRuntime._watchdog_recover``
+        # read it when they start and take a later change for the owner's
+        # stop: a per-attempt release also sets ``_conn_state`` DISCONNECTED,
+        # so that state cannot tell the two apart.
+        self._owner_stop_epoch: int = 0
+        self._auto_recover_audio = auto_recover_audio
+        self._on_audio_recovery = on_audio_recovery
+        self._on_reconnect: Callable[[], None] | None = None
+        self._on_reconnect_status: Callable[[dict[str, Any]], None] | None = None
+        self._civ_stream_ready: bool = False
+        self._civ_recovering: bool = False
+        self._last_civ_data_received: float | None = None
+        # MOR-3845: decode-point liveness stamp (Radio protocol member). Only
+        # a CI-V frame the RX pump parsed AND accepted as radio-originated
+        # may stamp it (``CivRuntime._route_civ_frame``); every connection
+        # generation resets it (``CivRuntime.advance_generation``).
+        self.last_valid_frame_monotonic: float | None = None
+        self._civ_recovery_lock = asyncio.Lock()
+        # All memory-slot CI-V operations share one lock (MOR-3768).
+        self._memory_select_lock = asyncio.Lock()
+        self._civ_recovery_wait_timeout: float = float(
+            os.environ.get("ICOM_CIV_RECOVERY_WAIT_TIMEOUT_S", "12.0")
+        )
+        self._civ_ready_idle_timeout: float = float(
+            os.environ.get("ICOM_CIV_READY_IDLE_TIMEOUT_S", "5.0")
+        )
+        self._pcm_rx_user_callback: Callable[[bytes | None], None] | None = None
+        self._pcm_rx_jitter_depth: int = 5
+        self._opus_rx_user_callback: Callable[[AudioPacket | None], None] | None = None
+        self._opus_rx_jitter_depth: int = 5
+        # AudioBus — lazy-initialized pub/sub for multi-consumer audio
+        self._audio_bus: Any = None
+        # AudioSession — lazy-initialized radio-owned singleton (MOR-579)
+        self._audio_session: Any = None
+        # Single-flight audio-silence repair task (MOR-3401); None when idle.
+        self._audio_silence_repair_task: asyncio.Task[None] | None = None
+        # Spent silence-repair attempts in the current episode (MOR-3401):
+        # EVERY round consumes one, failed or successful — only real RX
+        # frames (or a new CI-V epoch) close the episode. Reset on
+        # ``rx_resumed`` and on a new connect.
+        self._audio_silence_repair_attempts: int = 0
+        # Silence-episode markers (MOR-3401 r3): the CI-V epoch the episode
+        # began in, the bus RX heartbeat then, and the heartbeat as of the
+        # last settled point (episode open or last task end). A later
+        # ``rx_silent`` opens a new episode only if frames arrived since
+        # the baseline settled or the epoch moved; a successful round never
+        # touches these. Measuring from the settled baseline (not from each
+        # attempt start) absorbs one buffered pre-death frame landing
+        # mid-task: it must neither stop the task nor reopen the episode.
+        self._audio_silence_repair_episode_epoch: int | None = None
+        self._audio_silence_repair_episode_start_heartbeat: float | None = None
+        self._audio_silence_repair_baseline_heartbeat: float | None = None
+        # Monotonic time the last repair-round teardown completed (MOR-3401
+        # r3): the teardown itself flushes jitter-buffered pre-death frames
+        # into the bus, so only heartbeats NEWER than this prove audio
+        # really flows again.
+        self._audio_silence_repair_teardown_completed: float | None = None
+        self._scope_assembler: ScopeAssembler = ScopeAssembler()
+        self._scope_callback: Callable[[ScopeFrame], Any] | None = None
+        # MOR-2222: last scope-display mode published from the waveform
+        # stream, per receiver (0=MAIN, 1=SUB) — lets the stream
+        # change-detect before writing to the StateStore.
+        self._scope_stream_last_mode: dict[int, int] = {}
+        # MOR-2256: last scope-display span index published from the
+        # waveform stream (center mode only), per receiver -- same
+        # change-detect purpose as _scope_stream_last_mode above.
+        self._scope_stream_last_span: dict[int, int] = {}
+        # Raw CI-V pipe listeners (MOR-164): receive inbound on-wire frame bytes.
+        self._raw_civ_listeners: list[Callable[[bytes], Any]] = []
+        # External CAT-session ownership (MOR-166 slice 2): when True, cooperating
+        # pollers pause so they do not pollute an external master's byte stream.
+        self._external_cat_session: bool = False
+        self._external_cat_session_owner: str | None = None
+        self._civ_rx_task: asyncio.Task[None] | None = None
+        self._civ_data_watchdog_task: asyncio.Task[None] | None = None
+        self._audio_watchdog_task: asyncio.Task[None] | None = None
+        self._civ_request_tracker = CivRequestTracker()
+        self._civ_epoch = self._civ_request_tracker.generation
+        self._scope_stream_callbacks: list[Callable[[ScopeFrame], None]] = []
+        self._scope_activity_event = asyncio.Event()
+        self._civ_waiter_ttl_gc_interval: float = 1.0
+        self._civ_last_waiter_gc_monotonic: float = time.monotonic()
+        self._state_cache: StateCache = StateCache()
+        # Canonical state-ingress store exposed via ``state_store``. It is
+        # constructed bare here and does NOT decay on its own (MOR-432):
+        # freshness aging requires a StateFreshnessService wired over this
+        # store and driven by a running loop. In production the web/rigctld
+        # server wires and runs that service against this same store at
+        # startup. Used headless without a server, this store never ages
+        # fields to STALE.
+        self._state_store: StateStore = StateStore()
+        # MOR-2544: last power command the radio ACKed (0xFB), retained
+        # OUTSIDE the StateStore so it survives ``advance_generation``
+        # (watchdog timeout, reconnect attempts, soft reconnects — all clear
+        # the store). Set in ``set_powerstat`` on an accepted command only
+        # (which also observes ``power_on`` into the store from the ACK);
+        # cleared when a routed response reaches the state path or a 0x18
+        # readback arrives (``runtime/_civ_rx.py``) — not by relative-VFO
+        # readbacks (0x00/0x01/0x03/0x04/0x25/0x26 on
+        # ``selected_unselected`` profiles such as IC-7300/IC-705), which
+        # return before that point and clear nothing. The web fallback that
+        # republishes this
+        # attribute while the store is silent never republishes ``True``
+        # from it — only fresh answers prove power on. A process restart
+        # loses it, which reads as an honest unknown.
+        self._last_commanded_powerstat: bool | None = None
+        self._state_model_service: RadioStateModelService | None = None
+        self._state_diagnostics: StateDiagnosticsRecorder | None = None
+        self._on_state_change: Callable[[str, dict[str, Any]], None] | None = (
+            None  # set by server
+        )
+        self._radio_state: RadioState = RadioState()  # may be replaced by WebServer
+        _ttl = {**_DEFAULT_CACHE_TTL, **(cache_ttl_s or {})}
+        self._cache_ttl_freq: float = _ttl["freq"]
+        self._cache_ttl_mode: float = _ttl["mode"]
+        self._cache_ttl_rf_power: float = _ttl["rf_power"]
+        self._profile = resolve_radio_profile(
+            profile=profile,
+            model=model,
+            radio_addr=radio_addr,
+        )
+        # Bound once, at construction (MOR-2003 Step 3,
+        # docs/plans/2026-08-29-profile-driven-command-bytes.md §3.1/§4). A
+        # hand-built profile with no ``command_map`` (e.g. a test fixture
+        # constructed outside ``profiles/rig_loader.py``) and a loaded
+        # profile that declares no CI-V commands both bind an empty
+        # ``CommandMap`` here rather than raising -- construction must
+        # never fail on this. As of Steps 5..N module 1
+        # (`commands/config.py`, MOR-2006), the mod-level/mod-input/CI-V
+        # option getters and setters below are the first call sites to
+        # read ``self._commands``; the rest still migrate module by
+        # module.
+        #
+        # ``absent_command_sources``/``on_undeclared`` implement D1's
+        # undeclared-command policy (step 4b, plan §4 Step 4 / §8.1): this
+        # reads ``RadioProfile.absent_command_sources`` (plain data) and
+        # hands it, plus the logging side effect state 3 needs, to
+        # `commands/bound.py: BoundCommands` -- which imports nothing from
+        # `profiles` and only ever calls the hook it is given, never
+        # `logging` directly (`commands/LAYER.md` bans I/O in `commands/`).
+        self._commands = BoundCommands(
+            self._profile.command_map or CommandMap({}),
+            self._profile.absent_command_sources,
+            on_undeclared=self._log_undeclared_command,
+        )
+        # Apply per-profile codec preference override (#797) — only if caller
+        # accepted the global default. An explicit non-default value always wins.
+        # Limitation kept for compatibility with the historical constructor:
+        # passing the global default codec value is indistinguishable from
+        # omitting it, so profile codec preference may still apply in that case.
+        codec_is_explicit = (
+            audio_codec_explicit is True
+            or AudioCodec(audio_codec) != _DEFAULT_AUDIO_CODEC
+        )
+        sample_rate_is_explicit = (
+            audio_sample_rate_explicit is True
+            or (audio_sample_rate_explicit is None and audio_sample_rate is not None)
+            or "ICOM_AUDIO_SAMPLE_RATE" in os.environ
+        )
+        self._audio_stream_request = resolve_lan_audio_stream_request(
+            profile=self._profile,
+            requested_rx_codec=audio_codec,
+            requested_sample_rate_hz=requested_sample_rate,
+            rx_codec_explicit=codec_is_explicit,
+            sample_rate_explicit=sample_rate_is_explicit,
+        )
+        self._audio_stream_contract = audio_stream_contract_from_request(
+            self._audio_stream_request
+        )
+        self._audio_codec = self._audio_stream_contract.rx_codec
+        self._audio_tx_codec = self._audio_stream_contract.tx_codec
+        self._audio_rx_sample_rate = self._audio_stream_contract.rx_sample_rate_hz
+        self._audio_tx_sample_rate = self._audio_stream_contract.tx_sample_rate_hz
+        self._audio_sample_rate = self._audio_rx_sample_rate
+        self._radio_addr = self._profile.civ_addr if radio_addr is None else radio_addr
+        # GET commands use a shorter timeout than the general connection timeout.
+        # wfview-style: send once, short deadline, fall back to cache.
+        self._civ_get_timeout: float = min(timeout, 2.0)
+        # Composed runtimes (P0 decomposition); order: civ first so control_phase can call it.
+        self._civ_runtime: CivRuntime = CivRuntime(self)
+        self._control_phase: ControlPhaseRuntime = ControlPhaseRuntime(
+            cast("ControlPhaseHost", self)
+        )
+        # Unified session lifecycle (policy layer) over the control-phase packet
+        # mechanism.  ``CoreRadio.connect/disconnect/soft_reconnect/scan`` route
+        # through this so the guaranteed-release + cooldown-aware-retry policy is
+        # owned in one place (design 2026-06-22; task A3).  The resident-retry
+        # bound mirrors the removed legacy wrapper (``_DATA_PORT_COOLDOWN_RETRIES
+        # + 1`` attempts) so an in-process ``CoreRadio`` still surfaces a
+        # ConnectionError on a persistently-unready radio rather than spinning
+        # forever; the longer-lived Pro service uses the lifecycle's resident
+        # default directly.
+        self._session_mechanism: ControlPhaseSessionMechanism = (
+            ControlPhaseSessionMechanism(self._control_phase)
+        )
+        self._session_lifecycle: CoreRadioSessionLifecycle = CoreRadioSessionLifecycle(
+            self._session_mechanism,
+            max_connect_attempts=4,
+            # In-process SDK retry is immediate: the meaningful wait between
+            # attempts is the radio's own keepalive window, and the lifecycle
+            # already RELEASES the (partial) session before each retry, so no
+            # client-side cooldown sleep is needed here.  The within-attempt
+            # conninfo retry pacing for reconnects and not-ready sessions
+            # still lives in ``_connect_once`` (``_STATUS_RETRY_PAUSE``).  The
+            # longer-lived Pro service constructs the lifecycle with the
+            # default 10/30 s cooldowns.
+            not_ready_cooldown_s=0.0,
+            reject_cooldown_s=0.0,
+            # Start-up busy-hold policy (MOR-3391): on the first connect a
+            # profile-selected stereo status-stage busy reject and an
+            # auth-stage busy reject retry with a fresh login after the
+            # reject cooldown, until the start-up budget elapses — unless
+            # a busy reject on an attempt starting at or after first-busy
+            # plus the live-holder threshold proves a LIVE session holds
+            # the radio (part 1b), which stops with the honest busy error.
+            # Later connects keep the immediate attempts above; their
+            # status-stage busy path stays in ``_connect_once``.
+            first_connect_busy_cooldown_s=(ControlPhaseRuntime._STATUS_REJECT_COOLDOWN),
+            first_connect_busy_budget_s=(
+                ControlPhaseRuntime.STARTUP_BUSY_HOLD_BUDGET_S
+            ),
+            first_connect_busy_live_holder_after_s=(
+                ControlPhaseRuntime.STARTUP_BUSY_LIVE_HOLDER_AFTER_S
+            ),
+            # Recovery backoff is ZERO for the in-process CoreRadio (A4): the
+            # CI-V data watchdog already spends its patient OpenClose phase
+            # (~``_OPENCLOSE_DEADLINE`` = 60 s) BEFORE handing off to this
+            # RECOVERING loop, and ``soft_reconnect`` rebuilds the data path
+            # within one attempt.  A second 45/60 s lifecycle backoff per attempt
+            # would double-count that wait and stall the fast-recovery poller /
+            # direct ``soft_reconnect()`` callers.  The lifecycle still owns the
+            # attempt COUNT + exhaustion → CLOSING + release (single owner); only
+            # the inter-attempt sleep is collapsed.  The longer-lived Pro service
+            # constructs the lifecycle with the default ``_RECONNECT_BACKOFF``.
+            recovery_backoff_s=(0.0, 0.0, 0.0),
+        )
+        self._session_lifecycle.add_event_listener(self._on_session_lifecycle_event)
+        self._audio_runtime: AudioRecoveryRuntime = AudioRecoveryRuntime(self)
+        # Managed TX supervisor (MOR-1016).  Built once, by the first
+        # ``connect()`` that reaches ``_arm_managed_tx`` — never here: arming
+        # needs a live ``_civ_transport`` to capture, which does not exist
+        # until the control phase has run.  From that point on the member is
+        # non-None for the life of the radio: a failed arm degrades it to
+        # NOT_READY, never back to ``None`` (see ``_arm_managed_tx``).
+        self._managed_tx_runtime: ManagedRadioRuntime | None = None
+        self._managed_tx_composition: ManagedTxCompositionPort | None = None
+        self._local_tx_work: LocalTxWorkRunner | None = None
+        # CI-V epoch the last arming attempt was made against; ``None`` until
+        # the first attempt.  Bounds arming to one attempt per epoch.
+        self._managed_tx_armed_epoch: int | None = None
+        # Identity of the port the runtime is bound to, recorded the moment
+        # ``replace_provider`` captured it: (provider generation, CI-V epoch,
+        # transport).  Never cleared — every way a binding dies moves one of
+        # the three (see ``_managed_tx_binding_is_live``).
+        self._managed_tx_bound_port: tuple[int | None, int, object] | None = None
+        # Serialises the arming steps, so two callers cannot both find the
+        # binding dead and both replace the provider.
+        self._managed_tx_arm_lock = asyncio.Lock()
+        # Typed identity of the radio that answered on the link. Information
+        # only: nothing waits for it and nothing is refused because of it.
+        self._connection_identity: RadioIdentity | None = None
+        self._identity_read_task: asyncio.Task[None] | None = None
+        # True while a connect found the radio silent on CI-V: its tail waits.
+        self._connect_tail_pending: bool = False
+        self._connect_tail_task: asyncio.Task[None] | None = None
+        self._connect_lock = asyncio.Lock()
+
+    # Host shims for ControlPhaseRuntime and Icom7610SerialRadio (delegate to civ_runtime)
+    def _advance_civ_generation(self, reason: str) -> None:
+        self._civ_runtime.advance_generation(reason)
+
+    def _start_civ_rx_pump(self) -> None:
+        self._civ_runtime.start_pump()
+
+    async def _stop_civ_rx_pump(self) -> None:
+        await self._civ_runtime.stop_pump()
+
+    def _start_civ_data_watchdog(self) -> None:
+        self._civ_runtime.start_data_watchdog()
+
+    async def _stop_civ_data_watchdog(self) -> None:
+        await self._civ_runtime.stop_data_watchdog()
+
+    def _start_audio_watchdog(self) -> None:
+        if self._audio_watchdog_task is None or self._audio_watchdog_task.done():
+            self._audio_watchdog_task = asyncio.create_task(
+                self._audio_watchdog_loop(), name="audio-error-watchdog"
+            )
+
+    async def _stop_audio_watchdog(self) -> None:
+        task = self._audio_watchdog_task
+        if task is not None and not task.done():
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+        self._audio_watchdog_task = None
+
+    async def _audio_watchdog_loop(self) -> None:
+        await _reconnect.audio_error_watchdog_loop(self)
+
+    def _start_civ_worker(self) -> None:
+        self._civ_runtime.start_worker()
+
+    async def _stop_civ_worker(self) -> None:
+        await self._civ_runtime.stop_worker()
+
+    def __del__(self) -> None:
+        """Emit WARN if instance is collected while still connected (forgotten teardown)."""
+        try:
+            if self._conn_state == RadioConnectionState.CONNECTED:
+                logger.warning(
+                    "Radio collected with active connection/tasks; "
+                    "ensure disconnect() or async with is used."
+                )
+        except Exception:
+            pass  # avoid raising in destructor
+
+    @property
+    def conn_state(self) -> RadioConnectionState:
+        """Current connection state."""
+        return self._conn_state
+
+    @property
+    def connected(self) -> bool:
+        """Healthy CI-V transport on a connected session."""
+        if self._conn_state != RadioConnectionState.CONNECTED:
+            return False
+        civ = self._civ_transport
+        if civ is None:
+            return False
+        # Check for UDP errors (only on real IcomTransport, not mocks).
+        # A single transient EAGAIN/EWOULDBLOCK should not latch the socket
+        # into a "disconnected" state — only treat the transport as unhealthy
+        # after repeated errors.  The counter counts consecutive errors;
+        # IcomTransport._handle_packet zeroes it on every inbound datagram,
+        # and soft_reconnect zeroes it for a fresh session.
+        error_count = getattr(civ, "_udp_error_count", None)
+        if isinstance(error_count, int) and error_count >= _UDP_ERROR_THRESHOLD:
+            return False
+        return True
+
+    @property
+    def control_connected(self) -> bool:
+        """Whether the control transport is alive (LAN session active)."""
+        ctrl = self._ctrl_transport
+        if ctrl is None:
+            return False
+        return getattr(ctrl, "_udp_transport", None) is not None
+
+    @property
+    def connection_identity(self) -> RadioIdentity | None:
+        """Typed identity of the radio that answered on the link (MOR-3064)."""
+        return self._connection_identity
+
+    @property
+    def startup_busy_hold_event(self) -> asyncio.Event:
+        """Set while the first connect waits out a busy reject (MOR-3391).
+
+        Read-only for consumers: wait on it or probe ``is_set()``, never
+        set or clear it. The session lifecycle sets it when the first
+        connect enters the SESSION_BUSY_REJECT cooldown and clears it on
+        CONNECTED/DISCONNECTED; reconnect busy rejects never set it.
+        Lets start-up serve not-ready while the same connect keeps running.
+        """
+        return self._session_lifecycle.startup_busy_hold_event
+
+    @property
+    def startup_busy_hold_retry_in_seconds(self) -> float | None:
+        """The live cooldown remainder while one runs, else the hold's
+        cooldown between two busy passes; ``None`` when no hold is
+        active. Read through the private session lifecycle — this module
+        owns that layer, so no upper layer has to.
+        """
+        return self._session_lifecycle.startup_busy_hold_retry_in_seconds
+
+    @property
+    def remote_control_unreachable(self) -> bool:
+        """Whether the radio's host is reachable but its CI-V/remote-control
+        network server is not accepting the session.
+
+        After a radio power-cycle the IP comes back up (pings/ARP resolve) but
+        the CI-V network server on the control/CI-V UDP port may not be
+        listening yet.  On a *connected* UDP socket the kernel surfaces the
+        peer's ICMP port-unreachable as ``error_received`` (e.g.
+        ``[Errno 32] Broken pipe`` / ``[Errno 111] Connection refused``), which
+        increments ``_udp_error_count``.  A truly unreachable host produces no
+        ICMP at all — sends simply time out and the error counter stays at 0.
+
+        This property is therefore True when the control transport socket is
+        open (so the host route exists) and has consecutive port-unreachable
+        errors while the session is not established — i.e. the remote-control
+        server is refusing/ignoring us rather than the network being gone.
+        """
+        if self._conn_state == RadioConnectionState.CONNECTED:
+            return False
+        ctrl = self._ctrl_transport
+        if ctrl is None:
+            return False
+        # Socket open == route to host exists (or recently existed); a closed
+        # socket means we never got that far.
+        if getattr(ctrl, "_udp_transport", None) is None:
+            return False
+        error_count = getattr(ctrl, "_udp_error_count", 0)
+        return isinstance(error_count, int) and error_count >= _UDP_ERROR_THRESHOLD
+
+    @property
+    def radio_ready(self) -> bool:
+        """Whether CI-V stream is healthy enough for client operations."""
+        if not self.connected:
+            return False
+        if self._civ_recovering or not self._civ_stream_ready:
+            return False
+        last = getattr(self, "_last_civ_data_received", None)
+        if not isinstance(last, (int, float)):
+            return False
+        return (time.monotonic() - float(last)) <= self._civ_ready_idle_timeout
+
+    #: MOR-3845: liveness source label for the ``connection.liveness`` web
+    #: field — this backend family talks to the radio directly.
+    liveness_source = "radio"
+
+    @property
+    def liveness_stale_after_ms(self) -> int:
+        """MOR-3845: age at which ``last_valid_frame_monotonic`` is stale.
+
+        Derived from the backend's own ready/idle timeout
+        (``_civ_ready_idle_timeout``): the same window ``radio_ready``
+        grants a quiet but healthy CI-V stream, so quiet RX and sustained
+        TX (meters keep flowing) stay below it.
+        """
+        return int(self._civ_ready_idle_timeout * 1000)
+
+    @property
+    def managed_tx(self) -> ManagedTxSupervisor | None:
+        """The radio's managed TX supervisor, or ``None`` when unmanaged.
+
+        Structural implementation of
+        :class:`~rigplane.core.radio_protocol.ManagedTxCapable`: a real class
+        member, never conjured through ``__getattr__``, so
+        :meth:`~rigplane.core.radio_protocol.ManagedTxApi.bind`'s
+        ``getattr_static`` read finds it. ``None`` outside a connect session —
+        before the first ``connect()`` and again after :meth:`disconnect` —
+        where every ingress keeps using the legacy :meth:`set_ptt` path.
+        Within one, from :meth:`_arm_managed_tx` to teardown, this answers that
+        session's runtime for good, whether or not the arming succeeded:
+        a rig whose provider never came ready refuses keys with ``NOT_READY``
+        rather than reverting to an unsupervised write (MOR-1193).
+        """
+        composition = self._managed_tx_composition
+        return (
+            composition.legacy_supervisor
+            if composition is not None
+            else self._managed_tx_runtime
+        )
+
+    def install_managed_tx_composition(
+        self, composition: ManagedTxCompositionPort
+    ) -> None:
+        if self._managed_tx_composition is not None:
+            raise RuntimeError("managed TX composition is already installed")
+        if self._managed_tx_runtime is not None or self._conn_state is not (
+            RadioConnectionState.DISCONNECTED
+        ):
+            raise RuntimeError(
+                "managed TX composition must be installed before connect"
+            )
+        self._managed_tx_composition = composition
+
+    @property
+    def tx_snapshot(self) -> "TxSafetySnapshot | None":
+        """Current managed TX state, or ``None`` when no runtime exists yet.
+
+        Read-only passthrough to the supervisor's snapshot so presentation
+        (MOR-1015) can render *why* a key was refused — unarmed provider,
+        someone else's lease, a rig that is not observably OFF — without
+        reaching into ``_managed_tx_runtime`` or re-deriving TX state from
+        the legacy poller's PTT mirror.
+        """
+        runtime = self._managed_tx_runtime
+        return None if runtime is None else runtime.tx_snapshot
+
+    @property
+    def _managed_tx_target_id(self) -> str:
+        """Stable identity of the physical rig this radio's TX runtime owns.
+
+        One managed runtime supervises one rig, so the id has to separate two
+        radios that a single process holds at once and stay the same across
+        that rig's reconnects. For a LAN radio that is the backend family plus
+        the CI-V endpoint (``_host`` is the rig's address and ``_civ_port`` the
+        data port the control phase negotiated); serial radios carry the OS
+        device path instead, since ``_IcomSerialRadioBase`` passes the device
+        as ``host`` with no ports at all and ``f"…:{host}:0"`` would read as a
+        LAN rig on port zero. That branch is inert today — the serial backend
+        overrides ``connect()`` without calling ``super()``, so nothing arms
+        it (MOR-1219) — and exists so the id is right the day it does.
+        """
+        device = getattr(self, "_serial_device", None)
+        if isinstance(device, str) and device:
+            return f"serial:{device}"
+        return f"{self.backend_id}:{self._host}:{self._civ_port}"
+
+    async def _managed_tx_provider_answers_ptt(self) -> bool:
+        """Ask the rig for PTT once, unmanaged, before any port is captured.
+
+        The guard on the retirement trap. ``request_fresh_ptt`` treats "the
+        provider could not prove PTT state" as grounds to retire the managed
+        port, and ``CivRuntime.retire_managed_tx_port`` implements retirement
+        by advancing the CI-V epoch and **disconnecting the transport itself**
+        — correct for a port that was armed and is now suspect, catastrophic
+        for one that failed its very first read: it would close the CI-V
+        socket ``connect()`` opened moments earlier and hand the caller back a
+        radio that reports ``connected is False``.
+
+        So the rig proves it answers ``0x1C 0x00`` on the ordinary command
+        path first, where a timeout costs one ``CommandError`` and nothing
+        else. Only then is the runtime given a port it can retire. A rig that
+        does not implement the command — or is not answering at all — never
+        reaches step 2, and keeps its session.
+
+        This narrows the trap rather than closing it: a rig that answers the
+        probe and then drops the seed reply still loses the socket. Closing it
+        for good means teaching either ``request_fresh_ptt`` or
+        ``retire_managed_tx_port`` that an unarmed port is not a suspect one,
+        which is a change to modules this PR does not touch.
+        """
+        civ = build_civ_frame(self._radio_addr, CONTROLLER_ADDR, 0x1C, sub=0x00)
+        try:
+            await self._send_civ_expect(
+                civ, label="managed_tx_ptt_probe", timeout=_MANAGED_TX_PROBE_TIMEOUT_S
+            )
+        except Exception:
+            return False
+        return True
+
+    def _managed_tx_binding_is_live(self) -> bool:
+        """Whether the runtime's provider is bound to *this* CI-V port, now.
+
+        The one question a re-arm may key off, and the reason
+        ``_managed_tx_armed_epoch`` cannot answer it: that marker is written
+        before arming's first await, and arming's own retirement step can
+        advance the CI-V epoch before the capture that follows it. A perfectly
+        successful arm can therefore leave the marker one epoch behind a live
+        binding — at which point an epoch-keyed guard waves the *next* caller
+        through into exactly the second ``replace_provider`` this exists to
+        prevent, one call later than the naive case. That second call retires a
+        current port, and retirement advances the generation and disconnects
+        the transport, so the redundant re-arm is what breaks the connection
+        the reconnect just repaired.
+
+        The three facts recorded at capture are compared against the live ones
+        instead, which is also why nothing has to clear them: a retirement
+        advances the supervisor's provider generation, a CI-V recovery advances
+        the epoch, and a rebuilt data path replaces the transport object. Any
+        one of the three moving means the recorded port is no longer the bound
+        one, and the answer flips to "re-arm" on its own.
+        """
+        runtime, bound = self._managed_tx_runtime, self._managed_tx_bound_port
+        if runtime is None or bound is None or self._civ_transport is None:
+            return False
+        generation, epoch, transport = bound
+        return (
+            transport is self._civ_transport
+            and epoch == self._civ_epoch
+            and generation == runtime.tx_snapshot.provider_generation
+        )
+
+    async def rearm_managed_tx(self) -> None:
+        """Re-arm managed TX after a repaired CI-V path. The sole re-arm path.
+
+        Every consumer that used to reach for ``replace_provider`` of its own
+        accord routes here instead — the control phase ahead of its reconnect
+        callbacks, the Web recovery hook behind them — and exactly one of them
+        does the work: a caller that finds the provider already bound to the
+        live port returns having touched nothing. That no-op is the point.
+        Rebinding is not idempotent, and the cost of the redundant call is not
+        a wasted round trip but the transport itself
+        (:meth:`_managed_tx_binding_is_live`).
+
+        Past the guard this is arming unchanged — probe, capture, seed, and the
+        same degradation: a rig that cannot be supervised keeps its published
+        runtime and refuses TX rather than falling back to the unsupervised
+        legacy write (MOR-1193). Failures never propagate, so a caller on a
+        recovery path can await it without guarding.
+
+        A radio with no CI-V transport is not re-armable at all, and that is
+        what makes a disconnected one inert: :meth:`disconnect` clears the
+        runtime, so a re-arm that ran anyway would *build a second one* and
+        republish ``managed_tx`` on a radio with nothing to bind it to — a
+        supervisor whose port was captured from a closed session, which is a
+        worse answer than the honest ``None``. Only ``connect()`` brings a
+        runtime back.
+        """
+        composition = self._managed_tx_composition
+        if composition is not None:
+            async with self._managed_tx_arm_lock:
+                transport = self._civ_transport
+                if transport is not None:
+                    await composition.transport_ready(transport)
+            return
+        if self._civ_transport is None or self._managed_tx_binding_is_live():
+            return
+        async with self._managed_tx_arm_lock:
+            # Re-checked under the lock: the holder this caller queued behind
+            # may have been the one that armed the very port it came to replace.
+            if not self._managed_tx_binding_is_live():
+                await self._run_managed_tx_arm()
+
+    async def _arm_managed_tx(self) -> None:
+        """Arm managed TX from ``connect()``, once per CI-V epoch.
+
+        The epoch bound belongs to this entry point, not to the arming steps:
+        a fresh connect is the one caller with nothing to compare a binding
+        against, so "have I already tried on this epoch" is the only cheap
+        question it can ask. Re-arm callers ask a sharper one — see
+        :meth:`rearm_managed_tx`.
+
+        ``RIGPLANE_MANAGED_TX=0`` stops this short of building anything, so
+        ``managed_tx`` stays ``None`` and every ingress keeps the legacy
+        unsupervised ``set_ptt`` path. The check itself lives one level down,
+        in :meth:`_run_managed_tx_arm`, because that is the sole construction
+        site and ``rearm_managed_tx`` reaches it too — a gate here alone would
+        let the first CI-V recovery arm the radio the operator switched off.
+
+        **Naming trap (R9):** the CLI's ``--managed`` flag and the
+        ``args.managed_runtime`` namespace it sets select the *local station
+        runtime* (web host binding, bundled rigctld) and have nothing whatever
+        to do with managed TX. ``RIGPLANE_MANAGED_TX`` is the only managed-TX
+        switch; neither reads the other.
+        """
+        composition = self._managed_tx_composition
+        if composition is not None:
+            async with self._managed_tx_arm_lock:
+                transport = self._civ_transport
+                if transport is not None:
+                    await composition.transport_ready(transport)
+            return
+        async with self._managed_tx_arm_lock:
+            if self._managed_tx_armed_epoch != self._civ_epoch:
+                await self._run_managed_tx_arm()
+
+    async def _run_managed_tx_arm(self) -> None:
+        """Build, bind and seed the managed TX runtime for this CI-V epoch.
+
+        Four steps, all of which must land before a key is allowed:
+
+        1. construct the runtime — once per *connect session*, never per arm,
+           so every ingress that already bound a facade keeps pointing at the
+           same supervisor across a reconnect, a re-arm or a soft_disconnect.
+           The session, not the radio, is the bound: :meth:`disconnect` shuts
+           the runtime down and clears it (PR4), and the next ``connect()``
+           builds a new one. A fresh runtime's provider generations start again
+           at 1, which is why teardown also clears the CI-V layer's
+           generation-keyed registry — marks left by the previous session would
+           otherwise read as this one's and fail every arm from here on
+           (:meth:`~rigplane.runtime._civ_rx.CivRuntime.reset_managed_tx_generations`);
+        2. prove the rig answers PTT reads at all
+           (:meth:`_managed_tx_provider_answers_ptt`) — the guard that keeps a
+           failed arm from costing the CI-V session;
+        3. ``replace_provider(ready=True)`` — captures the *current* CI-V
+           transport as the managed port, which is why this runs at the end of
+           ``connect()`` and never in ``__init__``;
+        4. ``request_fresh_ptt()`` — one CI-V ``0x1C 0x00`` whose answer seeds
+           the authoritative OFF observation. Not optional and not cosmetic:
+           nothing polls PTT periodically, and ``request_on`` refuses with
+           ``RADIO_NOT_OFF`` until an observation exists, so a runtime armed
+           without this step can never key at all.
+
+        Failure at any step never propagates: a rig that cannot supervise TX
+        must still be usable for RX, tuning and audio. It degrades to
+        provider-not-ready and *stays published* — dropping the runtime would
+        hand the next key to the legacy unsupervised ``set_ptt`` with no lease,
+        no owner and no watchdog, which is the exact bypass MOR-1193 closed.
+
+        Serialised by ``_managed_tx_arm_lock``, so the steps below never
+        interleave with a second attempt. A step-4 failure retires the managed
+        port, which advances the epoch by itself — so the radio is immediately
+        eligible for a fresh attempt on the next ``connect()``/rearm rather
+        than being latched off for good.
+
+        Ahead of all four sits the kill switch. ``RIGPLANE_MANAGED_TX=0``
+        returns before the construction, so there is no runtime to publish and
+        ``managed_tx`` answers ``None`` — which every ingress already reads as
+        "unmanaged" and routes around, back to the legacy ``set_ptt`` write.
+        That is a different thing from a failed arm, which keeps the runtime
+        and refuses keys, and it is deliberately the louder of the two: a
+        failed arm is the rig's doing and the operator gets refusals to show
+        for it, while this one silently removes the lease, the owner and the
+        watchdog from every key on the radio. So it warns on every connect for
+        as long as it is set, and the marker below stays unwritten so a later
+        connect made with the switch back on arms normally.
+        """
+        if not get_managed_tx_enabled():
+            logger.warning(
+                "managed TX disabled by RIGPLANE_MANAGED_TX for %s: TX falls "
+                "back to the legacy unsupervised set_ptt path — no lease, no "
+                "owner, no keep-alive watchdog. Unset the variable to restore "
+                "supervision. (Unrelated to the CLI's --managed flag.)",
+                self._managed_tx_target_id,
+            )
+            return
+        self._managed_tx_armed_epoch = self._civ_epoch
+        runtime = self._managed_tx_runtime
+        if runtime is None:
+            runtime = ManagedRadioRuntime(
+                self._managed_tx_target_id,
+                service_factory=managed_tx_effect_service,
+                provider_lifecycle=self,
+            )
+            self._managed_tx_runtime = runtime
+        step = "ptt_probe"
+        try:
+            if await self._managed_tx_provider_answers_ptt():
+                step = "replace_provider"
+                bound = (await runtime.replace_provider(ready=True)).snapshot
+                if bound.provider_ready:
+                    # Identity of the port just captured, for the re-arm guard.
+                    # Recorded here rather than inside
+                    # ``_capture_managed_tx_port`` so a backend that overrides
+                    # that lifecycle hook cannot silently lose it.
+                    self._managed_tx_bound_port = (
+                        bound.provider_generation,
+                        self._civ_epoch,
+                        self._civ_transport,
+                    )
+                    step = "request_fresh_ptt"
+                    if (await runtime.request_fresh_ptt()).outcome is TxOutcome.APPLIED:
+                        return
+            logger.error(
+                "managed TX arming for %s did not complete at %s; TX stays "
+                "refused until a later connect re-arms it",
+                runtime.target_id,
+                step,
+            )
+        except Exception:
+            logger.error(
+                "managed TX arming for %s raised at %s; TX stays refused until "
+                "a later connect re-arms it",
+                runtime.target_id,
+                step,
+                exc_info=True,
+            )
+        # Degrade, never disappear.  A step-4 failure has already retired the
+        # port and marked the (new) provider not-ready, so this is a no-op
+        # there; the probe and capture paths need it stated explicitly.
+        try:
+            await runtime.set_provider_ready(ready=False)
+        except Exception:
+            logger.debug(
+                "managed TX degrade-to-not-ready failed for %s",
+                runtime.target_id,
+                exc_info=True,
+            )
+
+    async def _shutdown_managed_tx(self) -> None:
+        """Stop supervised TX while the CI-V path can still carry the OFF.
+
+        Ordered ahead of the session teardown in :meth:`disconnect` for the one
+        reason that matters: ``shutdown`` emergency-releases a held lease, and
+        a WRITE_OFF issued after the transport is gone is a rig left keyed with
+        nobody watching it. Bounded for the mirror-image reason — a supervisor
+        wedged on a rig that stopped answering must not hold ``disconnect()``
+        open, since closing the socket is itself the de-key of last resort.
+        The runtime shields its own shutdown task, so the bound abandons the
+        wait rather than the release: the OFF keeps trying behind us.
+
+        Clearing the three managed-TX members afterwards is the other half of
+        the MOR-1193 invariant, not a weakening of it. "Managed-eligible means
+        ``managed_tx`` is never ``None``" holds *from connect to disconnect*;
+        past disconnect there is no session to supervise, and the next
+        ``connect()`` arms a fresh runtime. Keeping this one published would
+        advertise a supervisor over a closed port — and leave the re-arm path
+        able to rebuild a binding for a rig that is gone.
+
+        Dropping the runtime is also what restarts its provider-generation
+        counter, which the CI-V layer uses as a registry key — so the session's
+        entries there have to go with it, or session 2's generation 1 collides
+        with session 1's and every arm from here on fails
+        (:meth:`~rigplane.runtime._civ_rx.CivRuntime.reset_managed_tx_generations`).
+        Ordered inside the ``finally`` with the members it belongs to, so a
+        shutdown that timed out or raised still leaves a connectable radio.
+        """
+        composition = self._managed_tx_composition
+        if composition is not None:
+            async with self._managed_tx_arm_lock:
+                transport = self._civ_transport
+                if transport is not None:
+                    await composition.transport_unavailable(transport)
+            return
+        runtime = self._managed_tx_runtime
+        if runtime is None:
+            return
+        try:
+            await asyncio.wait_for(
+                runtime.shutdown(
+                    release_provider=_managed_tx_provider_released_by_disconnect
+                ),
+                timeout=_MANAGED_TX_TEARDOWN_TIMEOUT_S,
+            )
+        except asyncio.TimeoutError:
+            logger.error(
+                "managed TX shutdown for %s did not settle within %.1fs; "
+                "disconnecting anyway — the rig may still be keyed",
+                runtime.target_id,
+                _MANAGED_TX_TEARDOWN_TIMEOUT_S,
+            )
+        except Exception:
+            logger.error(
+                "managed TX shutdown for %s failed; disconnecting anyway",
+                runtime.target_id,
+                exc_info=True,
+            )
+        finally:
+            self._managed_tx_runtime = None
+            self._managed_tx_bound_port = None
+            self._managed_tx_armed_epoch = None
+            self._civ_runtime.reset_managed_tx_generations()
+
+    async def _park_managed_tx(self) -> None:
+        """Refuse keys for the length of a CI-V gap, without unpublishing.
+
+        ``soft_disconnect`` takes the data path down and expects it back, so
+        the runtime outlives it — but in between, a lease granted on the
+        strength of a provider still marked ready would have its WRITE_ON land
+        on a socket that is already closing, which is a key the supervisor
+        believes in and the rig never saw. Marking the provider not-ready first
+        makes ``request_on`` answer ``NOT_READY`` for the length of the gap,
+        and turns a lease held across it into the release that
+        :meth:`rearm_managed_tx` services against the repaired port.
+
+        Bounded and fail-soft: a gate that will not shut is not a reason to
+        refuse to tear down the path it guards.
+        """
+        composition = self._managed_tx_composition
+        if composition is not None:
+            async with self._managed_tx_arm_lock:
+                transport = self._civ_transport
+                if transport is not None:
+                    await composition.transport_unavailable(transport)
+            return
+        runtime = self._managed_tx_runtime
+        if runtime is None:
+            return
+        try:
+            await asyncio.wait_for(
+                runtime.set_provider_ready(ready=False),
+                timeout=_MANAGED_TX_TEARDOWN_TIMEOUT_S,
+            )
+        except Exception:
+            logger.warning(
+                "managed TX did not park for %s ahead of soft_disconnect",
+                runtime.target_id,
+                exc_info=True,
+            )
+
+    # ------------------------------------------------------------------
+    # Backwards-compatible property shims for _connected / _intentional_disconnect
+    # (used by tests and internal loops — keep in sync with _conn_state)
+    # ------------------------------------------------------------------
+
+    @property
+    def _connected(self) -> bool:
+        return self._conn_state == RadioConnectionState.CONNECTED
+
+    @_connected.setter
+    def _connected(self, value: bool) -> None:
+        if value:
+            self._conn_state = RadioConnectionState.CONNECTED
+        elif self._conn_state == RadioConnectionState.CONNECTED:
+            self._conn_state = RadioConnectionState.DISCONNECTED
+
+    @property
+    def _intentional_disconnect(self) -> bool:
+        return self._conn_state == RadioConnectionState.DISCONNECTED
+
+    @_intentional_disconnect.setter
+    def _intentional_disconnect(self, value: bool) -> None:
+        if value:
+            self._conn_state = RadioConnectionState.DISCONNECTED
+        elif self._conn_state == RadioConnectionState.DISCONNECTED:
+            # Clearing intentional disconnect means reconnect is allowed.
+            self._conn_state = RadioConnectionState.RECONNECTING
+
+    @property
+    def state_cache(self) -> StateCache:
+        """Last-known radio state cache (frequency, mode, PTT, meters).
+
+        Updated from both explicit GET responses and unsolicited CI-V frames
+        (e.g. VFO knob turns).  Callers can read this directly for a
+        non-blocking snapshot of recent state.
+        """
+        return self._state_cache
+
+    @property
+    def state_store(self) -> StateStore:
+        """Canonical confirmed-observation store for runtime state ingress."""
+
+        return self._state_store
+
+    @property
+    def state_model_service(self) -> "RadioStateModelService | None":
+        """Optional StateStore freshness/acquisition service for consumers."""
+
+        return self._state_model_service
+
+    @state_model_service.setter
+    def state_model_service(self, service: "RadioStateModelService | None") -> None:
+        self._state_model_service = service
+
+    @property
+    def radio_state(self) -> RadioState:
+        """Dual-receiver state snapshot (MAIN + SUB receivers, PTT, etc.).
+
+        Populated by the CI-V RX stream.  May be replaced by
+        :class:`~rigplane.web.server.WebServer` with a shared instance.
+        """
+        return self._radio_state
+
+    @property
+    def audio_bus(self) -> Any:
+        """Lazy-initialized AudioBus for pub/sub audio distribution."""
+        if self._audio_bus is None:
+            from rigplane.audio.bus import AudioBus
+
+            self._audio_bus = AudioBus(self)
+        return self._audio_bus
+
+    @property
+    def audio_session(self) -> Any:
+        """Lazy-initialized radio-owned AudioSession singleton (MOR-579).
+
+        ONE session per radio, shared by every consumer (bridge, web TX
+        handler, poller PTT hooks) so the TX refcount can never split
+        across independent sessions. Wraps the shared :attr:`audio_bus`.
+        """
+        if self._audio_session is None:
+            from rigplane.audio.session import AudioSession
+
+            self._audio_session = AudioSession(self)
+            self._audio_session.add_listener(self._on_audio_session_event)
+        return self._audio_session
+
+    def _on_audio_session_event(self, event: Any) -> None:
+        """AudioSession listener: repair a LAN audio-only death (MOR-3401).
+
+        Schedules ONE bounded repair task per ``rx_silent`` episode, where
+        an episode is defined by REAL RX frames — not by call success. The
+        observable is the bus RX heartbeat
+        (``AudioBus.last_rx_frame_monotonic``, the same timestamp
+        ``AudioSession._check_liveness_locked`` reads): a later
+        ``rx_silent`` opens a NEW episode with a fresh budget only if an RX
+        frame arrived since the baseline settled (episode open or last task
+        end), or the CI-V epoch moved since the episode began; otherwise
+        it is the SAME episode and the attempt count continues. Measuring
+        from the settled baseline absorbs one buffered pre-death frame
+        landing mid-task. A round whose ``reestablish()`` succeeds
+        therefore never resets the budget — only frames (or a new epoch)
+        do — so a leg that re-arms but stays frameless still caps
+        at 3 attempts with one FAILED instead of looping forever. A second
+        ``rx_silent`` while the task runs schedules nothing.
+        ``rx_resumed`` is itself frame-based so it still ends the episode,
+        but only once its repair task is done: a stray resumed edge (e.g. a
+        buffered frame landing mid-repair) must not fund an extra round.
+        Non-LAN backends never schedule: serial Icom inherits this listener
+        but owns USB audio (``backend_id`` ``"icom_serial"``), while Yaesu
+        and rigctld are separate classes outside this path entirely.
+        """
+        reason = event.reason
+        if reason == "rx_resumed":
+            task = self._audio_silence_repair_task
+            if task is None or task.done():
+                self._audio_silence_repair_attempts = 0
+                self._audio_silence_repair_episode_epoch = self._civ_epoch
+                heartbeat = self._silence_repair_rx_heartbeat()
+                self._audio_silence_repair_episode_start_heartbeat = heartbeat
+                self._audio_silence_repair_baseline_heartbeat = heartbeat
+                self._audio_silence_repair_teardown_completed = None
+            return
+        if reason != "rx_silent":
+            return
+        if self.backend_id != "rigplane":
+            return
+        task = self._audio_silence_repair_task
+        if task is not None and not task.done():
+            return
+        heartbeat = self._silence_repair_rx_heartbeat()
+        frames_since_settled = (
+            heartbeat is not None
+            and heartbeat != self._audio_silence_repair_baseline_heartbeat
+        )
+        epoch_moved = self._civ_epoch != self._audio_silence_repair_episode_epoch
+        if (
+            self._audio_silence_repair_attempts == 0
+            or frames_since_settled
+            or epoch_moved
+        ):
+            self._audio_silence_repair_attempts = 0
+            self._audio_silence_repair_episode_epoch = self._civ_epoch
+            self._audio_silence_repair_episode_start_heartbeat = heartbeat
+            self._audio_silence_repair_baseline_heartbeat = heartbeat
+        if self._silence_repair_budget_spent():
+            return
+        if not self._silence_repair_preconditions_ok(
+            self._civ_epoch,
+            self._owner_stop_epoch,
+        ):
+            return
+        self._audio_silence_repair_task = asyncio.get_running_loop().create_task(
+            self._run_audio_silence_repair(
+                civ_epoch=self._civ_epoch,
+                owner_stop_epoch=self._owner_stop_epoch,
+            ),
+            name="audio-silence-repair",
+        )
+
+    def _silence_repair_rx_heartbeat(self) -> float | None:
+        """Bus RX heartbeat: monotonic stamp of the last arrived RX frame.
+
+        The same observable ``AudioSession._check_liveness_locked`` reads
+        (``AudioBus.last_rx_frame_monotonic``); None when no frame ever
+        arrived or the session is gone.
+        """
+        session = self._audio_session
+        if session is None:
+            return None
+        return session._bus.last_rx_frame_monotonic
+
+    def _silence_repair_silence_over(self) -> bool:
+        """RX frames resumed and are still flowing: stop without teardown.
+
+        Newer than the episode start is not enough — one buffered
+        pre-death frame landing mid-task, or the teardown's own
+        jitter-buffer flush, must not stop the repair. Only a heartbeat
+        that is both newer than the last teardown completion and fresher
+        than the session's own silence definition
+        (``RX_LIVENESS_TIMEOUT_S``, the same threshold
+        ``AudioSession._check_liveness_locked`` applies) proves audio
+        really flows again.
+        """
+        from rigplane.audio.session import RX_LIVENESS_TIMEOUT_S
+
+        heartbeat = self._silence_repair_rx_heartbeat()
+        if heartbeat is None:
+            return False
+        reference = self._audio_silence_repair_episode_start_heartbeat
+        completed = self._audio_silence_repair_teardown_completed
+        if completed is not None and (reference is None or completed > reference):
+            reference = completed
+        if reference is None or heartbeat <= reference:
+            return False
+        return time.monotonic() - heartbeat < RX_LIVENESS_TIMEOUT_S
+
+    def _silence_repair_preconditions_ok(
+        self, civ_epoch: int, owner_stop_epoch: int
+    ) -> bool:
+        """Whether the silence repair may (still) run for a trigger episode.
+
+        RX demand must still be held, the radio must be CONNECTED (not
+        RECONNECTING or mid soft-reconnect), and the CI-V / owner-stop epochs must still name the
+        trigger generation — any reconnect or owner stop since then aborts.
+        """
+        session = self._audio_session
+        return bool(
+            session is not None
+            and session.rx_demand > 0
+            and self._conn_state is RadioConnectionState.CONNECTED
+            and self._civ_epoch == civ_epoch
+            and self._owner_stop_epoch == owner_stop_epoch
+        )
+
+    def _silence_repair_budget_spent(self) -> bool:
+        """This silence episode already used every repair attempt."""
+        attempts = self._audio_silence_repair_attempts
+        return attempts >= self._LAN_AUDIO_SILENCE_REPAIR_ATTEMPTS
+
+    def _silence_repair_backoff_s(self) -> float:
+        """Backoff before the next retry (1 s, then 2 s)."""
+        backoff = self._LAN_AUDIO_SILENCE_REPAIR_BACKOFF_S
+        step = min(self._audio_silence_repair_attempts - 1, len(backoff) - 1)
+        return backoff[step]
+
+    async def _run_audio_silence_repair(
+        self, *, civ_epoch: int, owner_stop_epoch: int
+    ) -> None:
+        """Rebuild the LAN audio transport for one ``rx_silent`` episode.
+
+        Up to ``_LAN_AUDIO_SILENCE_REPAIR_ATTEMPTS`` teardown → ensure →
+        reestablish rounds (the phase-1 positive-control path, serialized on
+        ``_audio_ensure_lock`` inside ``_ensure_audio_transport``), with the
+        ``_LAN_AUDIO_SILENCE_REPAIR_BACKOFF_S`` sleeps between rounds. Every
+        precondition is re-checked after each await. Every round consumes
+        one attempt. Re-establishing demand does NOT reset the budget:
+        only real RX frames (or a new CI-V epoch) close the episode, so a
+        leg that re-arms yet stays frameless
+        consumes the shared budget and reports FAILED once through
+        ``_on_audio_recovery`` instead of looping with a fresh budget per
+        task. A successful final round observes frames for at most
+        ``RX_LIVENESS_TIMEOUT_S`` before reporting FAILED. Before every
+        round (after the backoff sleep) the task stops quietly when frames
+        have resumed and are still flowing: the
+        silence is over, nothing to tear down. Never raises — cancellation
+        from owner ``disconnect()`` propagates so the stop takes effect.
+        """
+        try:
+            while not self._silence_repair_budget_spent():
+                if self._audio_silence_repair_attempts:
+                    await asyncio.sleep(self._silence_repair_backoff_s())
+                if self._silence_repair_silence_over():
+                    return
+                if not self._silence_repair_preconditions_ok(
+                    civ_epoch,
+                    owner_stop_epoch,
+                ):
+                    return
+                try:
+                    await self._teardown_audio_transport()
+                    self._audio_silence_repair_teardown_completed = time.monotonic()
+                    if not self._silence_repair_preconditions_ok(
+                        civ_epoch,
+                        owner_stop_epoch,
+                    ):
+                        return
+                    await self._ensure_audio_transport()
+                    if not self._silence_repair_preconditions_ok(
+                        civ_epoch,
+                        owner_stop_epoch,
+                    ):
+                        return
+                    await self._audio_session.reestablish()
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    logger.warning(
+                        "audio-silence repair attempt failed",
+                        exc_info=True,
+                    )
+                    self._audio_silence_repair_attempts += 1
+                    continue
+                self._audio_silence_repair_attempts += 1
+                if self._silence_repair_budget_spent():
+                    from rigplane.audio.session import RX_LIVENESS_TIMEOUT_S
+
+                    deadline = time.monotonic() + RX_LIVENESS_TIMEOUT_S
+                    while self._silence_repair_preconditions_ok(
+                        civ_epoch, owner_stop_epoch
+                    ):
+                        if self._silence_repair_silence_over():
+                            return
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0:
+                            break
+                        await asyncio.sleep(min(0.05, remaining))
+                    else:
+                        return
+                break
+            if self._silence_repair_budget_spent():
+                if (
+                    not self._silence_repair_preconditions_ok(
+                        civ_epoch, owner_stop_epoch
+                    )
+                    or self._silence_repair_silence_over()
+                ):
+                    return
+                report = self._on_audio_recovery
+                if report is not None:
+                    try:
+                        report(AudioRecoveryState.FAILED)
+                    except Exception:
+                        logger.warning(
+                            "audio-silence repair FAILED report failed",
+                            exc_info=True,
+                        )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.warning("audio-silence repair task failed", exc_info=True)
+        finally:
+            # Settle the episode baseline: frames that arrived while this
+            # task ran (e.g. one buffered pre-death frame) must not reopen
+            # the episode later — only post-task frames do.
+            self._audio_silence_repair_baseline_heartbeat = (
+                self._silence_repair_rx_heartbeat()
+            )
+            if self._audio_silence_repair_task is asyncio.current_task():
+                self._audio_silence_repair_task = None
+
+    @property
+    def profile(self) -> RadioProfile:
+        """Active runtime radio profile."""
+        return self._profile
+
+    @property
+    def model(self) -> str:
+        """Human-readable radio model name."""
+        return self._profile.model
+
+    @property
+    def backend_id(self) -> str:
+        """Stable backend family identifier — ``"rigplane"`` for LAN/CI-V-over-Ethernet."""
+        return "rigplane"
+
+    @property
+    def capabilities(self) -> set[str]:
+        """Set of capability tags supported by this radio.
+
+        Standard tags: ``audio``, ``scope``, ``dual_rx``, ``meters``,
+        ``tx``, ``cw``.
+        """
+        return set(self._profile.capabilities)
+
+    @staticmethod
+    def _coerce_mode(mode: Mode | str) -> Mode:
+        """Normalize mode input and validate string names."""
+        if isinstance(mode, Mode):
+            return mode
+        raw_mode = mode
+        mode_key = mode.strip().upper().replace("-", "_")
+        try:
+            return Mode[mode_key]
+        except KeyError as exc:
+            supported = ", ".join(m.name for m in Mode)
+            raise ValueError(
+                f"Unknown mode: {raw_mode!r}. Supported modes: {supported}"
+            ) from exc
+
+    def _on_session_lifecycle_event(self, _event: LifecycleEvent) -> None:
+        self._civ_runtime._notify_change("connection_facts_changed", {})
+
+    def set_state_change_callback(
+        self, callback: Callable[[str, dict[str, Any]], None] | None
+    ) -> None:
+        """Register callback for CI-V state change notifications."""
+        self._on_state_change = callback
+
+    def set_reconnect_callback(self, callback: Callable[[], None] | None) -> None:
+        """Register callback invoked after successful soft reconnect."""
+        self._on_reconnect = callback
+
+    def set_reconnect_status_callback(
+        self, callback: Callable[[dict[str, Any]], None] | None
+    ) -> None:
+        """Register callback for reconnect-status updates (MOR-594).
+
+        The callback receives a small structured payload at each meaningful
+        reconnect edge: ``{"state": "reconnecting" | "connected" |
+        "disconnected", "attempt": int, "next_retry_seconds": float | None}``.
+        Invocation is best-effort — a raising callback never breaks the
+        watchdog/reconnect loops.
+        """
+        self._on_reconnect_status = callback
+
+    def civ_stats(self) -> dict[str, int]:
+        """Return CI-V request tracker statistics for monitoring.
+
+        Returns:
+            Dict with keys ``active_waiters``, ``stale_cleaned``,
+            ``timeouts``, ``generation``, ``ack_backlog_hits``,
+            ``ack_backlog_drops``, and ``ack_orphans``.
+        """
+        return self._civ_request_tracker.snapshot_stats()
+
+    def update_credentials(
+        self, *, username: str | None = None, password: str | None = None
+    ) -> None:
+        """Update the stored login credentials for future full reconnects.
+
+        The new values are used the next time a full ``connect()`` performs
+        authentication (the login packet is built from the stored
+        credentials). ``soft_reconnect()`` intentionally reuses the existing
+        session token and does NOT re-authenticate, so a rotated credential
+        only takes effect on a full reconnect.
+
+        Args:
+            username: New username, or ``None`` to keep the current one.
+            password: New password, or ``None`` to keep the current one.
+        """
+        if username is not None:
+            self._username = username
+        if password is not None:
+            self._password = password
+
+    async def connect(self) -> None:
+        """Open connection to the radio and authenticate.
+
+        The identity read (CI-V ``19 00``) is information only: it is
+        published as ``connection.identity`` and never gates readiness.
+
+        A fresh (re)connection means any prior external-CAT session is over —
+        its transport is gone — so clear leaked ownership first (#1702). Without
+        this, a ``begin_external_cat_session()`` that was never matched by an
+        ``end_external_cat_session()`` (managed-runtime crash/restart, a dropped
+        Hamlib bridge) would keep cooperating pollers paused forever, freezing
+        ``radio_state`` while rigctld/web serve a stale frequency.
+
+        Managed TX is armed last (MOR-1016): it captures the CI-V transport
+        this connect just built, and it must not delay the state fetch every
+        consumer waits on. It never raises — see :meth:`_arm_managed_tx` — so
+        ``connect()`` returns with ``managed_tx`` published either way.
+        """
+        async with self._connect_lock:
+            if self.connected:
+                return
+            # A new connect starts a fresh audio-silence episode (MOR-3401):
+            # a repair budget exhausted on the old connection is forgotten.
+            self._audio_silence_repair_attempts = 0
+            self._audio_silence_repair_episode_epoch = None
+            self._audio_silence_repair_episode_start_heartbeat = None
+            self._audio_silence_repair_baseline_heartbeat = None
+            self._audio_silence_repair_teardown_completed = None
+            self._reset_external_cat_session()
+            # Per-attempt owner-stop epoch, captured before any await: the
+            # tail below skips recovery when the owner tore the radio down
+            # mid-connect (an owner disconnect during _fetch_initial_state
+            # would otherwise recover against the torn-down radio).
+            owner_stop_epoch = self._owner_stop_epoch
+            await self._session_lifecycle.connect()
+            await self._complete_connect()
+            # An owner connect re-establishes session audio demand that
+            # survived its teardown (MOR-3415). The resident reconnect loop
+            # is excluded — ``radio_reconnect.reconnect_loop`` runs the same
+            # recovery itself from its pre-teardown snapshot — via the
+            # ``_reconnect_task`` identity test. Skipped when the owner stopped the radio mid-connect:
+            # the epoch captured above moved, and recovering then would run
+            # into the teardown and report a spurious FAILED.
+            if asyncio.current_task() is not getattr(self, "_reconnect_task", None):
+                audio_runtime = getattr(self, "_audio_runtime", None)
+                if (
+                    audio_runtime is not None
+                    and self._owner_stop_epoch == owner_stop_epoch
+                ):
+                    await self._recover_audio_after_connect(
+                        audio_runtime.capture_snapshot(), owner_stop_epoch
+                    )
+
+    async def __aenter__(self) -> "CoreRadio":
+        # Route through the lifecycle's guaranteed-release context manager so a
+        # failure between connect() and the body still releases the session
+        # (graceful-close Hole 2).  ``__aexit__`` always releases.
+        await self.connect()
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:  # type: ignore[no-untyped-def]
+        await self.disconnect()
+
+    async def disconnect(self) -> None:
+        """Cleanly disconnect from the radio (always releases; idempotent).
+
+        Routes through the lifecycle (guaranteed-release policy).  If the radio
+        still reports a live session afterwards — i.e. the underlying
+        ``_conn_state`` was driven CONNECTED outside the lifecycle's own
+        connect() path (legacy/test injection, soft_disconnect bookkeeping) and
+        the lifecycle therefore treated disconnect() as an idempotent no-op —
+        fall back to the control-phase graceful teardown so a genuinely live
+        session is always released (graceful-close invariant).
+
+        Managed TX is shut down first (MOR-1016), bounded, because the OFF a
+        held lease owes the rig has to go out over a transport that is still
+        open — see :meth:`_shutdown_managed_tx`, which is also where the radio
+        stops being managed until the next ``connect()``.
+        """
+        self._cancel_identity_read()
+        self._cancel_connect_tail()
+        # An owner stop supersedes any audio-silence repair still in flight
+        # (MOR-3401): cancel it first so a backoff sleep cannot fire another
+        # attempt while the teardown below runs.
+        repair_task = self._audio_silence_repair_task
+        self._audio_silence_repair_task = None
+        if repair_task is not None and not repair_task.done():
+            repair_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await repair_task
+        await self._shutdown_managed_tx()
+        # Owner teardown stops the resident loops explicitly: during
+        # RECONNECTING after a failed attempt the lifecycle is already
+        # released and unclaimed, so the lifecycle disconnect below is a
+        # no-op and the CONNECTED-gated control-phase teardown never runs —
+        # without this the loop would log back in after the user left.
+        self._owner_stop_epoch += 1
+        self._control_phase._stop_watchdog()
+        self._control_phase._stop_reconnect()
+        if self._conn_state is RadioConnectionState.RECONNECTING:
+            # Make conn_state read DISCONNECTED when the lifecycle
+            # teardown below has nothing to release.
+            self._conn_state = RadioConnectionState.DISCONNECTED
+        await self._session_lifecycle.disconnect()
+        if self._conn_state == RadioConnectionState.CONNECTED:
+            await self._control_phase.disconnect()
+        self._connection_identity = None
+        self._civ_runtime._notify_change("connection_facts_changed", {})
+
+    async def soft_disconnect(self) -> None:
+        """Disconnect CI-V and audio but keep control transport alive.
+
+        This allows fast reconnect without re-authentication — the radio
+        keeps the session open on the control port.
+
+        Managed TX is parked, not shut down (MOR-1016): the runtime survives
+        the gap and is re-armed against the repaired port, so the only thing
+        that changes here is that it stops accepting keys — see
+        :meth:`_park_managed_tx`.
+        """
+        self._cancel_identity_read()
+        self._cancel_connect_tail()
+        if self._conn_state != RadioConnectionState.CONNECTED:
+            self._connection_identity = None
+            self._civ_runtime._notify_change("connection_facts_changed", {})
+            return
+        await self._park_managed_tx()
+        self._conn_state = RadioConnectionState.DISCONNECTING
+        self._civ_runtime.advance_generation("soft_disconnect")
+
+        # Stop audio
+        await self._stop_audio_watchdog()
+        if self._audio_stream is not None:
+            await self._audio_stream.stop_rx()
+            await self._audio_stream.stop_tx()
+            self._audio_stream = None
+        self._pcm_tx_fmt = None
+        self._pcm_rx_user_callback = None
+        self._opus_rx_user_callback = None
+        audio_t = self._audio_transport
+        if audio_t is not None:
+            try:
+                await self._send_audio_open_close(open_stream=False)
+            except Exception:
+                logger.debug("soft_disconnect: audio open/close failed", exc_info=True)
+            # A queued ensure's entry teardown can empty the slot during the
+            # awaits above: disconnect the local, record its numbering, and
+            # clear the slot only if it still holds this transport.
+            await audio_t.disconnect()
+            self._audio_resume_seq = audio_t.send_seq
+            if self._audio_transport is audio_t:
+                self._audio_transport = None
+
+        # Stop CI-V
+        if self._civ_transport:
+            try:
+                await self._send_open_close(open_stream=False)
+            except Exception:
+                logger.debug("soft_disconnect: civ open/close failed", exc_info=True)
+            await self._civ_runtime.stop_data_watchdog()
+            await self._civ_runtime.stop_worker()
+            await self._civ_runtime.stop_pump()
+            await self._civ_transport.disconnect()
+            self._civ_resume_seq = self._civ_transport.send_seq
+            self._civ_transport = None
+
+        # Teardown has finished; retire its identity.
+        self._connection_identity = None
+
+        self._conn_state = RadioConnectionState.DISCONNECTED
+        self._civ_stream_ready = False
+        self._civ_recovering = False
+        self._civ_runtime._notify_change("connection_facts_changed", {})
+        logger.info(
+            "Soft disconnect from %s:%d (control kept alive)", self._host, self._port
+        )
+
+    async def _force_cleanup_civ(self) -> None:
+        """Unconditionally tear down CI-V transport regardless of state.
+
+        Used as a last resort before reconnect when normal soft_disconnect
+        fails or state is inconsistent (e.g. after struct overflow crash).
+        """
+        logger.info("force_cleanup_civ: tearing down CI-V unconditionally")
+        await self._civ_runtime.stop_data_watchdog()
+        await self._civ_runtime.stop_worker()
+        await self._civ_runtime.stop_pump()
+        if self._civ_transport is not None:
+            try:
+                await self._civ_transport.disconnect()
+            except Exception:
+                logger.debug(
+                    "force_cleanup_civ: transport disconnect failed", exc_info=True
+                )
+            self._civ_resume_seq = self._civ_transport.send_seq
+            self._civ_transport = None
+        ctrl_alive = bool(
+            self._ctrl_transport
+            and getattr(self._ctrl_transport, "_udp_transport", None) is not None
+        )
+        self._conn_state = (
+            RadioConnectionState.RECONNECTING
+            if ctrl_alive
+            else RadioConnectionState.DISCONNECTED
+        )
+        self._civ_stream_ready = False
+        self._civ_recovering = ctrl_alive
+
+    async def soft_reconnect(self) -> None:
+        """Reconnect CI-V transport using the existing control session.
+
+        Routes through the unified lifecycle RECOVERING loop
+        (:meth:`CoreRadioSessionLifecycle.soft_reconnect` →
+        :meth:`CoreRadioSessionLifecycle._run_recover`), which is now the SINGLE
+        owner of recovery policy: the per-attempt primitive
+        (``soft_reconnect_once`` = control + token reused; raises on failure),
+        the N-attempt count (``_MAX_RECONNECTS``), the backoff
+        (``_RECONNECT_BACKOFF``), and exhaustion → CLOSING + full release.
+
+        The CI-V data watchdog (``_civ_rx.py``) remains the stall DETECTOR: it
+        watches CI-V data flow, sends patient OpenClose nudges, and on patience
+        exhaustion TRIGGERS this method in a detached task — but it no longer
+        owns the retry/backoff/exhaustion ladder (that moved here). The
+        watchdog re-arms after recovery, so a later stall is caught again
+        (#1217).
+        """
+        await self._session_lifecycle.soft_reconnect()
+
+    # Connection identity: information only (MOR-4382)
+    def _start_identity_read(self) -> None:
+        """Read ``19 00`` in the background on this link epoch; never gates.
+
+        The answer is published as ``connection.identity`` (verified,
+        unverified or a mismatch the UI can name). Nothing refuses a command
+        or holds a state read for it.
+        """
+        self._cancel_identity_read()
+        self._connection_identity = RadioIdentity(
+            status=RadioIdentityStatus.CHECKING, expected_model=self.model
+        )
+        self._civ_runtime._notify_change("connection_facts_changed", {})
+        self._identity_read_task = asyncio.create_task(
+            self._identity_read_loop(self._civ_epoch, first_attempt_done=False),
+            name="lan-identity-read",
+        )
+
+    async def probe_connection_identity(self) -> bool:
+        """One bounded identity read during connect; publishes, never raises.
+
+        True when the radio answered CI-V. The read also starts the radio's
+        reply stream the readiness wait needs. When nothing answers the radio
+        is not talking CI-V yet (a stale session still held, a radio still
+        starting): the connect does not wait for it, the retries continue in
+        the background, and the post-connect tail (initial fetch, TX arming,
+        reconnect callback) runs when the first answer arrives.
+        """
+        self._cancel_identity_read()
+        self._cancel_connect_tail()
+        epoch = self._civ_epoch
+        self._connection_identity = RadioIdentity(
+            status=RadioIdentityStatus.CHECKING, expected_model=self.model
+        )
+        self._civ_runtime._notify_change("connection_facts_changed", {})
+        try:
+            answered = await self._read_identity_attempt(epoch)
+        except Exception:
+            logger.warning(
+                "rigplane (%s): identity read failed", self.model, exc_info=True
+            )
+            return False
+        if answered:
+            return True
+        if self._civ_epoch == epoch:
+            self._connect_tail_pending = True
+            self._connect_tail_task = asyncio.create_task(
+                self._run_connect_tail_when_ready(epoch),
+                name="lan-connect-tail",
+            )
+            self._identity_read_task = asyncio.create_task(
+                self._identity_read_loop(epoch, first_attempt_done=True),
+                name="lan-identity-read",
+            )
+        return False
+
+    def _cancel_connect_tail(self) -> None:
+        self._connect_tail_pending = False
+        task = getattr(self, "_connect_tail_task", None)
+        if task is not None and not task.done() and task is not asyncio.current_task():
+            task.cancel()
+        self._connect_tail_task = None
+
+    def _cancel_identity_read(self) -> None:
+        task = getattr(self, "_identity_read_task", None)
+        if task is not None and not task.done() and task is not asyncio.current_task():
+            task.cancel()
+        self._identity_read_task = None
+
+    async def _read_identity_attempt(self, epoch: int) -> bool:
+        """One read, published. True once the radio answered (or the link moved on)."""
+        if self._civ_epoch != epoch or not self.control_connected:
+            return True
+        payload = await self._read_lan_identity_payload()
+        if self._civ_epoch != epoch or not self.control_connected:
+            return True
+        if payload is None:
+            self._record_identity_no_response()
+            return False
+        identity = self._classify_lan_identity_answer(payload)
+        self._connection_identity = identity
+        self._civ_runtime._notify_change("connection_facts_changed", {})
+        if identity.status is RadioIdentityStatus.IDENTITY_MISMATCH:
+            logger.warning(
+                "rigplane (%s): %s:%d answered a different radio (native id "
+                "%s); commands are not blocked",
+                self.model,
+                self._host,
+                self._port,
+                identity.answered_id,
+            )
+        return True
+
+    async def _identity_read_loop(
+        self, epoch: int, *, first_attempt_done: bool
+    ) -> None:
+        """Ask until the radio answers, a few times, on this link epoch only."""
+        try:
+            delays = self._IDENTITY_READ_RETRY_DELAYS_S
+            for delay in delays if first_attempt_done else (0.0, *delays):
+                if delay:
+                    await asyncio.sleep(delay)
+                if await self._read_identity_attempt(epoch):
+                    return
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            logger.warning(
+                "rigplane (%s): identity read failed", self.model, exc_info=True
+            )
+
+    async def _read_lan_identity_payload(self) -> bytes | None:
+        """Read through the request tracker; None on silence/malformed reply.
+
+        Empty bytes preserve compatibility for profiles without an ID command.
+        """
+        builder = getattr(self._commands, "get_transceiver_id", None)
+        if not callable(builder):
+            return b""
+        try:
+            request = builder(to_addr=self._radio_addr)
+        except CommandError:
+            return b""
+        try:
+            resp = await self._execute_civ_raw(request, wait_response=True)
+        except (
+            CommandRejectedError,
+            TimeoutError,
+            asyncio.TimeoutError,
+            ConnectionError,
+            OSError,
+        ):
+            return None
+        if resp is None:
+            return None
+        # Only a well-formed 19 00 reply from the addressed radio counts:
+        # never an ACK, an address or a session network id.
+        if (
+            resp.from_addr != self._radio_addr
+            or resp.command != 0x19
+            or resp.sub != 0x00
+            or not resp.data
+        ):
+            return None
+        return resp.data
+
+    def _classify_lan_identity_answer(self, payload: bytes) -> RadioIdentity:
+        """Classify a raw ``19 00`` payload: empty/no expected → UNVERIFIED;
+        canonical match → VERIFIED; definitive wrong → MISMATCH."""
+        answered_id = payload.hex().upper() if payload else None
+        if not payload or not self._profile.expected_identity_ids:
+            return RadioIdentity(
+                status=RadioIdentityStatus.UNVERIFIED,
+                expected_model=self.model,
+                answered_id=answered_id,
+            )
+        # Profile tokens are immutable and compared exactly, as in Icom serial.
+        if answered_id in self._profile.expected_identity_ids:
+            return RadioIdentity(
+                status=RadioIdentityStatus.VERIFIED,
+                expected_model=self.model,
+                answered_model=self.model,
+                answered_id=answered_id,
+            )
+        return RadioIdentity(
+            status=RadioIdentityStatus.IDENTITY_MISMATCH,
+            expected_model=self.model,
+            answered_model=None,
+            answered_id=answered_id,
+        )
+
+    def _record_identity_no_response(self) -> None:
+        """Publish ``no_response`` (nothing answered the identity read)."""
+        previous_identity = self._connection_identity
+        self._connection_identity = RadioIdentity(
+            status=RadioIdentityStatus.NO_RESPONSE,
+            expected_model=self.model,
+        )
+        if self._connection_identity != previous_identity:
+            self._civ_runtime._notify_change("connection_facts_changed", {})
+
+    async def _complete_connect(self) -> None:
+        """Everything a connected link owes, for a fresh and a full reconnect.
+
+        MOR-4382: runs after every ``connect()`` that opened a link (first
+        connect, owner connect, the resident reconnect loop), so a full
+        reconnect behaves exactly like a fresh connect.
+        """
+        if self._connect_tail_pending:
+            return  # the radio is not answering yet; its first answer runs this
+        epoch = self._civ_epoch
+        await self._fetch_initial_state()
+        if self._civ_epoch != epoch:
+            return
+        await self._arm_managed_tx()
+        await self._scope_session_ready()
+        # The web layer discards its VFO identity when the connection drops
+        # and only the reconnect callback re-selects it (the soft path runs
+        # the same callback in ``_after_reconnect_parts``).
+        self._run_reconnect_callback()
+
+    async def _run_connect_tail_when_ready(self, epoch: int) -> None:
+        """Run the connect tail a silent radio owed, once, when CI-V is ready.
+
+        Driven by ordinary CI-V readiness (any reply), never by the identity
+        answer: a radio that talks CI-V but ignores ``19 00`` completes too.
+        Ends with the link epoch, ``disconnect()`` or ``soft_disconnect()``.
+        """
+        try:
+            while self._connect_tail_pending and self._civ_epoch == epoch:
+                if self.radio_ready:
+                    self._connect_tail_pending = False
+                    await self._complete_connect()
+                    return
+                await asyncio.sleep(0.2)
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            logger.warning(
+                "rigplane (%s): connect completion failed", self.model, exc_info=True
+            )
+
+    def _run_reconnect_callback(self) -> None:
+        """Run the registered reconnect callback; its failure never propagates."""
+        on_reconnect = self._on_reconnect
+        if on_reconnect is None:
+            return
+        try:
+            on_reconnect()
+        except Exception:
+            logger.debug("reconnect callback failed", exc_info=True)
+
+    async def _recover_audio_after_connect(
+        self, snapshot: object, owner_stop_epoch: int
+    ) -> None:
+        """Recover audio after ``connect()`` returned.
+
+        ``radio_reconnect.reconnect_loop`` and the owner-connect tail of
+        ``connect()`` call this with the snapshot they captured. Skipped when
+        the owner stopped the radio meanwhile.
+        """
+        if not (self._auto_recover_audio and snapshot is not None):
+            return
+        if self._owner_stop_epoch != owner_stop_epoch:
+            return
+        await self._audio_runtime.recover(snapshot)
+
+    async def _send_open_close(self, *, open_stream: bool) -> None:
+        """Delegate to control-phase runtime (for soft_disconnect, _force_cleanup_civ, etc.)."""
+        await self._control_phase._send_open_close(open_stream=open_stream)
+
+    def _check_connected(self) -> None:
+        """Delegate to CI-V runtime."""
+        self._civ_runtime._check_connected()
+
+    async def _execute_civ_raw(
+        self,
+        civ_frame: bytes,
+        wait_response: bool = True,
+        *,
+        is_current: "Callable[[], bool] | None" = None,
+    ) -> CivFrame | None:
+        """Delegate to CI-V runtime (for tests and internal callers)."""
+        return await self._civ_runtime.execute_civ_raw(
+            civ_frame,
+            wait_response=wait_response,
+            is_current=is_current,
+        )
+
+    def _update_state_cache_from_frame(self, frame: CivFrame) -> None:
+        """Delegate to CI-V runtime (for tests that feed unsolicited frames)."""
+        self._civ_runtime._update_state_cache_from_frame(frame)
+
+    async def _send_civ_raw(
+        self,
+        civ_frame: bytes,
+        *,
+        priority: Priority = Priority.NORMAL,
+        key: str | None = None,
+        dedupe: bool = False,
+        wait_response: bool = True,
+        timeout: float | None = None,
+        wait_dispatch: bool = True,
+        is_current: "Callable[[], bool] | None" = None,
+    ) -> CivFrame | None:
+        """Delegate to CI-V runtime (keeps existing call sites unchanged).
+
+        A receiver admission recorded by ``_require_cmd29_route`` for this
+        task is consumed here: when the frame is that admitted plain command,
+        the selection is re-checked at wire dispatch inside the serialized
+        send, and a selection that changed meanwhile refuses the frame with
+        :class:`ReceiverNotSelectedError` instead of reaching the other
+        receiver (MOR-3591).
+        """
+        admission = RECEIVER_ADMISSION.get()
+        if admission is not None:
+            RECEIVER_ADMISSION.set(None)
+            frame = parse_civ_frame(civ_frame)
+            if frame.receiver is not None or not admission.matches(
+                frame.command, frame.sub
+            ):
+                admission = None
+        if admission is None:
+            return await self._civ_runtime.send_civ_raw(
+                civ_frame,
+                priority=priority,
+                key=key,
+                dedupe=dedupe,
+                wait_response=wait_response,
+                timeout=timeout,
+                wait_dispatch=wait_dispatch,
+                is_current=is_current,
+            )
+        receiver = admission.receiver
+
+        def still_selected() -> bool:
+            return self._selected_receiver() == receiver
+
+        def admitted_is_current() -> bool:
+            return still_selected() and (is_current is None or is_current())
+
+        try:
+            return await self._civ_runtime.send_civ_raw(
+                civ_frame,
+                priority=priority,
+                key=key,
+                dedupe=dedupe,
+                wait_response=wait_response,
+                timeout=timeout,
+                wait_dispatch=wait_dispatch,
+                is_current=admitted_is_current,
+            )
+        except StaleBeforeWireError as exc:
+            # Only a refusal proven before the wire is a receiver refusal; a
+            # currency failure after the send keeps its ConnectionError (the
+            # frame may already be applied).
+            if still_selected():
+                raise
+            raise receiver_not_selected(
+                admission.operation,
+                receiver,
+                self._profile.model,
+                "the selection changed before the command reached the wire; ",
+            ) from exc
+
+    async def _send_civ_expect(
+        self,
+        civ_frame: bytes,
+        *,
+        label: str = "command",
+        priority: Priority = Priority.NORMAL,
+        key: str | None = None,
+        dedupe: bool = False,
+        timeout: float | None = None,
+        is_current: "Callable[[], bool] | None" = None,
+    ) -> CivFrame:
+        """Send a CIV frame and raise CommandError if no response."""
+        resp = await self._send_civ_raw(
+            civ_frame,
+            priority=priority,
+            key=key,
+            dedupe=dedupe,
+            timeout=timeout,
+            is_current=is_current,
+        )
+        if resp is None:
+            raise CommandError(f"No response for {label}")
+        return resp
+
+    async def _send_audio_open_close(self, *, open_stream: bool) -> None:
+        """Delegate to control-phase runtime."""
+        await self._control_phase._send_audio_open_close(open_stream=open_stream)
+
+    async def _send_token(self, magic: int) -> None:
+        """Delegate to control-phase runtime."""
+        await self._control_phase._send_token(magic)
+
+    # ------------------------------------------------------------------
+    # Initial state fetch
+    # ------------------------------------------------------------------
+
+    _initial_state_fetched: bool = False
+
+    _INITIAL_STATE_GAP_LAN: float = 0.012
+    _INITIAL_STATE_GAP_SERIAL: float = 0.050
+
+    async def _fetch_initial_state(self) -> None:
+        """Fetch full radio state once to populate RadioState (delegates)."""
+        await _initial_state.fetch_initial_state(self)
+
+    # ------------------------------------------------------------------
+    # Watchdog & reconnect loops
+    # ------------------------------------------------------------------
+
+    async def _watchdog_loop(self) -> None:
+        """Monitor connection health (delegates to ``radio_reconnect``)."""
+        await _reconnect.watchdog_loop(self)
+
+    async def _reconnect_loop(self) -> None:
+        """Attempt to reconnect with exponential backoff (delegates)."""
+        await _reconnect.reconnect_loop(self)
+
+    # ------------------------------------------------------------------
+    # Public CI-V API
+    # ------------------------------------------------------------------
+
+    async def send_civ(
+        self,
+        command: int,
+        sub: int | None = None,
+        data: bytes | None = None,
+        *,
+        wait_response: bool = True,
+        priority: Priority = Priority.NORMAL,
+        wait_dispatch: bool = True,
+        is_current: Callable[[], bool] | None = None,
+    ) -> CivFrame | None:
+        """Send a CI-V command.
+
+        Args:
+            command: CI-V command byte.
+            sub: Optional sub-command byte.
+            data: Optional payload data.
+            wait_response: If False, fire-and-forget (no response wait).
+            priority: Commander lane priority. Defaults to NORMAL so user
+                commands are not de-prioritized; background pollers pass
+                ``Priority.BACKGROUND`` so polls yield to user commands.
+            wait_dispatch: If False, return immediately after enqueueing
+                instead of awaiting the commander dispatching this frame.
+                Background pollers pass False so the poll burst does not park
+                the poll loop on the commander future (the response still
+                arrives via the RX path). Defaults to True so user commands
+                keep their blocking contract.
+            is_current: Optional request currency predicate for wire dispatch.
+
+        Returns:
+            Parsed response CivFrame, or None if wait_response=False.
+        """
+        self._check_connected()
+        frame = build_civ_frame(
+            self._radio_addr, CONTROLLER_ADDR, command, sub=sub, data=data
+        )
+        if is_current is not None:
+            return await self._send_civ_raw(
+                frame,
+                wait_response=wait_response,
+                priority=priority,
+                wait_dispatch=wait_dispatch,
+                is_current=is_current,
+            )
+        return await self._send_civ_raw(
+            frame,
+            wait_response=wait_response,
+            priority=priority,
+            wait_dispatch=wait_dispatch,
+        )
+
+    # ------------------------------------------------------------------
+    # Raw CI-V pipe (MOR-164) — transparent byte transport for Hamlib A1
+    # ------------------------------------------------------------------
+
+    async def send_civ_raw_fire_and_forget(self, frame: bytes) -> None:
+        """Transmit a raw CI-V frame without waiting for or matching a response.
+
+        For the Hamlib A1 bridge, where the *external* CAT master (Hamlib) owns
+        request/response matching and RigPlane is used purely as a byte
+        transport. Unlike :meth:`send_civ`, this never registers a response
+        waiter, so it does **not** time out merely because the radio answered a
+        write with a bare ACK (``FE FE E0 98 FB FD``); the ACK is observed via
+        :meth:`add_raw_civ_listener` instead.
+        """
+        self._check_connected()
+        await self._send_civ_raw(frame, wait_response=False)
+
+    def add_raw_civ_listener(
+        self, callback: Callable[[bytes], Any]
+    ) -> RawCivSubscription:
+        """Register a listener for inbound raw CI-V frame bytes.
+
+        The callback receives the exact on-wire frame bytes of each inbound
+        frame addressed to the controller (including bare ACK/NAK frames).
+        Unsolicited transceive broadcasts (``to_addr == 0x00``) are filtered out
+        so they do not pollute a Hamlib-owned byte stream. Returns a
+        :class:`RawCivSubscription`; call ``.close()`` to unregister.
+
+        To stop RigPlane's own pollers from competing on the wire while an
+        external CAT master consumes this stream, wrap the session with
+        :meth:`begin_external_cat_session` / :meth:`end_external_cat_session`
+        (MOR-166 slice 2).
+        """
+        self._raw_civ_listeners.append(callback)
+        return RawCivSubscription(self._raw_civ_listeners, callback)
+
+    # ---- External CAT-session ownership (MOR-166 slice 2) ----
+
+    @property
+    def external_cat_session_active(self) -> bool:
+        """True while an external CAT master (e.g. a Hamlib bridge) owns the wire."""
+        return self._external_cat_session
+
+    def begin_external_cat_session(self) -> None:
+        """Mark the radio as owned by an external CAT session.
+
+        Cooperating pollers (e.g. the web ``RadioPoller``) pause their own CI-V
+        traffic while this is set, so they do not pollute the owner's byte
+        stream. Idempotent when the external owner already holds the session.
+        """
+        if self._external_cat_session:
+            current = self._external_cat_session_owner or "external"
+            if current == "external":
+                self._external_cat_session_owner = "external"
+                return
+            raise RuntimeError(f"CI-V stream is already owned by {current}")
+        self._external_cat_session = True
+        self._external_cat_session_owner = "external"
+
+    def end_external_cat_session(self) -> None:
+        """Release legacy external-CAT-session ownership. Idempotent."""
+        if self._external_cat_session_owner not in (None, "external"):
+            return
+        self._external_cat_session = False
+        self._external_cat_session_owner = None
+
+    def _reset_external_cat_session(self) -> None:
+        """Unconditionally clear external-CAT ownership (#1702).
+
+        Used on (re)connect: a new connection invalidates any prior session
+        regardless of owner, so this drops a leaked ``begin_external_cat_session``
+        that was never released. Unlike :meth:`end_external_cat_session` it does
+        not respect the current owner — the old session can no longer exist.
+        """
+        self._external_cat_session = False
+        self._external_cat_session_owner = None
+
+    def _claim_external_cat_session(self, owner: str) -> None:
+        """Claim exclusive CI-V stream ownership for a scoped transaction."""
+        if self._external_cat_session:
+            current = self._external_cat_session_owner or "external"
+            raise RuntimeError(f"CI-V stream is already owned by {current}")
+        self._external_cat_session = True
+        self._external_cat_session_owner = owner
+
+    def _release_external_cat_session(self, owner: str) -> None:
+        """Release a transaction claim without disturbing another owner."""
+        if self._external_cat_session_owner not in (None, owner):
+            return
+        self._external_cat_session = False
+        self._external_cat_session_owner = None
+
+    async def send_civ_transaction(
+        self,
+        command: int,
+        sub: int | None = None,
+        data: bytes | None = None,
+        *,
+        expect: RawCivExpectation = "data",
+        timeout: float | None = None,
+    ) -> RawCivTransactionResult:
+        """Send one raw CI-V command with explicit response semantics.
+
+        This is intentionally separate from the web poller's fire-and-forget
+        queue. While the transaction is active, cooperating pollers pause via
+        ``external_cat_session_active`` so their background traffic cannot
+        consume or pollute the caller's response.
+        """
+        self._check_connected()
+        if not 0 <= command <= 0xFF:
+            raise ValueError(f"command must be 0-255, got {command}")
+        if sub is not None and not 0 <= sub <= 0xFF:
+            raise ValueError(f"sub must be 0-255, got {sub}")
+        if expect not in ("none", "ack", "data"):
+            raise ValueError(f"unsupported CI-V expectation: {expect!r}")
+
+        payload = data or b""
+        frame = build_civ_frame(
+            self._radio_addr, CONTROLLER_ADDR, command, sub=sub, data=payload
+        )
+        owner = "raw-civ-transaction"
+        self._claim_external_cat_session(owner)
+        try:
+            return await self._civ_runtime.execute_civ_transaction(
+                frame,
+                expect=expect,
+                timeout=timeout,
+            )
+        finally:
+            self._release_external_cat_session(owner)
+
+    async def reconcile_state(self) -> None:
+        """Re-read full radio state after an external session changed the rig.
+
+        Call once the external CAT master has finished; refreshes RigPlane's
+        ``RadioState`` from the wire so it reflects any frequency/mode/etc. the
+        external master applied while it owned the session.
+        """
+        await self._fetch_initial_state()
+
+    async def get_freq(
+        self, receiver: int = RECEIVER_MAIN, *, bypass_cache: bool = False
+    ) -> int:
+        """Get the current operating frequency in Hz.
+
+        Args:
+            receiver: 0=MAIN, 1=SUB.
+            bypass_cache: Skip dedupe and cache fallback (used by RadioPoller).
+
+        On timeout falls back to the state cache (if populated) rather than
+        raising immediately, allowing callers to remain responsive while the
+        radio is busy streaming scope data.
+
+        A read never switches the selection (MOR-3591). SUB is read through
+        selector 01 where profile data make that the physical SUB. Otherwise
+        the plain command is used only while ``receiver`` is the selected
+        receiver; for a receiver that is not selected (or while the
+        selection is unknown) the value last observed while it was selected
+        is returned, and with none :class:`ReceiverNotSelectedError` is
+        raised.
+        """
+        self._check_connected()
+        self._require_receiver(receiver, operation="get_freq")
+        if self._sub_direct_route(receiver, "get_unselected_freq"):
+            return await self._get_unselected_freq()
+        if await self._establish_receiver_selection() == receiver:
+            # The plain read answers for the selected receiver: admitted for
+            # it and re-checked at wire dispatch like a guarded write.
+            self._require_cmd29_route(
+                0x03, None, receiver=receiver, operation="get_freq"
+            )
+            if receiver == RECEIVER_MAIN:
+                return await self._get_frequency_main(bypass_cache=bypass_cache)
+            civ = self._commands.get_freq(to_addr=self._radio_addr)
+            resp = await self._send_civ_expect(civ, label="get_frequency_selected")
+            return parse_frequency_response(resp)
+        return int(cast(int, self._observed_freq_mode(receiver, "freq_hz", "get_freq")))
+
+    def _observed_freq_mode(self, receiver: int, name: str, operation: str) -> object:
+        """Last observed ``freq_mode`` value of a receiver that is not selected.
+
+        Plain frequency/mode answers are filed under the receiver selected
+        when they arrived. Only answers that arrived after the selection was
+        first known in this CI-V generation are owned by a known receiver;
+        earlier ones (e.g. right after a reconnect, filed under a stale
+        selection) are not trusted. Nothing trusted:
+        :class:`ReceiverNotSelectedError` -- unless the radio has not
+        answered CI-V since the link was established at all, when the
+        answer is the retriable :class:`RadioNotReadyError` instead
+        (MOR-4382 follow-up): the selection is unknown because the radio is
+        silent, not because a receiver is not selected.
+        """
+        if self._never_answered_since_connect():
+            raise radio_not_ready(operation, self._profile.model)
+        known_since = self._selection_known_since
+        try:
+            field = self._state_store.snapshot().field(
+                FieldPath.active(str(receiver), "freq_mode", name)
+            )
+        except KeyError:
+            field = None
+        if (
+            field is None
+            or field.value is None
+            or known_since is None
+            or field.last_observed_monotonic < known_since
+        ):
+            raise ReceiverNotSelectedError(
+                f"{operation} receiver={receiver}: profile {self._profile.model} "
+                "cannot address that receiver while it is not selected, and its "
+                "value was never observed; select that receiver first"
+            )
+        return field.value
+
+    async def set_freq(self, freq_hz: int, receiver: int = 0) -> None:
+        """Set the operating frequency.
+
+        Args:
+            freq_hz: Frequency in Hz.
+            receiver: 0=MAIN, 1=SUB.
+
+        A receiver is reached by its cmd29 route, by the selector-01 SET
+        where profile data make that the physical SUB, or by the plain
+        command while it is the selected receiver; otherwise
+        :class:`ReceiverNotSelectedError` is raised and nothing is sent.
+        The selection is never switched to reach it (MOR-3591).
+        """
+        self._check_connected()
+        self._require_receiver(receiver, operation="set_freq")
+        await self._establish_receiver_selection()
+        if self._sub_direct_route(
+            receiver, "set_unselected_freq", "get_unselected_freq"
+        ):
+            observed = await self.write_relative_vfo_frequency(freq_hz, selected=False)
+            # The verified readback is the radio's state, not the request.
+            self._radio_state.receiver("SUB").freq = observed
+            if observed != freq_hz:
+                raise CommandError(
+                    f"set_freq receiver={receiver}: readback {observed} Hz "
+                    f"contradicts the requested {freq_hz} Hz"
+                )
+            return
+        else:
+            self._require_cmd29_route(
+                0x05, None, receiver=receiver, operation="set_freq"
+            )
+            if receiver != RECEIVER_MAIN and self._profile.supports_cmd29(0x05):
+                civ = self._commands.set_freq(
+                    freq_hz, to_addr=self._radio_addr, receiver=receiver
+                )
+                await self._send_civ_raw(civ, wait_response=False)
+            else:
+                await self._set_frequency_main(
+                    freq_hz, update_cache=receiver == RECEIVER_MAIN
+                )
+        if receiver != RECEIVER_MAIN:
+            self._radio_state.receiver("SUB").freq = freq_hz
+
+    async def get_mode(self, receiver: int = 0) -> tuple[str, int | None]:
+        """Get current mode as (name, filter) — Protocol-compatible.
+
+        Returns a ``(mode_name, filter_number)`` tuple. For the Icom-specific
+        :class:`Mode` enum, use :meth:`get_mode_info` instead.
+
+        .. note:: The returned mode name is the Mode enum ``.name`` attribute
+           (e.g. ``"USB"``, ``"CW"``), which matches hamlib mode strings.
+        """
+        mode, filt = await self.get_mode_info(receiver=receiver)
+        return mode.name, filt
+
+    async def get_mode_enum(self) -> "Mode":
+        """Get the current operating mode as a :class:`Mode` enum (legacy).
+
+        .. deprecated:: 0.12
+           Use :meth:`get_mode` (returns ``tuple[str, int | None]``) or
+           :meth:`get_mode_info` (returns ``tuple[Mode, int | None]``).
+        """
+        mode, _ = await self.get_mode_info()
+        return mode
+
+    async def get_mode_info(
+        self, receiver: int = RECEIVER_MAIN
+    ) -> tuple[Mode, int | None]:
+        """Get current mode and filter number (if reported by radio).
+
+        On timeout falls back to the state cache when populated.
+        Receivers are read exactly like :meth:`get_freq` (MOR-3591).
+        """
+        self._check_connected()
+        self._require_receiver(receiver, operation="get_mode_info")
+        if self._sub_direct_route(receiver, "get_unselected_mode"):
+            return await self._get_unselected_mode()
+        if await self._establish_receiver_selection() == receiver:
+            # As in get_freq: admitted for the selected receiver and
+            # re-checked at wire dispatch.
+            self._require_cmd29_route(
+                0x04, None, receiver=receiver, operation="get_mode_info"
+            )
+            if receiver == RECEIVER_MAIN:
+                return await self._get_mode_info_main(update_cache=True)
+            civ = self._commands.get_mode(to_addr=self._radio_addr)
+            resp = await self._send_civ_expect(civ, label="get_mode_info_selected")
+            return parse_mode_response(resp)
+        mode_name = str(self._observed_freq_mode(receiver, "mode", "get_mode_info"))
+        try:
+            filt = self._observed_freq_mode(receiver, "filter_num", "get_mode_info")
+        except ReceiverNotSelectedError:
+            return Mode[mode_name], None
+        return Mode[mode_name], cast("int | None", filt)
+
+    async def get_filter(self, receiver: int = 0) -> int | None:
+        """Get current mode filter number (1-3) when available.
+
+        Args:
+            receiver: 0=MAIN, 1=SUB.
+        """
+        _, filt = await self.get_mode_info(receiver=receiver)
+        if filt is not None:
+            return filt
+        # Fallback: only MAIN has the legacy ``_filter_width`` cache; SUB
+        # falls back to ``None`` rather than returning MAIN's cached value.
+        if receiver == RECEIVER_MAIN:
+            return self._filter_width
+        return None
+
+    async def set_filter(self, filter_width: int, receiver: int = 0) -> None:
+        """Set filter number (1-3) while keeping current mode unchanged."""
+        mode_name, _ = await self.get_mode(receiver=receiver)
+        await self.set_mode(mode_name, filter_width=filter_width, receiver=receiver)
+
+    async def set_filter_width(self, width_hz: int, receiver: int = 0) -> None:
+        """Set DSP IF filter width in Hz (CI-V 0x1A 0x03).
+
+        Hz is translated to a profile-defined index and wrapped via cmd29 only
+        when the profile lists ``[0x1A, 0x03]`` in its cmd29 routes
+        (IC-7610). The profile must declare a ``set_filter_width`` command
+        before the runtime sends a write. Without the route the plain frame
+        is sent only to the selected receiver; any other receiver raises
+        :class:`ReceiverNotSelectedError` (MOR-3591).
+
+        Args:
+            width_hz: Filter width in Hz. Bounds and step depend on the
+                current mode's profile rule.
+            receiver: 0=MAIN, 1=SUB.
+        """
+        self._check_connected()
+        self._require_receiver(receiver, operation="set_filter_width")
+        if not self._profile.supports_command("set_filter_width"):
+            raise CommandError(
+                f"set_filter_width is unsupported by profile {self._profile.model}"
+            )
+
+        target = self._radio_state.receiver("SUB" if receiver else "MAIN")
+        mode_name = getattr(target, "mode", None)
+        data_mode = int(getattr(target, "data_mode", 0) or 0)
+        bcd_index_byte = self._profile.encode_filter_width(
+            width_hz, mode_name, data_mode=data_mode
+        )
+        # CI-V 1A 03: 1-byte BCD index (wfview-confirmed). cmd29-wrapped
+        # where the profile routes it, else plain to the selected receiver.
+        self._require_cmd29_route(
+            0x1A,
+            0x03,
+            receiver=receiver,
+            operation="set_filter_width",
+        )
+        if self._profile.supports_cmd29(0x1A, 0x03):
+            await self.send_civ(
+                0x29,
+                data=bytes([receiver, 0x1A, 0x03]) + bcd_index_byte,
+                wait_response=False,
+            )
+        else:
+            await self.send_civ(
+                0x1A, sub=0x03, data=bcd_index_byte, wait_response=False
+            )
+
+    async def get_filter_width(self, receiver: int = 0) -> int:
+        """Get DSP IF filter width in Hz (CI-V 0x1A 0x03).
+
+        The response encoding is profile-driven. Icom profiles use a 1-byte
+        BCD segmented index; Xiegu X6200 uses a single raw byte index. The
+        request is cmd29-wrapped only when the profile lists ``[0x1A, 0x03]``
+        in its cmd29 routes; without the route the plain request is sent
+        only for the selected receiver, any other raises
+        :class:`ReceiverNotSelectedError` (MOR-3591).
+
+        Args:
+            receiver: 0=MAIN, 1=SUB.
+
+        Returns:
+            Filter width in Hz.
+        """
+        self._check_connected()
+        self._require_receiver(receiver, operation="get_filter_width")
+
+        # CI-V 1A 03: 1-byte BCD index for every Icom rig (wfview-confirmed).
+        # cmd29-wrapped where the profile routes it, else plain for the
+        # selected receiver only.
+        self._require_cmd29_route(
+            0x1A,
+            0x03,
+            receiver=receiver,
+            operation="get_filter_width",
+        )
+        if self._profile.supports_cmd29(0x1A, 0x03):
+            civ = self._commands.get_filter_width(
+                to_addr=self._radio_addr, receiver=receiver
+            )
+        else:
+            civ = build_civ_frame(self._radio_addr, CONTROLLER_ADDR, 0x1A, sub=0x03)
+
+        resp = await self._send_civ_expect(
+            civ,
+            key=f"get_filter_width:{receiver}",
+            dedupe=True,
+            label="get_filter_width",
+        )
+        if resp.command != 0x1A or resp.sub != 0x03:
+            raise ValueError(
+                f"Not a filter-width response: command 0x{resp.command:02x} "
+                f"sub 0x{0 if resp.sub is None else resp.sub:02x}"
+            )
+
+        if self._profile.filter_width_encoding == "raw_byte_index":
+            if not resp.data:
+                raise ValueError("Filter-width response payload too short")
+            value = resp.data[0]
+        else:
+            value = parse_level_response(
+                resp,
+                command=0x1A,
+                sub=0x03,
+                bcd_bytes=1,
+            )
+
+        target = self._radio_state.receiver("SUB" if receiver else "MAIN")
+        mode_name = getattr(target, "mode", None)
+        data_mode = int(getattr(target, "data_mode", 0) or 0)
+        rule = self._profile.resolve_filter_rule(mode_name, data_mode=data_mode)
+        if rule is not None and rule.segments:
+            try:
+                return filter_index_to_hz(value, segments=rule.segments)
+            except ValueError:
+                # Out-of-band index — return raw value rather than fail.
+                return value
+        return value
+
+    async def set_mode(
+        self, mode: Mode | str, filter_width: int | None = None, receiver: int = 0
+    ) -> None:
+        """Set the operating mode.
+
+        Args:
+            mode: Mode enum or string name (e.g. "USB", "LSB").
+            filter_width: Optional filter number (1-3).
+            receiver: 0=MAIN, 1=SUB.
+
+        Receiver addressing follows :meth:`set_freq` (MOR-3591): the
+        selector-01 SET keeps the receiver's DATA setting and, when
+        ``filter_width`` is omitted, its filter.
+        """
+        self._check_connected()
+        self._require_receiver(receiver, operation="set_mode")
+        parsed_mode = self._coerce_mode(mode)
+        await self._establish_receiver_selection()
+
+        if self._sub_direct_route(
+            receiver,
+            "set_unselected_mode",
+            "get_unselected_mode",
+            "get_unselected_freq",
+        ):
+            await self.write_relative_vfo_mode(
+                int(parsed_mode), selected=False, filter_width=filter_width
+            )
+        else:
+            self._require_cmd29_route(
+                0x06, None, receiver=receiver, operation="set_mode"
+            )
+            if receiver != RECEIVER_MAIN and self._profile.supports_cmd29(0x06):
+                civ = self._commands.set_mode(
+                    parsed_mode,
+                    filter_width=filter_width,
+                    to_addr=self._radio_addr,
+                    receiver=receiver,
+                )
+                await self._send_civ_raw(civ, wait_response=False)
+            else:
+                await self._set_mode_main(
+                    parsed_mode,
+                    filter_width=filter_width,
+                    update_cache=receiver == RECEIVER_MAIN,
+                )
+            if receiver == RECEIVER_MAIN:
+                return
+
+        sub = self._radio_state.receiver("SUB")
+        sub.mode = parsed_mode.name
+        if filter_width is not None:
+            sub.filter = filter_width
+
+    async def get_data_mode(self) -> bool:
+        """Get the IC-7610 DATA mode state (command 0x1A 0x06).
+
+        Returns:
+            True if DATA mode is active (DATA1/2/3), False if off.
+        """
+        self._check_connected()
+        civ = self._commands.get_data_mode(to_addr=self._radio_addr)
+        resp = await self._send_civ_expect(civ, label="get_data_mode")
+        return parse_data_mode_response(resp)
+
+    async def set_data_mode_with_filter(
+        self, on: int | bool, *, filter_width: int
+    ) -> None:
+        """Apply DATA with an explicit filter using the declared value variant."""
+        await self.set_data_mode(on, filter_width=filter_width)
+
+    async def set_data_mode(
+        self, on: int | bool, receiver: int = 0, *, filter_width: int | None = None
+    ) -> None:
+        """Set receiver DATA mode (command 0x1A 0x06).
+
+        Args:
+            on: False/0 to disable, True/1 to enable DATA1 mode, or an explicit
+                DATA mode 0-3.
+            receiver: 0 = main, 1 = sub.
+        """
+        self._check_connected()
+        self._require_capability("data_mode", operation="set_data_mode")
+        self._require_receiver(receiver, operation="set_data_mode")
+
+        self._require_cmd29_route(
+            0x1A,
+            0x06,
+            receiver=receiver,
+            operation="set_data_mode",
+        )
+        # The builder cmd29-wraps any non-MAIN receiver: without a route the
+        # admitted (selected) receiver takes the plain frame.
+        wire_receiver = (
+            receiver if self._profile.supports_cmd29(0x1A, 0x06) else RECEIVER_MAIN
+        )
+        civ = self._commands.set_data_mode(
+            on,
+            to_addr=self._radio_addr,
+            receiver=wire_receiver,
+            filter_width=filter_width,
+        )
+        resp = await self._send_civ_expect(civ, label="action")
+        ack = parse_ack_nak(resp)
+        if ack is False:
+            raise CommandError(
+                f"Radio rejected set_data_mode({on}, receiver={receiver})"
+            )
+
+    def _parse_level(self, resp: "CivFrame") -> int:
+        """Parse a level BCD response into an integer 0-255."""
+        return _level_bcd_decode(resp.data)
+
+    async def _get_bcd_level(
+        self,
+        civ: bytes,
+        *,
+        key: str,
+        command: int,
+        sub: int,
+        prefix: bytes = b"",
+        bcd_bytes: int = 2,
+    ) -> int:
+        """Send a GET command and parse a BCD-encoded integer response."""
+        self._check_connected()
+        resp = await self._send_civ_expect(
+            civ, key=key, dedupe=True, label="get_bcd_level"
+        )
+        return parse_level_response(
+            resp,
+            command=command,
+            sub=sub,
+            prefix=prefix,
+            bcd_bytes=bcd_bytes,
+        )
+
+    async def _get_bool_value(
+        self,
+        civ: bytes,
+        *,
+        key: str,
+        command: int,
+        sub: int,
+        prefix: bytes = b"",
+    ) -> bool:
+        """Send a GET command and parse a boolean response."""
+        self._check_connected()
+        resp = await self._send_civ_expect(
+            civ, key=key, dedupe=True, label="get_bool_value"
+        )
+        return parse_bool_response(resp, command=command, sub=sub, prefix=prefix)
+
+    def _expect_shape(self, builder: Callable[..., bytes]) -> tuple[int, int, bytes]:
+        """The ``(command, sub, prefix)`` a migrated getter's reply must match.
+
+        Thin wrapper over `commands/bound.py: BoundCommands.expect` (MOR-2006
+        §6 population 1): ``expect`` types ``sub`` as ``int | None`` per the
+        wire-tuple contract, but every builder routed through here so far
+        always has one -- the assertion fails loudly instead of reaching
+        ``_get_bcd_level``/``_get_bool_value`` with the wrong type.
+        """
+        command, sub, prefix = self._commands.expect(builder)
+        assert sub is not None, (
+            f"{getattr(builder, '__qualname__', builder)}: map entry has no "
+            "sub-command byte"
+        )
+        return command, sub, prefix
+
+    async def _send_fire_and_forget(self, civ: bytes) -> None:
+        """Send a fire-and-forget CI-V command after connection checks."""
+        self._check_connected()
+        await self._send_civ_raw(civ, wait_response=False)
+
+    # commands/levels.py, migrated onto the bound command map (MOR-2006
+    # Steps 5..N module 2, plan §4): requests go through
+    # ``self._commands.<builder>`` and matcher-backed replies through
+    # ``self._expect_shape`` (§6 population 1). ``get_rf_power``,
+    # ``get_rf_gain`` and ``get_af_level`` parse their reply with
+    # ``_level_bcd_decode``/``_parse_level`` directly, without checking the
+    # reply's command/sub bytes, so they have no matcher shape to migrate.
+
+    async def get_rf_power(self) -> int:
+        """Get the RF power level (0-255).
+
+        On timeout falls back to the state cache if populated.
+        """
+        self._check_connected()
+        civ = self._commands.get_rf_power(to_addr=self._radio_addr)
+        try:
+            resp = await self._send_civ_expect(
+                civ, key="get_rf_power", dedupe=True, label="get_rf_power"
+            )
+            level = _level_bcd_decode(resp.data)
+            self._state_cache.update_rf_power(level / 255.0)
+            return level
+        except TimeoutError:
+            if (
+                self._state_cache.is_fresh("rf_power", self._cache_ttl_rf_power)
+                and self._state_cache.rf_power is not None
+            ):
+                cached_level = round(self._state_cache.rf_power * 255)
+                logger.debug("get_rf_power: timeout, returning cached %d", cached_level)
+                return cached_level
+            raise
+
+    async def set_rf_power(self, level: int) -> None:
+        """Set the RF power level (0-255).
+
+        Args:
+            level: Power level 0-255.
+        """
+        if not 0 <= level <= 255:
+            raise ValueError(f"RF power must be 0-255, got {level}")
+        self._check_connected()
+        self._require_capability("power_control", operation="set_rf_power")
+        civ = self._commands.set_rf_power(level, to_addr=self._radio_addr)
+        await self._send_civ_raw(civ, wait_response=False)
+
+    async def get_rf_gain(self, receiver: int = 0) -> int:
+        """Read the current RF gain level (0-255)."""
+        self._check_connected()
+        self._require_receiver(receiver, operation="get_rf_gain")
+        self._require_cmd29_route(
+            0x14,
+            0x02,
+            receiver=receiver,
+            operation="get_rf_gain",
+        )
+        cmd29 = self._profile.supports_cmd29(0x14, 0x02)
+        civ = self._commands.get_rf_gain(
+            to_addr=self._radio_addr, receiver=receiver, command29=cmd29
+        )
+        try:
+            resp = await self._send_civ_expect(
+                civ,
+                key=f"get_rf_gain:{receiver}",
+                dedupe=True,
+                label="get_rf_gain",
+            )
+            return self._parse_level(resp)
+        except TimeoutError:
+            raise
+
+    async def set_rf_gain(self, level: int, receiver: int = 0) -> None:
+        """Set RF gain level (0-255)."""
+        if not 0 <= level <= 255:
+            raise ValueError(f"RF gain must be 0-255, got {level}")
+        self._check_connected()
+        self._require_capability("rf_gain", operation="set_rf_gain")
+        self._require_receiver(receiver, operation="set_rf_gain")
+        cmd29 = bool(self._level_command29("set_rf_gain", receiver=receiver))
+        civ = self._commands.set_rf_gain(
+            level, to_addr=self._radio_addr, receiver=receiver, command29=cmd29
+        )
+        await self._send_civ_raw(civ, wait_response=False)
+
+    async def get_af_level(self, receiver: int = 0) -> int:
+        """Read the current AF output level (0-255)."""
+        self._check_connected()
+        self._require_receiver(receiver, operation="get_af_level")
+        self._require_cmd29_route(
+            0x14,
+            0x01,
+            receiver=receiver,
+            operation="get_af_level",
+        )
+        cmd29 = self._profile.supports_cmd29(0x14, 0x01)
+        civ = self._commands.get_af_level(
+            to_addr=self._radio_addr, receiver=receiver, command29=cmd29
+        )
+        try:
+            resp = await self._send_civ_expect(
+                civ,
+                key=f"get_af_level:{receiver}",
+                dedupe=True,
+                label="get_af_level",
+            )
+            return self._parse_level(resp)
+        except TimeoutError:
+            raise
+
+    async def set_af_level(self, level: int, receiver: int = 0) -> None:
+        """Set AF output level (0-255)."""
+        if not 0 <= level <= 255:
+            raise ValueError(f"AF level must be 0-255, got {level}")
+        self._check_connected()
+        self._require_capability("af_level", operation="set_af_level")
+        self._require_receiver(receiver, operation="set_af_level")
+        cmd29 = bool(self._level_command29("set_af_level", receiver=receiver))
+        civ = self._commands.set_af_level(
+            level, to_addr=self._radio_addr, receiver=receiver, command29=cmd29
+        )
+        await self._send_civ_raw(civ, wait_response=False)
+
+    async def set_squelch(self, level: int, receiver: int = 0) -> None:
+        """Set squelch level (0-255, 0=open)."""
+        if not 0 <= level <= 255:
+            raise ValueError(f"Squelch level must be 0-255, got {level}")
+        self._check_connected()
+        self._require_capability("squelch", operation="set_squelch")
+        self._require_receiver(receiver, operation="set_squelch")
+        cmd29 = bool(self._level_command29("set_squelch", receiver=receiver))
+        civ = self._commands.set_squelch(
+            level, to_addr=self._radio_addr, receiver=receiver, command29=cmd29
+        )
+        await self._send_civ_raw(civ, wait_response=False)
+
+    async def get_squelch(self, receiver: int = 0) -> int:
+        """Read the current squelch level (0-255)."""
+        self._check_connected()
+        self._require_capability("squelch", operation="get_squelch")
+        self._require_receiver(receiver, operation="get_squelch")
+        self._require_cmd29_route(
+            0x14,
+            0x03,
+            receiver=receiver,
+            operation="get_squelch",
+        )
+        cmd29 = self._profile.supports_cmd29(0x14, 0x03)
+        civ = self._commands.get_squelch(
+            to_addr=self._radio_addr, receiver=receiver, command29=cmd29
+        )
+        command, sub, prefix = self._expect_shape(get_squelch)
+        return await self._get_bcd_level(
+            civ,
+            key=f"get_squelch:{receiver}",
+            command=command,
+            sub=sub,
+            prefix=prefix,
+        )
+
+    async def get_apf_type_level(self, receiver: int = RECEIVER_MAIN) -> int:
+        """Read APF Type Level (0-255)."""
+        self._require_receiver(receiver, operation="get_apf_type_level")
+        self._require_cmd29_route(
+            0x14, 0x05, receiver=receiver, operation="get_apf_type_level"
+        )
+        cmd29 = self._profile.supports_cmd29(0x14, 0x05)
+        civ = self._commands.get_apf_type_level(
+            to_addr=self._radio_addr, receiver=receiver, command29=cmd29
+        )
+        command, sub, prefix = self._expect_shape(get_apf_type_level)
+        return await self._get_bcd_level(
+            civ,
+            key=f"get_apf_type_level:{receiver}",
+            command=command,
+            sub=sub,
+            prefix=prefix,
+        )
+
+    async def set_apf_type_level(
+        self, level: int, receiver: int = RECEIVER_MAIN
+    ) -> None:
+        """Set APF Type Level (0-255)."""
+        self._require_receiver(receiver, operation="set_apf_type_level")
+        self._require_cmd29_route(
+            0x14, 0x05, receiver=receiver, operation="set_apf_type_level"
+        )
+        cmd29 = self._profile.supports_cmd29(0x14, 0x05)
+        await self._send_fire_and_forget(
+            self._commands.set_apf_type_level(
+                level, to_addr=self._radio_addr, receiver=receiver, command29=cmd29
+            )
+        )
+
+    async def get_nr_level(self, receiver: int = RECEIVER_MAIN) -> int:
+        """Read NR Level (0-255)."""
+        self._require_receiver(receiver, operation="get_nr_level")
+        self._require_cmd29_route(
+            0x14, 0x06, receiver=receiver, operation="get_nr_level"
+        )
+        cmd29 = self._profile.supports_cmd29(0x14, 0x06)
+        civ = self._commands.get_nr_level(
+            to_addr=self._radio_addr, receiver=receiver, command29=cmd29
+        )
+        command, sub, prefix = self._expect_shape(get_nr_level)
+        return await self._get_bcd_level(
+            civ, key=f"get_nr_level:{receiver}", command=command, sub=sub, prefix=prefix
+        )
+
+    async def set_nr_level(self, level: int, receiver: int = RECEIVER_MAIN) -> None:
+        """Set NR Level (0-255)."""
+        self._require_receiver(receiver, operation="set_nr_level")
+        self._require_cmd29_route(
+            0x14, 0x06, receiver=receiver, operation="set_nr_level"
+        )
+        cmd29 = self._profile.supports_cmd29(0x14, 0x06)
+        await self._send_fire_and_forget(
+            self._commands.set_nr_level(
+                level, to_addr=self._radio_addr, receiver=receiver, command29=cmd29
+            )
+        )
+
+    async def get_pbt_inner(self, receiver: int = RECEIVER_MAIN) -> int:
+        """Read PBT Inner level (0-255)."""
+        self._require_receiver(receiver, operation="get_pbt_inner")
+        self._require_cmd29_route(
+            0x14, 0x07, receiver=receiver, operation="get_pbt_inner"
+        )
+        cmd29 = self._profile.supports_cmd29(0x14, 0x07)
+        civ = self._commands.get_pbt_inner(
+            to_addr=self._radio_addr, receiver=receiver, command29=cmd29
+        )
+        command, sub, prefix = self._expect_shape(get_pbt_inner)
+        return await self._get_bcd_level(
+            civ,
+            key=f"get_pbt_inner:{receiver}",
+            command=command,
+            sub=sub,
+            prefix=prefix,
+        )
+
+    async def set_pbt_inner(self, level: int, receiver: int = RECEIVER_MAIN) -> None:
+        """Set PBT Inner level (0-255)."""
+        self._require_receiver(receiver, operation="set_pbt_inner")
+        self._require_cmd29_route(
+            0x14, 0x07, receiver=receiver, operation="set_pbt_inner"
+        )
+        cmd29 = self._profile.supports_cmd29(0x14, 0x07)
+        await self._send_fire_and_forget(
+            self._commands.set_pbt_inner(
+                level, to_addr=self._radio_addr, receiver=receiver, command29=cmd29
+            )
+        )
+
+    async def get_pbt_outer(self, receiver: int = RECEIVER_MAIN) -> int:
+        """Read PBT Outer level (0-255)."""
+        self._require_receiver(receiver, operation="get_pbt_outer")
+        self._require_cmd29_route(
+            0x14, 0x08, receiver=receiver, operation="get_pbt_outer"
+        )
+        cmd29 = self._profile.supports_cmd29(0x14, 0x08)
+        civ = self._commands.get_pbt_outer(
+            to_addr=self._radio_addr, receiver=receiver, command29=cmd29
+        )
+        command, sub, prefix = self._expect_shape(get_pbt_outer)
+        return await self._get_bcd_level(
+            civ,
+            key=f"get_pbt_outer:{receiver}",
+            command=command,
+            sub=sub,
+            prefix=prefix,
+        )
+
+    async def set_pbt_outer(self, level: int, receiver: int = RECEIVER_MAIN) -> None:
+        """Set PBT Outer level (0-255)."""
+        self._require_receiver(receiver, operation="set_pbt_outer")
+        self._require_cmd29_route(
+            0x14, 0x08, receiver=receiver, operation="set_pbt_outer"
+        )
+        cmd29 = self._profile.supports_cmd29(0x14, 0x08)
+        await self._send_fire_and_forget(
+            self._commands.set_pbt_outer(
+                level, to_addr=self._radio_addr, receiver=receiver, command29=cmd29
+            )
+        )
+
+    async def get_cw_pitch(self) -> int:
+        """Read CW pitch in Hz."""
+        command, sub, prefix = self._expect_shape(get_cw_pitch)
+        level = await self._get_bcd_level(
+            self._commands.get_cw_pitch(to_addr=self._radio_addr),
+            key="get_cw_pitch",
+            command=command,
+            sub=sub,
+            prefix=prefix,
+        )
+        return decode_legacy_control(self._profile.controls, "cw_pitch", level)
+
+    async def set_cw_pitch(self, pitch_hz: int) -> None:
+        """Set CW pitch in Hz.
+
+        The Hz-to-level conversion comes from the active profile's
+        ``[controls.cw_pitch]`` band and its ``encode_rounding`` rule.
+        """
+        level = encode_legacy_control(self._profile.controls, "cw_pitch", pitch_hz)
+        await self._send_fire_and_forget(
+            self._commands.set_cw_pitch(level, to_addr=self._radio_addr)
+        )
+
+    async def get_mic_gain(self) -> int:
+        """Read Mic Gain (0-255)."""
+        command, sub, prefix = self._expect_shape(get_mic_gain)
+        return await self._get_bcd_level(
+            self._commands.get_mic_gain(to_addr=self._radio_addr),
+            key="get_mic_gain",
+            command=command,
+            sub=sub,
+            prefix=prefix,
+        )
+
+    async def set_mic_gain(self, level: int) -> None:
+        """Set Mic Gain (0-255)."""
+        await self._send_fire_and_forget(
+            self._commands.set_mic_gain(level, to_addr=self._radio_addr)
+        )
+
+    async def get_key_speed(self) -> int:
+        """Read key speed in WPM."""
+        command, sub, prefix = self._expect_shape(get_key_speed)
+        level = await self._get_bcd_level(
+            self._commands.get_key_speed(to_addr=self._radio_addr),
+            key="get_key_speed",
+            command=command,
+            sub=sub,
+            prefix=prefix,
+        )
+        return decode_legacy_control(self._profile.controls, "key_speed", level)
+
+    async def set_key_speed(self, wpm: int) -> None:
+        """Set key speed in WPM.
+
+        The WPM-to-level conversion comes from the active profile's
+        ``[controls.key_speed]`` band and its ``encode_rounding`` rule.
+        """
+        level = encode_legacy_control(self._profile.controls, "key_speed", wpm)
+        await self._send_fire_and_forget(
+            self._commands.set_key_speed(level, to_addr=self._radio_addr)
+        )
+
+    async def get_notch_filter(self, receiver: int = RECEIVER_MAIN) -> int:
+        """Read notch filter level (0-255)."""
+        self._require_receiver(receiver, operation="get_notch_filter")
+        self._require_cmd29_route(
+            0x14, 0x0D, receiver=receiver, operation="get_notch_filter"
+        )
+        cmd29 = self._profile.supports_cmd29(0x14, 0x0D)
+        civ = self._commands.get_notch_filter(
+            to_addr=self._radio_addr, receiver=receiver, command29=cmd29
+        )
+        command, sub, prefix = self._expect_shape(get_notch_filter)
+        return await self._get_bcd_level(
+            civ,
+            key=f"get_notch_filter:{receiver}",
+            command=command,
+            sub=sub,
+            prefix=prefix,
+        )
+
+    async def set_notch_filter(self, level: int, receiver: int = RECEIVER_MAIN) -> None:
+        """Set notch filter level (0-255)."""
+        self._require_receiver(receiver, operation="set_notch_filter")
+        self._require_cmd29_route(
+            0x14, 0x0D, receiver=receiver, operation="set_notch_filter"
+        )
+        cmd29 = self._profile.supports_cmd29(0x14, 0x0D)
+        await self._send_fire_and_forget(
+            self._commands.set_notch_filter(
+                level, to_addr=self._radio_addr, receiver=receiver, command29=cmd29
+            )
+        )
+
+    async def get_compressor_level(self) -> int:
+        """Read compressor level (0-255)."""
+        command, sub, prefix = self._expect_shape(get_compressor_level)
+        return await self._get_bcd_level(
+            self._commands.get_compressor_level(to_addr=self._radio_addr),
+            key="get_compressor_level",
+            command=command,
+            sub=sub,
+            prefix=prefix,
+        )
+
+    async def set_compressor_level(self, level: int) -> None:
+        """Set compressor level (0-255)."""
+        await self._send_fire_and_forget(
+            self._commands.set_compressor_level(level, to_addr=self._radio_addr)
+        )
+
+    async def get_break_in_delay(self) -> int:
+        """Read break-in delay level (0-255)."""
+        command, sub, prefix = self._expect_shape(get_break_in_delay)
+        return await self._get_bcd_level(
+            self._commands.get_break_in_delay(to_addr=self._radio_addr),
+            key="get_break_in_delay",
+            command=command,
+            sub=sub,
+            prefix=prefix,
+        )
+
+    async def set_break_in_delay(self, level: int) -> None:
+        """Set break-in delay level (0-255)."""
+        await self._send_fire_and_forget(
+            self._commands.set_break_in_delay(level, to_addr=self._radio_addr)
+        )
+
+    async def get_nb_level(self, receiver: int = RECEIVER_MAIN) -> int:
+        """Read NB level (0-255)."""
+        self._require_receiver(receiver, operation="get_nb_level")
+        self._require_cmd29_route(
+            0x14, 0x12, receiver=receiver, operation="get_nb_level"
+        )
+        cmd29 = self._profile.supports_cmd29(0x14, 0x12)
+        civ = self._commands.get_nb_level(
+            to_addr=self._radio_addr, receiver=receiver, command29=cmd29
+        )
+        command, sub, prefix = self._expect_shape(get_nb_level)
+        return await self._get_bcd_level(
+            civ, key=f"get_nb_level:{receiver}", command=command, sub=sub, prefix=prefix
+        )
+
+    async def set_nb_level(self, level: int, receiver: int = RECEIVER_MAIN) -> None:
+        """Set NB level (0-255)."""
+        self._require_receiver(receiver, operation="set_nb_level")
+        self._require_cmd29_route(
+            0x14, 0x12, receiver=receiver, operation="set_nb_level"
+        )
+        cmd29 = self._profile.supports_cmd29(0x14, 0x12)
+        await self._send_fire_and_forget(
+            self._commands.set_nb_level(
+                level, to_addr=self._radio_addr, receiver=receiver, command29=cmd29
+            )
+        )
+
+    async def get_digisel_shift(self, receiver: int = RECEIVER_MAIN) -> int:
+        """Read DIGI-SEL Shift (0-255)."""
+        self._require_receiver(receiver, operation="get_digisel_shift")
+        self._require_cmd29_route(
+            0x14, 0x13, receiver=receiver, operation="get_digisel_shift"
+        )
+        cmd29 = self._profile.supports_cmd29(0x14, 0x13)
+        civ = self._commands.get_digisel_shift(
+            to_addr=self._radio_addr, receiver=receiver, command29=cmd29
+        )
+        command, sub, prefix = self._expect_shape(get_digisel_shift)
+        return await self._get_bcd_level(
+            civ,
+            key=f"get_digisel_shift:{receiver}",
+            command=command,
+            sub=sub,
+            prefix=prefix,
+        )
+
+    async def set_digisel_shift(
+        self, level: int, receiver: int = RECEIVER_MAIN
+    ) -> None:
+        """Set DIGI-SEL Shift (0-255)."""
+        self._require_receiver(receiver, operation="set_digisel_shift")
+        self._require_cmd29_route(
+            0x14, 0x13, receiver=receiver, operation="set_digisel_shift"
+        )
+        cmd29 = self._profile.supports_cmd29(0x14, 0x13)
+        await self._send_fire_and_forget(
+            self._commands.set_digisel_shift(
+                level, to_addr=self._radio_addr, receiver=receiver, command29=cmd29
+            )
+        )
+
+    async def get_drive_gain(self) -> int:
+        """Read drive gain (0-255)."""
+        command, sub, prefix = self._expect_shape(get_drive_gain)
+        return await self._get_bcd_level(
+            self._commands.get_drive_gain(to_addr=self._radio_addr),
+            key="get_drive_gain",
+            command=command,
+            sub=sub,
+            prefix=prefix,
+        )
+
+    async def set_drive_gain(self, level: int) -> None:
+        """Set drive gain (0-255)."""
+        await self._send_fire_and_forget(
+            self._commands.set_drive_gain(level, to_addr=self._radio_addr)
+        )
+
+    async def get_monitor_gain(self) -> int:
+        """Read monitor gain (0-255)."""
+        command, sub, prefix = self._expect_shape(get_monitor_gain)
+        return await self._get_bcd_level(
+            self._commands.get_monitor_gain(to_addr=self._radio_addr),
+            key="get_monitor_gain",
+            command=command,
+            sub=sub,
+            prefix=prefix,
+        )
+
+    async def set_monitor_gain(self, level: int) -> None:
+        """Set monitor gain (0-255)."""
+        await self._send_fire_and_forget(
+            self._commands.set_monitor_gain(level, to_addr=self._radio_addr)
+        )
+
+    async def get_vox_gain(self) -> int:
+        """Read VOX gain (0-255)."""
+        command, sub, prefix = self._expect_shape(get_vox_gain)
+        return await self._get_bcd_level(
+            self._commands.get_vox_gain(to_addr=self._radio_addr),
+            key="get_vox_gain",
+            command=command,
+            sub=sub,
+            prefix=prefix,
+        )
+
+    async def set_vox_gain(self, level: int) -> None:
+        """Set VOX gain (0-255)."""
+        await self._send_fire_and_forget(
+            self._commands.set_vox_gain(level, to_addr=self._radio_addr)
+        )
+
+    async def get_anti_vox_gain(self) -> int:
+        """Read anti-VOX gain (0-255)."""
+        command, sub, prefix = self._expect_shape(get_anti_vox_gain)
+        return await self._get_bcd_level(
+            self._commands.get_anti_vox_gain(to_addr=self._radio_addr),
+            key="get_anti_vox_gain",
+            command=command,
+            sub=sub,
+            prefix=prefix,
+        )
+
+    async def set_anti_vox_gain(self, level: int) -> None:
+        """Set anti-VOX gain (0-255)."""
+        await self._send_fire_and_forget(
+            self._commands.set_anti_vox_gain(level, to_addr=self._radio_addr)
+        )
+
+    async def get_ref_adjust(self) -> int:
+        """Read REF Adjust (0-511)."""
+        command, sub, prefix = self._expect_shape(get_ref_adjust)
+        return await self._get_bcd_level(
+            self._commands.get_ref_adjust(to_addr=self._radio_addr),
+            key="get_ref_adjust",
+            command=command,
+            sub=sub,
+            prefix=prefix,
+        )
+
+    async def set_ref_adjust(self, value: int) -> None:
+        """Set REF Adjust (0-511)."""
+        await self._send_fire_and_forget(
+            self._commands.set_ref_adjust(value, to_addr=self._radio_addr)
+        )
+
+    async def get_dash_ratio(self) -> int:
+        """Read dash ratio (28-45)."""
+        command, sub, prefix = self._expect_shape(get_dash_ratio)
+        return await self._get_bcd_level(
+            self._commands.get_dash_ratio(to_addr=self._radio_addr),
+            key="get_dash_ratio",
+            command=command,
+            sub=sub,
+            prefix=prefix,
+            bcd_bytes=1,
+        )
+
+    async def set_dash_ratio(self, value: int) -> None:
+        """Set dash ratio (28-45)."""
+        await self._send_fire_and_forget(
+            self._commands.set_dash_ratio(value, to_addr=self._radio_addr)
+        )
+
+    async def get_nb_depth(self) -> int:
+        """Read NB depth (0-9)."""
+        command, sub, prefix = self._expect_shape(get_nb_depth)
+        return await self._get_bcd_level(
+            self._commands.get_nb_depth(to_addr=self._radio_addr),
+            key="get_nb_depth",
+            command=command,
+            sub=sub,
+            prefix=prefix,
+            bcd_bytes=1,
+        )
+
+    async def set_nb_depth(self, value: int) -> None:
+        """Set NB depth (0-9)."""
+        await self._send_fire_and_forget(
+            self._commands.set_nb_depth(value, to_addr=self._radio_addr)
+        )
+
+    async def get_nb_width(self) -> int:
+        """Read NB width (0-255)."""
+        command, sub, prefix = self._expect_shape(get_nb_width)
+        return await self._get_bcd_level(
+            self._commands.get_nb_width(to_addr=self._radio_addr),
+            key="get_nb_width",
+            command=command,
+            sub=sub,
+            prefix=prefix,
+        )
+
+    async def set_nb_width(self, value: int) -> None:
+        """Set NB width (0-255)."""
+        await self._send_fire_and_forget(
+            self._commands.set_nb_width(value, to_addr=self._radio_addr)
+        )
+
+    async def get_vox_delay(self) -> int:
+        """Read VOX delay (0-20, units of 0.1s)."""
+        command, sub, prefix = self._expect_shape(get_vox_delay)
+        return await self._get_bcd_level(
+            self._commands.get_vox_delay(to_addr=self._radio_addr),
+            key="get_vox_delay",
+            command=command,
+            sub=sub,
+            prefix=prefix,
+            bcd_bytes=1,
+        )
+
+    async def set_vox_delay(self, level: int) -> None:
+        """Set VOX delay (0-20, units of 0.1s)."""
+        await self._send_fire_and_forget(
+            self._commands.set_vox_delay(level, to_addr=self._radio_addr)
+        )
+
+    async def get_af_mute(self, receiver: int = RECEIVER_MAIN) -> bool:
+        """Read AF mute status."""
+        self._require_receiver(receiver, operation="get_af_mute")
+        self._require_cmd29_route(
+            0x1A, 0x09, receiver=receiver, operation="get_af_mute"
+        )
+        cmd29 = self._profile.supports_cmd29(0x1A, 0x09)
+        civ = self._commands.get_af_mute(
+            to_addr=self._radio_addr, receiver=receiver, command29=cmd29
+        )
+        command, sub, _ = self._expect_shape(get_af_mute)
+        return await self._get_bool_value(
+            civ, key=f"get_af_mute:{receiver}", command=command, sub=sub
+        )
+
+    async def set_af_mute(self, on: bool, receiver: int = RECEIVER_MAIN) -> None:
+        """Set AF mute status."""
+        self._require_receiver(receiver, operation="set_af_mute")
+        self._require_cmd29_route(
+            0x1A, 0x09, receiver=receiver, operation="set_af_mute"
+        )
+        cmd29 = self._profile.supports_cmd29(0x1A, 0x09)
+        await self._send_fire_and_forget(
+            self._commands.set_af_mute(
+                on, to_addr=self._radio_addr, receiver=receiver, command29=cmd29
+            )
+        )
+
+    async def get_s_meter_sql_status(self, receiver: int = RECEIVER_MAIN) -> bool:
+        """Read S-meter squelch status for the selected receiver."""
+        self._require_receiver(receiver, operation="get_s_meter_sql_status")
+        self._require_cmd29_route(
+            0x15, 0x01, receiver=receiver, operation="get_s_meter_sql_status"
+        )
+        cmd29 = self._profile.supports_cmd29(0x15, 0x01)
+        civ = self._commands.get_s_meter_sql_status(
+            to_addr=self._radio_addr, receiver=receiver, command29=cmd29
+        )
+        command, sub, _ = self._expect_shape(get_s_meter_sql_status)
+        return await self._get_bool_value(
+            civ,
+            key=f"get_s_meter_sql_status:{receiver}",
+            command=command,
+            sub=sub,
+        )
+
+    async def get_overflow_status(self) -> bool:
+        """Read OVF indicator status."""
+        civ = self._commands.get_overflow_status(to_addr=self._radio_addr)
+        command, sub, _ = self._expect_shape(get_overflow_status)
+        return await self._get_bool_value(
+            civ,
+            key="get_overflow_status",
+            command=command,
+            sub=sub,
+        )
+
+    async def get_agc(self, receiver: int = RECEIVER_MAIN) -> int:
+        """Read AGC mode.
+
+        Returns the raw profile-declared value (see the radio's ``[agc]
+        modes`` in its TOML profile), not an ``AgcMode`` enum member.
+        ``AgcMode`` is the IC-7610/generic Icom FAST/MID/SLOW shape — a
+        radio with a differently-shaped domain (e.g. the X6200's
+        OFF=0/FAST=1/SLOW=2/AUTO=3) would otherwise raise on OFF (0 is not
+        a member) or be silently mislabeled for SLOW/AUTO (index 2/3 mean
+        something else there). Label mapping is data-side (``[agc]
+        labels``), mirroring ``set_agc``'s MOR-1522 fix (MOR-1529).
+        """
+        self._require_receiver(receiver, operation="get_agc")
+        self._require_cmd29_route(0x16, 0x12, receiver=receiver, operation="get_agc")
+        cmd29 = self._profile.supports_cmd29(0x16, 0x12)
+        command, sub, _ = self._expect_shape(get_agc)
+        value = await self._get_bcd_level(
+            self._commands.get_agc(
+                to_addr=self._radio_addr, receiver=receiver, command29=cmd29
+            ),
+            key=f"get_agc:{receiver}",
+            command=command,
+            sub=sub,
+            bcd_bytes=1,
+        )
+        agc_modes = self._profile.agc_modes
+        if agc_modes is not None and value not in agc_modes:
+            raise ValueError(
+                f"AGC mode {value} reported by radio is not in declared domain "
+                f"{sorted(agc_modes)} for {self._profile.model}"
+            )
+        return value
+
+    async def set_agc(self, mode: AgcMode | int, receiver: int = RECEIVER_MAIN) -> None:
+        """Set AGC mode.
+
+        Valid values are declared per radio by the profile's ``[agc] modes``
+        (e.g. IC-7300/IC-7610 offer FAST/MID/SLOW only; the X6200
+        additionally declares OFF/AUTO). ``AgcMode`` is the IC-7610/generic
+        Icom FAST/MID/SLOW enum and is no longer used to gate the value —
+        a profile-declared value outside that enum (e.g. X6200's OFF=0)
+        must not be rejected just because it isn't an IC-7610 mode (MOR-1522).
+        """
+        self._require_receiver(receiver, operation="set_agc")
+        self._require_cmd29_route(0x16, 0x12, receiver=receiver, operation="set_agc")
+        cmd29 = self._profile.supports_cmd29(0x16, 0x12)
+        mode_int = int(mode)
+        agc_modes = self._profile.agc_modes
+        if agc_modes is not None and mode_int not in agc_modes:
+            raise ValueError(
+                f"AGC mode must be one of {sorted(agc_modes)} for "
+                f"{self._profile.model}, got {mode_int}"
+            )
+        await self._send_fire_and_forget(
+            self._commands.set_agc(
+                mode_int, to_addr=self._radio_addr, receiver=receiver, command29=cmd29
+            )
+        )
+
+    async def get_audio_peak_filter(
+        self, receiver: int = RECEIVER_MAIN
+    ) -> AudioPeakFilter:
+        """Read audio peak filter mode."""
+        self._require_receiver(receiver, operation="get_audio_peak_filter")
+        self._require_cmd29_route(
+            0x16, 0x32, receiver=receiver, operation="get_audio_peak_filter"
+        )
+        cmd29 = self._profile.supports_cmd29(0x16, 0x32)
+        command, sub, _ = self._expect_shape(get_audio_peak_filter)
+        value = await self._get_bcd_level(
+            self._commands.get_audio_peak_filter(
+                to_addr=self._radio_addr, receiver=receiver, command29=cmd29
+            ),
+            key=f"get_audio_peak_filter:{receiver}",
+            command=command,
+            sub=sub,
+            bcd_bytes=1,
+        )
+        return AudioPeakFilter(value)
+
+    async def set_audio_peak_filter(
+        self,
+        mode: AudioPeakFilter | int,
+        receiver: int = RECEIVER_MAIN,
+    ) -> None:
+        """Set audio peak filter mode."""
+        self._require_receiver(receiver, operation="set_audio_peak_filter")
+        self._require_cmd29_route(
+            0x16, 0x32, receiver=receiver, operation="set_audio_peak_filter"
+        )
+        cmd29 = self._profile.supports_cmd29(0x16, 0x32)
+        apf = AudioPeakFilter(mode)
+        await self._send_fire_and_forget(
+            self._commands.set_audio_peak_filter(
+                apf, to_addr=self._radio_addr, receiver=receiver, command29=cmd29
+            )
+        )
+
+    async def get_auto_notch(self, receiver: int = RECEIVER_MAIN) -> bool:
+        """Read auto-notch status."""
+        self._require_receiver(receiver, operation="get_auto_notch")
+        self._require_cmd29_route(
+            0x16, 0x41, receiver=receiver, operation="get_auto_notch"
+        )
+        cmd29 = self._profile.supports_cmd29(0x16, 0x41)
+        civ = self._commands.get_auto_notch(
+            to_addr=self._radio_addr, receiver=receiver, command29=cmd29
+        )
+        command, sub, _ = self._expect_shape(get_auto_notch)
+        return await self._get_bool_value(
+            civ,
+            key=f"get_auto_notch:{receiver}",
+            command=command,
+            sub=sub,
+        )
+
+    async def set_auto_notch(self, on: bool, receiver: int = RECEIVER_MAIN) -> None:
+        """Set auto-notch status."""
+        self._require_receiver(receiver, operation="set_auto_notch")
+        self._require_cmd29_route(
+            0x16, 0x41, receiver=receiver, operation="set_auto_notch"
+        )
+        cmd29 = self._profile.supports_cmd29(0x16, 0x41)
+        await self._send_fire_and_forget(
+            self._commands.set_auto_notch(
+                on, to_addr=self._radio_addr, receiver=receiver, command29=cmd29
+            )
+        )
+
+    async def get_compressor(self) -> bool:
+        """Read speech compressor status."""
+        civ = self._commands.get_compressor(to_addr=self._radio_addr)
+        command, sub, _ = self._expect_shape(get_compressor)
+        return await self._get_bool_value(
+            civ, key="get_compressor", command=command, sub=sub
+        )
+
+    async def set_compressor(self, on: bool) -> None:
+        """Set speech compressor status."""
+        await self._send_fire_and_forget(
+            self._commands.set_compressor(on, to_addr=self._radio_addr)
+        )
+
+    async def get_monitor(self) -> bool:
+        """Read monitor status."""
+        civ = self._commands.get_monitor(to_addr=self._radio_addr)
+        command, sub, _ = self._expect_shape(get_monitor)
+        return await self._get_bool_value(
+            civ, key="get_monitor", command=command, sub=sub
+        )
+
+    async def set_monitor(self, on: bool) -> None:
+        """Set monitor status."""
+        await self._send_fire_and_forget(
+            self._commands.set_monitor(on, to_addr=self._radio_addr)
+        )
+
+    async def get_vox(self) -> bool:
+        """Read VOX status."""
+        civ = self._commands.get_vox(to_addr=self._radio_addr)
+        command, sub, _ = self._expect_shape(get_vox)
+        return await self._get_bool_value(civ, key="get_vox", command=command, sub=sub)
+
+    async def set_vox(self, on: bool) -> None:
+        """Set VOX status."""
+        await self._send_fire_and_forget(
+            self._commands.set_vox(on, to_addr=self._radio_addr)
+        )
+
+    async def get_break_in(self) -> BreakInMode:
+        """Read break-in mode."""
+        command, sub, _ = self._expect_shape(get_break_in)
+        value = await self._get_bcd_level(
+            self._commands.get_break_in(to_addr=self._radio_addr),
+            key="get_break_in",
+            command=command,
+            sub=sub,
+            bcd_bytes=1,
+        )
+        return BreakInMode(value)
+
+    async def set_break_in(self, mode: BreakInMode | int) -> None:
+        """Set break-in mode.
+
+        Valid values are declared per radio by the profile's ``[break_in]
+        values`` (e.g. IC-705/IC-7300/IC-9700/IC-7610 all offer OFF/SEMI/
+        FULL). Unlike ``set_agc``/``set_preamp`` (MOR-1522/MOR-1523), a
+        missing domain here is NOT treated as "unvalidated, pass through" —
+        some profiles (X6100/X6200) advertise the ``break_in`` capability
+        but have no trustworthy in-repo source for a value domain (see the
+        ``rigs/x6200.toml``/``rigs/x6100.toml`` ``[capabilities]`` notes),
+        so this refuses any value rather than guess (MOR-1534).
+
+        Raises:
+            ValueError: If the profile declares no break-in domain, or if
+                ``mode`` is not in the profile's declared domain.
+        """
+        mode_int = int(mode)
+        break_in_modes = self._profile.break_in_modes
+        if break_in_modes is None:
+            raise ValueError(
+                f"No break-in value domain declared for {self._profile.model}; "
+                "refusing to set an unvalidated break-in mode"
+            )
+        if mode_int not in break_in_modes:
+            raise ValueError(
+                f"Break-in mode must be one of {sorted(break_in_modes)} for "
+                f"{self._profile.model}, got {mode_int}"
+            )
+        await self._send_fire_and_forget(
+            self._commands.set_break_in(mode_int, to_addr=self._radio_addr)
+        )
+
+    async def get_manual_notch(self, receiver: int = RECEIVER_MAIN) -> bool:
+        """Read manual-notch status."""
+        self._require_receiver(receiver, operation="get_manual_notch")
+        self._require_cmd29_route(
+            0x16, 0x48, receiver=receiver, operation="get_manual_notch"
+        )
+        cmd29 = self._profile.supports_cmd29(0x16, 0x48)
+        civ = self._commands.get_manual_notch(
+            to_addr=self._radio_addr, receiver=receiver, command29=cmd29
+        )
+        command, sub, _ = self._expect_shape(get_manual_notch)
+        return await self._get_bool_value(
+            civ,
+            key=f"get_manual_notch:{receiver}",
+            command=command,
+            sub=sub,
+        )
+
+    async def set_manual_notch(self, on: bool, receiver: int = RECEIVER_MAIN) -> None:
+        """Set manual-notch status."""
+        self._require_receiver(receiver, operation="set_manual_notch")
+        self._require_cmd29_route(
+            0x16, 0x48, receiver=receiver, operation="set_manual_notch"
+        )
+        cmd29 = self._profile.supports_cmd29(0x16, 0x48)
+        await self._send_fire_and_forget(
+            self._commands.set_manual_notch(
+                on, to_addr=self._radio_addr, receiver=receiver, command29=cmd29
+            )
+        )
+
+    async def get_manual_notch_width(self, receiver: int = RECEIVER_MAIN) -> int:
+        """Read manual notch width (0=WIDE, 1=MID, 2=NAR)."""
+        self._require_receiver(receiver, operation="get_manual_notch_width")
+        self._require_cmd29_route(
+            0x16, 0x57, receiver=receiver, operation="get_manual_notch_width"
+        )
+        cmd29 = self._profile.supports_cmd29(0x16, 0x57)
+        civ = self._commands.get_manual_notch_width(
+            to_addr=self._radio_addr, receiver=receiver, command29=cmd29
+        )
+        command, sub, _ = self._expect_shape(get_manual_notch_width)
+        return await self._get_bcd_level(
+            civ,
+            key=f"get_manual_notch_width:{receiver}",
+            command=command,
+            sub=sub,
+            bcd_bytes=1,
+        )
+
+    async def set_manual_notch_width(
+        self, value: int, receiver: int = RECEIVER_MAIN
+    ) -> None:
+        """Set manual notch width.
+
+        Valid values are declared per radio by the profile's ``[notch]
+        width_values`` (e.g. IC-705/IC-7300/IC-9700/IC-7610 all declare
+        0=WIDE/1=MID/2=NAR). A profile that declares no width domain is
+        unvalidated here (permissive), mirroring ``set_agc``/``set_preamp``
+        (MOR-1522/MOR-1523) — the ``notch`` capability covers auto-notch
+        too, so its absence does not by itself mean this control is wrong
+        to call (MOR-1534).
+
+        Raises:
+            ValueError: If the profile declares a width domain and
+                ``value`` is not in it.
+        """
+        self._require_receiver(receiver, operation="set_manual_notch_width")
+        self._require_cmd29_route(
+            0x16, 0x57, receiver=receiver, operation="set_manual_notch_width"
+        )
+        notch_width_values = self._profile.notch_width_values
+        if notch_width_values is not None and value not in notch_width_values:
+            raise ValueError(
+                f"Manual notch width must be one of {sorted(notch_width_values)} "
+                f"for {self._profile.model}, got {value}"
+            )
+        cmd29 = self._profile.supports_cmd29(0x16, 0x57)
+        await self._send_fire_and_forget(
+            self._commands.set_manual_notch_width(
+                value, to_addr=self._radio_addr, receiver=receiver, command29=cmd29
+            )
+        )
+
+    async def get_twin_peak_filter(self, receiver: int = RECEIVER_MAIN) -> bool:
+        """Read twin peak filter status."""
+        self._require_receiver(receiver, operation="get_twin_peak_filter")
+        self._require_cmd29_route(
+            0x16, 0x4F, receiver=receiver, operation="get_twin_peak_filter"
+        )
+        cmd29 = self._profile.supports_cmd29(0x16, 0x4F)
+        civ = self._commands.get_twin_peak_filter(
+            to_addr=self._radio_addr, receiver=receiver, command29=cmd29
+        )
+        command, sub, _ = self._expect_shape(get_twin_peak_filter)
+        return await self._get_bool_value(
+            civ,
+            key=f"get_twin_peak_filter:{receiver}",
+            command=command,
+            sub=sub,
+        )
+
+    async def set_twin_peak_filter(
+        self, on: bool, receiver: int = RECEIVER_MAIN
+    ) -> None:
+        """Set twin peak filter status."""
+        self._require_receiver(receiver, operation="set_twin_peak_filter")
+        self._require_cmd29_route(
+            0x16, 0x4F, receiver=receiver, operation="set_twin_peak_filter"
+        )
+        cmd29 = self._profile.supports_cmd29(0x16, 0x4F)
+        await self._send_fire_and_forget(
+            self._commands.set_twin_peak_filter(
+                on, to_addr=self._radio_addr, receiver=receiver, command29=cmd29
+            )
+        )
+
+    async def get_dial_lock(self) -> bool:
+        """Read dial lock status."""
+        civ = self._commands.get_dial_lock(to_addr=self._radio_addr)
+        command, sub, _ = self._expect_shape(get_dial_lock)
+        return await self._get_bool_value(
+            civ, key="get_dial_lock", command=command, sub=sub
+        )
+
+    async def set_dial_lock(self, on: bool) -> None:
+        """Set dial lock status."""
+        await self._send_fire_and_forget(
+            self._commands.set_dial_lock(on, to_addr=self._radio_addr)
+        )
+
+    async def get_filter_shape(self, receiver: int = RECEIVER_MAIN) -> FilterShape:
+        """Read DSP IF filter shape."""
+        self._require_receiver(receiver, operation="get_filter_shape")
+        self._require_cmd29_route(
+            0x16, 0x56, receiver=receiver, operation="get_filter_shape"
+        )
+        cmd29 = self._profile.supports_cmd29(0x16, 0x56)
+        command, sub, _ = self._expect_shape(get_filter_shape)
+        value = await self._get_bcd_level(
+            self._commands.get_filter_shape(
+                to_addr=self._radio_addr, receiver=receiver, command29=cmd29
+            ),
+            key=f"get_filter_shape:{receiver}",
+            command=command,
+            sub=sub,
+            bcd_bytes=1,
+        )
+        return FilterShape(value)
+
+    async def set_filter_shape(
+        self,
+        shape: FilterShape | int,
+        receiver: int = RECEIVER_MAIN,
+    ) -> None:
+        """Set DSP IF filter shape.
+
+        Valid values are declared per radio by the profile's
+        ``[filter_shape] values`` (IC-705/IC-7300/IC-9700/IC-7610 all
+        declare 0=SHARP/1=SOFT). A profile that declares no domain at all
+        (every radio outside that family) is unvalidated here (permissive),
+        mirroring ``set_agc``/``set_preamp`` (MOR-1522/MOR-1523) — none of
+        those radios advertise the ``filter_shape`` capability, so this
+        path is unreachable for them today (MOR-1534).
+
+        Raises:
+            ValueError: If the profile declares a domain and ``shape`` is
+                not in it.
+        """
+        self._require_receiver(receiver, operation="set_filter_shape")
+        self._require_cmd29_route(
+            0x16, 0x56, receiver=receiver, operation="set_filter_shape"
+        )
+        shape_int = int(shape)
+        filter_shape_values = self._profile.filter_shape_values
+        if filter_shape_values is not None and shape_int not in filter_shape_values:
+            raise ValueError(
+                f"Filter shape must be one of {sorted(filter_shape_values)} for "
+                f"{self._profile.model}, got {shape_int}"
+            )
+        cmd29 = self._profile.supports_cmd29(0x16, 0x56)
+        await self._send_fire_and_forget(
+            self._commands.set_filter_shape(
+                shape_int,
+                to_addr=self._radio_addr,
+                receiver=receiver,
+                command29=cmd29,
+            )
+        )
+
+    async def get_ssb_tx_bandwidth(self) -> SsbTxBandwidth:
+        """Read SSB transmit bandwidth preset."""
+        command, sub, _ = self._expect_shape(get_ssb_tx_bandwidth)
+        value = await self._get_bcd_level(
+            self._commands.get_ssb_tx_bandwidth(to_addr=self._radio_addr),
+            key="get_ssb_tx_bandwidth",
+            command=command,
+            sub=sub,
+            bcd_bytes=1,
+        )
+        return SsbTxBandwidth(value)
+
+    async def set_ssb_tx_bandwidth(self, bandwidth: SsbTxBandwidth | int) -> None:
+        """Set SSB transmit bandwidth preset.
+
+        Valid values are declared per radio by the profile's
+        ``[ssb_tx_bw] values`` (IC-705/IC-7300/IC-9700/IC-7610 all declare
+        0=WIDE/1=MID/2=NAR). A profile that declares no domain at all
+        (every radio outside that family) is unvalidated here (permissive),
+        mirroring ``set_agc``/``set_preamp`` (MOR-1522/MOR-1523) — none of
+        those radios advertise the ``ssb_tx_bw`` capability, so this path
+        is unreachable for them today (MOR-1534).
+
+        Raises:
+            ValueError: If the profile declares a domain and ``bandwidth``
+                is not in it.
+        """
+        bandwidth_int = int(bandwidth)
+        ssb_tx_bw_values = self._profile.ssb_tx_bw_values
+        if ssb_tx_bw_values is not None and bandwidth_int not in ssb_tx_bw_values:
+            raise ValueError(
+                f"SSB TX bandwidth must be one of {sorted(ssb_tx_bw_values)} for "
+                f"{self._profile.model}, got {bandwidth_int}"
+            )
+        await self._send_fire_and_forget(
+            self._commands.set_ssb_tx_bandwidth(bandwidth_int, to_addr=self._radio_addr)
+        )
+
+    async def get_main_sub_tracking(self) -> bool:
+        """Read Main/Sub Tracking status."""
+        civ = self._commands.get_main_sub_tracking(to_addr=self._radio_addr)
+        command, sub, _ = self._expect_shape(_get_main_sub_tracking_cmd)
+        return await self._get_bool_value(
+            civ, key="get_main_sub_tracking", command=command, sub=sub
+        )
+
+    async def set_main_sub_tracking(self, on: bool) -> None:
+        """Set Main/Sub Tracking status."""
+        await self._send_fire_and_forget(
+            self._commands.set_main_sub_tracking(on, to_addr=self._radio_addr)
+        )
+
+    async def get_agc_time_constant(self, receiver: int = RECEIVER_MAIN) -> int:
+        """Read AGC time constant preset (0-13)."""
+        self._require_receiver(receiver, operation="get_agc_time_constant")
+        self._require_cmd29_route(
+            0x1A, 0x04, receiver=receiver, operation="get_agc_time_constant"
+        )
+        cmd29 = self._profile.supports_cmd29(0x1A, 0x04)
+        command, sub, _ = self._expect_shape(get_agc_time_constant)
+        return await self._get_bcd_level(
+            self._commands.get_agc_time_constant(
+                to_addr=self._radio_addr, receiver=receiver, command29=cmd29
+            ),
+            key=f"get_agc_time_constant:{receiver}",
+            command=command,
+            sub=sub,
+            bcd_bytes=1,
+        )
+
+    async def set_agc_time_constant(
+        self, value: int, receiver: int = RECEIVER_MAIN
+    ) -> None:
+        """Set AGC time constant preset (0-13)."""
+        self._require_receiver(receiver, operation="set_agc_time_constant")
+        self._require_cmd29_route(
+            0x1A, 0x04, receiver=receiver, operation="set_agc_time_constant"
+        )
+        cmd29 = self._profile.supports_cmd29(0x1A, 0x04)
+        await self._send_fire_and_forget(
+            self._commands.set_agc_time_constant(
+                value,
+                to_addr=self._radio_addr,
+                receiver=receiver,
+                command29=cmd29,
+            )
+        )
+
+    async def get_s_meter(self) -> int:
+        """Read the S-meter value (0-255)."""
+        self._check_connected()
+        civ = self._commands.get_s_meter(to_addr=self._radio_addr)
+        resp = await self._send_civ_expect(civ, label="get_s_meter")
+        return parse_meter_response(resp)
+
+    async def get_swr(self) -> float:
+        """Read the SWR as a calibrated ratio (>= 1.0).
+
+        Uses the piecewise-linear table defined in
+        ``[[meters.swr.calibration]]`` of the active rig profile. Falls
+        back to a legacy linear approximation when no calibration table
+        is configured.
+
+        For the raw 0–255 BCD reading (e.g. for charts that need the
+        unscaled value) use :meth:`get_swr_meter`.
+        """
+        self._check_connected()
+        civ = self._commands.get_swr(to_addr=self._radio_addr)
+        resp = await self._send_civ_expect(civ, label="get_swr")
+        raw = parse_meter_response(resp)
+        return interpolate_swr(raw, self._profile.meter_calibrations)
+
+    async def get_swr_meter(self) -> int:
+        """Read the raw SWR meter value (0-255).
+
+        Mirrors the Yaesu ``*_meter`` naming on ``MetersCapable``. For a
+        calibrated SWR ratio (>= 1.0) use :meth:`get_swr`.
+        """
+        self._check_connected()
+        civ = self._commands.get_swr(to_addr=self._radio_addr)
+        resp = await self._send_civ_expect(civ, label="get_swr_meter")
+        return parse_meter_response(resp)
+
+    async def get_alc_meter(self) -> int:
+        """Read the ALC meter value (raw 0-255)."""
+        self._check_connected()
+        civ = self._commands.get_alc(to_addr=self._radio_addr)
+        resp = await self._send_civ_expect(civ, label="get_alc_meter")
+        return parse_meter_response(resp)
+
+    async def set_ptt(self, on: bool) -> None:
+        """Toggle PTT (Push-To-Talk).
+
+        Fire-and-forget: the command is sent at IMMEDIATE priority without
+        blocking for an ACK. PTT state changes only on decoded radio readback.
+
+        Args:
+            on: True for TX, False for RX.
+        """
+        self._check_connected()
+        civ = (
+            self._commands.ptt_on(to_addr=self._radio_addr)
+            if on
+            else self._commands.ptt_off(to_addr=self._radio_addr)
+        )
+        await self._send_civ_raw(civ, priority=Priority.IMMEDIATE, wait_response=False)
+        logger.debug("set_ptt(%s) sent (fire-and-forget)", on)
+
+    _PTT_READBACK_SETTLE_S: float = 0.2
+
+    # The profile command each managed-release abort executes, with its
+    # fixed leading arguments (MOR-4352). ``actuate`` builds the frame
+    # from this table and ``abort_applicable`` checks the same command
+    # names through ``supports_command``, so the executed command and the
+    # applicability decision are one mapping, never two.
+    _ABORT_COMMANDS: ClassVar[Mapping[AbortOperation, tuple[str, tuple[int, ...]]]] = {
+        AbortOperation.STOP_CW: ("stop_cw", ()),
+        AbortOperation.STOP_TUNE: ("set_tuner_status", (0,)),
+    }
+
+    def abort_applicable(self, operation: AbortOperation) -> bool:
+        """Whether this profile declares the command *operation* executes.
+
+        MOR-4352: a managed-release abort the radio cannot execute is not
+        applicable -- the effect lane never schedules it and it never
+        surfaces as an ``abortErrors`` entry. The decision is the
+        profile's own command declaration (:meth:`supports_command`)
+        over ``_ABORT_COMMANDS``; an undeclared name and a declared-absent
+        one are equally not applicable
+        (``RadioProfile.supports_command`` does not distinguish them).
+        """
+        abort = self._ABORT_COMMANDS.get(operation)
+        return abort is not None and self.supports_command(abort[0])
+
+    async def actuate(
+        self,
+        token: EffectToken,
+        operation: ActuationOperation | AbortOperation,
+        *,
+        is_current: "Callable[[], bool]",
+    ) -> ActuationResult:
+        """Execute one authority-tokened Icom TX semantic on the urgent lane."""
+        del token  # Authority owns token identity; the adapter owns no generation.
+        try:
+            if operation in (
+                ActuationOperation.PTT_ON,
+                ActuationOperation.TRANSMIT_ON,
+            ):
+                civ = self._commands.ptt_on(to_addr=self._radio_addr)
+                priority = Priority.IMMEDIATE
+            elif operation is ActuationOperation.FORCE_RECEIVE:
+                civ = self._commands.ptt_off(to_addr=self._radio_addr)
+                priority = Priority.FORCE_RELEASE
+            elif (abort := self._ABORT_COMMANDS.get(operation)) is not None:
+                name, args = abort
+                civ = getattr(self._commands, name)(*args, to_addr=self._radio_addr)
+                priority = Priority.ABORT
+            else:
+                return ActuationResult.REJECTED
+        except CommandError:
+            return ActuationResult.REJECTED
+        if operation is not ActuationOperation.FORCE_RECEIVE:
+            await self._send_civ_raw(
+                civ,
+                priority=priority,
+                wait_response=False,
+                is_current=is_current,
+            )
+            return ActuationResult.ACCEPTED
+        started = time.monotonic()
+        try:
+            reply = await self._send_civ_raw(
+                civ,
+                priority=priority,
+                wait_response=True,
+                is_current=is_current,
+            )
+        except TimeoutError:
+            reply = None
+        acknowledged = None if reply is None else parse_ack_nak(reply)
+        unclaimed = self._civ_request_tracker.ack_unclaimed_at
+        if acknowledged is None or (
+            unclaimed is not None and unclaimed >= started - self._civ_get_timeout
+        ):
+            if self._profile.supports_command("get_transceiver_status"):
+                try:
+                    reading = await self.read_transmit_state(
+                        priority=Priority.FORCE_RELEASE, is_current=is_current
+                    )
+                    if (
+                        reading.verified_readback
+                        and reading.value is False
+                        and reading.failure is None
+                    ):
+                        return ActuationResult.ACCEPTED
+                except Exception as exc:
+                    logger.debug("PTT release readback failed: %s", type(exc).__name__)
+            return ActuationResult.UNCERTAIN
+        return ActuationResult.ACCEPTED if acknowledged else ActuationResult.REJECTED
+
+    async def read_transmit_state(
+        self,
+        *,
+        priority: Priority = Priority.NORMAL,
+        is_current: Callable[[], bool] | None = None,
+    ) -> TxStateReading:
+        """One solicited CI-V transmit-state observation.
+
+        The directed reply is parsed through the shared observation decoder;
+        only a matching PTT observation supplies a value. Icom provides no
+        keying attribution. Wire-level failures return a ``failure`` tag;
+        connection preconditions still raise.
+        """
+        self._check_connected()
+        ledger = self._civ_runtime._ptt_reply_ledger
+        runtime, epoch, transport = (
+            self._civ_runtime,
+            self._civ_epoch,
+            self._civ_transport,
+        )
+        if not ledger.eligible():
+            return TxStateReading(value=None, failure="not-quiescent")
+        orphans_before = ledger.orphan_count
+        context = _PttReadContext(is_current)
+        frame = build_civ_frame(self._radio_addr, CONTROLLER_ADDR, 0x1C, sub=0x00)
+        try:
+            reply = await self._send_civ_expect(
+                frame,
+                label="tx-state",
+                timeout=TX_READ_DEADLINE_SECONDS,
+                priority=priority,
+                is_current=context,
+            )
+        except _PttNotQuiescent:
+            return TxStateReading(value=None, failure="not-quiescent")
+        except (asyncio.TimeoutError, TimeoutError):
+            # Both are real outcomes here: ``asyncio.TimeoutError`` from the
+            # outer wait, or this module's own ``core.exceptions.TimeoutError``
+            # ("CI-V response timed out") when the backend's own GET deadline
+            # (``_civ_get_timeout``) fires first -- it can be shorter than
+            # ``TX_READ_DEADLINE_SECONDS`` on a radio constructed with a tight
+            # ``timeout=`` (as the conformance fake does).
+            return TxStateReading(value=None, failure="timeout")
+        except CommandError:
+            return TxStateReading(value=None, failure="read-error")
+        if (
+            context.entry is None
+            or context.entry.answered_by is not reply
+            or not is_directed_ptt_reply(reply, self._radio_addr)
+        ):
+            return TxStateReading(value=None, failure="unverifiable-provenance")
+        for observation in self._civ_runtime._observations_from_frame(reply):
+            if str(observation.path) != "global.tx_state.ptt":
+                continue
+            source = str(observation.source.source)
+            if source == "poll_response":
+                if not observation.value:
+                    await asyncio.sleep(self._PTT_READBACK_SETTLE_S)
+                    if (
+                        self._civ_runtime is not runtime
+                        or self._civ_epoch != epoch
+                        or self._civ_transport is not transport
+                        or not self._connected
+                        or not context()
+                    ):
+                        return TxStateReading(value=None, failure="read-error")
+                    if ledger.orphan_count != orphans_before:
+                        return TxStateReading(
+                            value=None, failure="unverifiable-provenance"
+                        )
+                return TxStateReading(
+                    value=bool(observation.value),
+                    attributed=None,  # Icom reports no attribution (§3.7)
+                    source=source,
+                    verified_readback=True,
+                )
+        return TxStateReading(value=None, failure="unverifiable-provenance")
+
+    def _bind_authoritative_ptt_observer(
+        self,
+        *,
+        provider_generation: int,
+        observer: "Callable[[ProviderPttObservation], None]",
+    ) -> None:
+        """Bind decoded PTT readback to a managed-provider generation."""
+        self._civ_runtime.bind_ptt_observer(
+            provider_generation=provider_generation,
+            observer=observer,
+        )
+
+    def _capture_managed_tx_port(
+        self,
+        provider_generation: int,
+        observer: "Callable[[ProviderPttObservation], None]",
+    ) -> bool:
+        return self._civ_runtime.capture_managed_port(provider_generation, observer)
+
+    async def _write_managed_ptt(self, provider_generation: int, on: bool) -> None:
+        civ = (self._commands.ptt_on if on else self._commands.ptt_off)(
+            to_addr=self._radio_addr
+        )
+        await self._civ_runtime.write_managed_ptt(civ, provider_generation)
+
+    async def _retire_managed_tx_port(self, provider_generation: int) -> None:
+        await self._civ_runtime.retire_managed_tx_port(provider_generation)
+
+    def _unbind_authoritative_ptt_observer(self) -> None:
+        """Detach the managed-provider PTT readback observer."""
+        self._civ_runtime.unbind_ptt_observer()
+
+    async def _request_authoritative_ptt_read(
+        self,
+        provider_generation: int,
+        observer: "Callable[[ProviderPttObservation], None]",
+    ) -> None:
+        self._check_connected()
+        civ = build_civ_frame(self._radio_addr, CONTROLLER_ADDR, 0x1C, sub=0x00)
+        if not await self._civ_runtime.request_authoritative_ptt_read(
+            civ,
+            provider_generation=provider_generation,
+            observer=observer,
+        ):
+            raise CommandError("PTT response was not authoritative for this request")
+
+    # ------------------------------------------------------------------
+    # Transceiver status family (#136)
+    # ------------------------------------------------------------------
+
+    async def get_band_edge_freq(self) -> int:
+        """Read the current band-edge frequency in Hz."""
+        self._check_connected()
+        civ = self._commands.get_band_edge_freq(to_addr=self._radio_addr)
+        resp = await self._send_civ_expect(
+            civ, key="get_band_edge_freq", dedupe=True, label="get_band_edge_freq"
+        )
+        return parse_frequency_response(resp)
+
+    async def get_various_squelch(self, receiver: int = RECEIVER_MAIN) -> bool:
+        """Read various-squelch status for the selected receiver."""
+        self._require_receiver(receiver, operation="get_various_squelch")
+        self._require_cmd29_route(
+            0x15, 0x05, receiver=receiver, operation="get_various_squelch"
+        )
+        cmd29 = self._profile.supports_cmd29(0x15, 0x05)
+        civ = self._commands.get_various_squelch(
+            to_addr=self._radio_addr, receiver=receiver, command29=cmd29
+        )
+        command, sub, _ = self._expect_shape(get_various_squelch)
+        return await self._get_bool_value(
+            civ,
+            key=f"get_various_squelch:{receiver}",
+            command=command,
+            sub=sub,
+        )
+
+    async def get_power_meter(self) -> int:
+        """Read the RF power meter (0-255 raw BCD)."""
+        self._check_connected()
+        civ = self._commands.get_power_meter(to_addr=self._radio_addr)
+        resp = await self._send_civ_expect(civ, label="get_power_meter")
+        return parse_meter_response(resp)
+
+    async def get_comp_meter(self) -> int:
+        """Read the compressor meter (0-255 raw BCD)."""
+        self._check_connected()
+        civ = self._commands.get_comp_meter(to_addr=self._radio_addr)
+        resp = await self._send_civ_expect(civ, label="get_comp_meter")
+        return parse_meter_response(resp)
+
+    async def get_vd_meter(self) -> int:
+        """Read the Vd supply voltage meter (0-255 raw BCD)."""
+        self._check_connected()
+        civ = self._commands.get_vd_meter(to_addr=self._radio_addr)
+        resp = await self._send_civ_expect(civ, label="get_vd_meter")
+        return parse_meter_response(resp)
+
+    async def get_id_meter(self) -> int:
+        """Read the Id drain current meter (0-255 raw BCD)."""
+        self._check_connected()
+        civ = self._commands.get_id_meter(to_addr=self._radio_addr)
+        resp = await self._send_civ_expect(civ, label="get_id_meter")
+        return parse_meter_response(resp)
+
+    async def get_speech(self, what: int = 0) -> None:
+        """Trigger voice synthesizer announcement.
+
+        Fire-and-forget.
+
+        Args:
+            what: 0 = all (S-meter, frequency, mode),
+                  1 = frequency + S-meter,
+                  2 = mode.
+        """
+        self._check_connected()
+        civ = self._commands.get_speech(what, to_addr=self._radio_addr)
+        await self._send_civ_raw(civ, wait_response=False)
+
+    async def get_transceiver_id(self) -> int:
+        """Read the transceiver model ID (IC-7610 = 0x98)."""
+        self._check_connected()
+        civ = self._commands.get_transceiver_id(to_addr=self._radio_addr)
+        resp = await self._send_civ_expect(civ, label="get_transceiver_id")
+        if resp.data:
+            return resp.data[0]
+        return 0
+
+    async def get_tuner_status(self) -> int:
+        """Read the tuner/ATU status (0=off, 1=on, 2=tuning)."""
+        self._check_connected()
+        civ = self._commands.get_tuner_status(to_addr=self._radio_addr)
+        resp = await self._send_civ_expect(civ, label="get_tuner_status")
+        if resp.data:
+            return resp.data[0]
+        return 0
+
+    async def set_tuner_status(self, value: int) -> None:
+        """Set the tuner/ATU status (0=off, 1=on, 2=tune).
+
+        Fire-and-forget SET command.
+        """
+        self._check_connected()
+        civ = self._commands.set_tuner_status(value, to_addr=self._radio_addr)
+        if value == 0 or self._local_tx_work is None:
+            await self._send_civ_raw(civ, wait_response=False)
+            return
+
+        async def send(is_current: Callable[[], bool]) -> None:
+            await self._send_civ_raw(
+                civ,
+                wait_response=False,
+                is_current=is_current,
+            )
+
+        await self._local_tx_work.run(send)
+
+    async def get_xfc_status(self) -> bool:
+        """Read XFC (transmit frequency correction) status."""
+        self._check_connected()
+        civ = self._commands.get_xfc_status(to_addr=self._radio_addr)
+        resp = await self._send_civ_expect(civ, label="get_xfc_status")
+        return bool(resp.data[0]) if resp.data else False
+
+    async def set_xfc_status(self, on: bool) -> None:
+        """Set XFC status on/off. Fire-and-forget."""
+        self._check_connected()
+        civ = self._commands.set_xfc_status(on, to_addr=self._radio_addr)
+        await self._send_civ_raw(civ, wait_response=False)
+
+    async def get_rit_frequency(self) -> int:
+        """Read the RIT frequency offset in Hz (±9999)."""
+        self._check_connected()
+        civ = self._commands.get_rit_frequency(to_addr=self._radio_addr)
+        resp = await self._send_civ_expect(civ, label="get_rit_frequency")
+        return parse_rit_frequency_response(resp.data)
+
+    async def set_rit_frequency(self, offset_hz: int) -> None:
+        """Set the RIT frequency offset in Hz (±9999). Fire-and-forget."""
+        self._check_connected()
+        civ = self._commands.set_rit_frequency(offset_hz, to_addr=self._radio_addr)
+        await self._send_civ_raw(civ, wait_response=False)
+
+    async def get_rit_status(self) -> bool:
+        """Read RIT on/off status."""
+        self._check_connected()
+        civ = self._commands.get_rit_status(to_addr=self._radio_addr)
+        resp = await self._send_civ_expect(civ, label="get_rit_status")
+        return bool(resp.data[0]) if resp.data else False
+
+    async def set_rit_status(self, on: bool) -> None:
+        """Set RIT on/off. Fire-and-forget."""
+        self._check_connected()
+        civ = self._commands.set_rit_status(on, to_addr=self._radio_addr)
+        await self._send_civ_raw(civ, wait_response=False)
+
+    async def get_rit_tx_status(self) -> bool:
+        """Read RIT TX status."""
+        self._check_connected()
+        civ = self._commands.get_rit_tx_status(to_addr=self._radio_addr)
+        resp = await self._send_civ_expect(civ, label="get_rit_tx_status")
+        return bool(resp.data[0]) if resp.data else False
+
+    async def set_rit_tx_status(self, on: bool) -> None:
+        """Set RIT TX status on/off. Fire-and-forget."""
+        self._check_connected()
+        civ = self._commands.set_rit_tx_status(on, to_addr=self._radio_addr)
+        await self._send_civ_raw(civ, wait_response=False)
+
+    # ------------------------------------------------------------------
+    # VFO / Split
+    # ------------------------------------------------------------------
+
+    async def _set_vfo_wire(self, vfo: str) -> None:
+        """Wire-level CI-V VFO select.
+
+        Internal helper behind the explicit, operator-requested
+        :meth:`select_receiver`; nothing else switches the selection
+        (MOR-3591).  The legacy public
+        ``set_vfo("A"/"B"/"MAIN"/"SUB")`` overload was removed in v0.20
+        (#1206); external code must use
+        :class:`~rigplane.radio_protocol.ReceiverBankCapable` /
+        :class:`~rigplane.radio_protocol.VfoSlotCapable` instead.
+
+        Args:
+            vfo: "A", "B", "MAIN", or "SUB" (case-insensitive on input).
+
+        The selector byte comes from the profile, not from a table here:
+        ``B``/``SUB`` name the secondary VFO and take ``vfo_sub_code``,
+        anything else the primary and ``vfo_main_code``.  One pair serves
+        both spellings because a profile declares one primary and one
+        secondary selector whatever the rig's front panel calls them
+        (``[vfo] main_select`` / ``sub_select`` in ``rigs/*.toml``).  A
+        profile that declares no code for the VFO asked for raises, rather
+        than falling back to a byte this method invented.
+        """
+        self._check_connected()
+        name = vfo.upper()
+        code = (
+            self._profile.vfo_sub_code
+            if name in ("B", "SUB")
+            else self._profile.vfo_main_code
+        )
+        if code is None:
+            raise CommandError(
+                f"profile {self._profile.model} declares no VFO select code for {name}"
+            )
+        civ = self._commands.set_vfo(code, to_addr=self._radio_addr)
+        # Fail closed (MOR-3591): while the select is in flight, and after
+        # it fails, times out or is cancelled (it may still have switched),
+        # the selection is unknown and receiver-scoped plain commands are
+        # refused; a 0x07 0xD2 answer arriving meanwhile is not trusted.
+        self._receiver_select_inflight += 1
+        self._last_vfo = None
+        try:
+            with self._vfo_selection_change():
+                resp = await self._send_civ_expect(civ, label="set_vfo")
+                ack = parse_ack_nak(resp)
+                if ack is False:
+                    raise CommandError(f"Radio rejected VFO select {vfo}")
+        except BaseException:
+            self._last_vfo = None
+            raise
+        finally:
+            self._receiver_select_inflight -= 1
+        self._record_selection(vfo.upper())
+
+    async def set_split(self, on: bool) -> None:
+        """Enable or disable split mode (CI-V ``0x0F``)."""
+        self._check_connected()
+        civ = self._commands.set_split(on, to_addr=self._radio_addr)
+        resp = await self._send_civ_expect(civ, label="set_split")
+        ack = parse_ack_nak(resp)
+        if ack is False:
+            raise CommandError(f"Radio rejected split {'on' if on else 'off'}")
+        self._last_split = on
+
+    async def read_split(self) -> bool:
+        """Read current split truth without falling back to cached ACK state."""
+        return await self.get_split(strict=True)
+
+    async def get_split(self, *, strict: bool = False) -> bool:
+        """Read split mode state (CI-V ``0x0F``).
+
+        Returns ``True`` when split is enabled, ``False`` otherwise.  On a
+        radio that does not respond, returns the cached last-known value
+        (defaulting to ``False``) — unless ``strict`` is set, in which case
+        a failed or empty read raises instead of returning the mirror.
+        """
+        self._check_connected()
+        civ = self._commands.get_split(to_addr=self._radio_addr)
+        try:
+            resp = await self._send_civ_expect(
+                civ,
+                label="get_split",
+                # MOR-3888: a strict read is a client's live poll (rigctld
+                # ``s``). It shares the commander's single in-flight slot
+                # with other clients' writes, so a lost answer must not hold
+                # that slot for the whole 2 s window. The caller's timeout
+                # abandons just this read (commander #1188) after a window
+                # that recorded USB answers (30 ms) beat by a wide margin.
+                timeout=_LIVE_READ_ANSWER_WINDOW_S if strict else None,
+            )
+        except (CommandError, TimeoutError, asyncio.TimeoutError) as exc:
+            if strict:
+                if isinstance(exc, asyncio.TimeoutError):
+                    # The caller's answer window (MOR-3888) expired: report it
+                    # as this library's timeout, like the 2 s CI-V window does.
+                    raise TimeoutError("No response for get_split") from exc
+                raise
+            if self._last_split is not None:
+                logger.debug(
+                    "get_split: no response, returning cached %s", self._last_split
+                )
+                return self._last_split
+            return False
+        if resp.data:
+            # 11/12 are DUP−/DUP+, not split (MOR-2929; see the 0F branch of
+            # ``_civ_rx.py: CivRuntime._observations_from_frame``).
+            on = resp.data[0] == 0x01
+            self._last_split = on
+            return on
+        if strict:
+            raise CommandError("Radio returned empty split response")
+        if self._last_split is not None:
+            return self._last_split
+        return False
+
+    async def get_repeater_shift(self, receiver: int = 0) -> RepeaterShiftDirection:
+        """Read the repeater shift direction (CI-V ``0x0F``, MOR-2930).
+
+        MOR-3591: the plain command reaches only the selected receiver --
+        any other receiver, or either receiver while the selection is
+        unknown, raises ``ReceiverNotSelectedError`` and sends nothing.
+        """
+        self._check_connected()
+        self._require_receiver(receiver, operation="get_repeater_shift")
+        self._require_cmd29_route(
+            0x0F, None, receiver=receiver, operation="get_repeater_shift"
+        )
+        civ = self._commands.get_repeater_shift(to_addr=self._radio_addr)
+        resp = await self._send_civ_expect(civ, label="get_repeater_shift")
+        direction = parse_repeater_shift_response(resp.data)
+        if direction is None:
+            raise CommandError(
+                f"invalid repeater shift readback: {resp.data.hex() or 'empty'}"
+            )
+        return direction
+
+    async def set_repeater_shift(
+        self, direction: RepeaterShiftDirection | int, receiver: int = 0
+    ) -> None:
+        """Set the repeater shift direction (CI-V ``0x0F``, MOR-2930).
+
+        Only SIMPLEX, MINUS and PLUS have a code; any other direction, ARS
+        included, raises ``ValueError`` before anything is sent.
+
+        MOR-3591: the plain command reaches only the selected receiver --
+        any other receiver, or either receiver while the selection is
+        unknown, raises ``ReceiverNotSelectedError`` and sends nothing.
+        """
+        self._check_connected()
+        self._require_receiver(receiver, operation="set_repeater_shift")
+        self._require_cmd29_route(
+            0x0F, None, receiver=receiver, operation="set_repeater_shift"
+        )
+        civ = self._commands.set_repeater_shift(direction, to_addr=self._radio_addr)
+        resp = await self._send_civ_expect(civ, label="set_repeater_shift")
+        if parse_ack_nak(resp) is False:
+            raise CommandError(f"Radio rejected repeater shift {direction!r}")
+
+    async def get_tone_squelch_type(self, receiver: int = 0) -> ToneSquelchType:
+        """Read the exclusive tone squelch selector (CI-V ``0x16 0x5D``).
+
+        The reply code's meaning comes from the profile's
+        ``[tone_squelch_types]`` table; a code the table does not name
+        raises ``CommandError``.
+
+        MOR-3591: the plain command reaches only the selected receiver --
+        any other receiver, or either receiver while the selection is
+        unknown, raises ``ReceiverNotSelectedError`` and sends nothing.
+        """
+        self._check_connected()
+        self._require_receiver(receiver, operation="get_tone_squelch_type")
+        self._require_cmd29_route(
+            0x16,
+            _SUB_TONE_SQUELCH_TYPE,
+            receiver=receiver,
+            operation="get_tone_squelch_type",
+        )
+        cmd29 = self._profile.supports_cmd29(0x16, _SUB_TONE_SQUELCH_TYPE)
+        civ = self._commands.get_tone_squelch_type(
+            to_addr=self._radio_addr, receiver=receiver, command29=cmd29
+        )
+        resp = await self._send_civ_expect(civ, label="get_tone_squelch_type")
+        kind = parse_tone_squelch_type_response(
+            resp.data, self._profile.tone_squelch_types
+        )
+        if kind is None:
+            raise CommandError(
+                f"invalid tone squelch type readback: {resp.data.hex() or 'empty'}"
+            )
+        return kind
+
+    async def set_tone_squelch_type(
+        self, kind: ToneSquelchType | str, receiver: int = 0
+    ) -> None:
+        """Write the exclusive tone squelch selector (CI-V ``0x16 0x5D``).
+
+        ``kind`` is a neutral type from the profile's
+        ``[tone_squelch_types]`` table; a type the table does not name
+        raises ``ValueError`` before anything is sent.
+
+        MOR-3591: the plain command reaches only the selected receiver --
+        any other receiver, or either receiver while the selection is
+        unknown, raises ``ReceiverNotSelectedError`` and sends nothing.
+        """
+        self._check_connected()
+        self._require_receiver(receiver, operation="set_tone_squelch_type")
+        try:
+            neutral = ToneSquelchType(kind)
+        except ValueError:
+            raise ValueError(f"unknown tone squelch type {kind!r}") from None
+        table = self._profile.tone_squelch_types or {}
+        code = next((code for code, named in table.items() if named == neutral), None)
+        if code is None:
+            raise ValueError(
+                f"tone squelch type {neutral.value!r} is not declared by "
+                f"profile {self._profile.model}"
+            )
+        self._require_cmd29_route(
+            0x16,
+            _SUB_TONE_SQUELCH_TYPE,
+            receiver=receiver,
+            operation="set_tone_squelch_type",
+        )
+        cmd29 = self._profile.supports_cmd29(0x16, _SUB_TONE_SQUELCH_TYPE)
+        await self._send_fire_and_forget(
+            self._commands.set_tone_squelch_type(
+                code, to_addr=self._radio_addr, receiver=receiver, command29=cmd29
+            )
+        )
+
+    async def get_tuning_step(self) -> int:
+        """Read the tuning step index (0-8, BCD-encoded per IC-7610, CI-V 0x10)."""
+        self._check_connected()
+        civ = self._commands.get_tuning_step(to_addr=self._radio_addr)
+        resp = await self._send_civ_expect(civ, label="get_tuning_step")
+        if resp.data:
+            b = resp.data[0]
+            return ((b >> 4) & 0x0F) * 10 + (b & 0x0F)
+        return 0
+
+    async def set_tuning_step(self, step: int) -> None:
+        """Set the tuning step index (0-8, BCD-encoded, CI-V 0x10). Fire-and-forget."""
+        self._check_connected()
+        civ = self._commands.set_tuning_step(step, to_addr=self._radio_addr)
+        await self._send_civ_raw(civ, wait_response=False)
+
+    async def scan_start(self, mode: int = 0) -> None:
+        """Start scanning (CI-V 0x0E). Fire-and-forget.
+
+        Args:
+            mode: Scan type sub-byte.  0 (default) sends 0x01 (programmed scan)
+                  for backward compatibility.  Non-zero values are forwarded
+                  directly as the scan-type sub-byte (e.g. 0x03 = ΔF scan),
+                  validated against the profile's own domain (MOR-2007
+                  ruling 4) when it declares one -- permissive, like
+                  ``set_agc``, when it does not.
+        """
+        self._check_connected()
+        if mode == 0:
+            civ = self._commands.scan_start(to_addr=self._radio_addr)
+        else:
+            scan_types = self._profile.scan_type_values
+            if scan_types is not None and mode not in scan_types:
+                raise ValueError(
+                    f"Scan type must be one of {sorted(scan_types)} for "
+                    f"{self._profile.model}, got {hex(mode)}"
+                )
+            civ = self._commands.scan_start_type(mode, to_addr=self._radio_addr)
+        await self._send_civ_raw(civ, wait_response=False)
+
+    async def scan_stop(self) -> None:
+        """Stop scanning (CI-V 0x0E 0x00). Fire-and-forget."""
+        self._check_connected()
+        civ = self._commands.scan_stop(to_addr=self._radio_addr)
+        await self._send_civ_raw(civ, wait_response=False)
+
+    async def scan_set_df_span(self, span: int) -> None:
+        """Set ΔF scan span (CI-V 0x0E 0xA1-0xA7). Fire-and-forget."""
+        self._check_connected()
+        civ = self._commands.scan_set_df_span(span, to_addr=self._radio_addr)
+        await self._send_civ_raw(civ, wait_response=False)
+
+    async def scan_set_resume(self, mode: int) -> None:
+        """Set scan resume mode (CI-V 0x0E sub). Fire-and-forget.
+
+        Valid values are declared per radio by the profile's
+        ``[scan_resume] values`` (MOR-2007 ruling 4) -- every documented
+        CI-V guide lists only 0xD0 (OFF) and 0xD3 ("Close&Delay"), not the
+        0xD1/0xD2 5s/10s states this method used to accept unconditionally.
+        Permissive when the profile declares no domain, like ``set_agc``.
+        """
+        self._check_connected()
+        scan_resume_modes = self._profile.scan_resume_values
+        if scan_resume_modes is not None and mode not in scan_resume_modes:
+            raise ValueError(
+                f"Scan resume mode must be one of {sorted(scan_resume_modes)} for "
+                f"{self._profile.model}, got {hex(mode)}"
+            )
+        civ = self._commands.scan_set_resume(mode, to_addr=self._radio_addr)
+        await self._send_civ_raw(civ, wait_response=False)
+
+    async def get_dual_watch(self) -> bool:
+        """Query dual watch status.
+
+        Returns:
+            True if dual watch is enabled, False otherwise.
+
+        The reply shape comes from the same map entry the request used
+        (`commands/bound.py: BoundCommands.expect`), but unlike a
+        ``_get_bool_value``-style getter it cannot assume the value lands
+        in ``frame.sub``: IC-7610's ``[0x07, 0xC2]`` is a VFO-select-family
+        command, and ``0x07`` carries no CI-V sub-command per
+        `commands/_frame.py: command_carries_sub` (so
+        `runtime/_civ_rx.py`'s unsolicited-frame decoding, which shares
+        that same parser, is unaffected) -- the query's marker byte is
+        echoed as ``data[0]`` instead, and ``BoundCommands.expect`` puts
+        that same byte at the front of ``prefix`` (``sub=None``) rather
+        than in ``sub``. IC-9700's ``[0x16, 0x59]`` is a real CI-V
+        sub-command family (``0x16`` IS in that set), so its marker lands
+        in ``frame.sub`` normally and ``prefix`` is empty. Handling both
+        keeps this getter correct across profiles rather than pinned to
+        whichever shape the request happened to use. Resolves its shape
+        via ``BoundCommands.expect`` directly rather than
+        ``self._expect_shape``: that helper asserts a non-``None`` ``sub``,
+        which IC-7610's row legitimately does not have.
+        """
+        self._check_connected()
+        command, sub, prefix = self._commands.expect(get_dual_watch)
+        civ = self._commands.get_dual_watch(to_addr=self._radio_addr)
+        resp = await self._send_civ_expect(civ, label="get_dual_watch")
+        if resp.command != command:
+            return False
+        if resp.sub is not None:
+            # e.g. IC-9700's [0x16, 0x59]: 0x16 IS in command_carries_sub,
+            # so parse_civ_frame already split the marker into .sub.
+            if resp.sub != sub:
+                return False
+            data = resp.data[len(prefix) :]
+            return bool(data) and data[0] != 0x00
+        # e.g. IC-7610's [0x07, 0xC2]: 0x07 carries no CI-V sub-command, so
+        # the marker is echoed as data[0] instead of landing in .sub, and
+        # BoundCommands.expect put it at prefix[0] instead of sub.
+        if not prefix or not resp.data or resp.data[0] != prefix[0]:
+            return False
+        data = resp.data[1:]
+        return bool(data) and data[0] != 0x00
+
+    async def set_dual_watch(self, on: bool) -> None:
+        """Enable or disable dual watch. Fire-and-forget."""
+        self._check_connected()
+        civ = self._commands.set_dual_watch(on, to_addr=self._radio_addr)
+        await self._send_civ_raw(civ, wait_response=False)
+
+    async def get_quick_split(self) -> bool:
+        """Read the persistent Quick Split menu toggle (CI-V 0x1A 0x05).
+
+        MOR-2007 ruling 2: replaces the pre-migration ``quick_split()``,
+        which always sent this same bare-GET frame and never read the
+        reply -- it fired nothing. ``0x1A`` carries a real CI-V
+        sub-command (unlike ``get_dual_watch``'s ``0x07`` family above),
+        so this is a plain ``_get_bool_value`` getter, the same shape as
+        `commands/config.py: get_civ_transceive`.
+        """
+        command, sub, prefix = self._expect_shape(get_quick_split)
+        return await self._get_bool_value(
+            self._commands.get_quick_split(to_addr=self._radio_addr),
+            key="get_quick_split",
+            command=command,
+            sub=sub,
+            prefix=prefix,
+        )
+
+    async def set_quick_split(self, enabled: bool) -> None:
+        """Write the persistent Quick Split menu toggle. Fire-and-forget."""
+        await self._send_fire_and_forget(
+            self._commands.set_quick_split(enabled, to_addr=self._radio_addr)
+        )
+
+    async def get_quick_dual_watch(self) -> bool:
+        """Read the persistent Quick Dual Watch menu toggle.
+
+        See ``get_quick_split`` -- same ruling, same shape.
+        """
+        command, sub, prefix = self._expect_shape(get_quick_dual_watch)
+        return await self._get_bool_value(
+            self._commands.get_quick_dual_watch(to_addr=self._radio_addr),
+            key="get_quick_dual_watch",
+            command=command,
+            sub=sub,
+            prefix=prefix,
+        )
+
+    async def set_quick_dual_watch(self, enabled: bool) -> None:
+        """Write the persistent Quick Dual Watch menu toggle. Fire-and-forget."""
+        await self._send_fire_and_forget(
+            self._commands.set_quick_dual_watch(enabled, to_addr=self._radio_addr)
+        )
+
+    async def get_attenuator_level(
+        self, receiver: int = RECEIVER_MAIN, *, strict: bool = False
+    ) -> int:
+        """Read attenuator level in dB (Command29-aware).
+
+        Args:
+            receiver: RECEIVER_MAIN (0) or RECEIVER_SUB (1).
+            strict: re-raise on timeout and raise on an empty reply instead
+                of returning the setter-written ``_attenuator_db`` mirror.
+        """
+        self._check_connected()
+        self._require_capability("attenuator", operation="get_attenuator_level")
+        self._require_receiver(receiver, operation="get_attenuator_level")
+        self._require_cmd29_route(
+            0x11, None, receiver=receiver, operation="get_attenuator_level"
+        )
+        cmd29 = self._profile.supports_cmd29(0x11)
+        civ = self._commands.get_attenuator(
+            to_addr=self._radio_addr, receiver=receiver, command29=cmd29
+        )
+        try:
+            resp = await self._send_civ_expect(civ, label="get_attenuator_level")
+        except TimeoutError:
+            if strict:
+                raise
+        else:
+            if resp.data:
+                raw = resp.data[0]
+                val = ((raw >> 4) & 0x0F) * 10 + (raw & 0x0F)
+                self._attenuator_db[receiver] = val
+                return val
+            if strict:
+                raise CommandError("Radio returned empty attenuator response")
+
+        if receiver in self._attenuator_db:
+            return self._attenuator_db[receiver]
+        raise CommandError("Radio returned empty attenuator response")
+
+    async def get_attenuator(self, receiver: int = 0, *, strict: bool = False) -> bool:
+        """Read attenuator state (compat wrapper)."""
+        return (await self.get_attenuator_level(receiver, strict=strict)) > 0
+
+    def project_attenuator_observation_value(self, db: int) -> int:
+        return db
+
+    def attenuator_db_steps(self) -> tuple[int, ...] | None:
+        """Legal attenuator dB steps declared by the active profile."""
+        return self._profile.att_values
+
+    async def set_attenuator_level(
+        self, db: int, receiver: int = RECEIVER_MAIN
+    ) -> None:
+        """Set attenuator level in dB (Command29-aware).
+
+        Fire-and-forget: the command is sent without waiting for an ACK.
+        The attenuator state is updated optimistically.
+
+        Args:
+            db: Attenuation in dB. Valid values are declared per radio by the
+                profile's ``[attenuator] values`` (e.g. IC-7300 has a single
+                20 dB step; IC-7610 has 0..45 in 3 dB steps).
+            receiver: RECEIVER_MAIN (0) or RECEIVER_SUB (1).
+        """
+        self._check_connected()
+        self._require_capability("attenuator", operation="set_attenuator_level")
+        self._require_receiver(receiver, operation="set_attenuator_level")
+        self._require_cmd29_route(
+            0x11, None, receiver=receiver, operation="set_attenuator_level"
+        )
+        att_values = self._profile.att_values
+        if att_values is None:
+            # Data-driven only: no universal numeric fallback. A profile that
+            # declares the "attenuator" capability must also declare its
+            # valid dB steps via [attenuator] values in its rig TOML.
+            raise CommandError(
+                f"set_attenuator_level is not supported by profile "
+                f"{self._profile.model} (missing capability: attenuator values)"
+            )
+        if db not in att_values:
+            raise ValueError(
+                f"Attenuator level must be one of {sorted(att_values)} dB "
+                f"for {self._profile.model}, got {db}"
+            )
+        cmd29 = self._profile.supports_cmd29(0x11)
+        civ = self._commands.set_attenuator_level(
+            db, to_addr=self._radio_addr, receiver=receiver, command29=cmd29
+        )
+        await self._send_civ_raw(civ, wait_response=False)
+        self._attenuator_db[receiver] = db
+        logger.debug("set_attenuator(%d dB) sent (fire-and-forget)", db)
+
+    async def set_attenuator(self, on: bool, receiver: int = RECEIVER_MAIN) -> None:
+        """Enable or disable attenuator (compat wrapper, Command29-aware).
+
+        Resolves ``on`` to a value declared by the profile's ``[attenuator]
+        values`` and delegates to :meth:`set_attenuator_level` -- this
+        method no longer invents a level (MOR-2086; the deleted
+        ``commands/dsp.py: set_attenuator`` hardcoded 18, which is an
+        IC-7610 step invalid on every other CI-V profile). ``on=True``
+        requires the profile to declare exactly one non-zero attenuator
+        value; a stepped attenuator (e.g. IC-7610, several declared
+        non-zero steps) has no well-defined boolean "on", so it is refused
+        -- call :meth:`set_attenuator_level` directly with the desired dB
+        value instead. A profile declaring no ``[attenuator] values`` at
+        all is refused the same way.
+        """
+        self._check_connected()
+        self._require_capability("attenuator", operation="set_attenuator")
+        self._require_receiver(receiver, operation="set_attenuator")
+        self._require_cmd29_route(
+            0x11, None, receiver=receiver, operation="set_attenuator"
+        )
+        att_values = self._profile.att_values
+        if att_values is None:
+            raise CommandError(
+                f"set_attenuator is not supported by profile "
+                f"{self._profile.model} (missing capability: attenuator values)"
+            )
+        if not on:
+            await self.set_attenuator_level(0, receiver=receiver)
+            return
+        db = self._profile.attenuator_on_db()
+        if db is None:
+            non_zero = sorted({v for v in att_values if v != 0})
+            raise CommandError(
+                f"set_attenuator(on=True) is ambiguous for profile "
+                f"{self._profile.model}: {len(non_zero)} declared non-zero "
+                f"attenuator values {non_zero}; call set_attenuator_level "
+                f"directly with the desired dB value instead"
+            )
+        await self.set_attenuator_level(db, receiver=receiver)
+
+    async def get_preamp(
+        self, receiver: int = RECEIVER_MAIN, *, strict: bool = False
+    ) -> int:
+        """Read preamp level (0=off, 1=PREAMP1, 2=PREAMP2) (Command29-aware).
+
+        Args:
+            receiver: RECEIVER_MAIN (0) or RECEIVER_SUB (1).
+            strict: re-raise on timeout and raise on an empty reply instead
+                of returning the setter-written ``_preamp_level`` mirror.
+        """
+        self._check_connected()
+        self._require_capability("preamp", operation="get_preamp")
+        self._require_receiver(receiver, operation="get_preamp")
+        self._require_cmd29_route(0x16, 0x02, receiver=receiver, operation="get_preamp")
+        cmd29 = self._profile.supports_cmd29(0x16, 0x02)
+        civ = self._commands.get_preamp(
+            to_addr=self._radio_addr, receiver=receiver, command29=cmd29
+        )
+        try:
+            resp = await self._send_civ_expect(civ, label="get_preamp")
+        except TimeoutError:
+            if strict:
+                raise
+        else:
+            if resp.data:
+                raw = resp.data[0]
+                self._preamp_level = ((raw >> 4) & 0x0F) * 10 + (raw & 0x0F)
+                return self._preamp_level
+            if strict:
+                raise CommandError("Radio returned empty preamp response")
+
+        if self._preamp_level is not None:
+            return self._preamp_level
+        raise CommandError("Radio returned empty preamp response")
+
+    async def set_preamp(self, level: int = 1, receiver: int = RECEIVER_MAIN) -> None:
+        """Set preamp level (Command29-aware).
+
+        Valid values are declared per radio by the profile's ``[preamp]
+        values`` (e.g. IC-7300 offers OFF/P.AMP1/P.AMP2 = 0/1/2; the X6200
+        only declares OFF/P.AMP1 = 0/1 — it has no second preamp stage).
+
+        Args:
+            level: preamp level, must be one of the profile's declared
+                ``[preamp] values``.
+            receiver: RECEIVER_MAIN (0) or RECEIVER_SUB (1).
+
+        Raises:
+            ValueError: If ``level`` is not in the profile's declared
+                preamp domain.
+            CommandError: If DIGI-SEL (IP+) is enabled. On IC-7610, PREAMP and
+                DIGI-SEL are mutually exclusive — disable DIGI-SEL first.
+        """
+        self._check_connected()
+        self._require_capability("preamp", operation="set_preamp")
+        self._require_receiver(receiver, operation="set_preamp")
+        self._require_cmd29_route(
+            0x16,
+            0x02,
+            receiver=receiver,
+            operation="set_preamp",
+        )
+        pre_values = self._profile.pre_values
+        if pre_values is not None and level not in pre_values:
+            raise ValueError(
+                f"Preamp level must be one of {sorted(pre_values)} for "
+                f"{self._profile.model}, got {level}"
+            )
+
+        # Pre-flight: check DIGI-SEL / PREAMP mutual exclusion
+        if level > 0 and "digisel" in self.capabilities:
+            try:
+                if await self.get_digisel(receiver=receiver):
+                    raise CommandError(
+                        f"Cannot set preamp level {level}: DIGI-SEL (IP+) is ON. "
+                        "PREAMP and DIGI-SEL are mutually exclusive — disable DIGI-SEL first."
+                    )
+            except CommandError:
+                raise
+            except Exception:
+                logger.debug(
+                    "set_preamp: unexpected error checking DIGI-SEL, proceeding",
+                    exc_info=True,
+                )
+
+        cmd29 = self._profile.supports_cmd29(0x16, 0x02)
+        civ = self._commands.set_preamp(
+            level, to_addr=self._radio_addr, receiver=receiver, command29=cmd29
+        )
+        await self._send_civ_raw(civ, wait_response=False)
+        self._preamp_level = level
+
+    async def get_digisel(self, receiver: int = RECEIVER_MAIN) -> bool:
+        """Read DIGI-SEL status (IC-7610 frontend selector).
+
+        Wrapping is gated purely on ``self._profile.supports_cmd29(0x16,
+        0x4E)`` via ``_require_cmd29_route`` (without a route only the
+        selected receiver is admitted, MOR-3591) — matching every
+        other command in this family. Previously this also hard-raised
+        ``CommandError`` for receiver=MAIN when the profile lacked the
+        route, instead of unwrapping like the rest of the family (MOR-1537).
+
+        That earlier raise was NOT purely redundant, contrary to MOR-1537's
+        framing: it was the only thing turning a profile that over-declares
+        the ``"digisel"`` capability without a matching cmd29 route/command
+        into a fast, explicit ``CommandError`` instead of a live, always-
+        0x16/0x4E CI-V send that blocks for a full timeout because the
+        radio never answers (MOR-1540 hit this on IC-705). The fix for that
+        class of bug is correcting the capability declaration at the source
+        (``rigs/<model>.toml``), not restoring the raise here — this method
+        still unwraps for MAIN as documented above.
+        """
+        self._check_connected()
+        self._require_capability("digisel", operation="get_digisel")
+        self._require_receiver(receiver, operation="get_digisel")
+        self._require_cmd29_route(
+            0x16,
+            0x4E,
+            receiver=receiver,
+            operation="get_digisel",
+        )
+        cmd29 = self._profile.supports_cmd29(0x16, 0x4E)
+        civ = self._commands.get_digisel(
+            to_addr=self._radio_addr, receiver=receiver, command29=cmd29
+        )
+        resp = await self._send_civ_expect(civ, label="get_digisel")
+        if not resp.data:
+            raise CommandError("Radio returned empty DIGI-SEL response")
+        raw = resp.data[0]
+        val = ((raw >> 4) & 0x0F) * 10 + (raw & 0x0F)
+        return bool(val)
+
+    async def set_digisel(self, on: bool, receiver: int = 0) -> None:
+        """Set DIGI-SEL status."""
+        self._check_connected()
+        self._require_capability("digisel", operation="set_digisel")
+        self._require_receiver(receiver, operation="set_digisel")
+        self._require_cmd29_route(
+            0x16,
+            0x4E,
+            receiver=receiver,
+            operation="set_digisel",
+        )
+        cmd29 = self._profile.supports_cmd29(0x16, 0x4E)
+        civ = self._commands.set_digisel(
+            on, to_addr=self._radio_addr, receiver=receiver, command29=cmd29
+        )
+        resp = await self._send_civ_expect(civ, label="set_digisel")
+        ack = parse_ack_nak(resp)
+        if ack is False:
+            raise CommandError(f"Radio rejected DIGI-SEL {'on' if on else 'off'}")
+
+    async def get_nb(self) -> bool:
+        """Read Noise Blanker status."""
+        self._check_connected()
+        cmd29 = self._profile.supports_cmd29(0x16, 0x22)
+        civ = self._commands.get_nb(to_addr=self._radio_addr, command29=cmd29)
+        resp = await self._send_civ_expect(civ, label="get_nb")
+        return resp.data[0] == 0x01 if resp.data else False
+
+    async def set_nb(self, on: bool, receiver: int = 0) -> None:
+        """Set Noise Blanker on/off."""
+        self._check_connected()
+        self._require_capability("nb", operation="set_nb")
+        self._require_receiver(receiver, operation="set_nb")
+        self._require_cmd29_route(
+            0x16,
+            0x22,
+            receiver=receiver,
+            operation="set_nb",
+        )
+        cmd29 = self._profile.supports_cmd29(0x16, 0x22)
+        civ = self._commands.set_nb(
+            on, to_addr=self._radio_addr, receiver=receiver, command29=cmd29
+        )
+        await self._send_civ_raw(civ, wait_response=False)
+
+    async def get_nr(self) -> bool:
+        """Read Noise Reduction status."""
+        self._check_connected()
+        cmd29 = self._profile.supports_cmd29(0x16, 0x40)
+        civ = self._commands.get_nr(to_addr=self._radio_addr, command29=cmd29)
+        resp = await self._send_civ_expect(civ, label="get_nr")
+        return resp.data[0] == 0x01 if resp.data else False
+
+    async def set_nr(self, on: bool, receiver: int = 0) -> None:
+        """Set Noise Reduction on/off."""
+        self._check_connected()
+        self._require_capability("nr", operation="set_nr")
+        self._require_receiver(receiver, operation="set_nr")
+        self._require_cmd29_route(
+            0x16,
+            0x40,
+            receiver=receiver,
+            operation="set_nr",
+        )
+        cmd29 = self._profile.supports_cmd29(0x16, 0x40)
+        civ = self._commands.set_nr(
+            on, to_addr=self._radio_addr, receiver=receiver, command29=cmd29
+        )
+        await self._send_civ_raw(civ, wait_response=False)
+
+    async def get_ip_plus(self) -> bool:
+        """Read IP+ status."""
+        self._check_connected()
+        cmd29 = self._profile.supports_cmd29(0x16, 0x65)
+        civ = self._commands.get_ip_plus(to_addr=self._radio_addr, command29=cmd29)
+        resp = await self._send_civ_expect(civ, label="get_ip_plus")
+        return resp.data[0] == 0x01 if resp.data else False
+
+    async def set_ip_plus(self, on: bool, receiver: int = 0) -> None:
+        """Set IP+ on/off."""
+        self._check_connected()
+        self._require_capability("ip_plus", operation="set_ip_plus")
+        self._require_receiver(receiver, operation="set_ip_plus")
+        self._require_cmd29_route(
+            0x16,
+            0x65,
+            receiver=receiver,
+            operation="set_ip_plus",
+        )
+        cmd29 = self._profile.supports_cmd29(0x16, 0x65)
+        civ = self._commands.set_ip_plus(
+            on, to_addr=self._radio_addr, receiver=receiver, command29=cmd29
+        )
+        await self._send_civ_raw(civ, wait_response=False)
+
+    async def get_repeater_tone(self, receiver: int = 0) -> bool:
+        """Read repeater tone status (0x16 0x42)."""
+        self._check_connected()
+        self._require_receiver(receiver, operation="get_repeater_tone")
+        command, sub, _ = self._expect_shape(_get_repeater_tone_cmd)
+
+        self._require_cmd29_route(
+            0x16, _SUB_REPEATER_TONE, receiver=receiver, operation="get_repeater_tone"
+        )
+        cmd29 = self._profile.supports_cmd29(0x16, _SUB_REPEATER_TONE)
+        civ = self._commands.get_repeater_tone(
+            to_addr=self._radio_addr, receiver=receiver, command29=cmd29
+        )
+        return await self._get_bool_value(
+            civ,
+            key=f"get_repeater_tone:{receiver}",
+            command=command,
+            sub=sub,
+        )
+
+    async def set_repeater_tone(self, on: bool, receiver: int = 0) -> None:
+        """Set repeater tone on/off (0x16 0x42)."""
+        self._check_connected()
+        self._require_receiver(receiver, operation="set_repeater_tone")
+
+        self._require_cmd29_route(
+            0x16, _SUB_REPEATER_TONE, receiver=receiver, operation="set_repeater_tone"
+        )
+        cmd29 = self._profile.supports_cmd29(0x16, _SUB_REPEATER_TONE)
+        await self._send_fire_and_forget(
+            self._commands.set_repeater_tone(
+                on, to_addr=self._radio_addr, receiver=receiver, command29=cmd29
+            )
+        )
+
+    async def get_repeater_tsql(self, receiver: int = 0) -> bool:
+        """Read repeater TSQL status (0x16 0x43)."""
+        self._check_connected()
+        self._require_receiver(receiver, operation="get_repeater_tsql")
+        command, sub, _ = self._expect_shape(_get_repeater_tsql_cmd)
+
+        self._require_cmd29_route(
+            0x16, _SUB_REPEATER_TSQL, receiver=receiver, operation="get_repeater_tsql"
+        )
+        cmd29 = self._profile.supports_cmd29(0x16, _SUB_REPEATER_TSQL)
+        civ = self._commands.get_repeater_tsql(
+            to_addr=self._radio_addr, receiver=receiver, command29=cmd29
+        )
+        return await self._get_bool_value(
+            civ,
+            key=f"get_repeater_tsql:{receiver}",
+            command=command,
+            sub=sub,
+        )
+
+    async def set_repeater_tsql(self, on: bool, receiver: int = 0) -> None:
+        """Set repeater TSQL on/off (0x16 0x43)."""
+        self._check_connected()
+        self._require_receiver(receiver, operation="set_repeater_tsql")
+
+        self._require_cmd29_route(
+            0x16, _SUB_REPEATER_TSQL, receiver=receiver, operation="set_repeater_tsql"
+        )
+        cmd29 = self._profile.supports_cmd29(0x16, _SUB_REPEATER_TSQL)
+        await self._send_fire_and_forget(
+            self._commands.set_repeater_tsql(
+                on, to_addr=self._radio_addr, receiver=receiver, command29=cmd29
+            )
+        )
+
+    async def get_tone_freq(self, receiver: int = 0) -> int:
+        """Read CTCSS tone frequency in exact centiHz (0x1B 0x00)."""
+        self._check_connected()
+        self._require_receiver(receiver, operation="get_tone_freq")
+        domain = self._profile.ctcss_tones_centihz
+
+        self._require_cmd29_route(
+            0x1B, 0x00, receiver=receiver, operation="get_tone_freq"
+        )
+        cmd29 = self._profile.supports_cmd29(0x1B, 0x00)
+        civ = self._commands.get_tone_freq(
+            to_addr=self._radio_addr,
+            receiver=receiver,
+            command29=cmd29,
+            ctcss_tones_centihz=domain,
+        )
+        resp = await self._send_civ_expect(civ, label="get_tone_freq")
+        _, freq = parse_tone_freq_response(resp, ctcss_tones_centihz=domain)
+        return freq
+
+    async def set_tone_freq(
+        self,
+        freq_hz: int | None = None,
+        receiver: int = 0,
+        *,
+        freq_centihz: int | None = None,
+    ) -> None:
+        """Set CTCSS tone frequency in exact centiHz (0x1B 0x00)."""
+        if freq_hz is not None and freq_centihz is not None:
+            raise TypeError("set_tone_freq received both freq_hz and freq_centihz")
+        if freq_hz is None:
+            if freq_centihz is None:
+                raise TypeError("set_tone_freq missing required frequency")
+            freq_hz = freq_centihz
+
+        self._check_connected()
+        self._require_receiver(receiver, operation="set_tone_freq")
+        domain = self._profile.ctcss_tones_centihz
+
+        self._require_cmd29_route(
+            0x1B, 0x00, receiver=receiver, operation="set_tone_freq"
+        )
+        cmd29 = self._profile.supports_cmd29(0x1B, 0x00)
+        await self._send_fire_and_forget(
+            self._commands.set_tone_freq(
+                freq_hz,
+                to_addr=self._radio_addr,
+                receiver=receiver,
+                command29=cmd29,
+                ctcss_tones_centihz=domain,
+            )
+        )
+
+    async def get_tsql_freq(self, receiver: int = 0) -> int:
+        """Read TSQL frequency in exact centiHz (0x1B 0x01)."""
+        self._check_connected()
+        self._require_receiver(receiver, operation="get_tsql_freq")
+        domain = self._profile.ctcss_tones_centihz
+
+        self._require_cmd29_route(
+            0x1B, 0x01, receiver=receiver, operation="get_tsql_freq"
+        )
+        cmd29 = self._profile.supports_cmd29(0x1B, 0x01)
+        civ = self._commands.get_tsql_freq(
+            to_addr=self._radio_addr,
+            receiver=receiver,
+            command29=cmd29,
+            ctcss_tones_centihz=domain,
+        )
+        resp = await self._send_civ_expect(civ, label="get_tsql_freq")
+        _, freq = parse_tsql_freq_response(resp, ctcss_tones_centihz=domain)
+        return freq
+
+    async def set_tsql_freq(
+        self,
+        freq_hz: int | None = None,
+        receiver: int = 0,
+        *,
+        freq_centihz: int | None = None,
+    ) -> None:
+        """Set TSQL frequency in exact centiHz (0x1B 0x01)."""
+        if freq_hz is not None and freq_centihz is not None:
+            raise TypeError("set_tsql_freq received both freq_hz and freq_centihz")
+        if freq_hz is None:
+            if freq_centihz is None:
+                raise TypeError("set_tsql_freq missing required frequency")
+            freq_hz = freq_centihz
+
+        self._check_connected()
+        self._require_receiver(receiver, operation="set_tsql_freq")
+        domain = self._profile.ctcss_tones_centihz
+
+        self._require_cmd29_route(
+            0x1B, 0x01, receiver=receiver, operation="set_tsql_freq"
+        )
+        cmd29 = self._profile.supports_cmd29(0x1B, 0x01)
+        await self._send_fire_and_forget(
+            self._commands.set_tsql_freq(
+                freq_hz,
+                to_addr=self._radio_addr,
+                receiver=receiver,
+                command29=cmd29,
+                ctcss_tones_centihz=domain,
+            )
+        )
+
+    # ------------------------------------------------------------------
+    # System/Config commands (#135)
+    # ------------------------------------------------------------------
+
+    async def get_antenna_1(self) -> bool:
+        """Read ANT1 selection status (0x12 0x00)."""
+        return await self._get_bool_value(
+            self._commands.get_antenna_1(to_addr=self._radio_addr),
+            key="get_antenna_1",
+            command=0x12,
+            sub=0x00,
+        )
+
+    async def set_antenna_1(self, enabled: bool) -> None:
+        """Select ANT1 (0x12 0x00 <00|01>).
+
+        IC-7610: data byte encodes RX-ANT OFF/ON.
+        """
+        await self._send_fire_and_forget(
+            self._commands.set_antenna_1(enabled, to_addr=self._radio_addr)
+        )
+
+    async def get_antenna_2(self) -> bool:
+        """Read ANT2 selection status (0x12 0x01)."""
+        return await self._get_bool_value(
+            self._commands.get_antenna_2(to_addr=self._radio_addr),
+            key="get_antenna_2",
+            command=0x12,
+            sub=0x01,
+        )
+
+    async def set_antenna_2(self, enabled: bool) -> None:
+        """Select ANT2 (0x12 0x01 <00|01>).
+
+        IC-7610: data byte encodes RX-ANT OFF/ON.
+        """
+        await self._send_fire_and_forget(
+            self._commands.set_antenna_2(enabled, to_addr=self._radio_addr)
+        )
+
+    async def get_rx_antenna_ant1(self) -> bool:
+        """Read RX ANT state for ANT1.
+
+        NOTE: On IC-7610 this is implemented via 0x12 0x00 and may select ANT1.
+        """
+        return await self._get_bool_value(
+            self._commands.get_rx_antenna_ant1(to_addr=self._radio_addr),
+            key="get_rx_antenna_ant1",
+            command=0x12,
+            sub=0x00,
+        )
+
+    async def set_rx_antenna_ant1(self, enabled: bool) -> None:
+        """Set RX ANT state for ANT1 (0x12 0x00 <00|01>)."""
+        await self._send_fire_and_forget(
+            self._commands.set_rx_antenna_ant1(enabled, to_addr=self._radio_addr)
+        )
+
+    async def get_rx_antenna_ant2(self) -> bool:
+        """Read RX ANT state for ANT2.
+
+        NOTE: On IC-7610 this is implemented via 0x12 0x01 and may select ANT2.
+        """
+        return await self._get_bool_value(
+            self._commands.get_rx_antenna_ant2(to_addr=self._radio_addr),
+            key="get_rx_antenna_ant2",
+            command=0x12,
+            sub=0x01,
+        )
+
+    async def set_rx_antenna_ant2(self, enabled: bool) -> None:
+        """Set RX ANT state for ANT2 (0x12 0x01 <00|01>)."""
+        await self._send_fire_and_forget(
+            self._commands.set_rx_antenna_ant2(enabled, to_addr=self._radio_addr)
+        )
+
+    # commands/config.py, migrated onto the bound command map (MOR-2006
+    # Steps 5..N module 1, plan §4): requests go through
+    # ``self._commands.<builder>`` and replies through
+    # ``self._expect_shape`` (§6 population 1), rather than the literal
+    # ``command=``/``sub=``/``prefix=`` values every getter below still uses.
+
+    async def get_acc1_mod_level(self) -> int:
+        """Read ACC1 modulation level (0-255)."""
+        command, sub, prefix = self._expect_shape(get_acc1_mod_level)
+        return await self._get_bcd_level(
+            self._commands.get_acc1_mod_level(to_addr=self._radio_addr),
+            key="get_acc1_mod_level",
+            command=command,
+            sub=sub,
+            prefix=prefix,
+        )
+
+    async def set_acc1_mod_level(self, level: int) -> None:
+        """Set ACC1 modulation level (0-255)."""
+        await self._send_fire_and_forget(
+            self._commands.set_acc1_mod_level(level, to_addr=self._radio_addr)
+        )
+
+    async def get_usb_mod_level(self) -> int:
+        """Read USB modulation level (0-255)."""
+        command, sub, prefix = self._expect_shape(get_usb_mod_level)
+        return await self._get_bcd_level(
+            self._commands.get_usb_mod_level(to_addr=self._radio_addr),
+            key="get_usb_mod_level",
+            command=command,
+            sub=sub,
+            prefix=prefix,
+        )
+
+    async def set_usb_mod_level(self, level: int) -> None:
+        """Set USB modulation level (0-255)."""
+        await self._send_fire_and_forget(
+            self._commands.set_usb_mod_level(level, to_addr=self._radio_addr)
+        )
+
+    async def get_lan_mod_level(self) -> int:
+        """Read LAN modulation level (0-255)."""
+        command, sub, prefix = self._expect_shape(get_lan_mod_level)
+        return await self._get_bcd_level(
+            self._commands.get_lan_mod_level(to_addr=self._radio_addr),
+            key="get_lan_mod_level",
+            command=command,
+            sub=sub,
+            prefix=prefix,
+        )
+
+    async def set_lan_mod_level(self, level: int) -> None:
+        """Set LAN modulation level (0-255)."""
+        await self._send_fire_and_forget(
+            self._commands.set_lan_mod_level(level, to_addr=self._radio_addr)
+        )
+
+    async def get_data_off_mod_input(self) -> int:
+        """Read Data Off modulation input source (0-5)."""
+        command, sub, prefix = self._expect_shape(get_data_off_mod_input)
+        return await self._get_bcd_level(
+            self._commands.get_data_off_mod_input(to_addr=self._radio_addr),
+            key="get_data_off_mod_input",
+            command=command,
+            sub=sub,
+            prefix=prefix,
+            bcd_bytes=1,
+        )
+
+    async def set_data_off_mod_input(self, source: int) -> None:
+        """Set Data Off modulation input source (0-5)."""
+        await self._send_fire_and_forget(
+            self._commands.set_data_off_mod_input(source, to_addr=self._radio_addr)
+        )
+
+    async def get_data1_mod_input(self) -> int:
+        """Read DATA1 modulation input source (0-4)."""
+        command, sub, prefix = self._expect_shape(get_data1_mod_input)
+        return await self._get_bcd_level(
+            self._commands.get_data1_mod_input(to_addr=self._radio_addr),
+            key="get_data1_mod_input",
+            command=command,
+            sub=sub,
+            prefix=prefix,
+            bcd_bytes=1,
+        )
+
+    async def set_data1_mod_input(self, source: int) -> None:
+        """Set DATA1 modulation input source (0-4)."""
+        await self._send_fire_and_forget(
+            self._commands.set_data1_mod_input(source, to_addr=self._radio_addr)
+        )
+
+    async def get_data2_mod_input(self) -> int:
+        """Read DATA2 modulation input source (0-4)."""
+        command, sub, prefix = self._expect_shape(get_data2_mod_input)
+        return await self._get_bcd_level(
+            self._commands.get_data2_mod_input(to_addr=self._radio_addr),
+            key="get_data2_mod_input",
+            command=command,
+            sub=sub,
+            prefix=prefix,
+            bcd_bytes=1,
+        )
+
+    async def set_data2_mod_input(self, source: int) -> None:
+        """Set DATA2 modulation input source (0-4)."""
+        await self._send_fire_and_forget(
+            self._commands.set_data2_mod_input(source, to_addr=self._radio_addr)
+        )
+
+    async def get_data3_mod_input(self) -> int:
+        """Read DATA3 modulation input source (0-4)."""
+        command, sub, prefix = self._expect_shape(get_data3_mod_input)
+        return await self._get_bcd_level(
+            self._commands.get_data3_mod_input(to_addr=self._radio_addr),
+            key="get_data3_mod_input",
+            command=command,
+            sub=sub,
+            prefix=prefix,
+            bcd_bytes=1,
+        )
+
+    async def set_data3_mod_input(self, source: int) -> None:
+        """Set DATA3 modulation input source (0-4)."""
+        await self._send_fire_and_forget(
+            self._commands.set_data3_mod_input(source, to_addr=self._radio_addr)
+        )
+
+    async def get_civ_transceive(self) -> bool:
+        """Read CI-V transceive status."""
+        command, sub, prefix = self._expect_shape(get_civ_transceive)
+        return await self._get_bool_value(
+            self._commands.get_civ_transceive(to_addr=self._radio_addr),
+            key="get_civ_transceive",
+            command=command,
+            sub=sub,
+            prefix=prefix,
+        )
+
+    async def set_civ_transceive(self, enabled: bool) -> None:
+        """Set CI-V transceive status."""
+        await self._send_fire_and_forget(
+            self._commands.set_civ_transceive(enabled, to_addr=self._radio_addr)
+        )
+
+    async def get_civ_output_ant(self) -> bool:
+        """Read CI-V output (ANT) status."""
+        command, sub, prefix = self._expect_shape(get_civ_output_ant)
+        return await self._get_bool_value(
+            self._commands.get_civ_output_ant(to_addr=self._radio_addr),
+            key="get_civ_output_ant",
+            command=command,
+            sub=sub,
+            prefix=prefix,
+        )
+
+    async def set_civ_output_ant(self, enabled: bool) -> None:
+        """Set CI-V output (ANT) status."""
+        await self._send_fire_and_forget(
+            self._commands.set_civ_output_ant(enabled, to_addr=self._radio_addr)
+        )
+
+    async def get_system_date(self) -> tuple[int, int, int]:
+        """Read system date as (year, month, day)."""
+        self._check_connected()
+        civ = self._commands.get_system_date(to_addr=self._radio_addr)
+        resp = await self._send_civ_expect(
+            civ, key="get_system_date", dedupe=True, label="get_system_date"
+        )
+        _, _, prefix = self._expect_shape(get_system_date)
+        return parse_system_date_response(resp, prefix=prefix)
+
+    async def set_system_date(self, year: int, month: int, day: int) -> None:
+        """Set system date.
+
+        Args:
+            year: 4-digit year.
+            month: Month 1-12.
+            day: Day 1-31.
+        """
+        await self._send_fire_and_forget(
+            self._commands.set_system_date(year, month, day, to_addr=self._radio_addr)
+        )
+
+    async def get_system_time(self) -> tuple[int, int]:
+        """Read system time as (hour, minute)."""
+        self._check_connected()
+        civ = self._commands.get_system_time(to_addr=self._radio_addr)
+        resp = await self._send_civ_expect(
+            civ, key="get_system_time", dedupe=True, label="get_system_time"
+        )
+        _, _, prefix = self._expect_shape(get_system_time)
+        return parse_system_time_response(resp, prefix=prefix)
+
+    async def set_system_time(self, hour: int, minute: int) -> None:
+        """Set system time.
+
+        Args:
+            hour: Hour 0-23.
+            minute: Minute 0-59.
+        """
+        await self._send_fire_and_forget(
+            self._commands.set_system_time(hour, minute, to_addr=self._radio_addr)
+        )
+
+    async def get_utc_offset(self) -> tuple[int, int, bool]:
+        """Read UTC offset as (hours, minutes, is_negative)."""
+        self._check_connected()
+        civ = self._commands.get_utc_offset(to_addr=self._radio_addr)
+        resp = await self._send_civ_expect(
+            civ, key="get_utc_offset", dedupe=True, label="get_utc_offset"
+        )
+        _, _, prefix = self._expect_shape(get_utc_offset)
+        return parse_utc_offset_response(resp, prefix=prefix)
+
+    async def set_utc_offset(self, hours: int, minutes: int, is_negative: bool) -> None:
+        """Set UTC offset.
+
+        Args:
+            hours: Offset hours 0-14.
+            minutes: Offset minutes, one of 0/15/30/45.
+            is_negative: True for negative (west) offset.
+        """
+        await self._send_fire_and_forget(
+            self._commands.set_utc_offset(
+                hours, minutes, is_negative, to_addr=self._radio_addr
+            )
+        )
+
+    async def snapshot_state(self) -> dict[str, object]:
+        """Best-effort snapshot of core rig state for safe restore.
+
+        Implementation lives in :mod:`rigplane.radio_state_snapshot` (#1258).
+        """
+        return await _state_snapshot.snapshot_state(self)
+
+    async def restore_state(self, state: dict[str, object]) -> None:
+        """Best-effort restore of state produced by :meth:`snapshot_state`.
+
+        Implementation lives in :mod:`rigplane.radio_state_snapshot` (#1258).
+        """
+        await _state_snapshot.restore_state(self, state)
+
+    async def run_state_transaction(
+        self,
+        body: "Callable[[], Awaitable[None]]",
+    ) -> None:
+        """Run operation with snapshot/restore guard (wfview-style safety pattern)."""
+        self._check_connected()
+
+        async def _body() -> dict[str, object]:
+            await body()
+            return {}
+
+        if self._commander is None:
+            snapshot = await self.snapshot_state()
+            try:
+                await body()
+            finally:
+                await self.restore_state(snapshot)
+            return
+
+        await self._commander.transaction(
+            snapshot=self.snapshot_state,
+            restore=self.restore_state,
+            body=_body,
+        )
+
+    # ------------------------------------------------------------------
+    # CW keying
+    # ------------------------------------------------------------------
+
+    async def send_cw_text(self, text: str) -> None:
+        """Send CW text via the radio's built-in keyer.
+
+        Text is split into 30-character chunks.
+
+        Args:
+            text: CW text (A-Z, 0-9, prosigns).
+
+        Raises:
+            CwTextUnsupportedError: The profile does not enable CW text.
+            ValueError: The text is longer than the profile's limit
+                (``admit_cw_text``, MOR-3678); nothing is sent.
+            CwTextSendCancelledError: A transmit abort ended the send
+                part-way; no later frame is sent (MOR-3700).
+        """
+        admit_cw_text(self.profile, text)
+        self._check_connected()
+        frames = self._commands.send_cw(text, to_addr=self._radio_addr)
+
+        async def send_frames(
+            is_current: Callable[[], bool] | None = None,
+        ) -> None:
+            try:
+                for frame in frames:
+                    if is_current is None:
+                        resp = await self._send_civ_expect(
+                            frame,
+                            label="send_cw_text",
+                        )
+                    else:
+                        resp = await self._send_civ_expect(
+                            frame,
+                            label="send_cw_text",
+                            is_current=is_current,
+                        )
+                    ack = parse_ack_nak(resp)
+                    if ack is False:
+                        raise CommandError("Radio rejected CW text")
+            except Exception as exc:
+                # MOR-3700: an abort makes the fence stale at once and
+                # cancels this work later; a frame that fails in between
+                # ("managed TX attempt is stale") is the same abort.
+                if is_current is not None and not is_current():
+                    raise cw_text_cancelled(self.profile.model, "abort") from exc
+                raise
+
+        if not frames or self._local_tx_work is None:
+            await send_frames()
+            return
+        # MOR-3700: a force-off that cancels this send is a refusal.
+        await await_fenced_cw_text(
+            self._local_tx_work.run(send_frames), self.profile.model
+        )
+
+    async def stop_cw_text(self) -> None:
+        """Stop CW sending."""
+        self._check_connected()
+        civ = self._commands.stop_cw(to_addr=self._radio_addr)
+        resp = await self._send_civ_raw(civ, priority=Priority.IMMEDIATE)
+        if resp is not None and parse_ack_nak(resp) is False:
+            raise CommandError("Radio rejected CW stop")
+
+    async def power_control(self, on: bool) -> None:
+        """Power the radio on or off.
+
+        Args:
+            on: True to power on, False to power off.
+        """
+        await self.set_powerstat(on)
+
+    async def get_powerstat(self) -> bool:
+        """Get the current radio power state (PowerControlCapable protocol)."""
+        self._check_connected()
+        civ = self._commands.get_powerstat(to_addr=self._radio_addr)
+        resp = await self._send_civ_expect(civ, label="get_powerstat")
+        return parse_powerstat(resp)
+
+    async def set_powerstat(self, on: bool) -> None:
+        """Power the radio on or off (PowerControlCapable protocol).
+
+        After POWER ON, the radio can stop sending CI-V data for longer than
+        the 2 s answer window while it starts (about 3 s in the observed log),
+        so its acknowledgement cannot be relied on. POWER OFF still waits for
+        an acknowledgement and raises CommandError on a NAK.
+        """
+        self._check_connected()
+        civ = (
+            self._commands.power_on(to_addr=self._radio_addr)
+            if on
+            else self._commands.power_off(to_addr=self._radio_addr)
+        )
+        if on:
+            await self._send_civ_raw(civ, wait_response=False)
+            return
+
+        resp = await self._send_civ_expect(civ, label="set_powerstat")
+        ack = parse_ack_nak(resp)
+        if ack is False:
+            raise CommandError("Radio rejected power off")
+        if ack is True:
+            # MOR-2544: the 0xFB ACK is the radio's own confirmation of the
+            # new power state, so the provider observes it directly — built
+            # with the same observation helper the CI-V receive path uses
+            # (``CivRuntime._observation``), stamped with the store's live
+            # provider generation and announced through the same change
+            # notification the receive path sends. A NAK (ack is False) or
+            # ambiguous reply (ack is None) is not evidence and leaves the
+            # retained state untouched.
+            self._last_commanded_powerstat = False
+            observation = _replace_dataclass(
+                self._civ_runtime._observation(
+                    FieldPath.global_("tx_state", "power_on"),
+                    False,
+                    frame=resp,
+                ),
+                provider_generation=self._state_store.provider_generation,
+            )
+            changeset = self._state_store.apply(observation)
+            self._civ_runtime._notify_state_store_changed(changeset)
+
+    # --- Memory Commands ---
+
+    async def get_memory_mode(self) -> int:
+        """Get currently selected memory channel (1-101).
+
+        Raises:
+            NotImplementedError: IC-7610 does not support reading the current
+                memory channel. Command 0x08 is SELECT-only per the official
+                CI-V Reference Manual.
+        """
+        raise NotImplementedError(
+            "IC-7610 does not support reading the current memory channel. "
+            "Command 0x08 is SELECT-only (no GET variant). "
+            "See IC-7610 CI-V Reference Manual page 4."
+        )
+
+    async def set_memory_mode(self, channel: int, group: int | None = None) -> None:
+        """Select a memory channel (1-101 on the IC-7610).
+
+        With ``group`` this recalls a channel (MOR-3627, MOR-4219) on a
+        profile whose ``[memory]`` section has ``recall = true``: the memory
+        group (``08 A0``, group+channel addressing only, IC-705), the channel
+        (``08`` + channel), then the Memory mode (bare ``08``). Selecting the
+        channel alone leaves the radio in the VFO mode; the bare ``08`` is
+        what puts it on the channel, and it comes last so the radio goes
+        straight to the requested channel and a refused select leaves it
+        untouched. Each frame must be answered with an ACK: a NAK raises
+        :class:`CommandRejectedError`, any other answer :class:`CommandError`.
+        A channel-addressed profile has the single group ``first_group``. It
+        writes no memory contents and sends no transmit-start command; the
+        operating frequency and mode become the stored channel's.
+        """
+        if group is None:
+            if not 1 <= channel <= 101:
+                raise ValueError(f"Channel must be 1-101, got {channel}")
+            async with memory_slot_operation(self):
+                await self._send_fire_and_forget(
+                    self._commands.build_memory_mode_set(
+                        channel, to_addr=self._radio_addr
+                    )
+                )
+            return
+        memory = self._profile.memory
+        if memory is None or not memory.recall:
+            raise CommandError(f"{self._profile.model} does not support memory recall")
+        self._check_connected()
+        frames: list[bytes] = []
+        if memory.addressing == "group_channel":
+            frames.append(
+                self._commands.build_memory_group_set(
+                    memory, group, to_addr=self._radio_addr
+                )
+            )
+        elif group != memory.first_group:
+            raise ValueError(f"memory group must be {memory.first_group}, got {group}")
+        frames.append(
+            self._commands.build_memory_mode_set(
+                channel, to_addr=self._radio_addr, memory=memory
+            )
+        )
+        frames.append(self._commands.build_memory_mode_select(to_addr=self._radio_addr))
+        async with memory_slot_operation(self):
+            for civ in frames:
+                resp = await self._send_civ_expect(civ, label="recall_memory_channel")
+                answer = parse_ack_nak(resp)
+                if answer is False:
+                    raise CommandRejectedError(
+                        f"Radio rejected memory recall {group}/{channel}"
+                    )
+                if answer is not True:
+                    raise CommandError("Expected ACK for memory recall")
+
+    async def memory_write(self) -> None:
+        """Write current VFO state to selected memory channel."""
+        async with memory_slot_operation(self):
+            await self._send_fire_and_forget(
+                self._commands.build_memory_write(to_addr=self._radio_addr)
+            )
+
+    async def memory_to_vfo(self, channel: int) -> None:
+        """Load memory channel to VFO."""
+        if not 1 <= channel <= 101:
+            raise ValueError(f"Channel must be 1-101, got {channel}")
+        async with memory_slot_operation(self):
+            await self._send_fire_and_forget(
+                self._commands.build_memory_to_vfo(channel, to_addr=self._radio_addr)
+            )
+
+    async def memory_clear(self, channel: int, group: int | None = None) -> None:
+        """Clear memory channel.
+
+        ``group`` is the memory group (IC-705) or band code (IC-9700) the
+        profile's memory is addressed by; a grouped radio REFUSES a clear
+        without one (never silently group 0), the channel-only radios
+        keep group 0. MOR-3644: refused unless the profile's ``[memory]``
+        section declares a verified write layout; the clear frame itself
+        is the profile's declared form; nothing is sent otherwise. The
+        clear awaits the radio's answer: a NAK raises
+        :class:`CommandRejectedError`, silence a timeout -- a refused
+        clear never reports success.
+        """
+        self._check_connected()
+        admit_memory_write(self._profile)
+        memory = self._profile.memory
+        assert memory is not None  # admit_memory_write just verified it
+        async with memory_slot_operation(self):
+            self._check_connected()
+            resp = await self._send_civ_expect(
+                self._commands.build_memory_clear(
+                    memory, group, channel, to_addr=self._radio_addr
+                ),
+                label="memory_clear",
+            )
+            if parse_ack_nak(resp) is False:
+                raise CommandRejectedError(
+                    f"Radio rejected memory clear {group}/{channel}"
+                )
+            if parse_ack_nak(resp) is not True:
+                raise CommandError("Expected ACK for memory_clear")
+
+    async def get_memory_contents(self, channel: int) -> MemoryChannel:
+        """Read full memory channel data.
+
+        Args:
+            channel: Memory channel number (1-101).
+
+        Raises:
+            NotImplementedError: IC-7610 does not support reading memory
+                contents. Command 0x1A 0x00 GET is not documented in the
+                official CI-V Reference Manual.
+        """
+        if not 1 <= channel <= 101:
+            raise ValueError(f"Channel must be 1-101, got {channel}")
+        raise NotImplementedError(
+            f"IC-7610 does not support reading memory channel {channel} contents. "
+            "Command 0x1A 0x00 GET is not documented in the CI-V Reference Manual."
+        )
+
+    async def set_memory_contents(self, mem: MemoryChannel) -> None:
+        """Write full memory channel data.
+
+        MOR-3644: refused unless the profile's ``[memory]`` section
+        declares a verified write layout, and the record itself is built
+        from that layout (``[memory].write_layout``) -- the address form,
+        field offsets, tone encoding and name width are the profile's
+        own. Nothing is sent otherwise. The write awaits the radio's
+        answer: a NAK raises :class:`CommandRejectedError`, silence a
+        timeout -- a refused write never reports success.
+        """
+        self._check_connected()
+        admit_memory_write(self._profile)
+        memory = self._profile.memory
+        assert memory is not None  # admit_memory_write just verified it
+        async with memory_slot_operation(self):
+            self._check_connected()
+            resp = await self._send_civ_expect(
+                self._commands.build_memory_contents_set(
+                    mem,
+                    memory,
+                    to_addr=self._radio_addr,
+                    ctcss_tones_centihz=self._profile.ctcss_tones_centihz,
+                    modes=self._profile.modes,
+                    data_mode_count=self._profile.data_mode_count,
+                ),
+                label="set_memory_contents",
+            )
+            if parse_ack_nak(resp) is False:
+                raise CommandRejectedError(
+                    f"Radio rejected memory contents write to channel {mem.channel}"
+                )
+            if parse_ack_nak(resp) is not True:
+                raise CommandError("Expected ACK for set_memory_contents")
+
+    async def read_memory_entries(
+        self, group: int, channels: Sequence[int]
+    ) -> list[MemoryEntry]:
+        """Read stored memory channels without selecting them (``1A 00``).
+
+        One read per channel at background priority, in order, so polls and
+        PTT stay ahead of a sweep. ``group`` is the memory group (IC-705) or
+        band code (IC-9700) per the profile's ``[memory]`` section; an empty
+        slot comes back as an empty entry. Raises :class:`CommandError` when
+        the profile declares no memory channels or the radio answers a
+        different slot than asked.
+        """
+        self._check_connected()
+        memory = self._profile.memory
+        if memory is None:
+            raise CommandError(f"{self._profile.model} declares no memory channels")
+        if memory.addressing not in ("group_channel", "band_channel"):
+            # A channel-list profile (IC-7300, IC-7610) declares write-side
+            # data only: its 1A 00 read reply is not in the sourced
+            # manuals (MOR-3644), so the listing stays off rather than
+            # guessed.
+            raise CommandError(
+                f"{self._profile.model} has no verified CI-V memory read layout"
+            )
+        entries: list[MemoryEntry] = []
+        for channel in channels:
+            async with memory_slot_operation(self):
+                civ = self._commands.build_memory_entry_read(
+                    memory, group, channel, to_addr=self._radio_addr
+                )
+                resp = await self._send_civ_expect(
+                    civ,
+                    label=f"read_memory_entry {group}/{channel}",
+                    priority=Priority.BACKGROUND,
+                )
+                try:
+                    entry = parse_memory_entry(resp.data, memory)
+                except ValueError as exc:
+                    raise CommandError(
+                        f"unreadable memory slot {group}/{channel}: {exc}"
+                    ) from exc
+                if (entry.group, entry.channel) != (group, channel):
+                    raise CommandError(
+                        f"radio answered memory slot {entry.group}/{entry.channel} "
+                        f"to a read of {group}/{channel}"
+                    )
+                entries.append(entry)
+        return entries
+
+    async def get_bsr(self, band: int, register: int) -> BandStackRegister:
+        """Read band stacking register (band 0-24, register 1-3).
+
+        Issues CI-V ``0x1A 0x01 <band> <register>`` and parses the band-stack
+        response (frequency / mode / filter). Icom firmware (IC-7300,
+        IC-7610, IC-705, IC-9700, X6200, ...) answers this read; the historic
+        ``NotImplementedError`` was a stale IC-7610-era assumption.
+
+        Args:
+            band: Band number (0-24).
+            register: Register number (1-3).
+
+        Returns:
+            The decoded band-stack register entry.
+        """
+        if not 0 <= band <= 24:
+            raise ValueError(f"Band must be 0-24, got {band}")
+        if not 1 <= register <= 3:
+            raise ValueError(f"Register must be 1-3, got {register}")
+        self._check_connected()
+        civ = self._commands.get_bsr(band, register, to_addr=self._radio_addr)
+        resp = await self._send_civ_expect(civ, label="get_bsr")
+        return parse_band_stack_response(resp)
+
+    async def set_bsr(self, bsr: BandStackRegister) -> None:
+        """Write band stacking register."""
+        if not 0 <= bsr.band <= 24:
+            raise ValueError(f"Band must be 0-24, got {bsr.band}")
+        if not 1 <= bsr.register <= 3:
+            raise ValueError(f"Register must be 1-3, got {bsr.register}")
+        await self._send_fire_and_forget(
+            self._commands.set_bsr(bsr, to_addr=self._radio_addr)
+        )
+
+    # ------------------------------------------------------------------
+    # Backward-compat aliases — old names kept for existing callers
+    # ------------------------------------------------------------------
+
+    get_frequency = get_freq
+    set_frequency = set_freq
+    get_power = get_rf_power
+    set_power = set_rf_power
+    start_scan = scan_start
+    stop_scan = scan_stop
+    speech = get_speech
+    get_band_stack = get_bsr
+    set_band_stack = set_bsr
+    set_band = set_bsr  # BSR is the IC-7610's band select mechanism
+
+
+class IcomRadio(CoreRadio):
+    """LAN adapter for IC-7610 built on top of the shared executable core."""
+
+    @staticmethod
+    async def _flush_queue(transport: IcomTransport, max_pkts: int = 200) -> int:
+        """Flush receive queue on the given transport (delegates to ControlPhaseRuntime)."""
+        from rigplane._control_phase import ControlPhaseRuntime
+
+        return await ControlPhaseRuntime._flush_queue(transport, max_pkts)
+
+    pass

@@ -1,0 +1,15 @@
+[package]
+name = "ftx1"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+description = "Yaesu FTX-1 CAT protocol — frequency and clarifier control"
+
+[dependencies]
+tokio = { workspace = true }
+serialport = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tokio = { version = "1", default-features = false, features = ["rt", "time", "macros"] }

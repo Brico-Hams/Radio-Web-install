@@ -1,0 +1,1163 @@
+"""Startup/shutdown orchestration for :class:`rigplane.web.server.WebServer`.
+
+Extracted from ``web/server.py`` to keep ``WebServer.start()`` /
+``WebServer.stop()`` as thin delegators (issue #1261, Tier 3 wave 4 of #1063).
+
+The functions here access ``WebServer`` state via the ``server`` argument
+(clean dependency injection — no module-level state).
+"""
+
+from __future__ import annotations
+
+import asyncio
+from asyncio import Event
+import logging
+import time
+from collections.abc import Sequence
+from typing import TYPE_CHECKING, cast
+
+from ..core.acquisition_scheduler import (
+    AcquisitionScheduler,
+    DeclaredCommandDefect,
+    resolve_available_when,
+)
+from ..core.radio_protocol import (
+    ObservationPollable,
+    RadioIdentity,
+    RadioIdentityStatus,
+    StatePollable,
+    StateStoreCapable,
+    serial_identity_hold,
+)
+from ..core.state_pipeline_contracts import (
+    FieldPath,
+    Observation,
+    startup_critical_path,
+)
+from ..profiles import RadioProfile
+from ..radio_state import RadioState
+from ..runtime._civ_rx import _profile_path_for_observation
+from ..runtime._state_queries import (
+    acquisition_query_resolver_for_profile,
+    scope_fixed_edge_slot,
+)
+from ..startup_checks import assert_radio_startup_ready
+from .discovery import DiscoveryResponder, RadioInfo  # noqa: TID251
+from .dx_cluster import DXClusterClient  # noqa: TID251
+from .radio_poller import _SHUTDOWN_TX_DRAIN_TIMEOUT_S, RadioPoller  # noqa: TID251
+from .runtime_helpers import (  # noqa: TID251
+    runtime_capabilities,
+    store_has_radio_observation,
+)
+
+if TYPE_CHECKING:
+    from ..runtime.managed_tx_composition import ManagedTxCompositionPort
+    from .server import WebServer  # noqa: TID251
+
+__all__ = [
+    "attach_managed_tx_composition",
+    "prepare_managed_tx_observation_generation",
+    "start_web_server",
+    "stop_web_server",
+]
+
+logger = logging.getLogger(__name__)
+
+_SHUTDOWN_SCOPE_RESTORE_TIMEOUT_S = 1.0
+# MOR-2875: the other timed waits of _stop_web_server, and their sum
+# (pinned against the timeouts _stop_web_server passes by
+# test_web_stop_timeout_is_the_sum_of_its_timed_waits).
+_STATE_POLLER_STOP_TIMEOUT_S = 2.0
+_AUDIO_RELAY_STOP_TIMEOUT_S = 2.0
+_WEBRTC_CLOSE_TIMEOUT_S = 2.0
+_DIAGNOSTICS_STOP_TIMEOUT_S = 2.0
+_LISTENER_CLOSE_TIMEOUT_S = 2.0
+_TASKS_FINISH_TIMEOUT_S = 3.0
+WEB_STOP_TIMEOUT_S: float = (
+    _STATE_POLLER_STOP_TIMEOUT_S
+    + _AUDIO_RELAY_STOP_TIMEOUT_S
+    + _WEBRTC_CLOSE_TIMEOUT_S
+    + _DIAGNOSTICS_STOP_TIMEOUT_S
+    + _LISTENER_CLOSE_TIMEOUT_S
+    + _TASKS_FINISH_TIMEOUT_S
+    + _SHUTDOWN_TX_DRAIN_TIMEOUT_S
+    + _SHUTDOWN_SCOPE_RESTORE_TIMEOUT_S
+)
+_MANAGED_TX_FALLBACK_ADVANCED_ATTR = "_production_managed_tx_fallback_advanced"
+
+#: Poll spacing for the startup gate on a radio that declares no
+#: ``_INITIAL_STATE_GAP_*`` of its own.
+_STARTUP_GATE_POLL_SECONDS = 0.05
+_STARTUP_GATE_LOG_INTERVAL_SECONDS = 5.0
+_STARTUP_GATE_STALL_WARNING_SECONDS = 60.0
+#: Paths the startup sweep queues per ``gap``.
+_STARTUP_GATE_PRIME_LIMIT = 1
+#: Shortest spacing between two startup-sweep primes of the same path.
+_STARTUP_GATE_REPRIME_SECONDS = 1.0
+#: MOR-2749 (owner decision, 2026-09-27 14:20 EDT): a startup path that is
+#: not safety-critical stops blocking the gate this many seconds after the
+#: initial fetch; its control stays unread (dimmed) and polling continues.
+_STARTUP_GATE_NON_CRITICAL_DEADLINE_SECONDS = 10.0
+#: MOR-2749: a safety-critical path whose request group reaches this many
+#: failed reads — the initial fetch plus consecutive answer-window timeouts
+#: recorded by the scheduler's consecutive-timeout accounting — fails
+#: startup through the scheduler's declared-command defect record. The
+#: timeouts are recorded where each backend reports answer-window
+#: timeouts — the ``sweep=True`` branch (the Icom ``RadioPoller``) and the
+#: Yaesu CAT and rigctld client backends at their own read sites
+#: (``backends/yaesu_cat/observations.py``,
+#: ``backends/rigctld_client/observations.py``, MOR-2757); on the legacy
+#: ``StatePollable`` branch an unanswered critical path still waits — that
+#: gap is MOR-2757.
+_STARTUP_GATE_CRITICAL_ATTEMPTS = 3
+
+
+def _installed_managed_tx_composition(radio: object) -> object | None:
+    try:
+        namespace = vars(radio)
+    except TypeError:
+        return None
+    return namespace.get("_managed_tx_composition")
+
+
+def prepare_managed_tx_observation_generation(server: WebServer) -> int:
+    radio = server._radio
+    if isinstance(radio, ObservationPollable):
+        shared_store = isinstance(radio, StateStoreCapable) and (
+            radio.state_store is server.command_state_store
+        )
+        if not shared_store:
+            generation = int(server.command_state_store.begin_provider_generation())
+            setattr(server, _MANAGED_TX_FALLBACK_ADVANCED_ATTR, True)
+            return generation
+    return int(server.command_state_store.provider_generation)
+
+
+def attach_managed_tx_composition(
+    server: WebServer,
+    port: ManagedTxCompositionPort,
+) -> None:
+    installed = _installed_managed_tx_composition(server._radio)
+    if installed is not port:
+        raise RuntimeError("managed TX composition identity does not match the radio")
+    if vars(server).get("_production_managed_tx_port") is not None:
+        raise RuntimeError("managed TX composition is already attached")
+    server._production_managed_tx_port = port
+
+
+def _validate_managed_tx(server: WebServer) -> ManagedTxCompositionPort | None:
+    installed = _installed_managed_tx_composition(server._radio)
+    server_namespace = vars(server)
+    attached = server_namespace.get("_production_managed_tx_port")
+    if installed is None:
+        if attached is not None:
+            raise RuntimeError("managed TX composition is not installed on the radio")
+        return None
+    if attached is None:
+        raise RuntimeError("managed TX composition is not attached to Web")
+    if attached is not installed:
+        raise RuntimeError("managed TX composition identity mismatch")
+    if (
+        _serial_port_unopened(server)
+        or _serial_identity_pending(server)
+        or _startup_busy_hold_pending(server)
+    ):
+        # MOR-2876 / MOR-3081: there is no transport for a provider to
+        # stand on yet — the port never opened, or the identity gate still
+        # holds the open link (MOR-3071). MOR-3391 part 2 names the busy
+        # hold on its own: the first connect has no session yet, even
+        # though its CHECKING identity also trips the serial predicate.
+        # The store identity and the observation generation are still
+        # checked inside.
+        attached.validate_state_store(
+            server.command_state_store, transport_pending=True
+        )
+    else:
+        attached.validate_state_store(server.command_state_store)
+    return cast("ManagedTxCompositionPort", attached)
+
+
+def _supports_scope_local(server: WebServer) -> bool:
+    return "scope" in runtime_capabilities(server._radio)
+
+
+def _acquisition_scheduler(server: WebServer) -> AcquisitionScheduler | None:
+    """Return the scheduler ``WebServer._bootstrap_state_acquisition`` attached."""
+
+    scheduler = getattr(server._radio, "_acquisition_scheduler", None)
+    if scheduler is None:
+        return None
+    return cast("AcquisitionScheduler", scheduler)
+
+
+def _observed_paths(
+    server: WebServer,
+    scheduler: AcquisitionScheduler,
+) -> tuple[FieldPath, ...]:
+    """Return the store's observed paths, spelled the way the profile does.
+
+    CI-V ingress writes receiver-scoped fields as ``receiver.0`` /
+    ``receiver.1`` (``runtime/_civ_rx.py: CivRuntime._receiver_context``)
+    while the profiles spell the same receivers ``main`` / ``sub``, so a raw
+    store path never equals the profile path the predicate compares it
+    against. ``_profile_path_for_observation`` is how that same module
+    already resolves an observed path against the profile
+    (``CivRuntime._record_coalesced_meter_observation``), off the single
+    ``RECEIVER_ID_ALIASES`` table it also credits observations through
+    (``_field_paths_match``); reusing it keeps that table the only one.
+    Pinned by ``test_civ_ingress_counts_as_observed_against_profile_paths``.
+    """
+
+    profile = scheduler._profile
+    return tuple(
+        _profile_path_for_observation(profile, field.path)
+        for field in server.command_state_store.snapshot().fields
+    )
+
+
+def _startup_gap_seconds(radio: object) -> float:
+    """Return the per-query gap ``runtime.radio_initial_state`` uses."""
+
+    profile = getattr(radio, "_profile", None)
+    attribute = (
+        "_INITIAL_STATE_GAP_LAN"
+        if getattr(profile, "has_lan", False)
+        else "_INITIAL_STATE_GAP_SERIAL"
+    )
+    gap = getattr(radio, attribute, None)
+    if isinstance(gap, (int, float)) and not isinstance(gap, bool) and gap > 0:
+        return float(gap)
+    return _STARTUP_GATE_POLL_SECONDS
+
+
+def _abort_on_startup_defect(scheduler: AcquisitionScheduler) -> None:
+    """Raise if a backend has recorded a declared-command defect.
+
+    The backend records the defect on the scheduler without raising; that
+    record — which both sides already hold — is what carries the defect
+    here. Bind happens strictly after the gate, so raising here means no
+    listener is created.
+    """
+
+    defect = scheduler.startup_defect
+    if defect is None:
+        return
+    raise RuntimeError(
+        f"web startup aborted: {defect}. Refusing to start a half-working server."
+    )
+
+
+def _radio_link_down(server: WebServer) -> bool:
+    """Whether the backend's link answers nothing (MOR-2841).
+
+    The serial watchdog's consecutive-timeout detector
+    (``backends/_icom_serial_base.py: _declare_serial_link_down``) is the
+    one signal that distinguishes "the radio answers nothing" from "the
+    radio answers some reads but refuses one". Read two ways, so the
+    answer cannot depend on the connection state at the instant of the
+    question: through the same ``conn_state`` attribute
+    ``classify_radio_health`` reads, and through the backend's durable
+    ``_civ_link_down_ever_declared`` record. The state alone is
+    transient — stand evidence (2026-09-28): the watchdog reopened the
+    present-but-silent port two seconds after declaring link-down, the
+    gate decided four seconds later against CONNECTED, and the
+    MOR-2749 abort won — so what the gate needs is that the detector
+    fired, not the state it momentarily set.
+    """
+
+    radio = server._radio
+    conn_state = getattr(radio, "conn_state", None)
+    value = getattr(conn_state, "value", conn_state)
+    return (isinstance(value, str) and value == "reconnecting") or bool(
+        getattr(radio, "_civ_link_down_ever_declared", False)
+    )
+
+
+def _link_answers_nothing(server: WebServer) -> bool:
+    """Whether the link is completely silent: no radio observation, link down.
+
+    MOR-2841 (owner decision, 2026-09-28 09:00 EDT, option (a)): a radio
+    that answers NOTHING is the powered-off rig, not a half-working one —
+    zero observations from the radio plus the backend's link-down detector
+    is the evidence pair that separates it from a radio that answers some
+    reads but leaves one safety-critical path unanswered (which still
+    fails startup through MOR-2749's named defect). Locally reconciled
+    structural facts (``local_reconcile`` sources, e.g. the single-receiver
+    topology's ``active``) are not radio answers and do not break the
+    silence — ``_publish_single_receiver_topology`` writes one at
+    ``WebServer`` construction, before the radio is ever asked anything.
+    The observed-half is the shared
+    :func:`runtime_helpers.store_has_radio_observation` predicate — the one
+    ``WebServer._build_radio_health`` re-reads so the served-silent verdict
+    clears at the radio's first answer.
+    """
+
+    radio_observed = store_has_radio_observation(server.command_state_store)
+    return not radio_observed and _radio_link_down(server)
+
+
+def _serve_with_silent_link(server: WebServer) -> None:
+    """Release the startup gate for a completely silent link (MOR-2841).
+
+    One WARNING names the state; the watchdog keeps retrying the link and
+    the poller keeps asking, so when the radio starts answering (for
+    example after Power ON from the UI) acquisition completes normally.
+    Nothing here fabricates a reading: the store stays empty, and the
+    durable ``_served_with_silent_link`` mark is what the published
+    ``radioHealth`` holds onto — ``classify_radio_health`` keeps reporting
+    ``stalled`` / ``radio_powered_off_likely`` until the radio's first
+    observation, whatever the live link state does in between (the stand,
+    2026-09-28: the watchdog reopened the silent port to ``CONNECTED``
+    within seconds, and the live-state read called that ``ready``).
+    """
+
+    server._served_with_silent_link = True
+    logger.warning(
+        "startup gate: the radio is not answering (link down, no field "
+        "observed); serving in a radio-not-answering state — it may be "
+        "switched off. Power ON from the UI stays available; transmit "
+        "stays refused until the safety-critical fields are observed."
+    )
+
+
+def _serial_port_unopened(server: WebServer) -> bool:
+    """Whether the radio is retrying a serial port it could not open (MOR-2876).
+
+    The Icom serial backend records its latest failed port open in
+    ``last_error`` and clears it when an open succeeds; ``reconnecting`` is
+    the state its recovery loop retries from.
+    """
+
+    radio = server._radio
+    conn_state = getattr(radio, "conn_state", None)
+    value = getattr(conn_state, "value", conn_state)
+    return value == "reconnecting" and isinstance(
+        getattr(radio, "last_error", None), str
+    )
+
+
+def _serial_identity_pending(server: WebServer) -> bool:
+    """Whether the radio has not answered its identity read at start-up.
+
+    Serial and Yaesu (MOR-3071/3078): one shared predicate,
+    ``core.radio_protocol: serial_identity_hold`` — the read is in flight
+    (``checking``) or has heard nothing (``no_response``) while the radio is
+    not connected.
+
+    Icom LAN (MOR-4382): the connect no longer waits for the read, so a radio
+    that answers nothing on CI-V yet (a stale session still held, a radio
+    still starting) is connected but not ready, with the identity still
+    ``checking`` / ``no_response``. It is served in the same
+    radio-not-answering state; the connect tail runs on its first answer.
+    """
+
+    radio = server._radio
+    if serial_identity_hold(radio) is not None:
+        return True
+    identity = getattr(radio, "connection_identity", None)
+    return (
+        isinstance(identity, RadioIdentity)
+        and identity.status
+        in (RadioIdentityStatus.CHECKING, RadioIdentityStatus.NO_RESPONSE)
+        and getattr(radio, "radio_ready", None) is False
+    )
+
+
+def _startup_busy_hold_pending(server: WebServer) -> bool:
+    """Whether the first connect waits out a busy reject (MOR-3391 part 2).
+
+    Read through the radio's public busy surface only — the same signal
+    the web wire serves. A radio without that surface never pends here.
+    """
+
+    event = getattr(server._radio, "startup_busy_hold_event", None)
+    # Bound at import (not via the ``asyncio`` module global): the gate
+    # tests replace ``web_startup.asyncio`` with a sleep-only double.
+    return isinstance(event, Event) and event.is_set()
+
+
+def _serve_with_startup_busy_hold(server: WebServer) -> None:
+    """Release the startup gate while a busy reject holds the first connect.
+
+    The radio answered (with a busy reject) but holds no session for us —
+    each reject is released before its cooldown — so the readiness check
+    and the initial-state wait have nothing to work with yet. The
+    resident first connect keeps retrying in the background and the late
+    completion runs when the grant lands. Holds NO silent-link mark: a
+    held session is a busy radio, not a silent one, so health must not
+    blame a powered-off rig.
+    """
+
+    if server._served_with_startup_busy_hold:
+        return
+    server._served_with_startup_busy_hold = True
+    logger.warning(
+        "startup gate: another session holds the radio (start-up busy "
+        "hold); serving not-ready while the first connect keeps retrying "
+        "in the background."
+    )
+
+
+def _serve_with_identity_pending(server: WebServer) -> None:
+    """Release the startup gate while the identity read owns the link (MOR-3071).
+
+    Third instance of the ``_serve_without_port`` / ``_serve_with_silent_link``
+    pattern: the link is open but no radio has answered the identity read,
+    so the gate has nothing to wait for — every state poll would be refused
+    until the connect completes. The re-read task keeps asking on the open
+    link and the connect completes when the radio answers, so acquisition
+    proceeds normally from there. Holds the same durable
+    ``_served_with_silent_link`` mark ``_serve_with_silent_link`` sets, so
+    the published ``radioHealth`` keeps its existing causes —
+    ``stalled`` / ``radio_powered_off_likely`` until the radio's first
+    observation — with no new ``Literal``.
+    """
+
+    if server._served_with_silent_link:
+        return
+    server._served_with_silent_link = True
+    logger.warning(
+        "startup gate: the radio has not answered its identity read; "
+        "serving in a radio-not-answering state — another radio may be on "
+        "this port, or it is switched off. Power ON from the UI stays "
+        "available; the identity read is retried on the open link."
+    )
+
+
+def _serve_without_port(server: WebServer) -> None:
+    """Serve while the radio's serial port cannot be opened (MOR-2876)."""
+
+    server._served_without_port = True
+    logger.warning(
+        "startup gate: the radio is not connected — could not open port %s "
+        "(%s); serving in a "
+        "radio-not-connected state — check the USB cable. The port is "
+        "retried in the background; transmit is refused while no radio is "
+        "connected.",
+        getattr(server._radio, "_serial_device", "selected serial device"),
+        getattr(server._radio, "last_error", None),
+    )
+
+
+def _startup_path_command(server: WebServer, path: FieldPath) -> str:
+    """Return the CI-V wire form the radio would read *path* with.
+
+    Reuses :func:`acquisition_query_resolver_for_profile` — the single
+    path-to-query mapping the poller's executor already reads through —
+    over the radio's own profile, so the defect names the exact command
+    the radio never answered. Radios without a resolvable profile (no
+    ``_profile``, or no declared getter for the path) get an empty
+    command.
+    """
+
+    profile = getattr(server._radio, "_profile", None)
+    if not isinstance(profile, RadioProfile):
+        return ""
+    query = acquisition_query_resolver_for_profile(profile)(path)
+    if query is None:
+        return ""
+    if query.receiver is not None:
+        parts = [f"29 {query.receiver:02X}", f"{query.command:02X}"]
+    else:
+        parts = [f"{query.command:02X}"]
+    if query.sub is not None:
+        parts.append(f"{query.sub:02X}")
+    parts.extend(f"{byte:02X}" for byte in query.data)
+    return " ".join(parts)
+
+
+def _record_critical_startup_defect(
+    server: WebServer,
+    scheduler: AcquisitionScheduler,
+    path: FieldPath,
+) -> None:
+    """Record the defect that ends startup for an unanswered critical path.
+
+    The same :class:`DeclaredCommandDefect` record the Yaesu CAT and
+    rigctld client backends leave on the scheduler when a declared read
+    cannot answer — the gate's existing abort path
+    (``_abort_on_startup_defect``) picks it up; no second failure
+    mechanism is added.
+    """
+
+    defect = DeclaredCommandDefect(
+        label="startup gate",
+        paths=(path,),
+        command=_startup_path_command(server, path),
+        frame="",
+        detail=(
+            f"safety-critical path still unanswered after "
+            f"{_STARTUP_GATE_CRITICAL_ATTEMPTS} failed reads of its "
+            f"request group"
+        ),
+    )
+    scheduler.record_startup_defect(defect)
+
+
+async def _await_initial_state_acquisition(
+    server: WebServer,
+    *,
+    sweep: bool,
+) -> None:
+    """Block until the startup gate's blocking set is empty.
+
+    Since the owner decision of 2026-09-27 14:20 EDT (MOR-2749, reversing
+    R36b of MOR-2425 for non-critical fields), the wait is no longer
+    indefinite for every field:
+
+    * a path that is not safety-critical
+      (:func:`..core.state_pipeline_contracts.startup_critical_path`)
+      stops blocking :data:`_STARTUP_GATE_NON_CRITICAL_DEADLINE_SECONDS`
+      after the initial fetch — one WARNING names the paths, their
+      controls stay unread (dimmed), and polling continues; and
+    * a safety-critical path whose request group reaches
+      :data:`_STARTUP_GATE_CRITICAL_ATTEMPTS` failed reads (the initial
+      fetch plus consecutive answer-window timeouts recorded by the
+      scheduler's consecutive-timeout accounting) fails startup with an
+      error naming the field and the command, through the same
+      :class:`DeclaredCommandDefect` record a backend leaves on the
+      scheduler. The scheduler accounting is fed where the web poller
+      reports answer-window timeouts — the ``sweep=True`` branch, the
+      Icom ``RadioPoller``. The Yaesu CAT and rigctld client backends
+      count their own unanswered critical reads at their read sites and
+      record the same defect there (MOR-2757); on the legacy
+      ``StatePollable`` branch an unanswered critical path still waits —
+      that gap is MOR-2757; and
+    * MOR-2841 (owner decision, 2026-09-28 09:00 EDT, option (a)): a link
+      that answers NOTHING — zero fields observed and the backend's
+      link-down detector fired (connection state ``RECONNECTING``, or its
+      durable ``_civ_link_down_ever_declared`` record when the reconnect
+      cycle has already reopened the silent port back to ``CONNECTED``) —
+      is a
+      powered-off radio, not a half-working server. The gate releases
+      with one WARNING naming the radio-not-answering state and the
+      listener binds; nothing fabricates a reading, the published
+      ``radioHealth`` keeps reporting ``stalled`` /
+      ``radio_powered_off_likely`` until the radio's first observation
+      (whatever the live link state does in between). An unobserved PTT
+      does not refuse transmit by itself (MOR-4456): the managed
+      authority admits the local key, and only remote controller arming
+      is refused with ``controller_not_ready`` while PTT stays
+      unobserved.
+
+    Before that decision there was no serve-anyway timeout: every declared,
+    non-``tx_only`` path held the listener open forever.
+
+    A server that started while the radio's serial port could not be opened
+    (MOR-2876, ``_serve_without_port``) does not wait at all.
+
+    ``sweep`` re-primes the scheduler while the gate is open. It is set only
+    on the branch that builds a :class:`RadioPoller`, because that is the
+    only web branch carrying an ``AcquisitionDrain`` to execute a primed
+    request — pinned by
+    ``test_observation_pollable_path_binds_without_a_startup_sweep``.
+
+    The sweep queues at most :data:`_STARTUP_GATE_PRIME_LIMIT` path per
+    ``gap`` rather than the whole outstanding set at once, and it withholds
+    a path it primed less than :data:`_STARTUP_GATE_REPRIME_SECONDS` ago —
+    a path the radio never answers is freed by
+    ``record_acquisition_failure`` and would otherwise be re-queued on every
+    iteration. Both are pinned by
+    ``test_startup_sweep_queues_one_path_per_gap`` and
+    ``test_never_answered_path_is_reprimed_once_per_reprime_interval``.
+    """
+
+    if not server._config.await_initial_state or server._served_without_port:
+        return
+    if _startup_busy_hold_pending(server):
+        # MOR-3391 part 2: the connect has not completed, so no state
+        # read can answer yet; the gate releases and the late completion
+        # runs when the grant lands.
+        _serve_with_startup_busy_hold(server)
+        return
+    if _serial_identity_pending(server):
+        # MOR-3071: release the startup gate at once while identity is
+        # checking/no_response — the connect has not completed, so no state
+        # read can answer and waiting would only run out the acquisition
+        # timeouts.
+        _serve_with_identity_pending(server)
+        return
+    scheduler = _acquisition_scheduler(server)
+    if scheduler is None:
+        return
+    _abort_on_startup_defect(scheduler)
+
+    def unobserved() -> tuple[FieldPath, ...]:
+        snapshot = server.command_state_store.snapshot()
+        availability = resolve_available_when(scheduler._profile, snapshot)
+        profile = getattr(server._radio, "_profile", None)
+        if (
+            isinstance(profile, RadioProfile)
+            and scope_fixed_edge_slot(profile, snapshot) is None
+        ):
+            # No addressed slot can be read yet; startup must not await its reply.
+            availability[FieldPath.scope_control("display", "fixed_edge")] = False
+        return cast(
+            "tuple[FieldPath, ...]",
+            scheduler.unobserved_startup_paths(
+                _observed_paths(server, scheduler), availability=availability
+            ),
+        )
+
+    outstanding = unobserved()
+    if not outstanding:
+        return
+    logger.info(
+        "waiting for initial state acquisition: %d fields outstanding",
+        len(outstanding),
+    )
+    gap = _startup_gap_seconds(server._radio)
+    fewest = len(outstanding)
+    gate_started = last_progress = last_log = time.monotonic()
+    primed_at: dict[FieldPath, float] = {}
+    #: Paths whose non-critical deadline has passed (MOR-2749); they stop
+    #: blocking but stay unread — the poller keeps asking for them.
+    expired: set[FieldPath] = set()
+    while outstanding:
+        now = time.monotonic()
+        if now - gate_started >= _STARTUP_GATE_NON_CRITICAL_DEADLINE_SECONDS:
+            lapsed = tuple(
+                path
+                for path in outstanding
+                if path not in expired and not startup_critical_path(path)
+            )
+            if lapsed:
+                expired.update(lapsed)
+                logger.warning(
+                    "initial state acquisition: no answer for %s after %.0fs; "
+                    "serving without them",
+                    ", ".join(str(path) for path in lapsed),
+                    _STARTUP_GATE_NON_CRITICAL_DEADLINE_SECONDS,
+                )
+        blocking = tuple(path for path in outstanding if path not in expired)
+        if not blocking:
+            break
+        for path in blocking:
+            # MOR-4058: a refused read is a failed read too; the refusals
+            # include the initial fetch's own read, the timeouts do not.
+            if startup_critical_path(path) and (
+                1 + scheduler.consecutive_request_timeouts(path)
+                >= _STARTUP_GATE_CRITICAL_ATTEMPTS
+                or scheduler.consecutive_refusals(path)
+                >= _STARTUP_GATE_CRITICAL_ATTEMPTS
+            ):
+                # MOR-2841 (owner decision, 2026-09-28 09:00 EDT, option
+                # (a)): a link that answers NOTHING — zero fields
+                # observed and the backend's link-down detector fired —
+                # is a powered-off radio, not a half-working server. The
+                # gate releases with one WARNING naming the state instead
+                # of recording the MOR-2749 defect; the watchdog keeps
+                # retrying and the poller keeps asking, so when the radio
+                # starts answering acquisition completes normally. A
+                # radio that answered SOME reads still fails below.
+                if _link_answers_nothing(server):
+                    _serve_with_silent_link(server)
+                    return
+                _record_critical_startup_defect(server, scheduler, path)
+                _abort_on_startup_defect(scheduler)
+        if sweep:
+            queued_at = time.monotonic()
+            withheld = tuple(
+                path
+                for path, at in primed_at.items()
+                if queued_at - at < _STARTUP_GATE_REPRIME_SECONDS
+            )
+            # MOR-3630: the startup sweep honors the same conditional
+            # availability as the gate below — a contradicted field (an
+            # FM-NAKed read while the mode reads FM) is neither outstanding
+            # nor primed, and is re-primed once its clause set holds again.
+            sweep_availability = resolve_available_when(
+                scheduler._profile, server.command_state_store.snapshot()
+            )
+            for request in scheduler.prime_unobserved(
+                _observed_paths(server, scheduler) + withheld,
+                reason="startup-gate",
+                limit=_STARTUP_GATE_PRIME_LIMIT,
+                availability=sweep_availability,
+            ):
+                for path in request.paths:
+                    primed_at[path] = queued_at
+        await asyncio.sleep(gap)
+        _abort_on_startup_defect(scheduler)
+        outstanding = unobserved()
+        now = time.monotonic()
+        if len(outstanding) < fewest:
+            fewest = len(outstanding)
+            last_progress = now
+        if blocking and now - last_log >= _STARTUP_GATE_LOG_INTERVAL_SECONDS:
+            last_log = now
+            paths = ", ".join(str(path) for path in blocking)
+            if now - last_progress >= _STARTUP_GATE_STALL_WARNING_SECONDS:
+                logger.warning(
+                    "initial state acquisition: no new field for %.0fs, "
+                    "still waiting on %s",
+                    now - last_progress,
+                    paths,
+                )
+            else:
+                logger.info("initial state acquisition still waiting on %s", paths)
+    logger.info("initial state acquisition complete")
+
+
+async def start_web_server(server: WebServer) -> None:
+    managed_tx = _validate_managed_tx(server)
+    await _start_web_server(server, managed_tx)
+
+
+async def _start_web_server(
+    server: WebServer,
+    managed_tx: ManagedTxCompositionPort | None,
+) -> None:
+    """Start the radio's poller, wait for initial state, then bind the listener.
+
+    That order is pinned by
+    ``test_civ_startup_binds_only_after_the_predicate_is_satisfied`` and
+    ``test_observation_pollable_path_binds_without_a_startup_sweep``.
+    """
+    # Load band plan TOML files
+    # Try project-level band-plans/ directory first, then package fallback
+    project_bp = server._band_plan.directory
+    if project_bp is not None and project_bp.is_dir():
+        server._band_plan.load()
+    else:
+        logger.info("band-plan: no band-plans/ directory found")
+
+    # Load EiBi cache if available (non-blocking)
+    try:
+        result = await server._eibi.load_cache()
+        if result.get("status") == "ok":
+            logger.info(
+                "eibi: loaded %d stations from cache (season %s)",
+                server._eibi.station_count,
+                server._eibi.season,
+            )
+    except Exception:
+        logger.debug("eibi: no cache to load at startup")
+
+    ssl_ctx = None
+    if server._config.tls:
+        from .tls import build_ssl_context  # noqa: TID251
+
+        ssl_ctx = build_ssl_context(
+            cert_path=server._config.tls_cert or None,
+            key_path=server._config.tls_key or None,
+        )
+
+    if _serial_port_unopened(server):
+        _serve_without_port(server)
+    elif _startup_busy_hold_pending(server):
+        # MOR-3391 part 2: the first connect waits out a busy reject —
+        # serve not-ready now; the resident connect keeps retrying and
+        # the late completion runs when it lands. No silent-link mark:
+        # a held session is a busy radio, not a silent link.
+        _serve_with_startup_busy_hold(server)
+    elif _serial_identity_pending(server):
+        # MOR-3071: the link is open but the radio has not answered its
+        # identity read — not connected, not ready, and every state poll
+        # would be refused. Serve (the gate below also releases at once);
+        # the re-read task completes the connect when the radio answers.
+        _serve_with_identity_pending(server)
+    else:
+        assert_radio_startup_ready(server._radio, component="web startup")
+
+    managed_tx_authority = None if managed_tx is None else managed_tx.authority
+    if managed_tx_authority is not None:
+        server._bind_managed_tx_hint(managed_tx_authority)
+    startup_sweep = False
+    if server._radio is not None:
+        from ..radio_protocol import StateNotifyCapable
+
+        # --- Request-response observation poller (Yaesu CAT, rigctld client, etc.) ---
+        if isinstance(server._radio, ObservationPollable):
+            shared_store = isinstance(server._radio, StateStoreCapable) and (
+                server._radio.state_store is server.command_state_store
+            )
+            fallback_store = not shared_store
+
+            def _observation_cb(observations: Sequence[Observation]) -> None:
+                accepted = False
+                for observation in observations:
+                    changeset = server.command_service.apply_observation(observation)
+                    accepted = accepted or bool(changeset.observed_paths)
+                if not accepted:
+                    return
+                server.state_diagnostics.record(
+                    "backend_read",
+                    "web.observation_poller",
+                    backend=getattr(server._radio, "backend_id", None),
+                )
+                server._broadcast_state_update()
+
+            server._state_poller = server._radio.create_observation_poller(
+                callback=_observation_cb,
+                command_queue=server._command_queue,
+            )
+            bind_authority = getattr(
+                server._state_poller, "bind_managed_tx_authority", None
+            )
+            if managed_tx_authority is not None:
+                if not callable(bind_authority):
+                    raise RuntimeError(
+                        "managed observation poller must bind transmit authority"
+                    )
+                bind_authority(managed_tx_authority)
+            bind_generation = getattr(
+                server._state_poller, "bind_provider_generation", None
+            )
+            if fallback_store and not callable(bind_generation):
+                raise RuntimeError(
+                    "fallback observation poller must bind provider generation"
+                )
+            if callable(bind_generation):
+                bind_generation(
+                    capture=lambda: server.command_state_store.provider_generation,
+                    advance=(
+                        server.command_state_store.begin_provider_generation
+                        if fallback_store
+                        else None
+                    ),
+                )
+            setattr(
+                server._state_poller,
+                "_uses_fallback_provider_generation",
+                fallback_store,
+            )
+            if fallback_store and not getattr(
+                server, _MANAGED_TX_FALLBACK_ADVANCED_ATTR, False
+            ):
+                server.command_state_store.begin_provider_generation()
+            server._spawn(server._state_poller.start())
+            logger.info("observation poller started")
+        # --- Legacy request-response state poller compatibility path ---
+        elif isinstance(server._radio, StatePollable):
+
+            def _state_cb(state: RadioState) -> None:
+                server._radio_state = state
+                server.sync_state_store_from_radio_state(state)
+                server.state_diagnostics.record(
+                    "backend_read",
+                    "web.state_poller",
+                    backend=getattr(server._radio, "backend_id", None),
+                )
+                server._broadcast_state_update()
+
+            server._state_poller = server._radio.create_state_poller(
+                callback=_state_cb,
+                command_queue=server._command_queue,
+            )
+            bind_authority = getattr(
+                server._state_poller, "bind_managed_tx_authority", None
+            )
+            if managed_tx_authority is not None:
+                if not callable(bind_authority):
+                    raise RuntimeError(
+                        "managed state poller must bind transmit authority"
+                    )
+                bind_authority(managed_tx_authority)
+            server._spawn(server._state_poller.start())
+            logger.info("state poller started")
+        else:
+            # --- Icom CI-V backend: fire-and-forget RadioPoller ---
+            if isinstance(server._radio, StateNotifyCapable):
+                # Register callback so CI-V RX stream can notify us of state changes.
+                server._radio.set_state_change_callback(server._on_radio_state_change)
+                # Re-enable scope after soft_reconnect (CI-V stream reset loses scope state)
+                server._radio.set_reconnect_callback(server._on_radio_reconnect)
+            server._radio_poller = RadioPoller(
+                server._radio,
+                server._command_queue,
+                on_state_event=server._on_poller_state_event,
+                radio_state=server._radio_state,
+                diagnostics=server.state_diagnostics,
+                state_store=server.command_state_store,
+                managed_tx_authority=managed_tx_authority,
+                tx_active_hint=server.tx_active_hint,
+            )
+            server._radio_poller.start()
+            # RadioPoller is the only web branch that builds an
+            # AcquisitionDrain, so it is the only one where a primed request
+            # is executed.
+            startup_sweep = True
+    server._state_store_freshness_task = asyncio.get_running_loop().create_task(
+        server._state_freshness_service.run(), name="web-state-freshness"
+    )
+    await _await_initial_state_acquisition(server, sweep=startup_sweep)
+    if startup_sweep and server._radio_poller is not None:
+        await server._radio_poller.select_vfo_a_on_connect(
+            read_only=server._config.read_only
+        )
+
+    server._server = await asyncio.start_server(
+        server._accept_client,
+        host=server._config.host,
+        port=server._config.port,
+        ssl=ssl_ctx,
+        reuse_address=True,
+        # MOR-1572: deliberately NOT reuse_port. This is an exclusive TCP
+        # listener guarding a single radio session (same rationale as
+        # rigctld's listener, see rigctld/server.py) — SO_REUSEPORT let a
+        # second rigplane instance silently bind the same web port on
+        # macOS/BSD, so two instances raced for the same radio with no
+        # error and the operator saw a half-dead UI. It also undermined the
+        # check_ports_available() preflight (MOR-1437): an orphan holding
+        # the port with SO_REUSEPORT set could let the preflight probe bind
+        # successfully right alongside it. Contrast with the UDP discovery
+        # responder (web/discovery.py), which legitimately opts into
+        # SO_REUSEPORT so multiple co-located instances can each announce
+        # their own radio on the shared discovery port — that is a
+        # best-effort broadcast responder, not an exclusive session guard.
+    )
+    server._server_was_running = True
+    addr = server._server.sockets[0].getsockname()
+    scheme = "https" if ssl_ctx else "http"
+    logger.info("web server listening on %s://%s:%d", scheme, addr[0], addr[1])
+    if server._radio is not None and _supports_scope_local(server):
+        server._scope_health_task = asyncio.get_running_loop().create_task(
+            server._scope_health_monitor(), name="scope-health"
+        )
+    server._zombie_reaper_task = asyncio.get_running_loop().create_task(
+        server._zombie_reaper(), name="zombie-reaper"
+    )
+    if server._config.dx_cluster_host:
+        server._dx_client = DXClusterClient(
+            server._config.dx_cluster_host,
+            server._config.dx_cluster_port,
+            server._config.dx_callsign,
+            on_spot=server._broadcast_dx_spot,
+        )
+        server._dx_client_task = asyncio.get_running_loop().create_task(
+            server._dx_client.start(), name="dx-cluster"
+        )
+        logger.info(
+            "dx-cluster: connecting to %s:%d as %s",
+            server._config.dx_cluster_host,
+            server._config.dx_cluster_port,
+            server._config.dx_callsign,
+        )
+
+    # Start UDP discovery responder
+    if server._config.discovery:
+        radio = server._radio
+
+        def _radio_provider() -> RadioInfo | None:
+            if radio is None:
+                return None
+            radio_payload = server._radio_runtime_payload()
+            station_payload = server._station_readiness_payload()
+            return RadioInfo(
+                model=str(radio_payload["model"]),
+                connected=bool(radio_payload["connected"]),
+                control_connected=bool(radio_payload["controlConnected"]),
+                radio_ready=bool(radio_payload["radioReady"]),
+                backend=station_payload["backend"]
+                if isinstance(station_payload["backend"], str)
+                else None,
+                readiness=str(station_payload["readiness"]),
+                message=str(station_payload["message"]),
+                auth_required=bool(station_payload["authRequired"]),
+            )
+
+        server._discovery = DiscoveryResponder(
+            web_port=server._runtime_bind_payload()["port"],
+            tls=server._config.tls,
+            radio_provider=_radio_provider,
+            discovery_port=server._config.discovery_port,
+        )
+        await server._discovery.start()
+
+
+async def stop_web_server(server: WebServer) -> None:
+    await _stop_web_server(server)
+
+
+async def _stop_web_server(server: WebServer) -> None:
+    """Close the listener, stop RadioPoller, disconnect radio, cancel tasks.
+
+    Mirrors the original :meth:`WebServer.stop` body verbatim — the method
+    now delegates here so the public API is preserved.
+    """
+    # 1. Stop poller first (no more CI-V queries). The reference outlives the
+    #    call deliberately (MOR-1181): a session's teardown PttOff is enqueued
+    #    only when its client task is cancelled at step 6, so the poller is
+    #    already dead when the unkey arrives and its own CancelledError handler
+    #    finds an empty queue. Step 9 drains it, after those tasks tear down.
+    radio_poller = server._radio_poller
+    if radio_poller is not None:
+        radio_poller.stop()
+        server._radio_poller = None
+    if server._state_poller is not None:
+        if getattr(server._state_poller, "_uses_fallback_provider_generation", False):
+            server.command_state_store.begin_provider_generation()
+        try:
+            await asyncio.wait_for(
+                server._state_poller.stop(), timeout=_STATE_POLLER_STOP_TIMEOUT_S
+            )
+        except TimeoutError:
+            logger.warning("state poller stop timed out")
+        server._state_poller = None
+    if server._state_store_freshness_task is not None:
+        server._state_store_freshness_task.cancel()
+        try:
+            await server._state_store_freshness_task
+        except asyncio.CancelledError:
+            pass
+        server._state_store_freshness_task = None
+
+    # 2. Stop audio relay (stops AudioBus subscription → stop_audio_rx_opus)
+    try:
+        await asyncio.wait_for(
+            server._audio_broadcaster._stop_relay(),
+            timeout=_AUDIO_RELAY_STOP_TIMEOUT_S,
+        )
+    except (TimeoutError, Exception) as exc:
+        logger.warning("audio relay stop: %s", exc)
+
+    # 2a. Tear down any live WebRTC transport sessions (A2.3 / MOR-307).
+    if server._webrtc_sessions is not None:
+        try:
+            await asyncio.wait_for(
+                server._webrtc_sessions.close_all(), timeout=_WEBRTC_CLOSE_TIMEOUT_S
+            )
+        except (TimeoutError, Exception) as exc:
+            logger.warning("webrtc session close: %s", exc)
+        server._webrtc_sessions = None
+
+    # 2b. Stop diagnostic preview sweeper and clean up any in-flight bundles.
+    try:
+        await asyncio.wait_for(
+            server._diagnostics.stop(), timeout=_DIAGNOSTICS_STOP_TIMEOUT_S
+        )
+    except (TimeoutError, Exception) as exc:
+        logger.warning("diagnostics handler stop: %s", exc)
+    if server._audio_bridge is not None:
+        await server.stop_audio_bridge()
+
+    # 3. Stop discovery responder
+    if server._discovery is not None:
+        await server._discovery.stop()
+        server._discovery = None
+
+    # 4. Stop DX cluster
+    if server._dx_client is not None:
+        await server._dx_client.stop()
+        server._dx_client = None
+    if server._dx_client_task is not None:
+        server._dx_client_task.cancel()
+        try:
+            await server._dx_client_task
+        except asyncio.CancelledError:
+            pass
+        server._dx_client_task = None
+
+    # 5. Cancel housekeeping tasks
+    for task in (
+        server._zombie_reaper_task,
+        server._scope_health_task,
+    ):
+        if task is not None:
+            task.cancel()
+    server._zombie_reaper_task = None
+    server._scope_health_task = None
+
+    # 6. Cancel all background + client tasks first
+    all_tasks = list(server._bg_tasks) + list(server._client_tasks)
+    for task in all_tasks:
+        if not task.cancelling():
+            task.cancel()
+
+    # 7. Close TCP listener (now that client tasks are cancelled,
+    #    wait_closed() won't block on open connections)
+    if server._server is not None:
+        server._server.close()
+        try:
+            await asyncio.wait_for(
+                server._server.wait_closed(), timeout=_LISTENER_CLOSE_TIMEOUT_S
+            )
+        except TimeoutError:
+            logger.warning(
+                "server.wait_closed() timed out after %.0fs", _LISTENER_CLOSE_TIMEOUT_S
+            )
+        server._server = None
+    server._server_was_running = False
+
+    # 8. Wait for cancelled tasks to finish (with timeout)
+    if all_tasks:
+        try:
+            await asyncio.wait_for(
+                asyncio.gather(*all_tasks, return_exceptions=True),
+                timeout=_TASKS_FINISH_TIMEOUT_S,
+            )
+        except TimeoutError:
+            logger.warning(
+                "tasks did not finish in %.0fs, continuing shutdown",
+                _TASKS_FINISH_TIMEOUT_S,
+            )
+    server._bg_tasks.clear()
+
+    scope_cancelled = False
+    for handler in tuple(server._scope_handlers):
+        try:
+            await handler._unsubscribe()
+        except asyncio.CancelledError:
+            scope_cancelled = True
+        except Exception:
+            logger.warning(
+                "scope shutdown cleanup failed; restoration remains pending",
+                exc_info=True,
+            )
+
+    # 9. Now — and only now — the teardown unkeys those client tasks enqueued on
+    #    their way out are in the queue. Bounded, TX-safety only: this executes
+    #    pending PttOff entries and discards the rest (MOR-1181). The drain is
+    #    handed to serve_forever's on_tx_release hook, if any, with its bound
+    #    (MOR-2875).
+    if radio_poller is not None:
+        drain = asyncio.ensure_future(
+            radio_poller.drain_tx_safety_commands(timeout=_SHUTDOWN_TX_DRAIN_TIMEOUT_S)
+        )
+        on_tx_release = getattr(server, "_on_tx_release", None)
+        if on_tx_release is not None:
+            on_tx_release(drain, "web PTT drain", _SHUTDOWN_TX_DRAIN_TIMEOUT_S)
+        await drain
+
+    # 10. Scope restoration is intentionally subordinate to the final unkey.
+    # A queued DisableScope cannot complete once the poller is stopped (and may
+    # never have been serviceable if it already crashed), while waiting for it
+    # before step 9 can prevent a teardown PttOff from even being enqueued.
+    # With the poller loop gone, restore its owned snapshot directly on the same
+    # radio lane, bounded so a failed link cannot hold shutdown open.  On every
+    # incomplete path the flags/snapshot stay intact and the log records that
+    # restoration remains pending.
+    scope_restore_pending = bool(
+        server._radio_scope_session is not None and server._radio_scope_session.active
+    )
+    if scope_restore_pending:
+        if radio_poller is None:
+            logger.warning(
+                "scope: shutdown restore pending; radio poller is unavailable"
+            )
+        else:
+            try:
+                await asyncio.wait_for(
+                    radio_poller.restore_scope_after_shutdown(),
+                    timeout=_SHUTDOWN_SCOPE_RESTORE_TIMEOUT_S,
+                )
+            except TimeoutError:
+                logger.warning(
+                    "scope: shutdown restore timed out after %.1fs; state remains "
+                    "pending",
+                    _SHUTDOWN_SCOPE_RESTORE_TIMEOUT_S,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "scope: shutdown restore failed; state remains pending: %s",
+                    exc,
+                )
+            else:
+                logger.info("scope: pre-session state restored during shutdown")
+
+    # Radio disconnect is handled by the caller's context manager
+    # (async with radio: in _run). Do NOT disconnect here.
+    logger.info("web server stopped")
+    if scope_cancelled:
+        raise asyncio.CancelledError

@@ -1,0 +1,111 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Tests for the hub's wire code (Apps/Windows/README.md, "Desktop hub for
+    the iPad"). Compiles the files under test directly rather than
+    referencing the WinUI app, so it builds and runs with a plain
+    `dotnet test` — keep those files free of WinUI types.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+    <RootNamespace>FTX1RemoteWindows.Tests</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="..\FTX1RemoteWindows\Services\Hub\WireModels.cs" Link="Linked\WireModels.cs" />
+    <Compile Include="..\FTX1RemoteWindows\Services\Hub\HubAddressFilter.cs" Link="Linked\HubAddressFilter.cs" />
+    <Compile Include="..\FTX1RemoteWindows\Services\Hub\HubConnectionInfo.cs" Link="Linked\HubConnectionInfo.cs" />
+    <Compile Include="..\FTX1RemoteWindows\Services\Hub\RigCommandWire.cs" Link="Linked\RigCommandWire.cs" />
+    <Compile Include="..\FTX1RemoteWindows\Services\Hub\HubCommandPolicy.cs" Link="Linked\HubCommandPolicy.cs" />
+    <Compile Include="..\FTX1RemoteWindows\Services\Hub\HubAudioEncoder.cs" Link="Linked\HubAudioEncoder.cs" />
+    <Compile Include="..\FTX1RemoteWindows\Services\Hub\HubListWire.cs" Link="Linked\HubListWire.cs" />
+    <!-- The real server, on loopback, for the menu-read routing test; AppLog is a stub here (TestAppLog.cs) so tests don't write to the app's log. -->
+    <Compile Include="..\FTX1RemoteWindows\Services\Hub\HubServer.cs" Link="Linked\HubServer.cs" />
+    <!-- Phase 5: transmit audio state and the Pi sink. -->
+    <Compile Include="..\FTX1RemoteWindows\Services\Hub\HubTransmitAudio.cs" Link="Linked\HubTransmitAudio.cs" />
+    <Compile Include="..\FTX1RemoteWindows\Services\RemoteTxAudioClient.cs" Link="Linked\RemoteTxAudioClient.cs" />
+    <!-- Phase 6: the CW keyer pair, write checks, keyer tracker and confirmed stop. -->
+    <Compile Include="..\FTX1RemoteWindows\Services\Hub\HubKeyer.cs" Link="Linked\HubKeyer.cs" />
+    <Compile Include="..\FTX1RemoteWindows\Models\MemoryChannelEntry.cs" Link="Linked\MemoryChannelEntry.cs" />
+    <Compile Include="..\FTX1RemoteWindows\Models\AprsModels.cs" Link="Linked\AprsModels.cs" />
+    <Compile Include="..\FTX1RemoteWindows\Services\TransmitGate.cs" Link="Linked\TransmitGate.cs" />
+    <!-- Settings → License: the privilege model and presets behind the gate. -->
+    <Compile Include="..\FTX1RemoteWindows\Models\TransmitPrivileges.cs" Link="Linked\TransmitPrivileges.cs" />
+    <Compile Include="..\FTX1RemoteWindows\Models\PrivilegePresets.cs" Link="Linked\PrivilegePresets.cs" />
+    <Compile Include="..\FTX1RemoteWindows\Models\RigDelayCode.cs" Link="Linked\RigDelayCode.cs" />
+    <Compile Include="..\FTX1RemoteWindows\Models\RigState.cs" Link="Linked\RigState.cs" />
+    <Compile Include="..\FTX1RemoteWindows\Models\RigMode.cs" Link="Linked\RigMode.cs" />
+    <Compile Include="..\FTX1RemoteWindows\Models\BandPlan.cs" Link="Linked\BandPlan.cs" />
+    <Compile Include="..\FTX1RemoteWindows\Models\BandHints.cs" Link="Linked\BandHints.cs" />
+    <Compile Include="..\FTX1RemoteWindows\Models\MemoryScan.cs" Link="Linked\MemoryScan.cs" />
+    <Compile Include="..\FTX1RemoteWindows\Models\FilterModels.cs" Link="Linked\FilterModels.cs" />
+    <Compile Include="..\FTX1RemoteWindows\Models\MeterScale.cs" Link="Linked\MeterScale.cs" />
+    <!-- FilterModels.cs's NarrowWidthPreset refers to the catalog, which needs the tone tables. -->
+    <Compile Include="..\FTX1RemoteWindows\Models\DeepSettingsCatalog.cs" Link="Linked\DeepSettingsCatalog.cs" />
+    <Compile Include="..\FTX1RemoteWindows\Models\RigToneTables.cs" Link="Linked\RigToneTables.cs" />
+    <!-- Wavelog: the API client, the tune request parsing and the tune listener. -->
+    <Compile Include="..\FTX1RemoteWindows\Services\Wavelog.cs" Link="Linked\Wavelog.cs" />
+    <Compile Include="..\FTX1RemoteWindows\Services\WavelogTuneRequest.cs" Link="Linked\WavelogTuneRequest.cs" />
+    <Compile Include="..\FTX1RemoteWindows\Services\WavelogTuneListener.cs" Link="Linked\WavelogTuneListener.cs" />
+    <Compile Include="..\FTX1RemoteWindows\Models\LoggedQso.cs" Link="Linked\LoggedQso.cs" />
+    <Compile Include="..\FTX1RemoteWindows\Models\ThemeDefinition.cs" Link="Linked\ThemeDefinition.cs" />
+    <!-- Tools → RTTY/PSK: code tables, demodulators, modulators, decoder and sender (not the receiver/window). -->
+    <Compile Include="..\FTX1RemoteWindows\Services\Digi\DigiDsp.cs" Link="Linked\DigiDsp.cs" />
+    <Compile Include="..\FTX1RemoteWindows\Services\Digi\Baudot.cs" Link="Linked\Baudot.cs" />
+    <Compile Include="..\FTX1RemoteWindows\Services\Digi\Varicode.cs" Link="Linked\Varicode.cs" />
+    <Compile Include="..\FTX1RemoteWindows\Services\Digi\RttyDemodulator.cs" Link="Linked\RttyDemodulator.cs" />
+    <Compile Include="..\FTX1RemoteWindows\Services\Digi\PskDemodulator.cs" Link="Linked\PskDemodulator.cs" />
+    <Compile Include="..\FTX1RemoteWindows\Services\Digi\DigiModulators.cs" Link="Linked\DigiModulators.cs" />
+    <Compile Include="..\FTX1RemoteWindows\Services\Digi\DigiDecoder.cs" Link="Linked\DigiDecoder.cs" />
+    <Compile Include="..\FTX1RemoteWindows\Services\Digi\DigiSender.cs" Link="Linked\DigiSender.cs" />
+    <!-- MyKiwiSDR: protocol, clients, rig link, waterfall maths (WinUI-free). -->
+    <Compile Include="..\FTX1RemoteWindows\Services\Kiwi\KiwiProtocol.cs" Link="Linked\KiwiProtocol.cs" />
+    <Compile Include="..\FTX1RemoteWindows\Services\Kiwi\KiwiReceiverSettings.cs" Link="Linked\KiwiReceiverSettings.cs" />
+    <Compile Include="..\FTX1RemoteWindows\Services\Kiwi\KiwiPassband.cs" Link="Linked\KiwiPassband.cs" />
+    <Compile Include="..\FTX1RemoteWindows\Services\Kiwi\KiwiRigLink.cs" Link="Linked\KiwiRigLink.cs" />
+    <Compile Include="..\FTX1RemoteWindows\Services\Kiwi\KiwiWaterfall.cs" Link="Linked\KiwiWaterfall.cs" />
+    <Compile Include="..\FTX1RemoteWindows\Services\Kiwi\KiwiClients.cs" Link="Linked\KiwiClients.cs" />
+    <Compile Include="..\FTX1RemoteWindows\Services\Kiwi\KiwiRecordingSplit.cs" Link="Linked\KiwiRecordingSplit.cs" />
+    <Compile Include="..\FTX1RemoteWindows\Services\Kiwi\KiwiPlayout.cs" Link="Linked\KiwiPlayout.cs" />
+    <Compile Include="..\FTX1RemoteWindows\Services\Kiwi\LocalSdrAudioSource.cs" Link="Linked\LocalSdrAudioSource.cs" />
+    <!-- APRS transmit: encoder, info fields, transmitter, messaging, store, and the decoder it round-trips through. -->
+    <Compile Include="..\FTX1RemoteWindows\Services\Ax25.cs" Link="Linked\Ax25.cs" />
+    <Compile Include="..\FTX1RemoteWindows\Services\Ax25Encoder.cs" Link="Linked\Ax25Encoder.cs" />
+    <Compile Include="..\FTX1RemoteWindows\Services\AfskDemodulator.cs" Link="Linked\AfskDemodulator.cs" />
+    <Compile Include="..\FTX1RemoteWindows\Models\AprsPacket.cs" Link="Linked\AprsPacket.cs" />
+    <Compile Include="..\FTX1RemoteWindows\Services\AprsOutgoing.cs" Link="Linked\AprsOutgoing.cs" />
+    <Compile Include="..\FTX1RemoteWindows\Services\AprsTransmitSettings.cs" Link="Linked\AprsTransmitSettings.cs" />
+    <Compile Include="..\FTX1RemoteWindows\Services\AprsTransmitter.cs" Link="Linked\AprsTransmitter.cs" />
+    <Compile Include="..\FTX1RemoteWindows\Services\AprsMessaging.cs" Link="Linked\AprsMessaging.cs" />
+    <Compile Include="..\FTX1RemoteWindows\Services\AprsStore.cs" Link="Linked\AprsStore.cs" />
+    <!-- Tools → FT8/FT4: the native decoder wrapper and its reference vectors (the Mac's FT8KitTests fixtures). -->
+    <Compile Include="..\FTX1RemoteWindows\Services\Ft8\Ft8Mode.cs" Link="Linked\Ft8Mode.cs" />
+    <Compile Include="..\FTX1RemoteWindows\Services\Ft8\Ft8Decoder.cs" Link="Linked\Ft8Decoder.cs" />
+    <Compile Include="..\FTX1RemoteWindows\Services\Ft8\PskReporterPacket.cs" Link="Linked\PskReporterPacket.cs" />
+    <Compile Include="..\FTX1RemoteWindows\Services\CwAudioChannel.cs" Link="Linked\CwAudioChannel.cs" />
+    <Compile Include="..\FTX1RemoteWindows\Services\Ft8\Ft8DecodeCoordinator.cs" Link="Linked\Ft8DecodeCoordinator.cs" />
+    <Content Include="..\FTX1RemoteWindows\Vendor\ft8\ft8lib.dll" Link="ft8\ft8lib.dll" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\..\..\Tests\FT8KitTests\Resources\*.wav" Link="Ft8Fixtures\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+    <!-- The strings those files show (English only here; LocalizationTests reads all three .resx). -->
+    <Compile Include="..\FTX1RemoteWindows\Services\UpdateChecker.cs" Link="Linked\UpdateChecker.cs" />
+    <Compile Include="..\FTX1RemoteWindows\Localization\Loc.cs" Link="Linked\Loc.cs" />
+    <EmbeddedResource Include="..\FTX1RemoteWindows\Localization\Strings.resx" Link="Linked\Strings.resx" LogicalName="FTX1RemoteWindows.Localization.Strings.resources" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- HubServer runs on Kestrel. -->
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.13.0" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <!-- HubAudioEncoder uses its WdlResampler; same version as the app. -->
+    <PackageReference Include="NAudio.Core" Version="2.2.1" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.0" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,168 @@
+/**
+ * MOR-2309 — the six radio-wide intents bind once to the real frontend facades.
+ *
+ * `SemanticRadioSurfaces` binds one canonical N1 callback record and supplies
+ * that input to both legitimate radio-wide `VfoSurface` mounts. Its component test mocks
+ * `../command-bus`, so a renamed or deleted handler there would be invisible:
+ * the mock would keep answering. This file closes that gap the same way
+ * `tx-aux-command-bus.isolated.test.ts` does — load the real module, read the
+ * names off the real wiring source, and assert each one exists AND emits the
+ * command the radio expects.
+ *
+ * Each test's doc line names the mutation it exists to kill.
+ */
+import { readFileSync } from 'node:fs';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+
+const h = vi.hoisted(() => ({
+  patchActiveReceiver: vi.fn(),
+  patchRadioState: vi.fn(),
+  patchReceiver: vi.fn(),
+}));
+
+vi.mock('$lib/transport/ws-client', () => ({ sendCommand: vi.fn() }));
+vi.mock('$lib/runtime/commands/radio-intents', async () => {
+  const { sendCommand } = await import('$lib/transport/ws-client');
+  return {
+    dispatchRadioIntent: ({ name, params }: { name: string; params: Record<string, unknown> }) => sendCommand(name, params),
+    currentControlSessionEpoch: () => 0,
+  };
+});
+vi.mock('$lib/stores/radio.svelte', () => ({
+  getActiveReceiver: vi.fn(() => null),
+  getRadioState: vi.fn(() => ({
+    stateContractVersion: 1, providerGeneration: 1, active: 'MAIN',
+    main: { freqHz: 14_074_000 }, sub: { freqHz: 7_074_000 },
+    split: false, dualWatch: false, mainSubTracking: false,
+  })),
+  patchActiveReceiver: h.patchActiveReceiver,
+  patchRadioState: h.patchRadioState,
+  patchReceiver: h.patchReceiver,
+}));
+vi.mock('$lib/stores/capabilities.svelte', () => ({
+  getCapabilities: vi.fn(() => ({
+    receivers: 2, vfoScheme: 'main_sub',
+    capabilities: [
+      'dual_rx', 'dual_watch', 'split', 'main_sub_tracking',
+      'vfo_swap', 'vfo_equalize',
+    ],
+  })),
+  capabilitiesMatchGeneration: vi.fn(() => true),
+  getControlRange: vi.fn(() => null),
+}));
+vi.mock('$lib/audio/audio-manager', () => ({
+  audioManager: {
+    setOperatorNotifier: vi.fn(),
+    setAudioConfig: vi.fn(), startRx: vi.fn(), stopRx: vi.fn(),
+    setRxVolume: vi.fn(), rxEnabled: false,
+  },
+}));
+
+import { sendCommand } from '$lib/transport/ws-client';
+import { audioManager } from '$lib/audio/audio-manager';
+import { makeVfoHandlers } from '$lib/runtime/commands/panel-commands';
+
+const wiringSource = readFileSync('src/components-v2/wiring/SemanticRadioSurfaces.svelte', 'utf8');
+const commandSource = readFileSync('src/lib/runtime/commands/panel-commands.ts', 'utf8')
+  .replace(/\/\*[\s\S]*?\*\//g, '')
+  .replace(/\/\/.*$/gm, '');
+
+/**
+ * The six surface props and the exact frontend intent tuple each facade
+ * receives. Read as pairs so a cross-wiring fails on the command, not merely
+ * on "something was called".
+ */
+const OPS = [
+  { prop: 'onToggleSplit', binding: 'vfo.onSplitToggle', handler: 'onSplitToggle', command: ['set_split', { on: true }] },
+  { prop: 'onToggleDualWatch', binding: 'toggleDualWatch', handler: 'onDualWatchToggle', command: ['set_dual_watch', { on: true }] },
+  { prop: 'onSelectMainReceiver', binding: 'vfo.onMainVfoClick', handler: 'onMainVfoClick', command: ['set_vfo', { vfo: 'MAIN' }], focus: 'main' },
+  { prop: 'onSelectSubReceiver', binding: 'vfo.onSubVfoClick', handler: 'onSubVfoClick', command: ['set_vfo', { vfo: 'SUB' }], focus: 'sub' },
+  { prop: 'onEqualizeVfos', binding: 'vfo.onEqual', handler: 'onEqual', command: ['vfo_equalize', {}] },
+  { prop: 'onSwapVfos', binding: 'vfo.onSwap', handler: 'onSwap', command: ['vfo_swap', {}] },
+] as const;
+
+type OpHandlerName = (typeof OPS)[number]['handler'];
+
+function handlerFor(handler: OpHandlerName): () => void {
+  const vfo = makeVfoHandlers();
+  switch (handler) {
+    case 'onSplitToggle': return vfo.onSplitToggle;
+    case 'onDualWatchToggle': return () => vfo.onDualWatchToggle(true);
+    case 'onMainVfoClick': return vfo.onMainVfoClick;
+    case 'onSubVfoClick': return vfo.onSubVfoClick;
+    case 'onEqual': return vfo.onEqual;
+    case 'onSwap': return vfo.onSwap;
+  }
+}
+
+beforeEach(() => {
+  vi.mocked(sendCommand).mockClear();
+  vi.mocked(audioManager.setAudioConfig).mockClear();
+  h.patchActiveReceiver.mockClear();
+  h.patchRadioState.mockClear();
+  h.patchReceiver.mockClear();
+});
+
+describe('the wiring binds every VFO op to a handler the real command bus provides', () => {
+  // Kills: a callback duplicated or bound to a neighbouring facade.
+  it.each(OPS)('$prop has exactly one canonical $binding binding', ({ prop, binding }) => {
+    expect(wiringSource.split(`${prop}: ${binding}`).length - 1).toBe(1);
+  });
+
+  // Kills: a rename/removal in command-bus.ts that the mocked component test
+  // cannot see.
+  it.each(OPS)('$handler exists and is callable', ({ handler }) => {
+    expect(typeof handlerFor(handler)).toBe('function');
+  });
+
+  // Kills: cross-wiring. Each handler must emit ITS command and no other —
+  // receiving a call is not enough; each handler must emit its own command.
+  it.each(OPS)('$owner.$handler emits exactly $command.0 once with no side-channel mutation', ({ handler, command, ...entry }) => {
+    handlerFor(handler)();
+    expect(vi.mocked(sendCommand).mock.calls).toEqual([[command[0], command[1]]]);
+    expect(vi.mocked(audioManager.setAudioConfig).mock.calls).toEqual(
+      'focus' in entry ? [[{ focus: entry.focus }]] : [],
+    );
+    expect(h.patchActiveReceiver.mock.calls).toEqual([]);
+    expect(h.patchRadioState.mock.calls).toEqual([]);
+    expect(h.patchReceiver.mock.calls).toEqual([]);
+    expect(command[0]).not.toMatch(/ptt|key|start_tx|stop_tx|tune/i);
+  });
+
+  // R9. None of the six may touch a key path: the transmitter is keyed only
+  // through the App TX controller, never from a VFO action.
+  it('no VFO op emits a TX key/unkey command', () => {
+    for (const { handler } of OPS) {
+      handlerFor(handler)();
+    }
+    const sent = vi.mocked(sendCommand).mock.calls.map((c) => String(c[0]));
+    for (const forbidden of ['set_ptt', 'ptt', 'start_tx', 'stop_tx', 'tx']) {
+      expect(sent, forbidden).not.toContain(forbidden);
+    }
+  });
+
+  it('the facade source cannot bypass typed intents into provider/transport APIs', () => {
+    expect(commandSource).not.toMatch(/rigctld|WebSocket|fetch\s*\(|sendCommand|\$lib\/transport/);
+    expect(commandSource).not.toMatch(/from\s+['"][^'"]*provider[^'"]*['"]/);
+  });
+});
+
+describe('placement — the ops ride with the radio-wide facts', () => {
+  // Kills: binding the ops onto the per-receiver strip surface, which would
+  // render one equalize button PER RECEIVER in the dual-receiver cockpit. The
+  // strip mount is the one that sets `showRadioWideFacts={false}`; the two
+  // legitimate mounts are the cockpit's global row and the single composition.
+  it('passes the one N1 input to exactly the global row and single composition', () => {
+    expect(wiringSource.split('operationInput={vfoOperationInput ?? undefined}').length - 1).toBe(2);
+  });
+
+  // The strip mount stays op-free — asserted on the strip's own markup block
+  // rather than on a global count, so this cannot pass by miscounting above.
+  it('the per-receiver strip mount binds no ops', () => {
+    const stripBlock = wiringSource.slice(
+      wiringSource.indexOf('showRadioWideFacts={false}') - 400,
+      wiringSource.indexOf('showRadioWideFacts={false}') + 400,
+    );
+    expect(stripBlock).not.toContain('operationInput=');
+  });
+});

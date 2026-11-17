@@ -1,0 +1,445 @@
+<Window
+    x:Class="FTX1RemoteWindows.MainWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:l="using:FTX1RemoteWindows.Localization">
+
+    <!-- Scrolls so a window smaller than the MENU grid needs still reaches everything. -->
+    <ScrollViewer x:Name="RootScrollViewer" Background="{ThemeResource ApplicationPageBackgroundThemeBrush}">
+    <Grid Padding="16" RowSpacing="12">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <!-- Connection bar. The connection itself (mode, Pi host, Local
+             rigctld/COM port/baud) is set in Settings. -->
+        <StackPanel Grid.Row="0" Orientation="Horizontal" Spacing="8">
+            <Button x:Name="ConnectButton" Content="{l:Str Key=common.connect}" Click="ConnectButton_Click" />
+            <TextBlock x:Name="ConnectionStateText" Text="{l:Str Key=mainWindow.disconnected}" VerticalAlignment="Center" Foreground="{ThemeResource AppSecondaryTextBrush}" />
+            <Button x:Name="SettingsButton" Click="SettingsButton_Click" Margin="16,0,0,0"
+                    AutomationProperties.Name="{l:Str Key=mainWindow.settings}" ToolTipService.ToolTip="{l:Str Key=mainWindow.settings}">
+                <StackPanel Orientation="Horizontal" Spacing="6">
+                    <FontIcon Glyph="&#xE713;" FontSize="14" />
+                    <TextBlock Text="{l:Str Key=mainWindow.settings}" />
+                </StackPanel>
+            </Button>
+            <!-- The decoded APRS lists, also reachable while disconnected (the
+                 MENU grid's S.LIST/M.LIST need a connection) — the Mac's
+                 View → APRS menu. -->
+            <DropDownButton x:Name="AprsButton" AutomationProperties.Name="APRS" ToolTipService.ToolTip="{l:Str Key=mainWindow.decodedAPRSStationsMessages}">
+                <StackPanel Orientation="Horizontal" Spacing="6">
+                    <FontIcon Glyph="&#xE704;" FontSize="14" />
+                    <TextBlock Text="APRS" />
+                </StackPanel>
+                <DropDownButton.Flyout>
+                    <MenuFlyout Placement="Bottom">
+                        <MenuFlyoutItem Text="{l:Str Key=mainWindow.stationsSLIST}" Click="AprsStationsMenuItem_Click" />
+                        <MenuFlyoutItem Text="{l:Str Key=mainWindow.messagesMLIST}" Click="AprsMessagesMenuItem_Click" />
+                        <MenuFlyoutItem Text="{l:Str Key=mainWindow.map}" Click="AprsMapMenuItem_Click" />
+                        <MenuFlyoutSeparator />
+                        <MenuFlyoutItem Text="{l:Str Key=aprsTransmit.beaconNow}" Click="AprsBeaconNowMenuItem_Click" />
+                    </MenuFlyout>
+                </DropDownButton.Flyout>
+            </DropDownButton>
+            <!-- The Mac's Tools → WebSDR: a KiwiSDR/WebSDR that follows the rig. -->
+            <Button x:Name="WebSdrButton" Click="WebSdrButton_Click"
+                    AutomationProperties.Name="WebSDR" ToolTipService.ToolTip="{l:Str Key=mainWindow.listenOnAKiwiSDR}">
+                <StackPanel Orientation="Horizontal" Spacing="6">
+                    <FontIcon Glyph="&#xE774;" FontSize="14" />
+                    <TextBlock Text="WebSDR" />
+                </StackPanel>
+            </Button>
+            <!-- The Mac's Tools → MyKiwiSDR: native audio + waterfall from the operator's own KiwiSDR. -->
+            <Button x:Name="LocalSdrButton" Click="LocalSdrButton_Click"
+                    AutomationProperties.Name="MyKiwiSDR" ToolTipService.ToolTip="{l:Str Key=mainWindow.listenToYourOwn}">
+                <StackPanel Orientation="Horizontal" Spacing="6">
+                    <FontIcon Glyph="&#xE774;" FontSize="14" />
+                    <TextBlock Text="MyKiwiSDR" />
+                </StackPanel>
+            </Button>
+            <!-- The Mac's Tools → CW: decodes the rig's MAIN or SUB audio. -->
+            <Button x:Name="CwButton" Click="CwButton_Click"
+                    AutomationProperties.Name="CW" ToolTipService.ToolTip="{l:Str Key=mainWindow.decodeCWFromThe}">
+                <StackPanel Orientation="Horizontal" Spacing="6">
+                    <FontIcon Glyph="&#xE8C1;" FontSize="14" />
+                    <TextBlock Text="CW" />
+                </StackPanel>
+            </Button>
+            <!-- The Mac's Tools → RTTY/PSK: decodes and sends RTTY, BPSK31 and BPSK63. -->
+            <Button x:Name="DigiButton" Click="DigiButton_Click"
+                    AutomationProperties.Name="RTTY/PSK" ToolTipService.ToolTip="{l:Str Key=mainWindow.decodeAndSendRTTY}">
+                <StackPanel Orientation="Horizontal" Spacing="6">
+                    <FontIcon Glyph="&#xE8C1;" FontSize="14" />
+                    <TextBlock Text="RTTY/PSK" />
+                </StackPanel>
+            </Button>
+            <!-- The Mac's Tools → FT8 / FT4: decodes the rig's MAIN or SUB audio (or MyKiwiSDR's) with ft8_lib. -->
+            <Button x:Name="Ft8Button" Click="Ft8Button_Click"
+                    AutomationProperties.Name="FT8" ToolTipService.ToolTip="{l:Str Key=mainWindow.decodeFT8}">
+                <StackPanel Orientation="Horizontal" Spacing="6">
+                    <FontIcon Glyph="&#xE8C1;" FontSize="14" />
+                    <TextBlock Text="FT8" />
+                </StackPanel>
+            </Button>
+            <Button x:Name="Ft4Button" Click="Ft4Button_Click"
+                    AutomationProperties.Name="FT4" ToolTipService.ToolTip="{l:Str Key=mainWindow.decodeFT4}">
+                <StackPanel Orientation="Horizontal" Spacing="6">
+                    <FontIcon Glyph="&#xE8C1;" FontSize="14" />
+                    <TextBlock Text="FT4" />
+                </StackPanel>
+            </Button>
+        </StackPanel>
+
+        <!-- MAIN / SUB VFOs, with the waterfall/oscilloscope between them —
+             the Mac's and the rig's layout (SUB left, MAIN right): three equal
+             columns, each VFO in a black box like the Mac's VFODisplayBox
+             (green border while that receiver is shown; SUB's goes gray in
+             single-receive display), the meters below the boxes and the scope
+             between the meters. -->
+        <Border Grid.Row="1" BorderBrush="Gray" BorderThickness="1" CornerRadius="4" Padding="12">
+            <Grid ColumnSpacing="16" RowSpacing="10">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+
+                <Border Grid.Row="0" Grid.Column="2" x:Name="MainVfoBox" RequestedTheme="Dark"
+                        Background="Black" BorderBrush="#B300FF00" BorderThickness="1.5" CornerRadius="8" Padding="14,10">
+                    <StackPanel Spacing="4">
+                        <Grid>
+                        <StackPanel Orientation="Horizontal" Spacing="12">
+                            <TextBlock x:Name="MainLabelText" Text="MAIN" FontWeight="SemiBold" />
+                            <Border x:Name="MainTxRxTag" Background="Red" CornerRadius="3" Padding="4,1" VerticalAlignment="Center">
+                                <TextBlock x:Name="MainTxRxText" Text="TXRX" FontSize="12" FontWeight="SemiBold" Foreground="White" />
+                            </Border>
+                            <!-- "CH n TAG" while in Memory mode, "VM nn" in the other
+                                 sub-modes, hidden in VFO mode. -->
+                            <TextBlock x:Name="MemoryChannelAText" FontWeight="SemiBold" Foreground="DarkOrange" Visibility="Collapsed" />
+                        </StackPanel>
+                        <!-- The mode, upper right like the Mac's. -->
+                        <Border x:Name="MainModeBorder" BorderBrush="Gray" BorderThickness="1" CornerRadius="3" Padding="4,1" HorizontalAlignment="Right" VerticalAlignment="Center">
+                            <TextBlock x:Name="MainModeText" FontSize="12" FontWeight="SemiBold" Foreground="LimeGreen" />
+                        </Border>
+                        </Grid>
+                        <!-- Like the Mac's VFODisplayBox: the C4FM reflector / "APRS" line (height
+                             reserved so nothing jumps), then the caller on the left and the
+                             frequency on the right. -->
+                        <TextBlock x:Name="C4fmReflectorAText" Foreground="{ThemeResource AppSecondaryTextBrush}" FontSize="12" Height="14" />
+                        <Grid x:Name="FrequencyAGrid">
+                            <TextBlock x:Name="C4fmCallsignAText" FontSize="20" FontWeight="SemiBold" Foreground="DodgerBlue" FontFamily="Consolas" VerticalAlignment="Center" HorizontalAlignment="Left" />
+                            <TextBlock x:Name="FrequencyAText" Text="—" FontSize="32" FontFamily="Consolas" HorizontalAlignment="Right" />
+                        </Grid>
+                    </StackPanel>
+                </Border>
+
+                <StackPanel Grid.Row="0" Grid.Column="1" Spacing="8" VerticalAlignment="Center" HorizontalAlignment="Center">
+                    <!-- Spread across the width of the button grid below, so V/M lines up
+                         with Waterfall and the speaker button with Off/Skip. -->
+                    <Grid ColumnSpacing="12">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <!-- Order matches the Mac: V/M, TX side, SPLIT, swap, audio override. -->
+                        <!-- Main's VFO/Memory mode; checked whenever it isn't plain VFO. -->
+                        <ToggleButton x:Name="VfoMemoryToggle" Content="V/M"
+                                      Click="VfoMemoryToggle_Click"
+                                      ToolTipService.ToolTip="{l:Str Key=mainWindow.switchMAINBetweenVFO}" />
+                        <!-- Which receiver transmits (raw "FT"); the caption shows the current side. -->
+                        <Button x:Name="TxSideButton" Grid.Column="2" Content="TX:MAIN" Click="TxSideButton_Click"
+                                ToolTipService.ToolTip="{l:Str Key=mainWindow.switchTheTransmitSide}" />
+                        <!-- SPLIT on/off (raw "ST"); the chevron is quick split (MainWindow.Split.cs). -->
+                        <StackPanel Grid.Column="4" Orientation="Horizontal" Spacing="2">
+                            <ToggleButton x:Name="SplitToggle" Content="SPLIT" IsEnabled="False" Click="SplitToggle_Click"
+                                          ToolTipService.ToolTip="{l:Str Key=mainWindow.splitHelp}" />
+                            <DropDownButton x:Name="QuickSplitButton" IsEnabled="False" Padding="4,5"
+                                            AutomationProperties.Name="{l:Str Key=mainWindow.quickSplit}"
+                                            ToolTipService.ToolTip="{l:Str Key=mainWindow.quickSplitHelp}" />
+                        </StackPanel>
+                        <Button x:Name="SwapVfoButton" Grid.Column="6" Content="⇄"
+                                Click="SwapVfoButton_Click" ToolTipService.ToolTip="{l:Str Key=mainWindow.swapMainAndSub}" />
+                        <!-- Manual override for audio swap tracking; checked while L/R are swapped. -->
+                        <ToggleButton x:Name="AudioSwapToggle" Grid.Column="8" Click="AudioSwapToggle_Click">
+                            <FontIcon Glyph="&#xE767;" FontSize="14" />
+                        </ToggleButton>
+                    </Grid>
+                    <!-- What the scope below shows (the Mac's scope mode buttons),
+                         and under them the memory list (the Mac's Mem List) and the
+                         rig's memory scan (MainWindow.MemoryScan.cs). -->
+                    <!-- Three equal-width columns; the grid stretches to the row above,
+                         so Off/Skip still end where the speaker button does. -->
+                    <Grid ColumnSpacing="4" RowSpacing="4">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+                        <ToggleButton x:Name="ScopeWaterfallButton" Content="{l:Str Key=mainWindow.waterfall}" HorizontalAlignment="Stretch" Tag="Waterfall" Click="ScopeModeButton_Click" />
+                        <ToggleButton x:Name="ScopeOscilloscopeButton" Grid.Column="1" Content="{l:Str Key=mainWindow.oscilloscope}" HorizontalAlignment="Stretch" Tag="Oscilloscope" Click="ScopeModeButton_Click" />
+                        <ToggleButton x:Name="ScopeOffButton" Grid.Column="2" Content="{l:Str Key=mainWindow.off}" HorizontalAlignment="Stretch" Tag="Off" Click="ScopeModeButton_Click"
+                                      ToolTipService.ToolTip="{l:Str Key=mainWindow.stopsTheFFTToo}" />
+                        <Button x:Name="MemoryListButton" Grid.Row="1" Content="{l:Str Key=mainWindow.memList}" HorizontalAlignment="Stretch"
+                                Click="MemoryListButton_Click"
+                                ToolTipService.ToolTip="{l:Str Key=mainWindow.listTheRigsMemory}" />
+                        <!-- A menu (Scan SUB / Scan MAIN) while stopped, "Stop MAIN"/"Stop SUB"
+                             while a scan runs. -->
+                        <Button x:Name="MemoryScanButton" Grid.Row="1" Grid.Column="1" Content="{l:Str Key=mainWindow.scan}" HorizontalAlignment="Stretch"
+                                Click="MemoryScanButton_Click" IsEnabled="False"
+                                ToolTipService.ToolTip="{l:Str Key=mainWindow.scanMAINsOrSUBs}" />
+                        <Button x:Name="MemoryScanSkipButton" Grid.Row="1" Grid.Column="2" Content="{l:Str Key=mainWindow.skip}" HorizontalAlignment="Stretch"
+                                Click="MemoryScanSkipButton_Click" IsEnabled="False"
+                                ToolTipService.ToolTip="{l:Str Key=mainWindow.resumeThePausedScan}" />
+                    </Grid>
+                </StackPanel>
+
+                <Border Grid.Row="0" Grid.Column="0" x:Name="SubVfoBox" RequestedTheme="Dark"
+                        Background="Black" BorderBrush="#B300FF00" BorderThickness="1.5" CornerRadius="8" Padding="14,10">
+                    <StackPanel Spacing="4">
+                        <Grid>
+                        <StackPanel Orientation="Horizontal" Spacing="12">
+                            <TextBlock x:Name="SubLabelText" Text="SUB" FontWeight="SemiBold" />
+                            <Border x:Name="SubTxRxTag" Background="Green" CornerRadius="3" Padding="4,1" VerticalAlignment="Center">
+                                <TextBlock x:Name="SubTxRxText" Text="RX" FontSize="12" FontWeight="SemiBold" Foreground="White" />
+                            </Border>
+                            <TextBlock x:Name="MemoryChannelBText" FontWeight="SemiBold" Foreground="DarkOrange" Visibility="Collapsed" />
+                        </StackPanel>
+                        <Border x:Name="SubModeBorder" BorderBrush="Gray" BorderThickness="1" CornerRadius="3" Padding="4,1" HorizontalAlignment="Right" VerticalAlignment="Center">
+                            <TextBlock x:Name="SubModeText" FontSize="12" FontWeight="SemiBold" Foreground="LimeGreen" />
+                        </Border>
+                        </Grid>
+                        <!-- Like the Mac's VFODisplayBox: the C4FM reflector / "APRS" line (height
+                             reserved so nothing jumps), then the caller on the left and the
+                             frequency on the right. -->
+                        <TextBlock x:Name="C4fmReflectorBText" Foreground="{ThemeResource AppSecondaryTextBrush}" FontSize="12" Height="14" />
+                        <Grid x:Name="FrequencyBGrid">
+                            <TextBlock x:Name="C4fmCallsignBText" FontSize="20" FontWeight="SemiBold" Foreground="DodgerBlue" FontFamily="Consolas" VerticalAlignment="Center" HorizontalAlignment="Left" />
+                            <TextBlock x:Name="FrequencyBText" Text="—" FontSize="32" FontFamily="Consolas" HorizontalAlignment="Right" />
+                        </Grid>
+                    </StackPanel>
+                </Border>
+
+                <!-- MAIN's analog meter (Controls/SMeter.cs, added in code) with its
+                     Mute / SQL / VOL to the right — the Mac's channelControls. SQL is inverted like the Mac's: further right
+                     = tighter. The dot is the squelch-open light. -->
+                <!-- The meter is up to 190 px wide but shrinks in a narrow window (its
+                     Viewbox keeps the aspect) so the sliders stay usable — sized in
+                     code from this grid's width (ChannelGrid_SizeChanged). -->
+                <Grid Grid.Row="1" Grid.Column="2" x:Name="MainChannelGrid" ColumnSpacing="10" VerticalAlignment="Top"
+                      SizeChanged="ChannelGrid_SizeChanged">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <Border x:Name="MainMeterHost" Width="190" VerticalAlignment="Top" />
+                    <StackPanel Grid.Column="1" Spacing="2" VerticalAlignment="Center">
+                        <ToggleButton x:Name="MainMuteToggle" Content="{l:Str Key=mainWindow.mute}" Click="MainMuteToggle_Click" HorizontalAlignment="Stretch"
+                                      AutomationProperties.Name="{l:Str Key=mainWindow.muteMAIN}" />
+                        <Grid ColumnSpacing="6">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="28" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Text="SQL" FontSize="11" Foreground="{ThemeResource AppSecondaryTextBrush}" VerticalAlignment="Center" />
+                            <Slider Grid.Column="1" x:Name="MainSquelchSlider" Minimum="0" Maximum="0.05" StepFrequency="0.001"
+                                    ValueChanged="MainSquelchSlider_ValueChanged" IsThumbToolTipEnabled="False"
+                                    AutomationProperties.Name="{l:Str Key=mainWindow.mAINSquelch}" />
+                            <Ellipse Grid.Column="2" x:Name="MainSquelchLed" Width="8" Height="8" Fill="Gray" VerticalAlignment="Center"
+                                     ToolTipService.ToolTip="{l:Str Key=mainWindow.squelchOpen}" />
+                        </Grid>
+                        <Grid ColumnSpacing="6">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="28" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="8" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Text="VOL" FontSize="11" Foreground="{ThemeResource AppSecondaryTextBrush}" VerticalAlignment="Center" />
+                            <Slider Grid.Column="1" x:Name="MainVolumeSlider" Minimum="0" Maximum="1" StepFrequency="0.01"
+                                    ValueChanged="MainVolumeSlider_ValueChanged"
+                                    AutomationProperties.Name="{l:Str Key=mainWindow.mAINVolume}" />
+                        </Grid>
+                    </StackPanel>
+                </Grid>
+
+                <!-- Zoom arrows for whichever display is showing, then the scope
+                     (Controls/ScopeDisplay.cs, added in code), as tall as the meters. -->
+                <Grid Grid.Row="1" Grid.Column="1" ColumnSpacing="8" Height="81" VerticalAlignment="Top">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <StackPanel x:Name="ScopeZoomPanel" Spacing="2" VerticalAlignment="Center" Width="40">
+                        <Button x:Name="ScopeZoomInButton" HorizontalAlignment="Stretch" Click="ScopeZoomButton_Click" Tag="up"
+                                AutomationProperties.Name="{l:Str Key=mainWindow.zoomIn}" ToolTipService.ToolTip="{l:Str Key=mainWindow.zoomIn}">
+                            <FontIcon Glyph="&#xE70E;" FontSize="10" />
+                        </Button>
+                        <TextBlock x:Name="ScopeZoomText" Text="1.0x" FontSize="11" FontFamily="Consolas" Foreground="{ThemeResource AppSecondaryTextBrush}" HorizontalAlignment="Center" />
+                        <Button x:Name="ScopeZoomOutButton" HorizontalAlignment="Stretch" Click="ScopeZoomButton_Click" Tag="down"
+                                AutomationProperties.Name="{l:Str Key=mainWindow.zoomOut}" ToolTipService.ToolTip="{l:Str Key=mainWindow.zoomOut}">
+                            <FontIcon Glyph="&#xE70D;" FontSize="10" />
+                        </Button>
+                    </StackPanel>
+                    <Border Grid.Column="1" x:Name="ScopeHost" />
+                </Grid>
+
+                <!-- SUB's analog meter (Controls/SMeter.cs, added in code) with its
+                     Mute / SQL / VOL to the right — the Mac's channelControls. SQL is inverted like the Mac's: further right
+                     = tighter. The dot is the squelch-open light. -->
+                <!-- The meter is up to 190 px wide but shrinks in a narrow window (its
+                     Viewbox keeps the aspect) so the sliders stay usable — sized in
+                     code from this grid's width (ChannelGrid_SizeChanged). -->
+                <Grid Grid.Row="1" Grid.Column="0" x:Name="SubChannelGrid" ColumnSpacing="10" VerticalAlignment="Top"
+                      SizeChanged="ChannelGrid_SizeChanged">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <Border x:Name="SubMeterHost" Width="190" VerticalAlignment="Top" />
+                    <StackPanel Grid.Column="1" Spacing="2" VerticalAlignment="Center">
+                        <ToggleButton x:Name="SubMuteToggle" Content="{l:Str Key=mainWindow.mute}" Click="SubMuteToggle_Click" HorizontalAlignment="Stretch"
+                                      AutomationProperties.Name="{l:Str Key=mainWindow.muteSUB}" />
+                        <Grid ColumnSpacing="6">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="28" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Text="SQL" FontSize="11" Foreground="{ThemeResource AppSecondaryTextBrush}" VerticalAlignment="Center" />
+                            <Slider Grid.Column="1" x:Name="SubSquelchSlider" Minimum="0" Maximum="0.05" StepFrequency="0.001"
+                                    ValueChanged="SubSquelchSlider_ValueChanged" IsThumbToolTipEnabled="False"
+                                    AutomationProperties.Name="{l:Str Key=mainWindow.sUBSquelch}" />
+                            <Ellipse Grid.Column="2" x:Name="SubSquelchLed" Width="8" Height="8" Fill="Gray" VerticalAlignment="Center"
+                                     ToolTipService.ToolTip="{l:Str Key=mainWindow.squelchOpen}" />
+                        </Grid>
+                        <Grid ColumnSpacing="6">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="28" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="8" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Text="VOL" FontSize="11" Foreground="{ThemeResource AppSecondaryTextBrush}" VerticalAlignment="Center" />
+                            <Slider Grid.Column="1" x:Name="SubVolumeSlider" Minimum="0" Maximum="1" StepFrequency="0.01"
+                                    ValueChanged="SubVolumeSlider_ValueChanged"
+                                    AutomationProperties.Name="{l:Str Key=mainWindow.sUBVolume}" />
+                        </Grid>
+                    </StackPanel>
+                </Grid>
+            </Grid>
+        </Border>
+
+        <!-- Mode / PTT / power / SWR / band -->
+        <Border Grid.Row="2" BorderBrush="Gray" BorderThickness="1" CornerRadius="4" Padding="12">
+            <StackPanel Orientation="Horizontal" Spacing="24">
+                <StackPanel Spacing="4">
+                    <TextBlock Text="{l:Str Key=mainWindow.mode}" FontWeight="SemiBold" />
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                        <ComboBox x:Name="ModeComboBox" Width="120" SelectionChanged="ModeComboBox_SelectionChanged" />
+                        <!-- Carrier for an external auto-tuner; MainWindow.Tune.cs. -->
+                        <Button x:Name="TuneButton" Content="TUNE" MinWidth="70" IsEnabled="False" Click="TuneButton_Click" />
+                    </StackPanel>
+                </StackPanel>
+
+                <StackPanel Spacing="4">
+                    <TextBlock Text="{l:Str Key=mainWindow.band}" FontWeight="SemiBold" />
+                    <ComboBox x:Name="BandComboBox" Width="100" SelectionChanged="BandComboBox_SelectionChanged" />
+                </StackPanel>
+
+                <!-- Audio (Pi :8532): on/off and the link status. Each receiver's
+                     Mute / SQL / VOL sit beside its meter in the VFO section above. -->
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                    <ToggleSwitch x:Name="AudioSwitch" Header="{l:Str Key=mainWindow.audio}" OnContent="{l:Str Key=mainWindow.on}" OffContent="{l:Str Key=mainWindow.off}"
+                                  Toggled="AudioSwitch_Toggled"
+                                  ToolTipService.ToolTip="{l:Str Key=mainWindow.thePiStreamsAudio}" />
+                    <StackPanel VerticalAlignment="Bottom" Spacing="2">
+                        <TextBlock x:Name="AudioStateText" Text="{l:Str Key=common.notConnected}" Foreground="{ThemeResource AppSecondaryTextBrush}" />
+                        <TextBlock x:Name="AudioLevelsText" Text="" FontFamily="Consolas" FontSize="12" Foreground="{ThemeResource AppSecondaryTextBrush}" />
+                    </StackPanel>
+                </StackPanel>
+
+                <!-- Safety cutoff, applies at once; see TransmitGate. -->
+                <ToggleSwitch x:Name="TransmitEnabledSwitch" Header="{l:Str Key=mainWindow.enableTransmit}" OnContent="{l:Str Key=mainWindow.on}" OffContent="{l:Str Key=mainWindow.off}"
+                              Toggled="TransmitEnabledSwitch_Toggled"
+                              ToolTipService.ToolTip="{l:Str Key=mainWindow.whenOffPTTAnd}" />
+
+                <StackPanel Spacing="4">
+                    <TextBlock Text="PTT" FontWeight="SemiBold" />
+                    <!-- Momentary: keyed while held, like the Mac/iPad PTT. A Border
+                         rather than a Button so its background can show TX
+                         state without the Button template's pressed/hover
+                         states overriding it. -->
+                    <Border x:Name="PttButton" MinWidth="130" Padding="16,8" CornerRadius="8"
+                            Background="#40808080"
+                            AutomationProperties.Name="{l:Str Key=mainWindow.pushToTalk}"
+                            PointerPressed="PttButton_PointerPressed"
+                            PointerReleased="PttButton_PointerReleased"
+                            PointerCanceled="PttButton_PointerReleased"
+                            PointerCaptureLost="PttButton_PointerReleased">
+                        <TextBlock x:Name="PttText" Text="PTT" FontWeight="SemiBold" HorizontalAlignment="Center" />
+                    </Border>
+                </StackPanel>
+
+                <StackPanel Spacing="4" Width="230">
+                    <TextBlock Text="{l:Str Key=mainWindow.powerLevel}" FontWeight="SemiBold" />
+                    <!-- ◀/▶ fine-step the level by 1 W (PowerStep_Click). -->
+                    <Grid ColumnSpacing="4">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <Button Grid.Column="0" Tag="-1" Click="PowerStep_Click" Padding="6,4" VerticalAlignment="Center"
+                                AutomationProperties.Name="{l:Str Key=mainWindow.decreasePowerBy1}" ToolTipService.ToolTip="{l:Str Key=mainWindow.decreaseRFPowerBy}">
+                            <FontIcon Glyph="&#xE76B;" FontSize="10" />
+                        </Button>
+                        <Slider Grid.Column="1" x:Name="PowerSlider" Minimum="5" Maximum="100" ValueChanged="PowerSlider_ValueChanged" />
+                        <Button Grid.Column="2" Tag="1" Click="PowerStep_Click" Padding="6,4" VerticalAlignment="Center"
+                                AutomationProperties.Name="{l:Str Key=mainWindow.increasePowerBy1}" ToolTipService.ToolTip="{l:Str Key=mainWindow.increaseRFPowerBy}">
+                            <FontIcon Glyph="&#xE76C;" FontSize="10" />
+                        </Button>
+                    </Grid>
+                </StackPanel>
+
+                <StackPanel Spacing="4">
+                    <TextBlock Text="{l:Str Key=mainWindow.powerOut}" FontWeight="SemiBold" />
+                    <TextBlock x:Name="PowerWattsText" Text="—" FontFamily="Consolas" />
+                </StackPanel>
+
+                <StackPanel Spacing="4">
+                    <TextBlock Text="SWR" FontWeight="SemiBold" />
+                    <TextBlock x:Name="SwrText" Text="—" FontFamily="Consolas" />
+                </StackPanel>
+            </StackPanel>
+        </Border>
+
+        <!-- Filter rows (Controls/FilterPanel.cs), added in code: WIDTH/SHIFT,
+             CONTOUR-or-APF/N/W/NOTCH, the MAIN/SUB selector and the display. -->
+        <Border Grid.Row="3" x:Name="FilterPanelHost" BorderBrush="Gray" BorderThickness="1" CornerRadius="4" Padding="12" />
+
+        <!-- MENU grid (Controls/MenuGrid.cs), added in code. -->
+        <Border Grid.Row="4" x:Name="MenuGridHost" BorderBrush="Gray" BorderThickness="1" CornerRadius="4" Padding="12" />
+
+        <TextBlock Grid.Row="5" x:Name="StatusText" Text="" Foreground="Firebrick" TextWrapping="Wrap" VerticalAlignment="Bottom" />
+    </Grid>
+    </ScrollViewer>
+</Window>

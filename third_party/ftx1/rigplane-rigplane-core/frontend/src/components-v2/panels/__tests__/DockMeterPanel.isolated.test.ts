@@ -1,0 +1,237 @@
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { mount, unmount, flushSync } from 'svelte';
+import type { ComponentProps } from 'svelte';
+import DockMeterPanel from '../DockMeterPanel.svelte';
+
+// MOR-1470: no meter has a hardcoded fallback curve — the REAL capabilities
+// store is seeded with an IC-7610-shaped profile and the props below carry
+// engineering units (watts / ratio / normalized ALC / dB-rel-S9), exactly
+// what the backend publishes for a rig with these tables (MOR-469).
+import type { Capabilities } from '$lib/types/capabilities';
+import { clearCapabilities, setCapabilities } from '$lib/stores/capabilities.svelte';
+
+const IC7610_LIKE_S_METER_CAL = [
+  { raw: 0, actual: -54, label: 'S0' },
+  { raw: 26, actual: -48, label: 'S1' },
+  { raw: 52, actual: -36, label: 'S3' },
+  { raw: 78, actual: -24, label: 'S5' },
+  { raw: 103, actual: -12, label: 'S7' },
+  { raw: 130, actual: 0, label: 'S9' },
+  { raw: 165, actual: 10, label: 'S9+10' },
+  { raw: 200, actual: 20, label: 'S9+20' },
+  { raw: 240, actual: 40, label: 'S9+40' },
+];
+function makeCaps(): Capabilities {
+  return {
+    model: 'IC-7610',
+    scope: true,
+    audio: true,
+    tx: true,
+    capabilities: ['scope', 'tx'],
+    receivers: 2,
+    vfoScheme: 'main_sub',
+    freqRanges: [{ start: 1800000, end: 30000000, label: 'HF' }],
+    modes: ['USB', 'LSB', 'CW', 'AM', 'FM'],
+    filters: ['FIL1', 'FIL2', 'FIL3'],
+    audioConfig: { sampleRate: 48000, channels: 1, codecs: ['opus'] },
+    webrtc: { available: true, enabled: false },
+    txBands: null,
+    stateContractVersion: 1,
+    providerGeneration: 0,
+    meterCalibrations: {
+      s_meter: IC7610_LIKE_S_METER_CAL,
+      power: [
+        { raw: 0, actual: 0, label: '0' },
+        { raw: 143, actual: 50, label: '50' },
+        { raw: 212, actual: 100, label: '100' },
+      ],
+      swr: [
+        { raw: 0, actual: 1.0, label: '1.0' },
+        { raw: 48, actual: 1.5, label: '1.5' },
+        { raw: 80, actual: 2.0, label: '2.0' },
+        { raw: 120, actual: 3.0, label: '3.0' },
+      ],
+      alc: [
+        { raw: 0, actual: 0, label: '0' },
+        { raw: 120, actual: 100, label: '100' },
+      ],
+    },
+  };
+}
+
+let components: ReturnType<typeof mount>[] = [];
+let roots: HTMLElement[] = [];
+
+function mountPanel(props: ComponentProps<typeof DockMeterPanel>) {
+  const t = document.createElement('div');
+  document.body.appendChild(t);
+  roots.push(t);
+  const component = mount(DockMeterPanel, { target: t, props });
+  flushSync();
+  components.push(component);
+  return t;
+}
+
+beforeEach(() => {
+  components = [];
+  roots = [];
+  setCapabilities(makeCaps());
+});
+
+afterEach(() => {
+  components.forEach((c) => unmount(c));
+  roots.forEach((r) => r.remove());
+  components = [];
+  roots = [];
+  clearCapabilities();
+});
+
+const baseProps: ComponentProps<typeof DockMeterPanel> = {
+  sValue: 0,
+  rfPower: 0,
+  swr: 0,
+  alc: 0,
+  txActive: false,
+  meterSource: 'S',
+  onMeterSourceChange: () => {},
+};
+
+/** Returns the bar-fill width (%) for the row whose label matches `label`. */
+function fillPctForLabel(root: HTMLElement, label: string): number {
+  const rows = Array.from(root.querySelectorAll('.dock-row'));
+  const row = rows.find((r) => r.querySelector('.dock-row-label')?.textContent === label);
+  if (!row) throw new Error(`no DockMeterPanel row labelled ${label}`);
+  const fill = row.querySelector('.dock-bar-fill') as HTMLElement;
+  return parseFloat(fill.style.width);
+}
+
+describe('DockMeterPanel structure', () => {
+  it('renders the four meter rows in fixed order S, Po, SWR, ALC', () => {
+    const t = mountPanel(baseProps);
+    const labels = Array.from(t.querySelectorAll('.dock-row .dock-row-label')).map(
+      (el) => el.textContent,
+    );
+    expect(labels).toEqual(['S', 'Po', 'SWR', 'ALC']);
+  });
+});
+
+describe('DockMeterPanel calibrated bar fill (MOR-482)', () => {
+  // The bar fill must agree with the calibrated readout, not raw/255.
+  it('fills the SWR bar to ~100% at the 3.0 full-scale knot', () => {
+    // Ratio 3.0 over a table topping at 3.0 -> full bar.
+    const t = mountPanel({ ...baseProps, swr: 3.0, txActive: true });
+    expect(fillPctForLabel(t, 'SWR')).toBeGreaterThan(95);
+  });
+
+  it('fills the SWR bar to ~67% at ratio 2.0 (2.0/3.0)', () => {
+    const t = mountPanel({ ...baseProps, swr: 2.0, txActive: true });
+    const pct = fillPctForLabel(t, 'SWR');
+    expect(pct).toBeGreaterThan(60);
+    expect(pct).toBeLessThan(70);
+  });
+
+  it('fills the S bar to the shared S9 position at calibrated 0 dB-rel-S9', () => {
+    const t = mountPanel({ ...baseProps, sValue: 0 });
+    const pct = fillPctForLabel(t, 'S');
+    expect(pct).toBeGreaterThan(53);
+    expect(pct).toBeLessThan(56);
+  });
+
+  it('fills the S bar to ~100% at the top calibrated S anchor (+40 dB)', () => {
+    const t = mountPanel({ ...baseProps, sValue: 40 });
+    expect(fillPctForLabel(t, 'S')).toBeGreaterThan(99);
+  });
+
+  it('fills the Po bar to ~100% at full-scale watts', () => {
+    // 100 W of the 100 W top knot -> full bar.
+    const t = mountPanel({ ...baseProps, rfPower: 100, txActive: true });
+    expect(fillPctForLabel(t, 'Po')).toBeGreaterThan(99);
+  });
+
+  it('fills the ALC bar to ~100% at the redline (normalized 1.0)', () => {
+    const t = mountPanel({ ...baseProps, alc: 1.0, txActive: true });
+    expect(fillPctForLabel(t, 'ALC')).toBeGreaterThan(99);
+  });
+});
+
+describe('DockMeterPanel uncalibrated S row (MOR-2705 part 4a)', () => {
+  // The phone portrait TX chip mounts this panel while transmitting
+  // (`MobileRadioLayout.svelte`, `.m-tx-meter`). On an uncalibrated profile
+  // the S row keeps its moving bar but draws no number and no 'raw' word —
+  // a raw count is not an operator reading. Since MOR-2722 part B the TX
+  // rows (Po/SWR/ALC) do the same without a calibration table.
+  function uncalibratedCaps(): Capabilities {
+    const caps = makeCaps();
+    delete caps.meterCalibrations!.s_meter;
+    return caps;
+  }
+
+  it('draws the S bar with no number and no "raw" word on an uncalibrated radio while transmitting', () => {
+    setCapabilities(uncalibratedCaps());
+    const t = mountPanel({ ...baseProps, sValue: 53, rfPower: 50, txActive: true, meterSource: 'S' });
+    const row = t.querySelectorAll('.dock-row')[0];
+    expect(row.querySelector('.dock-row-label')?.textContent).toBe('S');
+    expect(row.querySelector('.dock-row-value')?.textContent).toBe('');
+    expect(row.textContent).not.toContain('raw');
+    expect(fillPctForLabel(t, 'S')).toBeGreaterThan(0);
+    expect(fillPctForLabel(t, 'S')).toBeLessThan(100);
+    // The TX rows keep their values — the Po row still reads watts.
+    expect(t.querySelectorAll('.dock-row')[1].querySelector('.dock-row-value')?.textContent).toBe('50W');
+  });
+
+  it('keeps the S-unit text on a calibrated radio', () => {
+    const t = mountPanel({ ...baseProps, sValue: 0 });
+    expect(t.querySelectorAll('.dock-row')[0].querySelector('.dock-row-value')?.textContent).toBe('S9');
+  });
+});
+
+describe('DockMeterPanel unread S row (MOR-2730)', () => {
+  // The phone's TX chip passes `toVfoProps(...).sValue`, which is NaN while
+  // the S-meter is unread.
+  const txProps: ComponentProps<typeof DockMeterPanel> = {
+    ...baseProps, rfPower: 50, swr: 1.5, alc: 0.5, txActive: true, meterSource: 'S',
+  };
+
+  it('draws no S reading and no S fill while the S-meter is unread', () => {
+    const t = mountPanel({ ...txProps, sValue: Number.NaN });
+    const row = t.querySelectorAll('.dock-row')[0];
+    expect(row.querySelector('.dock-row-label')?.textContent).toBe('S');
+    expect(row.querySelector('.dock-row-value')?.textContent).toBe('');
+    expect(fillPctForLabel(t, 'S')).toBe(0);
+    expect(t.querySelector('.status-tag.source')?.textContent).toBe('S ');
+  });
+
+  it('still draws a read S9 (0 dB relative to S9) as S9', () => {
+    const t = mountPanel({ ...txProps, sValue: 0 });
+    expect(t.querySelectorAll('.dock-row')[0].querySelector('.dock-row-value')?.textContent).toBe('S9');
+    expect(t.querySelector('.status-tag.source')?.textContent).toBe('S S9');
+  });
+});
+
+describe('DockMeterPanel uncalibrated TX rows (MOR-2722 part B)', () => {
+  // A profile with no TX meter calibration tables at all (X6200 class):
+  // every TX row keeps its moving bar but draws no digit and no 'raw'
+  // word — on screen or in the source tag.
+  function noTxCaps(): Capabilities {
+    const caps = makeCaps();
+    delete caps.meterCalibrations!.power;
+    delete caps.meterCalibrations!.swr;
+    delete caps.meterCalibrations!.alc;
+    return caps;
+  }
+
+  it('draws the Po bar with no number and no "raw" word while transmitting, with the source tag naming only the label', () => {
+    setCapabilities(noTxCaps());
+    const t = mountPanel({ ...baseProps, rfPower: 128, txActive: true, meterSource: 'po' });
+    const row = t.querySelectorAll('.dock-row')[1];
+    expect(row.querySelector('.dock-row-label')?.textContent).toBe('Po');
+    expect(row.querySelector('.dock-row-value')?.textContent).toBe('');
+    expect(row.textContent).not.toContain('raw');
+    expect(row.textContent).not.toContain('128');
+    expect(fillPctForLabel(t, 'Po')).toBeGreaterThan(0);
+    expect(fillPctForLabel(t, 'Po')).toBeLessThan(100);
+    const sourceTag = t.querySelector('.status-tag.source')!;
+    expect(sourceTag.textContent?.trim()).toBe('Po');
+    expect(sourceTag.textContent).not.toContain('raw');
+  });
+});

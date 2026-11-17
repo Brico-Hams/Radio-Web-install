@@ -1,0 +1,548 @@
+import SwiftUI
+
+/// Maps meter readings onto the needle's sweep, as a fraction 0.0 (hard
+/// left, needle at rest) ... 1.0 (hard right). Kept as pure static
+/// functions, separate from the drawing, so the anchor points can be
+/// unit-tested and later re-tuned against the real rig's meter without
+/// touching view code.
+///
+/// The anchor fractions mirror the FTX-1's own meter face: S1-S9 occupy
+/// the left ~55% of the sweep (one S unit = 6dB, evenly spaced), the blue
+/// +20/+40/+60 region the rest; the SWR scale compresses non-linearly
+/// toward ∞ the way the printed face does.
+public enum SMeterScale {
+    /// Labeled S-scale tick positions. `blue` marks the over-S9 region,
+    /// drawn in blue like the rig's face.
+    static let sTicks: [(label: String, fraction: Double, blue: Bool)] = [
+        ("1", 0.05, false),
+        ("3", 0.17, false),
+        ("5", 0.29, false),
+        ("7", 0.41, false),
+        ("9", 0.53, false),
+        ("+20", 0.66, true),
+        ("+40", 0.79, true),
+        ("+60", 0.92, true),
+    ]
+
+    /// Labeled SWR-scale tick positions.
+    static let swrTicks: [(label: String, fraction: Double)] = [
+        ("1.0", 0.10),
+        ("1.5", 0.26),
+        ("2", 0.38),
+        ("3", 0.52),
+        ("5", 0.65),
+        ("∞", 0.87),
+    ]
+
+    /// Raw CAT "RM" S-meter value (0-255) -> dB relative to S9. The FTX-1
+    /// manual gives no calibration, so this uses the table hamlib ships for
+    /// the FT-991 family (S0 = -54 dB ... S9 = raw 130 ... +60 dB = 255);
+    /// spot-checked only at the noise floor (raw ~0-6 vs. hamlib's own
+    /// STRENGTH of about -50 dB). Retune the anchors if the Sub meter
+    /// disagrees with the rig's own display on a strong signal.
+    public static func strengthDb(forRaw raw: Int) -> Double {
+        piecewise(Double(raw), anchors: [
+            (0, -54), (12, -48), (27, -42), (40, -36), (55, -30), (65, -24),
+            (80, -18), (95, -12), (112, -6), (130, 0), (150, 10), (172, 20),
+            (190, 30), (220, 40), (240, 50), (255, 60),
+        ])
+    }
+
+    /// RX: signal strength in dB relative to S9 (hamlib "STRENGTH"
+    /// convention) -> needle fraction. nil (no reading) rests the needle.
+    public static func fraction(forStrengthDb db: Double?) -> Double {
+        guard let db else { return 0 }
+        // -54dB = S0 (rest), then linear per S unit up to S9 = 0dB, then
+        // linear per 20dB segment through the anchors above.
+        return piecewise(db, anchors: [
+            (-54, 0.0),
+            (-48, 0.05),  // S1
+            (0, 0.53),    // S9
+            (20, 0.66),
+            (40, 0.79),
+            (60, 0.92),
+        ])
+    }
+
+    /// TX: SWR reading -> needle fraction on the SWR scale. nil rests the
+    /// needle. Clamps at the ∞ tick for anything wildly reflective.
+    public static func fraction(forSWR swr: Double?) -> Double {
+        guard let swr else { return 0 }
+        return piecewise(swr, anchors: [
+            (1.0, 0.10),
+            (1.5, 0.26),
+            (2.0, 0.38),
+            (3.0, 0.52),
+            (5.0, 0.65),
+            (20.0, 0.87),  // effectively ∞
+        ])
+    }
+
+    /// Linear interpolation through sorted (input, output) anchors,
+    /// clamped to the first/last output beyond the ends.
+    private static func piecewise(_ x: Double, anchors: [(x: Double, y: Double)]) -> Double {
+        guard let first = anchors.first, let last = anchors.last else { return 0 }
+        if x <= first.x { return first.y }
+        if x >= last.x { return last.y }
+        for (a, b) in zip(anchors, anchors.dropFirst()) where x <= b.x {
+            let t = (x - a.x) / (b.x - a.x)
+            return a.y + t * (b.y - a.y)
+        }
+        return last.y
+    }
+}
+
+/// How the Mac draws its S-meters (Settings → Appearance → S-Meter):
+/// the backlit analog face, the same face unlit, or a digital bar with a
+/// numeric readout like the iPad's strips.
+public enum SMeterStyle: String, CaseIterable, Sendable {
+    case lighted
+    case unlighted
+    case digital
+
+    public var displayName: String {
+        switch self {
+        case .lighted: String(localized: "sMeterStyle.lighted", bundle: .module)
+        case .unlighted: String(localized: "sMeterStyle.unlighted", bundle: .module)
+        case .digital: String(localized: "sMeterStyle.digital", bundle: .module)
+        }
+    }
+}
+
+/// The rig display's upper-left analog meter, recreated: arc-style S scale
+/// (white S1-S9, blue +20/+40/+60 dB) over an SWR scale (1.0-∞), with a
+/// red needle sweeping both from a pivot below the visible box. Shows
+/// signal strength on the S scale while receiving and the SWR reading on
+/// the SWR scale while transmitting. Shared by the Mac and iPad layouts
+/// (like `VFODisplayBox`, whose dark-box styling this matches).
+public struct SMeterView: View {
+    let smeterDb: Double?
+    let readings: MeterReadings
+    let ptt: Bool
+    /// The Sub VFO's meter: identical face, with its own remembered lower
+    /// scale, like the rig's separate MAIN/SUB METER SW settings.
+    let isSub: Bool
+    /// Whether this meter's receiver is the transmitting side (TX:SUB or
+    /// split puts SUB there — `RigState.subTransmits`). Only that meter
+    /// shows the TX readings while `ptt` is on; the other stays on its S
+    /// scale. The readings themselves are the rig's one transmitter's.
+    let transmits: Bool
+    let style: SMeterStyle
+    /// A receive-only meter (the MyKiwiSDR window's): no TX meter picker
+    /// on tap, and the digital face shows only its S line.
+    let receiveOnly: Bool
+    /// The digital face's accessibility name; nil = MAIN/SUB.
+    let label: String?
+
+    /// Which reading the lower scale shows while transmitting — picked by
+    /// tapping the meter, like the rig (see `MeterSelection`). Default PO,
+    /// same as the rig's.
+    @AppStorage private var selectionRaw: String
+    @State private var showingPicker = false
+
+    public init(smeterDb: Double?, swr: Double?, ptt: Bool, powerWatts: Double? = nil, txMeters: TXMeterReadings? = nil, isSub: Bool = false, transmits: Bool = true, style: SMeterStyle = .lighted, receiveOnly: Bool = false, label: String? = nil) {
+        self.isSub = isSub
+        self.receiveOnly = receiveOnly
+        self.label = label
+        self.transmits = transmits
+        self.style = style
+        _selectionRaw = AppStorage(wrappedValue: MeterSelection.po.rawValue, isSub ? MeterSettings.subKey : MeterSettings.key)
+        self.smeterDb = smeterDb
+        self.readings = MeterReadings(powerWatts: powerWatts, swr: swr, tx: txMeters)
+        self.ptt = ptt
+    }
+
+    private var selection: MeterSelection { MeterSelection(rawValue: selectionRaw) ?? .po }
+
+    private var showsTX: Bool { ptt && transmits && !receiveOnly }
+
+    private var needleFraction: Double {
+        showsTX ? selection.fraction(from: readings) : SMeterScale.fraction(forStrengthDb: smeterDb)
+    }
+
+    public var body: some View {
+        shapedFace
+            .contentShape(Rectangle())
+            .onTapGesture { if !receiveOnly { showingPicker = true } }
+            .popover(isPresented: $showingPicker) {
+                MeterPickerView(selection: selection) {
+                    selectionRaw = $0.rawValue
+                    showingPicker = false
+                }
+            }
+    }
+
+    /// The face at the analog meter's 280:120 shape — except a
+    /// receive-only digital face, a single line that takes the frame it's
+    /// given.
+    @ViewBuilder private var shapedFace: some View {
+        if receiveOnly && style == .digital {
+            face
+        } else {
+            face.aspectRatio(MeterFace.designSize.width / MeterFace.designSize.height, contentMode: .fit)
+        }
+    }
+
+    @ViewBuilder private var face: some View {
+        switch style {
+        case .lighted: analogFace(lit: true)
+        case .unlighted: analogFace(lit: false)
+        case .digital:
+            DigitalMeterFace(
+                label: label ?? (isSub ? "SUB" : "MAIN"),
+                smeterDb: smeterDb,
+                readings: readings,
+                showsTX: showsTX,
+                selection: selection,
+                showsTXLine: !receiveOnly
+            )
+        }
+    }
+
+    private func analogFace(lit: Bool) -> some View {
+        ZStack {
+            Canvas { context, size in
+                MeterFace.draw(in: &context, size: size, lower: selection)
+            }
+            NeedleShape(fraction: needleFraction)
+                .stroke(Color.red, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+                .shadow(color: .black.opacity(0.3), radius: 1.5, x: 1, y: 1)
+        }
+        .animation(.easeOut(duration: 0.4), value: needleFraction)
+        .background { if lit { MeterFace.backlight } else { MeterFace.unlit } }
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .overlay(
+            // Recessed-bezel shading: darkens the rim so the lit face
+            // reads as sitting behind glass.
+            RoundedRectangle(cornerRadius: 8)
+                .strokeBorder(Color.black.opacity(0.55), lineWidth: 3)
+                .blur(radius: 2)
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .strokeBorder(Color.gray.opacity(0.6), lineWidth: 1.5)
+        )
+    }
+}
+
+/// `SMeterStyle.digital`: two lines of the iPad strip's segmented bar,
+/// laid out like the analog face — the S-meter on top, the picked TX meter
+/// (PO/SWR/ALC/…) underneath. The lower line is dim until this meter's
+/// side transmits; then both lines are TX readings: the top one PO (SWR
+/// when PO is the picked meter), so two readings show at once.
+private struct DigitalMeterFace: View {
+    let label: String
+    let smeterDb: Double?
+    let readings: MeterReadings
+    /// Transmitting, and this meter's side is the TX side.
+    let showsTX: Bool
+    let selection: MeterSelection
+    /// False for a receive-only meter: the S line alone.
+    var showsTXLine = true
+
+    /// The top line's meter while transmitting.
+    private var topTXMeter: MeterSelection { selection == .po ? .swr : .po }
+
+    var body: some View {
+        VStack(spacing: 2) {
+            if showsTX {
+                txLine(topTXMeter, active: true)
+            } else {
+                line(
+                    title: "S",
+                    titleColor: .white.opacity(0.6),
+                    readout: BarSMeterView.sUnitText(smeterDb),
+                    bar: BarMeter(
+                        fraction: BarMeter.fraction(forStrengthDb: smeterDb),
+                        ticks: BarMeter.sTicks,
+                        hotFrom: BarMeter.s9Fraction,
+                        litColor: .green
+                    )
+                )
+            }
+            if showsTXLine {
+                txLine(selection, active: showsTX)
+                    .opacity(showsTX ? 1 : 0.45)
+            }
+        }
+        .padding(.horizontal, 6)
+        .padding(.vertical, 4)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(RoundedRectangle(cornerRadius: 8).fill(Color.black))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .strokeBorder(Color.gray.opacity(0.6), lineWidth: 1.5)
+        )
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(String(localized: "barSMeter.meter \(label)", bundle: .module))
+        .accessibilityValue(accessibilityReadout)
+    }
+
+    /// A TX meter's line; inactive = no reading (bar unlit, "—").
+    private func txLine(_ meter: MeterSelection, active: Bool) -> some View {
+        line(
+            title: meter.title,
+            titleColor: active ? .orange : .white.opacity(0.6),
+            readout: active ? BarSMeterView.txReadout(meter, readings) : "—",
+            bar: BarMeter(
+                fraction: active ? BarMeter.fraction(fromFace: meter.fraction(from: readings)) : 0,
+                ticks: meter.ticks.map { ($0.label, BarMeter.fraction(fromFace: $0.fraction)) },
+                hotFrom: 1.1,
+                litColor: .orange
+            )
+        )
+    }
+
+    private func line(title: String, titleColor: Color, readout: String, bar: BarMeter) -> some View {
+        HStack(alignment: .top, spacing: 4) {
+            Text(title)
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(titleColor)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+                .frame(width: 24, alignment: .leading)
+            bar
+            Text(readout)
+                .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                .foregroundStyle(.white)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+                .frame(width: 36, alignment: .trailing)
+        }
+    }
+
+    private var accessibilityReadout: String {
+        guard showsTX else { return BarSMeterView.sUnitText(smeterDb) }
+        return "\(topTXMeter.title) \(BarSMeterView.txReadout(topTXMeter, readings)), \(selection.title) \(BarSMeterView.txReadout(selection, readings))"
+    }
+}
+
+/// The rig's METER selector (manual p.20), recreated as a popover grid.
+private struct MeterPickerView: View {
+    let selection: MeterSelection
+    let onPick: (MeterSelection) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("METER").font(.headline)
+            LazyVGrid(columns: Array(repeating: GridItem(.fixed(70), spacing: 8), count: 3), spacing: 8) {
+                ForEach(MeterSelection.allCases, id: \.self) { item in
+                    Button(item.title) { onPick(item) }
+                        .buttonStyle(.borderedProminent)
+                        .tint(item == selection ? .accentColor : .gray)
+                        .help(item.detail)
+                }
+            }
+        }
+        .padding(14)
+    }
+}
+
+/// Shared geometry + static face drawing for `SMeterView`. Everything is
+/// laid out in a fixed 280x120 design space and scaled to the rendered
+/// size (the view pins its aspect ratio, so the scale stays uniform).
+/// The needle pivots well below the box, giving the shallow-arc "edge
+/// meter" look of the real face.
+private enum MeterFace {
+    static let designSize = CGSize(width: 280, height: 120)
+
+    /// Half-sweep of the needle/scale arc, radians. Chosen so the arc's
+    /// curvature roughly matches the photo of the real face.
+    private static let maxAngle = 17.0 * .pi / 180
+    /// Outer radius reaching the S-numeral row; sized so the sweep spans
+    /// ~92% of the design width.
+    private static let outerRadius = 0.46 * 280 / sin(maxAngle)
+    /// The S-numeral arc sits this far down the box at center sweep.
+    private static let pivot = CGPoint(x: 140, y: 30 + outerRadius)
+
+    /// Angle from vertical for a needle/tick fraction (0 = hard left).
+    private static func angle(for fraction: Double) -> Double {
+        maxAngle * (2 * fraction - 1)
+    }
+
+    /// Design-space point at `fraction` along the sweep, `radialOffset`
+    /// inward from the S-numeral arc (larger offset = lower on screen).
+    static func point(fraction: Double, radialOffset: Double) -> CGPoint {
+        let a = angle(for: fraction)
+        let r = outerRadius - radialOffset
+        return CGPoint(x: pivot.x + r * sin(a), y: pivot.y - r * cos(a))
+    }
+
+    /// Incandescent-lamp look of a backlit analog meter (modeled on an MFJ
+    /// SWR/wattmeter face): a warm amber hotspot low and centered, where
+    /// the lamp sits, falling off to pale cream toward the edges.
+    static var backlight: some View {
+        RadialGradient(
+            stops: [
+                .init(color: Color(red: 1.00, green: 0.88, blue: 0.58), location: 0.0),
+                .init(color: Color(red: 1.00, green: 0.94, blue: 0.78), location: 0.4),
+                .init(color: Color(red: 0.96, green: 0.92, blue: 0.84), location: 0.75),
+                .init(color: Color(red: 0.88, green: 0.85, blue: 0.79), location: 1.0),
+            ],
+            center: UnitPoint(x: 0.5, y: 0.8),
+            startRadius: 0,
+            endRadius: 190
+        )
+    }
+
+    /// The same face with the lamp off: flat, slightly grey paper, a touch
+    /// darker toward the bottom where the bezel shades it.
+    static var unlit: some View {
+        LinearGradient(
+            colors: [
+                Color(red: 0.86, green: 0.85, blue: 0.82),
+                Color(red: 0.78, green: 0.77, blue: 0.74),
+            ],
+            startPoint: .top,
+            endPoint: .bottom
+        )
+    }
+
+    static func draw(in context: inout GraphicsContext, size: CGSize, lower: MeterSelection) {
+        let scale = size.width / designSize.width
+        context.scaleBy(x: scale, y: scale)
+
+        // Dark ink on the lit face (printed scale, not glowing text).
+        let blue = Color(red: 0.10, green: 0.25, blue: 0.75)
+        let white = Color(red: 0.10, green: 0.08, blue: 0.06)
+
+        // Row placement, as radial offsets inward from the S-numeral arc.
+        let sTickSpan = (14.0, 26.0)
+        let swrLabelOffset = 40.0
+        let swrTickSpan = (54.0, 64.0)
+
+        func tick(_ fraction: Double, span: (Double, Double), color: Color, width: Double) {
+            var path = Path()
+            path.move(to: point(fraction: fraction, radialOffset: span.0))
+            path.addLine(to: point(fraction: fraction, radialOffset: span.1))
+            context.stroke(path, with: .color(color), lineWidth: width)
+        }
+
+        // S scale: labeled major ticks, unlabeled minors halfway between.
+        // Row-name labels sit at a fixed left margin (leading-anchored, at
+        // the arc's left-edge height) rather than on the arc itself, which
+        // would center them past the box's left edge and clip them.
+        context.draw(
+            Text("S").font(.system(size: 13, weight: .bold, design: .rounded)).italic().foregroundStyle(white),
+            at: CGPoint(x: 6, y: point(fraction: 0, radialOffset: 2).y), anchor: .leading
+        )
+        for (label, fraction, isBlue) in SMeterScale.sTicks {
+            let color = isBlue ? blue : white
+            context.draw(
+                Text(label).font(.system(size: 11, weight: .semibold, design: .rounded)).foregroundStyle(color),
+                at: point(fraction: fraction, radialOffset: 0)
+            )
+            tick(fraction, span: sTickSpan, color: color, width: 2)
+        }
+        for (a, b) in zip(SMeterScale.sTicks, SMeterScale.sTicks.dropFirst()) {
+            let mid = (a.fraction + b.fraction) / 2
+            tick(mid, span: (sTickSpan.0, sTickSpan.1 - 4), color: b.blue ? blue : white, width: 1)
+        }
+        context.draw(
+            Text("dB").font(.system(size: 10, weight: .semibold, design: .rounded)).foregroundStyle(blue),
+            at: point(fraction: 1.005, radialOffset: 0)
+        )
+
+        // Lower scale (the rig's METER selection).
+        context.draw(
+            Text(lower.title).font(.system(size: 10, weight: .bold, design: .rounded)).foregroundStyle(white),
+            at: CGPoint(x: 6, y: point(fraction: 0, radialOffset: swrLabelOffset - 2).y), anchor: .leading
+        )
+        if let unit = lower.unit {
+            context.draw(
+                Text(unit).font(.system(size: 10, weight: .semibold, design: .rounded)).foregroundStyle(white),
+                at: point(fraction: 0.97, radialOffset: swrLabelOffset)
+            )
+        }
+        for (label, fraction) in lower.ticks {
+            context.draw(
+                Text(label).font(.system(size: 10, weight: .semibold, design: .rounded)).foregroundStyle(white),
+                at: point(fraction: fraction, radialOffset: swrLabelOffset)
+            )
+            tick(fraction, span: swrTickSpan, color: white, width: 1.5)
+        }
+    }
+
+    /// Needle endpoints in design space — from below the bottom edge up
+    /// into the S tick row.
+    static func needlePoints(fraction: Double) -> (base: CGPoint, tip: CGPoint) {
+        (point(fraction: fraction, radialOffset: outerRadius - pivot.y + designSize.height + 10),
+         point(fraction: fraction, radialOffset: 10))
+    }
+}
+
+/// The meter needle as its own `Shape` so SwiftUI can animate the sweep
+/// (`Canvas` alone doesn't animate) — `fraction` is the animatable datum.
+private struct NeedleShape: Shape {
+    var fraction: Double
+
+    var animatableData: Double {
+        get { fraction }
+        set { fraction = newValue }
+    }
+
+    func path(in rect: CGRect) -> Path {
+        let sx = rect.width / MeterFace.designSize.width
+        let sy = sx
+        let (base, tip) = MeterFace.needlePoints(fraction: fraction)
+        var path = Path()
+        path.move(to: CGPoint(x: rect.minX + base.x * sx, y: rect.minY + base.y * sy))
+        path.addLine(to: CGPoint(x: rect.minX + tip.x * sx, y: rect.minY + tip.y * sy))
+        return path
+    }
+}
+
+#Preview("RX S9+20") {
+    SMeterView(smeterDb: 20, swr: nil, ptt: false)
+        .frame(width: 280)
+        .padding()
+}
+
+#Preview("RX quiet") {
+    SMeterView(smeterDb: -48, swr: nil, ptt: false)
+        .frame(width: 280)
+        .padding()
+}
+
+#Preview("TX SWR 1.5") {
+    SMeterView(smeterDb: nil, swr: 1.5, ptt: true)
+        .frame(width: 280)
+        .padding()
+}
+
+#Preview("Unlighted") {
+    SMeterView(smeterDb: -12, swr: nil, ptt: false, style: .unlighted)
+        .frame(width: 280)
+        .padding()
+}
+
+#Preview("Digital") {
+    SMeterView(smeterDb: 12, swr: nil, ptt: false, style: .digital)
+        .frame(width: 190)
+        .padding()
+}
+
+#Preview("Digital TX") {
+    SMeterView(smeterDb: nil, swr: 1.4, ptt: true, powerWatts: 10, style: .digital)
+        .frame(width: 190)
+        .padding()
+}
+
+#Preview("Digital, other side transmitting") {
+    SMeterView(smeterDb: -30, swr: 1.4, ptt: true, powerWatts: 10, isSub: true, transmits: false, style: .digital)
+        .frame(width: 190)
+        .padding()
+}
+
+#Preview("Sub") {
+    SMeterView(smeterDb: -20, swr: nil, ptt: false, isSub: true)
+        .frame(width: 280)
+        .padding()
+}
+
+#Preview("No reading") {
+    SMeterView(smeterDb: nil, swr: nil, ptt: false)
+        .frame(width: 280)
+        .padding()
+}

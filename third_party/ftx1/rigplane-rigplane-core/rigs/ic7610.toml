@@ -1,0 +1,1598 @@
+# Rig Configuration — IC-7610
+# This file defines the IC-7610 radio profile in TOML format.
+# See _schema.md for field documentation.
+#
+# Source: IC-7610 CI-V Reference Guide (Rev. 4, Sep 2025)
+#         wfview IC-7610.rig (v2.10)
+#         Hardware testing (firmware 1.42)
+
+[radio]
+id = "icom_ic7610"
+model = "IC-7610"
+civ_addr = 0x98
+default_baud = 115200
+receiver_count = 2
+has_lan = true
+has_wifi = false
+
+[identity]
+# Native 19 00 model token used by wfview's transceiver-ID decoder/rig definition.
+expected_ids = ["98"]
+
+[audio]
+# Direct IC-7610 LAN is PCM-first. Opus is only allowed as a browser
+# consumer transport after the server receives radio-native PCM.
+# Hardware probe: 2026-05-08, firmware 1.42,
+# `rigplane audio probe --candidate-cooldown 35 --retry-rejected 1`.
+# Full-fidelity 48000 Hz stereo PCM is valid. It fragments one 20 ms frame
+# across multiple UDP payloads (1364 + 1364 + 1112 audio bytes); make sure
+# VPN/tunnel MTU settings preserve those fragments, or override the sample
+# rate to 16000 Hz for constrained paths.
+codec_preference = ["PCM_2CH_16BIT", "PCM_1CH_16BIT", "ULAW_2CH", "ULAW_1CH"]
+tx_codec = "PCM_1CH_16BIT"
+default_sample_rate_hz = 48000
+sample_rate_by_codec = { PCM_2CH_16BIT = 48000, PCM_1CH_16BIT = 48000, ULAW_2CH = 48000, ULAW_1CH = 48000 }
+browser_rx_transport = "auto"
+browser_rx_transcode_to_opus = true
+
+[usb]
+# Field Windows device list, 2026-10: the internal hub carries two
+# Silicon Labs CP210x serial functions (instance ids ..._A and ..._B).
+# No audio_codec: no capture of the IC-7610 codec exists yet.
+serial_functions = [{ vid = "10C4", pid = "EA60" }, { vid = "10C4", pid = "EA60" }]
+
+[spectrum]
+seq_max = 15
+amp_max = 200
+data_len_max = 689
+
+[scope]
+ref_min_db = -30.0
+ref_max_db = 10.0
+ref_step_db = 0.5
+span_presets_hz = [2500, 5000, 10000, 25000, 50000, 100000, 250000, 500000]
+# MOR-4385: the 27 15 numbers are ±half-widths — this radio's own CI-V
+# Reference Guide p.14 ("Scope waveform data") documents that the
+# center-mode payload carries the center and the SPAN value itself, with
+# the display spanning center ± value (quoted in runtime/_civ_rx.py:
+# CivRuntime._publish_scope_span_observation).
+span_preset_semantics = "half_width"
+# IC-7610 CI-V Reference Guide, printed p15, 27 1E fixed-edge table.
+# https://www.icomjapan.com/uploads/support/manual/IC-7610_ENG_CI-V_4.pdf
+# The radio ignores digits below 1 kHz.
+fixed_edge_step_hz = 1000
+fixed_edge_ranges = [
+    { range_index = 1, start_hz = 30000, end_hz = 1600000 },
+    { range_index = 2, start_hz = 1600000, end_hz = 2000000 },
+    { range_index = 3, start_hz = 2000000, end_hz = 6000000 },
+    { range_index = 4, start_hz = 6000000, end_hz = 8000000 },
+    { range_index = 5, start_hz = 8000000, end_hz = 11000000 },
+    { range_index = 6, start_hz = 11000000, end_hz = 15000000 },
+    { range_index = 7, start_hz = 15000000, end_hz = 20000000 },
+    { range_index = 8, start_hz = 20000000, end_hz = 22000000 },
+    { range_index = 9, start_hz = 22000000, end_hz = 26000000 },
+    { range_index = 10, start_hz = 26000000, end_hz = 30000000 },
+    { range_index = 11, start_hz = 30000000, end_hz = 45000000 },
+    { range_index = 12, start_hz = 45000000, end_hz = 60000000 },
+]
+
+# ── Capabilities ─────────────────────────────────────────────────
+# Feature tags determine which UI panels and controls are rendered.
+# Grouped by functional area.
+
+[capabilities]
+features = [
+    # Receiver
+    "audio",
+    "dual_rx",
+    "dual_watch",
+    # LAN audio stereo routing via Phones L/R Mix (0x1A 05 00 72).
+    # IC-7610-only menu item — do NOT add to IC-9700 or FTX-1 even though
+    # they also have receiver_count=2 (#787 / #792 / #794).
+    "lan_dual_rx_audio_routing",
+    "af_level",
+    "rf_gain",
+    "squelch",
+    # RF front end
+    "attenuator",
+    "preamp",
+    "digisel",
+    # DIGI-SEL Shift (0x14 0x13 cmd29 level) is a distinct CI-V command from
+    # the 0x16 0x4E toggle above — IC-7610 has both (see get_digisel_shift/
+    # set_digisel_shift in [commands] below). Declared separately so the
+    # control handler can gate set_digisel_shift on its own tag instead of
+    # the shared "digisel" one (MOR-1544).
+    "digisel_shift",
+    "ip_plus",
+    # Antenna
+    "antenna",
+    "rx_antenna",
+    # DSP / Noise
+    "nb",
+    "nr",
+    "notch",
+    "apf",
+    "twin_peak",
+    # Filter
+    "pbt",
+    "filter_width",
+    "filter_shape",
+    # TX
+    "tx",
+    "split",
+    "vox",
+    "compressor",
+    "monitor",
+    "drive_gain",
+    "ssb_tx_bw",
+    # CW
+    "cw",
+    "break_in",
+    # RIT / XIT
+    "rit",
+    "xit",
+    # Tuner
+    "tuner",
+    # Metering
+    "meters",
+    # Scope
+    "scope",
+    # Tone: the IC-7610 (HF/6m) has no FM-repeater CTCSS tone feature, so the
+    # repeater-tone / TSQL family is intentionally NOT declared (MOR-661).
+    # Data
+    "data_mode",
+    # Modulation input routing — USB/LAN/DATA MOD source select (1A 05
+    # 0089-0094). Gates the mod_input.set RMVR guard behind the "web voice
+    # TX = noise" surface (DATA-OFF MOD must be LAN, not MIC; MOR-678).
+    "mod_input_routing",
+    # AGC
+    "agc",
+    # System
+    "power_control",
+    "dial_lock",
+    "scan",
+    "bsr",
+    "main_sub_tracking",
+    "tuning_step",
+    "band_edge",
+    "xfc",
+    # System
+    "system_settings",
+    # Built-in CI-V 0x13 announcement readback (get_speech below).
+    "speech",
+]
+# MOR-2467: the IC-7610 front panel wires RF gain and squelch as one physical
+# concentric knob, so it declares the combined control model introduced by
+# MOR-1447 leg 2 (same as rigs/ic7300.toml).
+rf_sql_control_model = "combined"
+
+[state_acquisition]
+provider = "icom_civ"
+default_cadence_seconds = 2.0
+default_freshness_ttl_seconds = 8.0
+default_reconciliation_priority = "unsolicited"
+adaptive_decay = true
+adaptive_decay_idle_multiplier = 4.0
+adaptive_decay_max_cadence_seconds = 30.0
+external_cat_pause = "pause_polling"
+meter_coalescing_window_seconds = 0.2
+
+[state_acquisition.capabilities]
+unsolicited_push = [
+    "receiver.main.active.freq_mode.freq_hz",
+    "receiver.main.active.freq_mode.mode",
+    "global.tx_state.ptt",
+]
+polling_only = [
+    "global.slow_state.active",
+    # MOR-496: the IC-7610 does NOT emit unsolicited 0x1C/00 transceive frames,
+    # so ptt must be regularly polled or the v2 UI never sees front-panel TX.
+    # ptt stays in unsolicited_push + command_response_observable +
+    # supported_controls (web-initiated PTT optimistic behavior unchanged); the
+    # loader unions all path lists into one capability with both polling=True
+    # and unsolicited_push=True, so listing it here only adds the poll hook.
+    "global.tx_state.ptt",
+    "global.operator_controls.rit_freq",
+    "global.tx_state.rit_on",
+    "global.tx_state.rit_tx",
+    "receiver.main.operator_controls.af_level",
+    "receiver.main.operator_controls.rf_gain",
+    "receiver.main.operator_controls.squelch",
+    "receiver.main.operator_controls.att",
+    "receiver.main.operator_controls.preamp",
+    "receiver.sub.operator_controls.af_level",
+    "receiver.sub.operator_controls.rf_gain",
+    "receiver.sub.operator_controls.squelch",
+    "receiver.sub.operator_controls.att",
+    "receiver.sub.operator_controls.preamp",
+    "receiver.main.active.freq_mode.freq_hz",
+    "receiver.main.active.freq_mode.mode",
+    "receiver.sub.active.freq_mode.freq_hz",
+    "receiver.sub.active.freq_mode.mode",
+    "receiver.main.active.freq_mode.filter_width",
+    "receiver.sub.active.freq_mode.filter_width",
+    "receiver.main.operator_toggles.digisel",
+    "receiver.main.operator_toggles.ipplus",
+    "receiver.main.operator_toggles.nb",
+    "receiver.main.operator_toggles.nr",
+    "receiver.main.operator_toggles.auto_notch",
+    "receiver.main.operator_toggles.manual_notch",
+    "receiver.main.operator_toggles.twin_peak_filter",
+    "receiver.main.operator_controls.agc",
+    "receiver.main.operator_controls.audio_peak_filter",
+    "receiver.sub.operator_toggles.digisel",
+    "receiver.sub.operator_toggles.ipplus",
+    "receiver.sub.operator_toggles.nb",
+    "receiver.sub.operator_toggles.nr",
+    "receiver.sub.operator_toggles.auto_notch",
+    "receiver.sub.operator_toggles.manual_notch",
+    "receiver.sub.operator_toggles.twin_peak_filter",
+    "receiver.sub.operator_controls.agc",
+    "receiver.sub.operator_controls.audio_peak_filter",
+    "receiver.main.operator_controls.nr_level",
+    "receiver.main.operator_controls.nb_level",
+    "receiver.main.operator_controls.pbt_inner",
+    "receiver.main.operator_controls.pbt_outer",
+    "receiver.main.operator_controls.apf_type_level",
+    "receiver.sub.operator_controls.nr_level",
+    "receiver.sub.operator_controls.nb_level",
+    "receiver.sub.operator_controls.pbt_inner",
+    "receiver.sub.operator_controls.pbt_outer",
+    "receiver.sub.operator_controls.apf_type_level",
+    "global.operator_controls.power_level",
+    "global.operator_controls.mic_gain",
+    "global.operator_controls.compressor_level",
+    "global.operator_controls.monitor_gain",
+    "global.operator_controls.vox_gain",
+    "global.operator_controls.anti_vox_gain",
+    "global.operator_controls.cw_pitch",
+    "global.operator_controls.key_speed",
+    "global.tx_state.compressor_on",
+    "global.tx_state.monitor_on",
+    "global.tx_state.vox_on",
+    "receiver.main.operator_controls.agc_time_constant",
+    "receiver.sub.operator_controls.agc_time_constant",
+    "global.tx_state.split",
+    "global.tx_state.dual_watch",
+    # MOR-2540: the TX target is the radio's own answer to CI-V 1C 03 ("Read
+    # transmit frequency"), polled on the get_tx_target getter declared below.
+    # This main_sub radio deliberately carries no [vfo] readback key, so the
+    # RadioPoller derivation (selected_unselected-only) never writes the field
+    # here -- this poll is the field's single producer.
+    "global.tx_state.tx_target",
+    "global.operator_controls.tuner_status",
+    # MOR-1491 (field-policy membership wave, profile parity): filter_shape
+    # (CI-V 0x16 0x56). docs/validation/cat-audits/ic7610.md documents this
+    # as S/R (``filter_shape.presence`` ✅), and rigs/ic7610.toml's own
+    # [commands] table already carries get/set_filter_shape — this only adds
+    # state_acquisition membership. Added to polling_only (not the new
+    # IC-7300 command_response/priming shape) to match every sibling 0x16
+    # DSP field already established on this profile above (e.g.
+    # audio_peak_filter).
+    "receiver.main.operator_controls.filter_shape",
+    "receiver.sub.operator_controls.filter_shape",
+    # MOR-1492 (field-policy membership wave, profile parity): notch_filter
+    # (14-0D) / manual_notch_width (16-57) — same rationale/sourcing as
+    # filter_shape above (documented S/R, already in [commands]/[notch]).
+    # notch_filter reclassified receiver-scoped under MOR-1548: the [cmd29]
+    # route below carries 0x14 0x0D specifically because notch position is
+    # per-receiver on this rig (dual-RX independence) — a verifier finding
+    # on PR #2461 caught the observation side still filing it as global,
+    # letting a SUB readback clobber MAIN's fact.
+    "receiver.main.operator_controls.notch_filter",
+    "receiver.sub.operator_controls.notch_filter",
+    "receiver.main.operator_controls.manual_notch_width",
+    "receiver.sub.operator_controls.manual_notch_width",
+    # MOR-1493 (field-policy membership wave, profile parity): break_in
+    # (16-47) / break_in_delay (14-0F) — same rationale/sourcing as above
+    # (documented S/R, already in [commands]/[break_in]). rit_freq/rit_on/
+    # rit_tx/key_speed/cw_pitch/audio_peak_filter/twin_peak_filter are
+    # already polled on this profile (see polling_only above) -- no addition
+    # needed for those.
+    "global.operator_controls.break_in",
+    "global.operator_controls.break_in_delay",
+    # MOR-2590: vd and id are polled meters, not stream_like_meters: the
+    # owner's 2026-09-24 decision (MOR-2574) puts vd in the setting class and
+    # id in the tx_meter class, and a stream-like meter is held to a cadence
+    # of at most 0.4 s and to a coalescing window by
+    # test_known_profiles_stream_like_meters_use_fast_non_decaying_policies.
+    "global.meters.vd",
+    "global.meters.id",
+    "scope_controls.global.display.receiver",
+    "scope_controls.global.display.dual",
+    "scope_controls.global.display.mode",
+    "scope_controls.global.display.span",
+    "scope_controls.global.display.edge",
+    "scope_controls.global.display.hold",
+    "scope_controls.global.display.ref_db",
+    "scope_controls.global.display.speed",
+    "scope_controls.global.display.during_tx",
+    "scope_controls.global.display.center_type",
+    "scope_controls.global.display.vbw_narrow",
+    "scope_controls.global.display.fixed_edge",
+    "scope_controls.global.display.rbw",
+]
+startup_optional = [
+    "scope_controls.global.display.receiver",
+    "scope_controls.global.display.dual",
+    "scope_controls.global.display.mode",
+    "scope_controls.global.display.span",
+    "scope_controls.global.display.edge",
+    "scope_controls.global.display.hold",
+    "scope_controls.global.display.ref_db",
+    "scope_controls.global.display.speed",
+    "scope_controls.global.display.during_tx",
+    "scope_controls.global.display.center_type",
+    "scope_controls.global.display.vbw_narrow",
+    "scope_controls.global.display.fixed_edge",
+    "scope_controls.global.display.rbw",
+    # MOR-2733: on the bench the radio refused MAIN's filter-shape read with a
+    # bare NG while MAIN was in RTTY, and answered SUB's in USB. Neither path
+    # holds the listener; both stay in polling_only above.
+    "receiver.main.operator_controls.filter_shape",
+    "receiver.sub.operator_controls.filter_shape",
+]
+stream_like_meters = [
+    "receiver.main.meters.s_meter",
+    "global.meters.power",
+    "global.meters.swr",
+    "global.meters.alc",
+    "global.meters.comp",
+]
+command_response_observable = [
+    "receiver.main.active.freq_mode.freq_hz",
+    "receiver.main.active.freq_mode.mode",
+    "receiver.sub.active.freq_mode.freq_hz",
+    "receiver.sub.active.freq_mode.mode",
+    "global.slow_state.active",
+    "global.operator_controls.rit_freq",
+    "global.tx_state.ptt",
+    "global.tx_state.rit_on",
+    "global.tx_state.rit_tx",
+]
+supported_controls = [
+    "receiver.main.active.freq_mode.freq_hz",
+    "receiver.main.active.freq_mode.mode",
+    "receiver.sub.active.freq_mode.freq_hz",
+    "receiver.sub.active.freq_mode.mode",
+    "global.tx_state.ptt",
+]
+
+# MOR-2590: a pollable path with no entry below takes its acquisition-class
+# policy (RadioAcquisitionProfile.policy_for). An entry overrides its class
+# and says why in `reason`.
+[state_acquisition.field_policies."receiver.main.meters.s_meter"]
+reason = "keeps a 2.0 s TTL: IC-7610 S-meter readings arrived about 1 s apart and a 0.8 s TTL left the meter stale at S0 (commit 8a64942f); a stream-like meter keeps the coalescing window"
+cadence_seconds = 0.3
+freshness_ttl_seconds = 2.0
+adaptive_decay = false
+meter_coalescing_window_seconds = 0.2
+
+# MOR-2540 (Po/SWR/ALC/COMP polled during RX): measured on a live IC-7610
+# over LAN (core 3.0.0b3, 2026-09-22) -- the four 0x15 TX meters were
+# cadence-polled at 0.2s while receiving, the oversubscribed scheduler (~28
+# CI-V commands/s at the 35 ms LAN pacing) flipped their freshness
+# fresh<->stale, and the Station Meters strip blinked. These meters are
+# meaningful only while transmitting, so they carry the same gating shape as
+# rigs/ic7300.toml's MOR-1485/MOR-2425 block and rigs/ftx1.toml: `tx_only =
+# true` makes AcquisitionScheduler.due_requests skip the cadence group
+# entirely while PTT reads false (zero steady-state RX cost), and the
+# `available_when` clause declares them absent while `global.tx_state.ptt`
+# reads false so StateFreshnessService.tick discards the last TX values on
+# dekey.
+[state_acquisition.field_policies."global.meters.power"]
+reason = "available_when: absent while PTT reads false, so the last TX reading is discarded on dekey (MOR-2540); a stream-like meter keeps the coalescing window"
+cadence_seconds = 0.25
+freshness_ttl_seconds = 2.0
+adaptive_decay = false
+meter_coalescing_window_seconds = 0.2
+tx_only = true
+available_when = [
+    { field = "global.tx_state.ptt", equals = true },
+]
+
+[state_acquisition.field_policies."global.meters.swr"]
+reason = "available_when: absent while PTT reads false, so the last TX reading is discarded on dekey (MOR-2540); a stream-like meter keeps the coalescing window"
+cadence_seconds = 0.25
+freshness_ttl_seconds = 2.0
+adaptive_decay = false
+meter_coalescing_window_seconds = 0.2
+tx_only = true
+available_when = [
+    { field = "global.tx_state.ptt", equals = true },
+]
+
+[state_acquisition.field_policies."global.meters.alc"]
+reason = "available_when: absent while PTT reads false, so the last TX reading is discarded on dekey (MOR-2540); a stream-like meter keeps the coalescing window"
+cadence_seconds = 0.25
+freshness_ttl_seconds = 2.0
+adaptive_decay = false
+meter_coalescing_window_seconds = 0.2
+tx_only = true
+available_when = [
+    { field = "global.tx_state.ptt", equals = true },
+]
+
+[state_acquisition.field_policies."global.meters.comp"]
+reason = "available_when: absent while PTT reads false, so the last TX reading is discarded on dekey (MOR-2540); a stream-like meter keeps the coalescing window"
+cadence_seconds = 0.25
+freshness_ttl_seconds = 2.0
+adaptive_decay = false
+meter_coalescing_window_seconds = 0.2
+tx_only = true
+available_when = [
+    { field = "global.tx_state.ptt", equals = true },
+]
+
+[state_acquisition.field_policies."global.meters.id"]
+reason = "available_when: absent while PTT reads false, so the last TX reading is discarded on dekey, as for Po/SWR/ALC/COMP (MOR-2540)"
+cadence_seconds = 0.25
+freshness_ttl_seconds = 2.0
+adaptive_decay = false
+tx_only = true
+available_when = [
+    { field = "global.tx_state.ptt", equals = true },
+]
+
+[state_acquisition.field_policies."global.tx_state.tx_target"]
+reason = "TUNE fails closed while tx_target is not FRESH, so its 4.0 s TTL blocks TUNE within 4 s of the 1C 03 readings stopping (MOR-2540)"
+cadence_seconds = 1.0
+freshness_ttl_seconds = 4.0
+adaptive_decay = false
+
+# MOR-2748: the IC-7610 Basic Manual ("Selecting the IF filter shape: Set the
+# operating mode to SSB or CW") restricts the DSP IF filter shape read to
+# SSB/CW modes, and the MOR-2733 bench check measured it refused with a bare
+# NG while MAIN was in RTTY and answered in USB. The data variants carry the
+# same mode values with `data_mode` separating them, so the membership list
+# below keeps the data modes covered. cadence sits at the ON_DEMAND panel
+# bound (5.0 s; the path is an on-demand member of the operator set), TTL and
+# adaptive match the SETTING class this path resolves to without an override
+# (never expires / no adaptive decay), so the entry only adds the availability
+# clause.
+[state_acquisition.field_policies."receiver.main.operator_controls.filter_shape"]
+reason = "available_when: the IC-7610 Basic Manual says \"Set the operating mode to SSB or CW\" before selecting the IF filter shape, and the MOR-2733 bench refusal of the 16 56 read in RTTY (bare NG) matches that clause; gated on MAIN's own mode (MOR-2748)"
+cadence_seconds = 5.0
+freshness_ttl_seconds = "never"
+adaptive_decay = false
+available_when = [
+    { field = "receiver.main.active.freq_mode.mode", in = ["USB", "LSB", "CW", "CW-R"] },
+]
+
+[state_acquisition.field_policies."receiver.sub.operator_controls.filter_shape"]
+reason = "available_when: same Basic Manual clause and bench refusal as MAIN, gated on SUB's own mode (MOR-2748); the data variants keep the same mode values with data_mode separating them"
+cadence_seconds = 5.0
+freshness_ttl_seconds = "never"
+adaptive_decay = false
+available_when = [
+    { field = "receiver.sub.active.freq_mode.mode", in = ["USB", "LSB", "CW", "CW-R"] },
+]
+
+# ── Parameterized Capabilities ───────────────────────────────────
+
+[attenuator]
+# CI-V 0x11: 16 discrete steps, 3 dB each (verified from CI-V PDF p.4)
+values = [0, 3, 6, 9, 12, 15, 18, 21, 24, 27, 30, 33, 36, 39, 42, 45]
+
+[preamp]
+# CI-V 0x16 0x02: 0=OFF, 1=P.AMP1, 2=P.AMP2
+values = [0, 1, 2]
+
+[agc]
+# CI-V 0x16 0x12: 1=FAST, 2=MID, 3=SLOW, NO OFF (MOR-1522).
+modes = [1, 2, 3]
+labels = { "1" = "FAST", "2" = "MID", "3" = "SLOW" }
+
+[scan_types]
+# CI-V 0x0E family: source IC-7610 CI-V Reference Guide (A7380-7EX-2,
+# May.2021) p.3 -- the guide's own valid-type list for this radio
+# (01,02,03,12,22,23,13) includes 0x13 ("Start a Fine dF scan"), absent
+# from the old code-level VALID_SCAN_TYPES frozenset this domain replaces
+# (MOR-2007 ruling 4). Only 0x24 ("Mode Select scan") is IC-705-specific
+# and not in this guide.
+values = [0x01, 0x02, 0x03, 0x12, 0x13, 0x22, 0x23]
+
+[scan_resume]
+# CI-V 0x0E family: source IC-7610 CI-V Reference Guide (A7380-7EX-2,
+# May.2021) p.3 -- documents only 0x0E D0/D3 (2 states), not the D0-D3 (4
+# states) the old code-level VALID_SCAN_RESUME frozenset accepted on every
+# radio (MOR-2007 ruling 4).
+values = [0xD0, 0xD3]
+
+[antenna]
+# CI-V 0x12: 0x00=ANT1, 0x01=ANT2 (each with RX ANT sub-data)
+# CI-V 0x16 0x53: RX-I/O antenna connector (separate)
+# ant_modes (OFF/Manual/Auto) are UI labels. Do not confuse with 0x1A 0x05 0x00 0x89 — that menu address is USB Mod Level (wfview IC-7610.rig).
+tx_count = 2
+has_rx_ant = true
+ant_modes = ["off", "manual", "auto"]
+
+[apf]
+# CI-V 0x16 0x32: 0=OFF, 1=WIDE(320Hz), 2=MID(160Hz), 3=NAR(80Hz)
+# IC-7300 does not declare APF; this four-value APF domain is IC-7610-specific.
+values = [0, 1, 2, 3]
+labels = { "0" = "OFF", "1" = "WIDE", "2" = "MID", "3" = "NAR" }
+
+[notch]
+# CI-V 0x16 0x57: Manual notch width
+# 0=WIDE, 1=MID, 2=NAR
+width_values = [0, 1, 2]
+width_labels = { "0" = "WIDE", "1" = "MID", "2" = "NAR" }
+
+[ssb_tx_bw]
+# CI-V 0x16 0x58: SSB TX bandwidth
+# 0=WIDE, 1=MID, 2=NAR
+values = [0, 1, 2]
+labels = { "0" = "WIDE", "1" = "MID", "2" = "NAR" }
+
+[filter_shape]
+# CI-V 0x16 0x56: DSP IF filter type (docs/validation/cat-audits/ic7610.md
+# "16 56 DSP IF filter type" S/R; the [commands] get/set_filter_shape entry
+# below carries the same 0=SHARP/1=SOFT comment).
+values = [0, 1]
+labels = { "0" = "SHARP", "1" = "SOFT" }
+
+[break_in]
+# CI-V 0x16 0x47: 0=OFF, 1=Semi, 2=Full
+values = [0, 1, 2]
+labels = { "0" = "OFF", "1" = "SEMI", "2" = "FULL" }
+
+[rit]
+# CI-V 0x21 0x00: ±9.999 kHz. The operator-facing domain is [controls.rit]
+# (±9999 Hz, 1 Hz steps per the shared CI-V builder, MOR-1883); nothing
+# reads range_hz.
+range_hz = 9999
+
+[cw]
+# CI-V 0x14 0x09: CW pitch 300-900 Hz (5 Hz steps)
+# CI-V 0x14 0x0C: Key speed 6-48 WPM
+# CI-V 0x1A 0x05 0x02 0x28: Dash ratio 2.8-4.5 (28-45)
+pitch_min_hz = 300
+pitch_max_hz = 900
+speed_min_wpm = 6
+speed_max_wpm = 48
+dash_ratio_min = 28
+dash_ratio_max = 45
+
+[nb]
+# CI-V 0x1A 0x05 0x02 0x90: NB depth 0-9 (maps to 1-10)
+# CI-V 0x1A 0x05 0x02 0x91: NB width 0-255
+depth_min = 0
+depth_max = 9
+width_min = 0
+width_max = 255
+
+[power]
+max_watts = 100
+
+[modes]
+list = ["USB", "LSB", "CW", "CW-R", "AM", "FM", "RTTY", "RTTY-R", "PSK", "PSK-R"]
+# MOR-3679: the CW modes, named once here for every client.
+families = { cw = ["CW", "CW-R"] }
+
+[data_mode]
+# CI-V 0x1A 0x06: DATA sub-mode (0=OFF, 1=DATA1, 2=DATA2, 3=DATA3)
+# IC-7610 has 3 DATA modes with separate mod input sources
+count = 3
+labels = { "0" = "OFF", "1" = "D1", "2" = "D2", "3" = "D3" }
+
+# Modulation input sources available for each DATA mode
+# Each data mode (OFF, D1, D2, D3) can select from these inputs
+# CI-V 0x1A 0x05 0x00 0x91-0x94: get/set mod input per DATA mode
+# Values are CI-V register bytes sent as data payload
+inputs = [
+    { value = 0, name = "MIC" },
+    { value = 1, name = "ACC" },
+    { value = 3, name = "USB" },
+    { value = 5, name = "LAN" },
+    { value = 2, name = "MIC+ACC" },
+    { value = 4, name = "MIC+USB" },
+]
+
+[filters]
+list = ["FIL1", "FIL2", "FIL3"]
+# CI-V 0x1A 0x03: width is a BCD-encoded index, not raw Hz.
+encoding = "segmented_bcd_index"
+width_min_hz = 50
+width_max_hz = 9999
+
+# Twin PBT step, per mode. Source: IC-7300 Advanced Manual p.40, "Using the
+# Twin PBT" -- its heading names the modes that have it, "SSB, CW, RTTY and AM
+# modes", and its text reads "The PBT is adjustable in 50 Hz steps in the SSB,
+# CW, and RTTY modes, and 200 Hz in the AM mode." FM is absent from that list
+# and therefore declares no pbt_step_hz: the absence means the mode has no twin
+# PBT, not that a default applies. The 50 Hz figure is independently confirmed
+# by a bench sweep of every raw 0..255 on the IC-7610 over LAN and the IC-7300
+# over serial on 2026-09-16 (MOR-2497); 200 Hz for AM is the manual alone.
+#
+# The -D and -R variants take the SSB/CW/RTTY figure by inference: the manual
+# names the base modes, not each variant.
+#
+# Do not confuse with step_hz in the same tables, which quantises the WIDTH.
+[filters.width.USB]
+pbt_step_hz = 50
+min_hz = 50
+max_hz = 3600
+defaults = [3000, 2400, 1800]
+segments = [
+    { hz_min = 50, hz_max = 500, step_hz = 50, index_min = 0 },
+    { hz_min = 600, hz_max = 3600, step_hz = 100, index_min = 10 },
+]
+
+[filters.width.LSB]
+pbt_step_hz = 50
+min_hz = 50
+max_hz = 3600
+defaults = [3000, 2400, 1800]
+segments = [
+    { hz_min = 50, hz_max = 500, step_hz = 50, index_min = 0 },
+    { hz_min = 600, hz_max = 3600, step_hz = 100, index_min = 10 },
+]
+
+[filters.width.USB-D]
+pbt_step_hz = 50
+min_hz = 50
+max_hz = 3600
+defaults = [3000, 1200, 500]
+segments = [
+    { hz_min = 50, hz_max = 500, step_hz = 50, index_min = 0 },
+    { hz_min = 600, hz_max = 3600, step_hz = 100, index_min = 10 },
+]
+
+[filters.width.LSB-D]
+pbt_step_hz = 50
+min_hz = 50
+max_hz = 3600
+defaults = [3000, 1200, 500]
+segments = [
+    { hz_min = 50, hz_max = 500, step_hz = 50, index_min = 0 },
+    { hz_min = 600, hz_max = 3600, step_hz = 100, index_min = 10 },
+]
+
+[filters.width.CW]
+pbt_step_hz = 50
+min_hz = 50
+max_hz = 3600
+defaults = [1200, 500, 250]
+segments = [
+    { hz_min = 50, hz_max = 500, step_hz = 50, index_min = 0 },
+    { hz_min = 600, hz_max = 3600, step_hz = 100, index_min = 10 },
+]
+
+[filters.width.CW-R]
+pbt_step_hz = 50
+min_hz = 50
+max_hz = 3600
+defaults = [1200, 500, 250]
+segments = [
+    { hz_min = 50, hz_max = 500, step_hz = 50, index_min = 0 },
+    { hz_min = 600, hz_max = 3600, step_hz = 100, index_min = 10 },
+]
+
+[filters.width.RTTY]
+pbt_step_hz = 50
+min_hz = 50
+max_hz = 2700
+defaults = [2400, 500, 250]
+segments = [
+    { hz_min = 50, hz_max = 500, step_hz = 50, index_min = 0 },
+    { hz_min = 600, hz_max = 2700, step_hz = 100, index_min = 10 },
+]
+
+[filters.width.RTTY-R]
+pbt_step_hz = 50
+min_hz = 50
+max_hz = 2700
+defaults = [2400, 500, 250]
+segments = [
+    { hz_min = 50, hz_max = 500, step_hz = 50, index_min = 0 },
+    { hz_min = 600, hz_max = 2700, step_hz = 100, index_min = 10 },
+]
+
+# PSK shares the CW row of the filter table: IC-7610 Basic Manual, PDF p.34
+# "Selecting the IF filter" puts CW and PSK in ONE row (FIL 1 1.2 kHz,
+# FIL 2 500 Hz, FIL 3 250 Hz; selectable 50-500 Hz in 50 Hz steps and
+# 600 Hz-3.6 kHz in 100 Hz steps). Twin PBT applies: PDF p.33 "Using the
+# Twin PBT" is headed "SSB, CW, RTTY, PSK and AM modes". The 50 Hz step was
+# measured on the bench on 2026-09-17 (real IC-7610 over LAN, PSK at FIL2,
+# 500 Hz): sweeping PBT Inner raw 0..255 read back 11 positions, raw
+# 11..244, 50.0 Hz per step.
+[filters.width.PSK]
+pbt_step_hz = 50
+min_hz = 50
+max_hz = 3600
+defaults = [1200, 500, 250]
+segments = [
+    { hz_min = 50, hz_max = 500, step_hz = 50, index_min = 0 },
+    { hz_min = 600, hz_max = 3600, step_hz = 100, index_min = 10 },
+]
+
+# PSK-R takes the PSK figure by inference: the manual names PSK without
+# distinguishing the reversed variant, and PSK-R was not separately
+# measured on the bench.
+[filters.width.PSK-R]
+pbt_step_hz = 50
+min_hz = 50
+max_hz = 3600
+defaults = [1200, 500, 250]
+segments = [
+    { hz_min = 50, hz_max = 500, step_hz = 50, index_min = 0 },
+    { hz_min = 600, hz_max = 3600, step_hz = 100, index_min = 10 },
+]
+
+[filters.width.AM]
+pbt_step_hz = 200
+min_hz = 200
+max_hz = 10000
+step_hz = 200
+defaults = [9000, 6000, 3000]
+segments = [
+    { hz_min = 200, hz_max = 10000, step_hz = 200, index_min = 0 },
+]
+
+[filters.width.FM]
+fixed = true
+defaults = [15000, 10000, 7000]
+
+[vfo]
+scheme = "main_sub"
+split_tx_target = "sub_receiver"
+main_select = [0xD0]
+sub_select = [0xD1]
+swap_main_sub = [0xB0]   # MAIN ↔ SUB receiver swap (issue #710)
+equal_main_sub = [0xB1]  # MAIN = SUB receiver equalize (issue #710)
+# MOR-2540: the 1C 03 transmit-frequency reply (get_tx_target below) is
+# transceiver-wide -- it carries no receiver of its own. Basic Manual p.3-2:
+# "you can transmit on only the Main band (except in Split Frequency
+# operation)"; p.4-9: with split on, Main receives and Sub transmits. The
+# decoder therefore labels the target MAIN, or SUB while a FRESH 0F split
+# readback (get_split) is ON. An unknown or stale split fact withdraws the
+# label: the reply publishes an unknown target, which both credits the read
+# request and fails closed -- TUNE blocks from that reply on; until it
+# arrives, the last FRESH target can stay valid up to its own 4.0s TTL.
+tx_receiver_rule = "main_unless_split"
+
+# ── Frequency Ranges ─────────────────────────────────────────────
+
+[[freq_ranges.ranges]]
+label = "HF"
+start_hz = 30_000
+end_hz = 60_000_000
+
+[[freq_ranges.ranges.bands]]
+name = "160m"
+start_hz = 1_800_000
+end_hz = 2_000_000
+default_hz = 1_825_000
+bsr_code = 0x01
+
+[[freq_ranges.ranges.bands]]
+name = "80m"
+start_hz = 3_500_000
+end_hz = 4_000_000
+default_hz = 3_700_000
+bsr_code = 0x02
+
+[[freq_ranges.ranges.bands]]
+name = "60m"
+start_hz = 5_330_000
+end_hz = 5_410_000
+default_hz = 5_357_000
+
+[[freq_ranges.ranges.bands]]
+name = "40m"
+start_hz = 7_000_000
+end_hz = 7_300_000
+default_hz = 7_100_000
+bsr_code = 0x03
+
+[[freq_ranges.ranges.bands]]
+name = "30m"
+start_hz = 10_100_000
+end_hz = 10_150_000
+default_hz = 10_130_000
+bsr_code = 0x04
+
+[[freq_ranges.ranges.bands]]
+name = "20m"
+start_hz = 14_000_000
+end_hz = 14_350_000
+default_hz = 14_200_000
+bsr_code = 0x05
+
+[[freq_ranges.ranges.bands]]
+name = "17m"
+start_hz = 18_068_000
+end_hz = 18_168_000
+default_hz = 18_120_000
+bsr_code = 0x06
+
+[[freq_ranges.ranges.bands]]
+name = "15m"
+start_hz = 21_000_000
+end_hz = 21_450_000
+default_hz = 21_200_000
+bsr_code = 0x07
+
+[[freq_ranges.ranges.bands]]
+name = "12m"
+start_hz = 24_890_000
+end_hz = 24_990_000
+default_hz = 24_940_000
+bsr_code = 0x08
+
+[[freq_ranges.ranges.bands]]
+name = "10m"
+start_hz = 28_000_000
+end_hz = 29_700_000
+default_hz = 28_500_000
+bsr_code = 0x09
+
+[[freq_ranges.ranges]]
+label = "6m"
+start_hz = 50_000_000
+end_hz = 54_000_000
+
+[[freq_ranges.ranges.bands]]
+name = "6m"
+start_hz = 50_000_000
+end_hz = 54_000_000
+default_hz = 50_125_000
+bsr_code = 0x0A
+
+# ── Command 29 Routes ───────────────────────────────────────────
+# Commands that use the Command29 prefix for dual-receiver targeting.
+# Each entry: [command_byte, sub_byte] or [command_byte] for cmd-only.
+# Source: wfview IC-7610.rig Command29=true entries, cross-checked against
+# IC-7610 CI-V Reference Guide Rev.4 command table (pp.3-9).
+# Excluded — transceiver-global per PDF + wfview agreement:
+#   0x14 0x0B mic gain, 0x14 0x0C key speed, 0x14 0x0E comp level,
+#   0x14 0x0F break-in delay, 0x14 0x14-17 drive/moni/vox/anti-vox.
+# PDF-vs-wfview disagreement — PDF primary source wins (issue #708 review):
+#   0x14 0x0D notch filter — PDF p.3 shows the 29-glyph, wfview records
+#   Command29=false; PDF takes precedence as the primary IC-7610 reference.
+#   Without this route, both receivers would share a single notch position
+#   on dual-RX — a real functional limitation.
+# Ambiguous — PDF 29-glyph present, wfview disagrees or absent (left out):
+#   0x1A 0x0A per-Rx OVF status.
+# See docs/parity/ic7610_command_matrix.json for per-row rationale (issue #725).
+
+[cmd29]
+routes = [
+    [0x11],           # Attenuator
+    [0x12],           # Antenna
+    [0x14, 0x01],     # AF Gain
+    [0x14, 0x02],     # RF Gain
+    [0x14, 0x03],     # Squelch
+    [0x14, 0x05],     # APF Type Level
+    [0x14, 0x06],     # NR Level
+    [0x14, 0x07],     # PBT Inner
+    [0x14, 0x08],     # PBT Outer
+    [0x14, 0x0D],     # Notch Filter (PDF p.3 29-glyph; wfview Command29=false;
+                      #  PDF precedence — per-receiver notch position)
+    [0x14, 0x12],     # NB Level
+    [0x14, 0x13],     # DIGI-SEL Shift
+    [0x15, 0x01],     # S-meter squelch status
+    [0x15, 0x02],     # S-meter level
+    [0x15, 0x05],     # Various squelch
+    [0x16, 0x02],     # Preamp
+    [0x16, 0x12],     # AGC mode
+    [0x16, 0x22],     # NB on/off
+    [0x16, 0x32],     # Audio Peak Filter
+    [0x16, 0x40],     # NR on/off
+    [0x16, 0x41],     # Auto Notch
+    [0x16, 0x42],     # Repeater Tone
+    [0x16, 0x43],     # Tone Squelch
+    [0x16, 0x48],     # Manual Notch
+    [0x16, 0x4E],     # DIGI-SEL on/off
+    [0x16, 0x4F],     # Twin Peak Filter
+    [0x16, 0x53],     # RX Antenna
+    [0x16, 0x56],     # Filter Shape
+    [0x16, 0x57],     # Manual Notch Width (PDF p.4 29-glyph)
+    [0x16, 0x65],     # IP+
+    [0x1A, 0x03],     # Filter Width
+    [0x1A, 0x04],     # AGC Time Constant
+    [0x1A, 0x09],     # AF Mute
+    [0x1B, 0x00],     # Tone Frequency
+    [0x1B, 0x01],     # TSQL Frequency
+]
+
+# ── CI-V Commands ────────────────────────────────────────────────
+# Grouped by capability area. Wire bytes as integer arrays.
+# Source: IC-7610 CI-V Reference Guide (Rev. 4)
+#
+# Legend:
+#   # NOT_IMPLEMENTED — command known from CI-V ref but not yet
+#                       handled by the rigplane backend
+
+# PROVENANCE OPEN (D2, MOR-2008 batch 4): the following are left
+# deliberately undeclared rather than guessed. House pattern:
+# rigs/ic9700.toml "PROVENANCE OPEN (D2, MOR-2015)".
+# - get_memory_mode [0x08]: this guide's own 0x08 row reads "Select the
+#   Memory mode" (imperative), not "Send/read" like the table's other
+#   bidirectional rows -- no live-bench probe has settled whether it
+#   answers a bare read.
+# - set_selected_mode [0x26, 0x00]: the opcode's GET direction is declared
+#   below (get_selected_mode), but this guide's own p.13 detail page for
+#   the SET direction's exact (mode, data_mode, filter) payload
+#   convention was not independently opened before this batch.
+[commands]
+
+# ── Frequency / Mode ──
+get_freq = [0x03]
+set_freq = [0x05]
+get_mode = [0x04]
+set_mode = [0x06]
+get_band_edge_freq = [0x02]
+
+# ── TX Band Edge ──
+get_tx_band_count = [0x1E, 0x00]          # source: IC-7610 CI-V Reference Guide (Rev. 4) p.9
+get_tx_band_edge = [0x1E, 0x01]           # source: IC-7610 CI-V Reference Guide (Rev. 4) p.9 (detail p.10)
+
+# ── VFO / Dual Receiver ──
+get_vfo = [0x07]
+set_vfo = [0x07]
+get_split = [0x0F]
+set_split = [0x0F]
+get_dual_watch = [0x07, 0xC2]             # 0=OFF, 1=ON
+set_dual_watch_on = [0x07, 0xC1]
+set_dual_watch_off = [0x07, 0xC0]
+get_main_sub_band = [0x07, 0xD2]          # 0=MAIN, 1=SUB
+get_main_sub_tracking = [0x16, 0x5E]      # 0=OFF, 1=ON
+set_main_sub_tracking = [0x16, 0x5E]
+get_selected_freq = [0x25, 0x00]          # source: IC-7610 CI-V Reference Guide (Rev. 4) p.9 (detail p.13) -- documents 25/26 as "main or sub band" frequency, not "selected/unselected VFO"; same opcode structure
+get_unselected_freq = [0x25, 0x01]        # source: IC-7610 CI-V Reference Guide (Rev. 4) p.9 (detail p.13) -- "main or sub band" wording, see get_selected_freq
+get_selected_mode = [0x26, 0x00]          # source: IC-7610 CI-V Reference Guide (Rev. 4) p.9 (detail p.13) -- "main or sub band" wording, see get_selected_freq
+get_unselected_mode = [0x26, 0x01]        # source: IC-7610 CI-V Reference Guide (Rev. 4) p.9 (detail p.13) -- "main or sub band" wording, see get_selected_freq
+# MOR-3754: IC-7610 CI-V Reference Guide Rev.4 p.9/p.13: 01 is physical SUB.
+set_unselected_freq = [0x25, 0x01]
+set_unselected_mode = [0x26, 0x01]
+# set_selected_mode -- PROVENANCE OPEN above, left undeclared
+
+# ── Tuning ──
+get_tuning_step = [0x10]
+set_tuning_step = [0x10]
+
+# ── RF Front End (Attenuator / Preamp / DIGI-SEL / IP+) ──
+get_attenuator = [0x11]
+set_attenuator = [0x11]
+get_preamp = [0x16, 0x02]
+set_preamp = [0x16, 0x02]
+get_digisel = [0x16, 0x4E]
+set_digisel = [0x16, 0x4E]
+get_digisel_shift = [0x14, 0x13]
+set_digisel_shift = [0x14, 0x13]
+get_ip_plus = [0x16, 0x65]
+set_ip_plus = [0x16, 0x65]
+
+# ── Antenna ──
+get_antenna = [0x12]                      # Sub: 0x00=ANT1, 0x01=ANT2; Data: 0/1=RX ANT OFF/ON
+set_antenna = [0x12]
+get_rx_antenna = [0x16, 0x53]             # RX-I/O connector 0=OFF, 1=ON
+set_rx_antenna = [0x16, 0x53]
+get_rx_antenna_ant2 = [0x12]              # source: IC-7610 CI-V Reference Guide (A7380-7EX-2, May.2021) p.3, "12 01: Select/read ANT2 selection (00=RX ANT OFF, 01=RX ANT ON)" -- genuine on this radio (separate RX ANT jack), unlike IC-705/others
+set_rx_antenna_ant2 = [0x12]              # source: IC-7610 CI-V Reference Guide (A7380-7EX-2, May.2021) p.3, "12 01: Select/read ANT2 selection (00=RX ANT OFF, 01=RX ANT ON)" -- genuine on this radio (separate RX ANT jack), unlike IC-705/others
+# source: IC-7610 CI-V Reference Guide (A7380-7EX-2, May.2021) p.9, "1C 04
+# CI-V Output (for ANT)" exactly; 1A 05 0130 is "Network > Default Gateway"
+# on this radio, not this command. The guide also documents the same
+# feature a second way at 1A 05 0114 (p.6/p.9) -- both paths are real,
+# this profile uses the 1C 04 path (D2, MOR-2017).
+get_civ_output_ant = [0x1C, 0x04]
+set_civ_output_ant = [0x1C, 0x04]
+
+# ── Audio / AF ──
+get_af_level = [0x14, 0x01]
+set_af_level = [0x14, 0x01]
+get_rf_gain = [0x14, 0x02]
+set_rf_gain = [0x14, 0x02]
+get_squelch = [0x14, 0x03]
+set_squelch = [0x14, 0x03]
+get_af_mute = [0x1A, 0x09]
+set_af_mute = [0x1A, 0x09]
+
+# ── DSP / Noise (NB, NR, Notch, APF, Twin Peak) ──
+get_nb = [0x16, 0x22]
+set_nb = [0x16, 0x22]
+get_nb_level = [0x14, 0x12]
+set_nb_level = [0x14, 0x12]
+get_nr = [0x16, 0x40]
+set_nr = [0x16, 0x40]
+get_nr_level = [0x14, 0x06]
+set_nr_level = [0x14, 0x06]
+get_auto_notch = [0x16, 0x41]
+set_auto_notch = [0x16, 0x41]
+get_manual_notch = [0x16, 0x48]
+set_manual_notch = [0x16, 0x48]
+get_notch_filter = [0x14, 0x0D]           # Notch position 0-255
+set_notch_filter = [0x14, 0x0D]
+get_manual_notch_width = [0x16, 0x57]     # 0=WIDE, 1=MID, 2=NAR
+set_manual_notch_width = [0x16, 0x57]
+get_audio_peak_filter = [0x16, 0x32]      # 0=OFF, 1=WIDE, 2=MID, 3=NAR
+set_audio_peak_filter = [0x16, 0x32]
+get_apf_type_level = [0x14, 0x05]         # APF position 0-255
+set_apf_type_level = [0x14, 0x05]
+get_twin_peak_filter = [0x16, 0x4F]
+set_twin_peak_filter = [0x16, 0x4F]
+
+# ── Filter (PBT, IF width, shape) ──
+get_pbt_inner = [0x14, 0x07]
+set_pbt_inner = [0x14, 0x07]
+get_pbt_outer = [0x14, 0x08]
+set_pbt_outer = [0x14, 0x08]
+get_filter_width = [0x1A, 0x03]           # 50-10000 Hz, cmd29
+set_filter_width = [0x1A, 0x03]
+get_filter_shape = [0x16, 0x56]           # 0=SHARP, 1=SOFT
+set_filter_shape = [0x16, 0x56]
+get_agc = [0x16, 0x12]
+set_agc = [0x16, 0x12]
+get_agc_time_constant = [0x1A, 0x04]
+set_agc_time_constant = [0x1A, 0x04]
+
+# ── TX Controls (Power, Mic, Compressor, Monitor, VOX) ──
+ptt_on = [0x1C, 0x00, 0x01]
+ptt_off = [0x1C, 0x00, 0x00]
+get_transceiver_status = [0x1C, 0x00]     # source: IC-7610 CI-V Reference Guide (May.2021) p.9
+# MOR-2540: source: IC-7610 CI-V Reference Guide (A7380-7EX-2, May.2021) p.9,
+# "1C 03 ... Read transmit frequency" (detail p.10: the same five-byte BCD
+# operating-frequency format as commands 00/03/05). Read-only row; transceiver
+# -global, so deliberately NOT in [cmd29] routes. With split ON the radio
+# itself answers the frequency it would transmit on -- this profile never
+# derives the target from the MAIN frequency. The reply's receiver label
+# follows [vfo] tx_receiver_rule above (MAIN unless a FRESH split is ON).
+get_tx_target = [0x1C, 0x03]
+get_rf_power = [0x14, 0x0A]
+set_rf_power = [0x14, 0x0A]
+get_mic_gain = [0x14, 0x0B]
+set_mic_gain = [0x14, 0x0B]
+get_drive_gain = [0x14, 0x14]             # IC-7610 only
+set_drive_gain = [0x14, 0x14]
+get_compressor = [0x16, 0x44]
+set_compressor = [0x16, 0x44]
+get_compressor_level = [0x14, 0x0E]
+set_compressor_level = [0x14, 0x0E]
+get_monitor = [0x16, 0x45]
+set_monitor = [0x16, 0x45]
+get_monitor_gain = [0x14, 0x15]
+set_monitor_gain = [0x14, 0x15]
+get_vox = [0x16, 0x46]
+set_vox = [0x16, 0x46]
+get_vox_gain = [0x14, 0x16]
+set_vox_gain = [0x14, 0x16]
+get_anti_vox_gain = [0x14, 0x17]
+set_anti_vox_gain = [0x14, 0x17]
+get_ssb_tx_bandwidth = [0x16, 0x58]       # 0=WIDE, 1=MID, 2=NAR
+set_ssb_tx_bandwidth = [0x16, 0x58]
+
+# ── Split ──
+get_xfc_status = [0x1C, 0x02]             # Transmit frequency monitor (XFC)
+set_xfc_status = [0x1C, 0x02]
+
+# ── CW ──
+send_cw = [0x17]
+stop_cw = [0x17]
+get_cw_pitch = [0x14, 0x09]
+set_cw_pitch = [0x14, 0x09]
+get_key_speed = [0x14, 0x0C]
+set_key_speed = [0x14, 0x0C]
+get_break_in = [0x16, 0x47]               # 0=OFF, 1=Semi, 2=Full
+set_break_in = [0x16, 0x47]
+get_break_in_delay = [0x14, 0x0F]
+set_break_in_delay = [0x14, 0x0F]
+
+# ── RIT / ∂TX (XIT) ──
+get_rit_frequency = [0x21, 0x00]
+set_rit_frequency = [0x21, 0x00]
+get_rit_status = [0x21, 0x01]
+set_rit_status = [0x21, 0x01]
+get_rit_tx_status = [0x21, 0x02]          # ∂TX on/off
+set_rit_tx_status = [0x21, 0x02]
+
+# ── Tuner / ATU ──
+get_tuner_status = [0x1C, 0x01]           # 0=OFF, 1=ON, 2=Tuning
+set_tuner_status = [0x1C, 0x01]
+
+# ── Meters ──
+get_s_meter = [0x15, 0x02]
+get_s_meter_sql_status = [0x15, 0x01]
+get_various_squelch = [0x15, 0x05]
+get_overflow_status = [0x15, 0x07]
+get_power_meter = [0x15, 0x11]
+get_swr = [0x15, 0x12]
+get_alc = [0x15, 0x13]
+get_comp_meter = [0x15, 0x14]
+get_vd_meter = [0x15, 0x15]
+get_id_meter = [0x15, 0x16]
+
+# ── Tone / TSQL ──
+# Declared absent (MOR-2008 batch 2 -- promoted from a comment-only D1
+# state 3 (unknown, warn-and-refuse) to a formal state 2 row (declared
+# absent, refuse-silently) below): the IC-7610 (HF/6m) has no
+# FM-repeater CTCSS tone feature, so the repeater-tone / TSQL family is
+# NOT declared as a capability (MOR-660/661). With no declared
+# capability and no registry check referencing them, the
+# get/set_repeater_tone, get/set_repeater_tsql, get/set_tone_freq, and
+# get/set_tsql_freq command entries were dead/orphaned and were removed
+# (MOR-682). Do not re-add them without first declaring the capability.
+#
+# D2 documentary re-check (MOR-2017): the IC-7610 CI-V Reference Guide
+# (A7380-7EX-2, May.2021) DOES print these exact addresses in its command
+# table (16 42, 16 43, 1B 00, 1B 01), same as they exist on FM-capable
+# Icom radios. This is left NOT re-added: MOR-661's removal was grounded in
+# a live-bench readback (tone_freq/tsql_freq returned garbage, 16.5 Hz),
+# not a documentary claim, and this pass has no bench access to re-check
+# that finding on IC-7610 (retired from the live bench 2026-08-04). A
+# guide printing a command-table address is not proof the radio's firmware
+# answers it meaningfully. Recorded as a conflict between this pass's
+# verdict and the prior bench finding; not resolved here -- the `absent`
+# source below cites the bench finding as the grounds for the row, not
+# the guide, since the guide is the very thing the row overrides.
+get_repeater_tone = { absent = "live-bench readback (MOR-660/661/682): repeater-tone/TSQL/tone-freq/TSQL-freq replies decoded to garbage (16.5 Hz) on this radio, not the documented values -- D2 re-check MOR-2017 confirms the IC-7610 CI-V Reference Guide (A7380-7EX-2, May.2021) prints these same addresses regardless" }
+set_repeater_tone = { absent = "live-bench readback (MOR-660/661/682): repeater-tone/TSQL/tone-freq/TSQL-freq replies decoded to garbage (16.5 Hz) on this radio, not the documented values -- D2 re-check MOR-2017 confirms the IC-7610 CI-V Reference Guide (A7380-7EX-2, May.2021) prints these same addresses regardless" }
+get_repeater_tsql = { absent = "live-bench readback (MOR-660/661/682): repeater-tone/TSQL/tone-freq/TSQL-freq replies decoded to garbage (16.5 Hz) on this radio, not the documented values -- D2 re-check MOR-2017 confirms the IC-7610 CI-V Reference Guide (A7380-7EX-2, May.2021) prints these same addresses regardless" }
+set_repeater_tsql = { absent = "live-bench readback (MOR-660/661/682): repeater-tone/TSQL/tone-freq/TSQL-freq replies decoded to garbage (16.5 Hz) on this radio, not the documented values -- D2 re-check MOR-2017 confirms the IC-7610 CI-V Reference Guide (A7380-7EX-2, May.2021) prints these same addresses regardless" }
+get_tone_freq = { absent = "live-bench readback (MOR-660/661/682): repeater-tone/TSQL/tone-freq/TSQL-freq replies decoded to garbage (16.5 Hz) on this radio, not the documented values -- D2 re-check MOR-2017 confirms the IC-7610 CI-V Reference Guide (A7380-7EX-2, May.2021) prints these same addresses regardless" }
+set_tone_freq = { absent = "live-bench readback (MOR-660/661/682): repeater-tone/TSQL/tone-freq/TSQL-freq replies decoded to garbage (16.5 Hz) on this radio, not the documented values -- D2 re-check MOR-2017 confirms the IC-7610 CI-V Reference Guide (A7380-7EX-2, May.2021) prints these same addresses regardless" }
+get_tsql_freq = { absent = "live-bench readback (MOR-660/661/682): repeater-tone/TSQL/tone-freq/TSQL-freq replies decoded to garbage (16.5 Hz) on this radio, not the documented values -- D2 re-check MOR-2017 confirms the IC-7610 CI-V Reference Guide (A7380-7EX-2, May.2021) prints these same addresses regardless" }
+set_tsql_freq = { absent = "live-bench readback (MOR-660/661/682): repeater-tone/TSQL/tone-freq/TSQL-freq replies decoded to garbage (16.5 Hz) on this radio, not the documented values -- D2 re-check MOR-2017 confirms the IC-7610 CI-V Reference Guide (A7380-7EX-2, May.2021) prints these same addresses regardless" }
+
+# ── Data Mode ──
+get_data_mode = [0x1A, 0x06]
+set_data_mode = [0x1A, 0x06]
+
+# ── Scope ──
+get_scope_wave = [0x27, 0x00]
+set_scope_wave = [0x27, 0x00]
+scope_on = [0x27, 0x10]
+scope_off = [0x27, 0x10]
+scope_data_output = [0x27, 0x11]
+get_scope_main_sub = [0x27, 0x12]         # 0=MAIN, 1=SUB
+set_scope_main_sub = [0x27, 0x12]         # source: IC-7610 CI-V Reference Guide (A7380-7EX-2, May.2021) p.9, Cmd 27 Sub 12 "Main or Sub scope setting (00=Main, 01=Sub)" -- same [cmd, sub] as get_scope_main_sub above; command 27 itself carries the guide's own "*" (Send/read data) marker, and the IC-7610 is a genuine dual-receiver (MAIN/SUB) transceiver (MOR-2106)
+get_scope_single_dual = [0x27, 0x13]
+get_scope_mode = [0x27, 0x14]
+get_scope_span = [0x27, 0x15]
+get_scope_edge = [0x27, 0x16]
+get_scope_hold = [0x27, 0x17]
+get_scope_ref = [0x27, 0x19]
+get_scope_speed = [0x27, 0x1A]
+get_scope_during_tx = [0x27, 0x1B]
+get_scope_center_type = [0x27, 0x1C]
+get_scope_vbw = [0x27, 0x1D]
+get_scope_fixed_edge = [0x27, 0x1E]
+get_scope_rbw = [0x27, 0x1F]
+
+# Main/Sub Prefix (CI-V 0x29) — wfview slot #132; distinct from cmd29 framing
+get_main_sub_prefix = [0x29]
+set_main_sub_prefix = [0x29]
+
+# ── Scan ──
+scan_start = [0x0E]
+scan_stop = [0x0E]
+scan_set_df_span = [0x0E]                 # source: IC-7610 CI-V Reference Guide (A7380-7EX-2, May.2021) p.3, 0x0E Ax (x=1-7) -- matches VALID_DF_SPANS
+scan_start_type = [0x0E]                  # source: IC-7610 CI-V Reference Guide (A7380-7EX-2, May.2021) p.3; domain resolved below ([scan_types], D2 residual closed, MOR-2007 ruling 4)
+scan_set_resume = [0x0E]                  # source: IC-7610 CI-V Reference Guide (A7380-7EX-2, May.2021) p.3; domain resolved below ([scan_resume], D2 residual closed, MOR-2007 ruling 4)
+
+# ── System / Power ──
+power_on = [0x18]
+power_off = [0x18]
+# get_powerstat (bare 0x18 query) intentionally left undeclared: guide p.4
+# confirms cmd 0x18 SET rows (00=OFF/01=ON) and a worked wake-up example
+# (p.9: FE x7 preamble + 98 E0 18 01 FD), but the "query with empty data"
+# GET convention is not printed as its own row (D2, MOR-2017; open
+# question, MOR-2007).
+get_transceiver_id = [0x19, 0x00]
+get_speech = [0x13]
+get_dial_lock = [0x16, 0x50]
+set_dial_lock = [0x16, 0x50]
+get_ref_adjust = [0x1A, 0x05, 0x00, 0x70]
+set_ref_adjust = [0x1A, 0x05, 0x00, 0x70]
+
+# ── Band Stacking Register ──
+get_bsr = [0x1A, 0x01]                    # source: IC-7610 CI-V Reference Guide (Rev. 4) p.4 (detail p.10)
+set_bsr = [0x1A, 0x01]                    # source: IC-7610 CI-V Reference Guide (Rev. 4) p.4 (detail p.10)
+
+# ── Memory ──
+# get_memory_mode -- PROVENANCE OPEN above, left undeclared
+set_memory_mode = [0x08]                  # source: IC-7610 CI-V Reference Guide (Rev. 4) p.3
+memory_write = [0x09]                     # source: IC-7610 CI-V Reference Guide (Rev. 4) p.3
+memory_to_vfo = [0x0A]                    # source: IC-7610 CI-V Reference Guide (Rev. 4) p.3 -- payload MOR-2055, see commands/memory.py: build_memory_to_vfo
+memory_clear = [0x0B]                     # source: IC-7610 CI-V Reference Guide (Rev. 4) p.3 -- payload MOR-2055, see commands/memory.py: build_memory_clear
+get_memory_contents = [0x1A, 0x00]        # source: IC-7610 CI-V Reference Guide (Rev. 4) p.4 (detail p.11)
+set_memory_contents = [0x1A, 0x00]        # source: IC-7610 CI-V Reference Guide (Rev. 4) p.4 (detail p.11)
+
+# ── Menu Settings (0x1A 0x05 ...) ──
+# These are SET menu items with model-specific sub-addresses.
+# IC-7610 addresses (differ from IC-7300).
+
+[commands.overrides]
+# acc1_mod_level (1A 05 0088) was the exact 0x14 0x0B collision MOR-1992
+# measured: 14 0B is MIC gain on this radio (see get_mic_gain = [0x14, 0x0B]
+# below), not ACC MOD level. Guide confirms both, p.3/p.5 (D2, MOR-2017).
+get_acc1_mod_level = [0x1A, 0x05, 0x00, 0x88]  # source: IC-7610 CI-V Reference Guide (A7380-7EX-2, May.2021) p.5, control 0088 "MOD Input > ACC MOD Level"; 14 0B = "MIC gain" (p.3)
+set_acc1_mod_level = [0x1A, 0x05, 0x00, 0x88]  # source: IC-7610 CI-V Reference Guide (A7380-7EX-2, May.2021) p.5, control 0088 "MOD Input > ACC MOD Level"; 14 0B = "MIC gain" (p.3)
+get_usb_mod_level = [0x1A, 0x05, 0x00, 0x89]  # source: IC-7610 CI-V Reference Guide (A7380-7EX-2, May.2021) p.3 (cmd 0x14 has no sub 0x10), p.5, control 0089 "MOD Input > USB MOD Level"
+set_usb_mod_level = [0x1A, 0x05, 0x00, 0x89]  # source: IC-7610 CI-V Reference Guide (A7380-7EX-2, May.2021) p.3 (cmd 0x14 has no sub 0x10), p.5, control 0089 "MOD Input > USB MOD Level"
+get_lan_mod_level = [0x1A, 0x05, 0x00, 0x90]  # source: IC-7610 CI-V Reference Guide (A7380-7EX-2, May.2021) p.3 (cmd 0x14 has no sub 0x11), p.5, control 0090 "MOD Input > LAN MOD Level"
+set_lan_mod_level = [0x1A, 0x05, 0x00, 0x90]  # source: IC-7610 CI-V Reference Guide (A7380-7EX-2, May.2021) p.3 (cmd 0x14 has no sub 0x11), p.5, control 0090 "MOD Input > LAN MOD Level"
+get_data_off_mod_input = [0x1A, 0x05, 0x00, 0x91]
+set_data_off_mod_input = [0x1A, 0x05, 0x00, 0x91]
+get_data1_mod_input = [0x1A, 0x05, 0x00, 0x92]
+set_data1_mod_input = [0x1A, 0x05, 0x00, 0x92]
+get_data2_mod_input = [0x1A, 0x05, 0x00, 0x93]
+set_data2_mod_input = [0x1A, 0x05, 0x00, 0x93]
+get_data3_mod_input = [0x1A, 0x05, 0x00, 0x94]
+set_data3_mod_input = [0x1A, 0x05, 0x00, 0x94]
+get_civ_transceive = [0x1A, 0x05, 0x01, 0x12]  # source: IC-7610 CI-V Reference Guide (A7380-7EX-2, May.2021) p.6, control 0112 "CI-V Transceive" exactly; 0129 is "Network > Subnet Mask" on this radio, not this command
+set_civ_transceive = [0x1A, 0x05, 0x01, 0x12]  # source: IC-7610 CI-V Reference Guide (A7380-7EX-2, May.2021) p.6, control 0112 "CI-V Transceive" exactly; 0129 is "Network > Subnet Mask" on this radio, not this command
+get_system_date = [0x1A, 0x05, 0x01, 0x58]  # source: IC-7610 CI-V Reference Guide (A7380-7EX-2, May.2021) p.7, control 0158 -- matches the shared fallback exactly (this appears to be the radio the shared constant was built against)
+set_system_date = [0x1A, 0x05, 0x01, 0x58]  # source: IC-7610 CI-V Reference Guide (A7380-7EX-2, May.2021) p.7, control 0158 -- matches the shared fallback exactly (this appears to be the radio the shared constant was built against)
+get_system_time = [0x1A, 0x05, 0x01, 0x59]  # source: IC-7610 CI-V Reference Guide (A7380-7EX-2, May.2021) p.7, control 0159 -- matches the shared fallback exactly
+set_system_time = [0x1A, 0x05, 0x01, 0x59]  # source: IC-7610 CI-V Reference Guide (A7380-7EX-2, May.2021) p.7, control 0159 -- matches the shared fallback exactly
+get_utc_offset = [0x1A, 0x05, 0x01, 0x62]  # source: IC-7610 CI-V Reference Guide (A7380-7EX-2, May.2021) p.7 (addr), p.13 (3-byte format, "1A 05 0162, 0164") -- matches the shared fallback exactly
+set_utc_offset = [0x1A, 0x05, 0x01, 0x62]  # source: IC-7610 CI-V Reference Guide (A7380-7EX-2, May.2021) p.7 (addr), p.13 (3-byte format, "1A 05 0162, 0164") -- matches the shared fallback exactly
+get_quick_split = [0x1A, 0x05, 0x00, 0x33]
+set_quick_split = [0x1A, 0x05, 0x00, 0x33]
+get_quick_dual_watch = [0x1A, 0x05, 0x00, 0x32]
+set_quick_dual_watch = [0x1A, 0x05, 0x00, 0x32]
+get_nb_depth = [0x1A, 0x05, 0x02, 0x90]
+set_nb_depth = [0x1A, 0x05, 0x02, 0x90]
+get_nb_width = [0x1A, 0x05, 0x02, 0x91]
+set_nb_width = [0x1A, 0x05, 0x02, 0x91]
+get_dash_ratio = [0x1A, 0x05, 0x02, 0x28]
+set_dash_ratio = [0x1A, 0x05, 0x02, 0x28]
+get_vox_delay = [0x1A, 0x05, 0x02, 0x92]
+set_vox_delay = [0x1A, 0x05, 0x02, 0x92]
+
+[protocol]
+type = "civ"
+
+[controls.attenuator]
+style = "stepped"
+
+[controls.nb]
+style = "toggle_and_level"
+
+[controls.nr]
+style = "toggle_and_level"
+
+# Level control ranges — raw CI-V values and display mapping
+# raw_min/raw_max = CI-V BCD range (0-255 typical)
+# raw_center = center/default position (for bipolar controls)
+# display_min/display_max = human-readable range
+# display_unit = unit label
+
+[controls.pbt_inner]
+raw_min = 0
+raw_max = 255
+raw_center = 128
+display_min = -1200
+display_max = 1200
+display_unit = "Hz"
+
+[controls.pbt_outer]
+raw_min = 0
+raw_max = 255
+raw_center = 128
+display_min = -1200
+display_max = 1200
+display_unit = "Hz"
+
+[controls.af_level]
+raw_min = 0
+raw_max = 255
+
+[controls.rf_gain]
+raw_min = 0
+raw_max = 255
+
+[controls.squelch]
+raw_min = 0
+raw_max = 255
+
+# NR level: CI-V wire value is 0-255 BCD (like every other rig); the IC-7610
+# front panel shows it as 0-15.  Record both so the web slider can convert
+# wire <-> display (MOR-490).
+[controls.nr_level]
+raw_min = 0
+raw_max = 255
+display_min = 0
+display_max = 15
+
+[controls.nb_level]
+raw_min = 0
+raw_max = 255
+
+# NB depth: CI-V wire value is 0-9; the IC-7610 front panel shows it as 1-10.
+# Record both so the web slider can convert wire <-> display (MOR-498).
+[controls.nb_depth]
+raw_min = 0
+raw_max = 9
+display_min = 1
+display_max = 10
+
+[controls.mic_gain]
+raw_min = 0
+raw_max = 255
+
+[controls.rf_power]
+raw_min = 0
+raw_max = 255
+
+[controls.monitor_gain]
+raw_min = 0
+raw_max = 255
+
+[controls.compressor_level]
+raw_min = 0
+raw_max = 255
+
+[controls.cw_pitch]
+raw_min = 0
+raw_max = 255
+display_min = 300
+display_max = 900
+display_unit = "Hz"
+decode_quantum = 5  # reproduces the pre-existing CW-pitch decode for every raw level (pinned by tests/test_control_domain_math.py::test_ci_v_cw_pitch_decode_matches_the_deleted_formula_vectors)
+encode_rounding = "ceil"  # reproduces the pre-existing CW-pitch encode for every Hz in 300-900 (pinned by tests/test_control_domain_math.py::test_ci_v_cw_pitch_encode_matches_the_deleted_formula_vectors)
+
+[controls.key_speed]
+raw_min = 0
+raw_max = 255
+display_min = 6
+display_max = 48
+display_unit = "WPM"
+decode_quantum = 1  # reproduces the pre-existing key-speed decode for every raw level (pinned by tests/test_control_domain_math.py::test_ci_v_key_speed_decode_matches_the_deleted_formula_vectors)
+encode_rounding = "nearest_half_down"  # reproduces the pre-existing key-speed encode for every WPM in 6-48 (pinned by tests/test_control_domain_math.py::test_ci_v_key_speed_encode_matches_the_deleted_formula_vectors)
+
+[controls.rit]
+# MOR-1883: exact-form translation of the previously declared range;
+# step 1 from the shared CI-V builder (+/-9999 Hz, 1 Hz BCD).
+mapping = "identity"
+raw_min = -9999
+raw_max = 9999
+raw_step = 1
+raw_origin = 0
+display_min = -9999
+display_max = 9999
+display_step = 1
+display_origin = 0
+display_unit = "Hz"
+quantization = "reject"
+restoration = "exact"
+
+[meters.s_meter]
+redline_raw = 130
+
+[[meters.s_meter.calibration]]
+raw = 0
+actual = -54.0
+label = "S0"
+
+[[meters.s_meter.calibration]]
+raw = 26
+actual = -48.0
+label = "S1"
+
+[[meters.s_meter.calibration]]
+raw = 52
+actual = -36.0
+label = "S3"
+
+[[meters.s_meter.calibration]]
+raw = 78
+actual = -24.0
+label = "S5"
+
+[[meters.s_meter.calibration]]
+raw = 103
+actual = -12.0
+label = "S7"
+
+[[meters.s_meter.calibration]]
+raw = 130
+actual = 0.0
+label = "S9"
+
+[[meters.s_meter.calibration]]
+raw = 165
+actual = 10.0
+label = "S9+10"
+
+[[meters.s_meter.calibration]]
+raw = 200
+actual = 20.0
+label = "S9+20"
+
+[[meters.s_meter.calibration]]
+raw = 240
+actual = 40.0
+label = "S9+40"
+
+[meters.power]
+redline_raw = 212
+unit = "W"
+
+[[meters.power.calibration]]
+raw = 0
+actual = 0.0
+label = "0"
+
+[[meters.power.calibration]]
+raw = 143
+actual = 50.0
+label = "50"
+
+[[meters.power.calibration]]
+raw = 212
+actual = 100.0
+label = "100"
+
+[meters.swr]
+redline_raw = 120
+
+[[meters.swr.calibration]]
+raw = 0
+actual = 1.0
+label = "1.0"
+
+[[meters.swr.calibration]]
+raw = 48
+actual = 1.5
+label = "1.5"
+
+[[meters.swr.calibration]]
+raw = 80
+actual = 2.0
+label = "2.0"
+
+[[meters.swr.calibration]]
+raw = 120
+actual = 3.0
+label = "3.0"
+
+[[meters.swr.calibration]]
+raw = 255
+actual = 6.0
+label = "6.0+"
+
+[meters.alc]
+redline_raw = 120
+
+[[meters.alc.calibration]]
+raw = 0
+actual = 0.0
+label = "0"
+
+[[meters.alc.calibration]]
+raw = 120
+actual = 100.0
+label = "100"
+
+# COMP / Vd / Id PA meter calibration (MOR-2540). Source: IC-7610 CI-V
+# Reference Guide (2021), command table, 15 14 / 15 15 / 15 16
+# (COMP: 0000=0 dB, 0130=15 dB, 0241=30 dB; Vd: 0000=0 V, 0151=10 V,
+# 0211=16 V; Id: 0000=0 A, 0077=10 A, 0165=20 A, 0241=30 A).
+
+[[meters.comp.calibration]]
+raw = 0
+actual = 0.0
+label = "0"
+
+[[meters.comp.calibration]]
+raw = 130
+actual = 15.0
+label = "15"
+
+[[meters.comp.calibration]]
+raw = 241
+actual = 30.0
+label = "30"
+
+[[meters.vd.calibration]]
+raw = 0
+actual = 0.0
+label = "0"
+
+[[meters.vd.calibration]]
+raw = 151
+actual = 10.0
+label = "10"
+
+[[meters.vd.calibration]]
+raw = 211
+actual = 16.0
+label = "16"
+
+[[meters.id.calibration]]
+raw = 0
+actual = 0.0
+label = "0"
+
+[[meters.id.calibration]]
+raw = 77
+actual = 10.0
+label = "10"
+
+[[meters.id.calibration]]
+raw = 165
+actual = 20.0
+label = "20"
+
+[[meters.id.calibration]]
+raw = 241
+actual = 30.0
+label = "30"
+
+[[rules]]
+kind = "mutex"
+fields = ["attenuator", "preamp"]
+
+[[rules]]
+kind = "disables"
+when_active = "digisel"
+disables = ["preamp"]
+reason = "DIGI-SEL overrides preamp"
+
+[tx_policy]
+# Not bench-measured — inherited (MOR-1947). The backend factory routes IC-7610 onto Icom7610SerialRadio over serial, and onto IcomRadio itself over LAN.
+# That is the same transmit-state read the measured IC-7300 uses: the
+# solicited CI-V 0x1C/0x00 request in runtime/radio.py, decoded through the
+# 0x00/0x01 allowlist in runtime/_civ_rx.py. The decode is shared, so the
+# ruling is the same ruling, and it is written here rather than left absent
+# because an absent section and an empty one load identically — only a
+# written section records that this was decided.
+# Nothing on this radio's path reads this map today: the CI-V reply is
+# decoded natively in runtime/radio.py into the canonical
+# core/tx_observation.py TxStateReading contract. The section records the
+# profile ruling even though the current Icom read path does not consult it.
+# No write-during-transmit battery was run on this radio, so no radio-side
+# refusal is claimed. Empty means "nothing measured", not "nothing refuses".
+refused_during_tx = []
+# Positive-RX rule (§3.7): the receiving byte only. This wire carries no
+# keying attribution, so nothing else is mapped and the transmitting byte
+# is not-receiving without an invented source.
+tx_state_map = { "0" = "rx" }
+
+[memory]
+# Write-side declaration only (MOR-3644). The 26-byte 1A 00 SET record and
+# the 0x0B clear this package has always built are pinned against THIS
+# profile's own command map by tests/test_memory_commands.py
+# (TestMemoryContentsSetBuilder, TestMemoryClearBuilder, and
+# TestIcomRadioMemoryMethods's test_memory_clear_calls_builder /
+# test_set_memory_contents_calls_builder, all loading ic7610.toml),
+# tests/integration/test_memory_set_only.py, and the complete-frame
+# goldens in tests/test_memory_write_gate.py. The declaration below
+# RETAINS this radio's existing write/clear behaviour byte for byte (the
+# record's Hz-BCD tone fields, BCD mode byte, NUL padded name and
+# trailing pad byte are the legacy form; only field-level validation --
+# filter 1-3, scan 0/1, name length -- is new). The IC-7610 CI-V
+# Reference Guide (Rev. 4) p.11 documents a DIFFERENT record (channel,
+# select, frequency, 2-byte mode, data|tone, tone, tsql, 10-char name --
+# 27 data bytes) and a 1A 00 + channel + FF clear; that discrepancy is
+# deliberately deferred to MOR-2055, the owner decides whether to switch.
+# The read-side listing stays OFF for this radio: the memory_read
+# capability is deliberately not declared (the 47-byte 1A 00 read record
+# is not proven here; see runtime/radio.py get_memory_contents).
+addressing = "channel"
+first_group = 0
+last_group = 0
+first_channel = 1
+last_channel = 101
+recall = true  # 08 + channel selects the channel, the bare 08 "Select the Memory mode" (CI-V Reference Guide Rev. 4 p.3); not yet bench-verified (MOR-4219)
+
+# The legacy record, declared in the shared layout vocabulary so ONE
+# table-driven encoder builds every radio's record (offsets are relative
+# to the record after the 2-byte BCD channel address).
+[memory.write_layout]
+clear = "0b_channel"  # legacy 0x0B + channel; the guide's 1A 00 + FF clear is the MOR-2055 discrepancy
+record_length = 26
+fields = [
+  { field = "scan", offset = 0, length = 1, encoding = "scan" },
+  { field = "frequency", offset = 1, length = 5, encoding = "frequency" },
+  { field = "mode", offset = 6, length = 1, encoding = "mode_bcd" },
+  { field = "filter", offset = 7, length = 1, encoding = "filter" },
+  { field = "data_tone", offset = 8, length = 1, encoding = "data_tone" },
+  { field = "tone", offset = 9, length = 3, encoding = "tone_hz_bcd" },
+  { field = "tsql", offset = 12, length = 3, encoding = "tsql_hz_bcd" },
+  { field = "name", offset = 15, length = 10, encoding = "name_nul" },
+  { field = "pad", offset = 25, length = 1, encoding = "fixed", value = "00" },
+]

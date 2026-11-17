@@ -1,0 +1,1225 @@
+"""MOR-2161 Slice 1: one descriptor-backed command reaches every drain."""
+
+from __future__ import annotations
+
+import asyncio
+import json
+from dataclasses import replace
+from pathlib import Path
+from typing import Any, cast
+from unittest.mock import AsyncMock, MagicMock, create_autospec
+
+import pytest
+
+from rigplane.backends.rigctld_client.radio import (
+    RigctldClientObservationPoller,
+    RigctldClientRadio,
+)
+from rigplane.backends.yaesu_cat.poller import YaesuCatPoller
+from rigplane.backends.yaesu_cat.radio import YaesuCatRadio
+from rigplane.capabilities import CAP_REPEATER_TONE, CAP_TSQL
+from rigplane.core.acquisition_scheduler import AcquisitionScheduler
+from rigplane.core.exceptions import CommandError, CommandRejectedError
+from rigplane.core.exceptions import TimeoutError as RigplaneTimeoutError
+from rigplane.core.command_dispatch import (
+    CommandUnsupportedError,
+    DescriptorTxPolicy,
+    command_descriptor,
+    prepare_command_intent,
+)
+from rigplane.core.state_pipeline_contracts import CommandIntent, FieldPath
+from rigplane.profiles import resolve_radio_profile
+from rigplane.rig_loader import load_rig
+from rigplane.web.handlers.control import ControlHandler
+from rigplane.web.radio_poller import RadioPoller
+from rigplane.web.server import WebConfig, WebServer
+
+
+class _Writer:
+    def __init__(self) -> None:
+        self.buffer = bytearray()
+
+    def write(self, data: bytes) -> None:
+        self.buffer.extend(data)
+
+    async def drain(self) -> None:
+        pass
+
+    @property
+    def status(self) -> int:
+        return int(self.buffer.split(b"\r\n", 1)[0].split()[1])
+
+    @property
+    def body(self) -> dict[str, object]:
+        return json.loads(self.buffer.split(b"\r\n\r\n", 1)[1])
+
+
+class _Ws:
+    def __init__(self) -> None:
+        self.messages: list[dict[str, object]] = []
+
+    async def send_text(self, payload: str) -> None:
+        self.messages.append(json.loads(payload))
+
+
+def _radio(
+    *, error: Exception | None = None, model: str = "FTX-1", supported: bool = True
+) -> MagicMock:
+    profile = resolve_radio_profile(model=model)
+    radio = MagicMock()
+    radio.profile = profile
+    radio.model = profile.model
+    radio.capabilities = set(profile.capabilities)
+    radio.supports_command = MagicMock(return_value=supported)
+    radio.set_repeater_shift = AsyncMock(side_effect=error)
+    return radio
+
+
+def _icom_poller(radio: MagicMock) -> RadioPoller:
+    server = WebServer(radio, WebConfig())
+    poller = RadioPoller(
+        radio, server.command_queue, state_store=server.command_state_store
+    )
+    poller._acquisition_scheduler = AcquisitionScheduler(  # noqa: SLF001
+        profile=radio.profile.state_acquisition
+    )
+    return poller
+
+
+def _server(radio: object) -> WebServer:
+    server = WebServer(radio, WebConfig())  # type: ignore[arg-type]
+    server.command_queue.bind_connection_generation(lambda: "test-connection")
+    return server
+
+
+async def _drain_yaesu(server: WebServer, radio: object) -> None:
+    await server.command_queue.wait(timeout=1.0)
+    poller = YaesuCatPoller.__new__(YaesuCatPoller)
+    poller._radio = radio  # type: ignore[attr-defined]
+    poller._managed_tx_authority = None  # noqa: SLF001
+    for entry in server.command_queue.drain_entries():
+        if entry.future is not None and entry.future.cancelled():
+            continue
+        try:
+            await poller._execute_command(entry.command)  # noqa: SLF001
+        except BaseException as exc:
+            if entry.future is not None and not entry.future.done():
+                entry.future.set_exception(exc)
+        else:
+            if entry.future is not None and not entry.future.done():
+                entry.future.set_result(None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("surface", ["http", "ws"])
+async def test_success_waits_for_real_yaesu_drain(surface: str) -> None:
+    radio = _radio()
+    server = _server(radio)
+    if surface == "http":
+        writer = _Writer()
+        request = asyncio.create_task(
+            server._handle_http_single_command(  # noqa: SLF001
+                writer,  # type: ignore[arg-type]
+                {
+                    "id": "shift",
+                    "name": "set_repeater_shift",
+                    "params": {"direction": 1},
+                },
+            )
+        )
+    else:
+        ws = _Ws()
+        handler = ControlHandler(ws, radio, "test", "FTX-1", server=server)  # type: ignore[arg-type]
+        request = asyncio.create_task(
+            handler._dispatch_command("shift", "set_repeater_shift", {"direction": 1})  # noqa: SLF001
+        )
+
+    await asyncio.sleep(0)
+    assert not request.done()
+    await _drain_yaesu(server, radio)
+    await request
+    radio.set_repeater_shift.assert_awaited_once_with(direction=1, receiver=0)
+    radio.supports_command.assert_called_once_with("set_repeater_shift")
+    with pytest.raises(KeyError):
+        server.command_state_store.snapshot().field(
+            "receiver.0.operator_controls.repeater_shift"
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("surface", ["http", "batch", "ws"])
+@pytest.mark.parametrize(
+    ("error", "supported", "http_status", "error_code", "batch_status"),
+    [
+        (None, False, 409, "unsupported_command", "failed_validation"),
+        (
+            CommandRejectedError("radio returned ?;"),
+            True,
+            409,
+            "radio_nak",
+            "failed_execution",
+        ),
+        (
+            CommandError("backend failed"),
+            True,
+            500,
+            "command_failed",
+            "failed_execution",
+        ),
+        (
+            RuntimeError("temporarily not supported by transport"),
+            True,
+            500,
+            "command_failed",
+            "failed_execution",
+        ),
+        (RigplaneTimeoutError("late"), True, 504, "command_timeout", "timed_out"),
+    ],
+)
+async def test_structured_error_reaches_every_surface(
+    surface: str,
+    error: Exception | None,
+    supported: bool,
+    http_status: int,
+    error_code: str,
+    batch_status: str,
+) -> None:
+    radio = _radio(error=error, supported=supported)
+    server = _server(radio)
+    payload = {"id": "shift", "name": "set_repeater_shift", "params": {"direction": 2}}
+    if surface == "http":
+        writer = _Writer()
+        request = asyncio.create_task(
+            server._handle_http_single_command(writer, payload)  # type: ignore[arg-type] # noqa: SLF001
+        )
+    elif surface == "batch":
+        writer = _Writer()
+        request = asyncio.create_task(
+            server._handle_http_command_batch(  # type: ignore[arg-type] # noqa: SLF001
+                writer, {"steps": [payload]}
+            )
+        )
+    else:
+        ws = _Ws()
+        handler = ControlHandler(ws, radio, "test", "FTX-1", server=server)  # type: ignore[arg-type]
+        request = asyncio.create_task(
+            handler._dispatch_command("shift", "set_repeater_shift", {"direction": 2})  # noqa: SLF001
+        )
+
+    await asyncio.sleep(0)
+    if server.command_queue.has_commands:
+        await _drain_yaesu(server, radio)
+    await request
+    if surface == "ws":
+        body = ws.messages[-1]
+    else:
+        assert writer.status == (200 if surface == "batch" else http_status)
+        body = writer.body
+        if surface == "batch":
+            assert body["ok"] is False
+            body = body["results"][0]  # type: ignore[index,assignment]
+            assert body["status"] == batch_status
+    assert body["ok"] is False
+    assert body["error"] == error_code
+
+
+@pytest.mark.asyncio
+async def test_descriptor_preflight_rejects_without_queue_or_overlay() -> None:
+
+    radios = (
+        _radio(model="IC-7300", supported=False),
+        RigctldClientRadio(host="127.0.0.1", port=4532),
+    )
+    for radio in radios:
+        server = _server(radio)
+        with pytest.raises(CommandUnsupportedError):
+            await server._control_handler_for()._enqueue_command(  # noqa: SLF001
+                "set_repeater_shift", {"direction": 1}, source="http"
+            )
+        assert not server.command_queue.has_commands
+        assert server.command_service.lifecycle_events() == ()
+
+
+@pytest.mark.asyncio
+async def test_all_three_drains_execute_the_same_neutral_intent() -> None:
+    from rigplane.core.command_dispatch import prepare_command_intent
+
+    for drain in ("icom", "yaesu", "rigctld"):
+        radio = _radio()
+        intent = prepare_command_intent(
+            radio,
+            "set_repeater_shift",
+            {"direction": 3, "receiver": 1},
+            source="http",
+        )
+        assert str(intent.target) == "receiver.1.operator_controls.repeater_shift"
+        if drain == "icom":
+            await _icom_poller(radio)._execute(intent)  # noqa: SLF001
+        elif drain == "yaesu":
+            poller = YaesuCatPoller.__new__(YaesuCatPoller)
+            poller._radio = radio  # type: ignore[attr-defined]
+            poller._managed_tx_authority = None  # noqa: SLF001
+            await poller._execute_command(intent)  # noqa: SLF001
+        else:
+            poller = RigctldClientObservationPoller(
+                radio, callback=lambda _: None, medium_interval=1.0, slow_interval=1.0
+            )
+            await poller._execute_command(intent)  # noqa: SLF001
+        radio.set_repeater_shift.assert_awaited_once_with(direction=3, receiver=1)
+
+
+@pytest.mark.parametrize(
+    "policy",
+    [
+        cast(Any, "defer"),
+        cast(Any, "block"),
+        cast(Any, None),
+    ],
+)
+def test_descriptor_admission_rejects_non_admitted_policy(
+    monkeypatch: pytest.MonkeyPatch,
+    policy: DescriptorTxPolicy,
+) -> None:
+    from rigplane.core import command_dispatch
+    from rigplane.core.command_dispatch import prepare_command_intent
+
+    descriptor = command_dispatch.command_descriptor("set_repeater_shift")
+    assert descriptor is not None
+    mutated = replace(descriptor, tx_policy=policy)
+    monkeypatch.setattr(
+        command_dispatch, "_COMMAND_DESCRIPTORS", {mutated.name: mutated}
+    )
+
+    radio = _radio()
+    with pytest.raises(CommandError, match="is not admitted"):
+        prepare_command_intent(radio, mutated.name, {"direction": 1}, source="http")
+    radio.supports_command.assert_not_called()
+    radio.set_repeater_shift.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_descriptor_enqueue_rejects_non_admitted_policy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from rigplane.core import command_dispatch
+    from rigplane.core.command_dispatch import (
+        enqueue_command_intent,
+        prepare_command_intent,
+    )
+
+    radio = _radio()
+    intent = prepare_command_intent(
+        radio, "set_repeater_shift", {"direction": 3}, source="http"
+    )
+    descriptor = command_dispatch.command_descriptor(intent.name)
+    assert descriptor is not None
+    mutated = replace(descriptor, tx_policy=cast(Any, "defer"))
+    monkeypatch.setattr(
+        command_dispatch, "_COMMAND_DESCRIPTORS", {mutated.name: mutated}
+    )
+    queue = MagicMock()
+    future = asyncio.get_running_loop().create_future()
+
+    with pytest.raises(CommandError, match="is not admitted"):
+        enqueue_command_intent(
+            queue,
+            intent,
+            future=future,
+            command_id=intent.id,
+            source=intent.source,
+            session_id=None,
+            command_service=object(),
+            timeout=intent.timeout,
+        )
+    queue.put_ordered.assert_not_called()
+    radio.set_repeater_shift.assert_not_awaited()
+
+
+def _install_non_admitted_descriptor(monkeypatch: pytest.MonkeyPatch) -> None:
+    from rigplane.core import command_dispatch
+
+    descriptor = command_dispatch.command_descriptor("set_repeater_shift")
+    assert descriptor is not None
+    mutated = replace(descriptor, tx_policy=cast(Any, "block"))
+    monkeypatch.setattr(
+        command_dispatch, "_COMMAND_DESCRIPTORS", {mutated.name: mutated}
+    )
+
+
+@pytest.mark.asyncio
+async def test_icom_drain_rejects_non_admitted_policy_before_radio_invocation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from rigplane.core.command_dispatch import prepare_command_intent
+
+    radio = _radio()
+    intent = prepare_command_intent(
+        radio, "set_repeater_shift", {"direction": 3}, source="http"
+    )
+    _install_non_admitted_descriptor(monkeypatch)
+    poller = _icom_poller(radio)
+
+    with pytest.raises(CommandError, match="is not admitted"):
+        await poller._execute(intent)  # noqa: SLF001
+    radio.set_repeater_shift.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_yaesu_drain_rejects_non_admitted_policy_before_radio_invocation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from rigplane.core.command_dispatch import prepare_command_intent
+
+    radio = _radio()
+    intent = prepare_command_intent(
+        radio, "set_repeater_shift", {"direction": 3}, source="http"
+    )
+    _install_non_admitted_descriptor(monkeypatch)
+    poller = YaesuCatPoller.__new__(YaesuCatPoller)
+    poller._radio = radio  # type: ignore[attr-defined]
+    poller._managed_tx_authority = None  # noqa: SLF001
+
+    with pytest.raises(CommandError, match="is not admitted"):
+        await poller._execute_command(intent)  # noqa: SLF001
+    radio.set_repeater_shift.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_rigctld_drain_rejects_non_admitted_policy_before_radio_invocation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from rigplane.core.command_dispatch import prepare_command_intent
+
+    radio = _radio()
+    intent = prepare_command_intent(
+        radio, "set_repeater_shift", {"direction": 3}, source="http"
+    )
+    _install_non_admitted_descriptor(monkeypatch)
+    poller = RigctldClientObservationPoller(
+        radio, callback=lambda _: None, medium_interval=1.0, slow_interval=1.0
+    )
+
+    with pytest.raises(CommandError, match="is not admitted"):
+        await poller._execute_command(intent)  # noqa: SLF001
+    radio.set_repeater_shift.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_descriptor_enqueue_preserves_queue_lifecycle_metadata() -> None:
+    from rigplane.core.command_dispatch import prepare_command_intent
+
+    radio = _radio()
+    server = _server(radio)
+    intent = prepare_command_intent(
+        radio,
+        "set_repeater_shift",
+        {"direction": 2},
+        source="websocket",
+        command_id="metadata-shift",
+        session_id="ws-metadata",
+    )
+    execution = asyncio.create_task(server.command_service.execute(intent))
+    await asyncio.sleep(0)
+
+    entries = server.command_queue.drain_entries()
+    assert len(entries) == 1
+    entry = entries[0]
+    assert entry.command is intent
+    assert entry.command_id == intent.id
+    assert entry.source == intent.source
+    assert entry.session_id == "ws-metadata"
+    assert entry.command_service is server.command_service
+    assert entry.future is not None
+    assert entry.command.timeout == intent.timeout == 10.0
+
+    entry.future.set_result(None)
+    await execution
+    terminal = [
+        event.state
+        for event in server.command_service.lifecycle_events()
+        if event.command_id == intent.id
+        and event.state in {"acknowledged", "failed", "timed_out"}
+    ]
+    assert terminal == ["acknowledged"]
+
+
+@pytest.mark.asyncio
+async def test_descriptor_queue_failure_completes_lifecycle_exactly_once() -> None:
+    from rigplane.core.command_dispatch import prepare_command_intent
+
+    radio = _radio()
+    server = _server(radio)
+    intent = prepare_command_intent(
+        radio,
+        "set_repeater_shift",
+        {"direction": 2},
+        source="websocket",
+        command_id="failed-shift",
+        session_id="ws-failure",
+    )
+    execution = asyncio.create_task(server.command_service.execute(intent))
+    await asyncio.sleep(0)
+    (entry,) = server.command_queue.drain_entries()
+
+    error = CommandError("radio write failed")
+    YaesuCatPoller._mark_queued_command_failed(entry, error)  # noqa: SLF001
+    assert entry.future is not None
+    entry.future.set_exception(error)
+    with pytest.raises(CommandError, match="radio write failed"):
+        await execution
+
+    terminal = [
+        event.state
+        for event in server.command_service.lifecycle_events()
+        if event.command_id == intent.id
+        and event.state in {"acknowledged", "failed", "timed_out"}
+    ]
+    assert terminal == ["failed"]
+
+
+@pytest.mark.asyncio
+async def test_descriptor_timeout_and_cancellation_cleanup_is_exact_once() -> None:
+    from rigplane.core.command_dispatch import prepare_command_intent
+
+    radio = _radio()
+    intent = prepare_command_intent(
+        radio,
+        "set_repeater_shift",
+        {"direction": 1},
+        source="websocket",
+        command_id="cancel-me",
+        session_id="ws-a",
+    )
+    server = _server(radio)
+    service = server.command_service
+    task = asyncio.create_task(service.execute(intent))
+    await asyncio.sleep(0)
+    assert ("websocket", "ws-a", "cancel-me") in service._active_commands  # noqa: SLF001
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert (
+        service.pending_overlays(
+            source="websocket", session_id="ws-a", command_id="cancel-me"
+        )
+        == ()
+    )
+    assert ("websocket", "ws-a", "cancel-me") not in service._active_commands  # noqa: SLF001
+    assert [
+        event.state
+        for event in service.lifecycle_events()
+        if event.command_id == "cancel-me"
+        and event.state in {"acknowledged", "failed", "timed_out"}
+    ] == ["failed"]
+    assert (
+        service.terminate_active_commands("late", source="websocket", session_id="ws-a")
+        == 0
+    )
+    await _drain_yaesu(server, radio)
+    assert [
+        event.state
+        for event in service.lifecycle_events()
+        if event.command_id == "cancel-me"
+        and event.state in {"acknowledged", "failed", "timed_out"}
+    ] == ["failed"]
+    radio.set_repeater_shift.assert_not_awaited()
+
+    timed = replace(intent, id="time-me", timeout=0.001)
+    timed_service = server.command_service
+    with pytest.raises(TimeoutError):
+        await timed_service.execute(timed)
+    assert [
+        event.state
+        for event in timed_service.lifecycle_events()
+        if event.command_id == "time-me"
+        and event.state in {"acknowledged", "failed", "timed_out"}
+    ] == ["timed_out"]
+    assert (
+        timed_service.pending_overlays(
+            source="websocket", session_id="ws-a", command_id="time-me"
+        )
+        == ()
+    )
+    assert ("websocket", "ws-a", "time-me") not in service._active_commands  # noqa: SLF001
+    await _drain_yaesu(server, radio)
+    assert [
+        event.state
+        for event in timed_service.lifecycle_events()
+        if event.command_id == "time-me"
+        and event.state in {"acknowledged", "failed", "timed_out"}
+    ] == ["timed_out"]
+    radio.set_repeater_shift.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_descriptor_queue_policy_controls_enqueue(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from rigplane.core import command_dispatch
+    from rigplane.core.command_dispatch import prepare_command_intent
+
+    radio = _radio()
+    descriptor = command_dispatch.command_descriptor("set_repeater_shift")
+    assert descriptor is not None
+    mutated = replace(descriptor, queue_policy=cast(Any, "unknown"))
+    monkeypatch.setattr(
+        command_dispatch,
+        "_COMMAND_DESCRIPTORS",
+        {mutated.name: mutated},
+    )
+    server = _server(radio)
+    intent = prepare_command_intent(
+        radio, mutated.name, {"direction": 1}, source="http"
+    )
+
+    with pytest.raises(CommandError, match="unsupported queue policy 'unknown'"):
+        await server.command_service.execute(intent)
+    assert not server.command_queue.has_commands
+
+
+@pytest.mark.asyncio
+async def test_batch_preparation_is_capture_only_then_executes_once() -> None:
+    radio = _radio()
+    server = _server(radio)
+    before = server.command_service.lifecycle_events()
+
+    step = await server._prepare_http_batch_step(  # noqa: SLF001
+        0, {"name": "set_repeater_shift", "params": {"direction": 1}}
+    )
+
+    assert server.command_service.lifecycle_events() == before
+    assert not server.command_queue.has_commands
+    assert isinstance(step.command, CommandIntent)
+    radio.supports_command.assert_called_once_with("set_repeater_shift")
+    execution = asyncio.create_task(server.command_service.execute(step.command))
+    await asyncio.sleep(0)
+    await _drain_yaesu(server, radio)
+    result = await execution
+    assert result.executor_result.details == {"direction": 1, "receiver": 0}
+    radio.set_repeater_shift.assert_awaited_once()
+    radio.supports_command.assert_called_once_with("set_repeater_shift")
+
+
+def test_descriptor_is_the_only_migrated_name_source() -> None:
+    from dataclasses import MISSING, fields
+
+    from rigplane.core.command_dispatch import CommandDescriptor, command_descriptors
+    from rigplane import _poller_types
+    from rigplane.runtime import _poller_types as runtime_types
+    from rigplane.web import radio_poller
+
+    assert set(command_descriptors()) == {
+        "set_repeater_shift",
+        "set_af_level",
+        "set_rf_gain",
+        "set_squelch",
+        "set_att",
+        "set_antenna_1",
+        "set_antenna_2",
+        "set_rx_antenna",
+        "set_rx_antenna_ant1",
+        "set_rx_antenna_ant2",
+        "set_civ_output_ant",
+        "set_tuner_status",
+        "set_split_freq",
+        "set_split_mode",
+        "set_repeater_tone",
+        "set_repeater_tsql",
+        "set_tone_freq",
+        "set_tsql_freq",
+    }
+    descriptor = command_descriptors()["set_repeater_shift"]
+    assert descriptor.tx_policy is DescriptorTxPolicy.TX_SAFE
+    policy_field = next(
+        field for field in fields(CommandDescriptor) if field.name == "tx_policy"
+    )
+    assert policy_field.default is MISSING
+    assert "set_repeater_shift" in ControlHandler._COMMANDS  # noqa: SLF001
+    attenuator = command_descriptors()["set_att"]
+    assert attenuator.name == "set_att"
+    assert attenuator.method_name == "set_attenuator_level"
+    assert attenuator.argument_names == ("db", "receiver")
+    assert attenuator.queue_policy == "coalesced"
+    assert attenuator.receiver_aware
+    assert attenuator.public_names == ("set_att", "set_attenuator")
+    assert command_descriptors()["set_squelch"].public_names == (
+        "set_sql",
+        "set_squelch",
+    )
+    assert "set_att" in ControlHandler._COMMANDS  # noqa: SLF001
+    assert "set_attenuator" in ControlHandler._COMMANDS  # noqa: SLF001
+    assert "set_attenuator_level" not in ControlHandler._COMMANDS  # noqa: SLF001
+    assert "set_preamp" in ControlHandler._COMMANDS  # noqa: SLF001
+    assert not hasattr(runtime_types, "SetRepeaterShift")
+    assert not hasattr(_poller_types, "SetRepeaterShift")
+    assert not hasattr(radio_poller, "SetRepeaterShift")
+
+
+@pytest.mark.parametrize(
+    ("name", "method_name", "target"),
+    [
+        ("set_antenna", "set_antenna_1", "global.slow_state.rx_antenna_1"),
+        ("set_antenna_1", "set_antenna_1", "global.slow_state.rx_antenna_1"),
+        ("set_antenna_2", "set_antenna_2", "global.slow_state.rx_antenna_2"),
+        (
+            "set_rx_antenna_ant1",
+            "set_rx_antenna_ant1",
+            "global.slow_state.rx_antenna_1",
+        ),
+        (
+            "set_rx_antenna_ant2",
+            "set_rx_antenna_ant2",
+            "global.slow_state.rx_antenna_2",
+        ),
+    ],
+)
+def test_antenna_aliases_share_canonical_descriptor_policy(
+    name: str, method_name: str, target: str
+) -> None:
+    from rigplane.core.command_dispatch import (
+        bind_command_intent,
+        command_descriptor,
+    )
+
+    descriptor = command_descriptor(name)
+    assert descriptor is not None
+    assert descriptor.tx_policy is DescriptorTxPolicy.ANTENNA_SWITCH
+
+    command = bind_command_intent(name, {"on": True}, source="test")
+    assert command.name == method_name
+    assert command.params["on"] is True
+    assert str(command.target) == target
+
+
+def test_rx_antenna_selector_preserves_antenna_and_public_result_shape() -> None:
+    from rigplane.core.command_dispatch import (
+        bind_command_intent,
+        command_descriptor,
+    )
+
+    descriptor = command_descriptor("set_rx_antenna")
+    assert descriptor is not None
+    assert descriptor.name == "set_rx_antenna"
+    assert descriptor.tx_policy is DescriptorTxPolicy.ANTENNA_SWITCH
+
+    command = bind_command_intent(
+        "set_rx_antenna", {"antenna": 2, "on": True}, source="test"
+    )
+
+    assert command.name == "set_rx_antenna"
+    assert command.params["antenna"] == 2
+    assert command.params["on"] is True
+    assert str(command.target) == "global.slow_state.rx_antenna_2"
+    assert descriptor.result(command) == {"antenna": 2, "on": True}
+
+
+def test_civ_output_ant_is_descriptor_tx_safe() -> None:
+    from rigplane.core.command_dispatch import (
+        bind_command_intent,
+        command_descriptor,
+    )
+
+    descriptor = command_descriptor("set_civ_output_ant")
+    assert descriptor is not None
+    assert descriptor.tx_policy is DescriptorTxPolicy.TX_SAFE
+    command = bind_command_intent(
+        "set_civ_output_ant", {"enabled": False}, source="test"
+    )
+    assert command.name == "set_civ_output_ant"
+    assert command.params["on"] is False
+    assert descriptor.result(command) == {"on": False}
+
+
+def test_descriptor_lookup_rejects_unrepresentable_policy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from rigplane.core import command_dispatch
+
+    descriptor = command_dispatch.command_descriptor("set_repeater_shift")
+    assert descriptor is not None
+    invalid = replace(descriptor, tx_policy=cast(Any, "antenna-ish"))
+    monkeypatch.setattr(
+        command_dispatch, "_COMMAND_DESCRIPTORS", {invalid.name: invalid}
+    )
+
+    with pytest.raises(CommandError, match="is not admitted"):
+        command_dispatch.command_descriptor(invalid.name)
+    with pytest.raises(CommandError, match="is not admitted"):
+        command_dispatch.command_descriptors()
+
+
+@pytest.mark.asyncio
+async def test_managed_shared_leaf_admits_exactly_once_before_execution() -> None:
+    from rigplane.core.command_dispatch import (
+        bind_command_intent,
+        execute_command_intent,
+    )
+
+    from rigplane.core.radio_protocol import AntennaControlCapable
+
+    radio = create_autospec(AntennaControlCapable, instance=True)
+    managed = MagicMock()
+    managed.admit_managed_write = AsyncMock(return_value=True)
+    command = bind_command_intent("set_rx_antenna_ant1", {"on": True}, source="test")
+
+    await execute_command_intent(radio, command, managed_tx_authority=managed)
+
+    managed.admit_managed_write.assert_awaited_once_with(command)
+    radio.set_rx_antenna_ant1.assert_awaited_once_with(on=True)
+
+
+@pytest.mark.asyncio
+async def test_managed_selector_admission_uses_stable_descriptor_intent_name() -> None:
+    from rigplane.core.command_dispatch import (
+        bind_command_intent,
+        execute_command_intent,
+    )
+    from rigplane.core.radio_protocol import AntennaControlCapable
+
+    radio = create_autospec(AntennaControlCapable, instance=True)
+    managed = MagicMock()
+    managed.admit_managed_write = AsyncMock(return_value=True)
+    command = bind_command_intent(
+        "set_rx_antenna", {"antenna": 2, "on": True}, source="test"
+    )
+
+    assert command.name == "set_rx_antenna"
+    await execute_command_intent(radio, command, managed_tx_authority=managed)
+
+    managed.admit_managed_write.assert_awaited_once_with(command)
+    radio.set_rx_antenna_ant2.assert_awaited_once_with(on=True)
+
+
+@pytest.mark.asyncio
+async def test_managed_shared_leaf_refusal_is_immediate_and_not_deferred() -> None:
+    from rigplane.core.command_dispatch import (
+        bind_command_intent,
+        execute_command_intent,
+    )
+
+    radio = MagicMock()
+    radio.set_rx_antenna_ant2 = AsyncMock()
+    managed = MagicMock()
+    managed.admit_managed_write = AsyncMock(return_value=False)
+    command = bind_command_intent(
+        "set_rx_antenna_ant2", {"enabled": False}, source="test"
+    )
+
+    with pytest.raises(CommandError, match="transmit authority"):
+        await execute_command_intent(radio, command, managed_tx_authority=managed)
+
+    managed.admit_managed_write.assert_awaited_once_with(command)
+    radio.set_rx_antenna_ant2.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_unmanaged_shared_leaf_remains_direct() -> None:
+    from rigplane.core.command_dispatch import (
+        bind_command_intent,
+        execute_command_intent,
+    )
+
+    from rigplane.core.radio_protocol import AntennaControlCapable
+
+    radio = create_autospec(AntennaControlCapable, instance=True)
+    command = bind_command_intent(
+        "set_rx_antenna_ant1", {"enabled": True}, source="public_api"
+    )
+
+    await execute_command_intent(radio, command)
+
+    radio.set_rx_antenna_ant1.assert_awaited_once_with(on=True)
+
+
+@pytest.mark.asyncio
+async def test_web_rx_antenna_selector_two_reaches_ant2_and_preserves_ack() -> None:
+    radio = _radio()
+    radio.set_rx_antenna_ant1 = AsyncMock()
+    radio.set_rx_antenna_ant2 = AsyncMock()
+    server = _server(radio)
+    ws = _Ws()
+    handler = ControlHandler(ws, radio, "test", "FTX-1", server=server)  # type: ignore[arg-type]
+
+    request = asyncio.create_task(
+        handler._dispatch_command(  # noqa: SLF001
+            "rx-ant", "set_rx_antenna", {"antenna": 2, "on": True}
+        )
+    )
+    await asyncio.sleep(0)
+    assert not request.done()
+
+    await _drain_yaesu(server, radio)
+    await request
+
+    radio.set_rx_antenna_ant1.assert_not_awaited()
+    radio.set_rx_antenna_ant2.assert_awaited_once_with(on=True)
+    assert ws.messages[-1] == {
+        "type": "response",
+        "id": "rx-ant",
+        "ok": True,
+        "result": {"antenna": 2, "on": True},
+    }
+
+
+def test_antenna_descriptor_preflight_preserves_profile_rejection() -> None:
+    from rigplane.core.command_dispatch import (
+        prepare_command_intent,
+    )
+
+    radio = _radio(supported=False)
+    radio.set_rx_antenna_ant1 = AsyncMock()
+
+    with pytest.raises(CommandUnsupportedError, match="active profile"):
+        prepare_command_intent(
+            radio, "set_rx_antenna_ant1", {"on": True}, source="test"
+        )
+
+    radio.supports_command.assert_called_once_with("set_rx_antenna_ant1")
+    radio.set_rx_antenna_ant1.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    ("params", "expected_db"),
+    [
+        ({"db": 20, "level": 3, "value": 1, "receiver": 1}, 3),
+        ({"level": 6, "value": 1}, 6),
+        ({"db": 12, "value": 1}, 12),
+        ({"value": 1}, 0),
+        ({}, 0),
+    ],
+    ids=("level-wins", "level-only", "db-only", "value-is-not-an-alias", "default"),
+)
+def test_att_helper_uses_public_precedence_through_canonical_binding(
+    params: dict[str, int], expected_db: int
+) -> None:
+    from rigplane.core.command_service import command_intent_from_request
+
+    intent = command_intent_from_request("set_att", params, source="public_api")
+
+    assert intent.name == "set_att"
+    assert intent.params["db"] == expected_db
+    assert intent.params["att"] == expected_db
+    assert intent.params["receiver"] == params.get("receiver", 0)
+
+
+# ---------------------------------------------------------------------------
+# MOR-2111 tone half: descriptor registration, Yaesu wire frames, refusals.
+# Every intent here is built through ``prepare_command_intent``, so removing
+# a tone descriptor entry fails this whole section (MOR-2160's acceptance:
+# the dispatch path is the arm, and the arm is the descriptor).
+# ---------------------------------------------------------------------------
+
+_RIGS_DIR = Path(__file__).resolve().parents[1] / "rigs"
+
+_TONE_COMMANDS = (
+    "set_tone_freq",
+    "set_tsql_freq",
+    "set_repeater_tone",
+    "set_repeater_tsql",
+)
+
+
+def _ftx1_radio(*, tone_tags: bool = True) -> YaesuCatRadio:
+    """A real YaesuCatRadio on the FTX-1 profile, transport mocked.
+
+    The stock FTX-1 profile carries the ``repeater_tone``/``tsql``
+    capability tags since MOR-2111 PR-B2. ``tone_tags=False`` strips
+    them, simulating a radio whose profile lacks the tags so the
+    descriptor capability gate's refusal stays pinned.
+    """
+    profile = load_rig(_RIGS_DIR / "ftx1.toml")
+    if not tone_tags:
+        profile = replace(
+            profile,
+            capabilities=frozenset(profile.capabilities)
+            - {CAP_REPEATER_TONE, CAP_TSQL},
+        )
+    radio = YaesuCatRadio("/dev/null", profile=profile)
+    radio._transport._connected = True  # noqa: SLF001
+    radio._transport.query = AsyncMock()  # type: ignore[method-assign]  # noqa: SLF001
+    radio._transport.write = AsyncMock()  # type: ignore[method-assign]  # noqa: SLF001
+    return radio
+
+
+def _yaesu_poller(radio: YaesuCatRadio) -> YaesuCatPoller:
+    poller = YaesuCatPoller.__new__(YaesuCatPoller)
+    poller._radio = radio  # type: ignore[attr-defined]  # noqa: SLF001
+    poller._managed_tx_authority = None  # type: ignore[attr-defined]  # noqa: SLF001
+    return poller
+
+
+@pytest.mark.parametrize("name", _TONE_COMMANDS)
+def test_tone_descriptor_registers_under_its_public_name(name: str) -> None:
+    descriptor = command_descriptor(name)
+    assert descriptor is not None
+    assert descriptor.name == name
+    assert descriptor.public_names == (name,)
+
+
+def test_tone_freq_descriptor_binds_centihz_and_preserves_ack_shape() -> None:
+    intent = prepare_command_intent(
+        _ftx1_radio(tone_tags=True), "set_tone_freq", {"freq": 8850}, source="http"
+    )
+
+    assert intent.params["freq_hz"] == 8850
+    assert intent.params["receiver"] == 0
+    assert intent.target == FieldPath.receiver("0", "operator_controls", "tone_freq")
+    assert command_descriptor("set_tone_freq").result(intent) == {  # type: ignore[union-attr]
+        "freq": 8850,
+        "receiver": 0,
+    }
+
+
+def test_repeater_tone_descriptor_binds_bool_and_preserves_ack_shape() -> None:
+    intent = prepare_command_intent(
+        _ftx1_radio(tone_tags=True),
+        "set_repeater_tone",
+        {"on": True, "receiver": 1},
+        source="http",
+    )
+
+    assert intent.params["on"] is True
+    assert intent.params["receiver"] == 1
+    assert intent.target == FieldPath.receiver("1", "operator_toggles", "repeater_tone")
+    assert command_descriptor("set_repeater_tone").result(intent) == {  # type: ignore[union-attr]
+        "on": True,
+        "receiver": 1,
+    }
+
+
+@pytest.mark.parametrize(
+    ("name", "params", "query_answer", "expected_write"),
+    [
+        ("set_tone_freq", {"freq": 8850}, None, "CN00008;"),
+        ("set_tone_freq", {"freq": 8850, "receiver": 1}, None, "CN10008;"),
+        ("set_tsql_freq", {"freq": 8850}, None, "CN00008;"),
+        ("set_tsql_freq", {"freq": 8850, "receiver": 1}, None, "CN10008;"),
+        (
+            "set_repeater_tone",
+            {"on": True},
+            "CT00",
+            "CT01;",
+        ),
+        (
+            "set_repeater_tone",
+            {"on": True, "receiver": 1},
+            "CT10",
+            "CT11;",
+        ),
+        (
+            "set_repeater_tsql",
+            {"on": True},
+            "CT01",
+            "CT02;",
+        ),
+        (
+            "set_repeater_tsql",
+            {"on": True, "receiver": 1},
+            "CT11",
+            "CT12;",
+        ),
+        (
+            "set_repeater_tsql",
+            {"on": False},
+            "CT02",
+            "CT01;",
+        ),
+    ],
+    ids=(
+        "tone-freq-main",
+        "tone-freq-sub",
+        "tsql-freq-shares-cn",
+        "tsql-freq-sub",
+        "tone-on-from-off",
+        "tone-on-sub",
+        "tsql-on-from-tone-only",
+        "tsql-on-from-tone-only-sub",
+        "tsql-off-from-both",
+    ),
+)
+@pytest.mark.asyncio
+async def test_tone_intent_drives_the_exact_yaesu_wire_frame(
+    name: str,
+    params: dict[str, Any],
+    query_answer: str | None,
+    expected_write: str,
+) -> None:
+    radio = _ftx1_radio(tone_tags=True)
+    if query_answer is not None:
+        radio._transport.query = AsyncMock(return_value=query_answer)  # type: ignore[method-assign]  # noqa: SLF001
+    intent = prepare_command_intent(radio, name, params, source="http")
+
+    await _yaesu_poller(radio)._execute_command(intent)  # noqa: SLF001
+
+    radio._transport.write.assert_awaited_once_with(expected_write)  # noqa: SLF001
+
+
+@pytest.mark.parametrize(
+    ("name", "params", "query_answer", "message"),
+    [
+        (
+            "set_repeater_tone",
+            {"on": False},
+            "CT02",
+            "tone squelch cannot stay on",
+        ),
+        ("set_repeater_tsql", {"on": True}, "CT03", "CT code 3"),
+        ("set_repeater_tsql", {"on": True}, "CT04", "CT code 4"),
+        ("set_repeater_tsql", {"on": True}, "CT05", "CT code 5"),
+        ("set_tone_freq", {"freq": 8800}, None, "not an exact member"),
+    ],
+    ids=(
+        "tone-off-while-tsql-on",
+        "tsql-over-dcs",
+        "tsql-over-pr-freq",
+        "tsql-over-rev-tone",
+        "non-member-tone",
+    ),
+)
+@pytest.mark.asyncio
+async def test_tone_refusal_reaches_the_caller_and_sends_no_write(
+    name: str, params: dict[str, Any], query_answer: str | None, message: str
+) -> None:
+    radio = _ftx1_radio(tone_tags=True)
+    if query_answer is not None:
+        radio._transport.query = AsyncMock(return_value=query_answer)  # type: ignore[method-assign]  # noqa: SLF001
+    intent = prepare_command_intent(radio, name, params, source="http")
+
+    with pytest.raises(ValueError, match=message):
+        await _yaesu_poller(radio)._execute_command(intent)  # noqa: SLF001
+
+    radio._transport.write.assert_not_awaited()  # noqa: SLF001
+
+
+@pytest.mark.parametrize(
+    ("name", "params"),
+    [
+        ("set_tone_freq", {"freq": 8850, "receiver": 2}),
+        ("set_repeater_tone", {"on": True, "receiver": 2}),
+        ("set_tone_freq", {"freq": 8850, "receiver": "1"}),
+        ("set_tone_freq", {"freq": 88.5}),
+        ("set_tone_freq", {"freq": True}),
+        ("set_repeater_tone", {"on": 1}),
+    ],
+    ids=(
+        "freq-bad-receiver",
+        "toggle-bad-receiver",
+        "receiver-not-an-int",
+        "float-tone",
+        "bool-tone",
+        "non-bool-toggle",
+    ),
+)
+def test_tone_invalid_params_are_refused_at_prepare(
+    name: str, params: dict[str, Any]
+) -> None:
+    with pytest.raises(ValueError, match="must be"):
+        prepare_command_intent(_ftx1_radio(), name, params, source="http")
+
+
+@pytest.mark.asyncio
+async def test_icom_drain_executes_tone_intents_against_the_radio_methods() -> None:
+    radio = _radio(model="IC-7300")
+    radio.set_tone_freq = AsyncMock()
+    radio.set_tsql_freq = AsyncMock()
+    radio.set_repeater_tone = AsyncMock()
+    radio.set_repeater_tsql = AsyncMock()
+    poller = _icom_poller(radio)
+
+    await poller._execute(  # noqa: SLF001
+        prepare_command_intent(
+            radio, "set_tone_freq", {"freq": 8850, "receiver": 1}, source="http"
+        )
+    )
+    await poller._execute(  # noqa: SLF001
+        prepare_command_intent(radio, "set_tsql_freq", {"freq": 8850}, source="http")
+    )
+    await poller._execute(  # noqa: SLF001
+        prepare_command_intent(radio, "set_repeater_tone", {"on": True}, source="http")
+    )
+    await poller._execute(  # noqa: SLF001
+        prepare_command_intent(radio, "set_repeater_tsql", {"on": False}, source="http")
+    )
+
+    radio.set_tone_freq.assert_awaited_once_with(freq_hz=8850, receiver=1)
+    radio.set_tsql_freq.assert_awaited_once_with(freq_hz=8850, receiver=0)
+    radio.set_repeater_tone.assert_awaited_once_with(on=True, receiver=0)
+    radio.set_repeater_tsql.assert_awaited_once_with(on=False, receiver=0)
+
+
+_TONE_TARGETS = (
+    ("set_tone_freq", "operator_controls", "tone_freq", "freq"),
+    ("set_tsql_freq", "operator_controls", "tsql_freq", "freq"),
+    ("set_repeater_tone", "operator_toggles", "repeater_tone", "on"),
+    ("set_repeater_tsql", "operator_toggles", "repeater_tsql", "on"),
+)
+
+
+def _tone_params(value_key: str, receiver: int) -> dict[str, Any]:
+    params: dict[str, Any] = {"receiver": receiver}
+    params[value_key] = True if value_key == "on" else 8850
+    return params
+
+
+@pytest.mark.parametrize("receiver", [0, 1])
+@pytest.mark.parametrize(("name", "family", "field", "value_key"), _TONE_TARGETS)
+def test_tone_intent_target_pins_name_family_and_receiver(
+    name: str, family: str, field: str, value_key: str, receiver: int
+) -> None:
+    """Each tone intent's semantic target is pinned by name and receiver:
+    swapping one family member's target for another's field (e.g. the
+    tsql pair onto the tone fields) must fail here, not silently mirror
+    the wrong leaf."""
+    intent = prepare_command_intent(
+        _radio(model="IC-7300"), name, _tone_params(value_key, receiver), source="http"
+    )
+
+    assert intent.target == FieldPath.receiver(str(receiver), family, field)
+
+
+@pytest.mark.parametrize(
+    ("name", "params", "capability"),
+    [
+        ("set_tone_freq", {"freq": 8850}, CAP_REPEATER_TONE),
+        ("set_tsql_freq", {"freq": 8850}, CAP_TSQL),
+        ("set_repeater_tone", {"on": True}, CAP_REPEATER_TONE),
+        ("set_repeater_tsql", {"on": True}, CAP_TSQL),
+    ],
+)
+def test_tone_family_refused_without_the_profile_capability_tag(
+    name: str, params: dict[str, Any], capability: str
+) -> None:
+    """A radio whose profile lacks the tag gets the family refused before
+    any radio call, with the legacy ``unsupported_command`` error class,
+    and nothing reaches the wire. The stock FTX-1 profile carries the
+    tags since PR-B2, so the fixture strips them."""
+    radio = _ftx1_radio(tone_tags=False)
+
+    with pytest.raises(
+        CommandUnsupportedError, match=f"missing capability: {capability}"
+    ):
+        prepare_command_intent(radio, name, params, source="http")
+
+    radio._transport.write.assert_not_awaited()  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+async def test_set_tsql_freq_schedules_its_own_post_write_readback_on_icom() -> None:
+    """The tsql write's readback names the tsql leaf alone: a descriptor
+    target swapped to the tone field must fail here (same shape as the
+    deleted MOR-2129 parity test on main)."""
+    radio = _radio(model="IC-7300")
+    radio.set_tsql_freq = AsyncMock()
+    poller = _icom_poller(radio)
+
+    await poller._execute(  # noqa: SLF001
+        prepare_command_intent(radio, "set_tsql_freq", {"freq": 8850}, source="http")
+    )
+
+    radio.set_tsql_freq.assert_awaited_once_with(freq_hz=8850, receiver=0)
+    pending = poller._acquisition_scheduler.pending_requests()  # noqa: SLF001
+    assert {path for request in pending for path in request.paths} == {
+        FieldPath.receiver("main", "operator_controls", "tsql_freq")
+    }
+    assert {request.reason for request in pending} == {"post_write_readback"}

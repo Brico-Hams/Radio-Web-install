@@ -1,0 +1,364 @@
+/**
+ * MOR-1441 leg 2 — the discrete-control pending accessors.
+ *
+ * `getPendingFilterSelection`/`getPendingPreampLevel`/`getPendingNbOn`/
+ * `getPendingNrOn` are the read side of the leg-2 pending-target affordance:
+ * FilterSurface/RfFrontEndSurface/DspSurface show these instead of confirmed
+ * radio truth while the matching intent is still in flight. Same authority
+ * (the command-bus lifecycle list) as leg 1's `getPendingFrequencyHz`
+ * (`mor1441-pending-frequency.isolated.test.ts`), but a DIFFERENT release
+ * rule (MOR-1488): a terminal-without-further-meaning command (failed,
+ * cancelled, timed-out) must never be read as still pending, but a merely
+ * `'acknowledged'` one (the transport ack) stays pending until the radio's
+ * OWN observed state answers for the commanded field — an ack proves only
+ * that the radio received the command, typically milliseconds before the
+ * next state poll actually echoes it back, and presenting that ack as
+ * confirmation is the exact live-bench fabrication MOR-1488 fixes.
+ */
+import { afterEach, describe, expect, it, vi } from 'vitest';
+
+type FakeCommand = {
+  name: string;
+  status: string;
+  createdAt: number;
+  params: Record<string, unknown>;
+  updatedAt?: number;
+  ackFieldObservationTimes?: Record<string, number>;
+};
+type FakeReceiverState = Record<string, unknown>;
+type FakeFieldStatus = Record<string, { lastObservedMonotonic?: number }>;
+
+const state: { commands: FakeCommand[] } = { commands: [] };
+const runtimeState: {
+  state: { main: FakeReceiverState; sub: FakeReceiverState; fieldStatus?: FakeFieldStatus } | null;
+} = { state: null };
+
+vi.mock('$lib/stores/commands.svelte', () => ({
+  getCommandLifecycles: () => state.commands,
+}));
+vi.mock('$lib/runtime/frontend-runtime', () => ({
+  runtime: { get state() { return runtimeState.state; }, get caps() { return null; } },
+}));
+vi.mock('$lib/runtime/adapters/radio-view-model-adapter', () => ({
+  toRadioViewModel: () => null,
+}));
+
+import {
+  getPendingFilterSelection, getPendingManualNotchWidth, getPendingNarrow, getPendingNbOn, getPendingNotchMode,
+  getPendingNrOn, getPendingPreampLevel,
+} from '../panel-adapters';
+
+const cmd = (over: Partial<FakeCommand> = {}): FakeCommand => ({
+  name: 'set_filter', status: 'pending', createdAt: 0, params: { filter: 2, receiver: 0 }, ...over,
+});
+
+type Case = {
+  label: string;
+  accessor: (receiver: 0 | 1) => number | boolean | null;
+  intentName: string;
+  paramKey: string;
+  /** The `ServerState.main`/`.sub` field this accessor's target is confirmed
+   *  against — differs from `paramKey` for preamp (`level` on the wire,
+   *  `preamp` on the receiver state), matching `panel-adapters.ts`'s own
+   *  `confirmedField` argument to `latestPendingParam`. */
+  confirmedField: string;
+  value: number | boolean;
+  otherValue: number | boolean;
+};
+
+const CASES: readonly Case[] = [
+  {
+    label: 'getPendingFilterSelection', accessor: getPendingFilterSelection,
+    intentName: 'set_filter', paramKey: 'filter', confirmedField: 'filter', value: 2, otherValue: 3,
+  },
+  {
+    label: 'getPendingPreampLevel', accessor: getPendingPreampLevel,
+    intentName: 'set_preamp', paramKey: 'level', confirmedField: 'preamp', value: 1, otherValue: 2,
+  },
+  {
+    label: 'getPendingNbOn', accessor: getPendingNbOn,
+    intentName: 'set_nb', paramKey: 'on', confirmedField: 'nb', value: true, otherValue: false,
+  },
+  {
+    label: 'getPendingNrOn', accessor: getPendingNrOn,
+    intentName: 'set_nr', paramKey: 'on', confirmedField: 'nr', value: true, otherValue: false,
+  },
+  {
+    label: 'getPendingNarrow', accessor: getPendingNarrow,
+    intentName: 'set_narrow', paramKey: 'on', confirmedField: 'narrow', value: true, otherValue: false,
+  },
+];
+
+describe.each(CASES)('$label (MOR-1441 leg 2, MOR-1488)', (
+  { accessor, intentName, paramKey, confirmedField, value, otherValue },
+) => {
+  afterEach(() => { runtimeState.state = null; });
+
+  it('returns the pending target for the given receiver', () => {
+    state.commands = [cmd({ name: intentName, params: { [paramKey]: value, receiver: 0 } })];
+    expect(accessor(0)).toBe(value);
+  });
+
+  it('returns null when no matching command is pending for that receiver', () => {
+    state.commands = [cmd({ name: intentName, params: { [paramKey]: value, receiver: 1 } })];
+    expect(accessor(0)).toBeNull();
+  });
+
+  it('returns null when no commands are in flight at all', () => {
+    state.commands = [];
+    expect(accessor(0)).toBeNull();
+  });
+
+  // THE kill: a resolved-and-final command misrepresented as still pending —
+  // the exact fabrication MOR-1441 forbids. 'acknowledged' is deliberately
+  // NOT in this list (MOR-1488) — see the two tests below.
+  it.each(['failed', 'cancelled', 'timed-out'])(
+    'ignores a %s command', (status) => {
+      state.commands = [cmd({ name: intentName, status, params: { [paramKey]: value, receiver: 0 } })];
+      expect(accessor(0)).toBeNull();
+    },
+  );
+
+  // MOR-1488 (live-bench finding): a transport ack is not a confirming
+  // observation. With no observed radio state yet (or one that has not
+  // caught up), an acknowledged command must still read as pending — this
+  // is the assertion that failed against the pre-fix code (it returned
+  // `null`, collapsing the pending window to something imperceptible live).
+  it('still returns the target for an acknowledged command when the confirmed state has not caught up', () => {
+    runtimeState.state = { main: { [confirmedField]: otherValue }, sub: {} };
+    state.commands = [cmd({ name: intentName, status: 'acknowledged', params: { [paramKey]: value, receiver: 0 } })];
+    expect(accessor(0)).toBe(value);
+  });
+
+  // The other half of the same rule: once the radio's OWN observed state
+  // confirms the target, the acknowledged command must stop reading as
+  // pending — the leg-1 "pending is display-only, confirmed reading stays
+  // authoritative" doctrine, now applied at the confirming-observation seam.
+  it('ignores an acknowledged command once the confirmed state matches the target', () => {
+    runtimeState.state = { main: { [confirmedField]: value }, sub: {} };
+    state.commands = [cmd({ name: intentName, status: 'acknowledged', params: { [paramKey]: value, receiver: 0 } })];
+    expect(accessor(0)).toBeNull();
+  });
+
+  /**
+   * After the write the core re-reads the commanded field at USER
+   * priority, so that field's own observation is what ends the marker —
+   * whatever value it carries. The per-field marker is
+   * `lastObservedMonotonic` (`runtime_helpers.py: _observed_field_status`),
+   * captured at ack into `ackFieldObservationTimes`
+   * (`commands.svelte.ts: transition`).
+   */
+  const fieldPath = `main.${confirmedField}`;
+  const acked = (over: Partial<FakeCommand> = {}): FakeCommand => cmd({
+    name: intentName, status: 'acknowledged', params: { [paramKey]: value, receiver: 0 },
+    ackFieldObservationTimes: { [fieldPath]: 4 }, ...over,
+  });
+
+  it('ends the marker when the commanded field is re-observed after the ack reporting a value other than the target', () => {
+    runtimeState.state = { main: { [confirmedField]: otherValue }, sub: {},
+      fieldStatus: { [fieldPath]: { lastObservedMonotonic: 5 } } };
+    state.commands = [acked()];
+    expect(accessor(0)).toBeNull();
+  });
+
+  it('stays pending when only another field is observed after the ack', () => {
+    runtimeState.state = { main: { [confirmedField]: otherValue }, sub: {},
+      fieldStatus: { [fieldPath]: { lastObservedMonotonic: 4 }, 'main.sMeter': { lastObservedMonotonic: 9 } } };
+    state.commands = [acked()];
+    expect(accessor(0)).toBe(value);
+  });
+
+  it('stays pending while the commanded field is never re-observed, until the grace backstop retires it', () => {
+    runtimeState.state = { main: { [confirmedField]: otherValue }, sub: {},
+      fieldStatus: { [fieldPath]: { lastObservedMonotonic: 4 } } };
+    state.commands = [acked({ updatedAt: Date.now() })];
+    expect(accessor(0)).toBe(value);
+    state.commands = [acked({ updatedAt: Date.now() - 3_001 })];
+    expect(accessor(0)).toBeNull();
+  });
+
+  // SUB receiver parity: the confirming read must follow the SAME receiver
+  // split as the command match, not always read MAIN.
+  it('confirms against the SUB receiver state for receiver 1', () => {
+    runtimeState.state = { main: {}, sub: { [confirmedField]: value } };
+    state.commands = [cmd({ name: intentName, status: 'acknowledged', params: { [paramKey]: value, receiver: 1 } })];
+    expect(accessor(1)).toBeNull();
+  });
+
+  // Kills: reading the OLDEST pending command instead of the freshest.
+  it('picks the freshest pending command when several are in flight', () => {
+    state.commands = [
+      cmd({ name: intentName, createdAt: 1, params: { [paramKey]: value, receiver: 0 } }),
+      cmd({ name: intentName, createdAt: 2, params: { [paramKey]: otherValue, receiver: 0 } }),
+    ];
+    expect(accessor(0)).toBe(otherValue);
+  });
+
+  // Kills: matching on receiver alone — a pending command for a DIFFERENT
+  // intent must never be mistaken for this one's target.
+  it('ignores commands for a different intent name', () => {
+    state.commands = [cmd({ name: 'set_freq', params: { freq: 14100000, receiver: 0 } })];
+    expect(accessor(0)).toBeNull();
+    // A foreign command that SHARES this accessor's paramKey — `set_rf_gain`/
+    // `set_nb_level`/… all carry `{ level, receiver }`, and seven intents carry
+    // `{ on, receiver }`. Only the intent-name check separates them.
+    state.commands = [cmd({ name: 'set_rf_gain', params: { [paramKey]: otherValue, receiver: 0 } })];
+    expect(accessor(0)).toBeNull();
+  });
+
+  // B3 (leg-1 review): on a same-millisecond `createdAt` tie, the LATER
+  // array-order entry is the actually-freshest one.
+  it('on a same-millisecond createdAt tie, prefers the LATER dispatched command (array order)', () => {
+    state.commands = [
+      cmd({ name: intentName, createdAt: 5, params: { [paramKey]: value, receiver: 0 } }),
+      cmd({ name: intentName, createdAt: 5, params: { [paramKey]: otherValue, receiver: 0 } }),
+    ];
+    expect(accessor(0)).toBe(otherValue);
+  });
+});
+
+// ── Notch-mode pending target (MOR-2236 remainder) ─────────────────────────
+//
+// The v3 notch choice group dispatches one command per choice ("auto" →
+// `set_auto_notch on`, "manual" → `set_manual_notch on`, "off" → BOTH off in
+// that order, MOR-1541). `getPendingNotchMode` folds the two in-flight
+// boolean strands into the single requested choice the group shows pending —
+// over the SAME lifecycle decision table (`latestPendingParam`) the four
+// accessors above use, so confirmation, failure and supersession clear it by
+// the same rule.
+
+describe('getPendingNotchMode (MOR-2236 remainder)', () => {
+  afterEach(() => { runtimeState.state = null; state.commands = []; });
+
+  const autoOn = (over: Partial<FakeCommand> = {}): FakeCommand => ({
+    name: 'set_auto_notch', status: 'pending', createdAt: 0,
+    params: { on: true, receiver: 0 }, ...over,
+  });
+  const manualOn = (over: Partial<FakeCommand> = {}): FakeCommand => ({
+    name: 'set_manual_notch', status: 'pending', createdAt: 0,
+    params: { on: true, receiver: 0 }, ...over,
+  });
+  const autoOff = (over: Partial<FakeCommand> = {}): FakeCommand => ({
+    name: 'set_auto_notch', status: 'pending', createdAt: 0,
+    params: { on: false, receiver: 0 }, ...over,
+  });
+  const manualOff = (over: Partial<FakeCommand> = {}): FakeCommand => ({
+    name: 'set_manual_notch', status: 'pending', createdAt: 0,
+    params: { on: false, receiver: 0 }, ...over,
+  });
+
+  it('returns null when nothing is in flight', () => {
+    expect(getPendingNotchMode(0)).toBeNull();
+  });
+
+  it('reads an auto-on strand as the auto choice', () => {
+    state.commands = [autoOn()];
+    expect(getPendingNotchMode(0)).toBe('auto');
+  });
+
+  it('reads a manual-on strand as the manual choice', () => {
+    state.commands = [manualOn()];
+    expect(getPendingNotchMode(0)).toBe('manual');
+  });
+
+  it('reads the off PAIR (both strands off) as the off choice', () => {
+    state.commands = [autoOff(), manualOff({ createdAt: 1 })];
+    expect(getPendingNotchMode(0)).toBe('off');
+  });
+
+  it('a half-arrived off pair (one strand only) is not yet the off choice', () => {
+    state.commands = [autoOff()];
+    expect(getPendingNotchMode(0)).toBeNull();
+  });
+
+  it('a newer strand supersedes the older choice (latest-target-wins)', () => {
+    state.commands = [autoOn({ createdAt: 1 }), manualOn({ createdAt: 2 })];
+    expect(getPendingNotchMode(0)).toBe('manual');
+  });
+
+  it('ignores strands for another receiver', () => {
+    state.commands = [autoOn({ params: { on: true, receiver: 1 } })];
+    expect(getPendingNotchMode(0)).toBeNull();
+  });
+
+  it('ignores terminal strands', () => {
+    state.commands = [autoOn({ status: 'failed' })];
+    expect(getPendingNotchMode(0)).toBeNull();
+  });
+
+  it('stays pending across an ack until the commanded field is re-observed', () => {
+    runtimeState.state = { main: { autoNotch: false, manualNotch: false }, sub: {},
+      fieldStatus: { 'main.autoNotch': { lastObservedMonotonic: 4 } } };
+    state.commands = [autoOn({ status: 'acknowledged', ackFieldObservationTimes: { 'main.autoNotch': 4 } })];
+    expect(getPendingNotchMode(0)).toBe('auto');
+  });
+
+  it('clears once the commanded field is re-observed', () => {
+    runtimeState.state = { main: { autoNotch: false, manualNotch: false }, sub: {},
+      fieldStatus: { 'main.autoNotch': { lastObservedMonotonic: 5 } } };
+    state.commands = [autoOn({ status: 'acknowledged', ackFieldObservationTimes: { 'main.autoNotch': 4 } })];
+    expect(getPendingNotchMode(0)).toBeNull();
+  });
+});
+
+// ── Manual-notch-width pending target (MOR-2634) ───────────────────────────
+//
+// The width choice group dispatches one `set_manual_notch_width` per choice
+// (`makeDspHandlers().onManualNotchWidthChange`, param `value`, confirmed
+// against `manualNotchWidth`). `getPendingManualNotchWidth` is a single-strand
+// read of the SAME lifecycle decision table (`latestPendingParam`) the four
+// accessors above use, so confirmation, failure and supersession clear it by
+// the same rule.
+
+describe('getPendingManualNotchWidth (MOR-2634)', () => {
+  afterEach(() => { runtimeState.state = null; state.commands = []; });
+
+  const width = (over: Partial<FakeCommand> = {}): FakeCommand => ({
+    name: 'set_manual_notch_width', status: 'pending', createdAt: 0,
+    params: { value: 1, receiver: 0 }, ...over,
+  });
+
+  it('returns null when nothing is in flight', () => {
+    expect(getPendingManualNotchWidth(0)).toBeNull();
+  });
+
+  it('reads the pending choice', () => {
+    state.commands = [width()];
+    expect(getPendingManualNotchWidth(0)).toBe(1);
+  });
+
+  it('a newer choice supersedes the older one (latest-target-wins)', () => {
+    state.commands = [width({ createdAt: 1 }), width({ createdAt: 2, params: { value: 2, receiver: 0 } })];
+    expect(getPendingManualNotchWidth(0)).toBe(2);
+  });
+
+  it('a failed/terminal record clears the pending choice', () => {
+    state.commands = [width({ status: 'failed' })];
+    expect(getPendingManualNotchWidth(0)).toBeNull();
+  });
+
+  it('ignores a choice for another receiver', () => {
+    state.commands = [width({ params: { value: 1, receiver: 1 } })];
+    expect(getPendingManualNotchWidth(0)).toBeNull();
+  });
+
+  it('stays pending across an ack until the commanded field is re-observed', () => {
+    runtimeState.state = { main: { manualNotchWidth: 0 }, sub: {},
+      fieldStatus: { 'main.manualNotchWidth': { lastObservedMonotonic: 4 } } };
+    state.commands = [width({
+      status: 'acknowledged',
+      ackFieldObservationTimes: { 'main.manualNotchWidth': 4 },
+    })];
+    expect(getPendingManualNotchWidth(0)).toBe(1);
+  });
+
+  it('clears once the commanded field is re-observed', () => {
+    runtimeState.state = { main: { manualNotchWidth: 0 }, sub: {},
+      fieldStatus: { 'main.manualNotchWidth': { lastObservedMonotonic: 5 } } };
+    state.commands = [width({
+      status: 'acknowledged',
+      ackFieldObservationTimes: { 'main.manualNotchWidth': 4 },
+    })];
+    expect(getPendingManualNotchWidth(0)).toBeNull();
+  });
+});

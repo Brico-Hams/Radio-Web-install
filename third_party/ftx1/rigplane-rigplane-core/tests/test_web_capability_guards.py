@@ -1,0 +1,1374 @@
+"""Web UI capability guards — verify API responses adapt to rig profile.
+
+TDD: these tests were written FIRST, then the backend was modified to pass them.
+"""
+
+from __future__ import annotations
+
+import json
+from dataclasses import astuple, replace
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+
+from rigplane.backends.yaesu_cat.radio import YaesuCatRadio
+from rigplane.radio_protocol import AudioCapable
+from rigplane.runtime.radio import IcomRadio
+from rigplane.types import AudioCodec
+from rigplane.web.handlers.audio import browser_tx_audio_facts
+from rigplane.web.handlers import ControlHandler
+from rigplane.web.server import WebConfig, WebServer
+from rigplane.ws import WebSocketConnection
+
+
+_RIGS_DIR = Path(__file__).parents[1] / "rigs"
+
+
+class _FakeWriter:
+    """Minimal asyncio.StreamWriter stand-in that captures bytes."""
+
+    def __init__(self) -> None:
+        self.buffer = bytearray()
+
+    def write(self, data: bytes) -> None:
+        self.buffer.extend(data)
+
+    async def drain(self) -> None:
+        pass
+
+    def close(self) -> None:
+        pass
+
+    async def wait_closed(self) -> None:
+        pass
+
+
+def _parse_json_body(writer: _FakeWriter) -> dict:
+    text = writer.buffer.decode("ascii", errors="replace")
+    body_start = text.index("\r\n\r\n") + 4
+    return json.loads(text[body_start:])
+
+
+# ── Helpers: fake radios with profiles ──────────────────────────
+
+
+def _make_radio(model: str = "IC-7610", caps: set[str] | None = None):
+    """Build a fake radio with a real RadioProfile resolved by model name."""
+    from rigplane.profiles import resolve_radio_profile
+    from rigplane.radio_protocol import AudioCapable, DualReceiverCapable, ScopeCapable
+
+    profile = resolve_radio_profile(model=model)
+
+    class _FakeRadio(ScopeCapable, AudioCapable, DualReceiverCapable):
+        pass
+
+    radio = _FakeRadio()
+    radio.model = model
+    radio.connected = True
+    radio.control_connected = False
+    radio.radio_ready = True
+    radio.capabilities = caps if caps is not None else set(profile.capabilities)
+    radio.profile = profile
+    return radio
+
+
+async def _endpoint_vfo_tags(
+    radio,
+    config: WebConfig | None = None,
+    reserved: frozenset[str] = frozenset(
+        {"vfo_swap", "vfo_equalize", "vfo_freq_direct"}
+    ),
+) -> tuple[set[str], set[str], set[str]]:
+    from rigplane.web.handlers import ControlHandler
+
+    srv = WebServer(radio, config)
+    info_writer = _FakeWriter()
+    capabilities_writer = _FakeWriter()
+    ws_payloads: list[str] = []
+
+    async def _send_text(payload: str) -> None:
+        ws_payloads.append(payload)
+
+    ws = SimpleNamespace(send_text=_send_text)
+    radio_model = getattr(radio, "model", srv._config.radio_model)  # noqa: SLF001
+    handler = ControlHandler(ws, radio, "0.0.0-test", radio_model, server=srv)
+
+    await srv._serve_info(info_writer)  # noqa: SLF001
+    await srv._serve_capabilities(capabilities_writer)  # noqa: SLF001
+    await handler._send_hello()  # noqa: SLF001
+
+    info = _parse_json_body(info_writer)
+    capabilities = _parse_json_body(capabilities_writer)
+    hello = json.loads(ws_payloads.pop())
+    return (
+        set(info["capabilities"]["tags"]) & reserved,
+        set(capabilities["capabilities"]) & reserved,
+        set(hello["capabilities"]) & reserved,
+    )
+
+
+# ── /api/v1/info tests ─────────────────────────────────────────
+
+
+class TestInfoEndpoint:
+    """Verify /api/v1/info includes rig-specific metadata."""
+
+    @pytest.mark.asyncio
+    async def test_info_includes_receivers_for_dual(self):
+        radio = _make_radio("IC-7610")
+        srv = WebServer(radio)
+        writer = _FakeWriter()
+        await srv._serve_info(writer)  # noqa: SLF001
+        data = _parse_json_body(writer)
+        assert data["capabilities"]["maxReceivers"] == 2
+
+    @pytest.mark.asyncio
+    async def test_info_includes_receivers_for_single(self):
+        radio = _make_radio("IC-7300")
+        srv = WebServer(radio)
+        writer = _FakeWriter()
+        await srv._serve_info(writer)  # noqa: SLF001
+        data = _parse_json_body(writer)
+        assert data["capabilities"]["maxReceivers"] == 1
+
+    @pytest.mark.asyncio
+    async def test_info_includes_vfo_scheme_main_sub(self):
+        radio = _make_radio("IC-7610")
+        srv = WebServer(radio)
+        writer = _FakeWriter()
+        await srv._serve_info(writer)  # noqa: SLF001
+        data = _parse_json_body(writer)
+        assert data["capabilities"]["vfoScheme"] == "main_sub"
+
+    @pytest.mark.asyncio
+    async def test_info_includes_vfo_scheme_ab(self):
+        radio = _make_radio("IC-7300")
+        srv = WebServer(radio)
+        writer = _FakeWriter()
+        await srv._serve_info(writer)  # noqa: SLF001
+        data = _parse_json_body(writer)
+        assert data["capabilities"]["vfoScheme"] == "ab"
+        assert data["capabilities"]["vfoReadback"] == "selected_unselected"
+
+    @pytest.mark.asyncio
+    async def test_info_includes_has_lan_true(self):
+        radio = _make_radio("IC-7610")
+        srv = WebServer(radio)
+        writer = _FakeWriter()
+        await srv._serve_info(writer)  # noqa: SLF001
+        data = _parse_json_body(writer)
+        assert data["capabilities"]["hasLan"] is True
+
+    @pytest.mark.asyncio
+    async def test_info_includes_has_lan_false(self):
+        radio = _make_radio("IC-7300")
+        srv = WebServer(radio)
+        writer = _FakeWriter()
+        await srv._serve_info(writer)  # noqa: SLF001
+        data = _parse_json_body(writer)
+        assert data["capabilities"]["hasLan"] is False
+
+    @pytest.mark.asyncio
+    async def test_info_ic7300_no_dual_rx_tag(self):
+        radio = _make_radio("IC-7300")
+        srv = WebServer(radio)
+        writer = _FakeWriter()
+        await srv._serve_info(writer)  # noqa: SLF001
+        data = _parse_json_body(writer)
+        assert "dual_rx" not in data["capabilities"]["tags"]
+
+    @pytest.mark.asyncio
+    async def test_unknown_runtime_model_fails_closed_for_reserved_vfo_tags_across_consumers(
+        self,
+    ):
+        """An unknown attached radio cannot inherit configured VFO primitives."""
+        reserved = {"vfo_swap", "vfo_equalize"}
+        radio = _make_radio("IC-7300", caps=reserved)
+        radio.model = "UNKNOWN-RADIO"
+        del radio.profile
+        server = WebServer(radio, WebConfig(radio_model="IC-7300"))
+
+        info_writer = _FakeWriter()
+        await server._serve_info(info_writer)  # noqa: SLF001
+        info = _parse_json_body(info_writer)
+
+        capabilities_writer = _FakeWriter()
+        await server._serve_capabilities(capabilities_writer)  # noqa: SLF001
+        capabilities = _parse_json_body(capabilities_writer)
+
+        ws = MagicMock(spec=WebSocketConnection)
+        sent: list[str] = []
+
+        async def send_text(payload: str) -> None:
+            sent.append(payload)
+
+        ws.send_text = send_text
+        handler = ControlHandler(ws, radio, "0.0.0-test", radio.model)
+        await handler._send_hello()  # noqa: SLF001
+        hello = json.loads(sent.pop())
+
+        assert not (reserved & set(info["capabilities"]["tags"]))
+        assert not (reserved & set(capabilities["capabilities"]))
+        assert not (reserved & set(hello["capabilities"]))
+
+    @pytest.mark.asyncio
+    async def test_ws_hello_and_http_capability_payloads_agree_for_non_resolving_runtime_model(
+        self,
+    ):
+        """Production factory: radio.model fails to resolve, configured model does.
+
+        Unlike the sibling test above (which builds ``ControlHandler`` directly
+        with ``radio.model`` as its configured-model argument, so both
+        fallback candidates share the same non-resolving value), this test
+        goes through the production ``WebServer._control_handler_for`` factory.
+        That factory is one of three server.py constructions that pass
+        ``self._config.radio_model`` unconditionally (alongside the CW-text
+        and CW-stop HTTP handlers); the two constructions that actually emit
+        ``hello`` over a live control channel — the WS-connect handshake and
+        the WebRTC session manager wiring — pre-collapse the model to
+        ``radio.model`` whenever it is a string, so they cannot diverge this
+        way. This test pins the shared helper's fail-closed semantics at the
+        seam an embedder hits by passing its own ``WebConfig`` with a
+        ``radio_model`` different from the radio's own reported model, not a
+        regression reachable through the shipped WS client.
+        """
+        reserved = {"vfo_swap", "vfo_equalize"}
+        radio = _make_radio("IC-7300", caps=reserved)
+        radio.model = "UNKNOWN-RADIO"
+        del radio.profile
+        server = WebServer(radio, WebConfig(radio_model="IC-7300"))
+
+        info_writer = _FakeWriter()
+        await server._serve_info(info_writer)  # noqa: SLF001
+        info = _parse_json_body(info_writer)
+
+        capabilities_writer = _FakeWriter()
+        await server._serve_capabilities(capabilities_writer)  # noqa: SLF001
+        capabilities = _parse_json_body(capabilities_writer)
+
+        sent: list[str] = []
+
+        async def send_text(payload: str) -> None:
+            sent.append(payload)
+
+        handler = server._control_handler_for()  # noqa: SLF001
+        handler._ws = SimpleNamespace(send_text=send_text)  # noqa: SLF001
+        await handler._send_hello()  # noqa: SLF001
+        hello = json.loads(sent.pop())
+
+        info_tags = reserved & set(info["capabilities"]["tags"])
+        capabilities_tags = reserved & set(capabilities["capabilities"])
+        hello_tags = reserved & set(hello["capabilities"])
+
+        assert info_tags == capabilities_tags == hello_tags
+        assert not info_tags
+
+    @pytest.mark.asyncio
+    async def test_reserved_vfo_tags_absent_when_no_usable_candidate_model_exists(
+        self,
+    ):
+        """Empty-candidate guard: neither side ever reaches resolve_radio_profile.
+
+        ``projected_vfo_capability_tags`` must short-circuit before calling
+        ``resolve_radio_profile`` when both ``radio.model`` (absent here)
+        and ``configured_model`` (an empty string here) are unusable. The
+        capabilities leg is checked against
+        ``_projected_runtime_capabilities()`` directly rather than through
+        ``_serve_capabilities()``: unlike ``_serve_info()``, that endpoint
+        has no fielded no-radio-attached case (MOR-2012 follow-up) and
+        still requires an identified radio for its other, unrelated
+        fields -- there is no candidate that identifies the radio for
+        ``_get_profile()`` without also making it a usable candidate for
+        ``projected_vfo_capability_tags``, since both check the same two
+        attributes in the same order.
+        """
+        reserved = {"vfo_swap", "vfo_equalize"}
+        radio = _make_radio("IC-7300", caps=reserved)
+        del radio.model
+        del radio.profile
+        server = WebServer(radio, WebConfig(radio_model=""))
+
+        info_writer = _FakeWriter()
+        await server._serve_info(info_writer)  # noqa: SLF001
+        info = _parse_json_body(info_writer)
+
+        capabilities_tags = sorted(server._projected_runtime_capabilities())  # noqa: SLF001
+
+        sent: list[str] = []
+
+        async def send_text(payload: str) -> None:
+            sent.append(payload)
+
+        handler = server._control_handler_for()  # noqa: SLF001
+        handler._ws = SimpleNamespace(send_text=send_text)  # noqa: SLF001
+        await handler._send_hello()  # noqa: SLF001
+        hello = json.loads(sent.pop())
+
+        assert not (reserved & set(info["capabilities"]["tags"]))
+        assert not (reserved & set(capabilities_tags))
+        assert not (reserved & set(hello["capabilities"]))
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("model", "expected"),
+        [
+            ("IC-705", {"vfo_swap", "vfo_equalize", "vfo_freq_direct"}),
+            ("IC-7300", {"vfo_swap", "vfo_equalize", "vfo_freq_direct"}),
+            ("IC-7300MK2", {"vfo_swap", "vfo_equalize", "vfo_freq_direct"}),
+            ("IC-7610", {"vfo_swap", "vfo_equalize"}),
+            ("IC-9700", {"vfo_swap", "vfo_equalize"}),
+            ("FTX-1", {"vfo_swap", "vfo_equalize"}),
+            ("FT-991A", {"vfo_swap", "vfo_equalize"}),
+            ("TX-500", set()),
+            ("X6100", set()),
+            ("X6200", set()),
+        ],
+    )
+    async def test_vfo_tags_match_across_consumers_for_real_profiles(
+        self, model, expected
+    ):
+        radio = _make_radio(model)
+        radio.write_relative_vfo_frequency = AsyncMock(
+            spec=IcomRadio.write_relative_vfo_frequency
+        )
+        assert await _endpoint_vfo_tags(radio) == (
+            expected,
+            expected,
+            expected,
+        )
+
+    @pytest.mark.asyncio
+    async def test_vfo_tags_keep_partial_and_mismatched_schemes_in_parity(self):
+        radio = _make_radio("IC-7300")
+        radio.profile = replace(radio.profile, equal_ab_code=None)
+        assert await _endpoint_vfo_tags(radio) == (
+            {"vfo_swap"},
+            {"vfo_swap"},
+            {"vfo_swap"},
+        )
+
+        radio = _make_radio("IC-7300")
+        radio.profile = replace(radio.profile, vfo_scheme="main_sub")
+        assert await _endpoint_vfo_tags(radio) == (set(), set(), set())
+
+    @pytest.mark.asyncio
+    async def test_vfo_tags_reject_injection_and_only_fallback_when_runtime_absent(
+        self,
+    ):
+        injected = _make_radio("X6100", {"vfo_swap", "vfo_equalize"})
+        assert await _endpoint_vfo_tags(injected) == (set(), set(), set())
+
+        absent_runtime = _make_radio("IC-7300")
+        del absent_runtime.profile
+        del absent_runtime.model
+        expected = {"vfo_swap", "vfo_equalize"}
+        assert await _endpoint_vfo_tags(
+            absent_runtime, WebConfig(radio_model="IC-7300")
+        ) == (
+            expected,
+            expected,
+            expected,
+        )
+
+
+# ── /api/v1/capabilities tests ─────────────────────────────────
+
+
+class TestCapabilitiesEndpoint:
+    """Verify /api/v1/capabilities includes rig-specific metadata."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("model", "receivers", "vfo_scheme"),
+        [
+            ("IC-7610", 2, "main_sub"),
+            ("IC-7300", 1, "ab"),
+            ("FTX-1", 2, "ab_shared"),
+            ("FT-991A", 1, "ab"),
+        ],
+    )
+    async def test_capabilities_pins_known_wire_subset_and_types(
+        self, model: str, receivers: int, vfo_scheme: str
+    ):
+        """Known fields stay typed while additive fields remain compatible."""
+        radio = _make_radio(model)
+        srv = WebServer(radio)
+        writer = _FakeWriter()
+
+        await srv._serve_capabilities(writer)  # noqa: SLF001
+
+        data = _parse_json_body(writer)
+        # Deliberately assert a subset: clients must tolerate future additive
+        # capability fields, but these established fields and their types are
+        # the frontend wire contract.
+        assert data["model"] == model
+        assert type(data["receivers"]) is int
+        assert data["receivers"] == receivers
+        assert data["vfoScheme"] == vfo_scheme
+        assert isinstance(data["capabilities"], list)
+        assert all(isinstance(capability, str) for capability in data["capabilities"])
+        assert isinstance(data["scope"], bool)
+        assert isinstance(data["audio"], bool)
+        assert isinstance(data["tx"], bool)
+        assert isinstance(data["freqRanges"], list)
+        assert isinstance(data["modes"], list)
+        assert isinstance(data["filters"], list)
+        assert isinstance(data["audioConfig"], dict)
+        assert type(data["audioConfig"]["sampleRate"]) is int
+        assert isinstance(data["webrtc"], dict)
+        assert isinstance(data["webrtc"]["available"], bool)
+        assert isinstance(data["webrtc"]["enabled"], bool)
+        assert isinstance(data["txBands"], list)
+        assert all(
+            isinstance(band["name"], str)
+            and type(band["start"]) is int
+            and type(band["end"]) is int
+            for band in data["txBands"]
+        )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("model", "expected"),
+        [
+            ("IC-7300", True),
+            ("X6200", False),
+            ("FT-991A", False),
+        ],
+    )
+    async def test_capabilities_power_on_command_matches_profile(
+        self, model: str, expected: bool
+    ):
+        """powerOnCommand pins the profile's power_on declaration (MOR-2841):
+        present and equal to supports_command("power_on") — the fact that
+        gates the power-off overlay's Power ON action. The MOR-2901
+        profile-less rewrite must not drop it from the profile-present
+        path (MOR-2901 correction)."""
+        from rigplane.profiles import resolve_radio_profile
+
+        profile = resolve_radio_profile(model=model)
+        assert profile.supports_command("power_on") is expected
+        radio = _make_radio(model)
+        srv = WebServer(radio)
+        writer = _FakeWriter()
+
+        await srv._serve_capabilities(writer)  # noqa: SLF001
+
+        data = _parse_json_body(writer)
+        assert data["powerOnCommand"] is expected
+
+    @pytest.mark.asyncio
+    async def test_capabilities_ic7300_4m_tunable_with_published_tx_row(self):
+        """MOR-3782 kept the 4 m range tunable; MOR-4300 added its band
+        row. The profile's receive envelope covers 70.2 MHz (receiver
+        0.030–74.800 MHz per the Advanced Manual 11a §16), and
+        ``txBands`` publishes the 4 m row with its rated maximum —
+        information, not a permit: whether the radio actually
+        transmits on 70 MHz is the radio's own decision (MOR-4303).
+        """
+        radio = _make_radio("IC-7300")
+        srv = WebServer(radio)
+        writer = _FakeWriter()
+
+        await srv._serve_capabilities(writer)  # noqa: SLF001
+
+        data = _parse_json_body(writer)
+        assert any(
+            freq_range["start"] <= 70_200_000 <= freq_range["end"]
+            for freq_range in data["freqRanges"]
+        )
+        tx = next((band for band in data["txBands"] if band["name"] == "4m"), None)
+        assert tx == {
+            "name": "4m",
+            "start": 70_000_000,
+            "end": 70_500_000,
+            "maxPowerW": 50,
+        }
+
+    @pytest.mark.asyncio
+    async def test_capabilities_reports_hardware_and_audio_scope_independently(self):
+        """Audio FFT availability is not inferred from hardware scope support."""
+        hardware_radio = _make_radio("IC-7610")
+        hardware_srv = WebServer(hardware_radio)
+        hardware_writer = _FakeWriter()
+        await hardware_srv._serve_capabilities(hardware_writer)  # noqa: SLF001
+        hardware_data = _parse_json_body(hardware_writer)
+
+        audio_radio = _make_radio("FTX-1")
+        audio_srv = WebServer(audio_radio)
+        audio_writer = _FakeWriter()
+        await audio_srv._serve_capabilities(audio_writer)  # noqa: SLF001
+        audio_data = _parse_json_body(audio_writer)
+
+        assert hardware_data["scope"] is True
+        assert hardware_data["audio"] is True
+        assert audio_data["scope"] is False
+        assert audio_data["audio"] is True
+
+    @pytest.mark.asyncio
+    async def test_ftx1_capabilities_omit_filter_selector_but_keep_width_tables(self):
+        radio = _make_radio("FTX-1")
+        srv = WebServer(radio)
+        writer = _FakeWriter()
+
+        await srv._serve_capabilities(writer)  # noqa: SLF001
+
+        data = _parse_json_body(writer)
+        assert data["filters"] == []
+        assert "filter_width" in data["capabilities"]
+        assert data["filterConfig"]["SSB"]["table"][0] == 300
+        assert data["filterConfig"]["SSB"]["table"][-1] == 4000
+
+    @pytest.mark.asyncio
+    async def test_capabilities_allows_nullable_tx_bands(self):
+        """Profiles without configured bands serialize the established null value."""
+        radio = _make_radio("IC-7610")
+        radio.profile = replace(radio.profile, freq_ranges=())
+        srv = WebServer(radio)
+        writer = _FakeWriter()
+
+        await srv._serve_capabilities(writer)  # noqa: SLF001
+
+        data = _parse_json_body(writer)
+        assert data["txBands"] is None
+
+    @pytest.mark.asyncio
+    async def test_ftx1_capabilities_carry_repeater_ranges_and_ctcss_tones(self):
+        """The repeater-band flag and the resolved CTCSS chart reach the wire."""
+        from rigplane.profiles import resolve_radio_profile
+
+        radio = _make_radio("FTX-1")
+        srv = WebServer(radio)
+        writer = _FakeWriter()
+
+        await srv._serve_capabilities(writer)  # noqa: SLF001
+
+        data = _parse_json_body(writer)
+        ranges = {r["label"]: r for r in data["freqRanges"]}
+        assert ranges["2m"]["repeater"] is True
+        assert ranges["70cm"]["repeater"] is True
+        assert "repeater" not in ranges["HF"]
+        # Reuses the loader's resolved table, in its own order, not a copy.
+        profile = resolve_radio_profile(model="FTX-1")
+        assert data["ctcssTones"] == list(profile.ctcss_tones_centihz)
+        assert data["ctcssTones"][0] == 6700
+        assert data["ctcssTones"][-1] == 25410
+
+    @pytest.mark.asyncio
+    async def test_ic7610_capabilities_omit_repeater_flag_and_ctcss_tones(self):
+        """A radio with no repeater ranges and no [ctcss] carries neither fact."""
+        radio = _make_radio("IC-7610")
+        srv = WebServer(radio)
+        writer = _FakeWriter()
+
+        await srv._serve_capabilities(writer)  # noqa: SLF001
+
+        data = _parse_json_body(writer)
+        assert all("repeater" not in r for r in data["freqRanges"])
+        assert "ctcssTones" not in data
+
+    @pytest.mark.asyncio
+    async def test_capabilities_includes_receivers(self):
+        radio = _make_radio("IC-7610")
+        srv = WebServer(radio)
+        writer = _FakeWriter()
+        await srv._serve_capabilities(writer)  # noqa: SLF001
+        data = _parse_json_body(writer)
+        assert data["receivers"] == 2
+
+    @pytest.mark.asyncio
+    async def test_capabilities_includes_vfo_scheme(self):
+        radio = _make_radio("IC-7610")
+        srv = WebServer(radio)
+        writer = _FakeWriter()
+        await srv._serve_capabilities(writer)  # noqa: SLF001
+        data = _parse_json_body(writer)
+        assert data["vfoScheme"] == "main_sub"
+
+    @pytest.mark.asyncio
+    async def test_capabilities_single_receiver(self):
+        radio = _make_radio("IC-7300")
+        srv = WebServer(radio)
+        writer = _FakeWriter()
+        await srv._serve_capabilities(writer)  # noqa: SLF001
+        data = _parse_json_body(writer)
+        assert data["receivers"] == 1
+        assert data["vfoScheme"] == "ab"
+        assert data["vfoReadback"] == "selected_unselected"
+
+    @pytest.mark.asyncio
+    async def test_capabilities_include_filter_config(self):
+        radio = _make_radio("IC-7610")
+        srv = WebServer(radio)
+        writer = _FakeWriter()
+        await srv._serve_capabilities(writer)  # noqa: SLF001
+        data = _parse_json_body(writer)
+        assert data["filterConfig"]["USB"]["defaults"] == [3000, 2400, 1800]
+        assert data["filterConfig"]["USB-D"]["defaults"] == [3000, 1200, 500]
+        assert data["filterConfig"]["AM"]["stepHz"] == 200
+        assert data["filterConfig"]["FM"]["fixed"] is True
+        # MOR-2497: the per-mode twin-PBT step reaches the browser, and its
+        # ABSENCE is the signal that a mode has no twin PBT (FM). `stepHz` and
+        # `pbtStepHz` are different quantities that collide at 200 in AM, so
+        # USB is pinned too, where the width step is absent and the PBT step
+        # is 50.
+        assert data["filterConfig"]["USB"]["pbtStepHz"] == 50
+        assert data["filterConfig"]["AM"]["pbtStepHz"] == 200
+        assert "stepHz" not in data["filterConfig"]["USB"]
+        assert "pbtStepHz" not in data["filterConfig"]["FM"]
+        # MOR-2504: PSK/PSK-R publish the CW-shaped filter table (IC-7610
+        # Basic Manual, PDF p.34) and the bench-measured 50 Hz PBT step
+        # (real IC-7610 over LAN, 2026-09-17, PSK at FIL2).
+        assert data["filterConfig"]["PSK"]["defaults"] == [1200, 500, 250]
+        assert data["filterConfig"]["PSK"]["pbtStepHz"] == 50
+        assert data["filterConfig"]["PSK-R"]["pbtStepHz"] == 50
+
+    @pytest.mark.asyncio
+    async def test_capabilities_include_keyboard_config(self):
+        radio = _make_radio("IC-7610")
+        srv = WebServer(radio)
+        writer = _FakeWriter()
+        await srv._serve_capabilities(writer)  # noqa: SLF001
+        data = _parse_json_body(writer)
+        assert data["keyboard"]["leaderKey"] == "g"
+        assert data["keyboard"]["leaderTimeoutMs"] == 1000
+        assert data["keyboard"]["altHints"] is True
+        assert any(
+            binding["action"] == "toggle_help"
+            for binding in data["keyboard"]["bindings"]
+        )
+
+    @pytest.mark.asyncio
+    async def test_capabilities_include_antenna_count(self):
+        radio = _make_radio("IC-7610")
+        srv = WebServer(radio)
+        writer = _FakeWriter()
+        await srv._serve_capabilities(writer)  # noqa: SLF001
+        data = _parse_json_body(writer)
+        assert data["antennas"] == 2
+
+    @pytest.mark.asyncio
+    async def test_capabilities_single_antenna_default(self):
+        radio = _make_radio("IC-7300")
+        srv = WebServer(radio)
+        writer = _FakeWriter()
+        await srv._serve_capabilities(writer)  # noqa: SLF001
+        data = _parse_json_body(writer)
+        assert data["antennas"] == 1
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("tx_count", "has_rx_antenna", "has_rx_actuator"),
+        [
+            (2, False, True),
+            (1, True, False),
+        ],
+    )
+    async def test_capabilities_keeps_antenna_topology_and_actuator_independent(
+        self, tx_count: int, has_rx_antenna: bool, has_rx_actuator: bool
+    ):
+        radio = _make_radio("IC-7610")
+        capabilities = set(radio.profile.capabilities)
+        if has_rx_actuator:
+            capabilities.add("rx_antenna")
+        else:
+            capabilities.discard("rx_antenna")
+        radio.profile = replace(
+            radio.profile,
+            antenna_tx_count=tx_count,
+            antenna_has_rx_ant=has_rx_antenna,
+            capabilities=frozenset(capabilities),
+        )
+        radio.capabilities = capabilities
+        srv = WebServer(radio)
+        writer = _FakeWriter()
+
+        await srv._serve_capabilities(writer)  # noqa: SLF001
+
+        data = _parse_json_body(writer)
+        assert data["antennas"] == tx_count
+        assert data["hasRxAntenna"] is has_rx_antenna
+        assert ("rx_antenna" in data["capabilities"]) is has_rx_actuator
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("model", "expected"),
+        [
+            ("IC-705", {"vfo_swap", "vfo_equalize"}),
+            ("IC-7300", {"vfo_swap", "vfo_equalize"}),
+            ("IC-7610", {"vfo_swap", "vfo_equalize"}),
+            ("IC-9700", {"vfo_swap", "vfo_equalize"}),
+            ("FTX-1", {"vfo_swap", "vfo_equalize"}),
+            ("FT-991A", {"vfo_swap", "vfo_equalize"}),
+            ("TX-500", set()),
+            ("X6100", set()),
+            ("X6200", set()),
+        ],
+    )
+    async def test_capabilities_projects_exact_profile_vfo_primitives(
+        self, model, expected
+    ):
+        radio = _make_radio(model)
+        srv = WebServer(radio)
+        writer = _FakeWriter()
+
+        await srv._serve_capabilities(writer)  # noqa: SLF001
+
+        tags = set(_parse_json_body(writer)["capabilities"])
+        assert tags & {"vfo_swap", "vfo_equalize"} == expected
+
+    @pytest.mark.asyncio
+    async def test_capabilities_rejects_mismatched_vfo_scheme_primitives(self):
+        radio = _make_radio("IC-7300")
+        radio.profile = replace(radio.profile, vfo_scheme="main_sub")
+
+        assert await _endpoint_vfo_tags(radio) == (set(), set(), set())
+
+
+def _yaesu(cls=YaesuCatRadio):
+    return cls("/dev/null", audio_driver=SimpleNamespace())
+
+
+def test_browser_tx_audio_facts_fail_closed():
+    no_tx = type(
+        "NoTx",
+        (YaesuCatRadio,),
+        {"capabilities": property(lambda _: {"audio"})},
+    )
+    bad_codec = type(
+        "BadCodec",
+        (YaesuCatRadio,),
+        {
+            "audio_tx_codec": property(lambda _: None),
+            "audio_codec": property(lambda _: None),
+        },
+    )
+    variants = (
+        _yaesu(no_tx),
+        _yaesu(bad_codec),
+        _yaesu(type("Partial", (YaesuCatRadio,), {"push_tx": None})),
+        _yaesu(type("SyncPush", (YaesuCatRadio,), {"push_tx": lambda *_: None})),
+        _yaesu(
+            type("WrongArity", (YaesuCatRadio,), {"push_tx": YaesuCatRadio.stop_tx})
+        ),
+    )
+    assert all(not browser_tx_audio_facts(radio).available for radio in variants)
+
+
+def test_browser_tx_audio_facts_reject_stubs_and_instance_callables():
+    class StubRadio(AudioCapable):
+        capabilities = {"audio", "tx"}
+        backend_id = "yaesu_cat"
+        has_usb_audio = True
+        audio_tx_codec = AudioCodec.OPUS_1CH
+
+    assert browser_tx_audio_facts(StubRadio()).available is False
+    donor, victim = _yaesu(), _yaesu()
+    victim.start_tx = donor.start_tx
+    assert browser_tx_audio_facts(victim).available is False
+
+    victim = _yaesu()
+    victim.push_tx = YaesuCatRadio.stop_tx
+    assert browser_tx_audio_facts(victim).available is False
+
+
+class _CountingRadio(YaesuCatRadio):
+    reads: dict[str, int]
+
+    def __getattribute__(self, name: str):
+        if name in {"start_tx", "push_tx", "stop_tx"}:
+            reads = object.__getattribute__(self, "reads")
+            reads[name] += 1
+        return super().__getattribute__(name)
+
+
+def test_browser_tx_audio_facts_reads_each_lifecycle_method_once():
+    radio = _yaesu(_CountingRadio)
+    radio.reads = dict.fromkeys(("start_tx", "push_tx", "stop_tx"), 0)
+    facts = browser_tx_audio_facts(radio)
+    assert facts.available is True
+    assert radio.reads == {"start_tx": 1, "push_tx": 1, "stop_tx": 1}
+
+
+def test_browser_tx_audio_facts_pin_real_provider_snapshots():
+    icom = browser_tx_audio_facts(IcomRadio("192.168.55.40", model="IC-7610"))
+    yaesu = browser_tx_audio_facts(
+        YaesuCatRadio("/dev/null", audio_driver=SimpleNamespace())
+    )
+    assert astuple(icom)[:-1] == (True, "lan", 5, AudioCodec.PCM_1CH_16BIT, "session")
+    assert astuple(yaesu)[:-1] == (
+        True,
+        "usb",
+        None,
+        AudioCodec.PCM_1CH_16BIT,
+        "session",
+    )
+
+
+def test_browser_tx_audio_facts_mk2_requires_declared_lan_input():
+    facts = browser_tx_audio_facts(IcomRadio("192.0.2.1", model="IC-7300MK2"))
+    assert astuple(facts)[:-1] == (
+        True,
+        "lan",
+        5,
+        AudioCodec.PCM_1CH_16BIT,
+        "session",
+    )
+
+
+# ── /api/v1/state tests ───────────────────────────────────────
+
+
+class TestStateEndpoint:
+    """Verify /api/v1/state adapts to receiver count."""
+
+    @pytest.mark.asyncio
+    async def test_state_dual_receiver_includes_sub(self):
+        radio = _make_radio("IC-7610")
+        srv = WebServer(radio)
+        writer = _FakeWriter()
+        await srv._serve_state(writer)  # noqa: SLF001
+        data = _parse_json_body(writer)
+        assert "main" in data
+        assert "sub" in data
+
+    @pytest.mark.asyncio
+    async def test_state_single_receiver_omits_sub(self):
+        radio = _make_radio("IC-7300")
+        srv = WebServer(radio)
+        writer = _FakeWriter()
+        await srv._serve_state(writer)  # noqa: SLF001
+        data = _parse_json_body(writer)
+        assert "main" in data
+        assert "sub" not in data
+
+
+# ── Command capability guards ──────────────────────────────────
+
+
+class TestCommandGuards:
+    """Commands for unsupported capabilities return clear error."""
+
+    def test_dual_watch_guard_single_receiver(self):
+        """set_dual_watch on IC-7300 (no dual_rx) should raise ValueError."""
+        from rigplane.web.handlers import ControlHandler
+
+        radio = _make_radio("IC-7300")
+        handler = ControlHandler.__new__(ControlHandler)
+        handler._radio = radio
+
+        with pytest.raises(ValueError, match="dual_rx"):
+            handler._ensure_capability("dual_rx", "set_dual_watch")
+
+    def test_digisel_guard_ic7300(self):
+        """set_digisel on IC-7300 (no digisel) should raise ValueError."""
+        from rigplane.web.handlers import ControlHandler
+
+        radio = _make_radio("IC-7300")
+        handler = ControlHandler.__new__(ControlHandler)
+        handler._radio = radio
+
+        with pytest.raises(ValueError, match="digisel"):
+            handler._ensure_capability("digisel", "set_digisel")
+
+    def test_ip_plus_allowed_ic7300(self):
+        """IC-7300 profile includes ip_plus (wfview CI-V 0x16 0x65)."""
+        from rigplane.web.handlers import ControlHandler
+
+        radio = _make_radio("IC-7300")
+        handler = ControlHandler.__new__(ControlHandler)
+        handler._radio = radio
+
+        handler._ensure_capability("ip_plus", "set_ip_plus")
+
+    def test_capability_passes_when_supported(self):
+        """_ensure_capability does NOT raise for supported capabilities."""
+        from rigplane.web.handlers import ControlHandler
+
+        radio = _make_radio("IC-7610")
+        handler = ControlHandler.__new__(ControlHandler)
+        handler._radio = radio
+
+        # Should not raise
+        handler._ensure_capability("dual_rx", "set_dual_watch")
+        handler._ensure_capability("dual_rx", "set_dual_watch")
+
+
+class TestReceiverValidationSeat:
+    """Unsupported receivers are refused before enqueue, on the radio's say-so.
+
+    MOR-2484: the web enqueue gate calls the single runtime seat
+    (``require_receiver_for_profile``), not a web copy. A single-receiver
+    profile (IC-7300) refuses receiver=1 at enqueue time with the
+    runtime's ``CommandError`` message, so the command is never queued;
+    the dual-receiver IC-7610 admits both receivers.
+    """
+
+    def test_single_receiver_refused_before_enqueue(self):
+        from rigplane.core.exceptions import CommandError
+        from rigplane.web.handlers import ControlHandler
+
+        radio = _make_radio("IC-7300")
+        handler = ControlHandler.__new__(ControlHandler)
+        handler._radio = radio
+        queue: list[object] = []
+
+        with pytest.raises(CommandError, match="does not support receiver=1"):
+            handler._enqueue_rc_frequency(  # noqa: SLF001
+                "set_freq",
+                {"freq": 14_074_000, "receiver": 1},
+                SimpleNamespace(put=queue.append),
+                radio,
+            )
+        assert queue == []
+        # No web *copy* remains: the gate calls the runtime seat directly,
+        # so the old ControlHandler method and the old poller copy are gone.
+        # The poller's drain-time guard is a one-line call into the same
+        # runtime seat (pinned by test_profiles_routing), not a copy.
+        assert not hasattr(ControlHandler, "_ensure_receiver_supported")
+        import rigplane.web.handlers.control as control_mod
+        import rigplane.web.radio_poller as poller_mod
+
+        assert not hasattr(control_mod, "_ensure_receiver_supported")
+        assert not hasattr(poller_mod.RadioPoller, "_ensure_receiver_supported")
+
+    def test_dual_receiver_admitted_to_queue(self):
+        from rigplane.web.handlers import ControlHandler
+
+        radio = _make_radio("IC-7610")
+        handler = ControlHandler.__new__(ControlHandler)
+        handler._radio = radio
+        queue: list[object] = []
+
+        result = handler._enqueue_rc_frequency(  # noqa: SLF001
+            "set_freq",
+            {"freq": 14_074_000, "receiver": 1},
+            SimpleNamespace(put=queue.append),
+            radio,
+        )
+        assert result == {"freq": 14_074_000, "receiver": 1}
+        assert len(queue) == 1
+
+    def test_web_gate_matches_runtime_seat_message(self):
+        """The web gate raises the runtime seat's message verbatim."""
+        from rigplane.core.exceptions import CommandError
+        from rigplane.runtime._dual_rx_runtime import require_receiver_for_profile
+        from rigplane.web.handlers.control import _refuse_unsupported_receiver
+
+        radio = _make_radio("IC-7300")
+        with pytest.raises(CommandError) as gate_exc:
+            _refuse_unsupported_receiver(radio, 1, operation="set_freq")
+        with pytest.raises(CommandError) as seat_exc:
+            require_receiver_for_profile(radio.profile, 1, operation="set_freq")
+        assert str(gate_exc.value) == str(seat_exc.value)
+
+
+# ── Profile-declared second receiver (owner ruling, 2026-09-08) ─
+
+
+class TestProfileDeclaredSecondReceiver:
+    """A profile-declared ``dual_rx`` reaches the served surface.
+
+    Owner ruling, 2026-09-08: structural existence of the second receiver
+    follows the rig profile, not the swap-and-equalize protocol. The swap
+    and equalize *actions* keep their own gates, so a backend that declares
+    ``dual_rx`` without declaring the MAIN/SUB primitives serves the
+    receiver and refuses the actions; the FTX-1 declares them natively
+    (``vfo_swap`` = ``SV;``, ``vfo_equalize`` = ``AB;``, OM 2508-C,
+    MOR-2531), so for it the row is served and the commands are admitted.
+
+    The radio here is a real :class:`YaesuCatRadio` on the bundled ``ftx1``
+    profile — a ``MagicMock`` would satisfy every Protocol check trivially
+    and could not distinguish the two behaviours.
+    """
+
+    def test_runtime_capabilities_serves_dual_rx_from_the_profile(self) -> None:
+        from rigplane.radio_protocol import DualReceiverCapable
+        from rigplane.web.runtime_helpers import runtime_capabilities
+
+        radio = _yaesu()
+        assert "dual_rx" in radio.capabilities
+        # MOR-2531 gave YaesuCatRadio real swap_main_sub/equalize_main_sub
+        # methods, so it now satisfies DualReceiverCapable structurally; the
+        # tag is still read from the profile's capabilities list, not
+        # derived from the protocol check.
+        assert isinstance(radio, DualReceiverCapable)
+        assert "dual_rx" in runtime_capabilities(radio)
+
+    @pytest.mark.asyncio
+    async def test_info_reports_the_second_receiver(self) -> None:
+        radio = _yaesu()
+        srv = WebServer(radio)
+        writer = _FakeWriter()
+        await srv._serve_info(writer)  # noqa: SLF001
+        data = _parse_json_body(writer)
+        assert data["capabilities"]["hasDualReceiver"] is True
+        assert data["capabilities"]["maxReceivers"] == 2
+        assert "dual_rx" in data["capabilities"]["tags"]
+
+    @pytest.mark.asyncio
+    async def test_capabilities_endpoint_reports_the_second_receiver(self) -> None:
+        radio = _yaesu()
+        srv = WebServer(radio)
+        writer = _FakeWriter()
+        await srv._serve_capabilities(writer)  # noqa: SLF001
+        data = _parse_json_body(writer)
+        assert "dual_rx" in data["capabilities"]
+        assert data["receivers"] == 2
+
+    def test_swap_and_equalize_tags_project_from_the_declared_commands(self) -> None:
+        from rigplane.web.runtime_helpers import projected_vfo_capability_tags
+
+        radio = _yaesu()
+        assert radio.profile.supports_command("vfo_swap")
+        assert radio.profile.supports_command("vfo_equalize")
+        assert projected_vfo_capability_tags(radio, None) == frozenset(
+            {"vfo_swap", "vfo_equalize"}
+        )
+
+    @pytest.mark.parametrize("name", ["vfo_swap", "vfo_equalize"])
+    def test_swap_and_equalize_commands_enqueue_on_the_ftx1(self, name: str) -> None:
+        from rigplane.web.handlers import ControlHandler
+
+        radio = _yaesu()
+        handler = ControlHandler.__new__(ControlHandler)
+        handler._radio = radio
+        queue: list[object] = []
+
+        result = handler._enqueue_rc_frequency(  # noqa: SLF001
+            name, {}, SimpleNamespace(put=queue.append), radio
+        )
+        assert result == {}
+        assert len(queue) == 1
+
+    @pytest.mark.parametrize("name", ["vfo_swap", "vfo_equalize"])
+    def test_swap_and_equalize_refused_when_the_profile_omits_the_command(
+        self, name: str
+    ) -> None:
+        from rigplane.rig_loader import load_rig
+        from rigplane.web.handlers import ControlHandler
+
+        config = load_rig(_RIGS_DIR / "ftx1.toml")
+        del config.commands["vfo_swap"]
+        del config.commands["vfo_equalize"]
+        radio = YaesuCatRadio("/dev/null", profile=config)
+        handler = ControlHandler.__new__(ControlHandler)
+        handler._radio = radio
+        queue: list[object] = []
+
+        expected = f"command '{name}' is not supported by active profile"
+        with pytest.raises(ValueError, match=expected):
+            handler._enqueue_rc_frequency(  # noqa: SLF001
+                name, {}, SimpleNamespace(put=queue.append), radio
+            )
+        assert queue == []
+
+
+# ── SUB-receiver AF level (MOR-2579) ───────────────────────────
+
+
+class TestSubReceiverAfLevelTag:
+    """``/api/v1/info`` and ``/api/v1/capabilities`` serve ``af_level_sub``
+    only when the radio itself admits ``set_af_level`` for receiver 1
+    (``Radio.supports_command`` with an explicit receiver). Real radios on the
+    bundled profiles, not mocks."""
+
+    @pytest.mark.parametrize(
+        ("rig", "admitted"),
+        [("ftx1", True), ("ic7610", True), ("ic9700", False), ("ic7300", False)],
+    )
+    def test_tag_follows_the_radio_admission(self, rig: str, admitted: bool) -> None:
+        from rigplane.rig_loader import load_rig
+        from rigplane.runtime.radio import CoreRadio
+        from rigplane.web.runtime_helpers import (
+            projected_af_level_sub_tag,
+            runtime_capabilities,
+        )
+
+        config = load_rig(_RIGS_DIR / f"{rig}.toml")
+        radio = (
+            YaesuCatRadio("/dev/null", profile=config)
+            if rig == "ftx1"
+            else CoreRadio("127.0.0.1", profile=config.to_profile())
+        )
+        assert radio.supports_command("set_af_level", receiver=1) is admitted
+        tags = projected_af_level_sub_tag(radio, runtime_capabilities(radio))
+        assert tags == (frozenset({"af_level_sub"}) if admitted else frozenset())
+
+    @pytest.mark.asyncio
+    async def test_info_and_capabilities_serve_it_only_with_a_sub_af_write(
+        self,
+    ) -> None:
+        from rigplane.rig_loader import load_rig
+
+        config = load_rig(_RIGS_DIR / "ftx1.toml")
+        commands = dict(config.commands)
+        del commands["set_af_level_sub"]
+        tag = frozenset({"af_level_sub"})
+        for profile, expected in (
+            (config, {"af_level_sub"}),
+            (replace(config, commands=commands), set()),
+        ):
+            radio = YaesuCatRadio(
+                "/dev/null", profile=profile, audio_driver=SimpleNamespace()
+            )
+            info, capabilities, _hello = await _endpoint_vfo_tags(radio, reserved=tag)
+            assert (info, capabilities) == (expected, expected)
+
+
+# ── Per-receiver declared controls (MOR-2588) ────────────────────
+
+
+class TestReceiverDeclaredControlTags:
+    """``attenuator_main``/``preamp_main``/``attenuator_sub``/``preamp_sub``/
+    ``agc_time_constant``/``agc_time_constant_sub``/``manual_notch_width``/
+    ``manual_notch_width_sub`` are served only for
+    receivers whose fields the profile itself declares (MOR-2588), following
+    the ``af_level_sub`` serving pattern (MOR-2579) with the profile's
+    declared acquisition paths as the fact. ``supports_command`` admission is
+    not the fact here: it under-admits (FTX-1 declares
+    ``receiver.main.operator_controls.preamp`` with no receiver-admitted
+    write) and over-admits (IC-9700/IC-705 declare the 0x1A 04 command pair
+    without declaring the polled field). The radio-wide ``attenuator``/
+    ``preamp`` capability is likewise not the fact: tx500/x6100 declare the
+    command with no polled MAIN field. Real radios on the bundled
+    profiles, not mocks."""
+
+    @pytest.mark.parametrize(
+        ("rig", "expected"),
+        [
+            (
+                "ic7610",
+                {
+                    "attenuator_main",
+                    "preamp_main",
+                    "attenuator_sub",
+                    "preamp_sub",
+                    "agc_time_constant",
+                    "agc_time_constant_sub",
+                    "manual_notch_width",
+                    "manual_notch_width_sub",
+                },
+            ),
+            (
+                "ic7300",
+                {
+                    "attenuator_main",
+                    "preamp_main",
+                    "agc_time_constant",
+                    "manual_notch_width",
+                },
+            ),
+            ("ic9700", {"attenuator_main", "preamp_main"}),
+            ("ic705", {"attenuator_main", "preamp_main", "manual_notch_width"}),
+            ("ftx1", {"attenuator_main", "preamp_main"}),
+            ("tx500", set()),
+            ("x6100", set()),
+            ("x6200", {"attenuator_main", "preamp_main"}),
+        ],
+    )
+    def test_tags_follow_the_profile_declared_fields(self, rig, expected):
+        from rigplane.rig_loader import load_rig
+        from rigplane.runtime.radio import CoreRadio
+        from rigplane.web.runtime_helpers import projected_receiver_control_tags
+
+        config = load_rig(_RIGS_DIR / f"{rig}.toml")
+        radio = (
+            YaesuCatRadio("/dev/null", profile=config)
+            if rig == "ftx1"
+            else CoreRadio("127.0.0.1", profile=config.to_profile())
+        )
+        assert projected_receiver_control_tags(radio) == frozenset(expected)
+
+    def test_command_declarations_alone_do_not_project_the_agc_time_tags(self):
+        """IC-9700 and IC-705 declare get/set_agc_time_constant without
+        declaring the polled field; admission would light a control that
+        never reads."""
+        from rigplane.rig_loader import load_rig
+        from rigplane.runtime.radio import CoreRadio
+        from rigplane.web.runtime_helpers import projected_receiver_control_tags
+
+        for rig in ("ic9700", "ic705"):
+            config = load_rig(_RIGS_DIR / f"{rig}.toml")
+            radio = CoreRadio("127.0.0.1", profile=config.to_profile())
+            assert radio.profile.supports_command("set_agc_time_constant")
+            assert "agc_time_constant" not in projected_receiver_control_tags(radio)
+
+    def test_width_values_and_commands_alone_do_not_project_the_notch_width_tag(
+        self,
+    ):
+        """MOR-2726: IC-9700 declares ``set_manual_notch_width`` and
+        ``[notch] width_values`` without declaring the polled field."""
+        from rigplane.rig_loader import load_rig
+        from rigplane.runtime.radio import CoreRadio
+        from rigplane.web.runtime_helpers import projected_receiver_control_tags
+
+        for rig in ("ic9700",):
+            config = load_rig(_RIGS_DIR / f"{rig}.toml")
+            radio = CoreRadio("127.0.0.1", profile=config.to_profile())
+            assert radio.profile.supports_command("set_manual_notch_width")
+            assert radio.profile.notch_width_values
+            assert "manual_notch_width" not in projected_receiver_control_tags(radio)
+
+    @pytest.mark.asyncio
+    async def test_info_and_capabilities_serve_the_declared_tags(self):
+        from rigplane.core.state_pipeline_contracts import FieldPath
+        from rigplane.web.runtime_helpers import projected_receiver_control_tags
+
+        reserved = frozenset(
+            {
+                "attenuator_main",
+                "preamp_main",
+                "attenuator_sub",
+                "preamp_sub",
+                "agc_time_constant",
+                "agc_time_constant_sub",
+                "manual_notch_width",
+                "manual_notch_width_sub",
+            }
+        )
+        undeclared = {
+            FieldPath.parse("receiver.main.operator_controls.att"),
+            FieldPath.parse("receiver.main.operator_controls.preamp"),
+            FieldPath.parse("receiver.sub.operator_controls.att"),
+            FieldPath.parse("receiver.sub.operator_controls.preamp"),
+            FieldPath.parse("receiver.main.operator_controls.agc_time_constant"),
+            FieldPath.parse("receiver.sub.operator_controls.agc_time_constant"),
+            FieldPath.parse("receiver.main.operator_controls.manual_notch_width"),
+            FieldPath.parse("receiver.sub.operator_controls.manual_notch_width"),
+        }
+        stripped = _make_radio("IC-7610")
+        acquisition = stripped.profile.state_acquisition
+        assert acquisition is not None
+        stripped.profile = replace(
+            stripped.profile,
+            state_acquisition=replace(
+                acquisition,
+                capabilities=tuple(
+                    capability
+                    for capability in acquisition.capabilities
+                    if capability.path not in undeclared
+                ),
+                field_policies={
+                    path: policy
+                    for path, policy in acquisition.field_policies.items()
+                    if path not in undeclared
+                },
+            ),
+        )
+        for radio, expected in (
+            (_make_radio("IC-7610"), reserved),
+            (stripped, frozenset()),
+        ):
+            assert projected_receiver_control_tags(radio) == expected
+            info, capabilities, hello = await _endpoint_vfo_tags(
+                radio, reserved=reserved
+            )
+            # The tags gate the HTTP surface the frontend store consumes
+            # (`ws-client.ts: refreshCapabilities` fetches
+            # /api/v1/capabilities). The websocket hello's capabilities are
+            # the control channel's command-admission view and carry none
+            # of the projected per-receiver tags — the same boundary
+            # MOR-2579 set for `af_level_sub`.
+            assert (info, capabilities) == (expected, expected)
+            assert hello == frozenset()
+
+
+# ── Profile-declared dual watch (MOR-2425) ─────────────────────
+
+
+class TestProfileDeclaredDualWatch:
+    """The bundled FTX-1 profile's ``dual_watch`` tag reaches the served surface.
+
+    The radio here is a real :class:`YaesuCatRadio` on the bundled ``ftx1``
+    profile, so the tag is read from the shipped TOML rather than from a
+    hand-built capability set.
+    """
+
+    def test_runtime_capabilities_serve_dual_watch(self) -> None:
+        from rigplane.web.runtime_helpers import runtime_capabilities
+
+        radio = _yaesu()
+        assert "dual_watch" in radio.capabilities
+        assert "dual_watch" in runtime_capabilities(radio)
+
+    @pytest.mark.asyncio
+    async def test_capabilities_endpoint_serves_dual_watch(self) -> None:
+        radio = _yaesu()
+        srv = WebServer(radio)
+        writer = _FakeWriter()
+        await srv._serve_capabilities(writer)  # noqa: SLF001
+        data = _parse_json_body(writer)
+        assert "dual_watch" in data["capabilities"]
+
+    @pytest.mark.asyncio
+    async def test_info_endpoint_serves_dual_watch(self) -> None:
+        radio = _yaesu()
+        srv = WebServer(radio)
+        writer = _FakeWriter()
+        await srv._serve_info(writer)  # noqa: SLF001
+        data = _parse_json_body(writer)
+        assert "dual_watch" in data["capabilities"]["tags"]
+
+
+@pytest.mark.parametrize("model", ["IC-7300", "IC-7300MK2", "IC-705"])
+async def test_direct_vfo_frequency_capability_requires_real_supported_route(model):
+    radio = _make_radio(model)
+    radio.write_relative_vfo_frequency = AsyncMock(
+        spec=IcomRadio.write_relative_vfo_frequency
+    )
+    for tags in await _endpoint_vfo_tags(radio):
+        assert "vfo_freq_direct" in tags
+    del radio.write_relative_vfo_frequency
+    radio.capabilities.add("vfo_freq_direct")
+    for tags in await _endpoint_vfo_tags(radio):
+        assert "vfo_freq_direct" not in tags
+
+
+@pytest.mark.parametrize("model", ["IC-7300", "IC-7300MK2", "IC-705"])
+@pytest.mark.parametrize(
+    "missing",
+    [
+        "set_selected_freq",
+        "get_selected_freq",
+        "set_unselected_freq",
+        "get_unselected_freq",
+    ],
+)
+async def test_direct_vfo_frequency_profile_keys_are_all_required(model, missing):
+    from rigplane.commands.command_map import CommandMap
+
+    radio = _make_radio(model)
+    radio.write_relative_vfo_frequency = AsyncMock(
+        spec=IcomRadio.write_relative_vfo_frequency
+    )
+    cmd_map = radio.profile.command_map
+    radio.profile = replace(
+        radio.profile,
+        command_map=CommandMap(
+            {key: cmd_map.get(key) for key in cmd_map if key != missing}
+        ),
+    )
+    for tags in await _endpoint_vfo_tags(radio):
+        assert "vfo_freq_direct" not in tags
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"id": "arbitrary_profile_id"},
+        {"receiver_count": 2},
+        {"vfo_scheme": "main_sub"},
+        {"vfo_readback": "none"},
+        {"command_map": None},
+    ],
+)
+async def test_direct_vfo_frequency_gate_uses_profile_data(changes):
+    radio = _make_radio("IC-7300")
+    radio.write_relative_vfo_frequency = AsyncMock(
+        spec=IcomRadio.write_relative_vfo_frequency
+    )
+    radio.profile = replace(radio.profile, **changes)
+    for tags in await _endpoint_vfo_tags(radio):
+        assert ("vfo_freq_direct" in tags) == ("id" in changes)

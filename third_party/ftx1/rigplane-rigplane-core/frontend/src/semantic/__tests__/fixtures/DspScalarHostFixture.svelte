@@ -1,0 +1,119 @@
+<script lang="ts">
+  import type { ScalarAppearance } from '../../../../component-kit-api/src/index';
+  import type { FiniteControlAppearance, FiniteRendererContext }
+    from '../../../primitives/control-instruments/control-instrument-renderer.svelte';
+  import type { CommandScalarFeedback } from '../../../primitives/scalar/continuous-scalar.svelte';
+  import type { NotchWidthChoice } from '../../../lib/types/capabilities';
+  import DspInstrumentHost from '../../DspInstrumentHost.svelte';
+  import DspScalarHost from '../../DspScalarHost.svelte';
+  import DspSurface, { type DspLevelField } from '../../DspSurface.svelte';
+  import type { DspFiniteChoiceValue, DspFiniteHandles, DspNotchMode,
+    DspToggleField } from '../../dsp-instruments';
+  import type { DspScalarFeedback, DspScalarField, DspScalarHandles,
+    DspScalarPresentation } from '../../dsp-scalars';
+  import type { RadioViewModel } from '../../radio-view-model';
+
+  interface Props {
+    view: RadioViewModel;
+    feedback?: DspScalarFeedback;
+    presentation?: 'grouped' | 'independent' | 'nr' | 'compact-notch' | 'notch-status';
+    scalarPresentation?: Readonly<DspScalarPresentation>;
+    agcLabels?: Record<string, string>;
+    notchWidthChoices?: readonly NotchWidthChoice[];
+    nbLevelMax?: number;
+    nbLevelPercent?: boolean;
+    scalarAppearance?: ScalarAppearance;
+    presentationIsCurrent?: () => boolean;
+    compactAgcTime?: boolean;
+    pendingNb?: boolean | null;
+    pendingNr?: boolean | null;
+    pendingNotch?: DspNotchMode | null;
+    pendingNotchWidth?: number | null;
+    finiteAppearance?: FiniteControlAppearance<DspFiniteChoiceValue>;
+    rendererContext?: FiniteRendererContext | null;
+    onToggle?: (field: DspToggleField, next: boolean) => void;
+    onLevelChange?: (field: DspLevelField, value: number) => void;
+    onNotchModeChange?: (mode: DspNotchMode) => void;
+    onAgcModeChange?: (mode: number) => void;
+  }
+  let { view, feedback, presentation = 'grouped', scalarPresentation,
+    agcLabels = {}, notchWidthChoices, nbLevelMax = 255, nbLevelPercent = false,
+    scalarAppearance, presentationIsCurrent, compactAgcTime,
+    pendingNb = null, pendingNr = null, pendingNotch = null, pendingNotchWidth = null,
+    finiteAppearance, rendererContext = null,
+    onToggle, onLevelChange, onNotchModeChange, onAgcModeChange }: Props = $props();
+  let finiteSelection = $derived(finiteAppearance === undefined
+    ? {} : { finiteAppearance, rendererContext });
+
+  function defaultFeedback(field: DspScalarField): Readonly<CommandScalarFeedback> {
+    const fact = view.dsp?.[field];
+    const confirmed = fact?.reading.status === 'known' ? fact.reading.value : null;
+    const available = fact?.availability.operational === true && confirmed !== null;
+    return Object.freeze({
+      confirmed: available ? confirmed : null,
+      target: null, requestedTarget: null, phase: available ? 'idle' : 'unavailable',
+      busy: false, availability: available ? 'available' : 'unavailable', outcome: null,
+      lifecycleId: null, transitionId: null, providerGeneration: 1, sessionEpoch: 1,
+      scope: Object.freeze({ control: field === 'nbLevel' ? 'nb-level' : 'nb-width', receiver: 0 }),
+      repeatPolicy: 'latest-target-wins',
+    });
+  }
+  let scalarFeedback = $derived(feedback ?? Object.freeze({
+    nbLevel: defaultFeedback('nbLevel'), nbDepth: defaultFeedback('nbDepth'),
+    nbWidth: defaultFeedback('nbWidth'), nrLevel: defaultFeedback('nrLevel'),
+    notchFreq: defaultFeedback('notchFreq'), manualNotchWidth: defaultFeedback('manualNotchWidth'),
+    agcTimeConstant: defaultFeedback('agcTimeConstant'),
+  }));
+</script>
+
+  <DspInstrumentHost {view} {agcLabels} {pendingNb} {pendingNr} {pendingNotch} {onToggle}
+  {onNotchModeChange} {onAgcModeChange} {...finiteSelection}>
+  {#snippet children(finiteHandles: DspFiniteHandles)}
+    <DspScalarHost {view} feedback={scalarFeedback} {nbLevelMax} {nbLevelPercent} {notchWidthChoices}
+      {pendingNotchWidth} {scalarAppearance} {presentationIsCurrent}
+      onLevelChange={(field, value) => onLevelChange?.(field, value)}>
+      {#snippet children(scalarHandles: DspScalarHandles)}
+        {#snippet independentFinite(handles: DspFiniteHandles)}
+          <section data-testid="independent-dsp-finite">
+            <div data-slot="toggles">{@render handles.nrActive()}{@render handles.nbActive()}</div>
+            <div data-slot="notch">{@render handles.notchMode()}</div>
+            <div data-slot="agc">{@render handles.agcMode()}</div>
+          </section>
+        {/snippet}
+        {#snippet independentScalars(handles: DspScalarHandles)}
+          <section data-testid="independent-dsp-scalars">
+            <div data-slot="nb-level">{@render handles.nbLevel(scalarPresentation)}</div>
+            <div data-slot="nb-width">{@render handles.nbWidth(scalarPresentation)}</div>
+          </section>
+        {/snippet}
+        {#key presentation}
+          {#if presentation === 'nr'}
+            <section data-testid="nr-dsp-scalar">
+              {@render scalarHandles.nrLevel(scalarPresentation)}
+            </section>
+          {:else if presentation === 'compact-notch'}
+            <!-- MOR-1685: the compact settings \"notch\" panel calls the
+              scalar host's own `manualNotchWidth` handle directly (the same
+              call `DspSurface`'s `compactLevels` makes), not the surface's
+              native row. -->
+            <section data-testid="compact-notch-width">
+              {@render scalarHandles.manualNotchWidth(scalarPresentation)}
+            </section>
+          {:else if presentation === 'notch-status'}
+            <!-- MOR-2635: the host's own notch handle, so status() renders.
+              The grouped surface draws a native slider and never calls it. -->
+            <section data-testid="notch-status">
+              {@render scalarHandles.notchFreq(scalarPresentation)}
+            </section>
+          {:else}
+            <DspSurface {view} {finiteHandles} scalarHandles={scalarHandles} {notchWidthChoices}
+              {pendingNotchWidth} {compactAgcTime}
+              finiteLayout={presentation === 'independent' ? independentFinite : undefined}
+              scalarLayout={presentation === 'independent' ? independentScalars : undefined}
+              onLevelChange={(field, value) => onLevelChange?.(field, value)} />
+          {/if}
+        {/key}
+      {/snippet}
+    </DspScalarHost>
+  {/snippet}
+</DspInstrumentHost>

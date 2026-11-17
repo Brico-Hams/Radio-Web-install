@@ -1,0 +1,868 @@
+/**
+ * MOR-1488 / MOR-1473 — the discrete-control pending affordance (MOR-1441
+ * leg 2: `FilterSurface`/`RfFrontEndSurface`/`DspSurface`'s `pendingFilter`/
+ * `pendingPreamp`/`pendingNb`/`pendingNr`), proved over the REAL wiring
+ * path: the real `$lib/stores/radio.svelte` + `$lib/stores/capabilities
+ * .svelte` stores (seeded through their own epoch-gated setters, never
+ * module-mocked — the PR #2409 "seed real store" idiom), a real
+ * `$lib/stores/commands.svelte` command lifecycle (populated by an actual
+ * click through the UNMOCKED `panel-commands.ts` handlers /
+ * `dispatchRadioIntent`), the real `panel-adapters.ts` pending accessors,
+ * and the real `SemanticRadioSurfaces` -> semantic-surface prop wiring.
+ *
+ * WHY THIS FILE EXISTS (MOR-1473, the test-gap ticket): MOR-1441 leg 2
+ * (#2410) added `getPendingFilterSelection`/`getPendingPreampLevel`/
+ * `getPendingNbOn`/`getPendingNrOn` and wired them through
+ * `SemanticRadioSurfaces` to the three semantic surfaces, but its own test
+ * (`lib/runtime/adapters/__tests__/mor1441-pending-discrete.isolated.test.ts`)
+ * only exercises the four accessor functions against a hand-built fake
+ * command list — it never mounts the wiring layer, so a dropped or
+ * misnamed prop between the `$derived`s in `SemanticRadioSurfaces.svelte`
+ * and the semantic surface's own `Props` would pass that suite unnoticed.
+ * The existing `semantic-dsp-wiring.component.test.ts` /
+ * `semantic-rf-front-end-wiring.component.test.ts` files replace every
+ * command-bus handler with a `vi.fn()` spy, so clicking never actually
+ * populates the real command-lifecycle store there either — a click in
+ * those files can never observe a 'pending' status.
+ *
+ * This file closes both gaps: it mounts the REAL wiring, drives a REAL
+ * command lifecycle for each of the five MOR-1441 pending accessors (leg
+ * 1's `pendingFrequencyHz` included, for completeness), and asserts the DOM
+ * marker the operator actually sees.
+ *
+ * Isolated pool by name (`*.component.test.ts`), per the MOR-1272 doctrine.
+ */
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { flushSync, mount, unmount } from 'svelte';
+import type { Capabilities } from '$lib/types/capabilities';
+import type { ServerState } from '$lib/types/state';
+import type { ManagedAppTxController } from '$lib/runtime/tx-controller/managed-app-host';
+
+const h = vi.hoisted(() => ({
+  txController: null as ManagedAppTxController | null,
+}));
+
+vi.mock('$lib/runtime/tx-controller/managed-app-host', () => ({
+  getManagedAppTxController: () => h.txController,
+}));
+vi.mock('$lib/runtime/adapters/mod-input-tx-guard.svelte', () => ({
+  deriveModInputTxGuardProps: () => ({ visible: false, sourceLabel: null }),
+  getModInputTxGuardHandlers: () => ({ onSetLan: vi.fn(), onDismiss: vi.fn() }),
+}));
+// The ONE seam this file replaces: the actual network write. Everything
+// upstream of it stays real — `dispatchRadioIntent`, `beginCommand`, the
+// real `$lib/stores/commands.svelte` lifecycle list — so a pending entry
+// this file observes after CLICKING a real control is the exact one
+// production code creates, not a stand-in shape this file made up.
+vi.mock('$lib/transport/ws-client', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('$lib/transport/ws-client')>();
+  return { ...actual, sendCommand: vi.fn(() => true) };
+});
+
+import SemanticRadioSurfaces from '../SemanticRadioSurfaces.svelte';
+import { setCapabilities, clearCapabilities } from '$lib/stores/capabilities.svelte';
+import { setRadioState, resetRadioState } from '$lib/stores/radio.svelte';
+import {
+  acknowledgeCommand, failCommand, getCommandLifecycles, resetCommandLifecycle,
+} from '$lib/stores/commands.svelte';
+import { dispatchRadioIntent } from '$lib/runtime/commands/radio-intents';
+import { sendCommand } from '$lib/transport/ws-client';
+import { ManagedAppTxHarness } from '$lib/runtime/tx-controller/__tests__/support/managed-app-tx-harness';
+
+const PROVIDER_GENERATION = 0;
+const fresh = {
+  storePath: 'x', observed: true, freshness: 'fresh' as const,
+  availability: 'available' as const, lastObservedMonotonic: 1,
+};
+
+/**
+ * One field's own observation marker advanced — `lastObservedMonotonic`
+ * (`runtime_helpers.py: _observed_field_status`), the per-field "the radio
+ * answered for THIS field" signal. Every fixture below starts from
+ * `fresh`'s marker of 1, so any value above it is a post-ack re-read of
+ * that one field.
+ */
+function observedAgain(base: ServerState, path: string, marker: number): ServerState {
+  return {
+    ...base,
+    observationSeq: marker, freshnessRevision: marker,
+    fieldStatus: { ...base.fieldStatus, [path]: { ...fresh, lastObservedMonotonic: marker } },
+  } as unknown as ServerState;
+}
+
+/**
+ * Single-receiver (IC-7300/FTX-1-shaped) fixture — the live-bench topology
+ * the MOR-1488 symptom was reported against — with filter, preamp and nb/nr
+ * all evidenced, so `FilterSurface`/`RfFrontEndSurface`/`DspSurface` all
+ * mount live. Accepted by the REAL `setCapabilities`/`setRadioState` epoch
+ * gate, not read back through a mock.
+ */
+function liveCaps(): Capabilities {
+  return {
+    model: 'fixture', scope: false, audio: true, tx: true,
+    capabilities: [
+      'audio', 'tx', 'filter_width', 'preamp',
+      // MOR-2588: the MAIN-scoped declared-field tag a real single-receiver
+      // server serves when it declares the polled preamp field; without it the
+      // adapter marks MAIN's preamp receiver-lacks-control and the control
+      // under test goes disabled.
+      'preamp_main',
+      'nb', 'nr', 'notch',
+      // MOR-2726: served for the polled MAIN notch-width field the IC-7300
+      // declares; without it the notch-width group under test is not drawn.
+      'manual_notch_width',
+    ],
+    notchWidthChoices: [
+      { value: 0, label: 'WIDE' }, { value: 1, label: 'MID' }, { value: 2, label: 'NAR' },
+    ],
+    preValues: [0, 1, 2], attValues: [0, 6, 12, 18],
+    receivers: 1, vfoScheme: 'single',
+    freqRanges: [], modes: ['USB', 'LSB'], filters: ['FIL1', 'FIL2', 'FIL3'],
+    audioConfig: { sampleRate: 48000, channels: 1, codecs: ['pcm16'] },
+    webrtc: { available: false, enabled: false }, txBands: null,
+    scopeSource: null, audioFftAvailable: false,
+    stateContractVersion: 1, providerGeneration: PROVIDER_GENERATION,
+  } as unknown as Capabilities;
+}
+
+function liveState(): ServerState {
+  const paths = [
+    'active', 'split', 'dualWatch', 'txTarget',
+    'main.freqHz', 'main.mode', 'main.filter', 'main.activeSlot',
+    'main.nb', 'main.nr', 'main.filterWidth', 'main.preamp',
+    'main.autoNotch', 'main.manualNotch', 'main.manualNotchWidth',
+  ];
+  return {
+    stateContractVersion: 1,
+    providerGeneration: PROVIDER_GENERATION,
+    revision: 1, stateRevision: 1, freshnessRevision: 1, observationSeq: 1,
+    updatedAt: '2026-08-12T00:00:00Z',
+    active: 'MAIN', ptt: false, split: false, dualWatch: false, tunerStatus: 0,
+    txTarget: { status: 'known', receiver: 'MAIN', slot: 'A', frequencyHz: 14250000 },
+    main: {
+      freqHz: 14250000, mode: 'USB', filter: 1, dataMode: 0, sMeter: 20,
+      att: 0, preamp: 0, nb: false, nr: false, afLevel: 100, rfGain: 255, squelch: 0,
+      activeSlot: 'A', filterWidth: 2400,       autoNotch: false, manualNotch: false, manualNotchWidth: 0,
+    },
+    connection: { rigConnected: true, radioReady: true, controlConnected: true },
+    fieldStatus: Object.fromEntries(paths.map((p) => [p, fresh])),
+  } as unknown as ServerState;
+}
+
+/**
+ * A confirming observation for `set_nb`: `liveState()` with `main.nb`
+ * flipped to `true` and every revision counter bumped past the initial
+ * fixture's — the exact "radio echoed the new value back" event, distinct
+ * from a transport ack, that the MOR-1488 fix waits for.
+ */
+function nbConfirmedState(): ServerState {
+  const base = liveState();
+  return observedAgain({
+    ...base,
+    revision: 2, stateRevision: 2,
+    main: { ...base.main, nb: true },
+  } as unknown as ServerState, 'main.nb', 2);
+}
+
+/**
+ * A push that observed something OTHER than `main.nb`: `liveState()` with
+ * `main.nb` left at `false` and every field's own `lastObservedMonotonic`
+ * left at the fixture's initial value, while `observationSeq`/
+ * `freshnessRevision` advance. `core.state_store._apply_one` bumps
+ * `observationSeq` on every applied observation but only touches the
+ * observed field's own marker, so this is the shape of an unrelated meter
+ * poll landing while the commanded field has not been re-read yet.
+ */
+function nbReobservedState(): ServerState {
+  const base = liveState();
+  return {
+    ...base,
+    observationSeq: 2, freshnessRevision: 2,
+  } as unknown as ServerState;
+}
+
+/**
+ * A confirming observation for `set_freq` (leg 1, MOR-1478 — same wiring
+ * seam and doctrine as `nbConfirmedState` above): `liveState()` with
+ * `main.freqHz` moved to the burst's target and every revision counter
+ * bumped past the initial fixture's.
+ */
+function freqConfirmedState(freqHz: number): ServerState {
+  const base = liveState();
+  return observedAgain({
+    ...base,
+    revision: 2, stateRevision: 2,
+    main: { ...base.main, freqHz },
+  } as unknown as ServerState, 'main.freqHz', 2);
+}
+
+/**
+ * Leg-1 sibling of `nbReobservedState`: a post-ack push that advances
+ * `observationSeq` (an unrelated meter poll) while `main.freqHz` is neither
+ * re-observed (its own marker stays put) nor changed.
+ */
+function freqReobservedState(seq = 2): ServerState {
+  const base = liveState();
+  return {
+    ...base,
+    observationSeq: seq, freshnessRevision: seq,
+  } as unknown as ServerState;
+}
+
+let target: HTMLDivElement;
+let component: ReturnType<typeof mount> | null = null;
+let txHarness: ManagedAppTxHarness;
+
+function render(): void {
+  target = document.createElement('div');
+  document.body.appendChild(target);
+  component = mount(SemanticRadioSurfaces, { target, props: {} });
+  flushSync();
+}
+
+const q = <T extends HTMLElement>(sel: string) => target.querySelector(sel) as T | null;
+
+beforeEach(() => {
+  vi.mocked(sendCommand).mockClear();
+  txHarness = new ManagedAppTxHarness();
+  h.txController = txHarness.controller;
+  // Assert acceptance, not just call it — a rejected fixture would leave
+  // `runtime.state`/`runtime.caps` at `null` and every assertion below would
+  // pass or fail for the wrong reason (mirrors
+  // `FrequencyDisplayInteractive.component.svelte.test.ts`'s own discipline).
+  expect(setCapabilities(liveCaps())).toBe(true);
+  expect(setRadioState(liveState())).toBe(true);
+});
+
+afterEach(() => {
+  if (component) unmount(component);
+  component = null;
+  expect(txHarness.listenerCount()).toBe(0);
+  expect(txHarness.trace()).toEqual([]);
+  document.body.innerHTML = '';
+  resetRadioState();
+  clearCapabilities();
+  resetCommandLifecycle();
+});
+
+describe('discrete pending markers reach the mounted DOM over the real wiring path (MOR-1488, closes MOR-1473)', () => {
+  function seedData(active: 'MAIN' | 'SUB' = 'SUB', unavailable?: 'active' | 'dataMode' | 'staleDataMode'): ServerState {
+    resetRadioState();
+    clearCapabilities();
+    expect(setCapabilities({ ...liveCaps(), receivers: 2, vfoScheme: 'main_sub',
+      capabilities: [...liveCaps().capabilities, 'data_mode'], dataModeCount: 1,
+      dataModeLabels: { '0': 'OFF', '1': 'DATA' },
+    })).toBe(true);
+    const state = liveState();
+    const fieldStatus: NonNullable<ServerState['fieldStatus']> = { ...state.fieldStatus, 'main.dataMode': fresh,
+      ...Object.fromEntries(Object.entries(state.fieldStatus!).filter(([key]) => key.startsWith('main.'))
+        .map(([key, value]) => [key.replace('main.', 'sub.'), value])), 'sub.dataMode': fresh,
+    };
+    if (unavailable) fieldStatus[unavailable === 'active' ? 'active' : `${active.toLowerCase()}.dataMode`] = {
+      ...fresh, ...(unavailable === 'staleDataMode' ? { freshness: 'stale' as const } : { observed: false }),
+    };
+    const dataState = { ...state, active, sub: { ...state.main, dataMode: 0 }, fieldStatus };
+    expect(setRadioState(dataState)).toBe(true);
+    return dataState;
+  }
+
+  it.each(['MAIN', 'SUB'] as const)('DATA click emits one receiver-specific frame for %s and pending never becomes confirmed', active => {
+    const state = seedData(active);
+    render();
+    expect(sendCommand).not.toHaveBeenCalled();
+    const off = q<HTMLButtonElement>('[data-testid="filter-data-mode-0"]')!;
+    const on = q<HTMLButtonElement>('[data-testid="filter-data-mode-1"]')!;
+    expect(on).not.toBeNull();
+    on.click();
+    flushSync();
+    expect(sendCommand).toHaveBeenCalledExactlyOnceWith('set_data_mode',
+      { mode: 1, receiver: active === 'MAIN' ? 0 : 1 }, expect.any(String));
+    expect(on.dataset.pending).toBe('true');
+    expect(off.dataset.pending).toBe('false');
+    expect(off.getAttribute('aria-pressed')).toBe('true');
+    expect(on.getAttribute('aria-pressed')).toBe('false');
+    const commands = getCommandLifecycles().filter(command => command.name === 'set_data_mode');
+    expect(commands).toHaveLength(1);
+    acknowledgeCommand(commands[0].id, commands[0].originalEpoch, commands[0].originalEpoch);
+    flushSync();
+    expect(on.dataset.pending).toBe('true');
+    const receiver = active === 'MAIN' ? 'main' : 'sub';
+    expect(setRadioState(observedAgain({ ...state, revision: 2, stateRevision: 2,
+      [receiver]: { ...state[receiver], dataMode: 1 },
+    } as unknown as ServerState, `${receiver}.dataMode`, 2))).toBe(true);
+    flushSync();
+    expect(on.dataset.pending).toBe('false');
+    expect(off.getAttribute('aria-pressed')).toBe('false');
+    expect(on.getAttribute('aria-pressed')).toBe('true');
+  });
+
+  it.each(['active', 'dataMode'] as const)('DATA with unavailable %s emits nothing on mount or forced click', unavailable => {
+    seedData('SUB', unavailable);
+    render();
+    const on = q<HTMLButtonElement>('[data-testid="filter-data-mode-1"]')!;
+    expect(on).not.toBeNull();
+    expect(on.disabled).toBe(true);
+    expect(on.getAttribute('aria-pressed')).toBe('false');
+    on.disabled = false;
+    on.click();
+    flushSync();
+    expect(sendCommand).not.toHaveBeenCalled();
+    expect(getCommandLifecycles()).toHaveLength(0);
+  });
+
+  // MOR-2425/R40: a HELD dataMode leaves the control live.
+  it('DATA with a held (stale) dataMode stays enabled and emits on click', () => {
+    seedData('SUB', 'staleDataMode');
+    render();
+    const on = q<HTMLButtonElement>('[data-testid="filter-data-mode-1"]')!;
+    expect(on.disabled).toBe(false);
+    on.click();
+    flushSync();
+    expect(sendCommand).toHaveBeenCalledOnce();
+  });
+
+  /**
+   * MOR-1689 — IC-7300-shaped seed for the Filter Shape half: the liveCaps
+   * topology plus the `filter_shape` capability and an evidenced
+   * `main.filterShape` reading, so `FilterInstrumentHost`'s shape snippet
+   * (the SHARP/SOFT buttons desktop-v2 actually mounts) renders live.
+   */
+  function seedShape(): void {
+    resetRadioState();
+    clearCapabilities();
+    expect(setCapabilities({
+      ...liveCaps(), capabilities: [...liveCaps().capabilities, 'filter_shape'],
+    })).toBe(true);
+    const state = liveState();
+    expect(setRadioState({
+      ...state,
+      main: { ...state.main, filterShape: 0 },
+      fieldStatus: { ...state.fieldStatus, 'main.filterShape': fresh },
+    } as unknown as ServerState)).toBe(true);
+  }
+
+  it('marks the clicked shape choice pending while set_filter_shape is in flight (FilterSurface, MOR-1689)', () => {
+    seedShape();
+    render();
+    const sharp = q<HTMLButtonElement>('[data-testid="filter-shape-0"]')!;
+    const soft = q<HTMLButtonElement>('[data-testid="filter-shape-1"]')!;
+    expect(sharp).not.toBeNull();
+    expect(sharp.getAttribute('aria-pressed')).toBe('true');
+
+    soft.click();
+    flushSync();
+
+    expect(sendCommand).toHaveBeenCalledExactlyOnceWith(
+      'set_filter_shape', { shape: 1, receiver: 0 }, expect.any(String),
+    );
+    // The targeted choice alone reads pending; the confirmed reading stays
+    // the sole selection source while the command is in flight.
+    expect(soft.dataset.pending).toBe('true');
+    expect(sharp.dataset.pending).toBe('false');
+    expect(sharp.getAttribute('aria-pressed')).toBe('true');
+    expect(soft.getAttribute('aria-pressed')).toBe('false');
+    const shapeGroup = q('[data-testid="filter-shape"]')!;
+    const describedBy = shapeGroup.getAttribute('aria-describedby');
+    expect(describedBy).toBeTruthy();
+    expect(document.getElementById(describedBy!)?.classList.contains('sr-only')).toBe(true);
+
+    // A confirming re-read of main.filterShape clears the marker and moves
+    // the confirmed selection — the marker never substitutes for it.
+    const commands = getCommandLifecycles().filter(command => command.name === 'set_filter_shape');
+    expect(commands).toHaveLength(1);
+    acknowledgeCommand(commands[0].id, commands[0].originalEpoch, commands[0].originalEpoch);
+    flushSync();
+    expect(soft.dataset.pending).toBe('true');
+    const base = liveState();
+    expect(setRadioState(observedAgain({
+      ...base, revision: 2, stateRevision: 2,
+      main: { ...base.main, filterShape: 1 },
+    } as unknown as ServerState, 'main.filterShape', 2))).toBe(true);
+    flushSync();
+    expect(soft.dataset.pending).toBe('false');
+    expect(sharp.getAttribute('aria-pressed')).toBe('false');
+    expect(soft.getAttribute('aria-pressed')).toBe('true');
+  });
+
+  it('marks the clicked filter choice pending while set_filter is in flight (FilterSurface)', () => {
+    render();
+    expect(q('[data-testid="filter-select"]')!.dataset.filterStatus).toBe('confirmed');
+
+    q<HTMLButtonElement>('[data-testid="filter-select-2"]')!.click();
+    flushSync();
+
+    expect(q('[data-testid="filter-select"]')!.dataset.filterStatus).toBe('pending');
+    expect(q('[data-testid="filter-select-2"]')!.dataset.pending).toBe('true');
+    // The choice NOT targeted must not also read pending — a swapped/shared
+    // accessor (e.g. reading `pendingPreamp` here) would mark every choice,
+    // or none, rather than the one actually in flight.
+    expect(q('[data-testid="filter-select-1"]')!.dataset.pending).toBe('false');
+  });
+
+  it('clears the native Filter Width announcement when its real-store evidence becomes unavailable', () => {
+    vi.useFakeTimers();
+    try {
+      render();
+      const input = q<HTMLInputElement>('[data-testid="filter-width"] input')!;
+      expect(input.disabled).toBe(false);
+      input.value = '3000';
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      vi.advanceTimersByTime(201);
+      flushSync();
+
+      const command = getCommandLifecycles().find(candidate => candidate.name === 'set_filter_width');
+      expect(command).toBeDefined();
+      failCommand(command!.id, command!.originalEpoch, command!.originalEpoch, 'radio refused width');
+      flushSync();
+
+      const first = q<HTMLElement>('[data-testid="filter-width"] [data-control-feedback-status]');
+      expect(first).not.toBeNull();
+      expect(sendCommand).toHaveBeenCalledExactlyOnceWith(
+        'set_filter_width', { width: 3000, receiver: 0 }, expect.any(String),
+      );
+
+      const unavailable = liveState();
+      expect(setRadioState({
+        ...unavailable, revision: 2, stateRevision: 2, freshnessRevision: 2, observationSeq: 2,
+        fieldStatus: {
+          ...unavailable.fieldStatus,
+          'main.filterWidth': { ...fresh, observed: false, lastObservedMonotonic: 2 },
+        },
+      })).toBe(true);
+      flushSync();
+
+      expect(q('[data-testid="filter-width"] [data-control-feedback-status]')).toBeNull();
+      expect(sendCommand).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('marks the clicked preamp choice pending while set_preamp is in flight (RfFrontEndSurface)', () => {
+    render();
+    expect(q('[data-testid="rf-front-end-preamp"]')!.dataset.preampStatus).toBe('confirmed');
+
+    q<HTMLButtonElement>('[data-testid="rf-front-end-preamp-1"]')!.click();
+    flushSync();
+
+    expect(q('[data-testid="rf-front-end-preamp"]')!.dataset.preampStatus).toBe('pending');
+    expect(q('[data-testid="rf-front-end-preamp-1"]')!.dataset.pending).toBe('true');
+  });
+
+  it('marks the NB toggle pending while set_nb is in flight, NR untouched (DspSurface)', () => {
+    render();
+    expect(q('[data-testid="dsp-nbActive"]')!.dataset.pendingStatus).toBe('confirmed');
+    expect(q('[data-testid="dsp-nrActive"]')!.dataset.pendingStatus).toBe('confirmed');
+
+    q<HTMLButtonElement>('[data-testid="dsp-nbActive"]')!.click();
+    flushSync();
+
+    expect(q('[data-testid="dsp-nbActive"]')!.dataset.pendingStatus).toBe('pending');
+    // Kills a `pendingNb`/`pendingNr` swap in the wiring's two DSP props —
+    // the untouched toggle must stay confirmed.
+    expect(q('[data-testid="dsp-nrActive"]')!.dataset.pendingStatus).toBe('confirmed');
+  });
+
+  it('marks the NR toggle pending while set_nr is in flight, NB untouched (DspSurface)', () => {
+    render();
+    q<HTMLButtonElement>('[data-testid="dsp-nrActive"]')!.click();
+    flushSync();
+
+    expect(q('[data-testid="dsp-nrActive"]')!.dataset.pendingStatus).toBe('pending');
+    expect(q('[data-testid="dsp-nbActive"]')!.dataset.pendingStatus).toBe('confirmed');
+  });
+
+  it('marks the clicked notch choice pending while its command is in flight, the other choices untouched (DspSurface)', () => {
+    render();
+    expect(q('[data-testid="dsp-notchMode"]')!.dataset.notchStatus).toBe('confirmed');
+
+    q<HTMLButtonElement>('[data-testid="dsp-notchMode-auto"]')!.click();
+    flushSync();
+
+    expect(q('[data-testid="dsp-notchMode"]')!.dataset.notchStatus).toBe('pending');
+    expect(q('[data-testid="dsp-notchMode-auto"]')!.dataset.pending).toBe('true');
+    // The choices NOT targeted must not also read pending — same swap-kill
+    // discipline as the NB/NR tests above.
+    expect(q('[data-testid="dsp-notchMode-off"]')!.dataset.pending).toBe('false');
+    expect(q('[data-testid="dsp-notchMode-manual"]')!.dataset.pending).toBe('false');
+    // Confirmed reading stays the selection source: still off.
+    expect(q('[data-testid="dsp-notchMode-off"]')!.getAttribute('aria-pressed')).toBe('true');
+    expect(q('[data-testid="dsp-notchMode-auto"]')!.getAttribute('aria-pressed')).toBe('false');
+  });
+
+  it('marks the clicked notch-width choice pending while set_manual_notch_width is in flight (DspSurface)', () => {
+    render();
+    const group = () => q('[data-testid="dsp-manualNotchWidth"]')!;
+    const choice = (value: number) => q(`[data-testid="dsp-manualNotchWidth-${value}"]`)!;
+    expect(group().dataset.notchWidthStatus).toBe('confirmed');
+
+    choice(1).click();
+    flushSync();
+
+    expect(group().dataset.notchWidthStatus).toBe('pending');
+    expect(choice(1).dataset.pending).toBe('true');
+    expect(choice(0).dataset.pending).toBe('false');
+    expect(choice(2).dataset.pending).toBe('false');
+    // Confirmed reading stays the selection source: still 0.
+    expect(choice(0).getAttribute('aria-checked')).toBe('true');
+    expect(choice(1).getAttribute('aria-checked')).toBe('false');
+    expect(group().querySelector(`#${group().getAttribute('aria-describedby')}`)?.textContent)
+      .toBe('Pending, not yet confirmed');
+  });
+
+  it('marks off pending after the MOR-1541 pair (both strands off) is in flight (DspSurface)', () => {
+    render();
+    q<HTMLButtonElement>('[data-testid="dsp-notchMode-auto"]')!.click();
+    flushSync();
+    q<HTMLButtonElement>('[data-testid="dsp-notchMode-off"]')!.click();
+    flushSync();
+
+    expect(q('[data-testid="dsp-notchMode"]')!.dataset.notchStatus).toBe('pending');
+    expect(q('[data-testid="dsp-notchMode-off"]')!.dataset.pending).toBe('true');
+    expect(q('[data-testid="dsp-notchMode-auto"]')!.dataset.pending).toBe('false');
+    const offCommands = getCommandLifecycles().filter((command) =>
+      (command.name === 'set_auto_notch' || command.name === 'set_manual_notch')
+      && command.params.on === false);
+    expect(offCommands).toHaveLength(2);
+  });
+
+  // Leg 1 parity (MOR-1441's original `pendingFrequencyHz`) — same wiring
+  // seam (`SemanticRadioSurfaces`'s `$derived`s), same real-store path, so
+  // this suite proves leg 1 and leg 2 travel the identical wiring
+  // discipline rather than asserting leg 2 in isolation.
+  it('marks the VFO frequency readout pending while set_freq is in flight (VfoSurface, leg 1)', () => {
+    render();
+    const freqEl = () => target.querySelector('[data-vfo-receiver="MAIN"] [data-freq-status]') as HTMLElement | null;
+    expect(freqEl()?.dataset.freqStatus).toBe('confirmed');
+
+    dispatchRadioIntent({ name: 'set_freq', params: { freq: 14260000, receiver: 0 } });
+    flushSync();
+
+    expect(freqEl()?.dataset.freqStatus).toBe('pending');
+  });
+
+  /**
+   * MOR-1478 (the reported bench symptom): after a long web-initiated
+   * tuning spin, the readout crawls, then FLASHES the stale pre-spin
+   * value for ~500ms, then updates from `RadioState`. Same root cause as
+   * the leg-2 MOR-1488 finding above: the WS ack for `set_freq` lands
+   * within milliseconds, long before the next state poll (~500ms
+   * keep-alive) echoes `main.freqHz` back — a marker that clears on ack
+   * alone briefly presents the OLD confirmed value as current. This drives
+   * the command to 'acknowledged' directly, without changing `main.freqHz`,
+   * and requires the marker to survive that ack.
+   */
+  it('keeps the VFO frequency marker pending across a transport ack until a confirming state observation arrives (MOR-1478)', () => {
+    render();
+    const freqEl = () => target.querySelector('[data-vfo-receiver="MAIN"] [data-freq-status]') as HTMLElement | null;
+
+    dispatchRadioIntent({ name: 'set_freq', params: { freq: 14260000, receiver: 0 } });
+    flushSync();
+    expect(freqEl()?.dataset.freqStatus).toBe('pending');
+
+    const command = getCommandLifecycles().find(
+      (candidate) => candidate.name === 'set_freq' && candidate.status === 'pending',
+    );
+    expect(command).toBeDefined();
+    acknowledgeCommand(command!.id, command!.originalEpoch, command!.originalEpoch);
+    flushSync();
+
+    // The ack alone must NOT confirm the marker — `main.freqHz` is still
+    // the pre-spin value in the store, so the operator has no honest
+    // evidence the radio applied the change yet.
+    expect(freqEl()?.dataset.freqStatus).toBe('pending');
+
+    // The confirming observation: the radio's own state now echoes the
+    // commanded frequency back.
+    expect(setRadioState(freqConfirmedState(14260000))).toBe(true);
+    flushSync();
+
+    expect(freqEl()?.dataset.freqStatus).toBe('confirmed');
+  });
+
+  /**
+   * A post-ack push that observed a DIFFERENT field (an unrelated meter
+   * poll landing before the commanded field's own read-back) must not clear
+   * the marker — that would collapse the pending window right back to the
+   * MOR-1478 symptom.
+   */
+  it('does not clear the VFO frequency marker on a post-ack push that observed another field (MOR-1478)', () => {
+    render();
+    const freqEl = () => target.querySelector('[data-vfo-receiver="MAIN"] [data-freq-status]') as HTMLElement | null;
+
+    dispatchRadioIntent({ name: 'set_freq', params: { freq: 14260000, receiver: 0 } });
+    flushSync();
+    const command = getCommandLifecycles().find(
+      (candidate) => candidate.name === 'set_freq' && candidate.status === 'pending',
+    );
+    expect(command).toBeDefined();
+    acknowledgeCommand(command!.id, command!.originalEpoch, command!.originalEpoch);
+    flushSync();
+    expect(freqEl()?.dataset.freqStatus).toBe('pending');
+
+    expect(setRadioState(observedAgain(liveState(), 'main.mode', 2))).toBe(true);
+    flushSync();
+
+    expect(freqEl()?.dataset.freqStatus).toBe('pending');
+  });
+
+  /**
+   * The read-back the core issues at USER priority for the commanded field
+   * ends the marker on arrival, whatever it reports. Here
+   * `main.freqHz` is re-observed still holding the pre-spin value (the
+   * radio refused the tune) — the marker must end anyway, because the field
+   * now shows what the radio reports.
+   */
+  it('clears the VFO frequency marker when main.freqHz is re-observed after the ack still holding the old value', () => {
+    render();
+    const freqEl = () => target.querySelector('[data-vfo-receiver="MAIN"] [data-freq-status]') as HTMLElement | null;
+
+    dispatchRadioIntent({ name: 'set_freq', params: { freq: 14260000, receiver: 0 } });
+    flushSync();
+    const command = getCommandLifecycles().find(
+      (candidate) => candidate.name === 'set_freq' && candidate.status === 'pending',
+    );
+    expect(command).toBeDefined();
+    acknowledgeCommand(command!.id, command!.originalEpoch, command!.originalEpoch);
+    flushSync();
+    expect(freqEl()?.dataset.freqStatus).toBe('pending');
+
+    expect(setRadioState(observedAgain(liveState(), 'main.freqHz', 2))).toBe(true);
+    flushSync();
+
+    expect(freqEl()?.dataset.freqStatus).toBe('confirmed');
+  });
+
+  /**
+   * MOR-1478 grace backstop parity: once `ACK_CONFIRM_GRACE_MS` (3000ms,
+   * shared with leg 2) has elapsed since ack, the marker retires even in
+   * the presence of a post-ack push that still does not confirm — bounding
+   * the classes of dropped confirming observation (MOR-1445 post-ack
+   * failure, MOR-1427 coalescing, link death) leg 2's own grace test
+   * documents.
+   */
+  it('retires the VFO frequency marker via the 3000ms grace backstop once it has elapsed, even with a non-confirming push (MOR-1478)', () => {
+    vi.useFakeTimers();
+    try {
+      render();
+      const freqEl = () => target.querySelector('[data-vfo-receiver="MAIN"] [data-freq-status]') as HTMLElement | null;
+
+      dispatchRadioIntent({ name: 'set_freq', params: { freq: 14260000, receiver: 0 } });
+      flushSync();
+      const command = getCommandLifecycles().find(
+        (candidate) => candidate.name === 'set_freq' && candidate.status === 'pending',
+      );
+      expect(command).toBeDefined();
+      acknowledgeCommand(command!.id, command!.originalEpoch, command!.originalEpoch);
+      flushSync();
+      expect(freqEl()?.dataset.freqStatus).toBe('pending');
+
+      vi.advanceTimersByTime(2_500); // past the OLD 2000ms budget, inside the new one
+      expect(setRadioState(freqReobservedState())).toBe(true);
+      flushSync();
+      // Pins ACK_CONFIRM_GRACE_MS from below: at 2000ms this would already
+      // have retired, dropping the readout to the stale pre-spin value —
+      // the MOR-1478 symptom (tuning-accumulator.ts:6,44, 0.5-2s confirm).
+      expect(freqEl()?.dataset.freqStatus).toBe('pending');
+
+      vi.advanceTimersByTime(501); // now past 3000ms
+      // `main.freqHz` was never re-observed (its own marker never moves) —
+      // only the elapsed grace window retires it. (seq advances again so the
+      // second push is accepted by the store.)
+      expect(setRadioState(freqReobservedState(3))).toBe(true);
+      flushSync();
+
+      expect(freqEl()?.dataset.freqStatus).toBe('confirmed');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('clears the pending marker once the command resolves (acknowledged), for all four discrete controls', () => {
+    render();
+    q<HTMLButtonElement>('[data-testid="filter-select-2"]')!.click();
+    q<HTMLButtonElement>('[data-testid="rf-front-end-preamp-1"]')!.click();
+    q<HTMLButtonElement>('[data-testid="dsp-nbActive"]')!.click();
+    q<HTMLButtonElement>('[data-testid="dsp-nrActive"]')!.click();
+    flushSync();
+    expect(q('[data-testid="filter-select"]')!.dataset.filterStatus).toBe('pending');
+    expect(q('[data-testid="rf-front-end-preamp"]')!.dataset.preampStatus).toBe('pending');
+    expect(q('[data-testid="dsp-nbActive"]')!.dataset.pendingStatus).toBe('pending');
+    expect(q('[data-testid="dsp-nrActive"]')!.dataset.pendingStatus).toBe('pending');
+
+    // A resolved command must stop reading as pending — the leg-1 honesty
+    // rule (`mor1441-pending-discrete.isolated.test.ts`'s own doc comment)
+    // applied over the real wiring path this time, not the fake command list.
+    resetCommandLifecycle();
+    flushSync();
+
+    expect(q('[data-testid="filter-select"]')!.dataset.filterStatus).toBe('confirmed');
+    expect(q('[data-testid="rf-front-end-preamp"]')!.dataset.preampStatus).toBe('confirmed');
+    expect(q('[data-testid="dsp-nbActive"]')!.dataset.pendingStatus).toBe('confirmed');
+    expect(q('[data-testid="dsp-nrActive"]')!.dataset.pendingStatus).toBe('confirmed');
+  });
+
+  /**
+   * MOR-1488 live-bench finding: a transport ack is not a confirming
+   * observation. The WS ack for `set_nb` typically lands within
+   * milliseconds — long before the next state poll (~500ms keep-alive)
+   * echoes `main.nb` back — so a pending marker that clears on ack alone
+   * collapses to something the operator can never actually see, exactly
+   * the reported symptom ("values flip instantly, pending presented as
+   * confirmed"). This drives the command to 'acknowledged' directly
+   * (`acknowledgeCommand`, the same primitive `radio-intents.ts`'s
+   * `onCommandDelivery` ack handler calls) WITHOUT changing the confirmed
+   * radio state, and requires the marker to survive that ack.
+   */
+  it('keeps the NB marker pending across a transport ack until a confirming state observation arrives (MOR-1488)', () => {
+    render();
+    q<HTMLButtonElement>('[data-testid="dsp-nbActive"]')!.click();
+    flushSync();
+    expect(q('[data-testid="dsp-nbActive"]')!.dataset.pendingStatus).toBe('pending');
+
+    const command = getCommandLifecycles().find(
+      (candidate) => candidate.name === 'set_nb' && candidate.status === 'pending',
+    );
+    expect(command).toBeDefined();
+    acknowledgeCommand(command!.id, command!.originalEpoch, command!.originalEpoch);
+    flushSync();
+
+    // The ack alone must NOT confirm the marker — `main.nb` is still `false`
+    // in the store, so the operator has no honest evidence the radio applied
+    // the change yet.
+    expect(q('[data-testid="dsp-nbActive"]')!.dataset.pendingStatus).toBe('pending');
+
+    // The confirming observation: the radio's own state now echoes `nb: true`.
+    expect(setRadioState(nbConfirmedState())).toBe(true);
+    flushSync();
+
+    expect(q('[data-testid="dsp-nbActive"]')!.dataset.pendingStatus).toBe('confirmed');
+  });
+
+  /**
+   * MOR-1488 review R2 (F2, closes the "test theatre" finding): a fast
+   * double-toggle acks the SECOND (OFF) command while the receiver state
+   * still reflects the value from BEFORE either dispatch — the target of
+   * OFF (`false`) happens to equal that stale, pre-both-clicks snapshot. A
+   * plain "does the target match the current confirmed reading" comparison
+   * (the pre-R2 implementation) would clear the marker the instant OFF
+   * acks, even though nothing has actually been re-observed since either
+   * click. This proves that coincidence alone does not settle it, and that
+   * the field's OWN post-ack re-read does — even one that only reconfirms
+   * the already-correct value and never advances `stateRevision`.
+   */
+  it('does not clear the marker from a stale pre-ack snapshot on a fast double-toggle, only on the field\'s own re-read (MOR-1488 review R2, closes F2)', () => {
+    render();
+    expect(q('[data-testid="dsp-nbActive"]')!.dataset.pendingStatus).toBe('confirmed');
+
+    // Click ON, then OFF again before either is ever observed by a poll.
+    dispatchRadioIntent({ name: 'set_nb', params: { on: true, receiver: 0 } });
+    dispatchRadioIntent({ name: 'set_nb', params: { on: false, receiver: 0 } });
+    flushSync();
+    expect(q('[data-testid="dsp-nbActive"]')!.dataset.pendingStatus).toBe('pending');
+
+    const off = getCommandLifecycles().find(
+      (candidate) => candidate.name === 'set_nb' && candidate.params.on === false && candidate.status === 'pending',
+    );
+    expect(off).toBeDefined();
+    acknowledgeCommand(off!.id, off!.originalEpoch, off!.originalEpoch);
+    flushSync();
+
+    // OFF's target (false) already equals the stale confirmed snapshot —
+    // must NOT clear from that coincidence alone.
+    expect(q('[data-testid="dsp-nbActive"]')!.dataset.pendingStatus).toBe('pending');
+
+    // The field's own post-ack re-read, even a non-transitioning one.
+    expect(setRadioState(observedAgain(liveState(), 'main.nb', 2))).toBe(true);
+    flushSync();
+
+    expect(q('[data-testid="dsp-nbActive"]')!.dataset.pendingStatus).toBe('confirmed');
+  });
+
+  /**
+   * `observationSeq` bumps on EVERY applied field observation, not just a
+   * re-read of THIS command's field — a 25ms meter poll advances it exactly
+   * as much as the commanded field's own read-back would. Only the field's
+   * own `lastObservedMonotonic` separates the two, so a push that observed
+   * some other field must leave the marker pending.
+   */
+  it('does not clear the marker on a post-ack push that observed another field (MOR-1488 review R3)', () => {
+    render();
+    q<HTMLButtonElement>('[data-testid="dsp-nbActive"]')!.click();
+    flushSync();
+    expect(q('[data-testid="dsp-nbActive"]')!.dataset.pendingStatus).toBe('pending');
+
+    const command = getCommandLifecycles().find(
+      (candidate) => candidate.name === 'set_nb' && candidate.status === 'pending',
+    );
+    expect(command).toBeDefined();
+    acknowledgeCommand(command!.id, command!.originalEpoch, command!.originalEpoch);
+    flushSync();
+    expect(q('[data-testid="dsp-nbActive"]')!.dataset.pendingStatus).toBe('pending');
+
+    expect(setRadioState(observedAgain(liveState(), 'main.freqHz', 2))).toBe(true);
+    flushSync();
+
+    expect(q('[data-testid="dsp-nbActive"]')!.dataset.pendingStatus).toBe('pending');
+  });
+
+  /**
+   * The commanded field's own post-ack observation ends the marker
+   * whatever it reports. `main.nb` is re-observed still `false`
+   * while the click commanded `true` — the radio refused, or has not
+   * applied it — and the operator is shown what the radio reports rather
+   * than a marker that outlives the answer.
+   */
+  it('clears the marker when main.nb is re-observed after the ack still holding the old value', () => {
+    render();
+    q<HTMLButtonElement>('[data-testid="dsp-nbActive"]')!.click();
+    flushSync();
+
+    const command = getCommandLifecycles().find(
+      (candidate) => candidate.name === 'set_nb' && candidate.status === 'pending',
+    );
+    expect(command).toBeDefined();
+    acknowledgeCommand(command!.id, command!.originalEpoch, command!.originalEpoch);
+    flushSync();
+    expect(q('[data-testid="dsp-nbActive"]')!.dataset.pendingStatus).toBe('pending');
+
+    expect(setRadioState(observedAgain(liveState(), 'main.nb', 2))).toBe(true);
+    flushSync();
+
+    expect(q('[data-testid="dsp-nbActive"]')!.dataset.pendingStatus).toBe('confirmed');
+  });
+
+  /**
+   * MOR-1488 review R3: the grace backstop, not the sequence guard, is what
+   * bounds an acknowledged command whose field is never actually observed
+   * to confirm. `ACK_CONFIRM_GRACE_MS` (3000ms; raised for leg 1's 0.5-2s confirm round trip, MOR-1478) budgets a full poll
+   * round-robin (~1.3s, `radio_poller.py:529-531`) plus headroom, so it
+   * retires the marker once that much time has passed since ack — even in
+   * the presence of a post-ack push that still does not confirm.
+   */
+  it('retires the marker via the 3000ms grace backstop once it has elapsed, even with a non-confirming push (MOR-1488 review R3)', () => {
+    vi.useFakeTimers();
+    try {
+      render();
+      q<HTMLButtonElement>('[data-testid="dsp-nbActive"]')!.click();
+      flushSync();
+      const command = getCommandLifecycles().find(
+        (candidate) => candidate.name === 'set_nb' && candidate.status === 'pending',
+      );
+      expect(command).toBeDefined();
+      acknowledgeCommand(command!.id, command!.originalEpoch, command!.originalEpoch);
+      flushSync();
+      expect(q('[data-testid="dsp-nbActive"]')!.dataset.pendingStatus).toBe('pending');
+
+      vi.advanceTimersByTime(3_001);
+      // `main.nb` was never re-observed (its own marker never moves), so
+      // only the elapsed grace window retires the marker.
+      expect(setRadioState(nbReobservedState())).toBe(true);
+      flushSync();
+
+      expect(q('[data-testid="dsp-nbActive"]')!.dataset.pendingStatus).toBe('confirmed');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

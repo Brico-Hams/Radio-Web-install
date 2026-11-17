@@ -1,0 +1,5666 @@
+"""The web UI is served only after the initial state acquisition completes.
+
+Covers the four pieces of that gate:
+
+* ``AcquisitionScheduler.unobserved_startup_paths`` /
+  ``initial_acquisition_complete`` — the completion predicate over the
+  declared, non-``tx_only`` paths;
+* ``web/web_startup.py: _observed_paths`` — the receiver-id alias between
+  what CI-V ingress writes and what the profile declares;
+* ``web/web_startup.py: _start_web_server`` — poller and freshness task
+  first, then the gate, then the bind;
+* ``cli/__init__.py: _cmd_web`` — the ``Web UI:`` banner line prints only
+  once the server reports it started.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import time
+from collections import deque
+from collections.abc import (
+    AsyncIterator,
+    Callable,
+    Iterable,
+    Iterator,
+    Mapping,
+    Sequence,
+)
+from contextlib import asynccontextmanager, contextmanager, suppress
+from dataclasses import replace
+from pathlib import Path
+from typing import Any
+from types import MappingProxyType, SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+
+from rigplane.backends._icom_serial_base import _IcomSerialRadioBase
+from rigplane.backends.yaesu_cat.radio import YaesuCatRadio
+from rigplane.commands import CONTROLLER_ADDR, build_civ_frame, parse_civ_frame
+from rigplane.core.acquisition_scheduler import (
+    AcquisitionRequest,
+    AcquisitionScheduler,
+    DeclaredCommandDefect,
+    resolve_available_when,
+)
+from rigplane.core.civ import CivFrame
+from rigplane.core.state_acquisition_policy import (
+    AcquisitionPolicy,
+    AvailabilityClause,
+    FieldCapability,
+    RadioAcquisitionProfile,
+)
+from rigplane.core.state_pipeline_contracts import (
+    FieldPath,
+    Observation,
+    SourceMetadata,
+    startup_critical_path,
+)
+from rigplane.core.state_store import StateStore
+from rigplane.core.types import bcd_encode
+from rigplane.profiles import get_radio_profile, resolve_radio_profile
+from rigplane.profiles.rig_loader import discover_rigs
+from rigplane.radio_state import RadioState
+from rigplane.runtime._civ_rx import _profile_path_for_observation
+from rigplane.runtime.radio import IcomRadio
+from rigplane.runtime.radio_initial_state import fetch_initial_state
+from rigplane.web import web_startup
+from rigplane.web.server import WebConfig, WebServer
+from rigplane.web.state_schema import (
+    ManagedTransmitDocumentPublic,
+    ServerStatePublic,
+)
+from rigplane.web.web_startup import (
+    _acquisition_scheduler,
+    _await_initial_state_acquisition,
+    _observed_paths,
+)
+from rigplane.testing.timing import await_until
+from test_icom7610_serial_radio import _FakeSerialCivLink
+from rigplane_testkit.fixture_rows import CatPairRow, read_cat_rows
+from rigplane_testkit.leaked_radio_guard import fake_connected
+from rigplane_testkit.yaesu import FakeCatRadio
+from rigplane_testkit.yaesu.replay import RecordedCatAnswerTable, reply_closes
+
+FREQ = FieldPath.active("main", "freq_mode", "freq_hz")
+MODE = FieldPath.active("main", "freq_mode", "mode")
+S_METER = FieldPath.receiver("main", "meters", "s_meter")
+POWER = FieldPath.global_("meters", "power")
+STARTUP_OPTIONAL = FieldPath.global_("slow_state", "startup_optional")
+
+_REAL_SLEEP = asyncio.sleep
+
+
+def _source() -> SourceMetadata:
+    return SourceMetadata(source="poll_response", provider="test_provider")
+
+
+def _observation(path: FieldPath, value: object, *, at: float) -> Observation:
+    return Observation(
+        path=path,
+        value=value,
+        timestamp_monotonic=at,
+        source=_source(),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Completion predicate
+# ---------------------------------------------------------------------------
+
+
+def _gate_profile() -> RadioAcquisitionProfile:
+    """Profile carrying one path of each shape the predicate must separate.
+
+    * ``FREQ`` — pollable, no ``field_policies`` entry (the TOML
+      ``polling_only`` shape).
+    * ``MODE`` — pollable, cadence-owned ``field_policies`` entry.
+    * ``S_METER`` — ``field_policies`` entry with no cadence (the shape
+      ``prime_unobserved`` owns).
+    * ``POWER`` — pollable, cadence-owned, ``tx_only``.
+    """
+
+    return RadioAcquisitionProfile(
+        provider="test_provider",
+        capabilities=(
+            FieldCapability(path=FREQ, polling=True),
+            FieldCapability(path=MODE, polling=True),
+            FieldCapability(path=S_METER, command_response_observable=True),
+            FieldCapability(path=POWER, polling=True, stream_like=True),
+        ),
+        field_policies={
+            MODE: AcquisitionPolicy(cadence_seconds=5.0, freshness_ttl_seconds=15.0),
+            S_METER: AcquisitionPolicy(
+                cadence_seconds=None, freshness_ttl_seconds=15.0
+            ),
+            POWER: AcquisitionPolicy(
+                cadence_seconds=0.2,
+                freshness_ttl_seconds=0.8,
+                tx_only=True,
+            ),
+        },
+    )
+
+
+def _scheduler() -> AcquisitionScheduler:
+    return AcquisitionScheduler(profile=_gate_profile())
+
+
+def test_predicate_is_complete_once_every_declared_non_tx_path_is_observed() -> None:
+    scheduler = _scheduler()
+
+    assert scheduler.unobserved_startup_paths((FREQ, MODE, S_METER)) == ()
+    assert scheduler.initial_acquisition_complete((FREQ, MODE, S_METER)) is True
+
+
+def test_unobserved_non_cadence_policy_field_keeps_the_predicate_incomplete() -> None:
+    scheduler = _scheduler()
+
+    assert scheduler.initial_acquisition_complete((FREQ, MODE)) is False
+    assert scheduler.unobserved_startup_paths((FREQ, MODE)) == (S_METER,)
+
+
+def test_unobserved_polling_only_path_keeps_the_predicate_incomplete() -> None:
+    """The case ``has_unobserved_policy_fields`` misses.
+
+    ``FREQ`` is pollable and carries no ``field_policies`` entry, so the
+    older prime-sweep predicate reports nothing outstanding for it.
+    """
+
+    scheduler = _scheduler()
+    observed = (MODE, S_METER)
+
+    assert scheduler.has_unobserved_policy_fields(observed) is False
+    assert scheduler.initial_acquisition_complete(observed) is False
+    assert scheduler.unobserved_startup_paths(observed) == (FREQ,)
+
+
+def test_unobserved_tx_only_path_does_not_keep_the_predicate_incomplete() -> None:
+    scheduler = _scheduler()
+
+    assert POWER in scheduler._profile.pollable_paths()
+    assert scheduler.initial_acquisition_complete((FREQ, MODE, S_METER)) is True
+
+
+def test_startup_optional_path_does_not_keep_the_predicate_incomplete() -> None:
+    """An optional field stays pollable without blocking the listener."""
+
+    profile = RadioAcquisitionProfile(
+        provider="test_provider",
+        capabilities=(
+            FieldCapability(
+                path=STARTUP_OPTIONAL,
+                polling=True,
+                startup_required=False,
+            ),
+        ),
+        field_policies={
+            STARTUP_OPTIONAL: AcquisitionPolicy(
+                cadence_seconds=30.0,
+                freshness_ttl_seconds=60.0,
+            ),
+        },
+    )
+    scheduler = AcquisitionScheduler(profile=profile)
+
+    assert STARTUP_OPTIONAL in profile.pollable_paths()
+    assert scheduler.unobserved_startup_paths(()) == ()
+    assert scheduler.initial_acquisition_complete(()) is True
+
+
+def test_outstanding_paths_are_exactly_the_unobserved_non_tx_only_paths() -> None:
+    scheduler = _scheduler()
+
+    assert set(scheduler.unobserved_startup_paths(())) == {FREQ, MODE, S_METER}
+
+
+# ---------------------------------------------------------------------------
+# Startup sweep
+# ---------------------------------------------------------------------------
+
+
+def _sweep_profile(count: int) -> RadioAcquisitionProfile:
+    paths = [FieldPath.global_("operator_controls", f"field_{i}") for i in range(count)]
+    return RadioAcquisitionProfile(
+        provider="test_provider",
+        capabilities=tuple(
+            FieldCapability(path=path, command_response_observable=True)
+            for path in paths
+        ),
+        # Distinct policies so nothing coalesces into a shared request.
+        field_policies={
+            path: AcquisitionPolicy(
+                cadence_seconds=15.0 + index, freshness_ttl_seconds=25.0
+            )
+            for index, path in enumerate(paths)
+        },
+    )
+
+
+class _GateClock:
+    """Fake monotonic clock the gate's own ``sleep`` advances.
+
+    ``stop_at`` ends the run by raising out of the sleep, so a test can
+    bound a fake window without waiting for it.
+    """
+
+    def __init__(self, *, stop_at: float) -> None:
+        self.now = 0.0
+        self._stop_at = stop_at
+        self.on_tick: Callable[[float], None] | None = None
+
+    def monotonic(self) -> float:
+        return self.now
+
+    async def sleep(self, delay: float) -> None:
+        self.now += delay
+        if self.on_tick is not None:
+            self.on_tick(self.now)
+        if self.now >= self._stop_at:
+            raise _GateWindowClosed
+        await _REAL_SLEEP(0)
+
+
+class _GateWindowClosed(Exception):
+    pass
+
+
+@contextmanager
+def _fake_gate_clock(clock: _GateClock) -> Iterator[None]:
+    """Rebind ``web_startup``'s own ``time``/``asyncio`` names, not the modules.
+
+    ``_await_initial_state_acquisition`` reads ``time.monotonic`` and
+    ``asyncio.sleep`` and nothing else from those two names, so swapping the
+    module-level names keeps the fake out of every other caller's way.
+    """
+
+    with (
+        patch.object(web_startup, "time", SimpleNamespace(monotonic=clock.monotonic)),
+        patch.object(web_startup, "asyncio", SimpleNamespace(sleep=clock.sleep)),
+    ):
+        yield
+
+
+class _PacingScheduler(AcquisitionScheduler):
+    """Real scheduler that records when each prime queued which paths."""
+
+    def __init__(self, profile: RadioAcquisitionProfile, clock: _GateClock) -> None:
+        super().__init__(profile=profile)
+        self._gate_clock = clock
+        self.primes: list[tuple[float, tuple[FieldPath, ...]]] = []
+
+    def prime_unobserved(
+        self,
+        observed_paths: Iterable[FieldPath],
+        *,
+        reason: str = "prime-unobserved",
+        limit: int = 5,
+        availability: Mapping[FieldPath, bool | None] = MappingProxyType({}),
+    ) -> tuple[AcquisitionRequest, ...]:
+        queued = super().prime_unobserved(
+            observed_paths, reason=reason, limit=limit, availability=availability
+        )
+        for request in queued:
+            self.primes.append((self._gate_clock.now, request.paths))
+        return queued
+
+
+_PACING_GAP = 0.125  # exact in binary, so the asserted instants are exact
+
+
+def _critical_wait_profile(
+    path_name: str = "ptt", *, path: FieldPath | None = None
+) -> RadioAcquisitionProfile:
+    """One cadence-owned, safety-critical path.
+
+    MOR-4456: PTT and split left the critical set, so proofs of the live
+    gate pass an explicit live-tuning ``path`` (freq/mode); the
+    ``path_name`` form stays for the split opens-proof.
+    """
+
+    resolved = path if path is not None else FieldPath.global_("tx_state", path_name)
+    return RadioAcquisitionProfile(
+        provider="test_provider",
+        capabilities=(FieldCapability(path=resolved, polling=True),),
+        field_policies={
+            resolved: AcquisitionPolicy(
+                cadence_seconds=1.0, freshness_ttl_seconds=15.0
+            ),
+        },
+    )
+
+
+def _pacing_server(scheduler: AcquisitionScheduler) -> WebServer:
+    radio = _CivRadio(scheduler)
+    radio._INITIAL_STATE_GAP_SERIAL = _PACING_GAP
+    return WebServer(radio, _gated_config())
+
+
+@pytest.mark.asyncio
+async def test_startup_sweep_queues_one_path_per_gap() -> None:
+    """One prime per ``_INITIAL_STATE_GAP_SERIAL``, not a whole-profile burst."""
+
+    clock = _GateClock(stop_at=10 * _PACING_GAP)
+    scheduler = _PacingScheduler(_sweep_profile(8), clock)
+    server = _pacing_server(scheduler)
+
+    with _fake_gate_clock(clock), pytest.raises(_GateWindowClosed):
+        await _await_initial_state_acquisition(server, sweep=True)
+
+    assert [instant for instant, _ in scheduler.primes] == [
+        index * _PACING_GAP for index in range(8)
+    ]
+    assert all(len(paths) == 1 for _, paths in scheduler.primes)
+    assert len({path for _, paths in scheduler.primes for path in paths}) == 8
+
+
+@pytest.mark.asyncio
+async def test_never_answered_path_is_reprimed_once_per_reprime_interval() -> None:
+    """A path the radio never answers is re-requested at most once a second."""
+
+    clock = _GateClock(stop_at=10.0)
+    scheduler = _PacingScheduler(_sweep_profile(1), clock)
+    server = _pacing_server(scheduler)
+
+    def _answer_nothing(now: float) -> None:
+        # What AcquisitionDrain does on a request that times out: the path is
+        # freed back to "not observed, not pending" and becomes re-primeable.
+        for request in scheduler.pending_requests():
+            scheduler.record_acquisition_failure(
+                request, reason="test_no_answer", now=now
+            )
+
+    clock.on_tick = _answer_nothing
+
+    with _fake_gate_clock(clock), pytest.raises(_GateWindowClosed):
+        await _await_initial_state_acquisition(server, sweep=True)
+
+    # 80 gate iterations in the 10 s window; one prime per whole second.
+    assert [instant for instant, _ in scheduler.primes] == [
+        float(second) for second in range(10)
+    ]
+
+
+@pytest.mark.asyncio
+async def test_outstanding_paths_are_logged_then_warned_when_nothing_arrives(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The wait-log cadence itself, on a critical path (MOR-2749).
+
+    A non-critical path no longer waits past the 10 s deadline, so the
+    5 s / 60 s log cadence is pinned on ``main.freq_mode.freq_hz`` — a
+    safety-critical path the sweep-less gate still waits on indefinitely
+    (MOR-4456 moved PTT and split out of the critical set).
+    """
+    clock = _GateClock(stop_at=65.0 + _PACING_GAP)
+    FREQ = FieldPath.active("main", "freq_mode", "freq_hz")
+    scheduler = AcquisitionScheduler(profile=_critical_wait_profile(path=FREQ))
+    server = _pacing_server(scheduler)
+    (outstanding,) = scheduler.unobserved_startup_paths(())
+
+    with caplog.at_level(logging.INFO, logger="rigplane.web.web_startup"):
+        with _fake_gate_clock(clock), pytest.raises(_GateWindowClosed):
+            await _await_initial_state_acquisition(server, sweep=False)
+
+    waiting = [
+        record for record in caplog.records if "still waiting on" in record.getMessage()
+    ]
+    infos = [record for record in waiting if record.levelno == logging.INFO]
+    warnings = [record for record in waiting if record.levelno == logging.WARNING]
+    # Every 5 s from t=5 to t=65; the last two are past the 60 s no-progress
+    # threshold and escalate.
+    assert len(infos) == 11
+    assert len(warnings) == 2
+    assert str(outstanding) in infos[0].getMessage()
+    assert str(outstanding) in warnings[0].getMessage()
+    assert "no new field for 60s" in warnings[0].getMessage()
+
+
+# ---------------------------------------------------------------------------
+# Receiver-id alias between store spelling and profile spelling
+# ---------------------------------------------------------------------------
+
+
+def test_civ_ingress_counts_as_observed_against_profile_paths() -> None:
+    """CI-V writes ``receiver.0``; the IC-7300 profile declares ``receiver.main``.
+
+    Without the alias resolution in ``_observed_paths`` a receiver-scoped
+    answer never credits the path the profile declares for it.
+    """
+
+    from rigplane.runtime.radio import IcomRadio
+
+    radio = IcomRadio("192.168.1.100", model="IC-7300")
+    server = WebServer(radio, _gated_config())
+    scheduler = _acquisition_scheduler(server)
+    assert scheduler is not None
+    # Not a vacuous assertion below: both paths are in the predicate's domain.
+    assert {MODE, FREQ} <= set(scheduler.unobserved_startup_paths(()))
+
+    runtime = radio._civ_runtime
+    runtime._apply_state_store_observations(
+        CivFrame(
+            to_addr=0xE0,
+            from_addr=0x94,
+            command=0x26,
+            sub=None,
+            data=bytes([0x00, 0x01, 0x01, 0x02]),
+        )
+    )
+    runtime._apply_state_store_observations(
+        CivFrame(
+            to_addr=0xE0,
+            from_addr=0x94,
+            command=0x25,
+            sub=None,
+            data=bytes([0x00]) + bcd_encode(14_074_000),
+        )
+    )
+
+    stored = {str(field.path) for field in server.command_state_store.snapshot().fields}
+    assert {
+        "receiver.0.active.freq_mode.mode",
+        "receiver.0.active.freq_mode.data_mode",
+        "receiver.0.active.freq_mode.filter_num",
+        "receiver.0.active.freq_mode.freq_hz",
+    } <= stored
+
+    outstanding = scheduler.unobserved_startup_paths(_observed_paths(server, scheduler))
+    assert MODE not in outstanding
+    assert FREQ not in outstanding
+
+
+def test_yaesu_observation_paths_need_no_receiver_alias() -> None:
+    """FTX-1's adapter already spells receivers the way its profile does."""
+
+    from rigplane.backends.yaesu_cat.observations import _MAIN_FREQ
+
+    profile = resolve_radio_profile(model="FTX-1").state_acquisition
+    assert profile is not None
+    scheduler = AcquisitionScheduler(profile=profile)
+
+    assert _profile_path_for_observation(profile, _MAIN_FREQ) == _MAIN_FREQ
+    assert _MAIN_FREQ in scheduler.unobserved_startup_paths(())
+    assert _MAIN_FREQ not in scheduler.unobserved_startup_paths((_MAIN_FREQ,))
+
+
+# ---------------------------------------------------------------------------
+# Web startup ordering
+# ---------------------------------------------------------------------------
+
+
+class _RecordingScheduler:
+    """Stands in for :class:`AcquisitionScheduler` at the gate's call sites."""
+
+    def __init__(self, required: Sequence[FieldPath]) -> None:
+        self._required = tuple(required)
+        # ``_observed_paths`` resolves store paths against this profile.
+        self._profile = RadioAcquisitionProfile(
+            provider="test_provider",
+            capabilities=tuple(
+                FieldCapability(path=path, polling=True) for path in required
+            ),
+        )
+        self.prime_limits: list[int | None] = []
+        self.on_prime: Callable[[], None] | None = None
+        self.startup_defect: DeclaredCommandDefect | None = None
+
+    def unobserved_startup_paths(
+        self,
+        observed_paths: Iterable[FieldPath],
+        *,
+        availability: Mapping[FieldPath, bool | None] = MappingProxyType({}),
+    ) -> tuple[FieldPath, ...]:
+        observed = frozenset(observed_paths)
+        return tuple(
+            path
+            for path in self._required
+            if path not in observed and availability.get(path, True) is not False
+        )
+
+    def prime_unobserved(
+        self,
+        observed_paths: Iterable[FieldPath],
+        *,
+        reason: str = "prime-unobserved",
+        limit: int | None = 5,
+        availability: Mapping[FieldPath, bool | None] = MappingProxyType({}),
+    ) -> tuple[object, ...]:
+        self.prime_limits.append(limit)
+        if self.on_prime is not None:
+            self.on_prime()
+        return ()
+
+    def consecutive_request_timeouts(self, _path: FieldPath) -> int:
+        return 0
+
+    def consecutive_refusals(self, _path: FieldPath) -> int:
+        return 0
+
+
+class _FakeSocket:
+    def getsockname(self) -> tuple[str, int]:
+        return ("127.0.0.1", 4242)
+
+
+class _FakeAsyncServer:
+    def __init__(self) -> None:
+        self.sockets = [_FakeSocket()]
+
+    def close(self) -> None:
+        return None
+
+    async def wait_closed(self) -> None:
+        return None
+
+
+class _CivRadio:
+    """Neither ``ObservationPollable`` nor ``StatePollable`` — the drain path."""
+
+    backend_id = "icom_civ"
+    # Unresolvable model: WebServer._bootstrap_state_acquisition must not
+    # replace the scheduler this test attaches.
+    model = "FAKE-CIV"
+    capabilities: set[str] = set()
+    connected = control_connected = radio_ready = True
+
+    def __init__(self, scheduler: _RecordingScheduler) -> None:
+        self.radio_state = RadioState()
+        self._acquisition_scheduler = scheduler
+        self._INITIAL_STATE_GAP_SERIAL = 0.005
+
+    def supports_command(self, _command: str) -> bool:
+        return False
+
+
+class _TickingObservationPoller:
+    """Fills the store over ``ticks`` callbacks, like ``YaesuCatPoller``."""
+
+    def __init__(
+        self,
+        callback: object,
+        paths: Sequence[FieldPath],
+        events: list[str],
+    ) -> None:
+        self._callback = callback
+        self._paths = tuple(paths)
+        self._events = events
+
+    async def start(self) -> None:
+        for index, path in enumerate(self._paths):
+            await asyncio.sleep(0.01)
+            self._events.append(f"tick-{index + 1}")
+            self._callback((_observation(path, index, at=float(index)),))
+
+    async def stop(self) -> None:
+        return None
+
+    def bind_provider_generation(self, *, capture: object, advance: object) -> None:
+        return None
+
+
+class _ObservationRadio:
+    backend_id = "yaesu_cat"
+    model = "FAKE-OBS"
+    capabilities: set[str] = set()
+    connected = control_connected = radio_ready = True
+
+    def __init__(
+        self,
+        scheduler: _RecordingScheduler,
+        paths: Sequence[FieldPath],
+        events: list[str],
+    ) -> None:
+        self.radio_state = RadioState()
+        self._state_store = StateStore()
+        self._acquisition_scheduler = scheduler
+        self._paths = tuple(paths)
+        self._events = events
+
+    @property
+    def state_store(self) -> StateStore:
+        return self._state_store
+
+    def supports_command(self, _command: str) -> bool:
+        return False
+
+    def create_observation_poller(
+        self, *, callback: object, **_kwargs: object
+    ) -> object:
+        return _TickingObservationPoller(callback, self._paths, self._events)
+
+
+def _gated_config() -> WebConfig:
+    return WebConfig(
+        host="127.0.0.1",
+        port=0,
+        discovery=False,
+        await_initial_state=True,
+    )
+
+
+@pytest.mark.asyncio
+async def test_civ_startup_binds_only_after_the_predicate_is_satisfied() -> None:
+    scheduler = _RecordingScheduler((FREQ,))
+    radio = _CivRadio(scheduler)
+    server = WebServer(radio, _gated_config())
+    binds: list[dict[str, object]] = []
+    fake_poller = MagicMock(
+        drain_tx_safety_commands=AsyncMock(), select_vfo_a_on_connect=AsyncMock()
+    )
+    started_when_primed: list[bool] = []
+    scheduler.on_prime = lambda: started_when_primed.append(fake_poller.start.called)
+
+    async def _bind(*_args: object, **_kwargs: object) -> _FakeAsyncServer:
+        binds.append(
+            {
+                "poller": server._radio_poller,
+                "poller_started": fake_poller.start.called,
+                "freshness": server._state_store_freshness_task,
+            }
+        )
+        return _FakeAsyncServer()
+
+    with (
+        patch("rigplane.web.web_startup.asyncio.start_server", new=_bind),
+        patch("rigplane.web.web_startup.RadioPoller", return_value=fake_poller),
+    ):
+        start = asyncio.create_task(server.start())
+        await asyncio.sleep(0.05)
+        assert binds == [], "listener bound before the predicate was satisfied"
+        assert scheduler.prime_limits, "startup sweep never primed"
+
+        server.command_state_store.apply(_observation(FREQ, 14_074_000, at=1.0))
+        await start
+        await server.stop()
+
+    assert len(binds) == 1
+    assert binds[0]["poller"] is fake_poller, "poller must be built before the bind"
+    assert binds[0]["poller_started"] is True, "poller must start before the bind"
+    # Stronger than start-before-bind: nothing answers a primed request until
+    # the poller's drain is running, so it must be running before the gate
+    # queues the first one.
+    assert started_when_primed and all(started_when_primed), (
+        "poller must start before the gate primes"
+    )
+    assert binds[0]["freshness"] is not None, "freshness task must start before bind"
+    # One path per gap while the gate is open — see
+    # test_startup_sweep_queues_one_path_per_gap.
+    assert set(scheduler.prime_limits) == {web_startup._STARTUP_GATE_PRIME_LIMIT}
+
+
+@pytest.mark.asyncio
+async def test_observation_pollable_path_binds_without_a_startup_sweep() -> None:
+    paths = (FREQ, MODE, S_METER)
+    scheduler = _RecordingScheduler(paths)
+    events: list[str] = []
+    radio = _ObservationRadio(scheduler, paths, events)
+    server = WebServer(radio, _gated_config())
+
+    async def _bind(*_args: object, **_kwargs: object) -> _FakeAsyncServer:
+        events.append("bind")
+        return _FakeAsyncServer()
+
+    with patch("rigplane.web.web_startup.asyncio.start_server", new=_bind):
+        await server.start()
+        await server.stop()
+
+    assert events == ["tick-1", "tick-2", "tick-3", "bind"]
+    # No AcquisitionDrain exists on this path, so a primed request would
+    # never reach the wire; the gate is satisfied by the backend's own
+    # poller instead.
+    assert scheduler.prime_limits == []
+
+
+# ---------------------------------------------------------------------------
+# CLI banner
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_web_ui_banner_prints_only_after_the_server_reports_started(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from rigplane.cli import _build_parser, _cmd_web
+
+    radio = AsyncMock()
+    radio.model = "IC-7300"
+    before_start: list[str] = []
+
+    class FakeWebServer:
+        def __init__(self, _radio: object, _cfg: object) -> None:
+            pass
+
+        async def serve_forever(self, *, on_started: object = None) -> None:
+            # The real WebServer only returns from start() after the bind;
+            # resolve late so anything printed earlier lands here.
+            await asyncio.sleep(0.05)
+            before_start.append(capsys.readouterr().out)
+            assert callable(on_started)
+            on_started()
+            raise asyncio.CancelledError
+
+    args = _build_parser().parse_args(["--host", "1.2.3.4", "web", "--no-rigctld"])
+
+    with patch("rigplane.web.server.WebServer", FakeWebServer):
+        rc = await _cmd_web(radio, args)
+
+    assert rc == 0
+    assert "Web UI:" not in before_start[0]
+    assert "Web UI:" in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------------
+# A declared field the radio answers in another shape
+# ---------------------------------------------------------------------------
+
+SUB_S_METER = FieldPath.receiver("sub", "meters", "s_meter")
+
+
+def _dual_meter_profile() -> RadioAcquisitionProfile:
+    """Two declared, non-``tx_only`` meter paths — the FTX-1 pair's shape."""
+
+    return RadioAcquisitionProfile(
+        provider="yaesu_cat",
+        capabilities=(
+            FieldCapability(path=S_METER, polling=True, stream_like=True),
+            FieldCapability(path=SUB_S_METER, polling=True, stream_like=True),
+        ),
+        field_policies={
+            S_METER: AcquisitionPolicy(cadence_seconds=0.2, freshness_ttl_seconds=0.8),
+            SUB_S_METER: AcquisitionPolicy(
+                cadence_seconds=0.2, freshness_ttl_seconds=0.8
+            ),
+        },
+    )
+
+
+class _YaesuAdapterPoller:
+    """Drives the real Yaesu adapter on a loop, like ``YaesuCatPoller``."""
+
+    def __init__(
+        self, callback: Callable[[Sequence[Observation]], None], radio: object
+    ):
+        self._callback = callback
+        self._radio = radio
+
+    async def start(self) -> None:
+        from rigplane.backends.yaesu_cat.observations import YaesuObservationAdapter
+
+        while True:
+            adapter = YaesuObservationAdapter(
+                self._radio,  # type: ignore[arg-type]
+                profile=self._radio._acquisition_scheduler._profile,  # type: ignore[attr-defined]
+            )
+            self._callback(await adapter.poll_rx_meters())
+            await asyncio.sleep(0.001)
+
+    async def stop(self) -> None:
+        return None
+
+    def bind_provider_generation(self, *, capture: object, advance: object) -> None:
+        return None
+
+    def bind_managed_tx_authority(self, _authority: object) -> None:
+        return None
+
+
+class _MalformedSubMeterRadio:
+    """Answers the MAIN meter and returns an unparseable SUB meter frame."""
+
+    backend_id = "yaesu_cat"
+    model = "FAKE-OBS"
+    capabilities = {"meters", "dual_rx"}
+    connected = control_connected = radio_ready = True
+
+    def __init__(self) -> None:
+        self.radio_state = RadioState()
+        self._state_store = StateStore()
+        self._acquisition_scheduler = AcquisitionScheduler(
+            profile=_dual_meter_profile()
+        )
+        self._poll_warned_fields: set[str] = set()
+        self._INITIAL_STATE_GAP_SERIAL = 0.005
+        self.read_s_meter = AsyncMock(side_effect=self._answer_s_meter)
+
+    @staticmethod
+    async def _answer_s_meter(receiver: int = 0) -> int:
+        from rigplane.backends.yaesu_cat.parser import CatParseError
+
+        if receiver == 0:
+            return 120
+        raise CatParseError(
+            "SM1{raw:03d};", "SM0000;", "Response does not match pattern"
+        )
+
+    @property
+    def state_store(self) -> StateStore:
+        return self._state_store
+
+    def supports_command(self, _command: str) -> bool:
+        return False
+
+    def create_observation_poller(
+        self, *, callback: Callable[[Sequence[Observation]], None], **_kwargs: object
+    ) -> object:
+        return _YaesuAdapterPoller(callback, self)
+
+    # -- what ``cli/__init__.py: _run`` needs before it reaches the gate ----
+
+    async def __aenter__(self) -> "_MalformedSubMeterRadio":
+        return self
+
+    async def __aexit__(self, *_exc: object) -> None:
+        return None
+
+    async def actuate(
+        self, _token: object, _operation: object, *, is_current: Callable[[], bool]
+    ) -> object:
+        from rigplane.runtime.managed_tx_state import ActuationResult
+
+        return ActuationResult.ACCEPTED if is_current() else ActuationResult.REJECTED
+
+    async def set_ptt(self, _on: bool) -> None:
+        return None
+
+
+@pytest.mark.asyncio
+async def test_gate_refuses_to_bind_when_a_declared_read_never_parses() -> None:
+    """No listener exists when a declared field is answered in another shape.
+
+    ``SUB_S_METER`` is polled every cycle and every answer is unparseable, so
+    no observation for it can ever reach the store. The message names the
+    field, the parse template and the frame the radio sent.
+    """
+    radio = _MalformedSubMeterRadio()
+    server = WebServer(radio, _gated_config())
+    scheduler = radio._acquisition_scheduler
+    assert set(scheduler.unobserved_startup_paths(())) == {S_METER, SUB_S_METER}
+    binds: list[str] = []
+
+    async def _bind(*_args: object, **_kwargs: object) -> _FakeAsyncServer:
+        binds.append("bind")
+        return _FakeAsyncServer()
+
+    with patch("rigplane.web.web_startup.asyncio.start_server", new=_bind):
+        with pytest.raises(RuntimeError) as caught:
+            await asyncio.wait_for(server.start(), timeout=10.0)
+        await server.stop()
+
+    assert binds == []
+    message = str(caught.value)
+    assert message.startswith("web startup aborted: ")
+    assert message.endswith("Refusing to start a half-working server.")
+    assert str(SUB_S_METER) in message
+    assert "SM1{raw:03d};" in message
+    assert "SM0000;" in message
+    assert SUB_S_METER in scheduler.unobserved_startup_paths(
+        _observed_paths(server, scheduler)
+    )
+
+
+@pytest.mark.asyncio
+async def test_gate_binds_when_a_one_off_refusal_answers_on_reread() -> None:
+    """MOR-2584: one refusal followed by a normal answer does not abort startup.
+
+    The SUB meter refuses once (the live ``SM1;`` ``?;`` during ``AG1``
+    writes, 2026-09-24) and answers the single re-read, so no defect is
+    recorded and the listener binds — with the field populated.
+    """
+    from rigplane.backends.yaesu_cat.transport import CatCommandRejected
+
+    radio = _MalformedSubMeterRadio()
+    refusal = CatCommandRejected(
+        "Radio rejected command 'SM1;' (returned '?;')", command="SM1;"
+    )
+    radio.read_s_meter = AsyncMock(side_effect=[120, refusal, 120, 120, 120])
+    server = WebServer(radio, _gated_config())
+    scheduler = radio._acquisition_scheduler
+    assert set(scheduler.unobserved_startup_paths(())) == {S_METER, SUB_S_METER}
+    binds: list[str] = []
+
+    async def _bind(*_args: object, **_kwargs: object) -> _FakeAsyncServer:
+        binds.append("bind")
+        return _FakeAsyncServer()
+
+    with patch("rigplane.web.web_startup.asyncio.start_server", new=_bind):
+        await asyncio.wait_for(server.start(), timeout=10.0)
+        await server.stop()
+
+    assert binds == ["bind"]
+    assert scheduler.startup_defect is None
+    assert scheduler.unobserved_startup_paths(_observed_paths(server, scheduler)) == ()
+
+
+def _refuse_sm1() -> int:
+    from rigplane.backends.yaesu_cat.transport import CatCommandRejected
+
+    raise CatCommandRejected(
+        "Radio rejected command 'SM1;' (returned '?;')", command="SM1;"
+    )
+
+
+@pytest.mark.asyncio
+async def test_gate_still_refuses_a_refusal_the_radio_repeats() -> None:
+    """MOR-2584: a command refused on every attempt still aborts startup.
+
+    The SUB meter refuses both the first read and the single re-read, so the
+    existing defect record — and its message — is what refuses the bind.
+    """
+    radio = _MalformedSubMeterRadio()
+    radio.read_s_meter = AsyncMock(
+        side_effect=lambda receiver=0: 120 if receiver == 0 else _refuse_sm1()
+    )
+    server = WebServer(radio, _gated_config())
+    scheduler = radio._acquisition_scheduler
+    binds: list[str] = []
+
+    async def _bind(*_args: object, **_kwargs: object) -> _FakeAsyncServer:
+        binds.append("bind")
+        return _FakeAsyncServer()
+
+    with patch("rigplane.web.web_startup.asyncio.start_server", new=_bind):
+        with pytest.raises(RuntimeError) as caught:
+            await asyncio.wait_for(server.start(), timeout=10.0)
+        await server.stop()
+
+    assert binds == []
+    message = str(caught.value)
+    assert message.startswith("web startup aborted: ")
+    assert message.endswith("Refusing to start a half-working server.")
+    assert str(SUB_S_METER) in message
+    assert "SM1;" in message
+    assert "?;" in message
+    assert SUB_S_METER in scheduler.unobserved_startup_paths(
+        _observed_paths(server, scheduler)
+    )
+
+
+# ---------------------------------------------------------------------------
+# MOR-2757: an unanswered safety-critical read on the rigctld-client path
+# ---------------------------------------------------------------------------
+
+
+def _rigctld_critical_profile() -> RadioAcquisitionProfile:
+    """The medium-lane paths a fake external rigctld must answer to open."""
+
+    from rigplane.backends.rigctld_client.observations import (
+        _FILTER,
+        _FREQ,
+        _MODE,
+        _PTT,
+    )
+    from rigplane.core.tx_observation import OBSERVED_PTT_PATH
+
+    return RadioAcquisitionProfile(
+        provider="external_rigctld",
+        capabilities=(
+            FieldCapability(path=_FREQ, polling=True),
+            FieldCapability(path=_MODE, polling=True),
+            FieldCapability(path=_FILTER, polling=True),
+            FieldCapability(path=_PTT, polling=True),
+            FieldCapability(path=OBSERVED_PTT_PATH, polling=True),
+        ),
+        field_policies={
+            path: AcquisitionPolicy(cadence_seconds=1.0, freshness_ttl_seconds=15.0)
+            for path in (_FREQ, _MODE, _FILTER, _PTT, OBSERVED_PTT_PATH)
+        },
+    )
+
+
+class _TcpRigctldServer:
+    """A fake external rigctld served over real TCP (MOR-2757).
+
+    ``silent="t"``: answers every command except that one — the real
+    ``RigctldTransport._read_line`` then times out and closes the
+    connection exactly as production does, so every counted attempt is a
+    real request that reached rigctld. ``drop=True``: accepts each
+    connection and closes it on the first command — a plain link drop
+    (rigctld restarting) with no unanswered read at all.
+    """
+
+    _ANSWERS = {
+        "f": ("14074000",),
+        "m": ("USB", "2400"),
+        "v": ("VFOA",),
+        "t": ("0",),
+        "T 1": ("RPRT 0",),
+        "T 0": ("RPRT 0",),
+        "l RF": ("128",),
+        "l AF": ("128",),
+        "l PREAMP": ("0",),
+        "l ATT": ("0",),
+        "u NB": ("0",),
+        "u NR": ("0",),
+    }
+
+    def __init__(
+        self,
+        *,
+        silent: str | None = None,
+        drop: bool = False,
+        refuse: str | None = None,
+    ) -> None:
+        self.silent = silent
+        self.drop = drop
+        self.refuse = refuse
+        self.f_requests = 0
+        self.t_requests = 0
+        self.t_commands = 0
+        self.t_connection_ids: set[int] = set()
+        self.tx_commands: list[str] = []
+        self.refused_requests = 0
+        self.connections = 0
+        self._conn_serial = 0
+        self._server: asyncio.AbstractServer | None = None
+        self.host = "127.0.0.1"
+        self.port = 0
+
+    async def start(self) -> None:
+        self._server = await asyncio.start_server(self._serve, self.host, 0)
+        self.port = self._server.sockets[0].getsockname()[1]
+
+    async def stop(self) -> None:
+        if self._server is not None:
+            self._server.close()
+            await self._server.wait_closed()
+
+    async def _serve(
+        self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+    ) -> None:
+        conn = self._conn_serial
+        self._conn_serial += 1
+        self.connections += 1
+        try:
+            while True:
+                line = await reader.readline()
+                if not line:
+                    return
+                command = line.decode("ascii").rstrip("\r\n")
+                if command == "f":
+                    self.f_requests += 1
+                if command == "t":
+                    self.t_commands += 1
+                if command in ("T 1", "T 0"):
+                    self.tx_commands.append(command)
+                if command == self.silent:
+                    # Never answer: the real transport's read timeout fires,
+                    # closing the connection from the client side.
+                    self.t_requests += 1
+                    self.t_connection_ids.add(conn)
+                    continue
+                if command == self.refuse:
+                    # Refuse with a nonzero RPRT: an answer, not silence —
+                    # the connection stays open.
+                    self.refused_requests += 1
+                    writer.write(b"RPRT 1\n")
+                    await writer.drain()
+                    continue
+                if self.drop:
+                    return
+                for reply in self._ANSWERS.get(command, ("0",)):
+                    writer.write(f"{reply}\n".encode("ascii"))
+                await writer.drain()
+        finally:
+            writer.close()
+            try:
+                await writer.wait_closed()
+            except (ConnectionError, OSError):
+                pass
+
+
+def _real_rigctld_radio(fake: _TcpRigctldServer) -> "RigctldClientRadio":  # noqa: F821
+    """A real rigctld-client radio on the fake TCP server, gate-ready.
+
+    The unresolvable model keeps ``WebServer._bootstrap_state_acquisition``
+    from replacing the scheduler the test attaches, and the real
+    ``RigctldTransport`` (0.05 s timeout) is what times out on the silent
+    ``t`` — the production close-on-timeout path the old fake-radio tests
+    bypassed (MOR-2757 review).
+    """
+
+    from rigplane.backends.rigctld_client.radio import RigctldClientRadio
+
+    radio = RigctldClientRadio(
+        host=fake.host,
+        port=fake.port,
+        timeout=0.05,
+        model="FAKE-RIGCTLD-TCP",
+    )
+    radio._acquisition_scheduler = AcquisitionScheduler(
+        profile=_rigctld_critical_profile()
+    )
+    return radio
+
+
+@pytest.mark.asyncio
+async def test_rigctld_unanswered_ptt_opens_after_the_non_critical_deadline(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """MOR-4456: a rigctld that never answers ``t`` opens without PTT.
+
+    PTT left the startup-critical set: the ``t`` timeout still closes the
+    connection and the poller still reconnects (a timeout is a transport
+    fact), but it no longer counts toward a startup defect. The answered
+    freq/mode reads are published before ``t`` is asked, so they reach
+    the store even on cycles where ``t`` times out; the gate opens at the
+    non-critical deadline with the existing WARNING naming
+    ``global.tx_state.ptt``, PTT stays unknown, and no defect is recorded.
+    The first timeout also demotes the poll-cycle ``t`` read (pinned by
+    the demotion test below), so ``t_requests`` stops at one here too.
+    """
+    PTT = FieldPath.global_("tx_state", "ptt")
+    fake = _TcpRigctldServer(silent="t")
+    await fake.start()
+    radio = _real_rigctld_radio(fake)
+    await radio.connect()
+    server = WebServer(radio, _gated_config())
+    scheduler = radio._acquisition_scheduler
+    binds: list[str] = []
+
+    async def _bind(*_args: object, **_kwargs: object) -> _FakeAsyncServer:
+        binds.append("bind")
+        return _FakeAsyncServer()
+
+    try:
+        with (
+            patch("rigplane.web.web_startup.asyncio.start_server", new=_bind),
+            caplog.at_level(logging.WARNING, logger="rigplane.web.web_startup"),
+        ):
+            await asyncio.wait_for(server.start(), timeout=30.0)
+            # Store-backed asserts run before stop(): this radio's teardown
+            # ends the provider epoch and clears the store.
+            assert binds == ["bind"]
+            assert scheduler.startup_defect is None
+            # The timeout counting switched off with the critical set: PTT
+            # timeouts no longer accrue.
+            assert radio._critical_read_timeouts == {}  # noqa: SLF001
+            # Not vacuous: ``t`` was really asked and really stayed silent.
+            assert fake.t_requests >= 1
+            observed = _observed_paths(server, scheduler)
+            assert PTT in scheduler.unobserved_startup_paths(observed)
+            from rigplane.backends.rigctld_client.observations import (
+                _FREQ as _RIG_FREQ,
+                _MODE as _RIG_MODE,
+            )
+
+            assert _RIG_FREQ in observed
+            assert _RIG_MODE in observed
+            await server.stop()
+    finally:
+        await radio.disconnect()
+        await fake.stop()
+
+    warnings = [
+        record.getMessage()
+        for record in caplog.records
+        if record.levelno == logging.WARNING
+        and record.name == "rigplane.web.web_startup"
+        and "global.tx_state.ptt" in record.getMessage()
+    ]
+    # The poller's own demotion WARNING lives on the backend logger and is
+    # pinned by the demotion test below; this one is the gate deadline.
+    assert warnings, "the deadline WARNING must name the unanswered path"
+    assert "after 10s" in warnings[0]
+
+
+@pytest.mark.asyncio
+async def test_rigctld_silent_t_demotes_after_one_reconnect_and_serves_receive_state(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """MOR-4456 B3: the first unanswered ``t`` reconnects once, then ``t`` stays unasked.
+
+    Full production path — the real TCP fake stays silent on ``t`` only,
+    the real poller runs inside ``WebServer.start()``, and the real HTTP
+    API serves state. Exactly one reconnect follows the first timeout
+    (``fake.connections`` stays 2), ``t`` is asked exactly once, and three
+    successive receive cycles each serve frequency/mode over HTTP. The
+    demotion logs its single named warning once. A fresh radio object asks
+    ``t`` again — the demotion dies with the client that earned it.
+    """
+    from rigplane.backends.rigctld_client.radio import (
+        RigctldClientObservationPoller,
+    )
+
+    fake = _TcpRigctldServer(silent="t")
+    await fake.start()
+    radio = _real_rigctld_radio(fake)
+    await radio.connect()
+    server = WebServer(radio, _gated_config())
+    try:
+        with caplog.at_level(logging.WARNING):
+            await asyncio.wait_for(server.start(), timeout=60.0)
+        assert fake.connections == 2
+        assert fake.t_requests == 1
+        port = int(server._server.sockets[0].getsockname()[1])  # noqa: SLF001
+        base_f = fake.f_requests
+        for _ in range(3):
+            await await_until(
+                lambda: fake.f_requests >= base_f + 1,
+                timeout=30.0,
+                description="another receive cycle with t demoted",
+            )
+            base_f = fake.f_requests
+            status, body = await _http_get_json(port, "/api/v1/state")
+            assert status == 200
+            state = ServerStatePublic.model_validate(body, strict=True)
+            assert state.main.freqHz == 14074000
+            assert state.main.mode == "USB"
+            snapshot = server.command_state_store.snapshot()
+            assert snapshot.field(FREQ).value == 14074000
+            assert snapshot.field(MODE).value == "USB"
+        assert fake.t_requests == 1
+        assert fake.connections == 2
+        demotions = [
+            record.getMessage()
+            for record in caplog.records
+            if record.levelno == logging.WARNING
+            and "transmit-state read demoted" in record.getMessage()
+        ]
+        assert len(demotions) == 1, [record.getMessage() for record in caplog.records]
+        assert "global.tx_state.ptt" in demotions[0]
+        assert "command t" in demotions[0]
+        assert "timed out" in demotions[0]
+        # A fresh radio object asks ``t`` again: the demotion dies with the
+        # client that earned it (server restart, explicit reconnect).
+        fake.silent = None
+        fresh = _real_rigctld_radio(fake)
+        await fresh.connect()
+        try:
+            answered: list = []
+            fresh_poller = RigctldClientObservationPoller(
+                fresh,
+                lambda batch: answered.extend(batch),
+                medium_interval=0.05,
+                slow_interval=1.0,
+            )
+            await fresh_poller._poll_medium()  # noqa: SLF001
+        finally:
+            await fresh.disconnect()
+        # Answered reads bump ``t_commands`` (``t_requests`` counts only the
+        # silent ones, still exactly one).
+        assert fake.t_requests == 1
+        assert fake.t_commands == 2
+        assert any(
+            str(item.path) == "global.tx_state.ptt" and item.value is False
+            for item in answered
+        )
+    finally:
+        with suppress(Exception):
+            await server.stop()
+        await radio.disconnect()
+        await fake.stop()
+
+
+async def _http_post_json(port: int, path: str) -> tuple[int, Any]:
+    """POST *path* with an empty body to the test listener, parsed as JSON."""
+    reader, writer = await asyncio.open_connection("127.0.0.1", port)
+    try:
+        writer.write(
+            f"POST {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n"
+            "Content-Length: 0\r\nConnection: close\r\n\r\n".encode()
+        )
+        await writer.drain()
+        raw = await asyncio.wait_for(reader.read(-1), 5.0)
+    finally:
+        writer.close()
+        with suppress(Exception):
+            await writer.wait_closed()
+    head, _, body = raw.partition(b"\r\n\r\n")
+    status = int(head.split(b" ", 2)[1])
+    return status, json.loads(body)
+
+
+@pytest.mark.asyncio
+async def test_rigctld_http_reconnect_resets_the_ptt_demotions() -> None:
+    """MOR-4456 P2: an explicit HTTP disconnect/connect asks ``t`` again.
+
+    The startup probe demotes the poll-cycle ``t`` read (one ``t``, two
+    connections); with ``t`` answering again, the operator's
+    ``/api/v1/radio/disconnect`` + ``/api/v1/radio/connect`` clears the
+    latch through the real HTTP endpoints, the next poll cycle re-asks
+    ``t``, and PTT is observed (release value ``False``) in the store.
+    """
+    PTT = FieldPath.global_("tx_state", "ptt")
+    fake = _TcpRigctldServer(silent="t")
+    await fake.start()
+    radio = _real_rigctld_radio(fake)
+    await radio.connect()
+    server = WebServer(radio, _gated_config())
+    scheduler = radio._acquisition_scheduler
+    try:
+        await asyncio.wait_for(server.start(), timeout=60.0)
+        assert fake.connections == 2
+        assert fake.t_requests == 1
+        assert radio._ptt_read_demoted  # noqa: SLF001
+        port = int(server._server.sockets[0].getsockname()[1])  # noqa: SLF001
+        # The radio answers again from here: the operator reconnect must
+        # re-ask the transmit-state read the demotion had retired.
+        fake.silent = None
+        status, _ = await _http_post_json(port, "/api/v1/radio/disconnect")
+        assert status == 200
+        status, _ = await _http_post_json(port, "/api/v1/radio/connect")
+        assert status == 200
+        await await_until(
+            lambda: fake.t_commands >= 2,
+            timeout=30.0,
+            description="the reconnected poll cycle asking t again",
+        )
+        await await_until(
+            lambda: PTT in _observed_paths(server, scheduler),
+            timeout=30.0,
+            description="ptt observed again after the operator reconnect",
+        )
+        await server.stop()
+    finally:
+        with suppress(Exception):
+            await server.stop()
+        await radio.disconnect()
+        await fake.stop()
+
+
+@pytest.mark.asyncio
+async def test_rigctld_client_recovery_reconnect_keeps_ptt_demotions() -> None:
+    """MOR-4456 P2: the client's own recovery reconnect never clears the latch.
+
+    The solicited probe demotes the poll-cycle ``t`` read; a transport drop
+    healed by the poller's own ``_reconnect_transport`` (not ``connect()``)
+    keeps the latch, so the next medium cycle serves receive state without
+    asking ``t`` again — one silent ``t`` in total, three connections.
+    """
+    from rigplane.backends.rigctld_client.observations import (
+        _FREQ as _RIG_FREQ,
+    )
+    from rigplane.backends.rigctld_client.radio import (
+        RigctldClientObservationPoller,
+    )
+
+    fake = _TcpRigctldServer(silent="t")
+    await fake.start()
+    radio = _real_rigctld_radio(fake)
+    await radio.connect()
+    try:
+        reading = await radio.read_transmit_state()
+        assert reading.value is None
+        assert radio._ptt_read_demoted  # noqa: SLF001
+        assert fake.t_requests == 1
+        # The probe-timeout reopen is an async server-side accept: wait for
+        # it instead of asserting the count on the same tick.
+        await await_until(
+            lambda: fake.connections == 2,
+            timeout=30.0,
+            description="the probe-timeout reopen reaching the fake",
+        )
+        await radio._transport.close()  # noqa: SLF001
+        observed: list = []
+        poller = RigctldClientObservationPoller(
+            radio,
+            lambda batch: observed.extend(batch),
+            medium_interval=0.05,
+            slow_interval=1.0,
+        )
+        await poller._reconnect_transport()  # noqa: SLF001
+        assert radio._ptt_read_demoted  # noqa: SLF001
+        await poller._poll_medium()  # noqa: SLF001
+        assert fake.t_requests == 1
+        assert fake.connections == 3
+        assert any(
+            str(item.path) == str(_RIG_FREQ) and item.value == 14074000
+            for item in observed
+        )
+    finally:
+        await radio.disconnect()
+        await fake.stop()
+
+
+@pytest.mark.asyncio
+async def test_rigctld_gate_is_unchanged_when_the_server_answers_everything() -> None:
+    """MOR-2757: a rigctld server that answers everything opens as before.
+
+    The same radio with ``t`` answering: no count ever reaches the limit,
+    no defect is recorded, and the listener binds once every medium-lane
+    path is observed — the pre-MOR-2757 behaviour.
+    """
+    fake = _TcpRigctldServer()
+    await fake.start()
+    radio = _real_rigctld_radio(fake)
+    await radio.connect()
+    server = WebServer(radio, _gated_config())
+    scheduler = radio._acquisition_scheduler
+    binds: list[str] = []
+
+    async def _bind(*_args: object, **_kwargs: object) -> _FakeAsyncServer:
+        binds.append("bind")
+        return _FakeAsyncServer()
+
+    try:
+        with patch("rigplane.web.web_startup.asyncio.start_server", new=_bind):
+            await asyncio.wait_for(server.start(), timeout=10.0)
+            # Store-backed asserts run before stop(): the fallback-store
+            # teardown this radio takes (no ``state_store`` capability)
+            # ends the provider epoch and clears the store.
+            assert binds == ["bind"]
+            assert scheduler.startup_defect is None
+            assert (
+                scheduler.unobserved_startup_paths(_observed_paths(server, scheduler))
+                == ()
+            )
+            assert fake.t_commands >= 1
+            await server.stop()
+    finally:
+        await radio.disconnect()
+        await fake.stop()
+
+
+@pytest.mark.asyncio
+async def test_rigctld_refused_ptt_opens_after_the_non_critical_deadline(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """MOR-4456: the refused-`t` wedge is closed — PTT is non-critical.
+
+    The fake refuses `t` with ``RPRT 1`` while answering everything else.
+    A refusal is an answer, not a failure tally, so PTT simply stays
+    outstanding; the gate opens at the non-critical deadline with the
+    existing WARNING naming ``global.tx_state.ptt``. The refused cycles
+    keep running on the still-open connection, and no defect, refusal
+    tally or timeout tally accrues.
+    """
+    from rigplane.backends.rigctld_client.observations import (
+        _FREQ as _RIG_FREQ,
+        _MODE as _RIG_MODE,
+    )
+
+    PTT = FieldPath.global_("tx_state", "ptt")
+    fake = _TcpRigctldServer(refuse="t")
+    await fake.start()
+    radio = _real_rigctld_radio(fake)
+    await radio.connect()
+    server = WebServer(radio, _gated_config())
+    scheduler = radio._acquisition_scheduler
+    binds: list[str] = []
+
+    async def _bind(*_args: object, **_kwargs: object) -> _FakeAsyncServer:
+        binds.append("bind")
+        return _FakeAsyncServer()
+
+    try:
+        with (
+            patch("rigplane.web.web_startup.asyncio.start_server", new=_bind),
+            caplog.at_level(logging.WARNING, logger="rigplane.web.web_startup"),
+        ):
+            await asyncio.wait_for(server.start(), timeout=30.0)
+            # Store-backed asserts run before stop(): this radio's teardown
+            # ends the provider epoch and clears the store.
+            assert binds == ["bind"]
+            assert scheduler.startup_defect is None
+            assert scheduler.consecutive_refusals(PTT) == 0
+            assert scheduler.consecutive_request_timeouts(PTT) == 0
+            observed = _observed_paths(server, scheduler)
+            assert PTT in scheduler.unobserved_startup_paths(observed)
+            assert _RIG_FREQ in observed
+            assert _RIG_MODE in observed
+            # Not vacuous: the refused `t` was asked repeatedly on one
+            # connection — the wedge (waiting forever on a tally-less
+            # refusal) is what this row closes.
+            assert fake.refused_requests >= 3
+            assert fake.connections == 1
+            await server.stop()
+    finally:
+        await radio.disconnect()
+        await fake.stop()
+
+    warnings = [
+        record.getMessage()
+        for record in caplog.records
+        if record.levelno == logging.WARNING
+        and "global.tx_state.ptt" in record.getMessage()
+    ]
+    assert warnings, "the deadline WARNING must name the unanswered path"
+    assert "after 10s" in warnings[0]
+
+
+async def _bind_managed_tx_and_start(
+    fake: _TcpRigctldServer, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> tuple["RigctldClientRadio", "ManagedTxComposition", WebServer, list[str]]:  # noqa: F821
+    """``cli/_cmd_web``'s managed-TX assembly on a TCP fake; the startup PTT
+    probe runs in ``bind_state_store`` (MOR-4456)."""
+    from rigplane.runtime.managed_tx_composition import (
+        ManagedTxComposition,
+        install_managed_tx_composition,
+    )
+    from rigplane.web.web_startup import (
+        attach_managed_tx_composition,
+        prepare_managed_tx_observation_generation,
+    )
+
+    radio = _real_rigctld_radio(fake)
+    composition = ManagedTxComposition(radio, config_path=tmp_path / "managed-tx.json")
+    install_managed_tx_composition(radio, composition)
+    await radio.connect()
+    server = WebServer(radio, _gated_config())
+    prepare_managed_tx_observation_generation(server)
+    await composition.transport_ready(radio)
+    await composition.bind_state_store(server.command_state_store)
+    attach_managed_tx_composition(server, composition)
+    binds: list[str] = []
+
+    async def _bind(*_args: object, **_kwargs: object) -> _FakeAsyncServer:
+        binds.append("bind")
+        return _FakeAsyncServer()
+
+    with (
+        patch("rigplane.web.web_startup.asyncio.start_server", new=_bind),
+        caplog.at_level(logging.WARNING, logger="rigplane.web.web_startup"),
+    ):
+        await asyncio.wait_for(server.start(), timeout=30.0)
+    return radio, composition, server, binds
+
+
+@pytest.mark.asyncio
+async def test_managed_startup_survives_an_unanswered_ptt_probe(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A silent `t` must not kill managed startup: the probe's timeout retires
+    the first connection, the fix reopens it before the readiness check, so
+    the listener binds, freq/mode are served, PTT is unobserved and the
+    deadline WARNING names it. Red on f245f1bf0 (readiness check aborts)."""
+    from rigplane.backends.rigctld_client.observations import (
+        _FREQ as _RIG_FREQ,
+        _MODE as _RIG_MODE,
+    )
+
+    PTT = FieldPath.global_("tx_state", "ptt")
+    fake = _TcpRigctldServer(silent="t")
+    await fake.start()
+    try:
+        radio, composition, server, binds = await _bind_managed_tx_and_start(
+            fake, tmp_path, caplog
+        )
+        try:
+            scheduler = radio._acquisition_scheduler
+            assert binds == ["bind"]
+            assert scheduler.startup_defect is None
+            # Not vacuous: `t` was really asked and really stayed silent,
+            # and the probe's timeout retired the first connection before
+            # the fix reopened it.
+            assert fake.t_requests >= 1
+            assert fake.connections >= 2
+            observed = _observed_paths(server, scheduler)
+            assert PTT in scheduler.unobserved_startup_paths(observed)
+            assert _RIG_FREQ in observed
+            assert _RIG_MODE in observed
+            await server.stop()
+        finally:
+            await composition.shutdown(asyncio.Event())
+            await radio.disconnect()
+    finally:
+        await fake.stop()
+
+    assert any(
+        r.levelno == logging.WARNING
+        and "global.tx_state.ptt" in r.getMessage()
+        and "after 10s" in r.getMessage()
+        for r in caplog.records
+    ), "the deadline WARNING must name the unanswered path"
+
+
+@pytest.mark.asyncio
+async def test_managed_startup_survives_a_refused_ptt_probe(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A REFUSED `t` (RPRT error) at managed startup keeps the connection open:
+    the probe refusal is not a timeout, so there is no reconnect (one
+    connection), the listener binds, freq/mode are served, PTT stays
+    unobserved and the deadline WARNING names it."""
+    from rigplane.backends.rigctld_client.observations import (
+        _FREQ as _RIG_FREQ,
+        _MODE as _RIG_MODE,
+    )
+
+    PTT = FieldPath.global_("tx_state", "ptt")
+    fake = _TcpRigctldServer(refuse="t")
+    await fake.start()
+    try:
+        radio, composition, server, binds = await _bind_managed_tx_and_start(
+            fake, tmp_path, caplog
+        )
+        try:
+            scheduler = radio._acquisition_scheduler
+            assert binds == ["bind"]
+            assert scheduler.startup_defect is None
+            assert fake.refused_requests >= 1  # really asked, really refused
+            assert fake.connections == 1  # a refusal never retires the link
+            observed = _observed_paths(server, scheduler)
+            assert PTT in scheduler.unobserved_startup_paths(observed)
+            assert _RIG_FREQ in observed
+            assert _RIG_MODE in observed
+            await server.stop()
+        finally:
+            # Production shutdown runs with the termination event set (SIGTERM);
+            # an unset event would wait for the startup release that a
+            # refused `t` can never confirm.
+            terminated = asyncio.Event()
+            terminated.set()
+            await composition.shutdown(terminated)
+            await radio.disconnect()
+    finally:
+        await fake.stop()
+
+    assert any(
+        r.levelno == logging.WARNING
+        and "global.tx_state.ptt" in r.getMessage()
+        and "after 10s" in r.getMessage()
+        for r in caplog.records
+    ), "the deadline WARNING must name the unanswered path"
+
+
+@pytest.mark.asyncio
+async def test_managed_startup_with_silent_t_probes_once_and_keeps_local_ptt(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """MOR-4456 P1: the managed-startup PTT probe demotes the poll-cycle ``t`` read.
+
+    Production CLI startup runs ``ManagedTxComposition.bind_state_store``
+    -> ``_record_startup_release`` -> ``radio.read_transmit_state`` BEFORE
+    the first poll cycle. On a silent ``t`` that probe times out, reopens
+    the transport and latches the demotion flag — so the first poll cycle
+    never asks ``t`` again: no second unanswered request, no third
+    connection, no second timeout advancing the bound store generation
+    (which would clear the active provider without republishing it and
+    strand local managed PTT).
+
+    Through the full production managed composition on the real TCP fake
+    (silent ``t`` only): exactly one ``t`` request in total, exactly two
+    connections in total (the probe-timeout reopen only), three successive
+    receive cycles still served over HTTP, and a local unbound
+    ``submit_ptt`` admitted and on the wire (cf.
+    ``test_managed_key_admitted_while_ptt_unobserved_after_start_without_ptt``).
+
+    MOR-4456 B3: the key is unkeyed while ``t`` stays silent — the release
+    settles from the ``T 0`` answer alone (no ``fake.silent = None``
+    workaround), the authority returns to idle, and a second key/unkey
+    cycle is admitted, still with two connections and one ``t`` in total.
+    """
+    from rigplane.runtime.managed_tx_composition import (
+        ManagedTxComposition,
+        install_managed_tx_composition,
+    )
+    from rigplane.runtime.managed_tx_state import (
+        ActuationResult,
+        ManagedTxIntentKind,
+        ManagedTxOutcome,
+    )
+    from rigplane.runtime.tx_interlock import RfState, resolve_rf_state
+    from rigplane.web.web_startup import (
+        attach_managed_tx_composition,
+        prepare_managed_tx_observation_generation,
+    )
+
+    fake = _TcpRigctldServer(silent="t")
+    await fake.start()
+    try:
+        radio = _real_rigctld_radio(fake)
+        composition = ManagedTxComposition(
+            radio, config_path=tmp_path / "managed-tx.json"
+        )
+        install_managed_tx_composition(radio, composition)
+        await radio.connect()
+        server = WebServer(radio, _gated_config())
+        prepare_managed_tx_observation_generation(server)
+        await composition.transport_ready(radio)
+        await composition.bind_state_store(server.command_state_store)
+        attach_managed_tx_composition(server, composition)
+        try:
+            await asyncio.wait_for(server.start(), timeout=60.0)
+            # ONE unanswered ``t`` (the startup probe) and its ONE reopen:
+            # the poller must never ask ``t`` again.
+            assert fake.connections == 2
+            assert fake.t_requests == 1
+            assert fake.t_commands == 1
+            port = int(server._server.sockets[0].getsockname()[1])  # noqa: SLF001
+            base_f = fake.f_requests
+            for _ in range(3):
+                await await_until(
+                    lambda: fake.f_requests >= base_f + 1,
+                    timeout=30.0,
+                    description="another receive cycle with t demoted",
+                )
+                base_f = fake.f_requests
+                status, body = await _http_get_json(port, "/api/v1/state")
+                assert status == 200
+                state = ServerStatePublic.model_validate(body, strict=True)
+                assert state.main.freqHz == 14074000
+                assert state.main.mode == "USB"
+            assert fake.t_requests == 1
+            assert fake.t_commands == 1
+            assert fake.connections == 2
+            # Local managed PTT is available: RF state is UNKNOWN (PTT
+            # unobserved, so no radio-TX refusal) and a local unbound key
+            # is admitted and reaches the wire.
+            store = server.command_state_store
+            assert resolve_rf_state(store.snapshot()) is RfState.UNKNOWN
+            assert composition.authority.radio_tx_refusal_nowait() is None
+            pressed = await composition.authority.submit_ptt(True, "memory-primary")
+            assert pressed.outcome is ManagedTxOutcome.ACCEPTED
+            await pressed.wait_settlement()
+            assert "T 1" in fake.tx_commands
+            # MOR-4456 B3: the unkey verification must not ask the demoted
+            # ``t`` — the release settles from the radio's own answer to
+            # the ``T 0`` command (``RPRT 0``) while the rig stays silent
+            # on ``t``. ``fake.silent`` stays ``"t"``: the pre-B3
+            # ``fake.silent = None`` workaround before the force_off is
+            # gone; without the rule the verification ``t`` below times
+            # out, retires the transport, advances the bound store
+            # generation and poisons the active provider without
+            # republishing it, so the owed release never drains.
+            released = await composition.authority.submit_force_off()
+            await await_until(
+                lambda: "T 0" in fake.tx_commands,
+                timeout=30.0,
+                description="the unkey reaching the rig",
+            )
+            settlement = await released.wait_settlement()
+            assert settlement is not None
+            assert settlement.result is ActuationResult.ACCEPTED
+            assert released.outcome is ManagedTxOutcome.ACCEPTED
+            # The release settled, so the authority is idle again: a
+            # second key is admitted and unkeyed, still without asking
+            # ``t`` — two connections and one ``t`` in total.
+            projection = await composition.authority.snapshot()
+            assert projection.state.intent.kind is ManagedTxIntentKind.RX
+            assert not projection.state.release_required
+            pressed_again = await composition.authority.submit_ptt(
+                True, "memory-primary"
+            )
+            assert pressed_again.outcome is ManagedTxOutcome.ACCEPTED
+            await pressed_again.wait_settlement()
+            released_again = await composition.authority.submit_force_off()
+            settlement_again = await released_again.wait_settlement()
+            assert settlement_again is not None
+            assert settlement_again.result is ActuationResult.ACCEPTED
+            assert fake.connections == 2
+            assert fake.t_requests == 1
+            assert fake.t_commands == 1
+            await server.stop()
+        finally:
+            with suppress(Exception):
+                await server.stop()
+            await composition.shutdown(asyncio.Event())
+            await radio.disconnect()
+    finally:
+        await fake.stop()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "fake_kwargs", ({"silent": "t"}, {"refuse": "t"}), ids=("silent-t", "refused-t")
+)
+async def test_http_managed_transmit_release_settles_while_t_is_unanswerable(
+    tmp_path: Path, fake_kwargs: dict[str, str]
+) -> None:
+    """MOR-4456 B3/#4607: the user-facing unkey settles over the real API.
+
+    Production managed composition behind the real HTTP listener; only
+    rigctld is faked (real TCP), silent or refusing ``t``. ``transmit_on``
+    and ``force_off`` go through ``POST /api/v1/managed-transmit/command``;
+    ``GET /api/v1/managed-transmit`` must then show RX intent, no owed
+    release and an accepted ``force_receive`` -- settled from the ``T 0``
+    answer, since the read-back ``t`` is unanswerable -- and a second
+    key/unkey cycle is admitted and settles the same way.
+    """
+    from integration.test_tx_under_fault_matrix import _http_json
+    from rigplane.runtime.managed_tx_composition import (
+        ManagedTxComposition,
+        install_managed_tx_composition,
+    )
+    from rigplane.web.web_startup import (
+        attach_managed_tx_composition,
+        prepare_managed_tx_observation_generation,
+    )
+
+    command_path = "/api/v1/managed-transmit/command"
+    fake = _TcpRigctldServer(**fake_kwargs)
+    await fake.start()
+    try:
+        radio = _real_rigctld_radio(fake)
+        composition = ManagedTxComposition(
+            radio, config_path=tmp_path / "managed-tx.json"
+        )
+        install_managed_tx_composition(radio, composition)
+        await radio.connect()
+        server = WebServer(radio, _gated_config())
+        prepare_managed_tx_observation_generation(server)
+        await composition.transport_ready(radio)
+        await composition.bind_state_store(server.command_state_store)
+        attach_managed_tx_composition(server, composition)
+        try:
+            await asyncio.wait_for(server.start(), timeout=60.0)
+            port = int(server._server.sockets[0].getsockname()[1])  # noqa: SLF001
+            for cycle in (1, 2):
+                status, body = await _http_json(
+                    port, "POST", command_path, {"operation": "transmit_on"}
+                )
+                assert (status, body) == (
+                    202,
+                    {"ok": True, "operation": "transmit_on", "result": "accepted"},
+                )
+                await await_until(
+                    lambda: fake.tx_commands.count("T 1") == cycle,
+                    timeout=10.0,
+                    description=f"key {cycle} reaching the rig",
+                )
+                status, body = await _http_json(
+                    port, "POST", command_path, {"operation": "force_off"}
+                )
+                assert (status, body) == (
+                    202,
+                    {"ok": True, "operation": "force_off", "result": "accepted"},
+                )
+                await await_until(
+                    lambda: (
+                        not composition.authority.snapshot_nowait().state.release_required
+                    ),
+                    timeout=10.0,
+                    description=f"release {cycle} settling",
+                )
+                status, document = await _http_get_json(
+                    port, "/api/v1/managed-transmit"
+                )
+                assert status == 200
+                managed = ManagedTransmitDocumentPublic.model_validate(
+                    document, strict=True
+                ).managedTransmit
+                assert fake.tx_commands.count("T 0") >= cycle
+                assert managed.status == "available"
+                assert managed.intent is not None
+                assert managed.intent.kind == "rx"
+                assert managed.intent.owner is None
+                assert managed.releaseRequired is False
+                assert managed.lastActuation is not None
+                assert managed.lastActuation.operation == "force_receive"
+                assert managed.lastActuation.result == "accepted"
+                assert managed.lastError is None
+            await server.stop()
+        finally:
+            # A release still owed (the regression this test pins) must not
+            # hold the cleanup: terminate rather than wait for its drain.
+            termination = asyncio.Event()
+            termination.set()
+            with suppress(Exception):
+                await asyncio.wait_for(server.stop(), timeout=10.0)
+            await asyncio.wait_for(composition.shutdown(termination), timeout=10.0)
+            await radio.disconnect()
+    finally:
+        await fake.stop()
+
+
+@pytest.mark.asyncio
+async def test_managed_release_refused_t0_keeps_release_owed(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """MOR-4456 B3: a refused ``T 0`` is never a silent success.
+
+    Full production managed composition on the real TCP fake, silent on
+    ``t`` (so the startup probe demotes the poll-cycle ``t`` read) and
+    refusing ``T 0`` with ``RPRT 1``. The key is admitted and reaches the
+    wire; the unkey write is refused, so the release stays owed
+    (``UNCERTAIN`` settlement, ``release_required`` still set) — the
+    failure path as today. The refusal is an answer, not silence: no
+    reconnect, still one silent ``t`` and two connections in total.
+    """
+    from rigplane.runtime.managed_tx_state import (
+        ActuationResult,
+        ManagedTxOutcome,
+    )
+
+    fake = _TcpRigctldServer(silent="t", refuse="T 0")
+    await fake.start()
+    try:
+        radio, composition, server, _binds = await _bind_managed_tx_and_start(
+            fake, tmp_path, caplog
+        )
+        termination = asyncio.Event()
+        try:
+            pressed = await composition.authority.submit_ptt(True, "memory-primary")
+            assert pressed.outcome is ManagedTxOutcome.ACCEPTED
+            await pressed.wait_settlement()
+            assert "T 1" in fake.tx_commands
+            released = await composition.authority.submit_force_off()
+            settlement = await released.wait_settlement()
+            assert settlement is not None
+            assert settlement.result is ActuationResult.UNCERTAIN
+            projection = await composition.authority.snapshot()
+            assert projection.state.release_required
+            assert fake.t_requests == 1
+            assert fake.connections == 2
+            await server.stop()
+        finally:
+            # The release is still owed: wake the shutdown drain with the
+            # termination event instead of waiting for the rig.
+            termination.set()
+            with suppress(Exception):
+                await server.stop()
+            await composition.shutdown(termination)
+            await radio.disconnect()
+    finally:
+        await fake.stop()
+
+
+@pytest.mark.asyncio
+async def test_managed_release_unanswered_t0_keeps_release_owed(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """MOR-4456 B3: an unanswered ``T 0`` is never a silent success.
+
+    Same shape as the refused case, but here ``t`` works (no demotion)
+    and the ``T 0`` write itself goes unanswered: the transport times the
+    write out and the release stays owed (``UNCERTAIN`` settlement,
+    ``release_required`` still set). The write really reached the rig —
+    ``T 0`` is on the wire — so this pins that only the *answer* settles,
+    never the attempt.
+    """
+    from rigplane.runtime.managed_tx_state import (
+        ActuationResult,
+        ManagedTxOutcome,
+    )
+
+    fake = _TcpRigctldServer(silent="T 0")
+    await fake.start()
+    try:
+        radio, composition, server, _binds = await _bind_managed_tx_and_start(
+            fake, tmp_path, caplog
+        )
+        termination = asyncio.Event()
+        try:
+            pressed = await composition.authority.submit_ptt(True, "memory-primary")
+            assert pressed.outcome is ManagedTxOutcome.ACCEPTED
+            await pressed.wait_settlement()
+            assert "T 1" in fake.tx_commands
+            released = await composition.authority.submit_force_off()
+            settlement = await released.wait_settlement()
+            assert "T 0" in fake.tx_commands
+            assert settlement is not None
+            assert settlement.result is ActuationResult.UNCERTAIN
+            projection = await composition.authority.snapshot()
+            assert projection.state.release_required
+            await server.stop()
+        finally:
+            termination.set()
+            with suppress(Exception):
+                await server.stop()
+            await composition.shutdown(termination)
+            await radio.disconnect()
+    finally:
+        await fake.stop()
+
+
+@pytest.mark.asyncio
+async def test_managed_release_skips_verification_while_t_refused(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """MOR-4456 #4607: a REFUSED ``t`` skips the managed unkey verification.
+
+    Full production managed composition on the real TCP fake refusing
+    ``t`` with ``RPRT 1``: the key is admitted and reaches the wire; the
+    unkey ``T 0`` is answered (``RPRT 0``) so the release settles
+    ``ACCEPTED`` from that answer alone — no verification ``t`` is sent
+    while the read is unanswerable. Without the rule the verification
+    ``t`` below is refused, the settlement is ``UNCERTAIN`` and the
+    release stays owed. The authority returns to idle, a second key/unkey
+    cycle is admitted, and shutdown completes with the termination event
+    UNSET (proving the release drained instead of hanging the drain).
+    """
+    from rigplane.runtime.managed_tx_state import (
+        ActuationResult,
+        ManagedTxIntentKind,
+        ManagedTxOutcome,
+    )
+
+    fake = _TcpRigctldServer(refuse="t")
+    await fake.start()
+    try:
+        radio, composition, server, _binds = await _bind_managed_tx_and_start(
+            fake, tmp_path, caplog
+        )
+        try:
+            assert fake.refused_requests >= 1  # really asked, really refused
+            assert fake.connections == 1  # a refusal never retires the link
+            pressed = await composition.authority.submit_ptt(True, "memory-primary")
+            assert pressed.outcome is ManagedTxOutcome.ACCEPTED
+            await pressed.wait_settlement()
+            assert "T 1" in fake.tx_commands
+            released = await composition.authority.submit_force_off()
+            await await_until(
+                lambda: "T 0" in fake.tx_commands,
+                timeout=30.0,
+                description="the unkey reaching the rig",
+            )
+            settlement = await released.wait_settlement()
+            assert settlement is not None
+            assert settlement.result is ActuationResult.ACCEPTED
+            assert released.outcome is ManagedTxOutcome.ACCEPTED
+            projection = await composition.authority.snapshot()
+            assert projection.state.intent.kind is ManagedTxIntentKind.RX
+            assert not projection.state.release_required
+            pressed_again = await composition.authority.submit_ptt(
+                True, "memory-primary"
+            )
+            assert pressed_again.outcome is ManagedTxOutcome.ACCEPTED
+            await pressed_again.wait_settlement()
+            released_again = await composition.authority.submit_force_off()
+            settlement_again = await released_again.wait_settlement()
+            assert settlement_again is not None
+            assert settlement_again.result is ActuationResult.ACCEPTED
+            assert fake.connections == 1
+            await server.stop()
+        finally:
+            # The release drained: shutdown needs no termination event.
+            with suppress(Exception):
+                await server.stop()
+            await asyncio.wait_for(composition.shutdown(asyncio.Event()), timeout=30.0)
+            await radio.disconnect()
+    finally:
+        await fake.stop()
+
+
+@pytest.mark.asyncio
+async def test_managed_release_t0_refused_while_t_refused_keeps_release_owed(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """MOR-4456 #4607: a refused ``T 0`` stays owed while ``t`` is refused.
+
+    Same refused-``t`` composition as above, but the unkey write itself
+    is refused (``fake.refuse`` flips to ``T 0`` after the admitted key):
+    the write raises before any verification question, so the release
+    stays owed (``UNCERTAIN`` settlement, ``release_required`` still
+    set) — never a silent success.
+    """
+    from rigplane.runtime.managed_tx_state import (
+        ActuationResult,
+        ManagedTxOutcome,
+    )
+
+    fake = _TcpRigctldServer(refuse="t")
+    await fake.start()
+    try:
+        radio, composition, server, _binds = await _bind_managed_tx_and_start(
+            fake, tmp_path, caplog
+        )
+        termination = asyncio.Event()
+        try:
+            pressed = await composition.authority.submit_ptt(True, "memory-primary")
+            assert pressed.outcome is ManagedTxOutcome.ACCEPTED
+            await pressed.wait_settlement()
+            assert "T 1" in fake.tx_commands
+            fake.refuse = "T 0"
+            released = await composition.authority.submit_force_off()
+            settlement = await released.wait_settlement()
+            assert "T 0" in fake.tx_commands
+            assert settlement is not None
+            assert settlement.result is ActuationResult.UNCERTAIN
+            projection = await composition.authority.snapshot()
+            assert projection.state.release_required
+            await server.stop()
+        finally:
+            termination.set()
+            with suppress(Exception):
+                await server.stop()
+            await composition.shutdown(termination)
+            await radio.disconnect()
+    finally:
+        await fake.stop()
+
+
+@pytest.mark.asyncio
+async def test_managed_release_t0_unanswered_while_t_refused_keeps_release_owed(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """MOR-4456 #4607: an unanswered ``T 0`` stays owed while ``t`` is refused.
+
+    Refused ``t`` plus a silent ``T 0``: the unkey write times out, so
+    the release stays owed (``UNCERTAIN`` settlement, ``release_required``
+    still set) — only the *answer* settles, never the attempt.
+    """
+    from rigplane.runtime.managed_tx_state import (
+        ActuationResult,
+        ManagedTxOutcome,
+    )
+
+    fake = _TcpRigctldServer(refuse="t", silent="T 0")
+    await fake.start()
+    try:
+        radio, composition, server, _binds = await _bind_managed_tx_and_start(
+            fake, tmp_path, caplog
+        )
+        termination = asyncio.Event()
+        try:
+            pressed = await composition.authority.submit_ptt(True, "memory-primary")
+            assert pressed.outcome is ManagedTxOutcome.ACCEPTED
+            await pressed.wait_settlement()
+            assert "T 1" in fake.tx_commands
+            released = await composition.authority.submit_force_off()
+            settlement = await released.wait_settlement()
+            assert "T 0" in fake.tx_commands
+            assert settlement is not None
+            assert settlement.result is ActuationResult.UNCERTAIN
+            projection = await composition.authority.snapshot()
+            assert projection.state.release_required
+            await server.stop()
+        finally:
+            termination.set()
+            with suppress(Exception):
+                await server.stop()
+            await composition.shutdown(termination)
+            await radio.disconnect()
+    finally:
+        await fake.stop()
+
+
+@pytest.mark.asyncio
+async def test_managed_release_heals_to_t_verification_after_refusal_answers(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """MOR-4456 #4607: polling heals answerability; the unkey stays settled.
+
+    The refused-``t`` composition settles its first release from ``T 0``
+    alone; once the rig answers ``t`` again (``fake.refuse`` cleared) the
+    still-asking poll cycle observes an answered ``t`` and the single
+    answerability flips back — the next key/unkey cycle settles
+    ``ACCEPTED`` with the read answerable again (the exact re-read count
+    is pinned at the actuator level below; here the poller shares ``t``).
+    """
+    from rigplane.runtime.managed_tx_state import (
+        ActuationResult,
+        ManagedTxOutcome,
+    )
+
+    fake = _TcpRigctldServer(refuse="t")
+    await fake.start()
+    try:
+        radio, composition, server, _binds = await _bind_managed_tx_and_start(
+            fake, tmp_path, caplog
+        )
+        try:
+            assert fake.refused_requests >= 1
+            assert not radio._ptt_read_answerable  # noqa: SLF001
+            pressed = await composition.authority.submit_ptt(True, "memory-primary")
+            assert pressed.outcome is ManagedTxOutcome.ACCEPTED
+            await pressed.wait_settlement()
+            released = await composition.authority.submit_force_off()
+            settlement = await released.wait_settlement()
+            assert settlement is not None
+            assert settlement.result is ActuationResult.ACCEPTED
+            # The rig starts answering ``t`` again: the poll cycle keeps
+            # asking a refused ``t`` every cycle, so answerability heals
+            # with no reconnect.
+            fake.refuse = None
+            await await_until(
+                lambda: radio._ptt_read_answerable,  # noqa: SLF001
+                timeout=30.0,
+                description="the refused t answering again",
+            )
+            pressed_again = await composition.authority.submit_ptt(
+                True, "memory-primary"
+            )
+            assert pressed_again.outcome is ManagedTxOutcome.ACCEPTED
+            await pressed_again.wait_settlement()
+            released_again = await composition.authority.submit_force_off()
+            settlement_again = await released_again.wait_settlement()
+            assert settlement_again is not None
+            assert settlement_again.result is ActuationResult.ACCEPTED
+            assert fake.connections == 1  # healing never reconnects
+            await server.stop()
+        finally:
+            with suppress(Exception):
+                await server.stop()
+            await asyncio.wait_for(composition.shutdown(asyncio.Event()), timeout=30.0)
+            await radio.disconnect()
+    finally:
+        await fake.stop()
+
+
+@pytest.mark.asyncio
+async def test_release_verification_returns_to_t_after_refusal_heals() -> None:
+    """MOR-4456 #4607: the actuator skips ``t`` while refused, re-reads it healed.
+
+    Straight at the rigctld-client actuator over the real TCP fake, no
+    poller running, so every ``t`` counted is the unkey verification
+    itself. Fresh radio, ``t`` refused: the first ``FORCE_RECEIVE``
+    verification still runs (the read was answerable), is refused, and
+    settles ``UNCERTAIN`` while latching the refusal; the second unkey
+    settles from the ``T 0`` answer alone (zero new ``t``). Once a
+    solicited ``t`` answers again the refusal clears and the third unkey
+    reads ``t`` back (one more ``t``) and settles ``ACCEPTED``.
+    """
+    from rigplane.runtime.managed_tx_state import (
+        ActuationOperation,
+        ActuationResult,
+        EffectToken,
+    )
+
+    fake = _TcpRigctldServer(refuse="t")
+    await fake.start()
+    try:
+        radio = _real_rigctld_radio(fake)
+        await radio.connect()
+        try:
+            assert radio._ptt_read_answerable  # noqa: SLF001
+            first = await radio.actuate(
+                EffectToken(
+                    provider_generation=1, effect_epoch=1, attempt_id="refused-1"
+                ),
+                ActuationOperation.FORCE_RECEIVE,
+                is_current=lambda: True,
+            )
+            assert first is ActuationResult.UNCERTAIN
+            assert fake.t_commands == 1
+            assert not radio._ptt_read_answerable  # noqa: SLF001
+            second = await radio.actuate(
+                EffectToken(
+                    provider_generation=1, effect_epoch=2, attempt_id="refused-2"
+                ),
+                ActuationOperation.FORCE_RECEIVE,
+                is_current=lambda: True,
+            )
+            assert second is ActuationResult.ACCEPTED
+            assert fake.tx_commands.count("T 0") == 2
+            assert fake.t_commands == 1
+            # A solicited ``t`` still asks while refused: once it
+            # answers, the latch clears without a reconnect.
+            fake.refuse = None
+            assert await radio.get_ptt() is False
+            assert radio._ptt_read_answerable  # noqa: SLF001
+            third = await radio.actuate(
+                EffectToken(
+                    provider_generation=1, effect_epoch=3, attempt_id="healed-3"
+                ),
+                ActuationOperation.FORCE_RECEIVE,
+                is_current=lambda: True,
+            )
+            assert third is ActuationResult.ACCEPTED
+            assert fake.tx_commands.count("T 0") == 3
+            # first verification (1) + the healing solicited read (2) +
+            # the third unkey's verification read (3)
+            assert fake.t_commands == 3
+        finally:
+            await radio.disconnect()
+    finally:
+        await fake.stop()
+
+
+@pytest.mark.asyncio
+async def test_managed_release_verifies_with_t_only_while_not_demoted() -> None:
+    """MOR-4456 B3: a working ``t`` still verifies the unkey; a demoted one is skipped.
+
+    Straight at the rigctld-client actuator over the real TCP fake, no
+    poller running, so every ``t`` counted is the unkey verification
+    itself: with ``t`` answering, ``FORCE_RECEIVE`` writes ``T 0`` and
+    reads ``t`` back (one more ``t``); with ``_ptt_read_demoted`` latched,
+    the same unkey settles from the ``T 0`` answer (``RPRT 0``) alone and
+    sends zero ``t``. The KEY path needs no rule: ``PTT_ON`` writes
+    ``T 1`` and returns ``ACCEPTED`` with no readback at all, demoted or
+    not (``radio.py: actuate``).
+    """
+    from rigplane.runtime.managed_tx_state import (
+        ActuationOperation,
+        ActuationResult,
+        EffectToken,
+    )
+
+    fake = _TcpRigctldServer()
+    await fake.start()
+    try:
+        radio = _real_rigctld_radio(fake)
+        await radio.connect()
+        try:
+            assert not radio._ptt_read_demoted  # noqa: SLF001
+            answered = fake.t_commands
+            first = await radio.actuate(
+                EffectToken(
+                    provider_generation=1, effect_epoch=1, attempt_id="b3-verify"
+                ),
+                ActuationOperation.FORCE_RECEIVE,
+                is_current=lambda: True,
+            )
+            assert first is ActuationResult.ACCEPTED
+            assert "T 0" in fake.tx_commands
+            assert fake.t_commands == answered + 1
+            radio._ptt_read_demoted = True  # noqa: SLF001
+            asked = fake.t_commands
+            second = await radio.actuate(
+                EffectToken(
+                    provider_generation=1, effect_epoch=2, attempt_id="b3-demoted"
+                ),
+                ActuationOperation.FORCE_RECEIVE,
+                is_current=lambda: True,
+            )
+            assert second is ActuationResult.ACCEPTED
+            assert fake.tx_commands.count("T 0") == 2
+            assert fake.t_commands == asked
+        finally:
+            await radio.disconnect()
+    finally:
+        await fake.stop()
+
+
+@pytest.mark.asyncio
+async def test_rigctld_connection_drop_never_builds_a_declared_defect() -> None:
+    """MOR-2757 (b): a dropped connection is link quality, not a defect.
+
+    A server that accepts each connection and closes it on the first
+    command — rigctld restarting, with no unanswered read at all — must
+    never build a ``DeclaredCommandDefect``: that type is a product
+    defect, and link quality reaches the backend as a transport error
+    (``core/acquisition_scheduler.py: DeclaredCommandDefect``). The real
+    poller runs several failing cycles, reconnecting between them; the
+    critical-read tally stays empty.
+    """
+    from rigplane.backends.rigctld_client.radio import (
+        RigctldClientObservationPoller,
+    )
+
+    fake = _TcpRigctldServer(drop=True)
+    await fake.start()
+    radio = _real_rigctld_radio(fake)
+    scheduler = radio._acquisition_scheduler
+    poller = RigctldClientObservationPoller(
+        radio,
+        lambda _observations: None,
+        medium_interval=0.05,
+        slow_interval=1.0,
+    )
+    try:
+        await poller.start()
+        # Several failing cycles, each reconnecting: wait for the event (three
+        # connections reached the dropping server), not for a stretch of time.
+        await await_until(
+            lambda: fake.connections >= 3,
+            timeout=30.0,
+            description="the poller's failing cycles to reconnect three times",
+        )
+    finally:
+        await poller.stop()
+        await radio.disconnect()
+        await fake.stop()
+
+    assert scheduler.startup_defect is None
+    assert radio._critical_read_timeouts == {}
+    # The cycles really ran against a dropping server and reconnected.
+    assert fake.connections >= 3
+
+
+@pytest.mark.asyncio
+async def test_rigctld_operator_disconnect_is_not_undone_by_the_poller() -> None:
+    """MOR-2757 review: an intentional disconnect stays disconnected.
+
+    ``/api/v1/radio/disconnect`` closes the transport while the
+    observation poller keeps running (it is stopped only at server
+    shutdown). The poller's reconnect must not reopen the transport
+    after that intentional disconnect — within two medium intervals no
+    new connection reaches the fake server and the radio stays
+    disconnected — while ``connect()`` clears the flag and polling
+    resumes. An *unintended* drop (the test above) still reconnects.
+    """
+    from rigplane.backends.rigctld_client.radio import (
+        RigctldClientObservationPoller,
+    )
+
+    fake = _TcpRigctldServer()
+    await fake.start()
+    radio = _real_rigctld_radio(fake)
+    await radio.connect()
+    poller = RigctldClientObservationPoller(
+        radio,
+        lambda _observations: None,
+        medium_interval=0.05,
+        slow_interval=1.0,
+    )
+    cycles = 0
+    real_poll_medium = poller._poll_medium
+
+    async def counted_poll_medium() -> None:
+        nonlocal cycles
+        try:
+            await real_poll_medium()
+        finally:
+            cycles += 1
+
+    poller._poll_medium = counted_poll_medium  # type: ignore[method-assign]
+
+    async def cycles_after(count: int, seen: int, what: str) -> None:
+        await await_until(
+            lambda: cycles >= seen + count, timeout=30.0, description=what
+        )
+
+    try:
+        await poller.start()
+        await await_until(
+            lambda: fake.connections >= 1 and cycles >= 1,
+            timeout=30.0,
+            description="the poller's first cycle",
+        )
+        connections_before_disconnect = fake.connections
+
+        await radio.disconnect()
+        # Four more medium cycles: each starts only after the previous cycle's
+        # failed poll and reconnect attempt (the old head's reopen) finished,
+        # so at least three reconnect attempts have had their chance.
+        await cycles_after(4, cycles, "four medium cycles after the disconnect")
+        assert radio.connected is False
+        assert fake.connections == connections_before_disconnect
+
+        await radio.connect()
+        await cycles_after(2, cycles, "polling to resume after connect()")
+        assert radio.connected is True
+        assert fake.connections > connections_before_disconnect
+    finally:
+        await poller.stop()
+        await radio.disconnect()
+        await fake.stop()
+
+
+# ---------------------------------------------------------------------------
+# MOR-2757: an unanswered safety-critical read on the Yaesu CAT path
+# ---------------------------------------------------------------------------
+
+
+def _yaesu_critical_profile() -> RadioAcquisitionProfile:
+    """The startup paths a fake FTX-1 answers (four critical).
+
+    Split joined the critical set for MOR-4456: the double answers it by
+    default, so the two pre-existing tests using this profile are
+    unaffected.
+    """
+
+    from rigplane.backends.yaesu_cat.observations import (
+        _MAIN_FREQ,
+        _MAIN_MODE,
+        _PTT,
+        _SPLIT,
+        _TX_TARGET,
+    )
+
+    return RadioAcquisitionProfile(
+        provider="yaesu_cat",
+        capabilities=(
+            FieldCapability(path=_MAIN_FREQ, polling=True),
+            FieldCapability(path=_MAIN_MODE, polling=True),
+            FieldCapability(path=_PTT, polling=True),
+            FieldCapability(path=_TX_TARGET, polling=True),
+            FieldCapability(path=_SPLIT, polling=True),
+        ),
+        field_policies={
+            path: AcquisitionPolicy(cadence_seconds=1.0, freshness_ttl_seconds=15.0)
+            for path in (_MAIN_FREQ, _MAIN_MODE, _PTT, _TX_TARGET, _SPLIT)
+        },
+    )
+
+
+class _YaesuCriticalPoller:
+    """Drives the real Yaesu adapter's medium and TX-control lanes.
+
+    One cycle reads every critical field (split lives in the TX-control
+    lane, like ``YaesuCatPoller._poll_slow`` drives it); a cycle-level
+    failure (a transport timeout re-raised by the adapter) is retried on
+    the next interval — what ``YaesuCatPoller._run_poll_cycle`` does with it.
+    """
+
+    def __init__(
+        self,
+        callback: Callable[[Sequence[Observation]], None],
+        radio: "_Ftx1CriticalRadio",
+    ) -> None:
+        self._callback = callback
+        self._radio = radio
+        self._stopped = asyncio.Event()
+
+    async def start(self) -> None:
+        from rigplane.backends.yaesu_cat.observations import YaesuObservationAdapter
+
+        while not self._stopped.is_set():
+            adapter = YaesuObservationAdapter(
+                self._radio,  # type: ignore[arg-type]
+                profile=self._radio._acquisition_scheduler._profile,  # type: ignore[attr-defined]
+            )
+            try:
+                observations = await adapter.poll_medium()
+                observations += await adapter.poll_tx_controls()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logging.getLogger(__name__).warning(
+                    "fake FTX-1 medium poll cycle failed", exc_info=True
+                )
+            else:
+                self._callback(observations)
+            await asyncio.sleep(0.001)
+
+    async def stop(self) -> None:
+        self._stopped.set()
+        await asyncio.sleep(0)
+
+    def bind_provider_generation(self, *, capture: object, advance: object) -> None:
+        return None
+
+    def bind_managed_tx_authority(self, _authority: object) -> None:
+        return None
+
+
+class _Ftx1CriticalRadio:
+    """A fake FTX-1 on the Yaesu observation (``sweep=False``) path.
+
+    Answers every safety-critical read except the one ``never_answers``
+    command, which raises the transport's unanswered-read timeout — what
+    ``YaesuCatTransport.query`` raises on a radio that stays silent
+    (MOR-2757).
+    """
+
+    backend_id = "yaesu_cat"
+    # Unresolvable model: WebServer must keep the scheduler this fake
+    # attaches, not bootstrap its own.
+    model = "FAKE-FTX1"
+    capabilities = {"tx", "split"}
+    connected = control_connected = radio_ready = True
+
+    def __init__(
+        self,
+        *,
+        never_answers: str | None = None,
+        profile: RadioAcquisitionProfile | None = None,
+    ) -> None:
+        self.radio_state = RadioState()
+        self._state_store = StateStore()
+        self._acquisition_scheduler = AcquisitionScheduler(
+            profile=profile if profile is not None else _yaesu_critical_profile()
+        )
+        self._poll_warned_fields: set[str] = set()
+        self._critical_read_timeouts: dict[FieldPath, int] = {}
+        self._INITIAL_STATE_GAP_SERIAL = 0.005
+        self._never_answers = never_answers
+        self.tx_func_reads = 0
+
+    @property
+    def profile(self) -> SimpleNamespace:
+        # What ``YaesuObservationAdapter.from_radio`` reads: the radio
+        # profile's state-acquisition block, plus the FT answer map from
+        # the real FTX-1 profile contract (``RadioProfile.tx_func``), which
+        # ``_read_tx_target`` reads directly to interpret the ``FT;`` digit.
+        return SimpleNamespace(
+            state_acquisition=self._acquisition_scheduler._profile,
+            tx_func=get_radio_profile("yaesu_ftx1").tx_func,
+        )
+
+    @property
+    def state_store(self) -> StateStore:
+        return self._state_store
+
+    async def read_freq(self, receiver: int = 0) -> int:
+        return 14_074_000
+
+    async def read_mode(self, receiver: int = 0) -> tuple[str, int | None]:
+        return "USB", None
+
+    async def read_transmit_state(self) -> object:
+        from rigplane.core.tx_observation import TxStateReading
+
+        if self._never_answers == "ptt":
+            # What the transport reports when the PTT read stays silent:
+            # the adapter builds its own ``CatTimeoutError`` from this tag.
+            return TxStateReading(value=None, failure="timeout")
+        return TxStateReading(
+            value=False,
+            verified_readback=True,
+            source="yaesu_poll_response",
+            attributed="rx",
+        )
+
+    async def read_split(self) -> bool:
+        from rigplane.backends.yaesu_cat.transport import (
+            CatCommandRejected,
+            CatTimeoutError,
+        )
+
+        if self._never_answers == "split-timeout":
+            # MOR-4456: what the transport raises when ``ST;`` stays silent.
+            raise CatTimeoutError(
+                "Read timeout (0.1s) waiting for ';' terminator", command="ST;"
+            )
+        if self._never_answers == "split-refused":
+            # MOR-4456: the radio answers the split read with ``?;``.
+            raise CatCommandRejected("?;", command="ST;")
+        return False
+
+    async def get_tx_func(self) -> int:
+        from rigplane.backends.yaesu_cat.transport import CatTimeoutError
+
+        self.tx_func_reads += 1
+        if self._never_answers == "FT;":
+            raise CatTimeoutError(
+                "Read timeout (0.1s) waiting for ';' terminator", command="FT;"
+            )
+        return 0
+
+    def supports_command(self, _command: str) -> bool:
+        return False
+
+    def create_observation_poller(
+        self, *, callback: Callable[[Sequence[Observation]], None], **_kwargs: object
+    ) -> object:
+        return _YaesuCriticalPoller(callback, self)
+
+    # -- what ``cli/__init__.py: _run`` needs before it reaches the gate ----
+
+    async def __aenter__(self) -> "_Ftx1CriticalRadio":
+        return self
+
+    async def __aexit__(self, *_exc: object) -> None:
+        return None
+
+    async def actuate(
+        self, _token: object, _operation: object, *, is_current: Callable[[], bool]
+    ) -> object:
+        from rigplane.runtime.managed_tx_state import ActuationResult
+
+        return ActuationResult.ACCEPTED if is_current() else ActuationResult.REJECTED
+
+    async def set_ptt(self, _on: bool) -> None:
+        return None
+
+
+_FTX1_CAT_PAIRS = (
+    Path(__file__).resolve().parent / "fixtures" / "ftx1" / "cat_pairs.jsonl"
+)
+
+
+def _ftx1_table_silent_on_ft() -> RecordedCatAnswerTable:
+    """The bench FTX-1 recording with every ``FT;`` answer dropped.
+
+    :func:`RecordedCatAnswerTable.from_cat_pairs` records a request the
+    next request overtakes without a reply as silence — the bench fact
+    "this read timed out" — so dropping the recorded ``FT0;`` replies
+    replays a radio that answers everything except ``FT;``, with no
+    hand-placed timeout standing in for the wire.
+
+    The live fake holds USB state while the bench recorded the MAIN/SUB
+    manual-notch reads in FM (``BP01F35;``/``BP11F35;`` — the FM answer
+    has no decimal form, see the ``available_when`` note on the notch
+    policy in ``rigs/ftx1.toml``). Those two replies are repaired to the
+    USB decimal form (``150`` mirrors the SUB USB sample ``BP11150;``
+    from the same session); without the repair the profile's decimal
+    parse would reject a bench answer the live radio state contradicts.
+
+    The same surgery answers ``RA0;`` (MAIN attenuator) with the
+    profile's well-formed OFF value: the recording holds exactly one
+    ``RA0;`` row — the probe window's refusal, which the 10-minute Core
+    session never re-asked — while this scenario needs the read answered
+    like every other non-TX-target read.
+    """
+    rows = read_cat_rows(_FTX1_CAT_PAIRS)
+    kept: list[CatPairRow] = []
+    pending: str | None = None
+    for row in rows:
+        if row.dir == "c2r":
+            pending = row.line
+            kept.append(row)
+        elif pending == "FT;" and reply_closes(pending, row.line):
+            pending = None  # swallow the FT0; reply: FT; stays silent
+        else:
+            if row.dir == "r2c" and row.line in ("BP01F35;", "BP11F35;"):
+                row = replace(row, line=row.line[:4] + "150;")
+            elif (
+                pending == "RA0;"
+                and row.line == "?;"
+                and reply_closes(pending, row.line)
+            ):
+                # Bench probe refused the attenuator read; this scenario
+                # answers it OFF (see the docstring).
+                row = replace(row, line="RA00;")
+            pending = None
+            kept.append(row)
+    table = RecordedCatAnswerTable.from_cat_pairs(kept)
+    ft_answer = table.lookup("FT;")
+    assert ft_answer is not None and ft_answer.kind == "silence"
+    st_answer = table.lookup("ST;")
+    assert st_answer is not None and st_answer.reply == "ST0;"
+    assert table.lookup("BP01;") is not None
+    assert table.lookup("BP01;").reply == "BP01150;"  # type: ignore[union-attr]
+    ra_answer = table.lookup("RA0;")
+    assert ra_answer is not None and ra_answer.reply == "RA00;"
+    return table
+
+
+def _ftx1_table_refused_tx() -> RecordedCatAnswerTable:
+    """The bench FTX-1 recording with the ``TX;`` answer replaced by ``?;``.
+
+    The same row surgery as :func:`_ftx1_table_silent_on_ft` (the USB
+    decimal repair of the FM-recorded manual-notch replies and the
+    attenuator answer the bench only refused), but every ``FT;`` reply is
+    kept — the TX target answers here — while each ``TX0;`` reply becomes
+    the ``?;`` refusal, replaying a radio that refuses only the PTT read.
+    """
+
+    rows = read_cat_rows(_FTX1_CAT_PAIRS)
+    kept: list[CatPairRow] = []
+    pending: str | None = None
+    for row in rows:
+        if row.dir == "c2r":
+            pending = row.line
+            kept.append(row)
+        else:
+            if row.dir == "r2c" and row.line in ("BP01F35;", "BP11F35;"):
+                row = replace(row, line=row.line[:4] + "150;")
+            elif (
+                pending == "RA0;"
+                and row.line == "?;"
+                and reply_closes(pending, row.line)
+            ):
+                row = replace(row, line="RA00;")
+            elif (
+                pending == "TX;"
+                and reply_closes(pending, row.line)
+                and row.line != "?;"
+            ):
+                # Bench answered TX0; (receiving); this scenario refuses it.
+                row = replace(row, line="?;")
+            pending = None
+            kept.append(row)
+    table = RecordedCatAnswerTable.from_cat_pairs(kept)
+    tx_answer = table.lookup("TX;")
+    assert tx_answer is not None and tx_answer.kind == "refusal"
+    st_answer = table.lookup("ST;")
+    assert st_answer is not None and st_answer.reply == "ST0;"
+    ft_answer = table.lookup("FT;")
+    assert ft_answer is not None and ft_answer.reply == "FT0;"
+    assert table.lookup("BP01;") is not None
+    assert table.lookup("BP01;").reply == "BP01150;"  # type: ignore[union-attr]
+    ra_answer = table.lookup("RA0;")
+    assert ra_answer is not None and ra_answer.reply == "RA00;"
+    return table
+
+
+async def _http_get_json(port: int, path: str) -> tuple[int, Any]:
+    """GET *path* from the test listener over a raw socket, parsed as JSON."""
+    reader, writer = await asyncio.open_connection("127.0.0.1", port)
+    try:
+        writer.write(
+            f"GET {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n"
+            "Connection: close\r\n\r\n".encode()
+        )
+        await writer.drain()
+        raw = await asyncio.wait_for(reader.read(-1), 5.0)
+    finally:
+        writer.close()
+        with suppress(Exception):
+            await writer.wait_closed()
+    head, _, body = raw.partition(b"\r\n\r\n")
+    status = int(head.split(b" ", 2)[1])
+    return status, json.loads(body)
+
+
+@pytest.mark.asyncio
+async def test_yaesu_silent_tx_func_still_opens_with_tx_target_unknown() -> None:
+    """MOR-4433: a real FTX-1 backend whose ``FT;`` stays silent still opens.
+
+    The full production path — ``FakeCatRadio`` (bench recording with
+    every ``FT;`` answer dropped) behind the real ``YaesuCatRadio`` and
+    its real observation poller, through ``WebServer.start()``. ``FT;``
+    times out on the wire every medium cycle while the rest answers, so
+    the critical observations (frequency, mode, PTT, split) arrive
+    naturally, no defect is recorded, the listener binds, and the real
+    HTTP state reports the TX target unknown.
+    """
+    from rigplane.backends.yaesu_cat.observations import (
+        _MAIN_FREQ,
+        _MAIN_MODE,
+        _PTT,
+        _SPLIT,
+        _TX_TARGET,
+    )
+
+    fake = FakeCatRadio(recorded_answers=_ftx1_table_silent_on_ft())
+    await fake.start()
+    try:
+        radio = YaesuCatRadio(device=fake.device_url, profile="ftx1")
+        await asyncio.wait_for(radio.connect(), 30)
+        assert radio.connected
+        config = _gated_config()
+        config.radio_model = "FTX-1"
+        server = WebServer(radio, config)
+        try:
+            await asyncio.wait_for(server.start(), 60)
+            scheduler = radio._acquisition_scheduler
+
+            # Not vacuous: the production poller asked for ``FT;`` on the
+            # wire — it is silent, not merely unasked.
+            assert "FT;" in fake.commands
+
+            # The critical observations arrived through the real poller —
+            # nothing was seeded by hand. The TX target is observed too —
+            # as unknown, republished every medium cycle — instead of
+            # staying unanswered.
+            from rigplane.core.tx_target import UnknownTxTarget
+
+            observed = _observed_paths(server, scheduler)
+            for path in (_MAIN_FREQ, _MAIN_MODE, _PTT, _SPLIT):
+                assert path in observed, path
+            assert scheduler.startup_defect is None
+            tx_field = server.command_state_store.snapshot().field(_TX_TARGET)
+            assert isinstance(tx_field.value, UnknownTxTarget)
+            assert tx_field.value.reason == "not-observed"
+
+            port = int(server._server.sockets[0].getsockname()[1])  # noqa: SLF001
+            status, body = await _http_get_json(port, "/api/v1/state")
+            assert status == 200
+            assert body["txTarget"] == {
+                "status": "unknown",
+                "reason": "not-observed",
+            }
+        finally:
+            await server.stop()
+            await radio.disconnect()
+    finally:
+        await fake.stop()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("never_answers", "failed_path"),
+    [
+        ("ptt", "global.tx_state.ptt"),
+        ("split-timeout", "global.tx_state.split"),
+        ("split-refused", "global.tx_state.split"),
+    ],
+)
+async def test_yaesu_unanswered_tx_state_opens_after_the_non_critical_deadline(
+    never_answers: str, failed_path: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    """MOR-4456: an unanswered PTT/split read opens without it on Yaesu.
+
+    PTT and split left the startup-critical set: a silent or refused
+    transmit-state read is served unknown after the non-critical deadline
+    instead of aborting startup. The timeout counting switched off with
+    the critical set and refused/malformed reads no longer record a
+    defect, so the gate opens with the existing WARNING naming the path
+    while the answered fields are served.
+    """
+    from rigplane.backends.yaesu_cat.observations import (
+        _MAIN_FREQ,
+        _MAIN_MODE,
+        _PTT,
+        _SPLIT,
+        _TX_TARGET,
+    )
+
+    radio = _Ftx1CriticalRadio(never_answers=never_answers)
+    server = WebServer(radio, _gated_config())
+    scheduler = radio._acquisition_scheduler
+    binds: list[str] = []
+
+    async def _bind(*_args: object, **_kwargs: object) -> _FakeAsyncServer:
+        binds.append("bind")
+        return _FakeAsyncServer()
+
+    with (
+        patch("rigplane.web.web_startup.asyncio.start_server", new=_bind),
+        caplog.at_level(logging.WARNING, logger="rigplane.web.web_startup"),
+    ):
+        await asyncio.wait_for(server.start(), timeout=30.0)
+        try:
+            assert binds == ["bind"]
+            assert scheduler.startup_defect is None
+            # The timeout counting switched off with the critical set.
+            assert radio._critical_read_timeouts == {}  # noqa: SLF001
+            observed = _observed_paths(server, scheduler)
+            outstanding = scheduler.unobserved_startup_paths(observed)
+            assert failed_path in [str(path) for path in outstanding]
+            for path in (_MAIN_FREQ, _MAIN_MODE, _TX_TARGET):
+                assert path in observed, path
+            answered_tx_state = _PTT if "split" in failed_path else _SPLIT
+            assert answered_tx_state in observed, answered_tx_state
+        finally:
+            await server.stop()
+
+    warnings = [
+        record.getMessage()
+        for record in caplog.records
+        if record.levelno == logging.WARNING and failed_path in record.getMessage()
+    ]
+    assert warnings, "the deadline WARNING must name the unanswered path"
+    assert "after 10s" in warnings[0]
+
+
+@pytest.mark.asyncio
+async def test_yaesu_refused_ptt_read_opens_after_the_non_critical_deadline(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """MOR-4456: a refused PTT read opens without PTT.
+
+    The full production path — the real ``YaesuCatRadio.read_transmit_state``
+    against a CAT fake answering ``TX;`` with ``?;``. Production catches
+    that refusal and reports ``failure="read-error"``; the lane publishes
+    unknown with NO defect, NO refusal tally and NO timeout tally. PTT
+    left the critical set, so the gate opens at the non-critical deadline
+    with the existing WARNING naming ``global.tx_state.ptt`` instead of
+    waiting on it. A hand-raised ``CatCommandRejected`` out of the reader
+    would take the lane's ``except CatCommandRejected`` branch and skip
+    the field with no defect either — a verdict production never produces,
+    which is why this test drives the wire.
+    """
+    from rigplane.backends.yaesu_cat.observations import (
+        _MAIN_FREQ,
+        _MAIN_MODE,
+        _PTT,
+        _SPLIT,
+        _TX_TARGET,
+    )
+
+    # The bench recording answers every other read; ``reject`` forces the
+    # ``?;`` past the fake's own ``get_ptt`` handler, which otherwise
+    # shadows the recorded refusal the table asserts above.
+    fake = FakeCatRadio(recorded_answers=_ftx1_table_refused_tx())
+    fake.reject("TX")
+    await fake.start()
+    try:
+        radio = YaesuCatRadio(device=fake.device_url, profile="ftx1")
+        await asyncio.wait_for(radio.connect(), 30)
+        assert radio.connected
+        config = _gated_config()
+        config.radio_model = "FTX-1"
+        server = WebServer(radio, config)
+        try:
+            binds: list[str] = []
+
+            async def _bind(*_args: object, **_kwargs: object) -> _FakeAsyncServer:
+                binds.append("bind")
+                return _FakeAsyncServer()
+
+            with (
+                patch("rigplane.web.web_startup.asyncio.start_server", new=_bind),
+                caplog.at_level(logging.WARNING, logger="rigplane.web.web_startup"),
+            ):
+                await asyncio.wait_for(server.start(), timeout=60.0)
+
+                # Read while the server is still up: ``stop`` advances the
+                # provider generation, hiding pre-stop fields from the
+                # snapshot below.
+                scheduler = radio._acquisition_scheduler
+
+                # Not vacuous: the production poller asked for ``TX;`` on
+                # the wire — refused, not merely unasked.
+                assert "TX;" in fake.commands
+
+                # The gate opened without PTT: no abort and no defect.
+                assert binds == ["bind"]
+                assert scheduler.startup_defect is None
+                assert scheduler.consecutive_refusals(_PTT) == 0
+                assert _PTT not in radio._critical_read_timeouts  # noqa: SLF001
+
+                # PTT is still unanswered — and only PTT: every other
+                # field answered through the same poller.
+                observed = _observed_paths(server, scheduler)
+                assert _PTT in scheduler.unobserved_startup_paths(observed)
+                for path in (_MAIN_FREQ, _MAIN_MODE, _SPLIT, _TX_TARGET):
+                    assert path not in scheduler.unobserved_startup_paths(observed), (
+                        path
+                    )
+
+                await server.stop()
+
+            warnings = [
+                record.getMessage()
+                for record in caplog.records
+                if record.levelno == logging.WARNING
+                and "global.tx_state.ptt" in record.getMessage()
+            ]
+            assert warnings, "the deadline WARNING must name the refused path"
+            assert "after 10s" in warnings[0]
+        finally:
+            await radio.disconnect()
+    finally:
+        await fake.stop()
+
+
+@pytest.mark.asyncio
+async def test_yaesu_gate_is_unchanged_when_the_fake_answers_everything() -> None:
+    """MOR-2757 (b): a fake FTX-1 that answers everything opens as before.
+
+    The same radio with ``FT;`` answering: no count ever reaches the
+    limit, no defect is recorded, and the listener binds once every
+    critical path is observed — the pre-MOR-2757 behaviour.
+    """
+    radio = _Ftx1CriticalRadio()
+    server = WebServer(radio, _gated_config())
+    scheduler = radio._acquisition_scheduler
+    binds: list[str] = []
+
+    async def _bind(*_args: object, **_kwargs: object) -> _FakeAsyncServer:
+        binds.append("bind")
+        return _FakeAsyncServer()
+
+    with patch("rigplane.web.web_startup.asyncio.start_server", new=_bind):
+        await asyncio.wait_for(server.start(), timeout=10.0)
+        await server.stop()
+
+    assert binds == ["bind"]
+    assert scheduler.startup_defect is None
+    assert scheduler.unobserved_startup_paths(_observed_paths(server, scheduler)) == ()
+    assert radio.tx_func_reads >= 1
+
+
+@pytest.mark.asyncio
+async def test_yaesu_fully_silent_link_still_serves_not_answering() -> None:
+    """Control: a Yaesu link that answers nothing keeps its old outcome.
+
+    Full silence from ``t=0`` never answers the identity read, so the
+    connect holds the open port without verifying and startup serves the
+    radio-not-answering state (MOR-3071) — it must not turn into an abort
+    from the TX-target containment, nor open as if acquisition completed.
+    """
+    fake = FakeCatRadio()
+    fake.silence(300.0)
+    await fake.start()
+    try:
+        radio = YaesuCatRadio(device=fake.device_url, profile="ftx1")
+        await asyncio.wait_for(radio.connect(), 60)
+        config = _gated_config()
+        config.radio_model = "FTX-1"
+        server = WebServer(radio, config)
+        try:
+            await asyncio.wait_for(server.start(), 60)
+            assert server._served_with_silent_link is True  # noqa: SLF001
+            assert radio._acquisition_scheduler.startup_defect is None
+            assert (
+                radio._acquisition_scheduler.unobserved_startup_paths(
+                    _observed_paths(server, radio._acquisition_scheduler)
+                )
+                != ()
+            )
+        finally:
+            await server.stop()
+            await radio.disconnect()
+    finally:
+        await fake.stop()
+
+
+@pytest.mark.asyncio
+async def test_cli_web_exits_one_and_prints_the_defect(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """``rigplane web`` reports the defect on stderr and exits 1.
+
+    Same radio as the gate test above, driven through the real
+    ``cli/__init__.py: _run`` so the exit code and the ``Error:`` line come
+    from the CLI's own handling, not from a re-raise the test composed.
+    """
+    from rigplane.cli import _build_parser, _run
+
+    radio = _MalformedSubMeterRadio()
+
+    async def _bind(*_args: object, **_kwargs: object) -> _FakeAsyncServer:
+        raise AssertionError("the listener must never bind")
+
+    args = _build_parser().parse_args(
+        ["--host", "1.2.3.4", "--model", "IC-7610", "web", "--no-rigctld"]
+    )
+    args.web_bridge = None  # no audio bridge; the gate is what is under test
+    with (
+        patch("rigplane.cli.create_radio", return_value=radio),
+        patch("rigplane.cli.check_ports_available"),
+        patch("rigplane.web.web_startup.asyncio.start_server", new=_bind),
+    ):
+        rc = await asyncio.wait_for(_run(args), timeout=10.0)
+
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert err.startswith("Error: web startup aborted: ")
+    assert str(SUB_S_METER) in err
+    assert "SM1{raw:03d};" in err
+    assert "SM0000;" in err
+    assert "Refusing to start a half-working server." in err
+
+
+# ---------------------------------------------------------------------------
+# available_when: a field the profile declares absent in the current mode
+# ---------------------------------------------------------------------------
+
+
+NOTCH_FREQ = FieldPath.receiver("main", "operator_controls", "manual_notch_freq")
+
+
+def _conditional_profile() -> RadioAcquisitionProfile:
+    """``FREQ``/``MODE`` plus one field declared absent while the mode is FM."""
+
+    return RadioAcquisitionProfile(
+        provider="test_provider",
+        capabilities=(
+            FieldCapability(path=FREQ, polling=True),
+            FieldCapability(path=MODE, polling=True),
+            FieldCapability(path=NOTCH_FREQ, polling=True),
+        ),
+        field_policies={
+            NOTCH_FREQ: AcquisitionPolicy(
+                cadence_seconds=1.0,
+                freshness_ttl_seconds=2.0,
+                available_when=(
+                    AvailabilityClause(field=MODE, operator="not_in", value=["FM"]),
+                ),
+            ),
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_field_declared_absent_in_the_current_mode_does_not_hold_the_gate() -> (
+    None
+):
+    scheduler = AcquisitionScheduler(profile=_conditional_profile())
+    server = WebServer(_CivRadio(scheduler), _gated_config())
+    server.command_state_store.apply(_observation(FREQ, 14_074_000, at=1.0))
+    server.command_state_store.apply(_observation(MODE, "FM", at=1.0))
+
+    # Not vacuous: the same predicate without the availability term still
+    # reports the conditional field outstanding.
+    assert scheduler.unobserved_startup_paths(_observed_paths(server, scheduler)) == (
+        NOTCH_FREQ,
+    )
+
+    await asyncio.wait_for(
+        _await_initial_state_acquisition(server, sweep=False), timeout=5.0
+    )
+
+
+# ---------------------------------------------------------------------------
+# The FTX-1's second receiver: every declared SUB path is unconditional
+# (MOR-2511; bench 2026-09-18 answered every SUB read in single receive)
+# ---------------------------------------------------------------------------
+
+
+DUAL_WATCH = FieldPath.global_("tx_state", "dual_watch")
+FTX1_SUB_PATHS = (
+    FieldPath.active("sub", "freq_mode", "freq_hz"),
+    FieldPath.active("sub", "freq_mode", "mode"),
+    FieldPath.active("sub", "freq_mode", "filter_width"),
+    FieldPath.receiver("sub", "meters", "s_meter"),
+    FieldPath.receiver("sub", "operator_controls", "af_level"),
+    FieldPath.receiver("sub", "operator_controls", "rf_gain"),
+    FieldPath.receiver("sub", "operator_controls", "squelch"),
+    FieldPath.receiver("sub", "operator_controls", "repeater_shift"),
+)
+
+
+def _ftx1_scheduler() -> AcquisitionScheduler:
+    acquisition = get_radio_profile("FTX-1").state_acquisition
+    assert acquisition is not None
+    return AcquisitionScheduler(profile=acquisition)
+
+
+def _ftx1_outstanding(
+    store: StateStore, observed: tuple[FieldPath, ...] = ()
+) -> tuple[FieldPath, ...]:
+    scheduler = _ftx1_scheduler()
+    return scheduler.unobserved_startup_paths(
+        observed,
+        availability=resolve_available_when(scheduler._profile, store.snapshot()),
+    )
+
+
+def test_ftx1_sub_paths_are_outstanding_at_startup_before_dual_receive_is_observed() -> (
+    None
+):
+    """Every SUB path holds the gate open like any unconditional declared
+    field -- the operator controls no longer wait for ``FR`` to answer."""
+
+    outstanding = _ftx1_outstanding(StateStore())
+
+    assert set(FTX1_SUB_PATHS).issubset(outstanding)
+    # dual_watch is itself an unconditional declared field, still polled for
+    # display.
+    assert DUAL_WATCH in outstanding
+
+
+FTX1_DRAIN_PATHS = (
+    FieldPath.global_("meters", "vd"),
+    FieldPath.global_("meters", "id"),
+)
+
+
+def test_ftx1_drain_meters_hold_the_gate_open_until_they_are_observed() -> None:
+    """MOR-2425/T147: declaring VDD/IDD without ``tx_only`` enrols them.
+
+    ``AcquisitionScheduler.unobserved_startup_paths`` drops a ``tx_only``
+    path, which is why the four transmit meters never hold the gate. These
+    two are not ``tx_only``, so the web start-up wait covers them -- the
+    2026-09-08 bench probe is the evidence that a receiving FTX-1 answers
+    both, in 8.3-14.4 ms per read.
+    """
+    outstanding = _ftx1_outstanding(StateStore())
+
+    assert set(FTX1_DRAIN_PATHS).issubset(outstanding)
+    # Not vacuous: the transmit meters sharing the same CAT command are
+    # excluded from the same set by their ``tx_only``.
+    assert FieldPath.global_("meters", "swr") not in outstanding
+
+    observed = _ftx1_outstanding(StateStore(), FTX1_DRAIN_PATHS)
+
+    assert set(FTX1_DRAIN_PATHS).isdisjoint(observed)
+
+
+@pytest.mark.parametrize("read_only", (False, True))
+async def test_application_connection_selection_follows_acquisition_before_listener(
+    read_only: bool,
+) -> None:
+    from test_radio_poller_tx_interlock import ConnectVfoRadio, _observe_ptt
+    from rigplane.web.radio_poller import RadioPoller
+
+    radio = ConnectVfoRadio()
+    config = _gated_config()
+    config.read_only = read_only
+    server = WebServer(radio, config)
+    events: list[str] = []
+
+    async def acquire(*args: object, **kwargs: object) -> None:
+        assert radio.wire.sent_frames == []
+        events.append("acquire")
+        _observe_ptt(server.command_state_store, False)
+
+    async def bind(*args: object, **kwargs: object) -> _FakeAsyncServer:
+        events.append("bind")
+        assert len(radio.wire.sent_frames) == (0 if read_only else 5)
+        if not read_only:
+            assert (
+                server.command_state_store.snapshot()
+                .field(FieldPath.active_slot("0"))
+                .value
+                == "A"
+            )
+        return _FakeAsyncServer()
+
+    with (
+        patch.object(RadioPoller, "start"),
+        patch.object(web_startup, "_await_initial_state_acquisition", new=acquire),
+        patch.object(web_startup.asyncio, "start_server", new=bind),
+    ):
+        await server.start()
+        await server.stop()
+    assert events == ["acquire", "bind"]
+
+
+# ---------------------------------------------------------------------------
+# IC-7610: the radio refuses MAIN's filter-shape read (MOR-2733)
+# ---------------------------------------------------------------------------
+
+MAIN_FILTER_SHAPE = FieldPath.receiver("main", "operator_controls", "filter_shape")
+SUB_FILTER_SHAPE = FieldPath.receiver("sub", "operator_controls", "filter_shape")
+# The MOR-2733 bench exchange: MAIN's cmd29 filter-shape read is refused with
+# a bare NG that carries no 29 prefix, and SUB's is answered 00 (SHARP).
+_MAIN_FILTER_SHAPE_READ = bytes.fromhex("FEFE98E029001656FD")
+_SUB_FILTER_SHAPE_READ = bytes.fromhex("FEFE98E029011656FD")
+_BARE_NG = bytes.fromhex("FEFEE098FAFD")
+_SUB_FILTER_SHAPE_ANSWER = bytes.fromhex("FEFEE0982901165600FD")
+
+
+def _read_value(request: CivFrame) -> bytes:
+    """Value an unscripted read is answered with, after its echoed bytes."""
+
+    if request.command == 0x25 or (request.command, request.sub) == (0x1C, 0x03):
+        return bcd_encode(14_074_000)
+    if request.command == 0x26:
+        return b"\x01\x00\x01"
+    if request.command in (0x14, 0x15):
+        return b"\x01\x28"
+    if (request.command, request.sub) == (0x21, 0x00):
+        return b"\x00\x00\x00"
+    return b"\x00"
+
+
+class _Ic7610Wire:
+    """Answers the initial state fetch through the real CI-V ingress.
+
+    Stands in for the LAN link at the ``send_civ`` seam
+    ``runtime/radio_initial_state.py: fetch_initial_state`` sends through. A
+    read in ``script`` gets its scripted reply; every other read is echoed
+    back from the radio with :func:`_read_value` appended. Each reply goes
+    through ``parse_civ_frame`` into ``CivRuntime._route_civ_frame``.
+    """
+
+    def __init__(self, radio: IcomRadio, script: Mapping[bytes, bytes]) -> None:
+        self._radio = radio
+        self._script = script
+        self.sent: list[bytes] = []
+
+    async def send_civ(
+        self,
+        command: int,
+        sub: int | None = None,
+        data: bytes | None = None,
+        **_kwargs: object,
+    ) -> None:
+        radio_addr = self._radio._radio_addr
+        request = build_civ_frame(
+            radio_addr, CONTROLLER_ADDR, command, sub=sub, data=data
+        )
+        self.sent.append(request)
+        reply = self._script.get(request)
+        if reply is None:
+            reply = build_civ_frame(
+                CONTROLLER_ADDR,
+                radio_addr,
+                command,
+                sub=sub,
+                data=(data or b"") + _read_value(parse_civ_frame(request)),
+            )
+        await self._radio._civ_runtime._route_civ_frame(
+            parse_civ_frame(reply), generation=self._radio._civ_epoch
+        )
+
+
+# ---------------------------------------------------------------------------
+# MOR-2749: only safety-critical fields block opening; the rest stop
+# blocking 10 s after the initial fetch
+# ---------------------------------------------------------------------------
+
+
+def _filter_shapes_startup_required(
+    scheduler: AcquisitionScheduler,
+) -> AcquisitionScheduler:
+    """Rebuild the IC-7610 profile with #3815's lines reverted in-test.
+
+    Both filter-shape capabilities come back ``startup_required``, and the
+    two filter-shape entries in ``field_policies`` drop their MOR-2748
+    ``available_when`` clauses — the availability declaration lives on the
+    ``AcquisitionPolicy``, not the ``FieldCapability``. The test pins the
+    deadline rule on the pre-#3815/pre-#3828 profile shape and stays correct
+    after those changes merged.
+    """
+
+    filter_shapes = {MAIN_FILTER_SHAPE, SUB_FILTER_SHAPE}
+    flipped = replace(
+        scheduler._profile,
+        capabilities=tuple(
+            replace(capability, startup_required=True)
+            if capability.path in filter_shapes
+            else capability
+            for capability in scheduler._profile.capabilities
+        ),
+        field_policies={
+            path: replace(policy, available_when=())
+            if path in filter_shapes
+            else policy
+            for path, policy in scheduler._profile.field_policies.items()
+        },
+    )
+    return AcquisitionScheduler(profile=flipped)
+
+
+@pytest.mark.asyncio
+async def test_ic7610_opens_while_the_radio_refuses_mains_filter_shape_read() -> None:
+    """MOR-2733: every initial read is answered except MAIN's filter shape.
+
+    The startup gate still completes, and MAIN's filter shape stays unread.
+    """
+
+    radio = IcomRadio("192.168.1.100", model="IC-7610")
+    server = WebServer(radio, _gated_config())
+    scheduler = _acquisition_scheduler(server)
+    assert scheduler is not None
+    # The generation advance runtime/_control_phase.py makes on connect.
+    radio._civ_runtime.advance_generation("connect")
+    wire = _Ic7610Wire(
+        radio,
+        {
+            _MAIN_FILTER_SHAPE_READ: _BARE_NG,
+            _SUB_FILTER_SHAPE_READ: _SUB_FILTER_SHAPE_ANSWER,
+        },
+    )
+    radio.send_civ = wire.send_civ  # type: ignore[method-assign]
+    radio._INITIAL_STATE_GAP_LAN = radio._INITIAL_STATE_GAP_SERIAL = 0.0
+
+    await fetch_initial_state(radio)
+
+    # Not vacuous: the initial fetch sent both filter-shape reads.
+    assert {_MAIN_FILTER_SHAPE_READ, _SUB_FILTER_SHAPE_READ} <= set(wire.sent)
+    clock = _GateClock(stop_at=10.0)
+    with _fake_gate_clock(clock):
+        try:
+            await _await_initial_state_acquisition(server, sweep=False)
+        except _GateWindowClosed:
+            outstanding = scheduler.unobserved_startup_paths(
+                _observed_paths(server, scheduler)
+            )
+            pytest.fail(
+                f"startup still waiting after {clock.now:.0f}s on {outstanding}"
+            )
+
+    assert MAIN_FILTER_SHAPE not in _observed_paths(server, scheduler)
+    sub_shape = FieldPath.receiver("1", "operator_controls", "filter_shape")
+    assert server.command_state_store.snapshot().field(sub_shape).value == 0
+
+
+@pytest.mark.asyncio
+async def test_ic7610_opens_by_the_deadline_while_refusing_mains_filter_shape_read(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """MOR-2749 (a): a refused non-critical field opens after 10 s.
+
+    The profile carries #3815's ``startup_optional`` lines removed (reverted
+    inside the test), the radio answers every initial read except MAIN's
+    filter shape (bare NG), and the gate must complete at the 10 s deadline
+    with a WARNING naming the path — with MAIN's filter shape still unread.
+    """
+
+    radio = IcomRadio("192.168.1.100", model="IC-7610")
+    server = WebServer(radio, _gated_config())
+    attached = _acquisition_scheduler(server)
+    assert attached is not None
+    scheduler = _filter_shapes_startup_required(attached)
+    radio._acquisition_scheduler = scheduler
+    # Not vacuous: with #3815's lines reverted, both filter shapes block.
+    assert {MAIN_FILTER_SHAPE, SUB_FILTER_SHAPE} <= set(
+        scheduler.unobserved_startup_paths(())
+    )
+    # The generation advance runtime/_control_phase.py makes on connect.
+    radio._civ_runtime.advance_generation("connect")
+    wire = _Ic7610Wire(
+        radio,
+        {
+            _MAIN_FILTER_SHAPE_READ: _BARE_NG,
+            _SUB_FILTER_SHAPE_READ: _SUB_FILTER_SHAPE_ANSWER,
+        },
+    )
+    radio.send_civ = wire.send_civ  # type: ignore[method-assign]
+    radio._INITIAL_STATE_GAP_LAN = radio._INITIAL_STATE_GAP_SERIAL = 0.05
+
+    await fetch_initial_state(radio)
+
+    # Not vacuous: the initial fetch sent both filter-shape reads.
+    assert {_MAIN_FILTER_SHAPE_READ, _SUB_FILTER_SHAPE_READ} <= set(wire.sent)
+    clock = _GateClock(stop_at=12.0)
+    with (
+        caplog.at_level(logging.WARNING, logger="rigplane.web.web_startup"),
+        _fake_gate_clock(clock),
+    ):
+        try:
+            await _await_initial_state_acquisition(server, sweep=False)
+        except _GateWindowClosed:
+            outstanding = scheduler.unobserved_startup_paths(
+                _observed_paths(server, scheduler)
+            )
+            pytest.fail(
+                f"startup still waiting after {clock.now:.0f}s on {outstanding}"
+            )
+
+    assert clock.now < 12.0
+    assert MAIN_FILTER_SHAPE not in _observed_paths(server, scheduler)
+    warnings = [
+        record.getMessage()
+        for record in caplog.records
+        if record.levelno == logging.WARNING
+        and "receiver.main.operator_controls.filter_shape" in record.getMessage()
+    ]
+    assert warnings, "the deadline WARNING must name the unanswered path"
+    assert "after 10s" in warnings[0]
+
+
+class _TxTargetAdverseWire(_Ic7610Wire):
+    """Answers every initial read except the native TX-target read (``1C 03``).
+
+    ``fate="silent"`` drops that read (the radio stays silent);
+    ``fate="nak"`` answers it with the bare NG the bench produces.
+    """
+
+    def __init__(self, radio: IcomRadio, *, fate: str) -> None:
+        super().__init__(radio, {})
+        assert fate in ("silent", "nak")
+        self._fate = fate
+        self.tx_target_reads = 0
+
+    async def send_civ(
+        self,
+        command: int,
+        sub: int | None = None,
+        data: bytes | None = None,
+        **kwargs: object,
+    ) -> None:
+        request = build_civ_frame(
+            self._radio._radio_addr, CONTROLLER_ADDR, command, sub=sub, data=data
+        )
+        parsed = parse_civ_frame(request)
+        if (parsed.command, parsed.sub) == (0x1C, 0x03):
+            self.sent.append(request)
+            self.tx_target_reads += 1
+            if self._fate == "nak":
+                await self._radio._civ_runtime._route_civ_frame(
+                    parse_civ_frame(_BARE_NG),
+                    generation=self._radio._civ_epoch,
+                )
+            return
+        await super().send_civ(command, sub=sub, data=data, **kwargs)
+
+
+@pytest.mark.parametrize("fate", ["silent", "nak"])
+@pytest.mark.asyncio
+async def test_ic7610_unanswered_tx_target_still_opens_with_tx_target_unknown(
+    fate: str,
+) -> None:
+    """MOR-4433: IC-7610 opens while the native TX-target read never answers.
+
+    The ``1C 03`` transmit-frequency read stays silent (or is NAKed with a
+    bare NG) while every other initial read answers; the gate must still
+    complete with ``tx_target`` unobserved, no defect recorded, and the
+    served state reporting it unknown.
+    """
+    from rigplane.web.runtime_helpers import build_public_state_payload_from_snapshot
+
+    TX_TARGET = FieldPath.global_("tx_state", "tx_target")
+
+    radio = IcomRadio("192.168.1.100", model="IC-7610")
+    server = WebServer(radio, _gated_config())
+    scheduler = _acquisition_scheduler(server)
+    assert scheduler is not None
+    assert TX_TARGET in scheduler.unobserved_startup_paths(())
+    # The generation advance runtime/_control_phase.py makes on connect.
+    radio._civ_runtime.advance_generation("connect")
+    wire = _TxTargetAdverseWire(radio, fate=fate)
+    radio.send_civ = wire.send_civ  # type: ignore[method-assign]
+    radio._INITIAL_STATE_GAP_LAN = radio._INITIAL_STATE_GAP_SERIAL = 0.0
+
+    await fetch_initial_state(radio)
+
+    # Not vacuous: the fetch attempted the TX-target read and answered
+    # the live tuning pair.
+    assert wire.tx_target_reads >= 1
+    observed = _observed_paths(server, scheduler)
+    assert TX_TARGET not in observed
+    assert any(path.name == "freq_hz" for path in observed), (
+        "the rest of the initial fetch must answer"
+    )
+
+    clock = _GateClock(stop_at=12.0)
+    with _fake_gate_clock(clock):
+        try:
+            await _await_initial_state_acquisition(server, sweep=False)
+        except _GateWindowClosed:
+            outstanding = scheduler.unobserved_startup_paths(
+                _observed_paths(server, scheduler)
+            )
+            pytest.fail(
+                f"startup still waiting after {clock.now:.0f}s on {outstanding}"
+            )
+
+    assert TX_TARGET not in _observed_paths(server, scheduler)
+    assert scheduler.startup_defect is None
+    payload = build_public_state_payload_from_snapshot(
+        server.command_state_store.snapshot(),
+        radio=None,
+        receiver_count=radio._profile.receiver_count,
+    )
+    assert payload["txTarget"] == {"status": "unknown", "reason": "not-observed"}
+
+
+RIGS_DIR = Path(__file__).resolve().parents[1] / "rigs"
+
+
+def _critical_startup_value(path: FieldPath) -> object:
+    # MOR-4433: ``tx_target`` is no longer safety-critical, so no caller
+    # answers it up front anymore — only the still-critical paths land here.
+    if path.name == "freq_hz":
+        return 14_074_000
+    if path.name == "mode":
+        return "LSB"
+    return False  # ptt, split
+
+
+def _shipped_startup_profiles() -> list[pytest.param]:
+    params = []
+    for model, rig in sorted(discover_rigs(RIGS_DIR).items()):
+        profile = rig.to_profile()
+        if profile.state_acquisition is None:
+            continue
+        params.append(pytest.param(model, profile.state_acquisition, id=model))
+    assert params, "no shipped profile carries state acquisition"
+    return params
+
+
+@pytest.mark.parametrize(("model", "acquisition"), _shipped_startup_profiles())
+@pytest.mark.asyncio
+async def test_shipped_profile_opens_by_the_deadline_with_every_non_critical_path_unanswered(
+    model: str,
+    acquisition: RadioAcquisitionProfile,
+) -> None:
+    """MOR-2749 (b): no non-critical field of any shipped profile hangs the open.
+
+    Every safety-critical path is answered up front and every other
+    startup-required path is never answered at all; the gate must still
+    complete at the 10 s deadline, on the fake clock.
+    """
+
+    scheduler = AcquisitionScheduler(profile=acquisition)
+    outstanding = scheduler.unobserved_startup_paths(())
+    non_critical = tuple(
+        path for path in outstanding if not startup_critical_path(path)
+    )
+    critical = tuple(path for path in outstanding if startup_critical_path(path))
+    assert non_critical, f"{model}: no startup-required non-critical path to pin"
+
+    server = WebServer(_CivRadio(scheduler), _gated_config())
+    for path in critical:
+        server.command_state_store.apply(
+            _observation(path, _critical_startup_value(path), at=0.0)
+        )
+
+    clock = _GateClock(stop_at=11.0)
+    with _fake_gate_clock(clock):
+        try:
+            await _await_initial_state_acquisition(server, sweep=False)
+        except _GateWindowClosed:
+            still = tuple(
+                path
+                for path in scheduler.unobserved_startup_paths(
+                    _observed_paths(server, scheduler)
+                )
+                if not startup_critical_path(path)
+            )
+            pytest.fail(
+                f"{model}: non-critical paths still blocking after "
+                f"{clock.now:.0f}s: {still}"
+            )
+
+    assert clock.now >= 10.0
+
+
+@pytest.mark.asyncio
+async def test_never_answered_critical_path_fails_startup_after_three_attempts() -> (
+    None
+):
+    """MOR-2749 (c): three failed attempts on a critical path end startup.
+
+    MOR-4456: PTT and split left the critical set, so the live tuning pair
+    carries this proof now — ``main.freq_mode.freq_hz`` is cadence-owned
+    and never answered: the initial fetch plus two re-reads that time out
+    for real (the MOR-2614 consecutive-timeout accounting) reach three
+    attempts, and the gate fails through the declared-command defect
+    record, naming the field and the CI-V command the radio never
+    answered.
+    """
+
+    from rigplane.core.acquisition_scheduler import AcquisitionPriority
+
+    FREQ = FieldPath.active("main", "freq_mode", "freq_hz")
+    radio = IcomRadio("192.168.1.100", model="IC-7300")
+    server = WebServer(radio, _gated_config())
+    scheduler = AcquisitionScheduler(profile=_critical_wait_profile(path=FREQ))
+    radio._acquisition_scheduler = scheduler
+    radio._INITIAL_STATE_GAP_LAN = radio._INITIAL_STATE_GAP_SERIAL = 0.05
+    assert scheduler.unobserved_startup_paths(()) == (FREQ,)
+
+    def _re_read_without_answer(now: float) -> None:
+        # What the drain does with a cadence group that never answers: it
+        # re-reads on cadence, and each answer window that closes without a
+        # reply is a real timeout (MOR-874's grace aside).
+        scheduler.ensure_fresh(
+            (FREQ,),
+            max_age=1e-9,
+            priority=AcquisitionPriority.BACKGROUND,
+            reason="startup-gate",
+        )
+        for request in scheduler.pending_requests():
+            scheduler.record_acquisition_failure(
+                request,
+                reason="acquisition_request_timeout",
+                failed_paths=request.paths,
+                now=now,
+                link_healthy=False,
+            )
+
+    clock = _GateClock(stop_at=6.0)
+    clock.on_tick = _re_read_without_answer
+    with _fake_gate_clock(clock):
+        with pytest.raises(RuntimeError) as caught:
+            await _await_initial_state_acquisition(server, sweep=True)
+
+    message = str(caught.value)
+    assert message.startswith("web startup aborted: ")
+    assert message.endswith("Refusing to start a half-working server.")
+    assert "receiver.main.active.freq_mode.freq_hz" in message
+    assert "still unanswered after 3 failed reads of its request group" in message
+    assert scheduler.startup_defect is not None
+
+
+@pytest.mark.asyncio
+async def test_never_answered_split_path_opens_after_the_non_critical_deadline(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """MOR-4456: a never-answered ``split`` opens without it.
+
+    Same shape as the critical case above with the split path alone —
+    except split left the critical set, so three timed-out reads no
+    longer fail startup: the gate opens at the non-critical deadline with
+    the existing WARNING naming ``global.tx_state.split``, and no defect
+    is recorded.
+    """
+
+    from rigplane.core.acquisition_scheduler import AcquisitionPriority
+
+    SPLIT = FieldPath.global_("tx_state", "split")
+    radio = IcomRadio("192.168.1.100", model="IC-7300")
+    server = WebServer(radio, _gated_config())
+    scheduler = AcquisitionScheduler(profile=_critical_wait_profile("split"))
+    radio._acquisition_scheduler = scheduler
+    radio._INITIAL_STATE_GAP_LAN = radio._INITIAL_STATE_GAP_SERIAL = 0.05
+    assert scheduler.unobserved_startup_paths(()) == (SPLIT,)
+
+    def _re_read_without_answer(now: float) -> None:
+        # What the drain does with a cadence group that never answers: it
+        # re-reads on cadence, and each answer window that closes without a
+        # reply is a real timeout (MOR-874's grace aside).
+        scheduler.ensure_fresh(
+            (SPLIT,),
+            max_age=1e-9,
+            priority=AcquisitionPriority.BACKGROUND,
+            reason="startup-gate",
+        )
+        for request in scheduler.pending_requests():
+            scheduler.record_acquisition_failure(
+                request,
+                reason="acquisition_request_timeout",
+                failed_paths=request.paths,
+                now=now,
+                link_healthy=False,
+            )
+
+    clock = _GateClock(stop_at=12.0)
+    clock.on_tick = _re_read_without_answer
+    with (
+        caplog.at_level(logging.WARNING, logger="rigplane.web.web_startup"),
+        _fake_gate_clock(clock),
+    ):
+        try:
+            await _await_initial_state_acquisition(server, sweep=True)
+        except _GateWindowClosed:
+            outstanding = scheduler.unobserved_startup_paths(
+                _observed_paths(server, scheduler)
+            )
+            pytest.fail(
+                f"startup still waiting after {clock.now:.0f}s on {outstanding}"
+            )
+
+    assert clock.now >= 10.0
+    assert scheduler.startup_defect is None
+    assert SPLIT in scheduler.unobserved_startup_paths(
+        _observed_paths(server, scheduler)
+    )
+    warnings = [
+        record.getMessage()
+        for record in caplog.records
+        if record.levelno == logging.WARNING
+        and "global.tx_state.split" in record.getMessage()
+    ]
+    assert warnings, "the deadline WARNING must name the unanswered path"
+    assert "after 10s" in warnings[0]
+
+
+@pytest.mark.asyncio
+async def test_gate_is_unchanged_when_every_declared_path_answers() -> None:
+    """MOR-2749 (d): a radio that answers everything binds as before.
+
+    Nothing is outstanding when the gate is entered, so neither the
+    deadline nor the attempt rule engages: no wait, no WARNING, no defect.
+    """
+
+    scheduler = _scheduler()
+    server = WebServer(_CivRadio(scheduler), _gated_config())
+    for path in scheduler.unobserved_startup_paths(()):
+        server.command_state_store.apply(_observation(path, 0, at=0.0))
+
+    clock = _GateClock(stop_at=0.05)
+    with _fake_gate_clock(clock):
+        await _await_initial_state_acquisition(server, sweep=True)
+
+    assert clock.now == 0.0
+    assert scheduler.startup_defect is None
+    assert scheduler.unobserved_startup_paths(_observed_paths(server, scheduler)) == ()
+
+
+# ---------------------------------------------------------------------------
+# MOR-2841: a radio that answers NOTHING serves; a radio that answers some
+# reads but not a critical one still fails (unchanged, above)
+# ---------------------------------------------------------------------------
+
+
+def _silent_link_radio(server: WebServer, scheduler: AcquisitionScheduler) -> IcomRadio:
+    """A never-connected radio whose link-down detector has fired.
+
+    The backend's serial watchdog (``_declare_serial_link_down``) forces
+    the connection state to ``RECONNECTING`` on consecutive CI-V timeouts —
+    the state a powered-off IC-7300 on an open serial port produces. The
+    scheduler is attached after ``WebServer`` construction, mirroring
+    ``test_never_answered_critical_path_fails_startup_after_three_attempts``.
+    """
+
+    from rigplane.runtime._connection_state import RadioConnectionState
+
+    radio = server._radio
+    assert isinstance(radio, IcomRadio)
+    radio._acquisition_scheduler = scheduler
+    radio._INITIAL_STATE_GAP_LAN = radio._INITIAL_STATE_GAP_SERIAL = 0.05
+    radio._conn_state = RadioConnectionState.RECONNECTING
+    return radio
+
+
+def _re_read_without_answer(
+    scheduler: AcquisitionScheduler, path: FieldPath
+) -> Callable[[float], None]:
+    from rigplane.core.acquisition_scheduler import AcquisitionPriority
+
+    def _tick(now: float) -> None:
+        scheduler.ensure_fresh(
+            (path,),
+            max_age=1e-9,
+            priority=AcquisitionPriority.BACKGROUND,
+            reason="startup-gate",
+        )
+        for request in scheduler.pending_requests():
+            scheduler.record_acquisition_failure(
+                request,
+                reason="acquisition_request_timeout",
+                failed_paths=request.paths,
+                now=now,
+                link_healthy=False,
+            )
+
+    return _tick
+
+
+@pytest.mark.asyncio
+async def test_silent_link_serves_instead_of_failing_startup(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """MOR-2841 (a): zero fields observed + link down = powered-off radio.
+
+    The same three failed reads that end startup through the named defect
+    (see ``test_never_answered_critical_path_fails_startup_after_three_attempts``,
+    unchanged) release the gate instead when the link answers NOTHING: one
+    WARNING names the radio-not-answering state, no defect is recorded, and
+    the wait returns so the listener binds.
+    """
+
+    import logging
+
+    FREQ = FieldPath.active("main", "freq_mode", "freq_hz")
+    scheduler = AcquisitionScheduler(profile=_critical_wait_profile(path=FREQ))
+    server = WebServer(IcomRadio("192.168.1.100", model="IC-7300"), _gated_config())
+    _silent_link_radio(server, scheduler)
+    assert scheduler.unobserved_startup_paths(()) == (FREQ,)
+
+    clock = _GateClock(stop_at=6.0)
+    clock.on_tick = _re_read_without_answer(scheduler, FREQ)
+    with caplog.at_level(logging.WARNING, logger="rigplane.web.web_startup"):
+        with _fake_gate_clock(clock):
+            # Returns instead of raising: no RuntimeError, and no
+            # _GateWindowClosed either (the gate released before 6 s).
+            await _await_initial_state_acquisition(server, sweep=True)
+
+    assert scheduler.startup_defect is None
+    warnings = [
+        r
+        for r in caplog.records
+        if r.levelno >= logging.WARNING and "not answering" in r.getMessage()
+    ]
+    assert len(warnings) == 1
+    assert "no field observed" in warnings[0].getMessage()
+    # Nothing fabricated a reading: every store field is a locally
+    # reconciled structural fact, not a radio observation (the
+    # single-receiver topology's `active` lands at construction).
+    assert all(
+        field.source.source == "local_reconcile"
+        for field in server.command_state_store.snapshot().fields
+    )
+
+
+@pytest.mark.asyncio
+async def test_silent_link_serves_even_after_the_reconnect_reopens_the_port(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """MOR-2841 stand recheck (2026-09-28): the raced sequence serves too.
+
+    The stand exposed the first cut's blind spot: link-down fires at
+    11:35:28, the watchdog's ``soft_reconnect`` reopens the
+    present-but-silent port at 11:35:32 (connection state back to
+    ``CONNECTED``), and only then does the gate's third failed critical
+    read decide at 11:35:34 — against a state that no longer says
+    ``RECONNECTING``, so the MOR-2749 abort won. This drives the whole
+    sequence for real on the serial backend's own machinery (a fake CI-V
+    link that connects fine and never answers), freezes the
+    reconnect-completed instant, then runs the gate: the decision must
+    rest on the link-down detector having fired, not on the
+    instantaneous connection state, so the server serves in the
+    not-answering state instead of aborting.
+    """
+
+    import logging
+
+    from rigplane import IC_7610_ADDR
+    from rigplane.backends.icom7610 import Icom7610SerialRadio
+    from rigplane.commands import _CMD_FREQ_GET
+    from rigplane.exceptions import TimeoutError as RigplaneTimeoutError
+    from rigplane.runtime._connection_state import RadioConnectionState
+    from test_icom7610_serial_radio import _FakeSerialCivLink, _silence_clock_reset_gap
+
+    # Phase A — the stand sequence through the real backend: silent link,
+    # link-down fires, and the reconnect REOPENS the silent port.
+    link = _FakeSerialCivLink()  # connect always succeeds; never answers
+    radio = Icom7610SerialRadio(
+        device="/dev/ttyUSB0",
+        civ_link=link,
+        # Hermetic on any host: no OS enumeration, so rediscovery can never
+        # adopt (or probe) a real sibling port (MOR-1453 seams).
+        _enumerate_serial_ports_fn=lambda: [],
+    )
+    radio._civ_min_interval = 0.001
+    radio._civ_get_timeout = 0.03
+    radio._SERIAL_WATCHDOG_INTERVAL_S = 0.005
+    await radio.connect()
+
+    frame = build_civ_frame(CONTROLLER_ADDR, IC_7610_ADDR, _CMD_FREQ_GET)
+    with caplog.at_level(logging.ERROR, logger="rigplane.backends._icom_serial_base"):
+        for _ in range(radio._SERIAL_LINK_DOWN_TIMEOUT_THRESHOLD):
+            with pytest.raises(RigplaneTimeoutError):
+                await radio._send_civ_raw(frame, wait_response=True)
+            # MOR-2861 (merge of #3866): back-to-back timed-out commands run
+            # the silence clock continuously across their answer windows and
+            # declare link-down at 2 x window + one watchdog tick — mid-send,
+            # before the consecutive-timeout threshold this phase pins. The
+            # quiet gap between sends is the same idiom the MOR-2861 suite
+            # uses (``_silence_clock_reset_gap``).
+            await _silence_clock_reset_gap(radio)
+        # ...and the reopen: connect call #2 succeeds on the silent port, so
+        # the state machine is back to CONNECTED before the gate ever
+        # decides. (The transient RECONNECTING window lasts one watchdog
+        # tick ~5 ms — too short to poll for; the link-down ERROR record
+        # below is its durable witness.)
+        assert await await_until(
+            lambda: (
+                link.connect_calls >= 2
+                and radio.conn_state == RadioConnectionState.CONNECTED
+            ),
+            timeout=2.0,
+        )
+    link_down_errors = [
+        r
+        for r in caplog.records
+        if r.levelno >= logging.ERROR and "link-down" in r.getMessage()
+    ]
+    assert len(link_down_errors) == 1
+    await radio._stop_civ_data_watchdog()  # freeze the raced instant
+
+    # Phase B — the gate decides three failed critical reads in, exactly
+    # as at 11:35:34 on the stand: connection state CONNECTED, zero radio
+    # observations, link-down having fired earlier in the same startup.
+    FREQ = FieldPath.active("main", "freq_mode", "freq_hz")
+    scheduler = AcquisitionScheduler(profile=_critical_wait_profile(path=FREQ))
+    server = WebServer(radio, _gated_config())
+    radio._acquisition_scheduler = scheduler
+    radio._INITIAL_STATE_GAP_LAN = radio._INITIAL_STATE_GAP_SERIAL = 0.05
+    assert scheduler.unobserved_startup_paths(()) == (FREQ,)
+
+    clock = _GateClock(stop_at=6.0)
+    clock.on_tick = _re_read_without_answer(scheduler, FREQ)
+    with caplog.at_level(logging.WARNING, logger="rigplane.web.web_startup"):
+        with _fake_gate_clock(clock):
+            # Returns instead of raising: no RuntimeError, no
+            # _GateWindowClosed (the gate released before 6 s).
+            await _await_initial_state_acquisition(server, sweep=True)
+
+    assert scheduler.startup_defect is None
+    warnings = [
+        r
+        for r in caplog.records
+        if r.levelno >= logging.WARNING and "not answering" in r.getMessage()
+    ]
+    assert len(warnings) == 1
+
+    await radio.disconnect()
+
+
+async def _served_silent_server_with_reopened_port() -> tuple[WebServer, IcomRadio]:
+    """The round-3 stand shape: the gate served silently, then the watchdog
+    reopened the present-but-silent port — the live state (and
+    ``radio_ready``) say connected/ready again while the radio has still
+    answered nothing (the 2026-09-28 pty check on mini .77)."""
+
+    FREQ = FieldPath.active("main", "freq_mode", "freq_hz")
+    scheduler = AcquisitionScheduler(profile=_critical_wait_profile(path=FREQ))
+    server = WebServer(IcomRadio("192.168.1.100", model="IC-7300"), _gated_config())
+    radio = _silent_link_radio(server, scheduler)
+
+    clock = _GateClock(stop_at=6.0)
+    clock.on_tick = _re_read_without_answer(scheduler, FREQ)
+    with _fake_gate_clock(clock):
+        await _await_initial_state_acquisition(server, sweep=True)
+
+    # The raced instant after the reopen: the transport is back, the CI-V
+    # stream counts as healthy, and a fresh-enough liveness tick makes the
+    # session count as ready — the exact input the live-state health read
+    # misreported as ``connected``/``ready``.
+    fake_connected(radio)
+    radio._civ_transport = object()
+    radio._civ_stream_ready = True
+    radio._civ_recovering = False
+    radio._last_civ_data_received = time.monotonic()
+    return server, radio
+
+
+@pytest.mark.asyncio
+async def test_served_silent_link_publishes_not_answering_after_reconnect() -> None:
+    """MOR-2841 (round 3): the reopened silent port must not read as healthy.
+
+    After the gate served in the radio-not-answering state AND the link has
+    reconnected (``radioLink`` 'connected', the session even counting as
+    ready), the published ``radioHealth`` still reports ``stalled`` plus
+    ``radio_powered_off_likely`` — the gate's silent-release decision, not
+    the live link state, owns the verdict.
+    """
+
+    server, radio = await _served_silent_server_with_reopened_port()
+
+    assert radio.radio_ready is True  # not vacuous: live evidence says ready
+
+    health = server._build_radio_health()
+    assert health["radioLink"] == "connected"
+    assert health["readiness"] == "stalled"
+    assert health["likelyCause"] == "radio_powered_off_likely"
+
+
+@pytest.mark.asyncio
+async def test_first_radio_observation_clears_the_not_answering_verdict() -> None:
+    """MOR-2841 (round 3): the verdict clears at the radio's first answer.
+
+    The served-silent mark is durable, but the health builder re-reads the
+    gate's own no-radio-observation predicate on every publish: one radio
+    observation in the store ends the powered-off verdict, and the healthy
+    session is reported normally again.
+    """
+
+    server, radio = await _served_silent_server_with_reopened_port()
+    server.command_state_store.apply(
+        _observation(FieldPath.global_("tx_state", "ptt"), False, at=time.monotonic())
+    )
+
+    assert server._served_with_silent_link is True  # the mark itself stays
+
+    health = server._build_radio_health()
+    assert health["radioLink"] == "connected"
+    assert health["readiness"] == "ready"
+    assert health["likelyCause"] == "unknown"
+
+
+@pytest.mark.asyncio
+async def test_silent_link_then_radio_answers_completes_acquisition() -> None:
+    """MOR-2841: Power ON mid-wait — acquisition completes normally.
+
+    The radio answers nothing at first, then starts answering (the shape
+    after Power ON): the critical observation lands, the link recovers, and
+    the gate completes with its normal completion line — not the silent
+    release, not the named defect.
+    """
+
+    PTT = FieldPath.global_("tx_state", "ptt")
+    scheduler = AcquisitionScheduler(profile=_critical_wait_profile())
+    server = WebServer(IcomRadio("192.168.1.100", model="IC-7300"), _gated_config())
+    radio = _silent_link_radio(server, scheduler)
+
+    def _tick(now: float) -> None:
+        if now < 0.1:
+            # Still silent: re-reads that never answer.
+            _re_read_without_answer(scheduler, PTT)(now)
+            return
+        # The radio starts answering (for example after Power ON): the
+        # critical observation lands and the link recovers.
+        fake_connected(radio)
+        server.command_state_store.apply(_observation(PTT, False, at=now))
+
+    clock = _GateClock(stop_at=3.0)
+    clock.on_tick = _tick
+    with _fake_gate_clock(clock):
+        await _await_initial_state_acquisition(server, sweep=True)
+
+    assert scheduler.startup_defect is None
+    assert scheduler.unobserved_startup_paths(_observed_paths(server, scheduler)) == ()
+
+
+@pytest.mark.asyncio
+async def test_silent_link_tx_refused_while_provider_not_ready() -> None:
+    """MOR-2841: transmit stays refused while the radio answers nothing.
+
+    Reuses the managed TX authority's own refusal — no new refusal code.
+    The arming PTT probe (``0x1C 00``, the same safety-critical read the
+    gate waits on) never answers on a silent link, so the provider stays
+    not-ready and every key answers ``NOT_READY``
+    (``core/tx_safety.py: request_on``; the full wiring is pinned by
+    ``test_a_rig_that_never_answers_ptt_stays_managed_and_refuses_tx``).
+    """
+
+    from rigplane.core.tx_safety import TxOutcome, TxOwner, TxSafetySupervisor, TxSource
+
+    supervisor = TxSafetySupervisor()
+    transition = supervisor.replace_provider(0, ready=False)
+    assert transition.outcome is TxOutcome.APPLIED
+
+    key = supervisor.request_on(TxOwner(TxSource.SDK, "session"))
+
+    assert key.outcome is TxOutcome.NOT_READY
+    assert key.snapshot.lease_id is None
+    assert key.snapshot.provider_ready is False
+
+
+@pytest.mark.asyncio
+async def test_powerstat_on_reaches_the_backend_power_on_path() -> None:
+    """MOR-2841: Power ON from the served-not-answering state is not refused.
+
+    With the gate released and the listener bound, the web ``set_powerstat``
+    command reaches the backend's power-on path (``radio.set_powerstat`` →
+    the CI-V ``0x18`` power-on frame) on a profile that declares
+    ``power_on`` — IC-7300 does; nothing at the poller layer refuses it.
+    """
+
+    from unittest.mock import AsyncMock
+
+    from rigplane.rigctld.state_cache import StateCache
+    from rigplane.web.radio_poller import CommandQueue, RadioPoller, SetPowerstat
+
+    profile = resolve_radio_profile(model="IC-7300")
+    assert profile.supports_command("power_on")
+    radio = MagicMock()
+    radio.profile = profile
+    radio.model = profile.model
+    radio.capabilities = set(profile.capabilities)
+    radio._radio_state = RadioState()
+    radio.managed_tx = None
+    radio.set_powerstat = AsyncMock()
+    poller = RadioPoller(radio, StateCache(), CommandQueue())
+
+    await poller._execute(SetPowerstat(True))  # noqa: SLF001
+
+    radio.set_powerstat.assert_awaited_once_with(True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("observed_rx_dispatch_premise")
+async def test_silent_startup_scan_seed_and_echo_never_count_as_radio_observation() -> (
+    None
+):
+    """MOR-2841 (round 4): the stand flip, pinned on the verdict predicate.
+
+    Round 3's stand check flipped the "radio probably off" verdict back on
+    because the connect-time scan seed and the fire-and-forget scan echoes
+    recorded ``command_response`` — a source
+    :func:`runtime_helpers.store_has_radio_observation` counts as the radio
+    having answered. MOR-2893 (#3875) relabelled both writers
+    ``local_reconcile``; its suite pins the forbidden-source list, while
+    this pins the verdict predicate itself: a silent startup that seeds
+    the scan facts and then echoes a scan command still observes nothing
+    from the radio, so the not-answering verdict survives both writers.
+    """
+
+    from rigplane.backends.icom7610 import Icom7610SerialRadio
+    from rigplane.web.radio_poller import CommandQueue, RadioPoller, ScanStart
+    from rigplane.web.runtime_helpers import store_has_radio_observation
+    from test_icom7610_serial_radio import _FakeSerialCivLink
+
+    # Leg 1 — the silent serial startup: the connect-time scan seed on a
+    # link that never answers a single byte.
+    link = _FakeSerialCivLink()
+    radio = Icom7610SerialRadio(
+        device="/dev/ttyUSB0",
+        civ_link=link,
+        timeout=0.1,
+        _enumerate_serial_ports_fn=lambda: [],
+    )
+    # MOR-2918: the CI log shows the serial link watchdog declaring link-down
+    # mid-test ("...with no response; marking connection reconnecting"), so
+    # hold it off for the test's lifetime: no tick, no declaration.
+    radio._SERIAL_WATCHDOG_INTERVAL_S = 3600.0
+    await radio.connect()
+    store = radio.state_store
+    poller = RadioPoller(
+        radio, CommandQueue(), radio_state=radio._radio_state, state_store=store
+    )
+
+    # The startup section of RadioPoller._run(), verbatim order (the same
+    # shape as test_mor2893_honest_provenance).
+    await poller._fetch_nb_controls()  # noqa: SLF001
+    await poller._fetch_mod_inputs()  # noqa: SLF001
+    poller._seed_scan_facts_at_connect()  # noqa: SLF001
+
+    assert store_has_radio_observation(store) is False
+
+    # Leg 2 — a fire-and-forget scan echo on the same silent store: the
+    # values land (the UI bootstrap depends on them) without ever reading
+    # as a radio answer.
+    await poller._execute(ScanStart(scan_type=0x01))  # noqa: SLF001
+
+    scanning = store.snapshot().field(FieldPath.global_("slow_state", "scanning"))
+    assert scanning.value is True
+    assert store_has_radio_observation(store) is False
+
+    await radio.disconnect()
+
+
+# ---------------------------------------------------------------------------
+# MOR-2876: a serial port that cannot be opened at startup serves a
+# radio-not-connected state while the backend keeps retrying the port
+# ---------------------------------------------------------------------------
+
+
+def _port_missing_error(device: str) -> BaseException:
+    """A pyserial error with the message a missing device node produces."""
+
+    import serial
+
+    return serial.SerialException(
+        f"[Errno 2] could not open port {device}: "
+        f"[Errno 2] No such file or directory: '{device}'"
+    )
+
+
+def _fast_retry_serial_radio(device: str, link: object) -> _IcomSerialRadioBase:
+    from rigplane.backends.icom7610 import Icom7610SerialRadio
+
+    radio = Icom7610SerialRadio(
+        device=device,
+        civ_link=link,
+        # Hermetic on any host: no OS enumeration, so no real port is probed.
+        _enumerate_serial_ports_fn=lambda: [],
+    )
+    # Short retry spacing, so a port that appears is reopened within the
+    # test's bounded waits instead of after the production backoff cap.
+    radio._SERIAL_WATCHDOG_INTERVAL_S = 0.005
+    radio._SERIAL_WATCHDOG_RETRY_S = 0.005
+    radio._SERIAL_WATCHDOG_RETRY_MAX_S = 0.01
+    # MOR-3078: the identity re-read ladder runs on the same compressed
+    # clock (the MOR-3071 ``_gate_radio`` fixture compresses both). This
+    # fixture predates the identity gate: left at the production
+    # 1/2/4/8/15 s ladder, any gate miss rides that ladder past the
+    # suite's bounded 5 s budgets. The Linux quick failure's original
+    # cause is still unknown; this only puts the ladder on the fixture
+    # clock. The answer window (``_civ_get_timeout``) stays at its
+    # production width.
+    radio._SERIAL_IDENTITY_REREAD_BACKOFF_S = (0.05, 0.1, 0.2, 0.4)
+    radio._SERIAL_IDENTITY_REREAD_STEADY_S = 0.5
+    # The fake link answers no poll: once the port opens, the watchdog would
+    # declare link-down on that silence, parking transmit and reopening the
+    # port under the assertions at a moment that depends on runner load.
+    radio._serial_civ_timeout_evidence_crossed_threshold = lambda: False
+    return radio
+
+
+# ---------------------------------------------------------------------------
+# MOR-3078 diagnostic: a transparent test-local witness around the fake
+# CI-V link, so a failed missing-port assertion can show what happened to
+# the ``19 00`` answer. The original Linux quick failure is NOT reproduced
+# or explained by this code; it only records evidence at the moment of a
+# failure. No production behavior, clock, or response generation changes.
+# ---------------------------------------------------------------------------
+
+
+def _diag_task_id(task: object) -> str:
+    if task is None:
+        return "None"
+    done = "done" if task.done() else "live"  # type: ignore[attr-defined]
+    return f"{id(task):x}/{task.get_name()}/{done}"  # type: ignore[attr-defined]
+
+
+def _diag_gate_state(radio: object) -> str:
+    """One compact line of the identity-gate state at an event."""
+
+    if radio is None:
+        return "radio=unbound"
+    conn_state = getattr(radio, "_conn_state", None)
+    identity = getattr(radio, "connection_identity", None)
+    status = getattr(identity, "status", None)
+    last_error = getattr(radio, "last_error", None)
+    return (
+        f"radio[conn={getattr(conn_state, 'name', conn_state)} "
+        f"connected={getattr(radio, 'connected', None)} "
+        f"stream_ready={getattr(radio, '_civ_stream_ready', None)} "
+        f"epoch={getattr(radio, '_civ_epoch', None)} "
+        f"rx_src={getattr(radio, '_active_rx_source_generation', None)} "
+        f"ans_epoch={getattr(radio, '_serial_identity_answer_epoch', None)} "
+        f"identity={getattr(status, 'name', status)} "
+        f"reread={_diag_task_id(getattr(radio, '_serial_identity_reread_task', None))} "
+        f"err={str(last_error)[-48:]!r}]"
+    )
+
+
+class _TracedCivLink(_FakeSerialCivLink):
+    """Transparent witness around ``_FakeSerialCivLink`` (MOR-3078).
+
+    Records a bounded (max 100, most recent) monotonic-timestamped trace
+    of link events — connect/disconnect/send/receive — each with the
+    asyncio task identity of the caller, the response-queue depth around
+    the event, and the radio's identity-gate state, so a failed
+    assertion message can distinguish: the ``19 00`` answer was never
+    queued; it was queued but consumed by a different task than the read
+    that wanted it; or the gate state/epoch moved underneath the read.
+    Every override forwards the exact original call and re-raises the
+    original exception unchanged; only recording is added.
+    """
+
+    MAX_TRACE = 100
+
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        super().__init__(*args, **kwargs)
+        self._diag_events: deque[str] = deque(maxlen=self.MAX_TRACE)
+        self._diag_t0 = time.monotonic()
+        self._diag_radio: object | None = None
+
+    def bind_radio(self, radio: object) -> None:
+        self._diag_radio = radio
+
+    def _diag_record(self, kind: str, detail: str) -> None:
+        task = asyncio.current_task()
+        self._diag_events.append(
+            f"t={time.monotonic() - self._diag_t0:7.3f} {kind:<12} "
+            f"by={_diag_task_id(task)} q={self._responses.qsize()} "
+            f"{detail} | {_diag_gate_state(self._diag_radio)}"
+        )
+
+    def trace_text(self) -> str:
+        return (
+            f"MOR-3078 link trace (last {len(self._diag_events)} "
+            f"of max {self.MAX_TRACE} events, newest last):\n"
+            + "\n".join(self._diag_events)
+        )
+
+    async def connect(self) -> None:
+        fail = self._fail_connect
+        self._diag_record(
+            "connect",
+            f"call#{self.connect_calls + 1} "
+            f"fail={type(fail).__name__ if fail is not None else None}",
+        )
+        try:
+            await super().connect()
+        except BaseException as exc:
+            self._diag_record("connect-err", f"{type(exc).__name__}: {exc}")
+            raise
+        self._diag_record("connect-ok", f"call#{self.connect_calls}")
+
+    async def disconnect(self) -> None:
+        self._diag_record("disconnect", f"call#{self.disconnect_calls + 1}")
+        await super().disconnect()
+
+    async def send(self, frame: bytes) -> None:
+        payload = bytes(frame)
+        cmd = payload[4:-1].hex() if len(payload) > 5 else payload.hex()
+        idq_before = self.identity_queries
+        q_before = self._responses.qsize()
+        try:
+            await super().send(frame)
+        except BaseException as exc:
+            self._diag_record("send-err", f"cmd={cmd} {type(exc).__name__}: {exc}")
+            raise
+        self._diag_record(
+            "send",
+            f"cmd={cmd} idq={self.identity_queries} "
+            f"answered={self.identity_queries > idq_before and bool(self.answer_identity)} "
+            f"q_delta={self._responses.qsize() - q_before}",
+        )
+
+    async def receive(self, timeout: float | None = None) -> bytes | None:
+        q_before = self._responses.qsize()
+        try:
+            result = await super().receive(timeout)
+        except asyncio.CancelledError:
+            self._diag_record("recv-cancel", f"tmo={timeout} q_before={q_before}")
+            raise
+        except BaseException as exc:
+            self._diag_record("recv-err", f"tmo={timeout} {type(exc).__name__}: {exc}")
+            raise
+        got = "silence" if result is None else bytes(result).hex()
+        self._diag_record(
+            "recv",
+            f"tmo={timeout} got={got} "
+            f"q_before={q_before} q_after={self._responses.qsize()}",
+        )
+        return result
+
+
+@asynccontextmanager
+async def _served_through_cli(
+    radio: object,
+    *,
+    bridge: str | None = None,
+    expect_rc: int = 0,
+) -> AsyncIterator[WebServer]:
+    """Run ``rigplane web`` through the real ``cli/__init__.py: _run``.
+
+    Yields the ``WebServer`` once its ``start()`` has returned, then stops
+    it and requires exit code 0. ``serve_forever`` is replaced by start /
+    wait / stop so no signal handler is installed, and the listener bind is
+    faked. ``bridge`` selects the ``--bridge`` value (None keeps the
+    harness default of no bridge at all). ``expect_rc`` requires that exit
+    code instead of a served server (MOR-3078: the explicit
+    ``--bridge=<DEVICE>`` fail-hard path exits 1 without serving).
+    """
+
+    from rigplane.cli import _build_parser, _run
+
+    served: list[WebServer] = []
+    release = asyncio.Event()
+
+    async def _serve_forever(
+        self: WebServer,
+        *,
+        on_started: object = None,
+        on_shutdown_signal: object = None,
+        on_tx_release: object = None,
+        before_cancel_all: object = None,
+    ) -> None:
+        await self.start()
+        served.append(self)
+        await release.wait()
+        await self.stop()
+
+    async def _bind(*_args: object, **_kwargs: object) -> _FakeAsyncServer:
+        return _FakeAsyncServer()
+
+    args = _build_parser().parse_args(
+        [
+            "--host",
+            "1.2.3.4",
+            "--model",
+            "IC-7300",
+            "web",
+            "--no-rigctld",
+            "--no-discovery",
+        ]
+    )
+    args.web_bridge = bridge
+    with (
+        patch("rigplane.cli.create_radio", return_value=radio),
+        patch("rigplane.cli.check_ports_available"),
+        patch("rigplane.web.web_startup.asyncio.start_server", new=_bind),
+        patch.object(WebServer, "serve_forever", _serve_forever),
+    ):
+        run = asyncio.create_task(_run(args))
+        try:
+            await await_until(lambda: bool(served) or run.done(), timeout=10.0)
+            if expect_rc == 0:
+                assert served, (
+                    f"rigplane web exited with {run.result()} instead of serving"
+                    if run.done()
+                    else "rigplane web did not finish starting"
+                )
+                yield served[0]
+            else:
+                assert not served, (
+                    "rigplane web served where a hard failure was required"
+                )
+                yield None
+        finally:
+            release.set()
+            rc = await asyncio.wait_for(run, timeout=10.0)
+    assert rc == expect_rc
+
+
+def _startup_warnings(caplog: pytest.LogCaptureFixture) -> list[str]:
+    return [
+        record.getMessage()
+        for record in caplog.records
+        if record.name == "rigplane.web.web_startup"
+        and record.levelno >= logging.WARNING
+    ]
+
+
+@pytest.mark.asyncio
+async def test_missing_serial_port_serves_not_connected_instead_of_exiting(
+    caplog: pytest.LogCaptureFixture, tmp_path: Path
+) -> None:
+    """``rigplane web`` with a missing port serves, then recovers the port.
+
+    Before the port exists: one WARNING names the not-connected state, the
+    port path and the open error; health reports ``radio_not_connected``;
+    transmit is refused; nothing is fabricated. When the port appears, the
+    backend's existing watchdog reopens it; while the radio stays silent
+    the verdict is MOR-2841's ``radio_powered_off_likely``, and the radio's
+    first answer clears it.
+    """
+
+    from rigplane.runtime.managed_tx_state import ManagedTxOutcome
+    from rigplane.web.runtime_helpers import store_has_radio_observation
+    from test_icom7610_serial_radio import _FakeSerialCivLink, _freq_response_frame
+
+    device = str(tmp_path / "cu.usbserial-1420")
+    link = _FakeSerialCivLink(fail_connect=_port_missing_error(device))
+    radio = _fast_retry_serial_radio(device, link)
+
+    with caplog.at_level(logging.WARNING, logger="rigplane.web.web_startup"):
+        async with _served_through_cli(radio) as server:
+            composition = radio._managed_tx_composition
+            assert composition is not None
+            # The port keeps being retried by the backend's own watchdog.
+            assert await await_until(lambda: link.connect_calls >= 3, timeout=5.0)
+
+            warnings = _startup_warnings(caplog)
+            assert len(warnings) == 1
+            assert "not connected" in warnings[0]
+            assert device in warnings[0]
+            assert "could not open port" in warnings[0]
+            assert "not answering" not in warnings[0]
+            assert "Power ON" not in warnings[0]
+            assert server._served_with_silent_link is False
+
+            health = server._build_radio_health()
+            assert health["likelyCause"] == "radio_not_connected"
+            assert store_has_radio_observation(server.command_state_store) is False
+            snapshot = await composition.authority.snapshot()
+            assert snapshot.provider_generation is None
+            assert await composition.authority.transmit_on() is (
+                ManagedTxOutcome.REJECTED
+            )
+
+            # The port appears; the radio behind it stays silent for now.
+            link._fail_connect = None
+            assert await await_until(
+                lambda: composition._active_provider is not None, timeout=5.0
+            )
+            assert radio.connected is True
+            health = server._build_radio_health()
+            assert health["likelyCause"] == "radio_powered_off_likely"
+
+            link.queue_response(_freq_response_frame(14_074_000))
+            assert await await_until(
+                lambda: store_has_radio_observation(server.command_state_store),
+                timeout=5.0,
+            )
+            health = server._build_radio_health()
+            assert health["readiness"] == "ready"
+            assert health["likelyCause"] == "unknown"
+
+
+@pytest.mark.asyncio
+async def test_present_but_silent_port_still_serves_not_answering(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Contrast pin: an open but silent port stays MOR-2841's state.
+
+    Same entry point as the missing-port test. The port opens and the
+    radio answers nothing, so the gate's silent release decides, not the
+    missing-port release: health is ``radio_powered_off_likely``, never
+    ``radio_not_connected``.
+    """
+
+    from test_icom7610_serial_radio import _FakeSerialCivLink
+
+    link = _FakeSerialCivLink()  # opens fine, answers no read
+    radio = _fast_retry_serial_radio("/dev/ttyUSB0", link)
+    # The watchdog must not declare link-down on its own before the startup
+    # assert on a loaded runner: that would abort startup for a reason this
+    # test is not about. The detector's durable record stands in for it.
+    radio._SERIAL_WATCHDOG_INTERVAL_S = 3600.0
+    radio._civ_link_down_ever_declared = True
+
+    # One failed read decides a critical path, so the gate reaches the
+    # MOR-2841 decision on its first pass instead of after real timeouts.
+    with (
+        patch.object(web_startup, "_STARTUP_GATE_CRITICAL_ATTEMPTS", 1),
+        caplog.at_level(logging.WARNING, logger="rigplane.web.web_startup"),
+    ):
+        async with _served_through_cli(radio) as server:
+            warnings = _startup_warnings(caplog)
+            assert len(warnings) == 1
+            assert "not answering" in warnings[0]
+            assert "not connected" not in warnings[0]
+            assert server._served_without_port is False
+            health = server._build_radio_health()
+            assert health["likelyCause"] == "radio_powered_off_likely"
+
+
+def test_only_a_recorded_open_failure_makes_reconnecting_a_missing_port() -> None:
+    """The missing-port decision needs the backend's recorded open failure.
+
+    ``RECONNECTING`` alone is also the state MOR-2841's link-down detector
+    sets for a silent radio, and a failed plain ``connect()`` rests
+    ``DISCONNECTED``: neither is served as a missing port.
+    """
+
+    from rigplane.runtime._connection_state import RadioConnectionState
+    from test_icom7610_serial_radio import _FakeSerialCivLink
+
+    radio = _fast_retry_serial_radio("/dev/ttyUSB0", _FakeSerialCivLink())
+    server = SimpleNamespace(_radio=radio)
+    radio._conn_state = RadioConnectionState.RECONNECTING  # link-down declared
+    assert web_startup._serial_port_unopened(server) is False
+    radio.last_error = "Failed to reconnect serial session on /dev/ttyUSB0: gone"
+    assert web_startup._serial_port_unopened(server) is True
+    radio._conn_state = RadioConnectionState.DISCONNECTED
+    assert web_startup._serial_port_unopened(server) is False
+
+
+@pytest.mark.asyncio
+async def test_http_connect_and_power_on_leave_the_port_retry_running(
+    tmp_path: Path,
+) -> None:
+    """A manual connect in the missing-port state keeps the retry loop alive.
+
+    ``connect()`` on a missing port fails and rests the radio
+    ``DISCONNECTED``, which the watchdog never retries. So
+    ``/api/v1/radio/connect`` and the power-on reconnect refuse with the
+    ``backend_recovering`` error (409), and
+    the port still connects when it appears.
+
+    MOR-3078: this is the test the Linux quick runner failed (the port
+    appeared, the identity read stayed silent, CONNECTED never latched
+    inside the budget; cause unknown). The link here is wrapped in the
+    transparent ``_TracedCivLink`` witness, so a failed assertion message
+    carries the bounded link trace — task identities of every send and
+    receive, queue depths, gate/epoch state — instead of only the timeout.
+    """
+
+    from test_web_server_coverage import _FakeWriter, _reader_with, _response_json
+
+    device = str(tmp_path / "cu.usbserial-1420")
+    link = _TracedCivLink(fail_connect=_port_missing_error(device))
+    radio = _fast_retry_serial_radio(device, link)
+    link.bind_radio(radio)
+
+    async with _served_through_cli(radio) as server:
+        connect_writer, power_writer = _FakeWriter(), _FakeWriter()
+        await server._handle_radio_control("/api/v1/radio/connect", connect_writer)
+        power_on = b'{"state": "on"}'
+        await server._handle_radio_control(
+            "/api/v1/radio/power",
+            power_writer,
+            headers={"content-length": str(len(power_on))},
+            reader=_reader_with(power_on),
+        )
+
+        calls = link.connect_calls
+        assert await await_until(lambda: link.connect_calls > calls, timeout=5.0), (
+            link.trace_text()
+        )
+        link._fail_connect = None
+        assert await await_until(lambda: radio.connected, timeout=5.0), (
+            link.trace_text()
+        )
+
+    for writer in (connect_writer, power_writer):
+        status, body = _response_json(writer)
+        assert status == 409
+        assert body["error"] == "backend_recovering"
+
+
+@pytest.mark.asyncio
+async def test_a_missed_first_identity_read_still_connects_within_the_test_budget(
+    tmp_path: Path,
+) -> None:
+    """Four silent reads finish before the fifth answer, on one owned link.
+
+    Keep production answer windows and the fixture's compressed retry ladder.
+    Four 2 s answer windows plus 0.75 s of retry spacing cannot fit in 5 s;
+    derive this test's wait from those bounds. The separate missing-port
+    tests retain their 5 s first-answer budget.
+    """
+
+    from rigplane.core.radio_protocol import RadioIdentityStatus
+    from test_icom7610_serial_radio import _FakeSerialCivLink
+
+    class _AnswersFromQueryLink(_FakeSerialCivLink):
+        """Answers ``19 00`` for real, but only from the Nth query on."""
+
+        def __init__(
+            self,
+            *,
+            answer_from_query: int,
+            fail_connect: BaseException | None,
+        ) -> None:
+            super().__init__(fail_connect=fail_connect)
+            self.answer_from_query = answer_from_query
+
+        @property
+        def answer_identity(self) -> bool:
+            return self.identity_queries >= self.answer_from_query
+
+        @answer_identity.setter
+        def answer_identity(self, value: bool) -> None:
+            _ = value  # the base __init__ writes the static flag; ignored
+
+    device = str(tmp_path / "cu.usbserial-1420")
+    link = _AnswersFromQueryLink(
+        # Gate + three re-reads are silent; the next re-read answers.
+        answer_from_query=5,
+        fail_connect=_port_missing_error(device),
+    )
+    radio = _fast_retry_serial_radio(device, link)
+
+    async with _served_through_cli(radio) as server:
+        assert server._served_without_port is True
+        assert await await_until(lambda: link.connect_calls >= 2, timeout=5.0)
+        link._fail_connect = None  # the port appears
+
+        # The gate misses and the re-read owns the open link — the state
+        # the Linux quick run's logs point at (NO_RESPONSE with the
+        # re-read task running), whatever lost the replies there.
+        assert await await_until(
+            lambda: (
+                radio.connection_identity is not None
+                and radio.connection_identity.status is RadioIdentityStatus.NO_RESPONSE
+                and radio._serial_identity_reread_task is not None
+            ),
+            timeout=5.0,
+        )
+
+        missed_reads = link.answer_from_query - 1
+        answer_budget = missed_reads * radio._civ_get_timeout
+        retry_budget = sum(radio._SERIAL_IDENTITY_REREAD_BACKOFF_S[:missed_reads])
+        assert await await_until(
+            lambda: radio.connected, timeout=answer_budget + retry_budget + 2.0
+        )
+        assert link.identity_queries == link.answer_from_query
+
+
+@pytest.mark.asyncio
+async def test_duplicate_soft_reconnect_cannot_retire_the_inflight_identity_read() -> (
+    None
+):
+    """MOR-3064: one owner for the open link's in-flight identity read.
+
+    The Linux quick regression (MOR-3078 diagnosis): the recovery
+    soft_reconnect opened the reappeared port and its identity gate sent
+    ``19 00``; while that read awaited its answer, a second
+    soft_reconnect() — the shape of the CI-V recovery kick
+    (``runtime/_civ_rx.py: _wait_for_civ_transport_recovery`` calls
+    ``host.soft_reconnect()`` while the connect is held) — tore the same
+    open link down: it retired the gate's CI-V generation, so the
+    in-flight read died as silence, the epoch fence correctly discarded
+    the reply, and the retired gate's tail left the radio ``CONNECTING``
+    with no re-read owner — a state the watchdog never retries. The
+    duplicate must not reset or cancel the current generation/await,
+    exactly as ``connect()`` already honors through
+    ``_identity_phase_owns_open_link``.
+
+    The interleave is forced, not timed: the link answers nothing until
+    the duplicate has run, so the first owner is provably still awaiting
+    its read when the duplicate enters; and the ID payload is the fake's
+    real ``19 00`` answer (raw 0x94, UNVERIFIED under this profile's
+    empty expected-ids), asserted recorded at the end — so a failure can
+    only be the ownership break, not scheduler flakiness or a wrong-ID
+    fixture.
+    """
+
+    from rigplane.backends.icom7610 import Icom7610SerialRadio
+    from rigplane.core.radio_protocol import RadioIdentityStatus
+
+    link = _FakeSerialCivLink(answer_identity=False)
+    radio = Icom7610SerialRadio(
+        device="/dev/ttyUSB0",
+        civ_link=link,
+        # Bounded answer window for the gate read this test holds open.
+        timeout=0.25,
+        # Hermetic on any host: no OS enumeration, so no real port is probed.
+        _enumerate_serial_ports_fn=lambda: [],
+    )
+    # RAW/unverified identity on purpose: this regression pins ownership
+    # of the in-flight read, not profile comparison. The expected-ids
+    # stay empty here whatever the profile metadata ships (the same
+    # ``replace`` idiom ``_gate_radio`` uses), and the answer byte is
+    # pinned explicitly so the LAN batch's fake-link default cannot
+    # change what this link answers.
+    radio._profile = replace(radio._profile, expected_identity_ids=())
+    link.model_id = 0x94
+    # Two soft_reconnect tasks are the whole scenario; the compressed
+    # re-read ladder keeps the first owner's recovery inside the budget.
+    radio._SERIAL_IDENTITY_REREAD_BACKOFF_S = (0.05,)
+    radio._SERIAL_IDENTITY_REREAD_STEADY_S = 0.1
+
+    owner = asyncio.create_task(radio.soft_reconnect())
+    try:
+        # The first owner holds the open link: its gate sent ``19 00`` and
+        # is awaiting the answer the link will not give yet.
+        assert await await_until(
+            lambda: (
+                link.identity_queries >= 1
+                and radio._serial_session.ready
+                and radio.connection_identity is not None
+                and radio.connection_identity.status is RadioIdentityStatus.CHECKING
+            ),
+            timeout=5.0,
+        ), "the first soft_reconnect never reached its in-flight identity read"
+
+        epoch_when_owned = radio._civ_epoch
+        connects_before = link.connect_calls
+        disconnects_before = link.disconnect_calls
+
+        duplicate = asyncio.create_task(radio.soft_reconnect())
+        await asyncio.wait_for(duplicate, timeout=5.0)
+
+        # The duplicate retired nobody's generation and reopened no port:
+        # the identity phase that owns the open link keeps it.
+        assert radio._civ_epoch == epoch_when_owned
+        assert link.connect_calls == connects_before
+        assert link.disconnect_calls == disconnects_before
+
+        # Now the radio answers: the FIRST owner's own re-read completes
+        # the connect — one identity query was its gate's, one its
+        # re-read's, and the duplicate sent none.
+        link.answer_identity = True
+        await asyncio.wait_for(owner, timeout=5.0)
+        assert owner.exception() is None
+        assert await await_until(lambda: radio.connected, timeout=5.0)
+        identity = radio.connection_identity
+        assert identity is not None
+        assert identity.status is RadioIdentityStatus.UNVERIFIED
+        assert link.identity_queries == 2
+    finally:
+        if not owner.done():
+            owner.cancel()
+            try:
+                await owner
+            except asyncio.CancelledError:
+                pass
+        await radio.disconnect()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("initial_action", ["connect", "soft_reconnect"])
+async def test_retired_identity_exception_preserves_replacement_hold(
+    initial_action: str,
+) -> None:
+    from dataclasses import replace
+    from rigplane.backends.icom7610 import Icom7610SerialRadio
+    from rigplane.core.radio_protocol import RadioIdentityStatus
+    from rigplane.exceptions import ConnectionError as RigplaneConnectionError
+
+    radio = Icom7610SerialRadio(
+        device="/dev/ttyUSB0",
+        civ_link=_FakeSerialCivLink(),
+        _enumerate_serial_ports_fn=lambda: [],
+    )
+    radio._profile = replace(radio._profile, expected_identity_ids=("94",))
+    entered, release = asyncio.Event(), asyncio.Event()
+    reads = 0
+
+    async def read() -> bytes:
+        nonlocal reads
+        reads += 1
+        if reads == 1:
+            entered.set()
+            await release.wait()
+            raise RuntimeError("retired read fault")
+        return b"\x98"
+
+    radio._read_serial_identity_payload = read
+    retired = asyncio.create_task(getattr(radio, initial_action)())
+    try:
+        await asyncio.wait_for(entered.wait(), 1)
+        await radio.disconnect()
+        await radio.connect()
+        replacement = radio.connection_identity
+        assert replacement.status is RadioIdentityStatus.IDENTITY_MISMATCH
+        replacement_epoch = radio._civ_epoch
+        release.set()
+        with pytest.raises(RigplaneConnectionError):
+            await retired
+        assert radio.connection_identity is replacement
+        assert radio._civ_epoch == replacement_epoch
+        assert radio.connected is False
+        assert radio._identity_phase_owns_open_link()
+    finally:
+        release.set()
+        await asyncio.gather(retired, return_exceptions=True)
+        await radio.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_traced_link_witness_is_transparent() -> None:
+    """MOR-3078 diagnostic helper: the witness records, never alters.
+
+    Pins exactly what the diagnostic relies on: the traced link answers
+    the identity read exactly as the base fake does, records send/receive
+    events naming the consuming asyncio task, keeps the response-queue
+    accounting exact, and lets a cancelled receive raise
+    ``CancelledError`` unchanged.
+    """
+
+    link = _TracedCivLink()
+    link.bind_radio(_fast_retry_serial_radio("/dev/ttyUSB0", link))
+    await link.connect()
+
+    # The IC-7610's own identity read (controller to 0x98), answered with the
+    # fake's IC-7610 model-ID byte 0x98 — the token the profile expects,
+    # independent of the bus address it rides on.
+    query = bytes((0xFE, 0xFE, 0x98, 0xE0, 0x19, 0x00, 0xFD))
+    await link.send(query)
+    assert link.identity_queries == 1
+    assert link._responses.qsize() == 1  # the answer is queued, unread
+    reply = await link.receive(timeout=0.2)
+    assert reply is not None and b"\x19\x00\x98" in reply
+    assert link._responses.qsize() == 0
+
+    trace = link.trace_text()
+    assert "send" in trace and "recv" in trace
+    # The consuming task's identity is in the trace, so a wrong-consumer
+    # read is attributable from the assertion message alone.
+    assert f"{id(asyncio.current_task()):x}" in trace
+
+    rx = asyncio.create_task(link.receive(timeout=5.0), name="diag-cancel-probe")
+    await asyncio.sleep(0.01)
+    rx.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await rx
+    assert "recv-cancel" in link.trace_text()
+
+
+@pytest.mark.asyncio
+async def test_power_on_still_reconnects_a_silent_port_that_opened_before() -> None:
+    """MOR-2841's Power ON keeps reconnecting first, as on main.
+
+    A silent radio's backend cycles link-down, reopen, link-down. In the gap
+    between a link-down and the reopen the control link is down, so the
+    power-on route reconnects before sending power-on. That port has opened
+    before, so the missing-port refusal does not apply.
+    """
+
+    from test_icom7610_serial_radio import _FakeSerialCivLink
+    from test_web_server_coverage import _FakeWriter, _reader_with, _response_json
+
+    radio = _fast_retry_serial_radio("/dev/ttyUSB0", _FakeSerialCivLink())
+    await radio.connect()
+    # The route's own reconnect is under test, so the watchdog must not reopen
+    # the port first.
+    await radio._stop_civ_data_watchdog()
+    await radio._declare_serial_link_down()
+    assert radio.control_connected is False
+    radio.set_powerstat = AsyncMock()
+    server = WebServer(radio, _gated_config())
+
+    writer = _FakeWriter()
+    power_on = b'{"state": "on"}'
+    try:
+        await server._handle_radio_control(
+            "/api/v1/radio/power",
+            writer,
+            headers={"content-length": str(len(power_on))},
+            reader=_reader_with(power_on),
+        )
+        assert _response_json(writer) == (200, {"status": "ok", "power": "on"})
+        assert radio.connected is True
+        radio.set_powerstat.assert_awaited_once_with(True)
+    finally:
+        await radio.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_power_on_is_refused_only_while_a_never_opened_port_is_retried() -> None:
+    """Power-on reconnects first, as on main, unless a never-opened port is retried."""
+
+    from rigplane.exceptions import ConnectionError as RigplaneConnectionError
+    from test_icom7610_serial_radio import _FakeSerialCivLink
+    from test_web_server_coverage import _FakeWriter, _reader_with, _response_json
+
+    async def power_on(radio: _IcomSerialRadioBase) -> tuple[int, dict[str, object]]:
+        radio.set_powerstat = AsyncMock()  # type: ignore[method-assign]
+        writer, body = _FakeWriter(), b'{"state": "on"}'
+        await WebServer(radio, _gated_config())._handle_radio_control(
+            "/api/v1/radio/power",
+            writer,
+            headers={"content-length": str(len(body))},
+            reader=_reader_with(body),
+        )
+        radio.set_powerstat.assert_awaited_once_with(True)
+        return _response_json(writer)
+
+    link = _FakeSerialCivLink()
+    vanished = _fast_retry_serial_radio("/dev/ttyUSB0", link)
+    await vanished.connect()
+    await vanished._stop_civ_data_watchdog()
+    await vanished._declare_serial_link_down()
+    link._fail_connect = _port_missing_error("/dev/ttyUSB0")
+    with pytest.raises(RigplaneConnectionError):
+        await vanished.soft_reconnect()  # the watchdog's retry, recorded
+    assert await power_on(vanished) == (200, {"status": "ok", "power": "on"})
+    await vanished.disconnect()
+
+    never = _fast_retry_serial_radio(
+        "/dev/ttyUSB0",
+        _FakeSerialCivLink(fail_connect=_port_missing_error("/dev/ttyUSB0")),
+    )
+    with pytest.raises(RigplaneConnectionError):
+        await never.connect()
+    assert await power_on(never) == (200, {"status": "ok", "power": "on"})
+
+
+@pytest.mark.asyncio
+async def test_tx_returns_after_the_late_first_open(tmp_path: Path) -> None:
+    """Transmit is refused without a port and follows the normal rules after.
+
+    The server session enters without an open port and marks no transport
+    ready. When the port appears, the watchdog's
+    ``soft_reconnect`` re-arms the mounted composition on the new transport
+    (``rearm_managed_tx`` -> ``transport_ready``), the same path a runtime
+    reconnect takes, and a key is accepted.
+    """
+
+    from rigplane.cli import _ManagedTxRadioSession
+    from rigplane.runtime.managed_tx_composition import (
+        ManagedTxComposition,
+        install_managed_tx_composition,
+    )
+    from rigplane.runtime.managed_tx_state import ManagedTxOutcome
+    from test_icom7610_serial_radio import _FakeSerialCivLink
+
+    device = str(tmp_path / "cu.usbserial-1420")
+    link = _FakeSerialCivLink(fail_connect=_port_missing_error(device))
+    radio = _fast_retry_serial_radio(device, link)
+    composition = ManagedTxComposition(radio, config_path=tmp_path / "managed-tx.json")
+    install_managed_tx_composition(radio, composition)
+    store = StateStore()
+    store.begin_provider_generation()
+    await composition.bind_state_store(store)  # as cli: _cmd_web does
+    session = _ManagedTxRadioSession(radio, composition)
+
+    assert await session.__aenter__() is radio
+    try:
+        assert composition._live_transport_identity is None
+        assert (await composition.authority.snapshot()).provider_generation is None
+        assert await composition.authority.transmit_on() is ManagedTxOutcome.REJECTED
+
+        link._fail_connect = None
+        assert await await_until(
+            lambda: composition._active_provider is not None, timeout=5.0
+        )
+        assert composition._active_provider.transport_identity is radio._civ_transport
+        keyed = await composition.authority.submit_ptt(True, "late-open-owner")
+        assert keyed.outcome is ManagedTxOutcome.ACCEPTED
+        await keyed.wait_settlement()
+    finally:
+        await session.__aexit__(None, None, None)
+
+
+@pytest.mark.asyncio
+async def test_only_a_port_open_failure_is_retried_on_the_server_path(
+    tmp_path: Path,
+) -> None:
+    """``connect()`` keeps its contract; the session recovers only an OSError.
+
+    A plain ``connect()`` still raises and leaves no background task. The
+    server session retries only an open failure (pyserial's
+    ``SerialException`` is an ``OSError``); a missing dependency still
+    raises from the session.
+    """
+
+    from rigplane.cli import _ManagedTxRadioSession
+    from rigplane.exceptions import ConnectionError as RigplaneConnectionError
+    from rigplane.runtime._connection_state import RadioConnectionState
+    from rigplane.runtime.managed_tx_composition import (
+        ManagedTxComposition,
+        install_managed_tx_composition,
+    )
+    from test_icom7610_serial_radio import _FakeSerialCivLink
+
+    device = str(tmp_path / "cu.usbserial-1420")
+    radio = _fast_retry_serial_radio(
+        device, _FakeSerialCivLink(fail_connect=_port_missing_error(device))
+    )
+    with pytest.raises(RigplaneConnectionError, match="Failed to connect serial"):
+        await radio.connect()
+    assert radio.conn_state == RadioConnectionState.DISCONNECTED
+    assert getattr(radio, "_civ_data_watchdog_task", None) is None
+
+    radio = _fast_retry_serial_radio(
+        device,
+        _FakeSerialCivLink(fail_connect=ImportError("pyserial-asyncio is required")),
+    )
+    composition = ManagedTxComposition(radio, config_path=tmp_path / "managed-tx.json")
+    install_managed_tx_composition(radio, composition)
+    with pytest.raises(RigplaneConnectionError, match="pyserial-asyncio"):
+        await _ManagedTxRadioSession(radio, composition).__aenter__()
+    assert radio.conn_state == RadioConnectionState.DISCONNECTED
+    assert getattr(radio, "_civ_data_watchdog_task", None) is None
+    await composition.shutdown(asyncio.Event())
+
+
+@pytest.mark.asyncio
+async def test_a_never_connected_radio_opens_no_other_serial_port(
+    tmp_path: Path,
+) -> None:
+    """No sibling-port search before the radio has ever connected.
+
+    A host can run more than one radio: while the configured path is
+    missing, the retry must not open (or even enumerate) another port.
+    """
+
+    from rigplane.backends.discovery import SerialPortCandidate
+    from rigplane.backends.icom7610 import Icom7610SerialRadio
+    from rigplane.exceptions import ConnectionError as RigplaneConnectionError
+    from test_icom7610_serial_radio import _FakeSerialCivLink
+
+    device = str(tmp_path / "cu.usbserial-1420")  # never created
+    sibling = tmp_path / "cu.usbserial-9931"  # matches the derived glob
+    sibling.write_text("")
+    enumerated: list[None] = []
+    probed: list[str] = []
+
+    def _enumerate() -> list[SerialPortCandidate]:
+        enumerated.append(None)
+        return [SerialPortCandidate(device=str(sibling), description="", hwid=None)]
+
+    async def _probe(port: str) -> int | None:
+        probed.append(port)
+        return None
+
+    radio = Icom7610SerialRadio(
+        device=device,
+        civ_link=_FakeSerialCivLink(fail_connect=_port_missing_error(device)),
+        _enumerate_serial_ports_fn=_enumerate,
+        _civ_identity_probe=_probe,
+    )
+    with pytest.raises(RigplaneConnectionError):
+        await radio.connect()
+    with pytest.raises(RigplaneConnectionError, match="Failed to reconnect serial"):
+        await radio.soft_reconnect()
+
+    assert probed == []
+    assert enumerated == []
+    await radio.disconnect()
+
+
+def test_every_likely_cause_the_classifier_returns_is_in_the_public_schema() -> None:
+    """MOR-2919: ``likelyCause`` never leaves the published contract.
+
+    The emitted set is read from ``classify_radio_health``'s own source:
+    every ``"likelyCause"`` value in a dict literal it builds, following a
+    local name to the expressions assigned to it. A value the walk cannot
+    resolve fails the test instead of being skipped.
+    """
+
+    import ast
+    import inspect
+    import textwrap
+    import typing
+
+    from rigplane.web.runtime_helpers import classify_radio_health
+    from rigplane.web.state_schema import RadioHealthPublic
+
+    tree = ast.parse(textwrap.dedent(inspect.getsource(classify_radio_health)))
+    assigned: dict[str, list[ast.expr]] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    assigned.setdefault(target.id, []).append(node.value)
+
+    def causes(node: ast.expr) -> set[str]:
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            return {node.value}
+        if isinstance(node, ast.IfExp):
+            return causes(node.body) | causes(node.orelse)
+        if isinstance(node, ast.Name) and node.id in assigned:
+            return set().union(*(causes(value) for value in assigned[node.id]))
+        raise AssertionError(f"cannot resolve a likelyCause from {ast.dump(node)}")
+
+    emitted: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Dict):
+            for key, value in zip(node.keys, node.values):
+                if isinstance(key, ast.Constant) and key.value == "likelyCause":
+                    emitted |= causes(value)
+
+    # Not vacuous: one value reached through each resolution rule — a
+    # constant, a conditional, and a local name.
+    assert {
+        "server_unreachable",
+        "radio_not_responding",
+        "radio_remote_control_unreachable",
+    } <= emitted
+    annotation = RadioHealthPublic.model_fields["likelyCause"].annotation
+    assert emitted <= set(typing.get_args(annotation))
+
+
+# ---------------------------------------------------------------------------
+# MOR-3081: the identity gate's hold (MOR-3071) must not end ``web`` — the
+# server serves in ``no_response``, the audio auto-start stays quiet, and
+# the connect completes when the radio answers. None of the #3954 tests ran
+# the real CLI web startup with a managed-TX composition; these do, through
+# the same ``_served_through_cli`` harness as the MOR-2876 suite above.
+# ---------------------------------------------------------------------------
+
+
+def _audio_scope_error_records(
+    caplog: pytest.LogCaptureFixture,
+) -> list[logging.LogRecord]:
+    return [
+        record
+        for record in caplog.records
+        if record.levelno >= logging.ERROR
+        and (
+            record.name.startswith("rigplane.audio")
+            or "audio" in record.getMessage().lower()
+            or "scope" in record.getMessage().lower()
+        )
+    ]
+
+
+def _identity_held_gate_radio() -> tuple[object, object]:
+    """IC-7300 whose identity read never answers, cadence compressed.
+
+    Same ``_gate_radio`` the MOR-3071 gate suite runs, plus the silence
+    detector held off (as ``_fast_retry_serial_radio`` does above): once
+    the radio answers, the poller's state reads still get no reply from
+    the fake, and an untamed watchdog would reopen the port under the
+    post-CONNECTED assertions for a reason this suite is not about.
+    """
+
+    from test_icom7610_serial_radio import _GateSerialLink, _gate_radio
+
+    link = _GateSerialLink(answer_identity=False)
+    radio = _gate_radio(link)
+    radio._serial_civ_timeout_evidence_crossed_threshold = lambda: False
+    return link, radio
+
+
+@pytest.mark.asyncio
+async def test_identity_hold_serves_then_latches_and_arms_when_the_radio_answers(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The bench regression: a silent port must serve, not exit.
+
+    ``rigplane web`` with the managed-TX composition on a link that never
+    answers ``19 00``: the server listens, ``/api/v1/info`` answers 200
+    with ``identity.status = "no_response"`` and ``rigConnected = false``,
+    and transmit is refused. When the link starts answering, CONNECTED
+    latches, managed TX arms, and no audio/scope ERROR traceback was
+    logged on the way.
+    """
+
+    from rigplane.core.radio_protocol import RadioIdentityStatus
+    from rigplane.runtime.managed_tx_state import ManagedTxOutcome
+    from test_web_server_coverage import _FakeWriter, _response_json
+
+    link, radio = _identity_held_gate_radio()
+
+    with caplog.at_level(logging.WARNING):
+        async with _served_through_cli(radio) as server:
+            identity = radio.connection_identity
+            assert identity is not None
+            assert identity.status is RadioIdentityStatus.NO_RESPONSE
+            assert radio.connected is False
+
+            # The startup gate released on the identity hold, named plainly.
+            assert any(
+                "not answered its identity read" in warning
+                for warning in _startup_warnings(caplog)
+            )
+
+            # The server answers while the connect is held.
+            writer = _FakeWriter()
+            await server._handle_http(writer, "GET", "/api/v1/info", headers={})  # noqa: SLF001
+            status, body = _response_json(writer)
+            assert status == 200
+            connection = body["connection"]
+            assert connection["rigConnected"] is False
+            assert connection["identity"]["status"] == "no_response"
+
+            # Transmit stays refused: no provider stands on a held connect.
+            composition = radio._managed_tx_composition
+            assert composition is not None
+            snapshot = await composition.authority.snapshot()
+            assert snapshot.provider_generation is None
+            assert await composition.authority.transmit_on() is (
+                ManagedTxOutcome.REJECTED
+            )
+
+            # The radio answers: CONNECTED latches and managed TX arms.
+            link.policy_answer = True
+            assert await await_until(lambda: radio.connected, timeout=5.0)
+            assert await await_until(
+                lambda: composition._active_provider is not None, timeout=5.0
+            )
+            identity = radio.connection_identity
+            assert identity is not None
+            assert identity.status is RadioIdentityStatus.UNVERIFIED
+
+            # Let any late failure land before judging the log.
+            await asyncio.sleep(0.2)
+            assert _audio_scope_error_records(caplog) == []
+
+
+@pytest.mark.asyncio
+async def test_audio_auto_start_skips_quietly_while_identity_holds(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The auto bridge does not attempt a radio-RX start on a held connect.
+
+    The bench log's ``ERROR audio-bus: failed to start RX`` traceback came
+    from the auto-start demanding RX while the identity gate owned the
+    link. While the connect is held the auto-start is skipped with one
+    WARNING naming the deferral; an explicit ``--bridge=<DEVICE>`` keeps
+    its fail-hard behaviour.
+    """
+
+    link, radio = _identity_held_gate_radio()
+
+    refused = AssertionError(
+        "audio bridge auto-start must not run while the connect is held"
+    )
+    bridge_start = AsyncMock(side_effect=refused)
+    with (
+        patch.object(WebServer, "start_audio_bridge", bridge_start),
+        caplog.at_level(logging.WARNING),
+    ):
+        async with _served_through_cli(radio, bridge="auto") as server:
+            assert server is not None
+            assert bridge_start.await_count == 0
+            assert any(
+                record.name == "rigplane.cli"
+                and "audio bridge auto-start deferred" in record.getMessage()
+                for record in caplog.records
+            )
+            assert _audio_scope_error_records(caplog) == []
+
+
+def test_identity_hold_predicate_requires_a_disconnected_radio() -> None:
+    """MOR-3078: one shared hold predicate; checking on a connected radio is no hold.
+
+    The CLI bridge deferral, the web startup gate and the no_response
+    print asked the same question three ways, and none required the radio
+    to be disconnected: a stale ``checking`` left on a connected radio
+    read as a hold. The shared predicate (``core.radio_protocol:
+    serial_identity_hold``) returns the hold status only for
+    checking/no_response on a radio that is NOT connected; anything else
+    the attribute may hold — including the ``Mock`` a test double
+    returns — is no hold, decided by ``isinstance``, never by truthiness.
+    """
+    from rigplane.core.radio_protocol import (
+        RadioIdentity,
+        RadioIdentityStatus,
+        serial_identity_hold,
+    )
+    from rigplane.web.web_startup import _serial_identity_pending
+
+    def _radio(status: RadioIdentityStatus, *, connected: bool) -> SimpleNamespace:
+        return SimpleNamespace(
+            connection_identity=RadioIdentity(status=status, expected_model="IC-7300"),
+            connected=connected,
+        )
+
+    held = _radio(RadioIdentityStatus.NO_RESPONSE, connected=False)
+    assert serial_identity_hold(held) is RadioIdentityStatus.NO_RESPONSE
+    assert _serial_identity_pending(SimpleNamespace(_radio=held)) is True
+
+    # A stale checking on a connected radio describes nothing: not a hold.
+    checking_connected = _radio(RadioIdentityStatus.CHECKING, connected=True)
+    assert serial_identity_hold(checking_connected) is None
+    assert _serial_identity_pending(SimpleNamespace(_radio=checking_connected)) is (
+        False
+    )
+
+    answered = _radio(RadioIdentityStatus.UNVERIFIED, connected=True)
+    assert serial_identity_hold(answered) is None
+
+    mock_radio = MagicMock()
+    assert serial_identity_hold(mock_radio) is None
+
+
+@pytest.mark.asyncio
+async def test_audio_auto_start_defers_then_starts_exactly_once(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """MOR-3078: the deferred auto-start runs once the radio answers.
+
+    The MOR-3081 deferral was permanent — the auto bridge never started
+    unless the operator asked from the UI. The deferred start is armed at
+    deferral time and runs exactly one ``start_audio_bridge`` once the
+    identity hold has cleared AND the connect latched; a later duplicate
+    trigger must not start a second bridge, and nothing may fire once
+    the server has stopped.
+    """
+
+    link, radio = _identity_held_gate_radio()
+    bridge_start = AsyncMock()
+    with (
+        patch.object(WebServer, "start_audio_bridge", bridge_start),
+        caplog.at_level(logging.WARNING),
+    ):
+        async with _served_through_cli(radio, bridge="auto") as server:
+            assert server is not None
+            assert bridge_start.await_count == 0  # deferred, not attempted
+            assert any(
+                record.name == "rigplane.cli"
+                and "audio bridge auto-start deferred" in record.getMessage()
+                for record in caplog.records
+            )
+
+            link.policy_answer = True
+            assert await await_until(lambda: radio.connected, timeout=5.0)
+            assert await await_until(lambda: bridge_start.await_count == 1, timeout=5.0)
+            await asyncio.sleep(0.5)  # a duplicate trigger would land here
+            assert bridge_start.await_count == 1
+            assert bridge_start.await_args is not None
+            assert bridge_start.await_args.kwargs.get("device_name") is None
+
+    # The server is down: no start may fire after stop begins.
+    await asyncio.sleep(0.2)
+    assert bridge_start.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_deferred_auto_bridge_never_starts_after_stop_begins(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """MOR-3078: a deferral that never sees the radio answer dies with the server.
+
+    The deferred start belongs to the web application lifetime: the
+    shutdown that begins when ``serve_forever`` ends must cancel it
+    before it can start a bridge, and nothing may fire once the server
+    is down.
+    """
+
+    link, radio = _identity_held_gate_radio()
+    bridge_start = AsyncMock()
+    with (
+        patch.object(WebServer, "start_audio_bridge", bridge_start),
+        caplog.at_level(logging.WARNING),
+    ):
+        async with _served_through_cli(radio, bridge="auto"):
+            assert bridge_start.await_count == 0
+            # The radio never answers; the block exits straight to shutdown.
+        await asyncio.sleep(0.3)
+        assert bridge_start.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_explicit_bridge_device_fails_hard_while_identity_held(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """MOR-3078: an explicit ``--bridge=<DEVICE>`` keeps failing while held.
+
+    The MOR-3081 docstring claimed this fail-hard behaviour but no test
+    pinned it: only the AUTO start defers; a concrete device name still
+    attempts the bridge at startup, fails against the held connect, and
+    exits non-zero instead of serving.
+    """
+
+    link, radio = _identity_held_gate_radio()
+    refused = RuntimeError("radio-RX start refused: the connect is held")
+    bridge_start = AsyncMock(side_effect=refused)
+    with patch.object(WebServer, "start_audio_bridge", bridge_start):
+        async with _served_through_cli(
+            radio, bridge="RigPlane Virtual Cable Output", expect_rc=1
+        ) as server:
+            assert server is None  # the harness asserts the non-zero exit
+    captured = capsys.readouterr()
+    assert "audio bridge failed" in captured.err
+
+
+@pytest.mark.asyncio
+async def test_no_port_start_runs_the_real_deferred_bridge_once_connected(
+    caplog: pytest.LogCaptureFixture,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """MOR-2922: a missing-port start defers the auto bridge, then runs it.
+
+    The ticket's sequence through the real entry points: ``rigplane web``
+    with ``--bridge=auto`` on a serial port that cannot be opened serves
+    the UI with the bridge deferred; when the port appears, the backend's
+    own watchdog reopens it, the identity read answers, and the deferred
+    runner starts the REAL ``AudioBridge`` — exactly once, never while
+    disconnected. CLI dispatch (``cli._run``), session recovery and bridge
+    startup all stay real; only the OS boundary is faked (the serial link
+    and the two PortAudio backends: the bridge's device backend and the
+    serial radio's USB-audio driver backend).
+
+    With the old arming condition (the identity-hold check only) this
+    test is red: the not-connected radio carries no identity hold, so the
+    CLI attempts the eager auto-start, fails it against the unconnected
+    radio, and never arms the deferred attempt — no bridge ever runs.
+    """
+
+    import rigplane.audio.bridge as bridge_module
+    from rigplane.audio.backend import (
+        AudioDeviceId,
+        AudioDeviceInfo,
+        FakeAudioBackend,
+    )
+    from rigplane.audio.usb_driver import UsbAudioDriver
+    from rigplane.backends.icom7610 import Icom7610SerialRadio
+    from rigplane.web import server as server_module
+    from test_audio_bridge import _bridge_backend
+
+    device = str(tmp_path / "cu.usbserial-1420")
+    link = _FakeSerialCivLink(fail_connect=_port_missing_error(device))
+    bridge_backend = _bridge_backend()
+    driver_backend = FakeAudioBackend(
+        devices=[
+            AudioDeviceInfo(
+                id=AudioDeviceId(0),
+                name="USB Audio CODEC",
+                input_channels=2,
+                output_channels=2,
+            )
+        ]
+    )
+    driver = UsbAudioDriver(
+        rx_device="USB Audio CODEC",
+        tx_device="USB Audio CODEC",
+        backend=driver_backend,
+    )
+    radio = Icom7610SerialRadio(
+        device=device,
+        civ_link=link,
+        audio_driver=driver,
+        # Hermetic on any host: no OS enumeration, so no real port is probed.
+        _enumerate_serial_ports_fn=lambda: [],
+    )
+    # Short retry spacing, so a port that appears is reopened within the
+    # test's bounded waits instead of after the production backoff cap.
+    radio._SERIAL_WATCHDOG_INTERVAL_S = 0.005
+    radio._SERIAL_WATCHDOG_RETRY_S = 0.005
+    radio._SERIAL_WATCHDOG_RETRY_MAX_S = 0.01
+    radio._SERIAL_IDENTITY_REREAD_BACKOFF_S = (0.05, 0.1, 0.2, 0.4)
+    radio._SERIAL_IDENTITY_REREAD_STEADY_S = 0.5
+    # The fake link answers no poll: once the port opens, the watchdog would
+    # declare link-down on that silence, parking transmit and reopening the
+    # port under the assertions at a moment that depends on runner load.
+    radio._serial_civ_timeout_evidence_crossed_threshold = lambda: False
+
+    monkeypatch.setattr(bridge_module, "PortAudioBackend", lambda: bridge_backend)
+    monkeypatch.setattr(server_module, "_BRIDGE_DEFER_POLL_S", 0.01)
+    monkeypatch.setattr("rigplane.cli._detect_loopback_hint", lambda: None)
+
+    with caplog.at_level(logging.WARNING):
+        async with _served_through_cli(radio, bridge="auto") as server:
+            assert server is not None
+            # Several deferred-runner poll cycles pass while the port is
+            # missing: the missing-port retry loop stays live, but no
+            # bridge may exist and no audio stream may open.
+            assert await await_until(lambda: link.connect_calls >= 2, timeout=5.0)
+            await asyncio.sleep(0.1)
+            assert server._audio_bridge is None  # noqa: SLF001
+            assert bridge_backend.rx_streams == []
+            assert bridge_backend.tx_streams == []
+            assert bridge_backend.duplex_streams == []
+            assert driver_backend.rx_streams == []
+            assert driver_backend.tx_streams == []
+            assert driver_backend.duplex_streams == []
+            assert any(
+                record.name == "rigplane.cli"
+                and "audio bridge auto-start deferred" in record.getMessage()
+                for record in caplog.records
+            )
+
+            # The port appears; the backend's own watchdog reopens it, the
+            # identity read answers, and the deferred runner starts the
+            # real bridge exactly once.
+            link._fail_connect = None
+            assert await await_until(lambda: radio.connected, timeout=5.0)
+            assert await await_until(
+                lambda: (
+                    server._audio_bridge is not None  # noqa: SLF001
+                    and server._audio_bridge.running
+                ),
+                timeout=5.0,
+            )
+            await asyncio.sleep(0.5)  # a duplicate start would land here
+            bridge = server._audio_bridge  # noqa: SLF001
+            assert bridge is not None and bridge.running
+            assert len(bridge_backend.tx_streams) == 1
+            assert bridge_backend.tx_streams[0].running
+            assert len(bridge_backend.rx_streams) == 1
+            assert bridge_backend.rx_streams[0].running
+            assert driver.rx_running
+
+
+async def test_managed_key_admitted_while_ptt_unobserved_after_start_without_ptt(
+    tmp_path: Path,
+) -> None:
+    """MOR-4456 authority characterisation: the managed key is admitted.
+
+    A station built exactly like production startup except PTT/split were
+    never observed (the MOR-4456 gate releases on the non-critical
+    deadline with one WARNING instead of failing): RF state resolves
+    UNKNOWN with no radio-TX refusal, so the managed key submitted to the
+    existing authority (local mode, no controller ticket) is ADMITTED and
+    reaches the wire — while arming the remote controller session is
+    refused with the existing ``controller_not_ready`` reason (HTTP 503).
+    """
+
+    from test_managed_tx_production_fake_wire import (
+        _IcomActuator,
+        _joined_web_runtime,
+    )
+    from test_web_controller import request
+
+    from rigplane.runtime.managed_tx_state import ManagedTxOutcome
+    from rigplane.runtime.tx_interlock import RfState, resolve_rf_state
+
+    actuator, composition, server = await _joined_web_runtime(tmp_path, _IcomActuator)
+    try:
+        store = server.command_state_store
+        assert resolve_rf_state(store.snapshot()) is RfState.UNKNOWN
+        assert composition.authority.radio_tx_refusal_nowait() is None
+        armed = await request(
+            server, "POST", "/api/v1/controller/mode", {"mode": "remote"}
+        )
+        assert armed.status == 503
+        assert armed.payload == {"error": "controller_not_ready"}
+        acquired = await request(server, "POST", "/api/v1/controller", {"kind": "pro"})
+        assert acquired.status == 201
+        # Local mode needs no controller ticket: the bound local ticket
+        # would carry its session owner, while an unbound submission is
+        # validated as a local key-down and reaches the authority.
+        pressed = await composition.authority.submit_ptt(True, "memory-primary")
+        assert pressed.outcome is ManagedTxOutcome.ACCEPTED
+        await pressed.wait_settlement()
+        assert True in actuator.wire
+        released = await composition.authority.submit_force_off()
+        await released.wait_settlement()
+    finally:
+        server._controller.revoke()  # noqa: SLF001
+        await server._controller.settle()  # noqa: SLF001
+        await composition.shutdown(asyncio.Event())

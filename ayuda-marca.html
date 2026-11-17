@@ -74,7 +74,10 @@
 <h2 id="estructura">Estructura</h2>
 <ul>
 <li>Barra superior fija: estado de la conexión (copia de <code>#radio-status</code>), distintivo de modo (<code>#mode-badge</code>) y botón «⌁ Conectar», que acciona el de la sección y se deshabilita con él.</li>
-<li>Barra lateral: logotipo, navegación y, en las páginas de radio, pasos numerados (0 Copias y conexión … 4 Firmware) que llevan a cada sección.</li>
+<li>Barra lateral: logotipo y una navegación ordenada por tarea: «Inicio», «Satelites», «Radios» (con una sublista sangrada de modelos: OpenGD77, Quansheng, AnyTone Beta, Yaesu FTX-1) y «Ayuda». La página actual lleva <code>aria-current=&quot;page&quot;</code>; en una página de modelo, «Radios» queda marcada con la clase <code>nav-ancestor</code>. En móvil (≤760 px) la sublista se aplana en la fila desplazable.</li>
+<li>Pasos numerados «PASOS» en las páginas de radio, agrupados por tarea (Conexión y copias, Canales/Codeplug, Satélites, Firmware, Herramientas).</li>
+<li>Inicio: panel «Próximo pase» (con cuenta atrás en cifras tabulares) y panel «Tu radio» (recuerda la última radio en <code>bricohams.lastRadio</code>). <code>radios.html</code> reúne las familias y sus grupos de tareas.</li>
+<li>Tipos de operación en las páginas de radio (<code>data-op</code>, sin cambiar el texto): rojo con borde izquierdo y ⚠ = escribe en la radio; azul = prepara datos locales; discontinuo = edita datos locales; sin marca = solo consulta. Una leyenda lo explica bajo la cabecera.</li>
 <li>Etiqueta sobre el título: <code>RADIOAFICIÓN · HAZLO TÚ MISMO</code>.</li>
 </ul>
 <h2 id="tipografia">Tipografía</h2>

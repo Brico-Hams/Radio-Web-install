@@ -1,0 +1,459 @@
+"""Stable Web API contract tests for managed supervisors and Pro clients."""
+
+from __future__ import annotations
+
+import json
+from dataclasses import replace
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+
+from rigplane.web.api_contract import (
+    RESPONSE_FIELD_CONTRACTS,
+    STABLE_HTTP_ENDPOINTS,
+    STABLE_WEBSOCKET_ROUTES,
+    WEB_API_CONTRACT_VERSION,
+    HttpEndpoint,
+    WebSocketRoute,
+)
+from rigplane.web.server import WebConfig, WebServer
+from rigplane.profiles import resolve_radio_profile
+from rigplane.rig_loader import load_rig
+
+
+class _Writer:
+    def __init__(self) -> None:
+        self.buffer = bytearray()
+
+    def write(self, data: bytes) -> None:
+        self.buffer.extend(data)
+
+    async def drain(self) -> None:
+        return None
+
+
+def _json_response(writer: _Writer) -> tuple[int, dict]:
+    text = writer.buffer.decode("ascii", errors="replace")
+    status = int(text.split(" ", 2)[1])
+    body_start = text.index("\r\n\r\n") + 4
+    return status, json.loads(text[body_start:] or "{}")
+
+
+def _golden_controls() -> dict[str, object]:
+    fixture = Path(__file__).parent / "fixtures" / "control-domain-controls.json"
+    return json.loads(fixture.read_text(encoding="utf-8"))
+
+
+def _golden_profile(tmp_path: Path):
+    huge = "1" + "0" * 399
+    half_huge = "5" + "0" * 398
+    toml = f"""\
+[radio]
+id = "golden_controls"
+model = "Golden Controls"
+receiver_count = 1
+has_lan = false
+has_wifi = false
+
+[capabilities]
+features = ["tx"]
+
+[modes]
+list = ["USB"]
+
+[filters]
+list = ["FIL1"]
+
+[vfo]
+scheme = "ab"
+
+[commands]
+
+[commands.overrides]
+
+[antenna]
+tx_count = 2
+has_rx_ant = true
+
+[scan_types]
+values = [0x01, 0x03, 0x13, 0x23]
+
+[scan_resume]
+values = [0xD0, 0xD3]
+
+[controls.identity]
+mapping = "identity"
+raw_min = -2
+raw_max = 2
+raw_step = 2
+raw_origin = -2
+display_min = -2
+display_max = 2
+display_step = 2
+display_origin = -2
+display_unit = "steps"
+quantization = "floor"
+restoration = "exact"
+style = "stepped"
+
+[controls.linear]
+mapping = "linear"
+raw_min = 0
+raw_max = 2
+raw_step = 1
+raw_origin = 0
+display_min = 0
+display_max = {huge}
+display_step = {half_huge}
+display_origin = 0
+display_unit = "huge"
+quantization = "nearest_ties_up"
+restoration = "exact"
+
+[controls.centered]
+mapping = "centered"
+raw_min = -2
+raw_max = 2
+raw_step = 2
+raw_origin = -2
+display_min = -0.00000000000000000001
+display_max = 0.00000000000000000001
+display_step = 0.00000000000000000001
+display_origin = -0.00000000000000000001
+display_unit = "tiny"
+quantization = "nearest_ties_down"
+restoration = "exact"
+raw_center = 0
+display_center = 0
+
+[controls.lookup]
+mapping = "lookup"
+raw_min = 0
+raw_max = 4
+raw_step = 2
+raw_origin = 0
+display_min = -1
+display_max = 1
+display_step = 1
+display_origin = -1
+display_unit = "label"
+quantization = "reject"
+restoration = "exact"
+lookup = [{{ raw = 0, display = -1 }}, {{ raw = 2, display = 0 }}, {{ raw = 4, display = 1 }}]
+"""
+    path = tmp_path / "golden-controls.toml"
+    path.write_text(toml, encoding="utf-8")
+    return load_rig(path).to_profile()
+
+
+@pytest.mark.asyncio
+async def test_control_domains_round_trip_through_both_capability_endpoints(
+    tmp_path: Path,
+) -> None:
+    """The shared JSON is derived only by loading TOML into a RadioProfile."""
+    profile = _golden_profile(tmp_path)
+    assert profile.controls == _golden_controls()
+    assert profile.antenna_tx_count == 2
+    assert profile.antenna_has_rx_ant is True
+    radio = SimpleNamespace(
+        model=profile.model,
+        profile=profile,
+        capabilities=set(profile.capabilities),
+        connected=False,
+        control_connected=False,
+        radio_ready=False,
+    )
+    server = WebServer(radio, WebConfig(host="127.0.0.1", port=0))
+    headers = {}
+    for path in ("/api/v1/info", "/api/v1/capabilities"):
+        writer = _Writer()
+        await server._handle_http(writer, "GET", path, headers=headers)  # noqa: SLF001
+        status, payload = _json_response(writer)
+        assert status == 200
+        controls = (
+            payload["capabilities"]["controls"]
+            if path == "/api/v1/info"
+            else payload["controls"]
+        )
+        capability_payload = (
+            payload["capabilities"] if path == "/api/v1/info" else payload
+        )
+        assert controls == _golden_controls()
+        assert capability_payload["antennas"] == 2
+        assert capability_payload["hasRxAntenna"] is True
+        assert capability_payload["scanTypeValues"] == [0x01, 0x03, 0x13, 0x23]
+        assert capability_payload["scanResumeValues"] == [0xD0, 0xD3]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model", ["IC-7300", "FTX-1"])
+async def test_capability_endpoints_publish_notch_width_choices(model: str) -> None:
+    """MOR-1685: the capabilities payload publishes the profile's manual
+    notch-width choices in ``notch_width_values`` order (MOR-1685), ``[]``
+    when the profile declares no domain. Literal expectations, never read
+    back from the profile under test."""
+    profile = resolve_radio_profile(model=model)
+    radio = SimpleNamespace(
+        model=profile.model,
+        profile=profile,
+        capabilities=set(profile.capabilities),
+        connected=False,
+        control_connected=False,
+        radio_ready=False,
+    )
+    server = WebServer(radio, WebConfig(host="127.0.0.1", port=0))
+    expected = (
+        [
+            {"value": 0, "label": "WIDE"},
+            {"value": 1, "label": "MID"},
+            {"value": 2, "label": "NAR"},
+        ]
+        if model == "IC-7300"
+        else []
+    )
+    for path in ("/api/v1/info", "/api/v1/capabilities"):
+        writer = _Writer()
+        await server._handle_http(writer, "GET", path, headers={})  # noqa: SLF001
+        status, payload = _json_response(writer)
+        assert status == 200
+        capability_payload = (
+            payload["capabilities"] if path == "/api/v1/info" else payload
+        )
+        assert capability_payload["notchWidthChoices"] == expected
+
+
+_OFF_SEMI_FULL = [
+    {"value": 0, "label": "OFF"},
+    {"value": 1, "label": "SEMI"},
+    {"value": 2, "label": "FULL"},
+]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model", "expected"),
+    [
+        ("FTX-1", [{"value": 0, "label": "OFF"}, {"value": 1, "label": "ON"}]),
+        ("IC-7300", _OFF_SEMI_FULL),
+        ("IC-7610", _OFF_SEMI_FULL),
+        ("X6200", []),
+    ],
+)
+async def test_capability_endpoints_publish_break_in_choices(
+    model: str, expected: list[dict[str, object]]
+) -> None:
+    """MOR-2729: both capability endpoints publish the profile's break-in
+    choices in ``[break_in] values`` order, ``[]`` when the profile declares
+    no domain. Literal expectations, never read back from the profile under
+    test."""
+    profile = resolve_radio_profile(model=model)
+    radio = SimpleNamespace(
+        model=profile.model,
+        profile=profile,
+        capabilities=set(profile.capabilities),
+        connected=False,
+        control_connected=False,
+        radio_ready=False,
+    )
+    server = WebServer(radio, WebConfig(host="127.0.0.1", port=0))
+    for path in ("/api/v1/info", "/api/v1/capabilities"):
+        writer = _Writer()
+        await server._handle_http(writer, "GET", path, headers={})  # noqa: SLF001
+        status, payload = _json_response(writer)
+        assert status == 200
+        capability_payload = (
+            payload["capabilities"] if path == "/api/v1/info" else payload
+        )
+        assert capability_payload["breakInChoices"] == expected
+
+
+@pytest.mark.asyncio
+async def test_capability_endpoints_omit_controls_for_legacy_profiles(
+    tmp_path: Path,
+) -> None:
+    profile = replace(_golden_profile(tmp_path), controls=None)
+    radio = SimpleNamespace(
+        model=profile.model,
+        profile=profile,
+        capabilities=set(profile.capabilities),
+        connected=False,
+        control_connected=False,
+        radio_ready=False,
+    )
+    server = WebServer(radio, WebConfig(host="127.0.0.1", port=0))
+    for path in ("/api/v1/info", "/api/v1/capabilities"):
+        writer = _Writer()
+        await server._handle_http(writer, "GET", path)  # noqa: SLF001
+        _status, payload = _json_response(writer)
+        capability_payload = (
+            payload["capabilities"] if path == "/api/v1/info" else payload
+        )
+        assert "controls" not in capability_payload
+
+
+def test_pro_web_api_contract_lists_stable_surface() -> None:
+    assert WEB_API_CONTRACT_VERSION == 1
+
+    http = {(route["method"], route["path"]) for route in STABLE_HTTP_ENDPOINTS}
+    assert ("GET", "/healthz") in http
+    assert ("GET", "/readyz") in http
+    assert ("GET", "/api/v1/runtime") in http
+    assert ("GET", "/api/v1/station") in http
+    assert ("GET", "/api/v1/info") in http
+    assert ("GET", "/api/v1/state") in http
+    assert ("GET", "/api/v1/capabilities") in http
+    assert ("GET", "/api/v1/audio/analysis") in http
+    assert ("GET", "/api/v1/managed-transmit") in http
+    assert ("POST", "/api/v1/managed-transmit/command") in http
+    assert ("PUT", "/api/v1/managed-transmit/tot") in http
+    assert ("GET", "/api/v1/bridge") in http
+    assert ("POST", "/api/v1/bridge") in http
+    assert ("PATCH", "/api/v1/bridge") in http
+    assert ("DELETE", "/api/v1/bridge") in http
+    assert ("POST", "/api/v1/commands") in http
+    assert ("POST", "/api/v1/commands/batch") in http
+
+    ws = {route["path"] for route in STABLE_WEBSOCKET_ROUTES}
+    assert "/api/v1/ws" in ws
+    assert "/api/v1/scope" in ws
+    assert "/api/v1/audio" in ws
+    assert "/api/v1/audio-scope" not in ws
+
+    assert RESPONSE_FIELD_CONTRACTS["/api/v1/info"]["required"] == (
+        "server",
+        "version",
+        "proto",
+        "radio",
+        "model",
+        "capabilities",
+        "connection",
+    )
+    assert RESPONSE_FIELD_CONTRACTS["/api/v1/commands"]["required"] == (
+        "ok",
+        "name",
+        "result",
+    )
+    assert RESPONSE_FIELD_CONTRACTS["/api/v1/commands/batch"]["required"] == (
+        "ok",
+        "results",
+    )
+    assert RESPONSE_FIELD_CONTRACTS["/api/v1/managed-transmit"]["required"] == (
+        "schemaVersion",
+        "sampledAt",
+        "managedTransmit",
+        "txObservation",
+    )
+    assert RESPONSE_FIELD_CONTRACTS["/api/v1/managed-transmit/command"]["required"] == (
+        "ok",
+        "operation",
+        "result",
+    )
+
+
+@pytest.mark.parametrize(
+    "route",
+    STABLE_HTTP_ENDPOINTS + STABLE_WEBSOCKET_ROUTES,
+    ids=[f"{route['method']} {route['path']}" for route in STABLE_HTTP_ENDPOINTS]
+    + [f"WS {route['path']}" for route in STABLE_WEBSOCKET_ROUTES],
+)
+def test_stable_routes_require_no_application_credentials(
+    route: HttpEndpoint | WebSocketRoute,
+) -> None:
+    assert route["auth"] == "none"
+
+
+def test_command_batch_docs_use_numeric_data_mode_contract() -> None:
+    root = Path(__file__).resolve().parents[1]
+    docs = [
+        root / "docs/api/web.md",
+        root / "docs/guide/web-ui.md",
+    ]
+
+    for path in docs:
+        text = path.read_text(encoding="utf-8")
+        assert '"name": "set_data_mode"' in text or '"name":"set_data_mode"' in text
+        assert '"set_data_mode", "params": { "enabled"' not in text
+        assert '"set_data_mode","params":{"enabled"' not in text
+        assert '"set_data_mode", "params": {"enabled"' not in text
+        assert '"set_data_mode","params": {"enabled"' not in text
+
+
+@pytest.mark.asyncio
+async def test_stable_http_payloads_satisfy_required_field_contract() -> None:
+    srv = WebServer(
+        None,
+        WebConfig(host="127.0.0.1", port=0, radio_model="IC-7610"),
+    )
+    srv._server = type(  # noqa: SLF001
+        "_Server",
+        (),
+        {
+            "sockets": [
+                type("_Socket", (), {"getsockname": lambda self: ("127.0.0.1", 0)})()
+            ]
+        },
+    )()
+    headers = {}
+
+    for path, expected_status in (
+        ("/healthz", 200),
+        ("/readyz", 503),
+        ("/api/v1/runtime", 200),
+        ("/api/v1/station", 200),
+        ("/api/v1/info", 200),
+        ("/api/v1/state", 200),
+        ("/api/v1/capabilities", 200),
+    ):
+        writer = _Writer()
+        await srv._handle_http(writer, "GET", path, headers=headers)  # noqa: SLF001
+        status, payload = _json_response(writer)
+        assert status == expected_status
+        required = RESPONSE_FIELD_CONTRACTS[path]["required"]
+        assert set(required).issubset(payload)
+
+
+def test_capabilities_contract_requires_mode_families() -> None:
+    """MOR-3679: clients read CW modes from ``modeFamilies``, so the stable
+    contract lists it as required on ``/api/v1/capabilities``."""
+    assert (
+        "modeFamilies" in RESPONSE_FIELD_CONTRACTS["/api/v1/capabilities"]["required"]
+    )
+
+
+def test_capabilities_contract_excludes_the_removed_rx_audio_level_menu() -> None:
+    optional = RESPONSE_FIELD_CONTRACTS["/api/v1/capabilities"].get("optional", ())
+    assert "rxAudioLevelMenu" not in optional
+
+
+def test_capabilities_contract_lists_the_scope_ref_range_as_optional() -> None:
+    """MOR-3694: the profile-declared scope REF range is an optional stable
+    field on ``/api/v1/capabilities`` — present only when the active
+    profile's ``[scope]`` declares it, absent otherwise (the REF steppers
+    fail closed on the client)."""
+    optional = RESPONSE_FIELD_CONTRACTS["/api/v1/capabilities"].get("optional", ())
+    assert set(optional) >= {"ref_min_db", "ref_max_db", "ref_step_db"}
+
+
+def test_runtime_contract_requires_the_process_block() -> None:
+    assert "process" in RESPONSE_FIELD_CONTRACTS["/api/v1/runtime"]["required"]
+
+
+@pytest.mark.asyncio
+async def test_runtime_process_block_keeps_its_five_keys_without_a_radio() -> None:
+    srv = WebServer(None, WebConfig(host="127.0.0.1", port=0))
+    writer = _Writer()
+    await srv._handle_http(  # noqa: SLF001
+        writer, "GET", "/api/v1/runtime", headers={}
+    )
+    status, payload = _json_response(writer)
+    assert status == 200
+    # Presence of the keys is the contract; a platform or radio that cannot
+    # report a value serves null, so no value is pinned.
+    assert set(payload["process"]) == {
+        "rssBytes",
+        "openFds",
+        "threads",
+        "asyncioTasks",
+        "reconnectsTotal",
+    }

@@ -1,0 +1,555 @@
+"""IC-7610 TOML profile tests — verify TOML produces correct RadioProfile.
+
+All profile data comes from TOML; there are no hardcoded constants to
+compare against.  Tests verify expected values directly.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+
+from rigplane.commands._codec import filter_index_to_hz
+from rigplane.meter_cal import interpolate_meter
+from rigplane.rig_loader import load_rig
+
+RIGS_DIR = Path(__file__).resolve().parent.parent / "rigs"
+IC7610_PATH = RIGS_DIR / "ic7610.toml"
+
+
+@pytest.fixture()
+def rig():
+    return load_rig(IC7610_PATH)
+
+
+@pytest.fixture()
+def profile(rig):
+    return rig.to_profile()
+
+
+@pytest.fixture()
+def cmdmap(rig):
+    return rig.to_command_map()
+
+
+# ── Profile parity ──────────────────────────────────────────────
+
+
+class TestProfileParity:
+    """ic7610.toml profile must match hardcoded RadioProfile exactly."""
+
+    def test_loads_without_error(self, rig):
+        assert rig is not None
+
+    def test_profile_id(self, profile):
+        assert profile.id == "icom_ic7610"
+
+    def test_model(self, profile):
+        assert profile.model == "IC-7610"
+
+    def test_civ_addr(self, profile):
+        assert profile.civ_addr == 0x98
+
+    def test_receiver_count(self, profile):
+        assert profile.receiver_count == 2
+
+    def test_capabilities_exact(self, profile):
+        expected = frozenset(
+            {
+                # Receiver
+                "audio",
+                "dual_rx",
+                "dual_watch",
+                "lan_dual_rx_audio_routing",
+                "af_level",
+                "rf_gain",
+                "squelch",
+                # RF front end
+                "attenuator",
+                "preamp",
+                "digisel",
+                "digisel_shift",
+                "ip_plus",
+                # Antenna
+                "antenna",
+                "rx_antenna",
+                # DSP / Noise
+                "nb",
+                "nr",
+                "notch",
+                "apf",
+                "twin_peak",
+                # Filter
+                "pbt",
+                "filter_width",
+                "filter_shape",
+                # TX
+                "tx",
+                "split",
+                "vox",
+                "compressor",
+                "monitor",
+                "drive_gain",
+                "ssb_tx_bw",
+                # CW
+                "cw",
+                "break_in",
+                # RIT / XIT
+                "rit",
+                "xit",
+                # Tuner
+                "tuner",
+                # Metering / Scope
+                "meters",
+                "scope",
+                # Tone: the IC-7610 (HF/6m) has no FM-repeater CTCSS tone
+                # feature, so repeater_tone / tsql are intentionally absent
+                # (MOR-661).
+                # Data / System
+                "data_mode",
+                # MOR-678: USB/LAN/DATA MOD-input routing source-select guard.
+                "mod_input_routing",
+                "power_control",
+                "dial_lock",
+                "scan",
+                "bsr",
+                "main_sub_tracking",
+                # AGC
+                "agc",
+                "tuning_step",
+                "band_edge",
+                "xfc",
+                # System
+                "system_settings",
+                # MOR-1655: IC-7610 speech is declared by the downstream
+                # profile change. Keep it in the static topology contract so
+                # this test remains an exact guard before and after that
+                # one-capability transition.
+                "speech",
+            }
+        )
+        assert profile.capabilities - {"speech"} == expected - {"speech"}
+        # A0: the current 48-member topology plus the sole permitted future
+        # addition must be the exact static 49-member contract.
+        assert profile.capabilities | {"speech"} == expected
+
+    def test_capabilities_count(self, profile):
+        # MOR-661: dropped repeater_tone + tsql (48 → 46).
+        # MOR-678: added mod_input_routing (46 → 47).
+        # MOR-1544: added digisel_shift (47 → 48).
+        # MOR-1655: speech is the only allowed transition (48 → 49).
+        assert len(profile.capabilities) == 48 + ("speech" in profile.capabilities)
+
+    def test_rf_sql_control_model_combined(self, profile):
+        """MOR-2467: the IC-7610 front panel wires RF gain and squelch as one
+        physical concentric knob, so the profile must declare the combined
+        control model (MOR-1447 leg 2) like rigs/ic7300.toml already does."""
+        assert profile.rf_sql_control_model == "combined"
+
+    def test_cmd29_routes_exact(self, profile):
+        expected = frozenset(
+            {
+                (0x11, None),
+                (0x12, None),
+                (0x14, 0x01),
+                (0x14, 0x02),
+                (0x14, 0x03),
+                (0x14, 0x05),
+                (0x14, 0x06),
+                (0x14, 0x07),
+                (0x14, 0x08),
+                (0x14, 0x0D),
+                (0x14, 0x12),
+                (0x14, 0x13),
+                (0x15, 0x01),
+                (0x15, 0x02),
+                (0x15, 0x05),
+                (0x16, 0x02),
+                (0x16, 0x12),
+                (0x16, 0x22),
+                (0x16, 0x32),
+                (0x16, 0x40),
+                (0x16, 0x41),
+                (0x16, 0x42),
+                (0x16, 0x43),
+                (0x16, 0x48),
+                (0x16, 0x4E),
+                (0x16, 0x4F),
+                (0x16, 0x53),
+                (0x16, 0x56),
+                (0x16, 0x57),
+                (0x16, 0x65),
+                (0x1A, 0x03),
+                (0x1A, 0x04),
+                (0x1A, 0x09),
+                (0x1B, 0x00),
+                (0x1B, 0x01),
+            }
+        )
+        assert profile.cmd29_routes == expected
+
+    def test_cmd29_routes_count(self, profile):
+        assert len(profile.cmd29_routes) == 35
+
+    def test_vfo_main_code(self, profile):
+        assert profile.vfo_main_code == 0xD0
+
+    def test_vfo_sub_code(self, profile):
+        assert profile.vfo_sub_code == 0xD1
+
+    def test_freq_ranges_count(self, profile):
+        assert len(profile.freq_ranges) == 2
+
+    def test_freq_range_hf(self, profile):
+        hf = profile.freq_ranges[0]
+        assert hf.start == 30_000
+        assert hf.end == 60_000_000
+        assert hf.label == "HF"
+
+    def test_freq_range_6m(self, profile):
+        sixm = profile.freq_ranges[1]
+        assert sixm.start == 50_000_000
+        assert sixm.end == 54_000_000
+        assert sixm.label == "6m"
+
+    def test_hf_bands_count(self, profile):
+        hf = profile.freq_ranges[0]
+        assert len(hf.bands) == 10
+
+    def test_modes(self, profile):
+        assert profile.modes == (
+            "USB",
+            "LSB",
+            "CW",
+            "CW-R",
+            "AM",
+            "FM",
+            "RTTY",
+            "RTTY-R",
+            "PSK",
+            "PSK-R",
+        )
+
+    def test_filters(self, profile):
+        assert profile.filters == ("FIL1", "FIL2", "FIL3")
+
+    def test_spectrum_matches_wfview_rig(self, rig):
+        assert rig.spectrum == {
+            "seq_max": 15,
+            "amp_max": 200,
+            "data_len_max": 689,
+        }
+
+    def test_keyboard_config(self, profile):
+        assert profile.keyboard is not None
+        assert profile.keyboard.leader_key == "g"
+        assert profile.keyboard.leader_timeout_ms == 1000
+        assert profile.keyboard.alt_hints is True
+        assert any(
+            binding.action == "toggle_help" for binding in profile.keyboard.bindings
+        )
+
+
+# ── Reversed-mode filter rules (MOR-2505) ──────────────────────
+
+
+class TestReversedModeFilterRules:
+    """Runtime callers pass Mode.name with an underscore ("CW_R", "PSK_R"),
+    while the profile filter keys are hyphenated ("CW-R", "PSK-R")."""
+
+    def test_cw_r_underscore_resolves_cw_r_rule(self, profile):
+        assert profile.resolve_filter_rule("CW_R") == profile.resolve_filter_rule(
+            "CW-R"
+        )
+
+    def test_rtty_r_underscore_resolves_rtty_r_rule(self, profile):
+        assert profile.resolve_filter_rule("RTTY_R") == profile.resolve_filter_rule(
+            "RTTY-R"
+        )
+
+    def test_psk_r_underscore_resolves_psk_r_rule(self, profile):
+        assert profile.resolve_filter_rule("PSK_R") == profile.resolve_filter_rule(
+            "PSK-R"
+        )
+
+    def test_hyphen_forms_still_resolve(self, profile):
+        for mode in ("CW-R", "RTTY-R", "PSK-R"):
+            assert profile.resolve_filter_rule(mode) is not None
+
+    def test_psk_r_width_index_9_decodes_to_500hz(self, profile):
+        # Index 9 leaked raw out of get_filter_width() on the live rig (MOR-2505).
+        rule = profile.resolve_filter_rule("PSK_R")
+        assert rule is not None
+        assert filter_index_to_hz(9, segments=rule.segments) == 500
+
+    def test_cw_r_width_index_9_decodes_to_500hz(self, profile):
+        rule = profile.resolve_filter_rule("CW_R")
+        assert rule is not None
+        assert filter_index_to_hz(9, segments=rule.segments) == 500
+
+    def test_psk_r_width_500hz_encodes_to_index_9(self, profile):
+        assert profile.encode_filter_width(500, "PSK_R") == b"\x09"
+
+
+# ── CommandMap parity ───────────────────────────────────────────
+
+
+class TestCommandMapParity:
+    """ic7610.toml commands must have correct wire bytes."""
+
+    def test_get_freq(self, cmdmap):
+        assert cmdmap.get("get_freq") == (0x03,)
+
+    def test_set_freq(self, cmdmap):
+        assert cmdmap.get("set_freq") == (0x05,)
+
+    def test_get_af_level(self, cmdmap):
+        assert cmdmap.get("get_af_level") == (0x14, 0x01)
+
+    def test_get_s_meter(self, cmdmap):
+        assert cmdmap.get("get_s_meter") == (0x15, 0x02)
+
+    def test_get_power_meter(self, cmdmap):
+        assert cmdmap.get("get_power_meter") == (0x15, 0x11)
+
+    def test_get_swr(self, cmdmap):
+        assert cmdmap.get("get_swr") == (0x15, 0x12)
+
+    def test_ptt_on(self, cmdmap):
+        assert cmdmap.get("ptt_on") == (0x1C, 0x00, 0x01)
+
+    def test_scope_on(self, cmdmap):
+        assert cmdmap.get("scope_on") == (0x27, 0x10)
+
+    def test_get_split(self, cmdmap):
+        assert cmdmap.get("get_split") == (0x0F,)
+
+    def test_get_scope_wave(self, cmdmap):
+        assert cmdmap.get("get_scope_wave") == (0x27, 0x00)
+        assert cmdmap.get("set_scope_wave") == (0x27, 0x00)
+
+    def test_main_sub_prefix(self, cmdmap):
+        assert cmdmap.get("get_main_sub_prefix") == (0x29,)
+        assert cmdmap.get("set_main_sub_prefix") == (0x29,)
+
+    def test_get_civ_output_ant_wfview_1c04(self, cmdmap):
+        assert cmdmap.get("get_civ_output_ant") == (0x1C, 0x04)
+        assert cmdmap.get("set_civ_output_ant") == (0x1C, 0x04)
+
+    def test_send_cw(self, cmdmap):
+        assert cmdmap.get("send_cw") == (0x17,)
+
+    def test_command_count_minimum(self, cmdmap):
+        assert len(cmdmap) >= 95
+
+    # ── D2 (MOR-2017): newly-declared BYTES entries ──────────────
+
+    def test_get_rx_antenna_ant2(self, cmdmap):
+        """D2, MOR-2017: IC-7610 CI-V Reference Guide (A7380-7EX-2,
+        May.2021) p.3, 12 01 -- genuine on this radio (separate RX ANT
+        jack), unlike IC-705/others which lack a second antenna
+        connector."""
+        assert cmdmap.get("get_rx_antenna_ant2") == (0x12,)
+
+    def test_set_rx_antenna_ant2(self, cmdmap):
+        assert cmdmap.get("set_rx_antenna_ant2") == (0x12,)
+
+    def test_scan_set_df_span(self, cmdmap):
+        assert cmdmap.get("scan_set_df_span") == (0x0E,)
+
+    def test_scan_set_resume(self, cmdmap):
+        """D2, MOR-2017 declared the base command byte (0x0E); MOR-2007
+        ruling 4 added the [scan_resume] domain (0xD0/0xD3 only) this
+        byte declaration alone did not resolve."""
+        assert cmdmap.get("scan_set_resume") == (0x0E,)
+
+    def test_scan_start_type(self, cmdmap):
+        """D2, MOR-2017: the base command byte (0x0E) is guide-confirmed.
+        The guide's valid-type list for this radio also includes 0x13
+        ("Start a Fine dF scan"), which the old code-level
+        VALID_SCAN_TYPES frozenset did not accept -- IC-7610 had the same
+        0x13 domain mismatch IC-705 did; only 0x24 was IC-705-specific.
+        Resolved by MOR-2007 ruling 4's [scan_types] domain, not by this
+        byte declaration alone.
+        """
+        assert cmdmap.get("scan_start_type") == (0x0E,)
+
+    def test_no_repeater_tone_family(self, cmdmap):
+        """D2, MOR-2017: the guide prints these addresses (16 42, 16 43,
+        1B 00, 1B 01), but MOR-661's live-bench finding (tone_freq/
+        tsql_freq readback returned garbage, 16.5 Hz) is stronger evidence
+        than a documentary re-check with no bench access, so MOR-682's
+        removal stands -- these stay undeclared."""
+        assert not cmdmap.has("get_repeater_tone")
+        assert not cmdmap.has("set_repeater_tone")
+        assert not cmdmap.has("get_repeater_tsql")
+        assert not cmdmap.has("set_repeater_tsql")
+        assert not cmdmap.has("get_tone_freq")
+        assert not cmdmap.has("set_tone_freq")
+        assert not cmdmap.has("get_tsql_freq")
+        assert not cmdmap.has("set_tsql_freq")
+
+
+# ── cmd29 route detail checks ──────────────────────────────────
+
+
+class TestCmd29Detail:
+    """Verify specific cmd29 route entries."""
+
+    def test_att_cmd_only(self, profile):
+        assert (0x11, None) in profile.cmd29_routes
+
+    def test_af_gain(self, profile):
+        assert (0x14, 0x01) in profile.cmd29_routes
+
+    def test_rf_gain(self, profile):
+        assert (0x14, 0x02) in profile.cmd29_routes
+
+    def test_preamp(self, profile):
+        assert (0x16, 0x02) in profile.cmd29_routes
+
+    def test_ip_plus(self, profile):
+        assert (0x16, 0x65) in profile.cmd29_routes
+
+    def test_agc_time_constant(self, profile):
+        assert (0x1A, 0x04) in profile.cmd29_routes
+
+    def test_af_mute(self, profile):
+        assert (0x1A, 0x09) in profile.cmd29_routes
+
+
+# ── Meter calibration tables ─────────────────────────────────────
+
+
+class TestMeterCalibrations:
+    """Verify meter calibration tables parsed from ic7610.toml."""
+
+    def test_all_meter_keys_present(self, rig):
+        mc = rig.meter_calibrations
+        assert mc is not None
+        assert set(mc.keys()) == {"s_meter", "power", "swr", "alc", "comp", "vd", "id"}
+
+    def test_s_meter_calibration_count(self, rig):
+        assert len(rig.meter_calibrations["s_meter"]) == 9
+
+    def test_power_calibration_count(self, rig):
+        assert len(rig.meter_calibrations["power"]) == 3
+
+    def test_swr_calibration_count(self, rig):
+        assert len(rig.meter_calibrations["swr"]) == 5
+
+    def test_alc_calibration_count(self, rig):
+        assert len(rig.meter_calibrations["alc"]) == 2
+
+    def test_power_redline(self, rig):
+        assert rig.meter_redlines["power"] == 212
+
+    def test_swr_redline(self, rig):
+        assert rig.meter_redlines["swr"] == 120
+
+    def test_alc_redline(self, rig):
+        assert rig.meter_redlines["alc"] == 120
+
+    def test_s_meter_redline(self, rig):
+        assert rig.meter_redlines["s_meter"] == 130
+
+    def test_power_endpoints(self, rig):
+        pts = rig.meter_calibrations["power"]
+        assert pts[0]["raw"] == 0 and pts[0]["actual"] == 0.0
+        assert pts[-1]["raw"] == 212 and pts[-1]["actual"] == 100.0
+
+    def test_swr_endpoints(self, rig):
+        pts = rig.meter_calibrations["swr"]
+        assert pts[0]["raw"] == 0 and pts[0]["actual"] == 1.0
+        # 5th point added in P3-01 (issue #1173) — wfview IC-7610.rig.
+        assert pts[-1]["raw"] == 255 and pts[-1]["actual"] == 6.0
+
+    def test_alc_endpoints(self, rig):
+        pts = rig.meter_calibrations["alc"]
+        assert pts[0]["raw"] == 0 and pts[0]["actual"] == 0.0
+        assert pts[-1]["raw"] == 120 and pts[-1]["actual"] == 100.0
+
+
+# ── COMP / Vd / Id PA meter calibration (MOR-2540) ───────────────
+#
+# Points transcribed from the IC-7610 CI-V Reference Guide (2021),
+# command table: 15 14 (COMP), 15 15 (Vd), 15 16 (Id). Red-first pin:
+# before the tables existed, `interpolate_meter` returned (raw, False)
+# for these three meters and the Station Meters strip rendered raw
+# device numbers ("Vd 185 raw").
+
+_PA_METER_ANCHORS = [
+    # (meter_key, raw, expected_actual) — each is a guide anchor point
+    # from rigs/ic7610.toml's [[meters.<key>.calibration]] tables.
+    ("comp", 0, 0.0),
+    ("comp", 130, 15.0),
+    ("comp", 241, 30.0),
+    ("vd", 0, 0.0),
+    ("vd", 151, 10.0),
+    ("vd", 211, 16.0),
+    ("id", 0, 0.0),
+    ("id", 77, 10.0),
+    ("id", 165, 20.0),
+    ("id", 241, 30.0),
+]
+
+
+class TestPaMeterCalibration:
+    """COMP/Vd/Id tables from the CI-V guide's command table (MOR-2540)."""
+
+    @pytest.mark.parametrize("meter_key,count", [("comp", 3), ("vd", 3), ("id", 4)])
+    def test_pa_calibration_count(self, rig, meter_key, count):
+        assert len(rig.meter_calibrations[meter_key]) == count
+
+    @pytest.mark.parametrize("meter_key,raw,expected_actual", _PA_METER_ANCHORS)
+    def test_anchor_round_trip(self, rig, meter_key, raw, expected_actual):
+        """Interpolating at a documented guide anchor returns that
+        anchor's engineering value. The literals here hand-transcribe
+        rigs/ic7610.toml (by design, as a regression pin), while the
+        interpolation runs through the real ``rig.meter_calibrations``
+        parsed from that same file."""
+        actual, calibrated = interpolate_meter(raw, rig.meter_calibrations, meter_key)
+        assert calibrated is True
+        assert actual == pytest.approx(expected_actual)
+
+    def test_vd_raw_185_interpolates_to_13_4_volts(self, rig):
+        """MOR-2540's reported finding: the Vd tile showed raw 185 with no
+        unit. Raw 185 sits between the guide's 151 (10 V) and 211 (16 V):
+        10 + (185 - 151) * 6 / 60 = 13.4 V. Before the table existed this
+        returned (185.0, False) — the "Vd 185 raw" rendering."""
+        actual, calibrated = interpolate_meter(185, rig.meter_calibrations, "vd")
+        assert calibrated is True
+        assert actual == pytest.approx(13.4)
+
+
+class TestControlRanges:
+    """[controls.*] raw/display ranges (MOR-490)."""
+
+    def test_nr_level_wire_range_is_full_bcd(self, rig):
+        # The NR-level CI-V wire value is 0-255 BCD on the IC-7610, like
+        # every other rig.  raw_max must be 255, not the front-panel 0-15.
+        nr = rig.controls["nr_level"]
+        assert nr["raw_min"] == 0
+        assert nr["raw_max"] == 255
+
+    def test_nr_level_display_range_matches_front_panel(self, rig):
+        # The front panel shows NR as 0-15; record that display mapping so
+        # the web slider can convert wire 0-255 <-> display 0-15.
+        nr = rig.controls["nr_level"]
+        assert nr["display_min"] == 0
+        assert nr["display_max"] == 15
+
+    def test_nb_depth_wire_range_is_zero_based(self, rig):
+        # The NB-depth CI-V wire value is 0-9 on the IC-7610; the front
+        # panel shows it 1-based (1-10).  raw range stays 0-9.
+        nb = rig.controls["nb_depth"]
+        assert nb["raw_min"] == 0
+        assert nb["raw_max"] == 9
+
+    def test_nb_depth_display_range_matches_front_panel(self, rig):
+        # The front panel shows NB depth as 1-10; record that display
+        # mapping so the web slider can convert wire 0-9 <-> display 1-10.
+        nb = rig.controls["nb_depth"]
+        assert nb["display_min"] == 1
+        assert nb["display_max"] == 10

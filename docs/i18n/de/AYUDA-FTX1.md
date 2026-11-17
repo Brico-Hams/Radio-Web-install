@@ -102,6 +102,36 @@ Die Funktionsliste wurde von cat-ftx1 (rzochowski, MIT-Lizenz laut Autor; die
 LICENSE-Datei fehlt in diesem Repository noch) inspiriert. Es wurde kein Code
 kopiert.
 
+### Zusätzliche Empfangsregler
+
+Ebenfalls pro Seite (MAIN/SUB), nur Empfang, beim Zurücklesen geprüft und bei
+Werten außerhalb des Bereichs vor dem Senden abgelehnt:
+
+| Befehl | Verwendung |
+| --- | --- |
+| `NL P1 P2P2P2;` | Störimpulsunterdrücker NB, 0 (OFF) oder 1-10 |
+| `RL P1 P2P2;` | Rauschminderung DNR, 0 (OFF) oder 1-10 |
+| `BC P1 P2;` | Automatischer Notch, OFF/ON |
+| `BP P1 0 P3P3P3;` | Manueller Notch OFF/ON (000/001) |
+| `BP P1 1 P3P3P3;` | Frequenz des manuellen Notch, 001-320 (x10 Hz: 10-3200 Hz) |
+| `NA P1 P2;` | Schmalfilter (NAR), OFF/ON |
+| `CF P1 0 0 P3 P4 000;` | Clarifier: Die Webseite aktiviert den Empfangs-Clarifier und lässt den TX-Clarifier aus |
+| `CF P1 0 1 P3 P4P4P4P4;` | Clarifier-Offset, -9999..+9999 Hz |
+| `KS P1P1P1;` | CW-Geschwindigkeit, 4-60 WPM (ohne Seite) |
+| `LK P1;` | Bedienfeldsperre, OFF/ON (ohne Seite) |
+
+Im FM-Modus antwortet das Funkgerät auf den manuellen Notch mit einem nicht
+numerischen Wert (zum Beispiel `BP01F35;`): Die Webseite wertet ihn als nicht
+verfügbar und lässt das Feld leer.
+
+## VFO
+
+Das Panel „5. VFO“ (zuerst „VFO lesen“ drücken) setzt die Frequenz von VFO A
+(`FA`) und VFO B (`FB`) zwischen 0.030000 und 470.000000 MHz, die Betriebsart
+von MAIN (`MD0 m`, nur die dokumentierten Betriebsarten) und den Split
+(`ST0`/`ST1`). Jede Änderung wird zurückgelesen und verglichen. Nichts davon
+sendet. Laut Handbuch schaltet `ST1` die Doppelanzeige aus (`FR01`).
+
 ## Grenzen
 
 - Nur Speicherkanäle 1-999. PMS, 5 MHz, Notrufkanal und Split-Speicher (`MZ`)

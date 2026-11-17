@@ -1,0 +1,2370 @@
+/**
+ * Radio view-model adapter — the live seam behind the semantic VFO and RX/TX
+ * surfaces (MOR-1065).
+ *
+ * Maps REAL runtime state + capabilities onto the MOR-1062 radio semantic
+ * view-model shape. Unknown-preservation is the whole job: an unobserved
+ * active receiver, A/B slot, split, dual-watch or TX target must reach the
+ * surfaces as the contract's explicit `unknown` branch — never as a
+ * fabricated `'MAIN'` / `'A'` / `false` (MOR-988 §3.2, §4, §11.3). Every
+ * radio fact below is gated on the backend's own field status, so an old or
+ * partially-observed server degrades to `unknown`/disabled rather than to a
+ * guessed default.
+ *
+ * The contract type is imported TYPE-ONLY. eslint invariant 1 (MOR-1061 F2)
+ * bans `lib/runtime/** -> semantic/**`, but the v3 ADR's own dependency
+ * diagram puts the view model on the ADAPTER side of that seam, so the
+ * adapters zone carries a narrow, recorded `allowTypeImports` exception (see
+ * `eslint.config.js`; MOR-1065 review ruling 2). Value imports from
+ * `semantic/` stay blocked — pinned by `architecture-boundaries.test.ts`.
+ * Annotating the return type here is what makes contract drift a compile
+ * error at the PRODUCER (and, because the returned object literal is checked
+ * against the annotation, an extra field is an error too);
+ * `__tests__/radio-view-model-adapter.test.ts` additionally runs every
+ * emitted model through the real `validateRadioViewModel`.
+ */
+import type { Capabilities } from '$lib/types/capabilities';
+import type { ServerState } from '$lib/types/state';
+import type {
+  RadioViewModel, TxAuxField, TxAuxViewModel, AtuStatus,
+  MeterEngineeringUnit, MeterField, MeterRfState, MeterSourceIdentity, MeterSourcePath,
+  MeterValueDomain, MetersViewModel,
+  AudioFocus, MonitorMode, RxAudioViewModel, ModeFilterViewModel,
+  ActiveFilterConfiguration, FilterPassbandViewModel, DspViewModel, RfFrontEndViewModel,
+  BandChoice, BandField, BandViewModel, RitXitViewModel, AntennaViewModel, ScanViewModel,
+  BreakInMode, CwKeyerViewModel, ScopeControlsViewModel,
+  ScopeDisplayViewModel, ScopeSourceKind, ScopeHealthState,
+  ReceiverIndicatorViewModel, TxTargetViewModel,
+  RadioWideIndicatorsViewModel, DualActionBlockViewModel,
+  RepeaterViewModel, RepeaterReceiverViewModel, RepeaterShift,
+  DisplayObservation,
+} from '../../../semantic/radio-view-model';
+import type { TxAuthoritySnapshot } from '../../../semantic/rx-tx-surface';
+import { qualifyDisplayObservation, qualifyRadioDisplayObservation } from './display-observation';
+import { deriveFilterWidthDisplay } from './filter-width-display';
+import { refRangeFromCaps } from '../../../components/spectrum/spectrum-toolbar-logic';
+import { isFieldAvailable, isFieldFreshlyObserved } from '$lib/state/field-status';
+import { modInputStateKey } from '$lib/radio/mod-input';
+import { flattenBands, findActiveBand, receiverInRepeaterBand } from '$lib/radio/band-plan';
+import { shiftFromDirection } from '$lib/radio/repeater-transitions';
+import {
+  getFrequencyPermit, isSourcelessPermitUnknown, type FrequencyPermit, type TxPermit,
+} from '$lib/utils/tx-permit';
+import {
+  relativeVfoIdentityUnknown,
+  resolveFilterModeConfig,
+  modeHasTwinPbt,
+} from '$lib/runtime/props/panel-props';
+import {
+  deriveIfShift, measuredPbtDisplayDomain, measuredPbtRawToHz, pbtRangeFromCaps,
+  resolveControlContract, projectNrLevel, controlDisplayDomain,
+} from '$lib/radio/filter-controls';
+import type { NrLevelProjection } from '$lib/radio/filter-controls';
+import {
+  derivePresentationCapabilities, type ReceiverId, type VfoSlotId,
+} from './presentation-capabilities';
+import {
+  deriveTxCapabilities, type ModInputSource, type TxCapabilityFacts,
+} from './tx-capabilities';
+// MOR-1312 (12A verify N1): the REAL type, not a hand-copied literal union —
+// `ScopeDisplaySnapshot.lifecycle` below now widens automatically if
+// `ResourceHealth` ever gains a value upstream, instead of silently staying
+// narrower than the runtime status it mirrors. `ConnectionState` (the sibling
+// type N1 also names) stays a hand-copied literal deliberately: it lives in
+// `$lib/transport/ws-client`, and this file's own purity guard
+// (`__tests__/rx-audio-purity.isolated.test.ts` pin 3 / SAFETY CONSTRAINT 1)
+// asserts NO import from `$lib/transport/*` anywhere in this adapter, type-only
+// or not — that guard is more binding than N1's suggestion, so `.transport`
+// keeps its inline union and only `.lifecycle` gets the real type.
+import type { ResourceHealth } from '$lib/runtime/resource-demand';
+
+type Slot =
+  | { kind: 'slotted'; id: VfoSlotId }
+  | { kind: 'relative'; role: 'selected' | 'unselected' }
+  | { kind: 'unslotted' }
+  | { kind: 'unknown' };
+type Fact = { status: 'known'; value: boolean } | { status: 'unknown' };
+type Reason = {
+  field: string;
+  code: 'capability-unavailable' | 'field-not-observed' | 'tx-target-unknown' | 'out-of-band'
+    | 'mutually-exclusive-control' | 'receiver-lacks-control';
+};
+type Readable = {
+  freqHz?: number | null; mode?: string | null; filter?: number | null; filterNum?: number | null;
+};
+type Position = { slot: Slot; base: string; filterKey: 'filter' | 'filterNum'; src: Readable | null };
+
+const RECEIVER_KEY = { MAIN: 'main', SUB: 'sub' } as const;
+const SLOT_KEY = { A: 'vfoA', B: 'vfoB' } as const;
+
+/**
+ * Observed, with usable evidence. MOR-2425/R40: an observed field that has
+ * aged past its TTL still carries its last reading, so it stays available —
+ * the same rule `field-status.ts: getFieldAvailability` applies. Only
+ * never-observed and structurally missing fields are withheld.
+ */
+function seen(state: ServerState | null, path: string): boolean {
+  const status = state?.fieldStatus?.[path];
+  return status?.observed === true
+    && (status.freshness === 'fresh' || status.freshness === 'stale')
+    && (status.availability === 'available' || status.availability === 'stale');
+}
+
+/**
+ * THE active-receiver identity — `seen()` plus a positively recognised
+ * MAIN/SUB reading. Extracted (MOR-1356) so `toRadioViewModel`'s
+ * `activeReceiver` fact and `deriveBand`'s receiver-scoped TX permit share
+ * ONE criterion rather than two that can drift apart: the model must not be
+ * able to say "I don't know which receiver is active" and, in the same
+ * payload, hand out a TX permit scoped to the receiver it just guessed.
+ *
+ * MOR-1421: `singleReceiverTopology` — `topology.structuralCount === 1` from
+ * the caller's own `derivePresentationCapabilities` call — makes this
+ * capability-aware. On a single-receiver radio (MAIN-only topology, e.g. the
+ * IC-7300) `active` is STRUCTURALLY always MAIN: there is no second receiver
+ * for it to name, so a backend that never confirms the field (`active` reads
+ * observed:false forever on that class of radio) leaves the fact `unknown`
+ * for a reason that carries no information — "which receiver" was never an
+ * open question. Returning `'MAIN'` here is a TAUTOLOGY the capabilities
+ * already prove, not the fabricated-default guess MOR-988 §3.2 forbids
+ * (guessing picks among live possibilities; this is the only possibility).
+ * Multi-receiver radios (`singleReceiverTopology: false`, including an
+ * unrecognised/contradictory caps shape) keep the original three-part
+ * `seen()` gate byte-for-byte — there the identity is genuinely unresolved
+ * without a confirmed reading.
+ */
+function activeReceiverId(
+  state: ServerState | null, singleReceiverTopology: boolean,
+): ReceiverId | null {
+  if (singleReceiverTopology) return 'MAIN';
+  const active = state?.active;
+  return seen(state, 'active') && (active === 'MAIN' || active === 'SUB') ? active : null;
+}
+
+function boolFact(state: ServerState | null, path: string, value: unknown): Fact {
+  return seen(state, path) && typeof value === 'boolean'
+    ? { status: 'known', value }
+    : { status: 'unknown' };
+}
+
+/** Per-position readings; each degrades to `null` on its own, unobserved field. */
+function readings(
+  state: ServerState | null, base: string, filterKey: 'filter' | 'filterNum', src: Readable | null,
+): { frequencyHz: number | null; mode: string | null; filter: string | null } {
+  const hz = src?.freqHz;
+  const mode = src?.mode;
+  const filter = filterKey === 'filter' ? src?.filter : src?.filterNum;
+  return {
+    frequencyHz: seen(state, `${base}freqHz`) && typeof hz === 'number' && Number.isFinite(hz)
+      ? hz : null,
+    mode: seen(state, `${base}mode`) && typeof mode === 'string' && mode !== '' ? mode : null,
+    filter: seen(state, `${base}${filterKey}`) && typeof filter === 'number'
+      ? `FIL${filter}` : null,
+  };
+}
+
+const sameSlot = (a: Slot, b: Slot): boolean =>
+  a.kind === 'slotted' && b.kind === 'slotted' ? a.id === b.id
+    : a.kind === 'relative' && b.kind === 'relative' ? a.role === b.role
+      : a.kind === b.kind;
+
+function hasCap(caps: Capabilities | null, name: string): boolean {
+  return caps?.capabilities?.includes(name) ?? false;
+}
+
+/**
+ * MOR-1244: the SAME field-status gate `toTxProps`/`toVoxProps` use for these
+ * exact controls (`$lib/runtime/props/panel-props.ts`,
+ * `components-v2/wiring/state-adapter.ts`) — deliberately the looser
+ * "not proven missing" gate (`isFieldAvailable`, defaults to available
+ * absent an explicit field-status entry), not this file's own stricter
+ * `seen()` three-part gate used for VFO/TX-target identity. `txAux` controls
+ * are legacy top-level fields with the same v2 availability story as the
+ * panel they came from; giving them a stricter gate here would silently
+ * disable controls v2 has always shown.
+ */
+function topFieldAvailable(state: ServerState | null, field: string): boolean {
+  return isFieldAvailable(state, field);
+}
+
+/** MOR-2309 singleton-indicator admission: the leaf must itself pass `seen()`
+ * (observed, with freshness/availability admitting a held stale reading per
+ * R40) and the existing ancestor-aware `topFieldAvailable` gate may still
+ * veto it. This is the same narrow rule MOR-2299 slice 1 uses; global
+ * absent-key semantics remain unchanged. */
+function strictFieldAvailable(state: ServerState | null, field: string): boolean {
+  return seen(state, field) && topFieldAvailable(state, field);
+}
+
+/** `fieldFresh` is the raw `topFieldAvailable` read; a structurally-absent
+ *  control must never report a "known" reading even if the (irrelevant)
+ *  field happens to look fresh — so the reading gates on BOTH, same as
+ *  `availability.operational`. */
+function txAuxField<T>(structural: boolean, fieldFresh: boolean, value: T | undefined): TxAuxField<T> {
+  const operational = structural && fieldFresh;
+  return {
+    reading: operational && value !== undefined ? { status: 'known', value } : { status: 'unknown' },
+    availability: { structural, operational },
+  };
+}
+const numOrUndef = (v: unknown): number | undefined => (typeof v === 'number' && Number.isFinite(v) ? v : undefined);
+const boolOrUndef = (v: unknown): boolean | undefined => (typeof v === 'boolean' ? v : undefined);
+const atuStatus = (v: unknown): AtuStatus | undefined =>
+  v === 0 ? 'off' : v === 1 ? 'on' : v === 2 ? 'tuning' : undefined;
+
+export type AgcReadbackProjection = {
+  mode?: number;
+  indicatorValue?: number | string;
+  autoMode?: number;
+  autoSpeed?: string;
+};
+
+export function projectAgcReadback(
+  caps: Capabilities | null | undefined, rawMode: number | undefined,
+): AgcReadbackProjection {
+  const rawContract = caps?.agcReadback;
+  const contract = rawContract !== null && typeof rawContract === 'object'
+    ? rawContract as Record<string, unknown>
+    : null;
+  const readbackModes = Array.isArray(contract?.modes)
+    && contract.modes.every(mode => Number.isSafeInteger(mode))
+    ? contract.modes as number[]
+    : null;
+  const autoMode = Number.isSafeInteger(contract?.autoMode)
+    && (caps?.agcModes ?? []).includes(contract!.autoMode as number)
+    ? contract!.autoMode as number
+    : undefined;
+  if (rawMode === undefined) return { autoMode };
+
+  const directLabel = caps?.agcLabels?.[String(rawMode)];
+  const indicatorValue = typeof directLabel === 'string' && directLabel.trim()
+    ? directLabel
+    : rawMode;
+  const rawSettableModes = caps?.agcModes as unknown;
+  const settableModes = Array.isArray(rawSettableModes)
+    && rawSettableModes.every(mode => Number.isSafeInteger(mode))
+    ? rawSettableModes as number[]
+    : null;
+  const directMode = settableModes?.includes(rawMode)
+    ? rawMode
+    : undefined;
+  if (contract === null) {
+    return directMode === undefined ? {} : { mode: directMode, indicatorValue };
+  }
+
+  const rawSpeedLabels = contract?.autoSpeedLabels;
+  const speedLabels = rawSpeedLabels !== null
+    && typeof rawSpeedLabels === 'object' && !Array.isArray(rawSpeedLabels)
+    ? rawSpeedLabels as Record<string, unknown>
+    : null;
+  const rawSpeed = readbackModes?.includes(rawMode)
+    ? speedLabels?.[String(rawMode)]
+    : undefined;
+  const autoSpeed = typeof rawSpeed === 'string' && rawSpeed.trim() ? rawSpeed : undefined;
+  const autoLabel = autoMode === undefined ? undefined : caps?.agcLabels?.[String(autoMode)];
+  if (directMode !== undefined) {
+    return {
+      mode: directMode,
+      indicatorValue,
+      autoMode,
+      ...(directMode === autoMode && autoSpeed !== undefined ? { autoSpeed } : {}),
+    };
+  }
+  if (autoMode !== undefined && autoSpeed !== undefined
+    && typeof autoLabel === 'string' && autoLabel.trim()) {
+    return { mode: autoMode, indicatorValue: autoLabel, autoMode, autoSpeed };
+  }
+  return { autoMode };
+}
+
+/**
+ * N3: emits the group ONLY on positive evidence — "capability/observed
+ * fields", verbatim. `caps.tx` alone is NOT sufficient: a radio can declare
+ * generic TX capability (e.g. for the RX/TX authority, MOR-1064) without
+ * this adapter having ANY reason to believe a single one of the twelve
+ * txAux controls exists — no sub-capability tag AND no field ever observed.
+ * Emitting a group there would be exactly the all-unknowns placeholder N3
+ * forbids. So the gate is a real OR: at least one txAux-specific capability
+ * tag (`vox`/`compressor`/`monitor`/`tuner`/`drive_gain` — confirmed against
+ * both `toTxProps` and `AmberCockpit.svelte`'s
+ * `hasCap('vox' | 'compressor' | 'tuner')` usage) OR at least one of the
+ * twelve raw state fields actually present (any live radio that has ever
+ * reported ptt/power/mic-gain telemetry clears this — RF power and mic gain
+ * carry no separate capability tag in v2 either, they are core TX facts).
+ * Once evidence exists, `hasCap(caps, 'tx')` remains required too — it is
+ * `toTxProps`'s own `hasTx` gate for the panel as a whole.
+ */
+function deriveTxAux(state: ServerState | null, caps: Capabilities | null): TxAuxViewModel | undefined {
+  if (!hasCap(caps, 'tx')) return undefined;
+  const hasTuner = hasCap(caps, 'tuner');
+  const hasVox = hasCap(caps, 'vox');
+  const hasCompressor = hasCap(caps, 'compressor');
+  const hasMonitor = hasCap(caps, 'monitor');
+  const hasDriveGain = hasCap(caps, 'drive_gain');
+  const rawValues = [
+    state?.tunerStatus, state?.voxOn, state?.voxGain, state?.antiVoxGain, state?.voxDelay,
+    state?.compressorOn, state?.compressorLevel, state?.monitorOn, state?.monitorGain,
+    state?.powerLevel, state?.micGain, state?.driveGain,
+  ];
+  const hasEvidence = hasTuner || hasVox || hasCompressor || hasMonitor || hasDriveGain
+    || rawValues.some((v) => v !== undefined);
+  if (!hasEvidence) return undefined;
+  return {
+    atu: txAuxField(hasTuner, strictFieldAvailable(state, 'tunerStatus'), atuStatus(state?.tunerStatus)),
+    vox: txAuxField(hasVox, topFieldAvailable(state, 'voxOn'), boolOrUndef(state?.voxOn)),
+    voxGain: txAuxField(hasVox, topFieldAvailable(state, 'voxGain'), numOrUndef(state?.voxGain)),
+    antiVoxGain: txAuxField(hasVox, topFieldAvailable(state, 'antiVoxGain'), numOrUndef(state?.antiVoxGain)),
+    voxDelay: txAuxField(hasVox, topFieldAvailable(state, 'voxDelay'), numOrUndef(state?.voxDelay)),
+    compressor: txAuxField(hasCompressor, topFieldAvailable(state, 'compressorOn'), boolOrUndef(state?.compressorOn)),
+    compressorLevel: txAuxField(
+      hasCompressor, topFieldAvailable(state, 'compressorLevel'), numOrUndef(state?.compressorLevel),
+    ),
+    monitor: txAuxField(hasMonitor, topFieldAvailable(state, 'monitorOn'), boolOrUndef(state?.monitorOn)),
+    monitorLevel: txAuxField(hasMonitor, topFieldAvailable(state, 'monitorGain'), numOrUndef(state?.monitorGain)),
+    rfPower: txAuxField(true, topFieldAvailable(state, 'powerLevel'), numOrUndef(state?.powerLevel)),
+    micGain: txAuxField(true, topFieldAvailable(state, 'micGain'), numOrUndef(state?.micGain)),
+    driveGain: txAuxField(hasDriveGain, topFieldAvailable(state, 'driveGain'), numOrUndef(state?.driveGain)),
+  };
+}
+
+/**
+ * The subset of the managed server TX snapshot the meter facts read
+ * (MOR-1262 slice 2A). Its deep-readonly shape is assignable without adaptation.
+ */
+export type MetersTxAuthority = Pick<TxAuthoritySnapshot, 'radioTx' | 'txRisk'>;
+
+/**
+ * SAFETY INVARIANT R9. TX truth comes from the managed server snapshot and from
+ * nowhere else — never from `state.ptt`, which is a command/readback echo
+ * that can read RX while the key is still down (the AppGlobalHost lamp's own
+ * reasoning, MOR-1059) and whose use for meter chrome is the open MOR-1235
+ * disagreement this slice closes.
+ *
+ * The body is a byte-identical copy of `rx-tx-surface.ts::rfState` — eslint
+ * invariant 1 permits this file only TYPE imports from `semantic/`, so the
+ * shared predicate cannot be called from here. Agreement with the real
+ * function, across every state the real reducer can reach, is pinned in
+ * `semantic/__tests__/meters.test.ts`; drift there is a red test, not a
+ * silent fork.
+ */
+function meterRfState(tx: MetersTxAuthority): MeterRfState {
+  if (tx.radioTx === 'on' || tx.txRisk === 'confirmed-on') return 'transmitting';
+  if (tx.txRisk === 'uncertain') return 'uncertain';
+  return tx.radioTx === 'off' && tx.txRisk === 'none' ? 'receiving' : 'unknown';
+}
+
+const METER_UNIT_BY_PATH = {
+  'main.sMeter': 'db', 'sub.sMeter': 'db', powerMeter: 'w', swrMeter: 'ratio',
+  alcMeter: 'normalized', compMeter: 'db', vdMeter: 'v', idMeter: 'a',
+} as const satisfies Readonly<Record<MeterSourcePath, MeterEngineeringUnit>>;
+
+/**
+ * Observation quality says what the backend published; capability calibration
+ * only says which projection geometry is available. Exactly one decisive token
+ * in an otherwise all-string array establishes the domain. Live fields always
+ * receive an explicit result, including `unknown`.
+ */
+function meterValueDomain(
+  state: ServerState | null, path: MeterSourcePath, qualified: boolean,
+): MeterValueDomain {
+  if (!qualified) return { kind: 'unknown' };
+  const quality: readonly unknown[] | undefined = state?.fieldStatus?.[path]?.quality;
+  if (!Array.isArray(quality) || quality.some((value) => typeof value !== 'string')) {
+    return { kind: 'unknown' };
+  }
+  const decisive = quality.filter(
+    (value) => value === 'calibrated' || value === 'uncalibrated',
+  );
+  if (decisive.length !== 1) return { kind: 'unknown' };
+  return decisive[0] === 'calibrated'
+    ? { kind: 'engineering', unit: METER_UNIT_BY_PATH[path] }
+    : { kind: 'raw' };
+}
+
+function meterField(
+  presence: NonNullable<MeterField['presence']>, observation: DisplayObservation<number>, relevant: boolean,
+  state: ServerState,
+  source: Omit<MeterSourceIdentity, 'providerGeneration'> | null,
+  receiverOperational = true,
+): MeterField {
+  const structural = presence !== 'absent';
+  const operational = structural && receiverOperational
+    && (observation.state === 'current' || observation.state === 'stale');
+  const providerGeneration = state.providerGeneration;
+  return {
+    presence,
+    reading: operational ? { status: 'known', value: observation.value } : { status: 'unknown' },
+    availability: { structural, operational },
+    relevant,
+    domain: source === null
+      ? { kind: 'unknown' }
+      : meterValueDomain(state, source.path, operational),
+    source: operational && source !== null
+      && typeof providerGeneration === 'number'
+      && Number.isSafeInteger(providerGeneration) && providerGeneration >= 0
+      ? { providerGeneration, ...source } : null,
+  };
+}
+
+function meterPresence(state: ServerState, path: MeterSourcePath): NonNullable<MeterField['presence']> {
+  const statuses = state.fieldStatus;
+  if (!statuses || !Object.prototype.hasOwnProperty.call(statuses, path)) return 'absent';
+  const status = statuses[path];
+  if (!status || status.availability === 'undeclared') return 'absent';
+  return status.availability === 'unavailable' ? 'unavailable' : 'present';
+}
+
+function deriveMeters(
+  state: ServerState | null, caps: Capabilities | null, tx: MetersTxAuthority | null | undefined,
+  activeId: ReceiverId | null,
+  structuralReceivers: readonly ReceiverId[],
+  operationalReceivers: readonly ReceiverId[],
+): MetersViewModel | undefined {
+  if (!tx || !state) return undefined;
+  const rfState = meterRfState(tx);
+  const onTx = rfState !== 'receiving';
+  const hasTx = caps?.tx ?? false;
+  const { powerMeter, swrMeter, alcMeter, compMeter, vdMeter, idMeter } = state;
+  const presenceOf = (path: MeterSourcePath, admitted = true) =>
+    admitted ? meterPresence(state, path) : 'absent';
+  const signalPresences = (activeId === null ? structuralReceivers
+    : structuralReceivers.filter(receiver => receiver === activeId))
+    .map(receiver => presenceOf(receiver === 'MAIN' ? 'main.sMeter' : 'sub.sMeter'));
+  const signalPresence = signalPresences.includes('present') ? 'present'
+    : signalPresences.includes('unavailable') ? 'unavailable' : 'absent';
+  const compressionPresence = presenceOf('compMeter', hasTx);
+  const drainVoltagePresence = presenceOf('vdMeter');
+  const drainCurrentPresence = presenceOf('idMeter', hasTx);
+  if ([signalPresence, compressionPresence, drainVoltagePresence, drainCurrentPresence,
+    ...(['powerMeter', 'swrMeter', 'alcMeter'] as const).map(path => presenceOf(path, hasTx)),
+  ].every(presence => presence === 'absent')) return undefined;
+  const displayTxMeter = (
+    raw: unknown,
+    path: Exclude<MeterSourcePath, 'main.sMeter' | 'sub.sMeter' | 'compMeter' | 'vdMeter' | 'idMeter'>,
+  ) => {
+    const presence = presenceOf(path, hasTx);
+    const structural = presence !== 'absent';
+    const display = qualifyRadioDisplayObservation({
+      state, caps, path, structural, value: numOrUndef(raw),
+    });
+    return {
+      ...meterField(presence, display, onTx, state, { scope: 'radio', receiver: null, path }),
+      display,
+    };
+  };
+  const signalStructural = signalPresence !== 'absent';
+  const signalRaw = activeId === null ? undefined : state[RECEIVER_KEY[activeId]]?.sMeter;
+  const signalObservation: DisplayObservation<number> = activeId === null
+    ? { state: 'unknown', reason: 'identity-unresolved' }
+    : qualifyDisplayObservation({
+      state, caps, receiver: activeId, path: `${RECEIVER_KEY[activeId]}.sMeter`,
+      structural: signalStructural, value: numOrUndef(signalRaw),
+    });
+  const compressionStructural = compressionPresence !== 'absent';
+  const compressionObservation = qualifyRadioDisplayObservation({
+    state, caps, path: 'compMeter', structural: compressionStructural,
+    value: numOrUndef(compMeter),
+  });
+  const drainVoltageStructural = drainVoltagePresence !== 'absent';
+  const drainVoltageObservation = qualifyRadioDisplayObservation({
+    state, caps, path: 'vdMeter', structural: drainVoltageStructural,
+    value: numOrUndef(vdMeter),
+  });
+  const drainCurrentStructural = drainCurrentPresence !== 'absent';
+  const drainCurrentObservation = qualifyRadioDisplayObservation({
+    state, caps, path: 'idMeter', structural: drainCurrentStructural,
+    value: numOrUndef(idMeter),
+  });
+  return {
+    rfState,
+    signal: meterField(
+      signalPresence, signalObservation, !onTx, state,
+      activeId === null ? null : {
+        scope: 'receiver', receiver: activeId,
+        path: activeId === 'MAIN' ? 'main.sMeter' : 'sub.sMeter',
+      },
+      activeId !== null && operationalReceivers.includes(activeId),
+    ),
+    power: displayTxMeter(powerMeter, 'powerMeter'),
+    swr: displayTxMeter(swrMeter, 'swrMeter'),
+    alc: displayTxMeter(alcMeter, 'alcMeter'),
+    compression: meterField(
+      compressionPresence, compressionObservation, onTx, state,
+      { scope: 'radio', receiver: null, path: 'compMeter' },
+    ),
+    // Vd is the station's supply rail, not a TX reading: it is worth showing
+    // in every RF state (the dock keeps it on instantaneous display for the
+    // same reason), so it is structurally gated but never relevance-gated.
+    drainVoltage: meterField(
+      drainVoltagePresence, drainVoltageObservation, true, state,
+      { scope: 'radio', receiver: null, path: 'vdMeter' },
+    ),
+    drainCurrent: meterField(
+      drainCurrentPresence, drainCurrentObservation, onTx, state,
+      { scope: 'radio', receiver: null, path: 'idMeter' },
+    ),
+  };
+}
+
+function isDataModeValue(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 && value <= 3;
+}
+
+function copyFilterConfiguration(
+  config: unknown, labels: readonly string[],
+): ActiveFilterConfiguration | null {
+  if (typeof config !== 'object' || config === null) return null;
+  const c = config as Record<string, unknown>;
+  const hz = (n: unknown): n is number => typeof n === 'number' && Number.isFinite(n) && n > 0;
+  if (!Array.isArray(c.defaults) || c.defaults.some(n => !hz(n)) || typeof c.fixed !== 'boolean'
+    || labels.some(label => typeof label !== 'string' || !label.trim())) return null;
+  const minHz = c.minHz ?? null, maxHz = c.maxHz ?? null, stepHz = c.stepHz ?? null;
+  if ([minHz, maxHz, stepHz].some(n => n !== null && !hz(n))
+    || (typeof minHz === 'number' && typeof maxHz === 'number' && minHz > maxHz)) return null;
+  const table = c.table ?? [], segments = c.segments ?? [];
+  if (!Array.isArray(table) || table.some((n, i) => !hz(n) || (i > 0 && n <= table[i - 1]))
+    || !Array.isArray(segments)) return null;
+  const copiedSegments: { hzMin: number; hzMax: number; stepHz: number; indexMin: number }[] = [];
+  for (const raw of segments) {
+    if (typeof raw !== 'object' || raw === null) return null;
+    const { hzMin, hzMax, stepHz, indexMin } = raw;
+    if (!hz(hzMin) || !hz(hzMax) || hzMin > hzMax || !hz(stepHz)
+      || !Number.isSafeInteger(indexMin) || indexMin < 0) return null;
+    copiedSegments.push({ hzMin, hzMax, stepHz, indexMin });
+  }
+  const defaults = c.defaults;
+  return {
+    slots: labels.map((label, i) => ({ filter: i + 1, label, factoryWidthHz: defaults[i] ?? null })),
+    fixed: c.fixed, minHz: minHz as number | null, maxHz: maxHz as number | null,
+    stepHz: stepHz as number | null, segments: copiedSegments, table: [...table],
+  };
+}
+
+/**
+ * Mode/filter facts (MOR-1262 decomposition slice 4A, MOR-1280): current
+ * mode, capability-derived mode choice set, current filter selection,
+ * capability-derived filter choice set, filter width and its min/max bounds.
+ *
+ * Evidence gate (N3): unlike `deriveTxAux`'s optional per-control fields,
+ * `ReceiverStatePublic.mode`/`.filter` are REQUIRED fields — always present
+ * once any receiver exists — so "a raw field was observed" carries no
+ * evidence here (it would fire for every radio ever built). The only honest
+ * signals are the capability-declared mode/filter choice sets and the
+ * `filter_width` capability: when none is present there is NO group, never
+ * an all-unknowns placeholder (pinned
+ * against `radio-view-model-adapter.test.ts`'s own `modes: [], filters: []`
+ * baseline fixtures, which must keep emitting no `modeFilter`).
+ *
+ * `resolveFilterModeConfig` moves BEHIND this adapter (the decomposition's
+ * explicit instruction for this slice): `filterWidthMin`/`filterWidthMax`
+ * read the shipped resolver's own per-mode table lookup — the same function
+ * `toFilterProps`/`toScopeControlsProps` call directly today — rather than
+ * re-deriving a width table here. v2's own call sites are untouched; this is
+ * an additional consumer, not a migration (that is slice 4B).
+ */
+function deriveModeFilter(
+  state: ServerState | null, caps: Capabilities | null, activeId: ReceiverId | null,
+): ModeFilterViewModel | undefined {
+  if (!caps) return undefined;
+  const modeChoices = caps.modes ?? [];
+  const filterChoices = caps.filters ?? [];
+  const hasFilterSelect = filterChoices.length > 0;
+  const hasWidth = hasCap(caps, 'filter_width');
+  if (modeChoices.length === 0 && !hasFilterSelect && !hasWidth) return undefined;
+  const onSub = state?.active === 'SUB';
+  const rx = onSub ? state?.sub : state?.main;
+  const base = onSub ? 'sub.' : 'main.';
+  const hasModes = modeChoices.length > 0;
+  const modeObserved = topFieldAvailable(state, `${base}mode`);
+  const filterObserved = topFieldAvailable(state, `${base}filter`);
+  const widthObserved = topFieldAvailable(state, `${base}filterWidth`);
+  // The active mode-keyed filter config, resolved by the ONE shipped
+  // derivation (`resolveFilterModeConfig`) — see the doc comment above.
+  // MOR-2513: null mode/dataMode (unobserved) resolves no config.
+  // MOR-4434: the freshly observed narrow state selects the active table,
+  // for the displayed receiver and for the configuration receiver alike —
+  // unobserved or stale narrow keeps the wide table, exactly as before
+  // and as the backend's admission hint reads it.
+  const narrow = isFieldFreshlyObserved(state, `${base}narrow`) ? (rx?.narrow ?? null) : null;
+  const filterConfig = resolveFilterModeConfig(caps, rx?.mode ?? undefined, rx?.dataMode ?? undefined, narrow);
+  const activeBase = activeId === 'SUB' ? 'sub' : 'main';
+  const activeRx = activeId === null ? undefined : state?.[activeBase];
+  const dataValue = activeRx?.dataMode;
+  const configObserved = activeId !== null && strictFieldAvailable(state, activeBase + '.mode')
+    && (!hasCap(caps, 'data_mode') || (isDataModeValue(dataValue) && strictFieldAvailable(state, activeBase + '.dataMode')));
+  const activeNarrow = activeId !== null && isFieldFreshlyObserved(state, `${activeBase}.narrow`)
+    ? (activeRx?.narrow ?? null) : null;
+  const activeFilterConfiguration = configObserved
+    ? copyFilterConfiguration(resolveFilterModeConfig(caps, activeRx?.mode ?? undefined, activeRx?.dataMode ?? undefined, activeNarrow), filterChoices) : null;
+  const widthMin = filterConfig?.minHz ?? filterConfig?.table?.[0] ?? caps.filterWidthMin;
+  const widthMax = filterConfig?.maxHz
+    ?? (filterConfig?.table?.length ? filterConfig.table[filterConfig.table.length - 1] : undefined)
+    ?? caps.filterWidthMax;
+  return {
+    activeFilterConfiguration,
+    // MOR-2513: a null (unobserved) mode maps onto the absent value, so
+    // the reading is `unknown` — never a fabricated mode.
+    currentMode: txAuxField(hasModes, modeObserved, rx?.mode ?? undefined),
+    modeChoices,
+    currentFilter: txAuxField(hasFilterSelect, filterObserved, numOrUndef(rx?.filter ?? undefined)),
+    filterChoices,
+    filterWidth: txAuxField(hasWidth, widthObserved, numOrUndef(rx?.filterWidth ?? undefined)),
+    // MOR-3677: the composed display verdict for the ACTIVE receiver —
+    // radio-default / narrow / not-reported are states the raw `filterWidth`
+    // field cannot name. Same `(state, caps)` purity as every other fact
+    // here (the ONE derivation, `filter-width-display.ts`).
+    filterWidthDisplay: deriveFilterWidthDisplay(state, caps, onSub ? 'SUB' : 'MAIN'),
+    // F2 fix (verify round 1): the bounds' VALUE comes from
+    // `resolveFilterModeConfig(caps, rx?.mode, rx?.dataMode)` — caps + MODE,
+    // never from `filterWidth` — so their operational gate must be
+    // `modeObserved`, not `widthObserved`. Gating on `widthObserved`
+    // published mode-derived bounds as confirmed while `currentMode` itself
+    // read unknown (fabrication), and withheld derivable bounds whenever a
+    // width readback simply hadn't arrived yet (false negative).
+    filterWidthMin: txAuxField(hasWidth, modeObserved, numOrUndef(widthMin)),
+    filterWidthMax: txAuxField(hasWidth, modeObserved, numOrUndef(widthMax)),
+  };
+}
+
+/**
+ * Filter-passband facts (MOR-1262 decomposition slice 4A′, MOR-1284): filter
+ * shape, IF-shift, PBT inner/outer, DATA-mode. A separate group from
+ * `deriveModeFilter` — see `FilterPassbandViewModel`'s doc comment.
+ *
+ * Evidence gate, per field, following the same "capability-based where the
+ * raw field is required-and-signal-free; observed-based operational gate
+ * otherwise" split 4A used:
+ *  - `dataMode` is a REQUIRED field (`ReceiverStatePublic.dataMode: number`,
+ *    always present) — same story as 4A's `mode`/`filter`: structural is
+ *    `hasCap(caps, 'data_mode')` (`toModeProps`'s own `hasDataMode` gate),
+ *    never "was it observed".
+ *  - `filterShape` the FACT is part of the same filter subsystem 4A's
+ *    `filterWidth` is, so its structural gate is the SAME `filter_width`
+ *    capability that field uses — it is NOT re-gated on the `filter_shape`
+ *    capability tag. `filterShapeControlStructural` (MOR-1502) is the
+ *    separate, presentation-only flag that IS gated on `hasCap(caps,
+ *    'filter_shape')` — see its doc comment on `FilterPassbandViewModel`
+ *    for the ifShiftControlStructural-mirroring split.
+ *  - `pbtInner`/`pbtOuter` are OPTIONAL, gated on `hasCap(caps, 'pbt')` AND a
+ *    usable `pbt_inner` range declared by THIS `caps` argument itself
+ *    (`pbtRangeFromCaps`, MOR-1291) AND the current mode having twin PBT
+ *    (`modeHasTwinPbt`, MOR-2497 — FM has none; a legacy payload that declares
+ *    no step in any mode keeps the radio-wide decision). `toFilterProps`'s
+ *    own `hasPbt`
+ *    capability check alone is not enough here: unlike the v2 `panel-props.ts`
+ *    path, this fact layer never falls back to a plausible IC-7610-shaped
+ *    default (rawCenter 128 / ±1200 Hz) when a radio's own capabilities omit
+ *    the range. A `pbt`-capable radio with no declared scale is exposed as
+ *    structurally absent, not as a confidently-known reading sourced from
+ *    module-global store state.
+ *  - `ifShift` mirrors `toFilterProps`'s own conditional BYTE-FOR-BYTE: a
+ *    radio with the `if_shift` capability reports its own raw field; one
+ *    without it, but WITH `pbt` AND a usable PBT range, gets
+ *    `deriveIfShift(pbtInner, pbtOuter)` — the ONE shipped fallback, not a
+ *    re-derivation. Structural is therefore the OR of both paths (same "real
+ *    OR, not a stand-in for AND" discipline `deriveRxAudio`'s `hasAfLevel`
+ *    uses), with the derived side additionally requiring the PBT range
+ *    (MOR-1291, same reasoning as `pbtInner`/`pbtOuter` above — there is no
+ *    scale to derive an Hz value with otherwise); operational for the
+ *    derived path requires BOTH pbtInner AND pbtOuter to be honestly
+ *    observed — deriving from one observed and one silently-defaulted-to-128
+ *    input is exactly the fabrication `deriveModeFilter`'s F2 fix forbids, so
+ *    neither pbtInner nor pbtOuter nor ifShift ever computes over the OTHER
+ *    field's ` ?? 128` fallback the way `toFilterProps` does.
+ */
+function deriveFilterPassband(
+  state: ServerState | null, caps: Capabilities | null, activeId: ReceiverId | null,
+): FilterPassbandViewModel | undefined {
+  if (!caps) return undefined;
+  const hasWidth = hasCap(caps, 'filter_width');
+  const hasPbtCap = hasCap(caps, 'pbt');
+  const hasIfShiftCap = hasCap(caps, 'if_shift');
+  const hasDataModeCap = hasCap(caps, 'data_mode');
+  const hasFilterShapeCap = hasCap(caps, 'filter_shape');
+  const hasNarrowCap = hasCap(caps, 'narrow');
+  if (!hasWidth && !hasPbtCap && !hasIfShiftCap && !hasDataModeCap && !hasNarrowCap) return undefined;
+
+  const onSub = state?.active === 'SUB';
+  const rx = onSub ? state?.sub : state?.main;
+  const base = onSub ? 'sub.' : 'main.';
+
+  const filterShapeObserved = topFieldAvailable(state, `${base}filterShape`);
+  const dataRx = activeId === null ? undefined : state?.[RECEIVER_KEY[activeId]];
+  const dataValue = dataRx?.dataMode;
+  const dataModeObserved = activeId !== null && isDataModeValue(dataValue) && strictFieldAvailable(state, RECEIVER_KEY[activeId] + '.dataMode');
+  const count = caps.dataModeCount;
+  const dataModeChoices = hasDataModeCap && typeof count === 'number' && Number.isSafeInteger(count) && count >= 0 && count <= 3
+    ? Array.from({ length: count + 1 }, (_, value) => {
+      const label = caps.dataModeLabels?.[String(value)];
+      return { value, label: typeof label === 'string' && label.trim() ? label : null };
+    }) : [];
+  const modInputChoices = Array.isArray(caps.dataModeInputs) ? caps.dataModeInputs : [];
+  const activeDataMode = isDataModeValue(dataValue) ? dataValue : null;
+  const modInputKey = activeDataMode === null ? null : modInputStateKey(activeDataMode);
+  const modInputStatus = modInputKey === null ? undefined : state?.fieldStatus?.[modInputKey];
+  const modInputStructural = hasDataModeCap && activeDataMode !== null
+    && typeof count === 'number' && activeDataMode <= count && modInputChoices.length > 0
+    && modInputStatus !== undefined
+    && modInputStatus.availability !== 'undeclared' && modInputStatus.availability !== 'unavailable';
+  const modInputValue = modInputKey === null ? undefined : numOrUndef(state?.[modInputKey]);
+  const modInputObserved = modInputStructural && modInputKey !== null
+    && strictFieldAvailable(state, modInputKey)
+    && modInputChoices.some(choice => choice.value === modInputValue);
+  const pbtInnerObserved = topFieldAvailable(state, `${base}pbtInner`);
+  const pbtOuterObserved = topFieldAvailable(state, `${base}pbtOuter`);
+  const ifShiftRawObserved = topFieldAvailable(state, `${base}ifShift`);
+
+  // The PBT raw->Hz conversion is `measuredPbtRawToHz` (`$lib/radio/
+  // filter-controls`, MOR-2497) — the measured-lattice conversion
+  // `toFilterProps` also calls — gated on a usable `pbt_inner` range derived
+  // from THIS function's own `caps` argument (`pbtRangeFromCaps`, MOR-1284
+  // F1), never the capabilities STORE singleton. A store-sourced scale would
+  // make these facts a function of module-global state rather than of
+  // `(state, caps)` — identical arguments could yield different facts across
+  // store writes. See the doc comment above and the parity pin in
+  // `__tests__/filter-passband-adapter.isolated.test.ts`. Computed only from
+  // the field's OWN raw value — never from a `?? 128` stand-in — so an
+  // unobserved pbtInner/pbtOuter never silently seeds a derived ifShift.
+  //
+  // MOR-1291: `pbtScale` is used ONLY when it resolves to a CONCRETE range.
+  // PBT has no per-radio-model default worth falling back to — a caps object
+  // that declares the `pbt` capability but omits its OWN `controls.pbt_inner`
+  // range is treated as an honest "this radio's PBT scale is unknown", never
+  // silently coerced to a plausible-looking IC-7610 reading sourced from
+  // module-global store state.
+  const pbtScale = pbtRangeFromCaps(caps);
+  const hasPbtRange = pbtScale !== undefined;
+  const pbtInnerRaw = numOrUndef(rx?.pbtInner);
+  const pbtOuterRaw = numOrUndef(rx?.pbtOuter);
+  // MOR-2497 step 2: raw -> Hz on the lattice the radio snaps PBT writes onto.
+  // Its spacing is the CURRENT mode's declared step (`pbtStepHz`, #3519 — 50 Hz
+  // in SSB/CW/RTTY, 200 Hz in AM, absent where the mode has no twin PBT at
+  // all) and one edge's span is floor(width/(2*step))*step — +/-100 Hz at a
+  // 250 Hz width, never the full half-width — so the width and the step are
+  // both as necessary to a PBT reading as the scale is: without either there
+  // is no Hz reading, and `undefined` here says exactly that. No step ever
+  // falls back to 50. In a mode without twin PBT this absent reading is
+  // not a passband-display refusal: `scope-passband-display.ts` takes the
+  // shift there as the KNOWN zero of a passband that cannot be displaced and
+  // pins this side's `strict.ifShiftHz` to null, one fact stated two ways.
+  // MOR-2513: null mode/dataMode (unobserved) resolves no config.
+  const filterConfig = resolveFilterModeConfig(caps, rx?.mode ?? undefined, rx?.dataMode ?? undefined);
+  const pbtStepHz = filterConfig?.pbtStepHz;
+  // MOR-2497 (owner ruling 2026-09-17): a mode without twin PBT (FM) has no
+  // PBT controls at all — the fields go NON-structural, and with them this
+  // PBT-derived IF-shift reading. `modeHasTwinPbt` (the ONE definition,
+  // shared with `toFilterProps`'s `hasPbt` gate) tells that absence apart
+  // from a legacy payload that declares no step in ANY mode, where the
+  // radio-wide capability keeps deciding structure, exactly as before —
+  // structure and reading are separate questions: in that legacy case the
+  // fields stay structural but still yield no Hz reading, because the step
+  // is absent either way.
+  const pbtStructural = hasPbtCap && hasPbtRange && modeHasTwinPbt(caps, filterConfig);
+  const pbtWidthHz = numOrUndef(rx?.filterWidth ?? undefined);
+  const pbtToHz = (raw: number | undefined): number | undefined => (
+    raw === undefined || pbtWidthHz === undefined || pbtStepHz === undefined ? undefined
+      : measuredPbtRawToHz(raw, pbtWidthHz, pbtStepHz) ?? undefined
+  );
+  const pbtInnerHz = pbtScale ? pbtToHz(pbtInnerRaw) : undefined;
+  const pbtOuterHz = pbtScale ? pbtToHz(pbtOuterRaw) : undefined;
+
+  // `hasPbtRange` gates the DERIVED path the same way `hasPbtCap` alone used
+  // to: a radio that declares `pbt` but no usable `pbt_inner` range can never
+  // actually produce a PBT-derived ifShift Hz value (there is no scale to
+  // convert with), so claiming `structural: true` there would promise a
+  // reading that can never arrive. MOR-2497 adds the mode gate on top via
+  // `pbtStructural`: a mode with no twin PBT (FM) offers no PBT-derived shift
+  // either. `hasIfShiftCap`'s own branch is untouched
+  // — a REAL if_shift command needs no PBT scale at all.
+  const ifShiftStructural = hasIfShiftCap || pbtStructural;
+  const ifShiftOperational = hasIfShiftCap
+    ? ifShiftRawObserved
+    : (pbtInnerObserved && pbtOuterObserved);
+  const ifShiftValue = hasIfShiftCap
+    ? numOrUndef(rx?.ifShift)
+    : (pbtInnerHz !== undefined && pbtOuterHz !== undefined
+      ? deriveIfShift(pbtInnerHz, pbtOuterHz)
+      : undefined);
+  // MOR-1681: the IF-shift control domain comes from the profile's
+  // published `controls.if_shift` entry — exact domain (identity-mapped Hz)
+  // or legacy range with the family fallback step. No usable entry keeps
+  // the key absent so surfaces fall back to their own today-behaviour
+  // constants.
+  const ifShiftDomain = controlDisplayDomain(caps?.controls?.if_shift, 25);
+  // MOR-2497 W2b: the PBT slider domain, from the SAME
+  // `measuredPbtDisplayDomain` derivation `toFilterProps` uses (#3527) at
+  // the observed width and the mode's step. No lattice (no step for this
+  // mode, an unobserved width, a degenerate width) keeps the key absent —
+  // the surface then keeps its own row constants, never a fabricated
+  // +/-1200 domain.
+  const pbtDomain = pbtStepHz !== undefined && pbtWidthHz !== undefined
+    ? measuredPbtDisplayDomain(pbtWidthHz, pbtStepHz)
+    : null;
+
+  return {
+    filterShape: txAuxField(hasWidth, filterShapeObserved, numOrUndef(rx?.filterShape)),
+    // MOR-1502 review round. Deliberately NOT `hasWidth` above.
+    // `filterShape`'s own structural/operational/value stay exactly as they
+    // were — a radio with filter width but no `filter_shape` command still gets
+    // an honest derived `filterShape` READING for any consumer of the raw
+    // fact (`scope-adapter.ts` reads `filterPassband.filterShape` directly).
+    // This flag answers a DIFFERENT question — does the radio have a REAL
+    // `filter_shape` COMMAND of its own — for `FilterInstrumentHost.svelte` to
+    // decide whether to show the SHARP/SOFT shape CONTROL at all. The FTX-1
+    // (`filter_width`, no `filter_shape`) has no such command; showing the control
+    // permanently disabled is a dead control, not a usable one (the owner's
+    // MOR-1494 ruling, applied here per MOR-1502: hide capability-absent
+    // controls, don't show them dead). See
+    // `FilterPassbandViewModel.filterShapeControlStructural`'s doc comment
+    // (`radio-view-model.ts`) for the full split. Mirrors
+    // `ifShiftControlStructural` immediately below, byte-for-byte doctrine.
+    filterShapeControlStructural: hasFilterShapeCap,
+    ifShift: txAuxField(ifShiftStructural, ifShiftOperational, ifShiftValue),
+    // MOR-1494 review round. Deliberately NOT `ifShiftStructural` above.
+    // `ifShiftStructural`/`ifShiftOperational`/`ifShiftValue` stay exactly as
+    // they were — a radio with `pbt` but no `if_shift` still gets an honest
+    // derived `ifShift` READING (`scope-adapter.ts`'s `toSpectrumAuthority`
+    // reads `filterPassband.ifShift` for the passband-center overlay on
+    // EVERY radio that has PBT, IC-7300 included, and must keep doing so).
+    // This flag answers a DIFFERENT question — does the radio have a REAL
+    // `if_shift` COMMAND of its own — for `FilterSurface.svelte` to decide
+    // whether to show the IF-shift CONTROL at all. IC-7300 (PBT-only) has no
+    // such command; showing the control permanently disabled with a
+    // PBT-derived stand-in is a dead control, not a usable one (the owner's
+    // MOR-1494 ruling: hide capability-absent controls, don't show them
+    // dead). See `FilterPassbandViewModel.ifShiftControlStructural`'s doc
+    // comment (`radio-view-model.ts`) for the full split.
+    ifShiftControlStructural: hasIfShiftCap,
+    ...(ifShiftDomain !== null ? { ifShiftDomain } : {}),
+    ...(pbtDomain !== null ? { pbtDomain } : {}),
+    // MOR-1291: structural requires BOTH the `pbt` capability tag AND a
+    // usable `pbt_inner` range from THIS caps argument — a radio that
+    // declares the capability but omits (or malforms) its own range is
+    // exposed as structurally absent (unavailable), same "hide, don't show
+    // dead" doctrine `ifShiftControlStructural` above already established,
+    // never a plausible IC-7610-shaped reading manufactured from a
+    // module-global store fallback (see the `pbtScale` doc comment above).
+    // MOR-2497 adds the third conjunct: the CURRENT mode must have twin PBT
+    // (`modeHasTwinPbt`) — in FM the controls do not exist.
+    pbtInner: {
+      ...txAuxField(pbtStructural, pbtInnerObserved, pbtInnerHz),
+      display: qualifyDisplayObservation({
+        state, caps, receiver: onSub ? 'SUB' : 'MAIN', path: `${base}pbtInner`,
+        structural: pbtStructural, value: pbtInnerHz,
+      }),
+    },
+    pbtOuter: {
+      ...txAuxField(pbtStructural, pbtOuterObserved, pbtOuterHz),
+      display: qualifyDisplayObservation({
+        state, caps, receiver: onSub ? 'SUB' : 'MAIN', path: `${base}pbtOuter`,
+        structural: pbtStructural, value: pbtOuterHz,
+      }),
+    },
+    dataModeChoices,
+    // MOR-2640: NARROW readback for the ACTIVE receiver (`main.narrow`/
+    // `sub.narrow`, `set_narrow`'s confirmed truth). Structural exactly
+    // when the profile declares `narrow` — no capability, no control.
+    narrow: txAuxField(hasNarrowCap, topFieldAvailable(state, `${base}narrow`), boolOrUndef(rx?.narrow)),
+    dataMode: txAuxField(hasDataModeCap, dataModeObserved, numOrUndef(dataRx?.dataMode)),
+    ...(modInputChoices.length > 0 ? {
+      modInputChoices,
+      modInputSource: txAuxField(modInputStructural, modInputObserved, modInputValue),
+    } : {}),
+  };
+}
+
+/**
+ * DSP facts (MOR-1262 decomposition slice 5A, MOR-1290): NR, NB (+ depth/
+ * width), notch (auto/manual), AGC. A separate group from `filterPassband`
+ * — family enumeration is explicit and CLOSED (filter shape / IF-shift / PBT
+ * are family 4, `deriveFilterPassband` above; never duplicated here).
+ *
+ * Evidence gate (N3): each field's structural gate is its capability,
+ * `hasCap(caps, 'nr'|'nb'|'notch'|'agc')`, or (for `nbDepth`/`nbWidth`) the
+ * presence of a `controls.nb_depth` range, the signal `toDspProps`' own
+ * `hasNbDepth`/`hasNbWidth` read (`hasNbWidth` borrows `hasNbDepth`'s signal
+ * verbatim, same as that function does). `manualNotchWidth` and
+ * `agcTimeConstant` also need their receiver's declared-field tag (below).
+ * The group itself emits only when at least one of those four capabilities
+ * or the range is present.
+ */
+function deriveDsp(
+  state: ServerState | null, caps: Capabilities | null,
+): DspViewModel | undefined {
+  if (!caps) return undefined;
+  const hasNrCap = hasCap(caps, 'nr');
+  const hasNbCap = hasCap(caps, 'nb');
+  const hasNotchCap = hasCap(caps, 'notch');
+  const hasAgcCap = hasCap(caps, 'agc');
+  const hasNbDepth = (caps.controls?.nb_depth ?? null) !== null;
+  if (!hasNrCap && !hasNbCap && !hasNotchCap && !hasAgcCap && !hasNbDepth) return undefined;
+
+  const onSub = state?.active === 'SUB';
+  const rx = onSub ? state?.sub : state?.main;
+  const base = onSub ? 'sub.' : 'main.';
+
+  // NR readback is projected through the one shared exact/legacy contract;
+  // the semantic reading comes back from that same projection, so the two
+  // cannot disagree. NB depth retains its shipped explicit-range conversion.
+  // Both are computed from the field's own raw value, never a `?? 0` stand-in.
+  const nrLevelRaw = numOrUndef(rx?.nrLevel);
+  const nrLevelReadable = topFieldAvailable(state, `${base}nrLevel`);
+  const nrLevelProjection: NrLevelProjection = projectNrLevel(
+    caps, nrLevelRaw, nrLevelReadable,
+  );
+
+  const nbDepthContract = resolveControlContract(caps, 'nb_depth');
+  const nbDepthRaw = numOrUndef(state?.nbDepth);
+  const nbDepthValue = nbDepthRaw !== undefined
+    ? nbDepthContract.rawToDisplay(nbDepthRaw) ?? undefined
+    : undefined;
+
+  // `notchMode` is derived from TWO raw booleans (`autoNotch`/`manualNotch`);
+  // same "never derive from a half-observed input" discipline `filterPassband`'s
+  // `ifShift` uses for `pbtInner`/`pbtOuter` (MOR-1284 F2 lesson) — both must
+  // be honestly observed before a definitive 'off'/'auto'/'manual' is reported.
+  const autoNotchObserved = topFieldAvailable(state, `${base}autoNotch`);
+  const manualNotchObserved = topFieldAvailable(state, `${base}manualNotch`);
+  const autoNotchRaw = boolOrUndef(rx?.autoNotch);
+  const manualNotchRaw = boolOrUndef(rx?.manualNotch);
+  const notchModeValue = autoNotchRaw !== undefined && manualNotchRaw !== undefined
+    ? (autoNotchRaw ? 'auto' as const : manualNotchRaw ? 'manual' as const : 'off' as const)
+    : undefined;
+
+  // Manual-notch readback (MOR-2475). The Yaesu CAT poller writes
+  // `main.manualNotchFreq` while Icom profiles publish no `manual_notch_freq`
+  // control at all, so source selection is capability-driven: when the radio
+  // publishes a `manual_notch_freq` domain AND the field's status is usable,
+  // read that field and decode it to its display unit; otherwise read
+  // `notchFilter` exactly as before.
+  const manualNotchFreqContract = resolveControlContract(caps, 'manual_notch_freq');
+  const manualNotchFreqRaw = numOrUndef(rx?.manualNotchFreq);
+  const manualNotchFreqReadable = topFieldAvailable(state, `${base}manualNotchFreq`);
+  const preferManualNotchFreq = manualNotchFreqContract.displayDomain !== null
+    && manualNotchFreqReadable && manualNotchFreqRaw !== undefined;
+  const notchFreqObserved = preferManualNotchFreq
+    ? manualNotchFreqReadable
+    : topFieldAvailable(state, `${base}notchFilter`);
+  const notchFreqValue = preferManualNotchFreq && manualNotchFreqRaw !== undefined
+    ? manualNotchFreqContract.rawToDisplay(manualNotchFreqRaw) ?? undefined
+    : numOrUndef(rx?.notchFilter);
+  const notchFreqDomain = manualNotchFreqContract.displayDomain;
+  const rawAgcMode = numOrUndef(rx?.agc);
+  const agcReadable = topFieldAvailable(state, `${base}agc`);
+  const agcProjection = projectAgcReadback(caps, agcReadable ? rawAgcMode : undefined);
+
+  return {
+    nrActive: txAuxField(hasNrCap, topFieldAvailable(state, `${base}nr`), boolOrUndef(rx?.nr)),
+    nrLevel: txAuxField(hasNrCap, nrLevelReadable, nrLevelProjection.value ?? undefined),
+    nrLevelProjection,
+    nbActive: txAuxField(hasNbCap, topFieldAvailable(state, `${base}nb`), boolOrUndef(rx?.nb)),
+    nbLevel: txAuxField(hasNbCap, topFieldAvailable(state, `${base}nbLevel`), numOrUndef(rx?.nbLevel)),
+    nbDepth: txAuxField(hasNbDepth, topFieldAvailable(state, 'nbDepth'), nbDepthValue),
+    nbWidth: txAuxField(hasNbDepth, topFieldAvailable(state, 'nbWidth'), numOrUndef(state?.nbWidth)),
+    notchMode: txAuxField(hasNotchCap, autoNotchObserved && manualNotchObserved, notchModeValue),
+    // notchFilter / manualNotchFreq are both receiver-scoped (MOR-1548
+    // reclassified notchFilter), matching the ic7610.toml cmd29 route's own
+    // per-receiver rationale — same pattern as manualNotchWidth below.
+    notchFreq: txAuxField(hasNotchCap, notchFreqObserved, notchFreqValue),
+    ...(notchFreqDomain !== null ? { notchFreqDomain } : {}),
+    // MOR-2726: `notch` alone is not proof of a notch-width control — the
+    // FTX-1 has a manual notch but no width. Same declared-field gate as
+    // `agcTimeConstant` below.
+    manualNotchWidth: txAuxField(
+      hasNotchCap && hasCap(caps, onSub ? 'manual_notch_width_sub' : 'manual_notch_width'),
+      topFieldAvailable(state, `${base}manualNotchWidth`), numOrUndef(rx?.manualNotchWidth),
+    ),
+    agcMode: {
+      ...txAuxField(hasAgcCap, agcReadable, agcProjection.mode),
+      ...(agcProjection.autoMode === undefined ? {} : { autoMode: agcProjection.autoMode }),
+      ...(agcProjection.autoSpeed === undefined ? {} : { autoSelectedSpeed: agcProjection.autoSpeed }),
+    },
+    agcModes: caps.agcModes ?? [],
+    // MOR-2527/MOR-2588: `agc` alone is not proof of an AGC-time control —
+    // the FTX-1 has AGC but no time constant. The server serves
+    // `agc_time_constant` / `agc_time_constant_sub` only for receivers whose
+    // fields the profile declares (`web/runtime_helpers.py:
+    // projected_receiver_control_tags`), so the gate reads that declaration,
+    // never the field status a mis-credited reading could flip.
+    agcTimeConstant: txAuxField(
+      hasAgcCap && hasCap(caps, onSub ? 'agc_time_constant_sub' : 'agc_time_constant'),
+      topFieldAvailable(state, `${base}agcTimeConstant`), numOrUndef(rx?.agcTimeConstant),
+    ),
+  };
+}
+
+/**
+ * RF front-end facts (MOR-1262 decomposition slice 6A, MOR-1292; extended by
+ * slice 6A′, MOR-1293 with `digiSel`/`ipPlus` — the family-11 enumeration
+ * gap the 6A re-verify flagged): preamp, attenuator, RF gain, squelch,
+ * DIGI-SEL, IP+. A separate group from `dsp` — family enumeration is
+ * explicit and CLOSED (NR/NB/notch/AGC are family 5, `deriveDsp` above;
+ * never duplicated here).
+ *
+ * Evidence gate (N3), purely caps-driven, same shape as `deriveDsp`'s own
+ * gate (no raw-state fallback): `hasCap(caps, 'preamp'|'attenuator'|
+ * 'rf_gain'|'squelch'|'digisel'|'ip_plus')`, copied verbatim from the shipped
+ * `toRfFrontEndProps` (`lib/runtime/props/panel-props.ts`)'s own
+ * `showPre`/`showAtt`/`showRfGain`/`showSquelch`/`showDigiSel`/`showIpPlus`
+ * gates. The group itself emits only when at least one of the six is
+ * declared.
+ *
+ * `preamp`/`attenuator`/`rfGain`/`squelch`/`digiSel`/`ipPlus` are read
+ * straight off the active receiver with NO scale conversion (see
+ * `RfFrontEndViewModel`'s doc comment for why there is no "real function" to
+ * consume for these six, unlike `dsp`'s `nrLevel`/`nbDepth`) —
+ * `numOrUndef(rx?.preamp)`/`boolOrUndef(rx?.digisel)` etc., never a `?? 0`/
+ * `?? false` stand-in, so an unobserved control never reports a fabricated
+ * reading.
+ *
+ * `preValues`/`attValues` are the capability-derived choice sets
+ * (`Capabilities.preValues`/`.attValues`, verbatim) — see
+ * `RfFrontEndViewModel`'s doc comment. Deliberately `?? []`, never the
+ * shipped panel's `[0, 1, 2]`/`[0, 6, 12, 18]` presentation-only
+ * UI-convenience fallback (the IC-7610's actual ATT ladder is 16 × 3 dB
+ * steps per `rigs/ic7610.toml`; X6200 lesson: no radio-specific tables in
+ * the fact layer).
+ *
+ * THE MUTEX is NOT derived here — it lives in `toRadioViewModel`, below,
+ * where it reads THIS function's own `digiSel` field back rather than
+ * re-reading `rx?.digisel` a second time (one raw read per fact, same
+ * discipline as every other field here).
+ */
+function deriveRfFrontEnd(
+  state: ServerState | null, caps: Capabilities | null,
+): RfFrontEndViewModel | undefined {
+  if (!caps) return undefined;
+  const hasPreCap = hasCap(caps, 'preamp');
+  const hasAttCap = hasCap(caps, 'attenuator');
+  const hasRfGainCap = hasCap(caps, 'rf_gain');
+  const hasSquelchCap = hasCap(caps, 'squelch');
+  const hasDigiSelCap = hasCap(caps, 'digisel');
+  const hasIpPlusCap = hasCap(caps, 'ip_plus');
+  if (!hasPreCap && !hasAttCap && !hasRfGainCap && !hasSquelchCap && !hasDigiSelCap && !hasIpPlusCap) {
+    return undefined;
+  }
+
+  const onSub = state?.active === 'SUB';
+  const rx = onSub ? state?.sub : state?.main;
+  const base = onSub ? 'sub.' : 'main.';
+
+  return {
+    preamp: txAuxField(hasPreCap, topFieldAvailable(state, `${base}preamp`), numOrUndef(rx?.preamp)),
+    preValues: caps.preValues ?? [],
+    ...(caps.preLabels && Object.keys(caps.preLabels).length > 0 ? { preLabels: caps.preLabels } : {}),
+    attenuator: txAuxField(hasAttCap, topFieldAvailable(state, `${base}att`), numOrUndef(rx?.att)),
+    attValues: caps.attValues ?? [],
+    rfGain: txAuxField(hasRfGainCap, topFieldAvailable(state, `${base}rfGain`), numOrUndef(rx?.rfGain)),
+    squelch: txAuxField(hasSquelchCap, topFieldAvailable(state, `${base}squelch`), numOrUndef(rx?.squelch)),
+    digiSel: txAuxField(hasDigiSelCap, topFieldAvailable(state, `${base}digisel`), boolOrUndef(rx?.digisel)),
+    ipPlus: txAuxField(hasIpPlusCap, topFieldAvailable(state, `${base}ipplus`), boolOrUndef(rx?.ipplus)),
+  };
+}
+
+/**
+ * MOR-2299 slice 1: one strict, receiver-addressed reading collection per
+ * structural receiver. This deliberately does not reuse the active-receiver
+ * groups above: those groups answer a different question and would mirror
+ * MAIN onto SUB when the active receiver changes.
+ *
+ * Non-S members retain the owner-recorded leaf rule: the leaf itself must be
+ * `seen()` and the existing ancestor-aware `topFieldAvailable()` gate must
+ * also pass. S-meter is the deliberate qualified exception: it additionally
+ * requires matching provider identity, valid evidence and value, and a
+ * retained observation — `sMeterRetained` below admits `current` or `stale`.
+ * Global absent-key semantics remain unchanged.
+ */
+/**
+ * MOR-2706: the widest filter-width value ANY mode of the mounted profile
+ * can print — the ceiling the semantic BW fact's slot reservation derives
+ * from (`ReceiverIndicatorViewModel.bandwidthMaxHz`). Each mode
+ * contributes its `maxHz`, its table's last step, or its widest segment
+ * endpoint, whichever it has; the profile-wide `filterWidthMax` (the 9999
+ * codebase default when the profile declares none) is the floor. The same
+ * per-mode vocabulary `panel-props.ts`'s `filterWidthMax` fallback reads,
+ * taken across every mode instead of the active one only.
+ */
+function widestFilterWidthHz(caps: Capabilities): number {
+  let widest = caps.filterWidthMax ?? 9999;
+  for (const config of Object.values(caps.filterConfig ?? {})) {
+    // A malformed per-mode entry (the adapter's own tests feed `null` and
+    // non-finite tables straight in) contributes no width — the same
+    // witholding `resolveFilterModeConfig` applies to the active mode.
+    if (config === null || typeof config !== 'object') continue;
+    const modeMax = config.maxHz
+      ?? (config.table?.length ? config.table[config.table.length - 1] : undefined)
+      ?? (config.segments
+        ? Math.max(...config.segments.map((segment) => segment.hzMax))
+        : undefined);
+    if (modeMax !== undefined && Number.isFinite(modeMax) && modeMax > widest) {
+      widest = modeMax;
+    }
+  }
+  return widest;
+}
+
+function deriveReceiverIndicators(
+  state: ServerState | null,
+  caps: Capabilities,
+  structuralReceivers: readonly ReceiverId[],
+  operationalReceivers: readonly ReceiverId[],
+): readonly ReceiverIndicatorViewModel[] {
+  const hasWidth = hasCap(caps, 'filter_width');
+  const hasAgc = hasCap(caps, 'agc');
+  const hasNb = hasCap(caps, 'nb');
+  const hasNr = hasCap(caps, 'nr');
+  const hasNotch = hasCap(caps, 'notch');
+  const hasAttenuator = hasCap(caps, 'attenuator');
+  const hasPreamp = hasCap(caps, 'preamp');
+  const hasRfGain = hasCap(caps, 'rf_gain');
+  const hasDigiSel = hasCap(caps, 'digisel');
+  const hasIpPlus = hasCap(caps, 'ip_plus');
+  const hasSquelch = hasCap(caps, 'squelch');
+
+  return structuralReceivers.map((receiver) => {
+    const receiverOperational = operationalReceivers.includes(receiver);
+    const key = RECEIVER_KEY[receiver];
+    const rx = state?.[key];
+    const path = (leaf: string): string => `${key}.${leaf}`;
+    const strictField = <T>(
+      structural: boolean, leaf: string, value: T | undefined,
+    ): TxAuxField<T> => txAuxField(
+      structural,
+      receiverOperational && seen(state, path(leaf)) && topFieldAvailable(state, path(leaf)),
+      value,
+    );
+
+    const autoNotchKnown = receiverOperational
+      && seen(state, path('autoNotch')) && topFieldAvailable(state, path('autoNotch'));
+    const manualNotchKnown = receiverOperational
+      && seen(state, path('manualNotch')) && topFieldAvailable(state, path('manualNotch'));
+    const autoNotch = boolOrUndef(rx?.autoNotch);
+    const manualNotch = boolOrUndef(rx?.manualNotch);
+    const notchMode = autoNotch !== undefined && manualNotch !== undefined
+      ? (autoNotch ? 'auto' as const : manualNotch ? 'manual' as const : 'off' as const)
+      : undefined;
+    const notchOperational = hasNotch && autoNotchKnown && manualNotchKnown;
+    const agcOrdinal = numOrUndef(rx?.agc);
+    const agcMode = projectAgcReadback(caps, agcOrdinal).indicatorValue;
+    const sMeterObservation = qualifyDisplayObservation({
+      state, caps, receiver, path: path('sMeter'), structural: true,
+      value: numOrUndef(rx?.sMeter),
+    });
+    const sMeterRetained = sMeterObservation.state === 'current' || sMeterObservation.state === 'stale';
+    const sMeterOperational = receiverOperational && sMeterRetained;
+    const providerGeneration = state?.providerGeneration;
+
+    // MOR-2588: a receiver's att/preamp exists only when the radio declares
+    // it for THAT receiver — MAIN by the server-served
+    // `attenuator_main`/`preamp_main` tags, SUB by `attenuator_sub`/
+    // `preamp_sub` (`web/runtime_helpers.py: projected_receiver_control_tags`).
+    // The radio-wide `attenuator`/`preamp` capability alone only proves the
+    // COMMAND exists (tx500/x6100/x6200 declare it with no polled MAIN field),
+    // so it cannot light an indicator for a receiver that never declares the
+    // field. An observed reading credited to a receiver that never declared
+    // the field cannot light this.
+    const attStructural = hasAttenuator
+      && hasCap(caps, receiver === 'MAIN' ? 'attenuator_main' : 'attenuator_sub');
+    const preampStructural = hasPreamp
+      && hasCap(caps, receiver === 'MAIN' ? 'preamp_main' : 'preamp_sub');
+
+    return {
+      receiver,
+      availability: { structural: true, operational: receiverOperational },
+      // Every structural receiver owns one S-meter shell. The reading stays
+      // unknown until its own leaf passes the strict gate; numeric zero is a
+      // valid calibrated S9 reading and is preserved by numOrUndef.
+      sMeter: {
+        ...txAuxField(
+          true, sMeterOperational,
+          sMeterRetained ? sMeterObservation.value : undefined,
+        ),
+        domain: meterValueDomain(
+          state, receiver === 'MAIN' ? 'main.sMeter' : 'sub.sMeter', sMeterOperational,
+        ),
+        source: sMeterOperational
+          && typeof providerGeneration === 'number'
+          && Number.isSafeInteger(providerGeneration) && providerGeneration >= 0
+          ? {
+              providerGeneration, scope: 'receiver', receiver,
+              path: receiver === 'MAIN' ? 'main.sMeter' : 'sub.sMeter',
+            }
+          : null,
+      },
+      bandwidthHz: strictField(hasWidth, 'filterWidth', numOrUndef(rx?.filterWidth)),
+      // MOR-2706: the structural ceiling the BW fact's slot reservation
+      // derives from — fixed when the capabilities load, never a reading.
+      ...(hasWidth ? { bandwidthMaxHz: widestFilterWidthHz(caps) } : {}),
+      agcMode: strictField(hasAgc, 'agc', agcMode),
+      nbActive: strictField(hasNb, 'nb', boolOrUndef(rx?.nb)),
+      nrActive: strictField(hasNr, 'nr', boolOrUndef(rx?.nr)),
+      notchMode: txAuxField(hasNotch, notchOperational, notchMode),
+      attenuator: strictField(attStructural, 'att', numOrUndef(rx?.att)),
+      preamp: strictField(preampStructural, 'preamp', numOrUndef(rx?.preamp)),
+      rfGain: {
+        ...strictField(hasRfGain, 'rfGain', numOrUndef(rx?.rfGain)),
+        display: qualifyDisplayObservation({
+          state, caps, receiver, path: path('rfGain'), structural: hasRfGain,
+          value: numOrUndef(rx?.rfGain),
+        }),
+      },
+      digiSel: strictField(hasDigiSel, 'digisel', boolOrUndef(rx?.digisel)),
+      ipPlus: strictField(hasIpPlus, 'ipplus', boolOrUndef(rx?.ipplus)),
+      // The SQL tag reads the receiver's own squelch level, the leaf the
+      // squelch slider shows; unknown until observed. The seat exists
+      // wherever the radio declares a squelch control, on every band.
+      ...(hasSquelch ? { squelch: strictField(true, 'squelch', numOrUndef(rx?.squelch)) } : {}),
+    };
+  });
+}
+
+/**
+ * MOR-2309: one radio-wide indicator/action projection. Existing optional
+ * groups remain the owners of ATU, multi-port antenna, and RIT/XIT readings;
+ * this singleton points at those exact field objects. The only additional
+ * reading is ANT on a one-port radio, where the selection surface is
+ * structurally absent but the observed antenna fact still belongs in the
+ * deck. No default ANT 1 is synthesized.
+ */
+function deriveRadioWideIndicators(
+  state: ServerState | null,
+  caps: Capabilities,
+  structuralReceivers: readonly ReceiverId[],
+  operationalReceivers: readonly ReceiverId[],
+  tx: MetersTxAuthority | null | undefined,
+  txAux: TxAuxViewModel | undefined,
+  ritXit: RitXitViewModel | undefined,
+  antenna: AntennaViewModel | undefined,
+): RadioWideIndicatorsViewModel {
+  const availability = (structural: boolean, operational: boolean) => ({
+    structural, operational: structural && operational,
+  });
+  const absentBoolean = txAuxField<boolean>(false, false, undefined);
+  const absentNumber = txAuxField<number>(false, false, undefined);
+  const absentAtu = txAuxField<AtuStatus>(false, false, undefined);
+  const antennaStructural = (caps.antennas ?? 0) >= 1;
+  const antennaFact = antenna?.txAntenna ?? txAuxField(
+    antennaStructural,
+    strictFieldAvailable(state, 'txAntenna'),
+    numOrUndef(state?.txAntenna),
+  );
+
+  const dualReceiver = structuralReceivers.includes('SUB');
+  const mainOperational = dualReceiver && operationalReceivers.includes('MAIN') && state?.main != null;
+  const subOperational = dualReceiver && operationalReceivers.includes('SUB') && state?.sub != null;
+  const hasVfoPair = caps.vfoScheme !== 'single';
+  const equalizeStructural = hasVfoPair && hasCap(caps, 'vfo_equalize');
+  const swapStructural = hasVfoPair && hasCap(caps, 'vfo_swap');
+  const actions: DualActionBlockViewModel = {
+    main: availability(dualReceiver, mainOperational),
+    sub: availability(dualReceiver, subOperational),
+    equalize: availability(equalizeStructural, state !== null),
+    swap: availability(swapStructural, state !== null),
+  };
+
+  return {
+    rfState: tx ? meterRfState(tx) : 'unknown',
+    antenna: antennaFact,
+    atu: txAux?.atu ?? absentAtu,
+    dialLock: txAuxField(
+      hasCap(caps, 'dial_lock'),
+      strictFieldAvailable(state, 'dialLock'),
+      boolOrUndef(state?.dialLock),
+    ),
+    ritActive: ritXit?.ritActive ?? absentBoolean,
+    ritOffset: ritXit?.ritOffset ?? absentNumber,
+    xitActive: ritXit?.xitActive ?? absentBoolean,
+    xitOffset: ritXit?.xitOffset ?? absentNumber,
+    actions,
+  };
+}
+
+/**
+ * THE MUTEX (MOR-479, MOR-1293): the shipped `toRfFrontEndProps` disables the
+ * PRE control while DIGI-SEL is ON — `const preDisabled = rx?.digisel ??
+ * false` (`panel-props.ts`) — because the IC-7610 silently ignores a PREAMP
+ * set in that state. Expressed here as a `disabledReasons` entry rather than
+ * a bespoke field (the gap-ticket ruling, MOR-1292 re-verify §5), and
+ * consumes THIS group's own `digiSel` fact rather than re-deriving the raw
+ * `rx?.digisel ?? false` read a second time — the fact already carries the
+ * two-level availability the raw read has no way to express.
+ *
+ * FAIL-CLOSED (the discriminating deviation from v2's own naive read): the
+ * shipped `rx?.digisel ?? false` treats an UNOBSERVED digisel as "off", so a
+ * radio that has never reported DIGI-SEL would silently show PREAMP enabled.
+ * This function does the opposite for an `unknown` reading — mutex ACTIVE,
+ * same as `on` — because "we don't know DIGI-SEL is off" is not evidence
+ * that it's safe to optimistically enable PREAMP; it is exactly the class of
+ * fabricated-default this whole contract exists to forbid (MOR-988 §3.2).
+ * Gated on `preamp.availability.structural` — a radio with no preamp
+ * capability at all gets no `rfFrontEnd.preamp` disable entry, mutex or not.
+ */
+function deriveRfFrontEndMutex(rfFrontEnd: RfFrontEndViewModel | undefined): Reason | null {
+  if (!rfFrontEnd) return null;
+  const { preamp, digiSel } = rfFrontEnd;
+  if (!preamp.availability.structural || !digiSel.availability.structural) return null;
+  const mutexActive = digiSel.reading.status === 'unknown' || digiSel.reading.value === true;
+  return mutexActive ? { field: 'rfFrontEnd.preamp', code: 'mutually-exclusive-control' } : null;
+}
+
+/**
+ * Band facts (MOR-1262 decomposition slice 7A, MOR-1294): current band, the
+ * capability-derived band choice set with its per-band TX permits, and the
+ * tuning envelope frequency entry validates against. A separate group from
+ * `rfFrontEnd` — family enumeration is explicit and CLOSED.
+ *
+ * Evidence gate (N3), purely caps-driven like `deriveRfFrontEnd`'s: no
+ * declared `freqRanges` ⇒ NO group. `freqRanges` is a REQUIRED capability
+ * field (always present, possibly empty), so "was it observed" carries no
+ * evidence here — the same reasoning `deriveModeFilter` applies to
+ * `modes`/`filters`. There is no `band`/`band_select` capability TAG to gate
+ * on: the shipped `BandSelector.svelte` gates purely on `freqRanges` being
+ * non-empty, and that gate is copied rather than replaced.
+ *
+ * `flattenBands`/`findActiveBand` are the ONE shipped band-plan derivation
+ * (`$lib/radio/band-plan`, moved there from `components-v2/controls/band-utils`
+ * by this slice precisely so it could be CONSUMED rather than forked) —
+ * called with `caps.freqRanges` from THIS request's own `caps` argument, not
+ * the capabilities STORE singleton the v2 callers read (`getCapabilities()?.
+ * freqRanges ?? []`). Same discipline as `filterPassband`'s `pbtRangeFromCaps`
+ * (MOR-1284 F1) and `dsp`'s `resolveControlContract` (MOR-2475): a
+ * fact-layer value is a pure function of `(state, caps)`, never of
+ * module-global state that can differ from the `caps` already in hand.
+ *
+ * SAFETY (MOR-1294). Every permit here comes from `getFrequencyPermit(hz,
+ * caps.txBands)`, the SAME single derivation `deriveTxCapabilities` calls for
+ * the model's top-level `txPermit`. What differs between the two permit facts
+ * is only the FREQUENCY ARGUMENT, and that difference is the whole point:
+ *  - `bandChoices[].defaultHzTxPermit` samples the band's own `defaultHz` —
+ *    the picker label, "may I key where selecting this band lands me".
+ *  - `currentBandTx` samples the LIVE observed frequency — "may I key right
+ *    now". It is NEVER inherited from the point sample above (verify F1): a
+ *    `txBands` segment narrower than its band-plan band (WARC segments,
+ *    regional sub-bands, 60m channels) makes the inherited answer fail OPEN,
+ *    e.g. live 14.300 MHz reading `allowed` off a 14.000–14.150 allocation
+ *    whose 14.074 default happens to be inside. Same derivation, correct
+ *    argument — not a second derivation.
+ *
+ * Two things this deliberately does NOT do:
+ *  - it never treats a band's presence in the PLAN as permission to key. The
+ *    plan (`freqRanges`) is what the radio can TUNE; `caps.txBands` is where
+ *    it may TRANSMIT, and they routinely differ (a general-coverage receiver
+ *    tunes far outside its TX allocations). Reading permission off the plan
+ *    is the fail-open defect the slice's safety note names.
+ *  - it never states a permit on unknown input. `currentBandTx` is `'allowed'`
+ *    only when the ACTIVE RECEIVER is positively confirmed (MOR-1356 — the
+ *    permit is scoped to that receiver's frequency, so an unconfirmed
+ *    identity makes it a permit for a guess; `activeReceiverId` is the ONE
+ *    gate, shared with the model's `activeReceiver` fact), the current band
+ *    is POSITIVELY known, has a choice entry, AND
+ *    the live-frequency permit is POSITIVELY `allowed`; everything else
+ *    collapses to `'denied'` exactly as the shipped `getTxPermit` does
+ *    ("unknown fails closed", `$lib/utils/tx-permit`). An unknown input must
+ *    not enable a TX-adjacent affordance. `validateRadioViewModel` enforces
+ *    the known-band half of that invariant structurally.
+ */
+function deriveBand(
+  state: ServerState | null, caps: Capabilities | null, activeReceiver: ReceiverId | null,
+): BandViewModel | undefined {
+  if (!caps) return undefined;
+  const freqRanges = caps.freqRanges ?? [];
+  if (freqRanges.length === 0) return undefined;
+
+  const bandChoices: BandChoice[] = flattenBands(freqRanges)
+    // A band whose boundaries or default frequency are not finite numbers is
+    // OMITTED rather than emitted with a fabricated value: there is no
+    // frequency to tune to and therefore no permit to state. Omission is the
+    // fail-closed outcome — `currentBandTx` finds no entry for such a band
+    // and reads 'denied' even when `findActiveBand` still names it.
+    .filter((band) => [band.start, band.end, band.defaultFreq].every((hz) => numOrUndef(hz) !== undefined))
+    .map((band) => ({
+      name: band.name,
+      startHz: band.start,
+      endHz: band.end,
+      defaultHz: band.defaultFreq,
+      // `?? null` is the contract's own "no BSR index declared", not a
+      // fabricated 0 — index 0 is a real band-stacking register on Icom rigs.
+      bsrCode: numOrUndef(band.bsrCode) ?? null,
+      // POINT SAMPLE at defaultHz — the picker label, never the live answer.
+      defaultHzTxPermit: getFrequencyPermit(band.defaultFreq, caps.txBands),
+    }));
+
+  const onSub = state?.active === 'SUB';
+  // MOR-2526 (owner ruling 2026-09-22): the band READING is per receiver —
+  // each entry derives from ITS OWN receiver's observed frequency leaf with
+  // the one `findActiveBand` mechanism, so a dual-receiver radio whose SUB
+  // sits on VHF while MAIN is on HF carries two different honest readings.
+  // One derivation function for both receivers; `currentBand` below is the
+  // active receiver's entry of this map, never a second computation.
+  const receiverBand = (key: 'main' | 'sub'): BandField<string> => {
+    const observed = topFieldAvailable(state, `${key}.freqHz`);
+    const hz = numOrUndef(state?.[key]?.freqHz);
+    const name = observed && hz !== undefined
+      ? findActiveBand(hz, freqRanges) ?? undefined
+      : undefined;
+    return txAuxField(bandChoices.length > 0, observed, name);
+  };
+  const receiverBands = { main: receiverBand('main'), sub: receiverBand('sub') };
+  const currentBand = onSub ? receiverBands.sub : receiverBands.main;
+  // MOR-1356: which receiver the raw `state.active` names is an ORDINARY fact
+  // — every reading below keeps reading it ungated, per this file's own
+  // convention. The PERMIT is the exception: `activeReceiver` (passed in by
+  // the caller, MOR-1421) is the SAME gate the model's own `activeReceiver`
+  // fact uses, so a receiver identity the model itself reports as unknown
+  // cannot carry TX permission (see `currentBandTx`).
+  const activeConfirmed = activeReceiver !== null;
+  const freqObserved = topFieldAvailable(state, onSub ? 'sub.freqHz' : 'main.freqHz');
+  const freqHz = numOrUndef((onSub ? state?.sub : state?.main)?.freqHz);
+  const reading = currentBand.reading;
+  const currentChoice = reading.status === 'known'
+    ? bandChoices.find((band) => band.name === reading.value)
+    : undefined;
+  // THE LIVE-FREQUENCY PERMIT (verify F1). Evaluated at `freqHz`, the
+  // frequency the operator is actually on — never inherited from
+  // `currentChoice.defaultHzTxPermit`, which only samples the band's default.
+  // The `currentChoice`/`reading` conjunction is fail-closed reinforcement,
+  // not the permit itself: a frequency inside `txBands` but outside every
+  // plan band, or inside a band whose entry was dropped as malformed, still
+  // reads 'denied' (and would otherwise break the contract's own
+  // "allowed ⇒ currentBand known" invariant).
+  const liveFreqPermit = freqObserved && freqHz !== undefined
+    ? getFrequencyPermit(freqHz, caps.txBands)
+    : getFrequencyPermit(null, caps.txBands);
+  const currentBandTx: TxPermit = activeConfirmed && reading.status === 'known'
+    && currentChoice !== undefined && liveFreqPermit.status === 'allowed' ? 'allowed' : 'denied';
+
+  const starts = freqRanges.map((range) => range.start).filter((hz) => Number.isFinite(hz));
+  const ends = freqRanges.map((range) => range.end).filter((hz) => Number.isFinite(hz));
+  return {
+    currentBand,
+    receiverBands,
+    bandChoices,
+    currentBandTx,
+    tuneMinHz: starts.length > 0 ? Math.min(...starts) : null,
+    tuneMaxHz: ends.length > 0 ? Math.max(...ends) : null,
+  };
+}
+
+/**
+ * Repeater facts (MOR-2111 PR1): the per-receiver readings a repeater strip
+ * gates on. Facts only — no intent dispatch; the strip lands in PR2.
+ *
+ * Evidence gate (N3): the radio's `freqRanges` must declare at least one
+ * `repeater = true` range (a VHF/UHF repeater band). No flagged range ⇒ no
+ * group — the band identity comes from profile data, never a hard-coded
+ * frequency, and there is nothing to gate without it.
+ *
+ * `inRepeaterBand` is a range-level match of the receiver's OWN frequency
+ * against the flagged ranges (`receiverInRepeaterBand` beside
+ * `findActiveBand` in `$lib/radio/band-plan`): `findActiveBand` matches only
+ * named sub-bands, and a bare 2 m / 70 cm range carries none.
+ *
+ * `toneMode` collapses the two neutral booleans into the owner's three-state
+ * selector. (off, off) → off; (on, off) → tone; (on, on) → tsql (the FTX-1
+ * `CT` code 2 reads both booleans true). (off, on) is unrepresentable in one
+ * register and reads `unknown`, never a guess.
+ *
+ * `toneFreq` reads `toneFreq` (centiHz), not `tsqlFreq`: on the FTX-1 the two
+ * are one `CN` register, and the ENC tone is what a repeater needs.
+ *
+ * `shiftChoices` has ARS only with the `repeater_shift_ars` tag. `shift` maps
+ * 0/1/2/3 to simplex/plus/minus/ars; a value outside `shiftChoices` reads
+ * `unknown`, never `simplex`.
+ */
+function deriveRepeater(
+  state: ServerState | null, caps: Capabilities | null,
+): RepeaterViewModel | undefined {
+  if (!caps) return undefined;
+  const freqRanges = caps.freqRanges ?? [];
+  if (!freqRanges.some((range) => range.repeater === true)) return undefined;
+
+  const hasTone = hasCap(caps, 'repeater_tone') || hasCap(caps, 'tsql');
+  const hasShift = hasCap(caps, 'repeater_shift');
+  const shiftChoices: readonly RepeaterShift[] = !hasShift ? []
+    : hasCap(caps, 'repeater_shift_ars') ? ['simplex', 'plus', 'minus', 'ars']
+    : ['simplex', 'plus', 'minus'];
+
+  const receiver = (key: 'main' | 'sub'): RepeaterReceiverViewModel => {
+    const rx = state?.[key];
+    const path = (leaf: string): string => `${key}.${leaf}`;
+
+    const freqObserved = topFieldAvailable(state, `${key}.freqHz`);
+    const freq = numOrUndef(rx?.freqHz);
+    const inBand = freqObserved && freq !== undefined
+      ? receiverInRepeaterBand(freq, freqRanges)
+      : undefined;
+
+    const toneObserved = topFieldAvailable(state, path('repeaterTone'));
+    const tsqlObserved = topFieldAvailable(state, path('repeaterTsql'));
+    const tone = boolOrUndef(rx?.repeaterTone);
+    const tsql = boolOrUndef(rx?.repeaterTsql);
+    const toneMode = tone !== undefined && tsql !== undefined
+      ? (!tone && !tsql ? 'off' : tone && !tsql ? 'tone' : tone && tsql ? 'tsql' : undefined)
+      : undefined;
+
+    const toneFreqObserved = topFieldAvailable(state, path('toneFreq'));
+    const toneFreq = numOrUndef(rx?.toneFreq);
+
+    const shiftObserved = topFieldAvailable(state, path('repeaterShift'));
+    const shiftRaw = numOrUndef(rx?.repeaterShift);
+    const shiftChoice = shiftRaw === undefined ? null : shiftFromDirection(shiftRaw);
+    const shift = shiftChoice !== null && shiftChoices.includes(shiftChoice) ? shiftChoice : undefined;
+
+    return {
+      inRepeaterBand: txAuxField(true, freqObserved, inBand),
+      toneMode: txAuxField(hasTone, toneObserved && tsqlObserved, toneMode),
+      toneFreq: txAuxField(hasTone, toneFreqObserved, toneFreq),
+      shift: txAuxField(hasShift, shiftObserved, shift),
+    };
+  };
+
+  return { main: receiver('main'), sub: receiver('sub'), shiftChoices };
+}
+
+/**
+ * RIT/XIT facts (MOR-1262 decomposition slice 8A, MOR-1295): the RIT/XIT
+ * enables and their shared frequency offset. A separate group from `txAux`
+ * — RIT/XIT is not a TX-adjacent control (it offsets the RX/TX pair without
+ * transmitting), and family enumeration stays explicit and closed.
+ *
+ * Evidence gate (N3), purely caps-driven: `hasCap(caps, 'rit'|'xit')` — the
+ * shipped `RitXitPanel`'s own `shouldShowPanel(hasRit, hasXit)` gate,
+ * verbatim, no raw-field fallback (same shape as `deriveBand`'s
+ * `freqRanges`-only gate).
+ *
+ * `ritOffset`/`xitOffset` deliberately read the SAME raw field
+ * (`state.ritFreq`) and the SAME freshness signal — see `RitXitViewModel`'s
+ * doc comment for why duplicating, not deriving one from the other, is the
+ * parity-correct shape.
+ */
+function deriveRitXit(state: ServerState | null, caps: Capabilities | null): RitXitViewModel | undefined {
+  const hasRitCap = hasCap(caps, 'rit');
+  const hasXitCap = hasCap(caps, 'xit');
+  if (!hasRitCap && !hasXitCap) return undefined;
+  const offsetObserved = strictFieldAvailable(state, 'ritFreq');
+  const offsetRaw = numOrUndef(state?.ritFreq);
+  return {
+    ritActive: txAuxField(hasRitCap, strictFieldAvailable(state, 'ritOn'), boolOrUndef(state?.ritOn)),
+    ritOffset: txAuxField(hasRitCap, offsetObserved, offsetRaw),
+    xitActive: txAuxField(hasXitCap, strictFieldAvailable(state, 'ritTx'), boolOrUndef(state?.ritTx)),
+    xitOffset: txAuxField(hasXitCap, offsetObserved, offsetRaw),
+  };
+}
+
+/**
+ * Antenna facts (MOR-1262 decomposition slice 8A, MOR-1295): selected TX
+ * antenna port, the port-dependent RX-antenna override, and the declared
+ * port count. See `AntennaViewModel`'s doc comment for why ATU/tuner state
+ * is deliberately absent (family 1, `txAux.atu`) and why `antennaCount` is
+ * this group's whole evidence gate.
+ *
+ * `rxAnt` selects `rxAntenna1`/`rxAntenna2` by the RAW `txAntenna` reading —
+ * `toAntennaProps`'s own `txAntenna === 2 ? rxAntenna2 : rxAntenna1` — and,
+ * per the "never derive from a half-observed pair" lesson (4A′/5A), is
+ * operational only when `txAntenna` ITSELF was honestly observed; an
+ * unobserved port never silently resolves to port 1's reading.
+ */
+function deriveAntenna(state: ServerState | null, caps: Capabilities | null): AntennaViewModel | undefined {
+  const antennaCount = caps?.antennas ?? 0;
+  if (antennaCount <= 1) return undefined;
+  const hasRxAntennaCap = hasCap(caps, 'rx_antenna');
+  const txAntennaObserved = strictFieldAvailable(state, 'txAntenna');
+  const txAntennaRaw = numOrUndef(state?.txAntenna);
+  const rxAntennaRaw = txAntennaRaw === 2 ? state?.rxAntenna2 : state?.rxAntenna1;
+  const rxAntennaObserved = txAntennaObserved && txAntennaRaw !== undefined
+    && strictFieldAvailable(state, txAntennaRaw === 2 ? 'rxAntenna2' : 'rxAntenna1');
+  return {
+    txAntenna: txAuxField(true, txAntennaObserved, txAntennaRaw),
+    rxAnt: txAuxField(hasRxAntennaCap, rxAntennaObserved, boolOrUndef(rxAntennaRaw)),
+    antennaCount,
+  };
+}
+
+/**
+ * Scan facts (MOR-1262 decomposition slice 8A, MOR-1295): scanning, scan
+ * type, and the masked resume mode. No capability tag exists for `scan`
+ * anywhere in v2 (the shipped `ScanPanel` renders unconditionally), so —
+ * like `deriveMeters` — evidence is per-field "was this ever reported",
+ * not a capability check; see `ScanViewModel`'s doc comment.
+ */
+function deriveScan(state: ServerState | null): ScanViewModel | undefined {
+  const raw = [state?.scanning, state?.scanType, state?.scanResumeMode];
+  if (!raw.some((v) => v !== undefined)) return undefined;
+  const resumeRaw = numOrUndef(state?.scanResumeMode);
+  return {
+    scanning: txAuxField(
+      state?.scanning !== undefined, topFieldAvailable(state, 'scanning'), boolOrUndef(state?.scanning),
+    ),
+    scanType: txAuxField(
+      state?.scanType !== undefined, topFieldAvailable(state, 'scanType'), numOrUndef(state?.scanType),
+    ),
+    // The shipped `& 0x0F` mask (`toScanProps`), applied verbatim — the raw
+    // field carries a direction bit this contract does not interpret.
+    scanResumeMode: txAuxField(
+      state?.scanResumeMode !== undefined, topFieldAvailable(state, 'scanResumeMode'),
+      resumeRaw !== undefined ? (resumeRaw & 0x0f) : undefined,
+    ),
+  };
+}
+
+/** An unrecognised break-in int returns `undefined` (⇒ `unknown` reading) —
+ *  an unreadable break-in state must never present as "the key is safe".
+ *  Same shape as `atuStatus` above. */
+const breakInMode = (v: unknown): BreakInMode | undefined =>
+  v === 0 ? 'off' : v === 1 ? 'semi' : v === 2 ? 'full' : undefined;
+
+/**
+ * CW-keyer facts (MOR-1262 decomposition slice 9A, MOR-1296) — SAFETY-CRITICAL.
+ * See `CwKeyerViewModel`'s doc comment for the group shape, the closed family
+ * enumeration (sidetone LEVEL is `txAux.monitorLevel`, current MODE is
+ * `modeFilter.currentMode`, keyer TYPE has no state field at all) and the
+ * "no second permit" rule. This function emits READINGS ONLY; every disable —
+ * the APF/TPF mode mutex and the break-in TX gate alike — is produced by
+ * `deriveCwKeyerReasons` below, which consumes facts, never raw state.
+ *
+ * Evidence gate (N3): `hasCap(caps, 'cw')`, the shipped panel's own single
+ * gate (`LeftSidebar.svelte`/`RightSidebar.svelte` render the CW panel only
+ * under `hasCapability('cw')`, and `CwPanel.svelte` wraps its whole body in
+ * `{#if showCw}`), copied rather than replaced. One v2 gate, not four: a radio
+ * declaring `twin_peak` but not `cw` shows nothing in v2 and gets no group
+ * here either. The per-control `break_in`/`apf`/`twin_peak` tags are
+ * `toCwProps`'s own sub-gates and become per-field STRUCTURAL availability,
+ * exactly as `deriveRitXit` treats `rit`/`xit`.
+ *
+ * `reversePaddle` consumes `toCwProps`'s own `(state?.dashRatio ?? 0) < 0`
+ * predicate — but over an HONEST input: v2's `?? 0` makes an unreported dash
+ * ratio read as "not reversed", where an unobserved field here yields
+ * `unknown`. Same deviation-from-v2-fabrication story as `pitchHz`/
+ * `keyerSpeed`, which never fall back to v2's 600 Hz / 12 WPM.
+ */
+function deriveCwKeyer(state: ServerState | null, caps: Capabilities | null): CwKeyerViewModel | undefined {
+  if (!hasCap(caps, 'cw')) return undefined;
+  const hasBreakInCap = hasCap(caps, 'break_in');
+  const hasApfCap = hasCap(caps, 'apf');
+  const hasTwinPeakCap = hasCap(caps, 'twin_peak');
+  const onSub = state?.active === 'SUB';
+  const rx = onSub ? state?.sub : state?.main;
+  const base = onSub ? 'sub.' : 'main.';
+  const dashRatio = numOrUndef(state?.dashRatio);
+  // MOR-1682: the pitch domain comes from the profile's published
+  // `controls.cw_pitch` entry — exact domain or legacy range (its step is
+  // the entry's decode_quantum when published, else the 5 Hz fallback step).
+  // MOR-2475 F1: key speed takes the same path from `controls.key_speed`
+  // with the 1 WPM fallback step. No usable entry keeps the key absent so
+  // surfaces fall back to their own today-behaviour constants.
+  const pitchDomain = controlDisplayDomain(caps?.controls?.cw_pitch, 5);
+  const keySpeedDomain = controlDisplayDomain(caps?.controls?.key_speed, 1);
+  return {
+    breakIn: txAuxField(hasBreakInCap, topFieldAvailable(state, 'breakIn'), breakInMode(state?.breakIn)),
+    breakInDelay: txAuxField(
+      hasBreakInCap, topFieldAvailable(state, 'breakInDelay'), numOrUndef(state?.breakInDelay),
+    ),
+    keyerSpeed: txAuxField(true, topFieldAvailable(state, 'keySpeed'), numOrUndef(state?.keySpeed)),
+    pitchHz: txAuxField(true, topFieldAvailable(state, 'cwPitch'), numOrUndef(state?.cwPitch)),
+    ...(pitchDomain !== null ? { pitchDomain } : {}),
+    ...(keySpeedDomain !== null ? { keySpeedDomain } : {}),
+    reversePaddle: txAuxField(
+      true, topFieldAvailable(state, 'dashRatio'), dashRatio === undefined ? undefined : dashRatio < 0,
+    ),
+    apf: txAuxField(hasApfCap, topFieldAvailable(state, `${base}apfTypeLevel`), numOrUndef(rx?.apfTypeLevel)),
+    twinPeak: txAuxField(
+      hasTwinPeakCap, topFieldAvailable(state, `${base}twinPeakFilter`), boolOrUndef(rx?.twinPeakFilter),
+    ),
+  };
+}
+
+/**
+ * Every CW-keyer disable, in one place, derived from FACTS only (MOR-1296).
+ *
+ * THE APF/TPF MUTEX (MOR-479 lineage, MOR-1293 precedent): `toCwProps`
+ * disables APF outside CW/CW-R and TPF outside RTTY/RTTY-R — its own comment
+ * calls this a mirror of the MOR-479 preamp mutex — so it is expressed the
+ * way the DIGI-SEL/PREAMP mutex is: `disabledReasons` entries with the generic
+ * `'mutually-exclusive-control'` code, never bespoke `apfDisabled`/
+ * `tpfDisabled` booleans. The mode comes from THIS model's own
+ * `modeFilter.currentMode` fact, never a second `rx?.mode` read, and an
+ * `unknown` (or structurally-absent) mode leaves BOTH controls disabled —
+ * fail-closed, matching what v2's `?? 'USB'` fallback happens to produce
+ * while resting on a fabricated value this contract refuses to invent.
+ *
+ * THE BREAK-IN TX GATE (safety constraint 2, "no second permit"): break-in
+ * keys the transmitter, so its affordance is gated on the model's ONE
+ * `txPermit` — the value already computed by `deriveTxCapabilities` and
+ * passed in here, NOT a second `getFrequencyPermit` call and NOT `state.ptt`
+ * (invariant R9). The reason CODES mirror the model-level `txPermit` entries
+ * `toRadioViewModel` already emits, so there is one vocabulary for one
+ * permit. Anything other than a positively `'allowed'` permit — denied,
+ * ranges-unconfigured, tx-target-unknown — disables break-in, EXCEPT the
+ * permit unknown that follows from a sourceless target (MOR-4433:
+ * `txTarget` `unsupported` — the sourceless class (G7250 and the
+ * sourceless-Yaesu shape) — has no source a wait
+ * could resolve, so blocking break-in on it prohibits transmit with no
+ * condition to wait out). The unknown permit still disables break-in while
+ * a source exists (not-observed/stale/contradiction) and while no band table
+ * is configured; that fail-closed pairing is additionally enforced by
+ * `validateRadioViewModel`.
+ */
+function deriveCwKeyerReasons(
+  cwKeyer: CwKeyerViewModel | undefined, modeFilter: ModeFilterViewModel | undefined,
+  txPermit: FrequencyPermit, txTarget: TxTargetViewModel,
+): Reason[] {
+  if (!cwKeyer) return [];
+  const modeReading = modeFilter?.currentMode.reading;
+  const mode = modeReading?.status === 'known' ? modeReading.value : undefined;
+  const reasons: Reason[] = [];
+  if (cwKeyer.apf.availability.structural && mode !== 'CW' && mode !== 'CW-R') {
+    reasons.push({ field: 'cwKeyer.apf', code: 'mutually-exclusive-control' });
+  }
+  if (cwKeyer.twinPeak.availability.structural && mode !== 'RTTY' && mode !== 'RTTY-R') {
+    reasons.push({ field: 'cwKeyer.twinPeak', code: 'mutually-exclusive-control' });
+  }
+  // MOR-4433: the permit unknown that follows from a SOURCED target still
+  // disables break-in; only the unknown that follows from NO source does not
+  // — the shared `isSourcelessPermitUnknown` decision, no local copy.
+  if (cwKeyer.breakIn.availability.structural && txPermit.status !== 'allowed'
+    && !isSourcelessPermitUnknown(txTarget, txPermit)) {
+    reasons.push({
+      field: 'cwKeyer.breakIn',
+      code: txPermit.status === 'denied' ? 'out-of-band'
+        : txPermit.reason === 'ranges-unconfigured' ? 'capability-unavailable' : 'tx-target-unknown',
+    });
+  }
+  return reasons;
+}
+
+/**
+ * Scope-control facts (MOR-1262 decomposition slice 11A/MOR-1298, extended
+ * by slice 11A′/MOR-1299 with mode/edge/hold/refDb, and slice 11A″/MOR-1330
+ * with duringTx/centerType/vbwNarrow/rbw). See `ScopeControlsViewModel`'s
+ * doc comment for the field set (including why `fixedEdge` is excluded),
+ * the parity story against `SpectrumToolbar.svelte`'s/
+ * `ScopeSettingsPopover.svelte`'s own `scopeControls?.<leaf> ?? <default>`
+ * reads, and the doubly-applied X6200 capability-gating lesson.
+ *
+ * Evidence gate (N3): `hasCap(caps, 'scope')`, the same single gate the
+ * shipped toolbar uses to render at all (`{#if hasCapability('scope')}`,
+ * three call sites in `SpectrumToolbar.svelte`) — one v2 gate, not a
+ * per-field OR-of-evidence like `deriveTxAux`, because there is no
+ * scope-adjacent state that reports independently of the `scope` capability
+ * the way TX telemetry does.
+ *
+ * `mode`/`edge`/`span`/`speed`/`hold`/`refDb`/`duringTx`/`centerType`/
+ * `vbwNarrow`/`rbw` are structurally available whenever the group is (every
+ * scope-bearing single-RX radio supports them — the backend spec declares
+ * all ten as read-only ingress leaves with no additional capability
+ * distinction); `dual`/`receiver` additionally require `hasCap(caps,
+ * 'dual_rx')` — the only generic tag available to gate "does dual-scope /
+ * receiver-select make sense here" without a radio-specific table.
+ */
+function deriveScopeControls(
+  state: ServerState | null, caps: Capabilities | null,
+): ScopeControlsViewModel | undefined {
+  if (!hasCap(caps, 'scope')) return undefined;
+  const hasReceiverSelect = hasCap(caps, 'dual_rx');
+  const sc = state?.scopeControls;
+  return {
+    mode: txAuxField(true, topFieldAvailable(state, 'scopeControls.mode'), numOrUndef(sc?.mode)),
+    edge: txAuxField(true, topFieldAvailable(state, 'scopeControls.edge'), numOrUndef(sc?.edge)),
+    span: txAuxField(true, topFieldAvailable(state, 'scopeControls.span'), numOrUndef(sc?.span)),
+    speed: txAuxField(true, topFieldAvailable(state, 'scopeControls.speed'), numOrUndef(sc?.speed)),
+    hold: txAuxField(true, topFieldAvailable(state, 'scopeControls.hold'), boolOrUndef(sc?.hold)),
+    refDb: txAuxField(true, topFieldAvailable(state, 'scopeControls.refDb'), numOrUndef(sc?.refDb)),
+    // MOR-3694: the declared REF range from capabilities; `null` fails the
+    // REF steppers closed (no fallback range).
+    refRange: refRangeFromCaps(caps),
+    dual: txAuxField(
+      hasReceiverSelect, topFieldAvailable(state, 'scopeControls.dual'), boolOrUndef(sc?.dual),
+    ),
+    receiver: txAuxField(
+      hasReceiverSelect, topFieldAvailable(state, 'scopeControls.receiver'), numOrUndef(sc?.receiver),
+    ),
+    duringTx: txAuxField(
+      true, topFieldAvailable(state, 'scopeControls.duringTx'), boolOrUndef(sc?.duringTx),
+    ),
+    centerType: txAuxField(
+      true, topFieldAvailable(state, 'scopeControls.centerType'), numOrUndef(sc?.centerType),
+    ),
+    vbwNarrow: txAuxField(
+      true, topFieldAvailable(state, 'scopeControls.vbwNarrow'), boolOrUndef(sc?.vbwNarrow),
+    ),
+    rbw: txAuxField(true, topFieldAvailable(state, 'scopeControls.rbw'), numOrUndef(sc?.rbw)),
+  };
+}
+
+/**
+ * The App-owned scope-display snapshot the `scopeDisplay` facts are read
+ * against (MOR-1262 slice 12A, MOR-1301). Like `RxAudioSnapshot`, this is an
+ * INPUT: `defaultScopeStatus` lives on the `FrontendRuntime` singleton
+ * (`lib/runtime/frontend-runtime.ts`), not on `ServerState`/`Capabilities`,
+ * so a fact derivation may not reach for it directly (MOR-988 §3.2
+ * determinism) — the caller reads its own already-live
+ * `runtime.defaultScopeStatus` plus the radio-power state it already tracks
+ * and hands the values in. Field names mirror `DefaultScopeStatus` verbatim
+ * (`source`/`available`/`resourceSelected`/`demand`/`lifecycle`/`transport`/
+ * `frameSeen`) so a caller can spread `runtime.defaultScopeStatus` in
+ * directly; `isPoweredOff` is the one addition, the status bar's own
+ * override input to the same classification (see `classifyScopeHealth`).
+ *
+ * `hardwareConnected` (MOR-1312, slice 12B) is a SECOND addition: mirrors
+ * `runtime.scope.hardwareScopeConnected` verbatim, the hardware channel's own
+ * transport regardless of `source` — NOT an input to `classifyScopeHealth`
+ * (see `ScopeDisplayViewModel`'s CORRECTION note for why it stays a separate
+ * leaf instead).
+ */
+export interface ScopeDisplaySnapshot {
+  source: ScopeSourceKind | null;
+  available: boolean;
+  resourceSelected: boolean;
+  demand: number;
+  lifecycle: ResourceHealth;
+  // `ConnectionState`'s own literal union, hand-copied rather than imported —
+  // see the import comment above (this file's transport-purity guard).
+  transport: 'disconnected' | 'connecting' | 'connected' | 'reconnecting';
+  frameSeen: boolean;
+  isPoweredOff: boolean;
+  hardwareConnected: boolean;
+}
+
+/**
+ * Mirrors `hasAnyScope()` (`$lib/stores/capabilities.svelte.ts`) — the real
+ * gate the status bar's scope indicator uses to decide whether to render at
+ * all — re-driven on THIS function's own `caps` argument rather than that
+ * store singleton, which a fact derivation may not read (determinism, N2).
+ * A one-line boolean; agreement with the store function is a direct
+ * expression match, not something worth a live-store parity test (which
+ * would need `setCapabilities`/`afterEach` cleanup under the fast pool,
+ * MOR-1272 — avoided here because it is avoidable).
+ */
+function hasAnyScopeCap(caps: Capabilities | null): boolean {
+  return caps?.scope === true || (caps?.scopeSources?.length ?? 0) > 0 || caps?.scopeSource === 'audio_fft';
+}
+
+/**
+ * Byte-identical to `deriveScopeIndicatorState` (`components-v2/layout/
+ * StatusBar.svelte`) — the shipped status-bar scope indicator's own state
+ * machine, reproduced here because `lib/runtime` may not import
+ * `components-v2` (ADR 2026-04-12, `eslint.config.js`'s `FORBIDDEN` import
+ * boundary), so the real function cannot be called from this file. Parity
+ * with the real function, across a full discriminating-combo matrix, is
+ * pinned in `__tests__/scope-display-adapter.test.ts` rather than assumed —
+ * the same "agree with the real projector" discipline `projectModInputSource`
+ * above uses for the same reason (that one duplicates `app-authority.ts`'s
+ * `projectInputs`, blocked by the same boundary).
+ */
+function classifyScopeHealth(s: ScopeDisplaySnapshot): ScopeHealthState {
+  if (s.isPoweredOff) return 'disconnected';
+  if (s.source === null || !s.available || !s.resourceSelected || s.demand === 0) return 'inactive';
+  if (s.lifecycle === 'failed') return 'failed';
+  if (s.lifecycle === 'starting') return 'starting';
+  if (s.transport === 'connecting') return 'connecting';
+  if (s.transport === 'reconnecting') return 'reconnecting';
+  if (s.transport === 'disconnected') return 'disconnected';
+  if (!s.frameSeen) return 'waiting';
+  return s.lifecycle === 'streaming' ? 'connected' : 'inactive';
+}
+
+/**
+ * Scope-display facts (MOR-1262 decomposition slice 12A, MOR-1301 — the
+ * FINAL A-slice of the vocabulary program). See `ScopeDisplayViewModel`'s
+ * doc comment for the group-shape rationale (why scope tuning and scope
+ * pixels are both deliberately absent).
+ *
+ * Evidence gate: NO snapshot ⇒ NO group (same `deriveRxAudio` discipline —
+ * `defaultScopeStatus` is App-owned, not this layer's to guess), AND
+ * `hasAnyScopeCap(caps)` ⇒ NO group otherwise (a radio with neither a
+ * hardware scope nor an audio-FFT source has no indicator to state a fact
+ * about, mirroring the real status bar rendering nothing at all).
+ *
+ * Both leaves share the one structural gate: unlike `scopeControls`'s
+ * per-leaf capability split, there is exactly one v2 reader here (the status
+ * bar's single indicator), so there is exactly one gate.
+ */
+function deriveScopeDisplay(
+  caps: Capabilities | null, snapshot: ScopeDisplaySnapshot | null | undefined,
+): ScopeDisplayViewModel | undefined {
+  if (!snapshot || !hasAnyScopeCap(caps)) return undefined;
+  return {
+    source: txAuxField(true, snapshot.source !== null, snapshot.source ?? undefined),
+    health: txAuxField(true, true, classifyScopeHealth(snapshot)),
+    // MOR-1312 (12B): read straight from the snapshot, never through
+    // `classifyScopeHealth` — see `ScopeDisplayViewModel`'s CORRECTION note.
+    hardwareConnected: txAuxField(true, true, snapshot.hardwareConnected),
+  };
+}
+
+/**
+ * The App-owned RX-audio snapshot the `rxAudio` facts are read against
+ * (MOR-1262 slice 3A). It is an INPUT, deliberately: audio lifetime belongs to
+ * the App (MOR-1058) and building a view model must never open, start or probe
+ * the audio path (MOR-972 P0). Nothing in this file imports `audio-manager`,
+ * `ws-client` or `AudioContext`; the caller reads its own already-live state
+ * (`runtime.audio`, `runtime.connectionAudio`, the applied routing snapshot)
+ * and hands the values in. Pinned by `__tests__/rx-audio-purity.isolated.test.ts`.
+ */
+export interface RxAudioSnapshot {
+  /** `AudioUiState` (`lib/runtime/props/panel-props.ts`), verbatim. */
+  muted: boolean;
+  rxEnabled: boolean;
+  /** 0..100 browser RX volume. */
+  volume: number;
+  /** Audio-WS link health (`runtime.connectionAudio`). */
+  connected: boolean;
+  /** MOR-2792: server RX capture is bit-exact digital silence. */
+  rxSilent?: boolean;
+  routing?: { focus?: AudioFocus; splitStereo?: boolean } | null;
+}
+
+/**
+ * Projects the active DATA group's MOD-input source with the same observation
+ * gate consumed by managed TX: the same
+ * three-part `seen()` gate and the same `Number.isSafeInteger` value check.
+ * Agreement with the real projector is pinned in
+ * `__tests__/rx-audio-adapter.test.ts` rather than assumed.
+ */
+function projectModInputSource(state: ServerState | null): ModInputSource {
+  const rx = state?.active === 'SUB' ? state.sub : state?.main;
+  const key = modInputStateKey(rx?.dataMode ?? 0);
+  const source = state?.[key];
+  return seen(state, key) && typeof source === 'number' && Number.isSafeInteger(source)
+    ? { status: 'known', source }
+    : { status: 'unknown' };
+}
+
+/**
+ * RX audio-chain facts. Same positive-evidence discipline as `deriveTxAux`
+ * (N3) and `deriveMeters`: NO App snapshot ⇒ NO group (there is no honest
+ * monitor mode to state, and guessing one from a store this layer does not own
+ * is the MOR-972 failure), and a radio with no AF control, no live audio, no
+ * dual-RX routing and no MOD-input routing gets no all-unknowns placeholder.
+ *
+ * SAFETY: `modInputReadiness` is `deriveTxCapabilities`'s own conclusion,
+ * passed straight through. It is NOT re-derived here — the "web voice TX =
+ * noise" guard has exactly one derivation in this codebase and this contract
+ * exposes it, the same way the meters group exposes the TX authority's.
+ */
+function deriveRxAudio(
+  state: ServerState | null, caps: Capabilities | null, facts: TxCapabilityFacts,
+  modInputSource: ModInputSource, audio: RxAudioSnapshot | null | undefined,
+  structuralReceivers: readonly ReceiverId[],
+): RxAudioViewModel | undefined {
+  if (!audio) return undefined;
+  const hasLiveAudio = hasCap(caps, 'audio');
+  // `toRxAudioProps`'s own gate: the radio's AF control, or the browser stream.
+  const hasAfLevel = hasCap(caps, 'af_level') || hasLiveAudio;
+  // MOR-2527: dual-receiver audio ROUTING is its own capability
+  // (`lan_dual_rx_audio_routing`, IC-7610 only today) — the server refuses
+  // routing without it (`web/handlers/audio.py`). `dual_rx` alone (e.g. the
+  // FTX-1) must not promise routing rows that can never carry a value.
+  const hasAudioRouting = hasCap(caps, 'lan_dual_rx_audio_routing');
+  const modInputChoices = Array.isArray(caps?.dataModeInputs) ? caps.dataModeInputs : [];
+  const activeDataMode = state?.active === 'SUB' ? state.sub?.dataMode : state?.main?.dataMode;
+  const hasModInput = facts.modInputRoutingAvailable && modInputChoices.length > 0
+    && Number.isSafeInteger(activeDataMode) && (activeDataMode as number) >= 0
+    && (activeDataMode as number) <= (caps?.dataModeCount ?? -1);
+  if (!hasAfLevel && !hasLiveAudio && !hasAudioRouting && !hasModInput) return undefined;
+  // Byte-identical to `toRxAudioProps`'s monitor-mode derivation; parity across
+  // the whole matrix is pinned in `__tests__/rx-audio-adapter.test.ts`.
+  // MOR-2583: the server's monitor MUTE survives a page reload, the
+  // client-side `muted` flag does not — the server's word wins.
+  const monitorMode: MonitorMode = state?.monitorMute?.on === true || audio.muted
+    ? 'mute'
+    : audio.rxEnabled && hasLiveAudio ? 'live' : 'local';
+  const onSub = state?.active === 'SUB';
+  const rx = onSub ? state?.sub : state?.main;
+  const afObserved = state !== null && topFieldAvailable(state, onSub ? 'sub.afLevel' : 'main.afLevel');
+  // In `live` mode AF is the browser volume the App already owns, so it is
+  // known by construction; otherwise it is the radio's own gated field — and
+  // `unknown` when unobserved, where the shipped panel substitutes 0.5.
+  const live = monitorMode === 'live';
+  const afLevel = live ? numOrUndef(audio.volume / 100) : (afObserved ? numOrUndef(rx?.afLevel) : undefined);
+  // MOR-2579: outside `live` the AF control is the radio's own. The server
+  // serves `af_level_sub` only when the radio admits `set_af_level` for
+  // receiver 1 (`web/runtime_helpers.py: projected_af_level_sub_tag`), and only
+  // then does each receiver get its own AF field, read by path.
+  const perReceiverAf = !live && hasCap(caps, 'af_level') && structuralReceivers.includes('SUB')
+    && hasCap(caps, 'af_level_sub');
+  const receiverAf = (key: 'main' | 'sub') => txAuxField(
+    true, state !== null && topFieldAvailable(state, `${key}.afLevel`), numOrUndef(state?.[key]?.afLevel),
+  );
+  const routing = audio.routing ?? null;
+  const source = modInputSource.status === 'known' ? modInputSource.source : undefined;
+  return {
+    monitorMode,
+    liveAudio: { structural: hasLiveAudio, operational: hasLiveAudio && audio.connected },
+    // `txAuxField` is the shared `{reading, availability}` builder — `RxAudioField`
+    // IS `TxAuxField` (see the contract's alias), so there is one builder, not a fork.
+    afLevel: txAuxField(hasAfLevel, live || afObserved, afLevel),
+    ...(perReceiverAf ? { receiverAfLevels: { main: receiverAf('main'), sub: receiverAf('sub') } } : {}),
+    routingFocus: txAuxField(hasAudioRouting, routing?.focus !== undefined, routing?.focus),
+    routingSplit: txAuxField(hasAudioRouting, routing?.splitStereo !== undefined, routing?.splitStereo),
+    modInputSource: txAuxField(hasModInput, source !== undefined, source),
+    modInputChoices,
+    modInputReadiness: facts.modInputReadiness,
+    rxSilent: audio.rxSilent === true,
+  };
+}
+
+/**
+ * MOR-4213: the inputs one derivation was computed from, plus its result.
+ * Every input is an immutable snapshot replaced as a whole (`radio.current`
+ * and the capability store are `$state.raw`; the App-owned TX/audio/scope
+ * snapshots are fresh objects per change), so object identity is a complete
+ * cache key.
+ */
+interface RadioViewDerivation {
+  readonly state: ServerState | null;
+  readonly caps: Capabilities;
+  readonly tx: MetersTxAuthority | null;
+  readonly rxAudio: RxAudioSnapshot | null;
+  readonly scopeDisplay: ScopeDisplaySnapshot | null;
+  readonly view: RadioViewModel | null;
+}
+
+/**
+ * One remembered derivation per argument lane. Callers that pass no App
+ * snapshots (feedback projections, media session, instrument hosts) share
+ * one lane; the canonical surface view with TX/audio/scope snapshots has its
+ * own, so the two never evict each other.
+ */
+const lastDerivationByLane = new Map<string, RadioViewDerivation>();
+
+function argumentLane(
+  tx: MetersTxAuthority | null, rxAudio: RxAudioSnapshot | null,
+  scopeDisplay: ScopeDisplaySnapshot | null,
+): string {
+  return `${tx === null ? '-' : 't'}${rxAudio === null ? '-' : 'a'}${scopeDisplay === null ? '-' : 's'}`;
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
+
+/**
+ * Structural sharing between two view models (MOR-4213). Returns `previous`
+ * wherever `next` is deep-equal to it, so a group whose facts did not change
+ * keeps its object identity and Svelte's `===` check stops the update there.
+ * Never mutates either argument: a container is copied only when some of its
+ * children were swapped for their previous, equal versions. An object that
+ * `next` references twice (`band.currentBand` is the active receiver's
+ * `band.receiverBands` entry) maps to one result, so the alias survives.
+ */
+function shareUnchangedViewParts<T>(previous: unknown, next: T): T {
+  return shareParts(previous, next, new Map<object, unknown>()) as T;
+}
+
+function shareParts(previous: unknown, next: unknown, seen: Map<object, unknown>): unknown {
+  if (Object.is(previous, next)) return next;
+  const isArray = Array.isArray(previous) && Array.isArray(next);
+  if (!isArray && !(isPlainRecord(previous) && isPlainRecord(next))) return next;
+  const container = next as object;
+  if (seen.has(container)) return seen.get(container);
+  let result: unknown;
+  if (isArray) {
+    const before = previous as unknown[];
+    const after = next as unknown[];
+    let equal = before.length === after.length;
+    let swapped = false;
+    const items = after.map((item, index) => {
+      const shared = index < before.length ? shareParts(before[index], item, seen) : item;
+      if (shared !== before[index]) equal = false;
+      if (shared !== item) swapped = true;
+      return shared;
+    });
+    result = equal ? before : swapped ? items : after;
+  } else {
+    const before = previous as Record<string, unknown>;
+    const after = next as Record<string, unknown>;
+    const keys = Object.keys(after);
+    let equal = keys.length === Object.keys(before).length;
+    let swapped = false;
+    const entries = keys.map((key) => {
+      const item = after[key];
+      const known = Object.hasOwn(before, key);
+      const shared = known ? shareParts(before[key], item, seen) : item;
+      if (!known || shared !== before[key]) equal = false;
+      if (shared !== item) swapped = true;
+      return [key, shared] as const;
+    });
+    result = equal ? before : swapped ? Object.fromEntries(entries) : after;
+  }
+  seen.set(container, result);
+  return result;
+}
+
+/**
+ * `null` when there is nothing safe to render at all: capabilities have not
+ * loaded, or they describe a topology that contradicts itself
+ * (`derivePresentationCapabilities` diagnoses that, and a contradictory
+ * topology must not be guessed into one of the four canonical shapes).
+ *
+ * MOR-4213: a pure function of its arguments, memoized on their identity.
+ * Every surface, feedback projection and host asks for the model of the same
+ * `(state, caps)` pair on each state delivery; that pair is derived once and
+ * the result is shared. A fresh derivation reuses the previous result's
+ * unchanged parts (`shareUnchangedViewParts`). Callers must treat the result
+ * as immutable, and producers must replace a snapshot (or at least every
+ * changed branch of it) instead of editing it in place.
+ */
+export function toRadioViewModel(
+  state: ServerState | null, caps: Capabilities | null,
+  tx?: MetersTxAuthority | null,
+  rxAudioSnapshot?: RxAudioSnapshot | null,
+  scopeDisplaySnapshot?: ScopeDisplaySnapshot | null,
+): RadioViewModel | null {
+  if (!caps) return null;
+  const txInput = tx ?? null;
+  const rxAudioInput = rxAudioSnapshot ?? null;
+  const scopeDisplayInput = scopeDisplaySnapshot ?? null;
+  const lane = argumentLane(txInput, rxAudioInput, scopeDisplayInput);
+  const last = lastDerivationByLane.get(lane);
+  if (last !== undefined && last.state === state && last.caps === caps && last.tx === txInput
+    && last.rxAudio === rxAudioInput && last.scopeDisplay === scopeDisplayInput) return last.view;
+  const derived = deriveRadioViewModel(state, caps, txInput, rxAudioInput, scopeDisplayInput);
+  const view = last === undefined ? derived : shareUnchangedViewParts(last.view, derived);
+  lastDerivationByLane.set(lane, {
+    state, caps, tx: txInput, rxAudio: rxAudioInput, scopeDisplay: scopeDisplayInput, view,
+  });
+  return view;
+}
+
+function deriveRadioViewModel(
+  state: ServerState | null, caps: Capabilities,
+  tx: MetersTxAuthority | null,
+  rxAudioSnapshot: RxAudioSnapshot | null,
+  scopeDisplaySnapshot: ScopeDisplaySnapshot | null,
+): RadioViewModel | null {
+  const presentation = derivePresentationCapabilities(caps);
+  const topology = presentation.topology;
+  if (!topology) return null;
+
+  const activeId = activeReceiverId(state, topology.structuralCount === 1);
+  const activeReceiver: { status: 'known'; receiver: ReceiverId } | { status: 'unknown' } =
+    activeId !== null ? { status: 'known', receiver: activeId } : { status: 'unknown' };
+
+  // TX identity and permit come from the SAME derivation the App TX authority
+  // uses (`deriveTxCapabilities`), so the surfaces cannot disagree with the
+  // controller about what the radio would key.
+  const observedTarget = seen(state, 'txTarget') && state
+    ? state.txTarget
+    : { status: 'unknown' as const, reason: 'not-observed' as const };
+  // MOR-1274: the REAL projected MOD-input source, not a stub — it is the sole
+  // input to `modInputReadiness`, the "web voice TX = noise" guard the rxAudio
+  // group exposes. No other fact this call returns depends on it.
+  const modInputSource = projectModInputSource(state);
+  const facts = deriveTxCapabilities(caps, { txTarget: observedTarget, modInputSource });
+  const target = facts.txTarget;
+  const txTarget = target.status === 'known'
+    ? {
+      status: 'known' as const, receiver: target.receiver, frequencyHz: target.frequencyHz,
+      slot: (target.slot === null
+        ? { kind: 'unslotted' } : { kind: 'slotted', id: target.slot }) as Slot,
+    }
+    : { status: 'unknown' as const, reason: target.reason };
+  const txPermit = facts.frequencyPermit;
+
+  const vfos = topology.structuralReceivers.flatMap((receiver) => {
+    const key = RECEIVER_KEY[receiver];
+    const rx = state?.[key] ?? null;
+    const slots = topology.slots[receiver] ?? null;
+    // Gated like every other fact — and it MUST be: the backend defaults
+    // `activeSlot` to "A" (`state_schema.py`), so an ungated read marks
+    // MAIN A active on evidence the radio never provided.
+    const activeSlot = seen(state, `${key}.activeSlot`)
+      && (rx?.activeSlot === 'A' || rx?.activeSlot === 'B') ? rx.activeSlot : null;
+    const relativeIdentityUnknown = relativeVfoIdentityUnknown(state, caps, key);
+    const positions: Position[] = slots === null
+      ? [{ slot: { kind: 'unslotted' }, base: `${key}.`, filterKey: 'filter', src: rx }]
+      : relativeIdentityUnknown
+          ? [
+            {
+              slot: { kind: 'relative', role: 'selected' }, base: `${key}.`,
+              filterKey: 'filter', src: rx,
+            },
+            {
+              slot: { kind: 'relative', role: 'unselected' },
+              base: `${key}.unselectedVfo.`, filterKey: 'filterNum',
+              src: rx?.unselectedVfo ?? null,
+            },
+          ]
+        : slots.every((id) => rx?.[SLOT_KEY[id]] != null)
+          ? slots.map((id) => ({
+            slot: { kind: 'slotted', id }, base: `${key}.${SLOT_KEY[id]}.`,
+            filterKey: 'filterNum', src: rx?.[SLOT_KEY[id]] ?? null,
+          }))
+        // A slotted scheme whose slot view was never observed: ONE position of
+        // unknown slot identity. Synthesising 'A' here is exactly the
+        // fabrication MOR-988 §3.2 forbids.
+        : [{ slot: { kind: 'unknown' }, base: `${key}.`, filterKey: 'filter', src: rx }];
+    return positions.map(({ slot, base, filterKey, src }) => {
+      const displayObservation = <T extends number | string>(leaf: string, value: T | undefined) =>
+        slot.kind === 'unknown' ? { state: 'unknown' as const, reason: 'identity-unresolved' as const }
+          : qualifyDisplayObservation({ state, caps, receiver, path: `${base}${leaf}`, structural: true, value });
+      const filter = src?.[filterKey];
+      // MOR-1335 (G4): the per-RECEIVER half of "active", named on its own so a
+      // receiver-scoped intent has a slot to address on EVERY receiver — not
+      // only on the active one. `activeSlot` is already the gated read above,
+      // so an unobserved reading is `null` and BOTH slots fail closed here; an
+      // unslotted (or unknown-slot) position is its receiver's only one.
+      const isActiveSlot = slot.kind === 'relative' ? slot.role === 'selected'
+        : slot.kind !== 'slotted' || slot.id === activeSlot;
+      return {
+        receiver,
+        slot,
+        label: slot.kind === 'slotted' ? `${receiver} ${slot.id}`
+          : slot.kind === 'relative'
+            ? (slot.role === 'selected' ? 'Selected VFO' : 'Unselected VFO')
+            : receiver,
+        ...readings(state, base, filterKey, src),
+        display: {
+          frequencyHz: displayObservation('freqHz', typeof src?.freqHz === 'number' ? src.freqHz : undefined),
+          mode: displayObservation('mode', typeof src?.mode === 'string' ? src.mode : undefined),
+          filter: displayObservation(filterKey,
+            typeof filter === 'number' && Number.isFinite(filter) ? `FIL${filter}` : undefined),
+        },
+        // Unchanged in meaning, restated on the new fact: the radio-wide active
+        // VFO IS the active receiver's active slot.
+        isActive: activeReceiver.status === 'known' && activeReceiver.receiver === receiver
+          && isActiveSlot,
+        isActiveSlot,
+        isTxTarget: txTarget.status === 'known' && txTarget.receiver === receiver
+          && sameSlot(txTarget.slot, slot),
+      };
+    });
+  });
+
+  const split = boolFact(state, 'split', state?.split);
+  const dualWatch = boolFact(state, 'dualWatch', state?.dualWatch);
+  // Structural = the model has it. Operational = usable right now: the
+  // hardware scope needs an observed scope-control block, the audio FFT needs
+  // a live state payload for the stream it rides on.
+  const hardwareScope = {
+    structural: presentation.scope.hardwareScopeAvailable,
+    operational: presentation.scope.hardwareScopeAvailable && state?.scopeControls != null,
+  };
+  const audioFftScope = {
+    structural: presentation.scope.audioFftAvailable,
+    operational: presentation.scope.audioFftAvailable && state !== null,
+  };
+
+  const disabledReasons: Reason[] = [];
+  if (activeReceiver.status === 'unknown') {
+    disabledReasons.push({ field: 'activeReceiver', code: 'field-not-observed' });
+  }
+  if (split.status === 'unknown') disabledReasons.push({ field: 'split', code: 'field-not-observed' });
+  if (dualWatch.status === 'unknown') {
+    disabledReasons.push({ field: 'dualWatch', code: 'field-not-observed' });
+  }
+  if (txTarget.status === 'unknown') {
+    disabledReasons.push({
+      field: 'txTarget',
+      code: txTarget.reason === 'unsupported' ? 'capability-unavailable' : 'field-not-observed',
+    });
+  }
+  if (txPermit.status === 'denied') disabledReasons.push({ field: 'txPermit', code: 'out-of-band' });
+  if (txPermit.status === 'unknown') {
+    disabledReasons.push({
+      field: 'txPermit',
+      code: txPermit.reason === 'ranges-unconfigured' ? 'capability-unavailable' : 'tx-target-unknown',
+    });
+  }
+  for (const [field, availability] of [
+    ['scope.hardwareScope', hardwareScope], ['scope.audioFftScope', audioFftScope],
+  ] as const) {
+    if (!availability.structural) disabledReasons.push({ field, code: 'capability-unavailable' });
+    else if (!availability.operational) disabledReasons.push({ field, code: 'field-not-observed' });
+  }
+  // MOR-1256: `operationalReceivers` (presentation-capabilities.ts) had zero
+  // consumers — a `dual-rx-unavailable` radio (structurally dual, no
+  // `dual_rx` tag) kept SUB in `vfos` (correct: MOR-977 renders it PRESENT)
+  // but nothing ever disabled it. One reason per structurally-present,
+  // operationally-absent receiver, same shape as the scope facts above;
+  // `dual-receiver-strips.ts`'s `isOperationalStrip` reads it back.
+  for (const receiverId of topology.structuralReceivers) {
+    if (!topology.operationalReceivers.includes(receiverId)) {
+      disabledReasons.push({ field: `receiver.${receiverId}`, code: 'capability-unavailable' });
+    }
+  }
+
+  // Conditional spread, not a plain `txAux: deriveTxAux(...)` property: an
+  // object literal assigning a key to `undefined` still shows up in
+  // `Object.keys()`, which would make "no TX capability" indistinguishable
+  // from "has the group" to any consumer that inventories keys — same
+  // reasoning as the validator's own omission below `validateRadioViewModel`.
+  const txAux = deriveTxAux(state, caps);
+  const meters = deriveMeters(
+    state, caps, tx, activeId, topology.structuralReceivers, topology.operationalReceivers,
+  );
+  const rxAudio = deriveRxAudio(
+    state, caps, facts, modInputSource, rxAudioSnapshot, topology.structuralReceivers,
+  );
+  const modeFilter = deriveModeFilter(state, caps, activeId);
+  const filterPassband = deriveFilterPassband(state, caps, activeId);
+  const dsp = deriveDsp(state, caps);
+  const rfFrontEnd = deriveRfFrontEnd(state, caps);
+  const band = deriveBand(state, caps, activeId);
+  const repeater = deriveRepeater(state, caps);
+  const ritXit = deriveRitXit(state, caps);
+  const antenna = deriveAntenna(state, caps);
+  const scan = deriveScan(state);
+  const cwKeyer = deriveCwKeyer(state, caps);
+  const scopeControls = deriveScopeControls(state, caps);
+  const scopeDisplay = deriveScopeDisplay(caps, scopeDisplaySnapshot);
+  const rfFrontEndMutex = deriveRfFrontEndMutex(rfFrontEnd);
+  const receiverIndicators = deriveReceiverIndicators(
+    state, caps, topology.structuralReceivers, topology.operationalReceivers,
+  );
+  const radioWideIndicators = deriveRadioWideIndicators(
+    state, caps, topology.structuralReceivers, topology.operationalReceivers,
+    tx, txAux, ritXit, antenna,
+  );
+  if (rfFrontEndMutex) disabledReasons.push(rfFrontEndMutex);
+  // MOR-2588: the ACTIVE receiver lacks att/preamp when the radio declares
+  // the radio-wide capability but not the field for that receiver (no
+  // `attenuator_main`/`preamp_main` on MAIN, no `attenuator_sub`/
+  // `preamp_sub` on SUB) — e.g. tx500/x6100/x6200 on MAIN. The disabled
+  // control must still carry its explanation even if a mis-credited reading
+  // made the field status available.
+  const activeRx = state?.active;
+  if (rfFrontEnd && (activeRx === 'MAIN' || activeRx === 'SUB')) {
+    const onSub = activeRx === 'SUB';
+    if (hasCap(caps, 'attenuator') && !hasCap(caps, onSub ? 'attenuator_sub' : 'attenuator_main')) {
+      disabledReasons.push({ field: 'rfFrontEnd.attenuator', code: 'receiver-lacks-control' });
+    }
+    if (hasCap(caps, 'preamp') && !hasCap(caps, onSub ? 'preamp_sub' : 'preamp_main')) {
+      disabledReasons.push({ field: 'rfFrontEnd.preamp', code: 'receiver-lacks-control' });
+    }
+  }
+  disabledReasons.push(...deriveCwKeyerReasons(cwKeyer, modeFilter, txPermit, txTarget));
+
+  return {
+    topologyId: `${topology.structuralCount}/${topology.scheme}`,
+    vfoScheme: topology.scheme,
+    activeReceiver,
+    vfos,
+    split,
+    dualWatch,
+    txTarget,
+    txPermit,
+    scope: { hardwareScope, audioFftScope },
+    disabledReasons,
+    receiverIndicators,
+    radioWideIndicators,
+    ...(txAux !== undefined ? { txAux } : {}),
+    ...(meters !== undefined ? { meters } : {}),
+    ...(rxAudio !== undefined ? { rxAudio } : {}),
+    ...(modeFilter !== undefined ? { modeFilter } : {}),
+    ...(filterPassband !== undefined ? { filterPassband } : {}),
+    ...(dsp !== undefined ? { dsp } : {}),
+    ...(rfFrontEnd !== undefined ? { rfFrontEnd } : {}),
+    ...(band !== undefined ? { band } : {}),
+    ...(repeater !== undefined ? { repeater } : {}),
+    ...(ritXit !== undefined ? { ritXit } : {}),
+    ...(antenna !== undefined ? { antenna } : {}),
+    ...(scan !== undefined ? { scan } : {}),
+    ...(cwKeyer !== undefined ? { cwKeyer } : {}),
+    ...(scopeControls !== undefined ? { scopeControls } : {}),
+    ...(scopeDisplay !== undefined ? { scopeDisplay } : {}),
+  };
+}

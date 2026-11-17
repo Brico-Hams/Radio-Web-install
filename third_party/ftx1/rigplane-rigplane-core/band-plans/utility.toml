@@ -1,0 +1,519 @@
+# Utility, Time Signals, Maritime, Aviation frequencies on HF
+# Sources: ITU, NOAA, various references
+
+[meta]
+name = "Utility & Services"
+layer = "utility"
+priority = 3
+source = "ITU / public references"
+
+# ── Time Signals ──
+
+[[band]]
+name = "WWV 2.5"
+start = 2_500_000
+end = 2_500_000
+
+  [[band.segment]]
+  start = 2_500_000
+  end = 2_500_000
+  mode = "utility"
+  label = "WWV"
+  notes = "WWV/WWVH time signal, Fort Collins CO / Kekaha HI"
+  url = "https://www.nist.gov/pml/time-and-frequency-division/time-distribution/radio-station-wwv"
+
+[[band]]
+name = "CHU 3.33"
+start = 3_330_000
+end = 3_330_000
+
+  [[band.segment]]
+  start = 3_330_000
+  end = 3_330_000
+  mode = "utility"
+  label = "CHU"
+  notes = "CHU time signal, Ottawa, Canada"
+
+[[band]]
+name = "WWV 5"
+start = 5_000_000
+end = 5_000_000
+
+  [[band.segment]]
+  start = 5_000_000
+  end = 5_000_000
+  mode = "utility"
+  label = "WWV"
+  notes = "WWV/WWVH time signal"
+
+[[band]]
+name = "CHU 7.85"
+start = 7_850_000
+end = 7_850_000
+
+  [[band.segment]]
+  start = 7_850_000
+  end = 7_850_000
+  mode = "utility"
+  label = "CHU"
+  notes = "CHU time signal, Ottawa, Canada"
+
+[[band]]
+name = "WWV 10"
+start = 10_000_000
+end = 10_000_000
+
+  [[band.segment]]
+  start = 10_000_000
+  end = 10_000_000
+  mode = "utility"
+  label = "WWV"
+  notes = "WWV/WWVH time signal"
+
+[[band]]
+name = "WWV 15"
+start = 15_000_000
+end = 15_000_000
+
+  [[band.segment]]
+  start = 15_000_000
+  end = 15_000_000
+  mode = "utility"
+  label = "WWV"
+  notes = "WWV/WWVH time signal"
+
+[[band]]
+name = "WWV 20"
+start = 20_000_000
+end = 20_000_000
+
+  [[band.segment]]
+  start = 20_000_000
+  end = 20_000_000
+  mode = "utility"
+  label = "WWV"
+  notes = "WWV time signal"
+
+[[band]]
+name = "WWV 25"
+start = 25_000_000
+end = 25_000_000
+
+  [[band.segment]]
+  start = 25_000_000
+  end = 25_000_000
+  mode = "utility"
+  label = "WWV"
+  notes = "WWV time signal"
+
+[[band]]
+name = "BPM 10"
+start = 10_000_000
+end = 10_000_000
+
+  [[band.segment]]
+  start = 10_000_000
+  end = 10_000_000
+  mode = "utility"
+  label = "BPM"
+  notes = "BPM time signal, China"
+
+# ── Maritime ──
+
+[[band]]
+name = "NAVTEX"
+start = 518_000
+end = 518_000
+
+  [[band.segment]]
+  start = 518_000
+  end = 518_000
+  mode = "utility"
+  label = "NAVTEX"
+  notes = "International NAVTEX (maritime safety)"
+
+[[band]]
+name = "Maritime Distress"
+start = 2_182_000
+end = 2_182_000
+
+  [[band.segment]]
+  start = 2_182_000
+  end = 2_182_000
+  mode = "utility"
+  label = "DISTRESS"
+  notes = "International maritime distress & calling frequency"
+
+[[band]]
+name = "Maritime DSC"
+start = 2_187_500
+end = 2_187_500
+
+  [[band.segment]]
+  start = 2_187_500
+  end = 2_187_500
+  mode = "utility"
+  label = "DSC"
+  notes = "Digital Selective Calling — maritime distress"
+
+[[band]]
+name = "USCG 2670"
+start = 2_670_000
+end = 2_670_000
+
+  [[band.segment]]
+  start = 2_670_000
+  end = 2_670_000
+  mode = "utility"
+  label = "USCG"
+  notes = "US Coast Guard marine info broadcasts"
+
+[[band]]
+name = "Maritime HF"
+start = 4_125_000
+end = 4_125_000
+
+  [[band.segment]]
+  start = 4_125_000
+  end = 4_125_000
+  mode = "utility"
+  label = "MARITIME"
+  notes = "HF maritime calling/distress"
+
+[[band]]
+name = "Maritime 6"
+start = 6_215_000
+end = 6_215_000
+
+  [[band.segment]]
+  start = 6_215_000
+  end = 6_215_000
+  mode = "utility"
+  label = "MARITIME"
+  notes = "HF maritime calling"
+
+[[band]]
+name = "Maritime 8"
+start = 8_291_000
+end = 8_291_000
+
+  [[band.segment]]
+  start = 8_291_000
+  end = 8_291_000
+  mode = "utility"
+  label = "MARITIME"
+  notes = "HF maritime calling"
+
+[[band]]
+name = "Maritime 12"
+start = 12_290_000
+end = 12_290_000
+
+  [[band.segment]]
+  start = 12_290_000
+  end = 12_290_000
+  mode = "utility"
+  label = "MARITIME"
+  notes = "HF maritime calling"
+
+[[band]]
+name = "Maritime 16"
+start = 16_420_000
+end = 16_420_000
+
+  [[band.segment]]
+  start = 16_420_000
+  end = 16_420_000
+  mode = "utility"
+  label = "MARITIME"
+  notes = "HF maritime calling"
+
+# ── Aviation (VOLMET / HF ATC) ──
+
+[[band]]
+name = "VOLMET 3"
+start = 3_413_000
+end = 3_413_000
+
+  [[band.segment]]
+  start = 3_413_000
+  end = 3_413_000
+  mode = "utility"
+  label = "VOLMET"
+  notes = "Shannon VOLMET — aviation weather"
+
+[[band]]
+name = "VOLMET 5"
+start = 5_505_000
+end = 5_505_000
+
+  [[band.segment]]
+  start = 5_505_000
+  end = 5_505_000
+  mode = "utility"
+  label = "VOLMET"
+  notes = "Shannon VOLMET"
+
+[[band]]
+name = "VOLMET 6"
+start = 6_604_000
+end = 6_604_000
+
+  [[band.segment]]
+  start = 6_604_000
+  end = 6_604_000
+  mode = "utility"
+  label = "VOLMET"
+  notes = "New York VOLMET"
+
+[[band]]
+name = "VOLMET 8"
+start = 8_957_000
+end = 8_957_000
+
+  [[band.segment]]
+  start = 8_957_000
+  end = 8_957_000
+  mode = "utility"
+  label = "VOLMET"
+  notes = "VOLMET — aviation weather"
+
+[[band]]
+name = "VOLMET 10"
+start = 10_051_000
+end = 10_051_000
+
+  [[band.segment]]
+  start = 10_051_000
+  end = 10_051_000
+  mode = "utility"
+  label = "VOLMET"
+  notes = "New York VOLMET"
+
+[[band]]
+name = "VOLMET 13"
+start = 13_270_000
+end = 13_270_000
+
+  [[band.segment]]
+  start = 13_270_000
+  end = 13_270_000
+  mode = "utility"
+  label = "VOLMET"
+  notes = "VOLMET — aviation weather"
+
+[[band]]
+name = "NY Radio"
+start = 13_306_000
+end = 13_306_000
+
+  [[band.segment]]
+  start = 13_306_000
+  end = 13_306_000
+  mode = "utility"
+  label = "NY ATC"
+  notes = "New York Radio — HF ATC"
+
+# ── Military ──
+
+[[band]]
+name = "HFGCS 4"
+start = 4_724_000
+end = 4_724_000
+
+  [[band.segment]]
+  start = 4_724_000
+  end = 4_724_000
+  mode = "military"
+  label = "HFGCS"
+  notes = "USAF High Frequency Global Communication System — EAM broadcasts"
+
+[[band]]
+name = "HFGCS 6"
+start = 6_739_000
+end = 6_739_000
+
+  [[band.segment]]
+  start = 6_739_000
+  end = 6_739_000
+  mode = "military"
+  label = "HFGCS"
+  notes = "USAF HFGCS"
+
+[[band]]
+name = "HFGCS 8"
+start = 8_992_000
+end = 8_992_000
+
+  [[band.segment]]
+  start = 8_992_000
+  end = 8_992_000
+  mode = "military"
+  label = "HFGCS"
+  notes = "USAF HFGCS — primary EAM frequency"
+
+[[band]]
+name = "HFGCS 11"
+start = 11_175_000
+end = 11_175_000
+
+  [[band.segment]]
+  start = 11_175_000
+  end = 11_175_000
+  mode = "military"
+  label = "HFGCS"
+  notes = "USAF HFGCS"
+
+[[band]]
+name = "HFGCS 13"
+start = 13_200_000
+end = 13_200_000
+
+  [[band.segment]]
+  start = 13_200_000
+  end = 13_200_000
+  mode = "military"
+  label = "HFGCS"
+  notes = "USAF HFGCS"
+
+[[band]]
+name = "HFGCS 15"
+start = 15_016_000
+end = 15_016_000
+
+  [[band.segment]]
+  start = 15_016_000
+  end = 15_016_000
+  mode = "military"
+  label = "HFGCS"
+  notes = "USAF HFGCS"
+
+# ── Числовые станции / интересные ──
+
+[[band]]
+name = "UVB-76"
+start = 4_625_000
+end = 4_625_000
+
+  [[band.segment]]
+  start = 4_625_000
+  end = 4_625_000
+  mode = "military"
+  label = "BUZZER"
+  notes = "UVB-76 'The Buzzer' — Russian military marker"
+
+# ── Citizens Band ──
+
+[[band]]
+name = "CB"
+start = 26_965_000
+end = 27_405_000
+
+  [[band.segment]]
+  start = 26_965_000
+  end = 27_405_000
+  mode = "utility"
+  label = "CB"
+  notes = "Citizens Band — 40 channels, AM/SSB"
+
+# ── Weather Fax ──
+
+[[band]]
+name = "WEFAX Boston"
+start = 6_340_500
+end = 6_340_500
+
+  [[band.segment]]
+  start = 6_340_500
+  end = 6_340_500
+  mode = "utility"
+  label = "WEFAX"
+  notes = "USCG Boston — HF weather fax"
+
+[[band]]
+name = "WEFAX NOLA"
+start = 8_503_900
+end = 8_503_900
+
+  [[band.segment]]
+  start = 8_503_900
+  end = 8_503_900
+  mode = "utility"
+  label = "WEFAX"
+  notes = "USCG New Orleans — HF weather fax"
+
+[[band]]
+name = "WEFAX Boston 12"
+start = 12_750_000
+end = 12_750_000
+
+  [[band.segment]]
+  start = 12_750_000
+  end = 12_750_000
+  mode = "utility"
+  label = "WEFAX"
+  notes = "USCG Boston — HF weather fax"
+
+# ── Pirate Radio ──
+
+[[band]]
+name = "Pirate 6925"
+start = 6_925_000
+end = 6_975_000
+
+  [[band.segment]]
+  start = 6_925_000
+  end = 6_975_000
+  mode = "other"
+  label = "PIRATE"
+  notes = "North American pirate radio — USB"
+
+[[band]]
+name = "Europirate 6.2-6.4"
+start = 6_200_000
+end = 6_400_000
+
+  [[band.segment]]
+  start = 6_200_000
+  end = 6_400_000
+  mode = "other"
+  label = "EUROPIRATE"
+  notes = "European pirate radio — AM/USB"
+
+[[band]]
+name = "Europirate 15"
+start = 15_040_000
+end = 15_070_000
+
+  [[band.segment]]
+  start = 15_040_000
+  end = 15_070_000
+  mode = "other"
+  label = "EUROPIRATE"
+  notes = "European pirate radio"
+
+# ── Emergency / Ham Nets ──
+
+[[band]]
+name = "INTERCON"
+start = 14_300_000
+end = 14_300_000
+
+  [[band.segment]]
+  start = 14_300_000
+  end = 14_300_000
+  mode = "utility"
+  label = "INTERCON"
+  notes = "Intercontinental Assistance & Traffic Net — amateur emergency"
+
+[[band]]
+name = "SATERN"
+start = 14_265_000
+end = 14_265_000
+
+  [[band.segment]]
+  start = 14_265_000
+  end = 14_265_000
+  mode = "utility"
+  label = "SATERN"
+  notes = "Salvation Army Team Emergency Radio Network"

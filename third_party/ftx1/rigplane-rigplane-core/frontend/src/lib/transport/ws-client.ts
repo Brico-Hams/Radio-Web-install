@@ -1,0 +1,1281 @@
+import type { WsCommand, WsIncoming } from '../types/protocol';
+import { makeCommandId } from '../types/protocol';
+import { refusalBlockedReason, type KeyBlockedReason } from '../../semantic/rx-tx-surface';
+import { isLiveRadioAvailable, setWsConnected, markStateUpdated, setReconnecting, setRadioStatus } from '../stores/connection.svelte';
+import { setRxSilent } from '../stores/rx-silence.svelte';
+import { isValidServerState, matchesCurrentCapabilityTopology, resetRadioState, setRadioState } from '../stores/radio.svelte';
+import { isStateAdvance, type StateAdvanceBaseline } from '../stores/live-metadata';
+import { capabilitiesMatchGeneration, clearCapabilities, setCapabilities } from '../stores/capabilities.svelte';
+import { fetchCapabilities } from './http-client';
+import { authenticatedWsUrl, withoutWsAuthToken, withWsSearchParam } from './ws-url';
+import { controllerClient, ControllerClientError } from './controller-client';
+import { applyStateDelta, stateDeltaOps } from './state-delta';
+import type { MessageTransport } from './message-transport';
+import { createMessageTransport } from './transport-factory';
+
+export type ConnectionState = 'disconnected' | 'connecting' | 'connected' | 'reconnecting';
+export interface ControlSessionTransition {
+  state: ConnectionState;
+  epoch: number;
+}
+export type CommandDeliveryKind = 'transport-sent' | 'ack' | 'response-ok' | 'response-error' | 'error';
+export interface CommandDeliveryEvent {
+  commandId: string;
+  kind: CommandDeliveryKind;
+  originalEpoch: number;
+  eventEpoch: number;
+  error?: string;
+  cancelled?: boolean;
+  /** Sanitized finite 0..1 `result.admitted_level`, only on a response-ok frame. */
+  admittedLevel?: number;
+  /** Sanitized non-negative safe-integer `result.admitted_width` (Hz), only on a response-ok frame. */
+  admittedWidth?: number;
+}
+export type CommandLifecycleDeliveryKind = 'held' | 'superseded' | 'timed-out' | 'failed';
+export interface CommandLifecycleDeliveryEvent {
+  commandId: string;
+  kind: CommandLifecycleDeliveryKind;
+  originalEpoch: number;
+  eventEpoch: number;
+  reason?: string;
+  expiresAt?: number;
+  error?: string;
+}
+export interface CommandReconciliationDeliveryEvent {
+  commandId: string;
+  kind: 'reconciled';
+  originalEpoch: number;
+  eventEpoch: number;
+  revision: number;
+  observationSeq: number;
+}
+type MessageHandler = (msg: WsIncoming) => void;
+type BinaryHandler = (data: ArrayBuffer) => void;
+type StateHandler = (state: ConnectionState) => void;
+export type ControlSessionTransitionHandler = (transition: ControlSessionTransition) => void;
+type CommandDeliveryHandler = (event: CommandDeliveryEvent) => void;
+type CommandLifecycleDeliveryHandler = (event: CommandLifecycleDeliveryEvent) => void;
+type CommandReconciliationDeliveryHandler = (event: CommandReconciliationDeliveryEvent) => void;
+type PendingPttRelease = { command: WsCommand; originalEpoch: number };
+type TrackedPttCommand = PendingPttRelease & {
+  seen: Set<CommandDeliveryKind>;
+};
+type PendingNonPttCommand = { command: WsCommand; originalEpoch: number };
+type TrackedNonPttCommand = TrackedPttCommand & { eventEpoch: number };
+type TrackedLifecycleCommand = {
+  originalEpoch: number;
+  eventEpoch: number;
+  seen: Set<CommandLifecycleDeliveryKind>;
+};
+
+const BACKOFF_BASE_MS = 1_000;
+const BACKOFF_MAX_MS = 30_000;
+const HEARTBEAT_TIMEOUT_MS = 30_000;  // server may be idle on control WS
+const KEEPALIVE_INTERVAL_MS = 15_000; // send ping to prevent idle timeout
+const MAX_QUEUE_SIZE = 20;
+const MAX_TRACKED_PTT_COMMANDS = 100;
+const MAX_TRACKED_NON_PTT_COMMANDS = 100;
+const MAX_TRACKED_LIFECYCLE_COMMANDS = 100;
+
+// Command types where only the latest value matters (last write wins)
+const IDEMPOTENT_TYPES = new Set(['set_freq', 'set_mode', 'set_filter']);
+
+function pttIntent(name: string, params: Record<string, unknown>): 'on' | 'off' | null {
+  if (name === 'ptt_on') return 'on';
+  if (name === 'ptt_off') return 'off';
+  if (name === 'ptt' && params.state === true) return 'on';
+  if (name === 'ptt' && params.state === false) return 'off';
+  return null;
+}
+
+function calcBackoff(attempt: number): number {
+  const base = Math.min(BACKOFF_BASE_MS * 2 ** attempt, BACKOFF_MAX_MS);
+  return base * (0.8 + Math.random() * 0.4);
+}
+
+function isTabHidden(): boolean {
+  return typeof document !== 'undefined' && document.visibilityState === 'hidden';
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    && Object.getPrototypeOf(value) === Object.prototype;
+}
+
+const FIELD_TOKEN = '[a-z0-9_]+';
+const FIELD_FAMILY = '(?:freq_mode|vfo|operator_toggles|operator_controls|meters|tx_state|slow_state|display|connection|health)';
+const LIFECYCLE_TARGET = new RegExp(
+  `^(?:receiver\\.${FIELD_TOKEN}\\.(?:(?:slot\\.[AB]|active|unselected)\\.freq_mode\\.${FIELD_TOKEN}|${FIELD_FAMILY}\\.${FIELD_TOKEN})|(?:global|connection|health)\\.${FIELD_FAMILY}\\.${FIELD_TOKEN}|scope_controls\\.(?:receiver\\.${FIELD_TOKEN}|global)\\.display\\.${FIELD_TOKEN})$`,
+);
+
+function reconciliationEvidence(value: unknown): { revision: number; observationSeq: number } | null {
+  if (!isPlainRecord(value)) return null;
+  const keys = Reflect.ownKeys(value);
+  if (keys.length !== 2 || !keys.includes('revision') || !keys.includes('observationSeq')) return null;
+  const revision = Object.getOwnPropertyDescriptor(value, 'revision');
+  const observationSeq = Object.getOwnPropertyDescriptor(value, 'observationSeq');
+  if (!revision || !('value' in revision) || !observationSeq || !('value' in observationSeq)) return null;
+  if (!Number.isSafeInteger(revision.value) || revision.value < 0) return null;
+  if (!Number.isSafeInteger(observationSeq.value) || observationSeq.value < 0) return null;
+  return { revision: revision.value as number, observationSeq: observationSeq.value as number };
+}
+
+/** Only a finite 0..1 `result.admitted_level` on an ok response frame is evidence. */
+function admittedLevelOf(raw: Record<string, unknown>): number | undefined {
+  if (raw.type !== 'response' || raw.ok === false || !isPlainRecord(raw.result)) return undefined;
+  const value = raw.result['admitted_level'];
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1
+    ? value : undefined;
+}
+
+/** Only a non-negative safe-integer `result.admitted_width` on an ok response frame is evidence. */
+function admittedWidthOf(raw: Record<string, unknown>): number | undefined {
+  if (raw.type !== 'response' || raw.ok === false || !isPlainRecord(raw.result)) return undefined;
+  const value = raw.result['admitted_width'];
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
+    ? value : undefined;
+}
+
+// ─── Close observability (MOR-1424) ─────────────────────────────────────────
+//
+// The client previously discarded the WS CloseEvent entirely (onerror just
+// called ws.close()), making reconnect-churn incidents impossible to
+// attribute. This records the most recent close across all channels
+// (control + named channels) for diagnostics.
+export interface WsCloseInfo {
+  code: number;
+  reason: string;
+  wasClean: boolean;
+  url: string;
+  timestamp: number;
+}
+
+let _lastCloseInfo: WsCloseInfo | null = null;
+
+export function getLastCloseInfo(): WsCloseInfo | null {
+  return _lastCloseInfo;
+}
+
+export class WsChannel {
+  private ws: MessageTransport | null = null;
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private heartbeatTimer: ReturnType<typeof setTimeout> | null = null;
+  /** `performance.now()` of the newest frame from the current socket. */
+  private lastServerFrameAt = 0;
+  private keepaliveTimer: ReturnType<typeof setInterval> | null = null;
+  private attempt = 0;
+  private intentionalClose = false;
+  private sendQueue: PendingNonPttCommand[] = [];
+  private pendingPttRelease: PendingPttRelease | null = null;
+  private transportEpoch = 0;
+  private trackedPttCommands = new Map<string, TrackedPttCommand>();
+  private trackedNonPttCommands = new Map<string, TrackedNonPttCommand>();
+  private trackedLifecycleCommands = new Map<string, TrackedLifecycleCommand>();
+  private commandDeliveryHandlers = new Set<CommandDeliveryHandler>();
+  private commandLifecycleDeliveryHandlers = new Set<CommandLifecycleDeliveryHandler>();
+  private commandReconciliationDeliveryHandlers = new Set<CommandReconciliationDeliveryHandler>();
+  private messageHandlers = new Set<MessageHandler>();
+  private binaryHandlers = new Set<BinaryHandler>();
+  private stateHandlers = new Set<StateHandler>();
+  private sessionTransitionHandlers = new Set<ControlSessionTransitionHandler>();
+  private sessionTransitionQueue: ControlSessionTransition[] = [];
+  private dispatchingSessionTransition = false;
+  private _state: ConnectionState = 'disconnected';
+  private url = '';
+  private _subscribeMsg: Record<string, unknown> | null = null;
+  // MOR-1424: while the tab is hidden, the browser throttles/never-completes
+  // the WS handshake — retrying on a growing backoff just burns attempts
+  // against a connection that can't succeed yet. This flag remembers that a
+  // reconnect is owed once the tab becomes visible again.
+  private reconnectPendingVisibility = false;
+  private controllerEpoch = 0;
+  private opening = 0;
+
+  constructor(private readonly control = true) {
+    controllerClient.onLoss(() => {
+      this.sendQueue = [];
+      this.pendingPttRelease = null;
+      this.trackedPttCommands.clear();
+      this.cancelNonPtt('controller_lost');
+      if (controllerClient.remote) {
+        this.disconnect();
+        if (this.control) this.emitLocalNotification('error', new ControllerClientError('controller_lost').message, 'controller_lost');
+        return;
+      }
+      // MOR-3535: a lost local session recovers silently — reconnect through
+      // prepare() so this channel re-attaches with the fresh session key.
+      // A channel closed on purpose stays closed.
+      const resume = !this.intentionalClose && !!this.url;
+      this.disconnect();
+      if (resume) this.connect(this.url);
+    });
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', this._onVisibilityChange);
+    }
+  }
+
+  /** Register a message to re-send automatically on every (re)connect. */
+  setSubscribeMessage(msg: Record<string, unknown>) {
+    this._subscribeMsg = msg;
+  }
+
+  /** JSON controls are not command envelopes and are never queued across sessions. */
+  sendRaw(message: Record<string, unknown>): boolean {
+    if ((controllerClient.remote || controllerClient.session) && !controllerClient.current(this.controllerEpoch)) return false;
+    if (this.ws?.state !== 'open' || this._state !== 'connected') return false;
+    this.ws.send(JSON.stringify(message));
+    return true;
+  }
+
+  private _onVisibilityChange = () => {
+    if (isTabHidden()) {
+      // Pause the retry loop — cancel any already-scheduled reconnect, but
+      // never touch a healthy open (or in-flight connecting) socket.
+      if (this.reconnectTimer) {
+        clearTimeout(this.reconnectTimer);
+        this.reconnectTimer = null;
+        this.reconnectPendingVisibility = true;
+      }
+      return;
+    }
+    if (this.reconnectPendingVisibility && !this.intentionalClose) {
+      this.reconnectPendingVisibility = false;
+      this.attempt = 0;
+      this._open();
+    }
+  };
+
+  get state(): ConnectionState {
+    return this._state;
+  }
+
+  private setState(s: ConnectionState) {
+    const changed = this._state !== s;
+    this._state = s;
+    this.stateHandlers.forEach((h) => h(s));
+    if (changed) {
+      this._emitSessionTransition({ state: s, epoch: this.transportEpoch });
+    }
+  }
+
+  private _emitSessionTransition(transition: ControlSessionTransition): void {
+    this.sessionTransitionQueue.push(transition);
+    if (this.dispatchingSessionTransition) return;
+    this.dispatchingSessionTransition = true;
+    try {
+      while (this.sessionTransitionQueue.length > 0) {
+        const next = this.sessionTransitionQueue.shift()!;
+        for (const handler of [...this.sessionTransitionHandlers]) handler(next);
+      }
+    } finally {
+      this.dispatchingSessionTransition = false;
+    }
+  }
+
+  connect(url: string) {
+    const st = this.ws?.state;
+    if (st === 'open' || st === 'connecting') return;
+    this.url = withoutWsAuthToken(url);
+    this.intentionalClose = false;
+    // A fresh explicit connect supersedes any stale "reconnect once visible"
+    // debt from a previous, unrelated hidden episode.
+    this.reconnectPendingVisibility = false;
+    this._open();
+  }
+
+  private _open() {
+    const transportState = this.ws?.state;
+    if (transportState === 'open' || transportState === 'connecting') return;
+    if (!controllerClient.sessionMode) { this._openSocket(); return; }
+    const opening = ++this.opening;
+    this.setState(this.attempt === 0 ? 'connecting' : 'reconnecting');
+    void (controllerClient.remote ? Promise.resolve() : controllerClient.prepare())
+      .then(() => {
+        const epoch = controllerClient.epoch;
+        const ready = this.control ? Promise.resolve() : controllerClient.waitForPrimary();
+        return ready.then(() => {
+          if (opening === this.opening && !this.intentionalClose && controllerClient.valid(epoch)) this._openSocket();
+        });
+      })
+      .catch(() => {
+        if (opening !== this.opening) return;
+        this.setState('disconnected');
+        if (controllerClient.remote || this.intentionalClose) return;
+        // MOR-3535: retry the local session acquisition with backoff.
+        this.reconnectTimer = setTimeout(() => {
+          this.reconnectTimer = null;
+          this._open();
+        }, calcBackoff(this.attempt++));
+      });
+  }
+
+  private _openSocket() {
+    this.setState(this.attempt === 0 ? 'connecting' : 'reconnecting');
+    const protocols = controllerClient.protocols();
+    if (controllerClient.remote) {
+      this.sendQueue = [];
+      this.pendingPttRelease = null;
+    }
+    const epoch = controllerClient.epoch;
+    this.controllerEpoch = epoch;
+    let target = authenticatedWsUrl(this.url);
+    if (this.control && controllerClient.session) {
+      target = withWsSearchParam(target, 'controller_role', controllerClient.role);
+    }
+    const ws = createMessageTransport();
+    let socketEpoch = 0;
+    this.ws = ws;
+    ws.open(target, protocols.length > 0 ? { protocols, role: controllerClient.role } : undefined);
+
+    ws.onOpen(() => {
+      if (protocols.length > 0) {
+        if (!controllerClient.valid(epoch) || ws.attachedProtocol !== protocols[0]) { ws.close(); return; }
+        if (this.control) controllerClient.controlOpened((message) => ws.send(JSON.stringify(message)));
+      }
+      socketEpoch = ++this.transportEpoch;
+      this.attempt = 0;
+      this.setState('connected');
+      if (
+        this.ws !== ws
+        || ws.state !== 'open'
+        || this._state !== 'connected'
+        || socketEpoch !== this.transportEpoch
+      ) return;
+      this._resetHeartbeat();
+      this._startKeepalive();
+      // drain send queue
+      const release = this.pendingPttRelease;
+      this.pendingPttRelease = null;
+      if (release) this._sendPtt(ws, release, socketEpoch);
+      const queued = this.sendQueue.splice(0);
+      for (const pending of queued) this._sendNonPtt(ws, pending, socketEpoch);
+      // Re-send subscribe on every (re)connect so server pushes state immediately
+      if (this._subscribeMsg) ws.send(JSON.stringify(this._subscribeMsg));
+    });
+
+    ws.onBinary((data: ArrayBuffer) => {
+      if (this.ws !== ws) return;
+      this._resetHeartbeat();
+      this.binaryHandlers.forEach((h) => h(data));
+    });
+
+    ws.onText((text: string) => {
+      if (protocols.length > 0 && (this.ws !== ws || !controllerClient.current(epoch))) return;
+      if (this.ws === ws) this._resetHeartbeat();
+      {
+        try {
+          const raw = JSON.parse(text) as Record<string, unknown>;
+          if (this.control && controllerClient.acknowledge(raw)) return;
+          if (raw['type'] === 'command_lifecycle') {
+            this._emitCommandLifecycle(raw, socketEpoch);
+            return;
+          }
+          this._emitCommandResult(raw, socketEpoch);
+          // Handle status-based error responses ({"status":"error", ...})
+          if (raw['status'] === 'error') {
+            const errorMsg = (raw['message'] as string) || (raw['error'] as string) || 'Command failed';
+            console.error(`[ws] error response:`, raw);
+            const errNote = { type: 'notification', level: 'error', message: errorMsg, category: 'command' } as any;
+            this.messageHandlers.forEach((h) => h(errNote));
+            return;
+          }
+          const msg = raw as unknown as WsIncoming;
+          this.messageHandlers.forEach((h) => h(msg));
+          if (msg.type === 'error') {
+            console.error(`[ws] error from server (id=${msg.id}): ${msg.message}`);
+          } else if (msg.type === 'response') {
+            if (msg.ok === false) {
+              const errorMsg = msg.message || msg.error || 'Command failed';
+              console.error(`[ws] command ${msg.id} failed: ${errorMsg}`);
+              for (const h of this.messageHandlers) {
+                h({ type: 'notification', level: 'error', message: errorMsg, category: 'command' } as any);
+              }
+            } else {
+              console.debug(`[ws] command ${msg.id} ok`);
+            }
+          }
+        } catch {
+          // ignore malformed frames
+        }
+      }
+    });
+
+    // An error closes the socket inside the transport, so the close path
+    // below (and the reconnect policy on it) runs — no handler needed here.
+    ws.onClose((info) => {
+      _lastCloseInfo = {
+        code: info.code,
+        reason: info.reason,
+        wasClean: info.wasClean,
+        url: this.url,
+        timestamp: Date.now(),
+      };
+      console.info('[ws] closed', _lastCloseInfo);
+      if (this.ws !== ws) return;
+      this._clearHeartbeat();
+      this._stopKeepalive();
+      this.trackedNonPttCommands.clear();
+      this.trackedLifecycleCommands.clear();
+      this.ws = null;
+      if (this.control && !this.intentionalClose
+        && controllerClient.session && controllerClient.valid(epoch)) {
+        controllerClient.lose();
+        return;
+      }
+      this.setState('disconnected');
+      if (!this.intentionalClose) {
+        if (isTabHidden()) {
+          // Don't burn attempts against a throttled handshake — resume from
+          // the visibilitychange listener once the tab is visible again.
+          this.reconnectPendingVisibility = true;
+        } else {
+          const delay = calcBackoff(this.attempt++);
+          this.reconnectTimer = setTimeout(() => {
+            this.reconnectTimer = null;
+            this._open();
+          }, delay);
+        }
+      }
+    });
+  }
+
+  /** Reconnect using the last-known URL (no-op if never connected or already open). */
+  reconnect() {
+    if (!this.url) return;
+    this.connect(this.url);
+  }
+
+  disconnect() {
+    this.opening += 1;
+    this.intentionalClose = true;
+    this._clearTimers();
+    const { ws } = this;
+    this.ws = null;
+    this.trackedNonPttCommands.clear();
+    this.trackedLifecycleCommands.clear();
+    // A channel still connecting is closed silently after open, inside the
+    // transport — the old disconnect-CONNECTING branch, unchanged.
+    if (ws) ws.close();
+    this.setState('disconnected');
+    this.attempt = 0;
+    if (this.control && controllerClient.remote && controllerClient.valid(this.controllerEpoch)) controllerClient.lose();
+  }
+
+  send(cmd: WsCommand): boolean {
+    if (controllerClient.remote || controllerClient.session) {
+      if (!controllerClient.current(this.controllerEpoch)) return false;
+      if (controllerClient.remote && this.ws?.state !== 'open') return false;
+    }
+    if (this.ws?.state === 'open') {
+      const intent = pttIntent(cmd.name, cmd.params);
+      if (intent) {
+        return this._sendPtt(
+          this.ws,
+          { command: cmd, originalEpoch: this.transportEpoch },
+          this.transportEpoch,
+        );
+      }
+      return this._sendNonPtt(
+        this.ws,
+        { command: cmd, originalEpoch: this.transportEpoch },
+        this.transportEpoch,
+      );
+    }
+    const intent = pttIntent(cmd.name, cmd.params);
+    if (intent === 'on') {
+      return false;
+    }
+    if (intent === 'off') {
+      this.pendingPttRelease = { command: cmd, originalEpoch: this.transportEpoch };
+      return false;
+    }
+    if (!IDEMPOTENT_TYPES.has(cmd.name)) {
+      this._rejectNonPtt(cmd.id, this.transportEpoch, 'offline non-idempotent command rejected');
+      return false;
+    }
+    // Deduplicate idempotent commands — keep only the latest value
+    const superseded = this.sendQueue.find((pending) => pending.command.name === cmd.name);
+    if (superseded) {
+      this._rejectNonPtt(superseded.command.id, superseded.originalEpoch, 'superseded by newer offline command');
+      this.sendQueue = this.sendQueue.filter((pending) => pending.command.name !== cmd.name);
+    }
+    this.sendQueue.push({ command: cmd, originalEpoch: this.transportEpoch });
+    // Drop oldest if over limit
+    if (this.sendQueue.length > MAX_QUEUE_SIZE) {
+      const dropped = this.sendQueue.shift()!;
+      this._rejectNonPtt(dropped.command.id, dropped.originalEpoch, 'offline command queue capacity exceeded');
+    }
+    return false;
+  }
+
+  isConnected(): boolean {
+    return this.ws?.state === 'open';
+  }
+
+  onMessage(handler: MessageHandler): () => void {
+    this.messageHandlers.add(handler);
+    return () => this.messageHandlers.delete(handler);
+  }
+
+  /**
+   * MOR-1422: a client-synthesized notification, delivered through the SAME
+   * bus a server `{"type":"notification"}` frame uses (the `errNote`
+   * pattern above) — so the one shipped toast surface (`components/shared/
+   * Toast.svelte`) renders it with no changes of its own. `code` is resolved
+   * to `core.toast.<code>` by `messageFromReasonCode`; `message` is the
+   * English fallback for a caller that never supplied one.
+   */
+  emitLocalNotification(
+    level: 'info' | 'warning' | 'error',
+    message: string,
+    code: string,
+    params?: Record<string, string | number>,
+  ): void {
+    const note: WsIncoming = {
+      type: 'notification', level, message, code, category: 'command',
+      ...(params ? { params } : {}),
+    };
+    this.messageHandlers.forEach((h) => h(note));
+  }
+
+  onBinary(handler: BinaryHandler): () => void {
+    this.binaryHandlers.add(handler);
+    return () => this.binaryHandlers.delete(handler);
+  }
+
+  onStateChange(handler: StateHandler): () => void {
+    this.stateHandlers.add(handler);
+    return () => this.stateHandlers.delete(handler);
+  }
+
+  onSessionTransition(handler: ControlSessionTransitionHandler): () => void {
+    this.sessionTransitionHandlers.add(handler);
+    return () => this.sessionTransitionHandlers.delete(handler);
+  }
+
+  onCommandDelivery(handler: CommandDeliveryHandler): () => void {
+    this.commandDeliveryHandlers.add(handler);
+    return () => this.commandDeliveryHandlers.delete(handler);
+  }
+
+  onCommandLifecycleDelivery(handler: CommandLifecycleDeliveryHandler): () => void {
+    this.commandLifecycleDeliveryHandlers.add(handler);
+    return () => this.commandLifecycleDeliveryHandlers.delete(handler);
+  }
+
+  onCommandReconciliationDelivery(handler: CommandReconciliationDeliveryHandler): () => void {
+    this.commandReconciliationDeliveryHandlers.add(handler);
+    return () => this.commandReconciliationDeliveryHandlers.delete(handler);
+  }
+
+  get sessionEpoch(): number {
+    return this.transportEpoch;
+  }
+
+  rejectNonPtt(commandId: string, error: string): void {
+    this._rejectNonPtt(commandId, this.transportEpoch, error);
+  }
+
+  cancelNonPtt(error: string): void {
+    for (const tracked of this.trackedNonPttCommands.values()) {
+      this._rejectNonPtt(tracked.command.id, tracked.originalEpoch, error, this.transportEpoch, true);
+    }
+    this.trackedNonPttCommands.clear();
+    this.trackedLifecycleCommands.clear();
+  }
+
+  private _sendPtt(ws: MessageTransport, pending: PendingPttRelease, eventEpoch: number): boolean {
+    try {
+      ws.send(JSON.stringify(pending.command));
+    } catch (error) {
+      this._emitDelivery({
+        commandId: pending.command.id,
+        kind: 'error',
+        originalEpoch: pending.originalEpoch,
+        eventEpoch,
+        error: error instanceof Error ? error.message : 'WebSocket send failed',
+      });
+      return false;
+    }
+    const tracked: TrackedPttCommand = { ...pending, seen: new Set() };
+    if (this.trackedPttCommands.size >= MAX_TRACKED_PTT_COMMANDS) {
+      this.trackedPttCommands.delete(this.trackedPttCommands.keys().next().value!);
+    }
+    this.trackedPttCommands.set(pending.command.id, tracked);
+    this._emitTracked(tracked, 'transport-sent', eventEpoch);
+    return true;
+  }
+
+  private _sendNonPtt(ws: MessageTransport, pending: PendingNonPttCommand, eventEpoch: number): boolean {
+    if (this.trackedNonPttCommands.size >= MAX_TRACKED_NON_PTT_COMMANDS) {
+      this._rejectNonPtt(
+        pending.command.id, pending.originalEpoch, 'delivery tracking capacity exceeded', eventEpoch,
+      );
+      return false;
+    }
+    try {
+      ws.send(JSON.stringify(pending.command));
+    } catch (error) {
+      this._rejectNonPtt(
+        pending.command.id, pending.originalEpoch,
+        error instanceof Error ? error.message : 'WebSocket send failed', eventEpoch,
+      );
+      return false;
+    }
+    const tracked: TrackedNonPttCommand = { ...pending, eventEpoch, seen: new Set() };
+    this.trackedNonPttCommands.set(pending.command.id, tracked);
+    const lifecycleId = pending.command.id;
+    if (typeof lifecycleId === 'string' && lifecycleId.trim().length > 0) {
+      this.trackedLifecycleCommands.delete(lifecycleId);
+      if (this.trackedLifecycleCommands.size >= MAX_TRACKED_LIFECYCLE_COMMANDS) {
+        this.trackedLifecycleCommands.delete(this.trackedLifecycleCommands.keys().next().value!);
+      }
+      this.trackedLifecycleCommands.set(lifecycleId, {
+        originalEpoch: pending.originalEpoch, eventEpoch, seen: new Set(),
+      });
+    }
+    this._emitTracked(tracked, 'transport-sent', tracked.eventEpoch);
+    return true;
+  }
+
+  private _emitCommandResult(raw: Record<string, unknown>, eventEpoch: number): void {
+    const id = raw.id;
+    if (typeof id !== 'string') return;
+    const tracked = this.trackedPttCommands.get(id);
+    if (tracked && raw.type === 'ack') this._emitTracked(tracked, 'ack', eventEpoch);
+    else if (raw.type === 'response') {
+      if (tracked) this._emitTracked(tracked, raw.ok === false ? 'response-error' : 'response-ok', eventEpoch);
+    } else if (raw.type === 'error' || raw.status === 'error') {
+      if (tracked) this._emitTracked(tracked, 'error', eventEpoch, String(raw.message ?? raw.error ?? 'Command failed'));
+    }
+    const generic = this.trackedNonPttCommands.get(id);
+    if (!generic || generic.eventEpoch !== eventEpoch) return;
+    if (raw.type === 'ack') this._emitTracked(generic, 'ack', generic.eventEpoch);
+    else if (raw.type === 'response') {
+      this._emitTracked(
+        generic,
+        raw.ok === false ? 'response-error' : 'response-ok',
+        generic.eventEpoch,
+        raw.ok === false ? String(raw.message ?? raw.error ?? 'Command failed') : undefined,
+        raw.ok === false ? undefined : admittedLevelOf(raw),
+        raw.ok === false ? undefined : admittedWidthOf(raw),
+      );
+      this.trackedNonPttCommands.delete(id);
+    } else if (raw.type === 'error' || raw.status === 'error') {
+      this._emitTracked(generic, 'error', generic.eventEpoch, String(raw.message ?? raw.error ?? 'Command failed'));
+      this.trackedNonPttCommands.delete(id);
+    }
+    const lifecycle = this.trackedLifecycleCommands.get(id);
+    if (lifecycle?.eventEpoch === eventEpoch && (
+      (raw.type === 'response' && raw.ok === false) || raw.type === 'error' || raw.status === 'error'
+    )) this.trackedLifecycleCommands.delete(id);
+  }
+
+  private _emitCommandLifecycle(raw: Record<string, unknown>, eventEpoch: number): void {
+    if (!isPlainRecord(raw)) return;
+    const id = raw.commandId;
+    const state = raw.state;
+    if (typeof id !== 'string' || id.trim().length === 0) return;
+    if (state !== 'queued' && state !== 'superseded' && state !== 'timed_out' && state !== 'failed' && state !== 'reconciled') return;
+    const tracked = this.trackedLifecycleCommands.get(id);
+    if (!tracked || tracked.eventEpoch !== eventEpoch) return;
+
+    if (state === 'reconciled') {
+      if (
+        raw.source !== 'websocket'
+        || typeof raw.target !== 'string'
+        || !LIFECYCLE_TARGET.test(raw.target)
+        || typeof raw.timestampMonotonic !== 'number'
+        || !Number.isFinite(raw.timestampMonotonic)
+        || raw.message !== 'confirmed by matching observation'
+      ) return;
+      const evidence = reconciliationEvidence(raw.details);
+      if (!evidence) return;
+      // Consume the terminal correlation before dispatch: a reentrant or duplicate
+      // frame must find nothing to correlate, and one throwing subscriber must not
+      // starve the rest or keep the correlation alive.
+      this.trackedLifecycleCommands.delete(id);
+      const delivery: CommandReconciliationDeliveryEvent = {
+        commandId: id, kind: 'reconciled', originalEpoch: tracked.originalEpoch, eventEpoch,
+        ...evidence,
+      };
+      for (const handler of [...this.commandReconciliationDeliveryHandlers]) {
+        try {
+          handler(delivery);
+        } catch (error) {
+          console.error('[ws] reconciliation subscriber failed', error);
+        }
+      }
+      return;
+    }
+
+    let kind: CommandLifecycleDeliveryKind;
+    let reason: string | undefined;
+    let expiresAt: number | undefined;
+    let error: string | undefined;
+    if (state === 'queued') {
+      const details = raw.details;
+      if (!isPlainRecord(details) || details.heldBy !== 'tx_interlock' || details.reason !== 'tx_active') return;
+      if (typeof details.expiresAt !== 'number' || !Number.isFinite(details.expiresAt) || details.expiresAt < 0) return;
+      kind = 'held';
+      reason = 'tx_active';
+      expiresAt = details.expiresAt;
+    } else {
+      if (raw.message !== undefined && raw.message !== null && typeof raw.message !== 'string') return;
+      kind = state === 'timed_out' ? 'timed-out' : state;
+      /**
+       * MOR-1890: on a `failed` frame, `details` used to die unread — the
+       * server's refusal code reached the client and was dropped here. Read
+       * exactly one validation: a `blockedBy: 'tx_interlock'` refusal named
+       * by a known snake_case wire code maps onto the semantic blocked
+       * vocabulary (kebab-case) and then REPLACES the raw English message
+       * as `error`, so the refusal can render from its i18n key. Anything
+       * unrecognised falls back to the raw message verbatim.
+       */
+      let refusalReason: KeyBlockedReason | undefined;
+      if (state === 'failed' && isPlainRecord(raw.details)) {
+        const wireReason = raw.details.reason;
+        refusalReason = raw.details.blockedBy === 'tx_interlock' && typeof wireReason === 'string'
+          ? refusalBlockedReason(wireReason) : undefined;
+      }
+      reason = refusalReason;
+      error = refusalReason ?? (typeof raw.message === 'string' ? raw.message : undefined);
+    }
+    if (tracked.seen.has(kind)) return;
+    tracked.seen.add(kind);
+    this.commandLifecycleDeliveryHandlers.forEach((handler) => handler({
+      commandId: id, kind, originalEpoch: tracked.originalEpoch, eventEpoch,
+      ...(reason ? { reason } : {}), ...(expiresAt !== undefined ? { expiresAt } : {}),
+      ...(error !== undefined ? { error } : {}),
+    }));
+    if (kind !== 'held') this.trackedLifecycleCommands.delete(id);
+  }
+
+  private _rejectNonPtt(
+    commandId: string, originalEpoch: number, error: string,
+    eventEpoch = this.transportEpoch, cancelled = false,
+  ): void {
+    this._emitDelivery({
+      commandId, kind: 'error', originalEpoch, eventEpoch, error,
+      ...(cancelled ? { cancelled } : {}),
+    });
+  }
+
+  private _emitTracked(
+    tracked: TrackedPttCommand,
+    kind: CommandDeliveryKind,
+    eventEpoch: number,
+    error?: string,
+    admittedLevel?: number,
+    admittedWidth?: number,
+  ): void {
+    if (tracked.seen.has(kind)) return;
+    tracked.seen.add(kind);
+    this._emitDelivery({
+      commandId: tracked.command.id,
+      kind,
+      originalEpoch: tracked.originalEpoch,
+      eventEpoch,
+      ...(error ? { error } : {}),
+      ...(admittedLevel !== undefined ? { admittedLevel } : {}),
+      ...(admittedWidth !== undefined ? { admittedWidth } : {}),
+    });
+  }
+
+  private _emitDelivery(event: CommandDeliveryEvent): void {
+    this.commandDeliveryHandlers.forEach((handler) => handler(event));
+  }
+
+  /**
+   * A server frame arrived: the silence deadline moves to 30 s from now.
+   * MOR-4213: the frame only records its time. One timer stays armed and, on
+   * waking early, sleeps for the rest of the deadline; clearing and re-arming
+   * a timer on every frame cost two timer calls per message (tens a second).
+   */
+  private _resetHeartbeat() {
+    this.lastServerFrameAt = performance.now();
+    if (this.heartbeatTimer === null) this._armHeartbeat(HEARTBEAT_TIMEOUT_MS);
+  }
+
+  private _armHeartbeat(delayMs: number) {
+    this.heartbeatTimer = setTimeout(() => {
+      this.heartbeatTimer = null;
+      const silentMs = performance.now() - this.lastServerFrameAt;
+      if (silentMs < HEARTBEAT_TIMEOUT_MS) {
+        this._armHeartbeat(HEARTBEAT_TIMEOUT_MS - silentMs);
+        return;
+      }
+      console.warn('[ws] heartbeat timeout — closing');
+      this.ws?.close();
+    }, delayMs);
+  }
+
+  private _clearHeartbeat() {
+    if (this.heartbeatTimer) {
+      clearTimeout(this.heartbeatTimer);
+      this.heartbeatTimer = null;
+    }
+  }
+
+  private _startKeepalive() {
+    this._stopKeepalive();
+    this.keepaliveTimer = setInterval(() => {
+      if (this.ws?.state === 'open') {
+        this.ws.send(JSON.stringify({ type: 'ping' }));
+      }
+    }, KEEPALIVE_INTERVAL_MS);
+  }
+
+  private _stopKeepalive() {
+    if (this.keepaliveTimer) {
+      clearInterval(this.keepaliveTimer);
+      this.keepaliveTimer = null;
+    }
+  }
+
+  private _clearTimers() {
+    this._clearHeartbeat();
+    this._stopKeepalive();
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+  }
+}
+
+// ─── Control channel singleton (backward-compat API) ───────────────────────
+
+const _ctrl = new WsChannel();
+_ctrl.onStateChange((s) => {
+  setWsConnected(s === 'connected');
+  setReconnecting(s === 'connecting' || s === 'reconnecting');
+  if (s === 'disconnected') {
+    _fullState = null;
+    _hasReceivedFullState = false;
+    _acceptedProviderGeneration = null;
+    _expectedProviderGeneration = null;
+    cancelCapabilitiesRefresh();
+    resetRadioState();
+    clearCapabilities();
+    // MOR-1526 (F1 verifier finding): a WS drop that never gets a terminal
+    // `connection_status` event (server restart; reconnect_loop hitting
+    // asyncio.CancelledError on either exit path in radio_reconnect.py)
+    // used to leave `radioStatus` stuck at 'connecting'/'reconnecting'
+    // forever — the reconnect overlay then permanently suppressed the
+    // honest steady-state facts once the session reconnected to a server
+    // that (by the ticket's own premise) never emits `connection_status`
+    // on a healthy session. Reset it here so the overlay clears across
+    // every disconnect path, not just the ones that happen to emit a
+    // terminal event.
+    //
+    // R2 ruling: rigConnected/radioReady/radioHealth are deliberately NOT
+    // reset here (unlike an earlier revision of this fix) — those three
+    // also gate `isLiveRadioAvailable()`/`sendCommand()`'s offline
+    // queue-and-replay path (below, IDEMPOTENT_TYPES dedup, MAX_QUEUE_SIZE,
+    // sendQueue replay), and forcing them false for the whole offline
+    // window made that command-safety path unreachable in production — a
+    // side effect this display fix must not cause. The chip's up-edge
+    // honesty (F2) is instead handled by `factsObservedThisSession` in
+    // connection.svelte.ts, which does not touch these fields' values.
+    setRadioStatus('disconnected');
+  }
+});
+// Delta state tracking for incremental updates
+let _fullState: Record<string, unknown> | null = null;
+let _hasReceivedFullState = false;
+let _acceptedProviderGeneration: number | null = null;
+let _expectedProviderGeneration: number | null = null;
+let _capabilityRefresh: {
+  generation: number;
+  epoch: number;
+  attempt: number;
+  inFlight: boolean;
+  completed: boolean;
+  timer: ReturnType<typeof setTimeout> | null;
+} | null = null;
+
+function cancelCapabilitiesRefresh(): void {
+  if (_capabilityRefresh && _capabilityRefresh.timer !== null) {
+    clearTimeout(_capabilityRefresh.timer);
+  }
+  _capabilityRefresh = null;
+}
+
+function isProviderGeneration(value: unknown): value is number {
+  return typeof value === 'number'
+    && Number.isSafeInteger(value)
+    && value >= 0;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function epochOf(envelope: Record<string, unknown>): number | null {
+  if (envelope.stateContractVersion !== 1 || !isProviderGeneration(envelope.providerGeneration)) {
+    return null;
+  }
+  return envelope.providerGeneration;
+}
+
+function highestSeenGeneration(): number | null {
+  if (_expectedProviderGeneration !== null) return _expectedProviderGeneration;
+  return _acceptedProviderGeneration;
+}
+
+function resetForProviderGeneration(generation: number): void {
+  cancelCapabilitiesRefresh();
+  _ctrl.cancelNonPtt('provider session replaced');
+  _fullState = null;
+  _hasReceivedFullState = false;
+  _acceptedProviderGeneration = null;
+  _expectedProviderGeneration = generation;
+  resetRadioState();
+  clearCapabilities();
+}
+
+function commitCurrentState(): boolean {
+  if (
+    !_hasReceivedFullState
+    || _fullState === null
+    || _acceptedProviderGeneration === null
+    || !capabilitiesMatchGeneration(_acceptedProviderGeneration)
+  ) return false;
+  return setRadioState(_fullState as any);
+}
+
+function refreshCapabilities(generation: number): void {
+  if (_capabilityRefresh && _capabilityRefresh.generation !== generation) cancelCapabilitiesRefresh();
+  const refresh = _capabilityRefresh ??= {
+    generation, epoch: _ctrl.sessionEpoch, attempt: 0,
+    inFlight: false, completed: false, timer: null,
+  };
+  const isCurrent = () => _capabilityRefresh === refresh
+    && _ctrl.state === 'connected' && _ctrl.sessionEpoch === refresh.epoch
+    && _acceptedProviderGeneration === generation
+    && _hasReceivedFullState && _fullState !== null;
+  if (!isCurrent() || refresh.inFlight || refresh.completed || refresh.timer !== null) return;
+  refresh.inFlight = true;
+  void fetchCapabilities().then((caps) => {
+    if (!isCurrent()) return;
+    const record = caps as unknown as Record<string, unknown>;
+    if (record.stateContractVersion !== 1 || record.providerGeneration !== generation) return;
+    if (setCapabilities(caps)) {
+      refresh.completed = true;
+      if (commitCurrentState()) markStateUpdated();
+    }
+  }).catch(() => {
+    // Keep state fail-closed; the session-owned timer retries metadata only.
+  }).finally(() => {
+    refresh.inFlight = false;
+    if (!isCurrent() || refresh.completed) return;
+    refresh.timer = setTimeout(() => {
+      refresh.timer = null;
+      if (isCurrent()) refreshCapabilities(generation);
+    }, calcBackoff(refresh.attempt++));
+  });
+}
+
+function syncEnvelopeRevisions(
+  state: Record<string, unknown>,
+  envelope: Record<string, unknown>,
+): Record<string, unknown> {
+  if (typeof envelope.revision === 'number') {
+    state.revision = envelope.revision;
+  }
+  if (typeof envelope.stateRevision === 'number') {
+    state.stateRevision = envelope.stateRevision;
+  }
+  if (typeof envelope.freshnessRevision === 'number') {
+    state.freshnessRevision = envelope.freshnessRevision;
+  }
+  if (typeof envelope.observationSeq === 'number') {
+    state.observationSeq = envelope.observationSeq;
+  }
+  if (typeof envelope.publicStateSeq === 'number') {
+    state.publicStateSeq = envelope.publicStateSeq;
+  }
+  if (typeof envelope.transportSeq === 'number') {
+    state.transportSeq = envelope.transportSeq;
+  }
+  if (typeof envelope.healthRevision === 'number') {
+    state.healthRevision = envelope.healthRevision;
+  }
+  return state;
+}
+
+function stateRevisionOf(state: Record<string, unknown> | null): number {
+  if (!state) return -1;
+  if (typeof state.stateRevision === 'number') return state.stateRevision;
+  if (typeof state.revision === 'number') return state.revision;
+  return -1;
+}
+
+function deliverySeqOf(state: Record<string, unknown> | null): number {
+  if (!state) return -1;
+  const publicStateSeq = typeof state.publicStateSeq === 'number' ? state.publicStateSeq : 0;
+  const transportSeq = typeof state.transportSeq === 'number' ? state.transportSeq : 0;
+  return Math.max(publicStateSeq, transportSeq);
+}
+
+function stateAdvanceBaselineOf(state: Record<string, unknown> | null): StateAdvanceBaseline | null {
+  if (!state) return null;
+  return {
+    stateRevision: stateRevisionOf(state),
+    freshnessRevision: typeof state.freshnessRevision === 'number' ? state.freshnessRevision : 0,
+    observationSeq: typeof state.observationSeq === 'number' ? state.observationSeq : 0,
+    healthRevision: typeof state.healthRevision === 'number' ? state.healthRevision : 0,
+    deliverySeq: deliverySeqOf(state),
+    state,
+  };
+}
+
+function applyDeltaEnvelope(envelope: Record<string, unknown>): Record<string, unknown> | null {
+  const deltaType = envelope.type;
+  const generation = epochOf(envelope);
+  if (generation === null || (deltaType !== 'full' && deltaType !== 'delta')) return null;
+  const highestSeen = highestSeenGeneration();
+  if (highestSeen !== null && generation < highestSeen) return null;
+
+  if (deltaType === 'full') {
+    if (!isRecord(envelope.data)) return null;
+    const data = envelope.data;
+    if (data.stateContractVersion !== 1 || data.providerGeneration !== generation) return null;
+    const nextState = syncEnvelopeRevisions({ ...data }, envelope);
+    // MOR-2513: a dropped full envelope leaves BOTH stores empty (capabilities
+    // are only refreshed after a full is accepted), so the page silently
+    // renders no radio surfaces — this rejection must at least be visible.
+    if (!isValidServerState(nextState)) {
+      console.error('[rigplane] state: rejected a full state envelope that failed contract validation');
+      return null;
+    }
+    if (capabilitiesMatchGeneration(generation) && !matchesCurrentCapabilityTopology(nextState as any)) return null;
+    if (
+      _acceptedProviderGeneration === generation
+      && _fullState !== null
+      && !isStateAdvance(stateAdvanceBaselineOf(_fullState), nextState)
+    ) return null;
+    if (_acceptedProviderGeneration !== generation || !_hasReceivedFullState) {
+      // Bootstrap may already have fetched matching capabilities. Keep that
+      // proven epoch; every provider transition (or an unbased higher delta)
+      // still clears all retired browser truth before accepting this full.
+      if (
+        _expectedProviderGeneration !== generation
+        && (_acceptedProviderGeneration !== null || !capabilitiesMatchGeneration(generation))
+      ) resetForProviderGeneration(generation);
+    }
+    _fullState = nextState;
+    _hasReceivedFullState = true;
+    _acceptedProviderGeneration = generation;
+    _expectedProviderGeneration = null;
+    refreshCapabilities(generation);
+    return commitCurrentState() ? _fullState : null;
+  }
+
+  const ops = stateDeltaOps(envelope);
+  if (!ops) return null;
+  const epochKeys = ['stateContractVersion', 'providerGeneration'];
+  if (
+    ops.unset.some((path) => epochKeys.includes(path[0]))
+    || ops.set.some(([path, value]) => (
+      (path[0] === 'stateContractVersion' && (path.length > 1 || value !== 1))
+      || (path[0] === 'providerGeneration' && (path.length > 1 || value !== generation))
+    ))
+  ) return null;
+  const currentState = _fullState;
+  const candidate = currentState ? applyStateDelta(currentState, ops) : null;
+  if (currentState && !candidate) return null;
+  if (candidate) {
+    syncEnvelopeRevisions(candidate, envelope);
+    if (!isValidServerState(candidate)) {
+      console.error('[rigplane] state: rejected a delta state envelope that failed contract validation');
+      return null;
+    }
+    if (capabilitiesMatchGeneration(generation) && !matchesCurrentCapabilityTopology(candidate as any)) return null;
+  }
+  if (_acceptedProviderGeneration !== generation || !_hasReceivedFullState || _fullState === null) {
+    if (highestSeen === null || generation > highestSeen) resetForProviderGeneration(generation);
+    return null;
+  }
+  const nextState = candidate!;
+  if (!isStateAdvance(stateAdvanceBaselineOf(currentState), nextState)) return null;
+  _fullState = nextState;
+  return commitCurrentState() ? _fullState : null;
+}
+
+_ctrl.onMessage((msg) => {
+  if (msg.type === 'state_update' && msg.data) {
+    const state = applyDeltaEnvelope(msg.data as Record<string, unknown>);
+    if (state) {
+      setRadioState(state as any);
+      markStateUpdated();
+    }
+  }
+  // Radio reconnect/degraded status (MOR-594 backend event, consumed for
+  // the StatusBar radio indicator — MOR-620). Shape:
+  // { type: 'event', name: 'connection_status',
+  //   data: { state, attempt, next_retry_seconds } }
+  if (msg.type === 'event') {
+    const ev = msg as { name?: string; data?: Record<string, unknown> };
+    if (ev.name === 'connection_status') {
+      const state = ev.data?.state;
+      if (typeof state === 'string') setRadioStatus(state);
+    }
+    // MOR-2792: digital-silence flag rides the existing audio_session event.
+    if (ev.name === 'audio_session') {
+      const silent = ev.data?.rxSilent;
+      if (typeof silent === 'boolean') setRxSilent(silent);
+    }
+  }
+  // Companion-injected state (RC-28 tuning step, etc.)
+  if (msg.type === 'companion_state') {
+    const raw = msg as unknown as Record<string, unknown>;
+    const stepHz = raw['tuning_step_hz'];
+    if (typeof stepHz === 'number' && stepHz > 0) {
+      // Lazy import to avoid circular dependency.
+      import('../stores/tuning.svelte').then((m) => m.setTuningStepFromCompanion(stepHz));
+    }
+  }
+});
+
+export function connect(url: string = '/api/v1/ws') {
+  // MOR-4206: ask for leaf deltas (`StateUpdateEnvelope.deltaVersion` 2).
+  _ctrl.connect(withWsSearchParam(url, 'state_delta', '2'));
+}
+
+/** Send a raw JSON message (e.g. subscribe) and register it for re-send on reconnect. */
+export function sendRaw(msg: Record<string, unknown>): boolean {
+  if (msg.type === 'subscribe') {
+    _ctrl.setSubscribeMessage(msg);
+  }
+  return _ctrl.send(msg as any);
+}
+
+export function disconnect() {
+  _ctrl.disconnect();
+}
+
+export function onCommandDelivery(handler: CommandDeliveryHandler): () => void {
+  return _ctrl.onCommandDelivery(handler);
+}
+
+export function onCommandLifecycleDelivery(handler: CommandLifecycleDeliveryHandler): () => void {
+  return _ctrl.onCommandLifecycleDelivery(handler);
+}
+
+export function onCommandReconciliationDelivery(handler: CommandReconciliationDeliveryHandler): () => void {
+  return _ctrl.onCommandReconciliationDelivery(handler);
+}
+
+export function onControlSessionTransition(handler: ControlSessionTransitionHandler): () => void {
+  return _ctrl.onSessionTransition(handler);
+}
+
+export function getControlSession(): ControlSessionTransition {
+  return { state: _ctrl.state, epoch: _ctrl.sessionEpoch };
+}
+
+/**
+ * MOR-1422: the refusal below fires per COMMAND — a held control (a
+ * jog wheel, a repeated keypress) can call `sendCommand` many times a
+ * second, and a toast per call would bury the one useful signal ("your
+ * commands are not reaching the radio") under a flood. This is a burst
+ * debounce, not a rate limit on the refusal itself: `sendCommand` keeps
+ * returning `false` for every call, only the notice is throttled.
+ */
+const REFUSAL_NOTICE_DEBOUNCE_MS = 3_000;
+let lastRefusalNoticeAt = -Infinity;
+
+export function sendCommand(
+  name: string,
+  params: Record<string, unknown> = {},
+  id?: string,
+): boolean {
+  const commandId = id ?? makeCommandId();
+  // This health gate only speaks for a LIVE transport. While the socket is
+  // open, rigConnected/radioReady/radioHealth are continuously refreshed by
+  // state_update, so `!isLiveRadioAvailable()` means the radio link is
+  // known-bad — refuse loudly rather than send into a black hole. While the
+  // socket is down, jurisdiction hands off entirely to WsChannel.send's own
+  // offline policy (idempotent keep-latest queue / non-idempotent reject /
+  // pendingPttRelease), which predates this gate and stays authoritative —
+  // a queued command ships (or doesn't) on the transport's terms, not a
+  // stale health snapshot from before the drop. (MOR-1526 R2: an earlier
+  // revision of the display fix in the 'disconnected' branch above reset
+  // rigConnected/radioReady/radioHealth on every disconnect, which would
+  // have made `!isLiveRadioAvailable()` unconditionally true for the whole
+  // offline window and this gate redundant with the transport's own
+  // policy; that reset was reverted, so these fields keep their real,
+  // request-driven values across a disconnect — this `_ctrl.isConnected()`
+  // guard is what keeps the two policies from double-judging the same
+  // command.)
+  if (_ctrl.isConnected() && !isLiveRadioAvailable() && pttIntent(name, params) !== 'off') {
+    console.warn('[cmd] blocked while radio health is degraded', name);
+    if (pttIntent(name, params) === null) {
+      _ctrl.rejectNonPtt(commandId, 'radio health is degraded');
+    }
+    const now = Date.now();
+    if (now - lastRefusalNoticeAt >= REFUSAL_NOTICE_DEBOUNCE_MS) {
+      lastRefusalNoticeAt = now;
+      _ctrl.emitLocalNotification(
+        'warning', 'Command not sent — link to the radio is degraded', 'commandRefusedLinkDegraded',
+      );
+    }
+    return false;
+  }
+  return _ctrl.send({
+    type: 'cmd',
+    name,
+    id: commandId,
+    params,
+  });
+}
+
+export function onMessage(handler: MessageHandler): () => void {
+  return _ctrl.onMessage(handler);
+}
+
+/** @deprecated Use onMessage */
+export const addMessageHandler = onMessage;
+
+export function emitLocalNotification(
+  level: 'info' | 'warning' | 'error',
+  message: string,
+  code: string,
+  params?: Record<string, string | number>,
+): void {
+  _ctrl.emitLocalNotification(level, message, code, params);
+}
+
+export function isConnected(): boolean {
+  return _ctrl.isConnected();
+}
+
+// ─── Named channel registry (scope / audio) ────────────────────────────────
+
+const _channels = new Map<string, WsChannel>();
+
+export function getChannel(name: string): WsChannel {
+  let ch = _channels.get(name);
+  if (!ch) {
+    ch = new WsChannel(false);
+    _channels.set(name, ch);
+  }
+  return ch;
+}
+
+/** Disconnect the control channel and all named channels (scope, etc.). */
+export function disconnectAll(): void {
+  _ctrl.disconnect();
+  for (const ch of _channels.values()) {
+    ch.disconnect();
+  }
+}
+
+/** Reconnect the control channel and all previously-connected named channels. */
+export function reconnectAll(): void {
+  _ctrl.reconnect();
+  for (const ch of _channels.values()) {
+    ch.reconnect();
+  }
+}

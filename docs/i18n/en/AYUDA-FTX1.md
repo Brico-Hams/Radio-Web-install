@@ -91,6 +91,35 @@ disconnect or on any error.
 The feature list was inspired by cat-ftx1 (rzochowski, MIT licence per its
 author; the LICENSE file is still pending in that repository). No code was copied.
 
+### Additional receive controls
+
+Also per side (MAIN/SUB), receive only, verified by reading back and rejected
+before sending if out of range:
+
+| Command | Use |
+| --- | --- |
+| `NL P1 P2P2P2;` | NB noise blanker, 0 (OFF) or 1-10 |
+| `RL P1 P2P2;` | DNR noise reduction, 0 (OFF) or 1-10 |
+| `BC P1 P2;` | Auto notch, OFF/ON |
+| `BP P1 0 P3P3P3;` | Manual notch OFF/ON (000/001) |
+| `BP P1 1 P3P3P3;` | Manual notch frequency, 001-320 (x10 Hz: 10-3200 Hz) |
+| `NA P1 P2;` | Narrow filter (NAR), OFF/ON |
+| `CF P1 0 0 P3 P4 000;` | Clarifier: the web page turns on the receive one and leaves the TX one off |
+| `CF P1 0 1 P3 P4P4P4P4;` | Clarifier offset, -9999..+9999 Hz |
+| `KS P1P1P1;` | CW speed, 4-60 WPM (no side) |
+| `LK P1;` | Panel lock, OFF/ON (no side) |
+
+In FM the radio answers the manual notch with a non-numeric value (for example
+`BP01F35;`): the web page treats it as unavailable and leaves the field empty.
+
+## VFO
+
+The "5. VFO" panel (press "Read VFO" first) sets the frequency of VFO A (`FA`) and
+VFO B (`FB`) between 0.030000 and 470.000000 MHz, the MAIN mode (`MD0 m`, only the
+documented modes) and the split (`ST0`/`ST1`). Every change is read back and
+compared. None of this transmits. According to the manual, `ST1` turns off the
+dual display (`FR01`).
+
 ## Limits
 
 - Memory channels 1-999 only. PMS, 5 MHz, emergency channel and split memories

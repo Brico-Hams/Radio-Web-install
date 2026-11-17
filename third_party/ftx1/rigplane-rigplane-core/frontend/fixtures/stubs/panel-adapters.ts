@@ -1,0 +1,271 @@
+/** Verification-only semantic command binder: records through the existing fixture bus stub. */
+import {
+  makeAgcHandlers, makeAntennaHandlers, makeAudioRoutingHandlers, makeBandHandlers,
+  makeCwPanelHandlers, makeDspHandlers, makeFilterHandlers, makeModeHandlers,
+  makeRfFrontEndHandlers, makeRitXitHandlers, makeRxAudioHandlers, makeScanHandlers,
+  makeScopeControlsHandlers, makeSystemHandlers, makeTxHandlers, makeVfoHandlers, makeVoxHandlers,
+} from './command-bus';
+
+export function bindSemanticSurfaceHandlers() {
+  return Object.freeze({
+    agc: makeAgcHandlers(), antenna: makeAntennaHandlers(), audioRouting: makeAudioRoutingHandlers(),
+    band: makeBandHandlers(), cw: makeCwPanelHandlers(), dsp: makeDspHandlers(),
+    filter: makeFilterHandlers(), mode: makeModeHandlers(), rfFrontEnd: makeRfFrontEndHandlers(),
+    ritXit: makeRitXitHandlers(), rxAudio: makeRxAudioHandlers(), scan: makeScanHandlers(),
+    scopeControls: makeScopeControlsHandlers(), tx: makeTxHandlers(), vfo: makeVfoHandlers(), vox: makeVoxHandlers(),
+  });
+}
+
+/** Fixture-safe singleton matching the production adapter facade. */
+const systemHandlers = makeSystemHandlers();
+export function getSystemHandlers() { return systemHandlers; }
+
+/** No Break-in Delay truth or command lifecycle exists in the offline fixture. */
+export function getBreakInDelayControlFeedback() {
+  return Object.freeze({
+    confirmed: null, target: null, requestedTarget: null,
+    phase: 'unavailable' as const, busy: false, availability: 'unavailable' as const,
+    outcome: null, lifecycleId: null, transitionId: null, sessionEpoch: 1,
+    scope: Object.freeze({ control: 'break-in-delay', receiver: 0 as const }),
+    repeatPolicy: 'latest-target-wins' as const,
+  });
+}
+
+function unavailableScalarFeedback(
+  control: 'cw-pitch' | 'keyer-speed' | 'af-level' | 'rf-power'
+    | 'pbt-inner' | 'pbt-outer' | 'if-shift',
+) {
+  return Object.freeze({
+    confirmed: null, target: null, requestedTarget: null,
+    phase: 'unavailable' as const, busy: false, availability: 'unavailable' as const,
+    outcome: null, lifecycleId: null, transitionId: null, sessionEpoch: 1,
+    scope: Object.freeze({ control, receiver: 0 as const }),
+    repeatPolicy: 'latest-target-wins' as const,
+  });
+}
+
+/** Offline fixtures never fabricate global CW command-feedback authority. */
+export function getCwPitchControlFeedback() {
+  return unavailableScalarFeedback('cw-pitch');
+}
+export function getKeySpeedControlFeedback() {
+  return unavailableScalarFeedback('keyer-speed');
+}
+
+/** No Filter Width truth or command lifecycle exists in the offline fixture. */
+export function getFilterWidthControlFeedback() {
+  return Object.freeze({
+    confirmed: null, target: null, requestedTarget: null,
+    phase: 'unavailable' as const, busy: false, availability: 'unavailable' as const,
+    outcome: null, lifecycleId: null, transitionId: null, sessionEpoch: 1,
+    scope: Object.freeze({ control: 'filter-width', receiver: 0 as const }),
+    repeatPolicy: 'latest-target-wins' as const,
+  });
+}
+
+/**
+ * MOR-1687 part 1 — `SemanticRadioSurfaces.svelte` now also imports the
+ * three passband feedback producers unconditionally. Same MOR-1271/MOR-1320
+ * module-resolution lesson as `getPendingFrequencyHz` below: an export
+ * missing here fails the whole fixture harness at build time. The offline
+ * fixture has no passband command authority, so the honest answer is the
+ * same unavailable shape every other scalar stub here returns.
+ */
+export function getPbtInnerHzControlFeedback() {
+  return unavailableScalarFeedback('pbt-inner');
+}
+export function getPbtOuterHzControlFeedback() {
+  return unavailableScalarFeedback('pbt-outer');
+}
+export function getIfShiftControlFeedback() {
+  return unavailableScalarFeedback('if-shift');
+}
+
+const txAuxControls = Object.freeze({
+  micGain: 'mic-gain',
+  driveGain: 'drive-gain',
+  voxGain: 'vox-gain',
+  antiVoxGain: 'anti-vox-gain',
+  voxDelay: 'vox-delay',
+  compressorLevel: 'compressor-level',
+  monitorGain: 'monitor-level',
+} as const);
+
+/** Offline fixtures never fabricate radio-global TX/VOX feedback authority. */
+export function getTxAuxControlFeedback(field: keyof typeof txAuxControls) {
+  return Object.freeze({
+    confirmed: null, target: null, requestedTarget: null,
+    phase: 'unavailable' as const, busy: false, availability: 'unavailable' as const,
+    outcome: null, lifecycleId: null, transitionId: null, sessionEpoch: 1,
+    scope: Object.freeze({ control: txAuxControls[field], receiver: 0 as const }),
+    repeatPolicy: 'latest-target-wins' as const,
+  });
+}
+
+const dspScalarControls = Object.freeze({
+  nbLevel: 'nb-level', nbWidth: 'nb-width', nbDepth: 'nb-depth', nrLevel: 'nr-level',
+  notchFilter: 'notch-position', manualNotchWidth: 'manual-notch-width', agcTimeConstant: 'agc-time',
+} as const);
+
+/** MOR-2425 — offline fixtures never fabricate radio-global DSP command-feedback authority. */
+export function getDspControlFeedback(field: keyof typeof dspScalarControls) {
+  return Object.freeze({
+    confirmed: null, target: null, requestedTarget: null,
+    phase: 'unavailable' as const, busy: false, availability: 'unavailable' as const,
+    outcome: null, lifecycleId: null, transitionId: null, sessionEpoch: 1,
+    scope: Object.freeze({ control: dspScalarControls[field], receiver: 0 as const }),
+    repeatPolicy: 'latest-target-wins' as const,
+  });
+}
+
+/** Offline DSP feedback has no readings to project into display units. */
+export function projectDspControlFeedbackToDisplay(
+  _field: 'nrLevel' | 'nbDepth',
+  feedback: ReturnType<typeof getDspControlFeedback>,
+  _caps: unknown,
+) {
+  return feedback;
+}
+
+/** The offline fixture has no qualified RF/SQL command-feedback authority. */
+export function getRfSqlControlFeedback(_controlSession: unknown): null {
+  return null;
+}
+
+/**
+ * MOR-1441 — `SemanticRadioSurfaces.svelte` now also imports
+ * `getPendingFrequencyHz` from the real `panel-adapters` module. Per this
+ * file's own MOR-1271/MOR-1320 lesson, an export missing here fails at
+ * MODULE RESOLUTION and takes the whole fixture harness dark, not merely
+ * degraded — so the stub always needs it, even though the deterministic
+ * offline harness never has a real in-flight command to report. `null`
+ * ("nothing pending") is the correct and only honest answer here.
+ */
+export function getPendingFrequencyHz(_receiver: 0 | 1): number | null {
+  return null;
+}
+
+export function getTuningBurstFrequencyHz(_receiver: 0 | 1): number | null {
+  return null;
+}
+
+export function isTuningBurstObservation(_receiver: number, _frequency: number): boolean {
+  return false;
+}
+
+/**
+ * MOR-1441 leg 2 — same MOR-1271/MOR-1320 lesson as `getPendingFrequencyHz`
+ * above, for the discrete-control pending accessors `SemanticRadioSurfaces.
+ * svelte` now also imports (filter select, preamp, NB/NR, notch mode). `null` is the
+ * correct and only honest answer for the same reason: the deterministic
+ * offline harness never has a real in-flight command to report.
+ */
+export function getPendingFilterSelection(_receiver: 0 | 1): number | null {
+  return null;
+}
+export function getPendingPreampLevel(_receiver: 0 | 1): number | null {
+  return null;
+}
+export function getPendingNbOn(_receiver: 0 | 1): boolean | null {
+  return null;
+}
+export function getPendingNrOn(_receiver: 0 | 1): boolean | null {
+  return null;
+}
+/** MOR-2640 — the NARROW pending accessor, inert like the accessors
+ *  above: `null` means nothing pending. */
+export function getPendingNarrow(_receiver: 0 | 1): boolean | null {
+  return null;
+}
+export function getPendingNotchMode(_receiver: 0 | 1): 'off' | 'auto' | 'manual' | null {
+  return null;
+}
+export function getPendingManualNotchWidth(_receiver: 0 | 1): number | null {
+  return null;
+}
+
+/** MOR-2111 — the repeater panel's three pending accessors, inert like the
+ *  accessors above: `null` means nothing pending. */
+export function getPendingRepeaterTone(_receiver: 0 | 1): 'off' | 'tone' | 'tsql' | null {
+  return null;
+}
+export function getPendingRepeaterShift(_receiver: 0 | 1): number | null {
+  return null;
+}
+export function getPendingToneFreq(_receiver: 0 | 1): number | null {
+  return null;
+}
+
+/** MOR-2111 — the repeater panel's command handlers, inert like
+ *  `getMemoryHandlers`. */
+const repeaterHandlers = Object.freeze({
+  onToneModeChange: (_from: string, _to: string, _receiver: number): void => {},
+  onShiftChange: (_shift: string, _receiver: number): void => {},
+  onToneFreqChange: (_freqHz: number, _tsql: boolean, _receiver: number): void => {},
+});
+export function getRepeaterHandlers() { return repeaterHandlers; }
+
+export function getDataModeArmed(): { armed: false; value: null } {
+  return { armed: false, value: null };
+}
+
+export function getModeArmed(): { armed: false; value: null } {
+  return { armed: false, value: null };
+}
+
+export function getAgcArmed(): { armed: false; value: null } {
+  return { armed: false, value: null };
+}
+
+export function getAttenuatorArmed(): { armed: false; value: null } {
+  return { armed: false, value: null };
+}
+
+export function getModInputArmed(): { armed: false; value: null } {
+  return { armed: false, value: null };
+}
+
+export function getFilterShapeArmed(): { armed: false; value: null } {
+  return { armed: false, value: null };
+}
+
+/** MOR-1689 — `SemanticRadioSurfaces.svelte` also imports the Filter Shape
+ *  command-feedback projection (same MOR-1271/MOR-1320 module-resolution
+ *  lesson as `getFilterShapeArmed` above). The offline fixture has no
+ *  shape command authority, so the honest answer is the same unavailable
+ *  shape every other feedback stub here returns. */
+export function getFilterShapeControlFeedback() {
+  return Object.freeze({
+    confirmed: null, target: null, requestedTarget: null,
+    phase: 'unavailable' as const, busy: false, availability: 'unavailable' as const,
+    outcome: null, lifecycleId: null, transitionId: null, sessionEpoch: 1,
+    scope: Object.freeze({ control: 'filter-shape', receiver: 0 as const }),
+    repeatPolicy: 'latest-target-wins' as const,
+  });
+}
+
+/**
+ * MOR-2425 — `SemanticRadioSurfaces.svelte` now also imports
+ * `deriveMemoryPanelProps`/`getMemoryHandlers` unconditionally (same
+ * MOR-1271/MOR-1320 module-resolution lesson as `getPendingFrequencyHz`
+ * above: a missing export here fails the whole fixture harness, not just
+ * the memory surface). The offline fixture has no real VFO identity or
+ * command authority, so this reports the same unavailable/inert shape
+ * `getBreakInDelayControlFeedback` and friends use above: `vfoIdentityKnown:
+ * false` (the "unknown identity" sentinel `toMemoryPanelProps` itself
+ * returns during a relative-VFO bootstrap epoch) and handlers that report
+ * "refused" without dispatching anything.
+ */
+export function deriveMemoryPanelProps() {
+  return Object.freeze({ activeFreqHz: Number.NaN, activeMode: '---', vfoIdentityKnown: false });
+}
+
+const memoryHandlers = Object.freeze({
+  onRecall: (_channel: number): boolean => false,
+  onStore: (_channel: number, _frequencyHz: number, _mode: string): boolean => false,
+  onClear: (_channel: number): boolean => false,
+});
+export function getMemoryHandlers() { return memoryHandlers; }
+
+export function getAfLevelControlFeedback() { return unavailableScalarFeedback('af-level'); }
+export function getRfPowerControlFeedback() { return unavailableScalarFeedback('rf-power'); }

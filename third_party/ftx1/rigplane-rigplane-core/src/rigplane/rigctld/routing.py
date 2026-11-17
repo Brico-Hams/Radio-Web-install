@@ -1,0 +1,681 @@
+"""Rigctld vendor-specific routing strategies.
+
+Provides routing for level/func/dump_state/info commands that differ
+between radio vendors (Icom CI-V vs Yaesu CAT).
+
+Architecture::
+
+    RigctldHandler
+        ├── _routing: RigctldRouting  (picked at __init__)
+        │       ├── get_level(level) → RigctldResponse
+        │       ├── set_level(level, value) → RigctldResponse
+        │       ├── get_func(func) → RigctldResponse
+        │       ├── set_func(func, on) → RigctldResponse
+        │       ├── dump_state() → list[str]
+        │       └── get_info() → str
+        └── core commands: freq, mode, PTT, VFO, etc. (shared)
+"""
+
+from __future__ import annotations
+
+import logging
+import math
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
+
+if TYPE_CHECKING:
+    from ..radio_protocol import Radio
+
+from ..core.radio_protocol import ControlDomainCapable
+from ..core.state_pipeline_contracts import FieldPath
+from .contract import HamlibError, RigctldResponse  # noqa: TID251
+
+logger = logging.getLogger(__name__)
+
+__all__ = ["RigctldRouting", "YaesuRouting", "create_routing"]
+
+_StateObserver = Callable[[FieldPath, object], None]
+
+
+def _ok() -> RigctldResponse:
+    return RigctldResponse(values=["RPRT 0"])
+
+
+def _err(code: HamlibError) -> RigctldResponse:
+    return RigctldResponse(error=int(code))
+
+
+def _is_normalized_float(value: Any) -> bool:
+    return (
+        isinstance(value, float) and not isinstance(value, bool) and 0.0 <= value <= 1.0
+    )
+
+
+def _format_normalized_or_raw_float(value: Any, *, raw_divisor: float) -> str:
+    if _is_normalized_float(value):
+        return f"{value:.6f}"
+    return _format_raw_scaled_float(value, raw_divisor=raw_divisor)
+
+
+def _format_raw_scaled_float(value: Any, *, raw_divisor: float) -> str:
+    return f"{int(value) / raw_divisor:.6f}"
+
+
+def _format_strength(value: Any, *, raw_divisor: float) -> str:
+    raw = int(value)
+    return str(round((raw / raw_divisor) * 114.0 - 54.0))
+
+
+def _canonical_decimal(value: float) -> str | None:
+    """Render a finite float as a canonical decimal string.
+
+    ``1500.0`` → ``"1500"``, ``-0.0`` → ``"0"``; non-finite values
+    (NaN, infinities) return ``None``. The result feeds the backend's
+    control-domain surface, which parses canonical decimal strings only.
+    """
+    if not math.isfinite(value):
+        return None
+    rendered = format(value, "f")
+    if "." in rendered:
+        rendered = rendered.rstrip("0").rstrip(".")
+    return "0" if rendered in {"0", "-0"} else rendered
+
+
+async def _set_snapped_level(
+    radio: "Radio",
+    control: str,
+    value: float,
+    apply: Callable[[int], Any],
+) -> RigctldResponse | None:
+    """Apply a hamlib level snapped onto the radio's control domain.
+
+    Routes through :class:`~rigplane.core.radio_protocol.ControlDomainCapable`:
+    the requested value is rendered as a canonical decimal, snapped to
+    the nearest legal display value (ties up) and applied as the raw
+    code. Returns the response when the domain surface decided the
+    outcome — including ``EINVAL`` for out-of-range values, with no
+    radio setter called — or ``None`` when the caller must take its
+    legacy rounded path: the radio does not implement the protocol,
+    publishes no normalized domain, or (test doubles) cannot supply a
+    usable raw code.
+    """
+    if not isinstance(radio, ControlDomainCapable):
+        return None
+    display = _canonical_decimal(value)
+    if display is None:
+        return None
+    try:
+        raw = radio.snap_control_display(control, display)
+    except ValueError:
+        return _err(HamlibError.EINVAL)
+    if not isinstance(raw, int) or isinstance(raw, bool):
+        return None
+    await apply(raw)
+    return _ok()
+
+
+def _display_band_bounds(bounds: object) -> tuple[float, float] | None:
+    """Usable ``(min, max)`` display band from protocol bounds.
+
+    Accepts the ``tuple[str, str] | None`` contract of
+    :meth:`~rigplane.core.radio_protocol.ControlDomainCapable.control_display_bounds`;
+    anything a radio or test double returns that is not a two-entry
+    tuple of parseable numbers — ``None`` included — yields ``None`` so
+    callers take their legacy path. Degenerate bands (``max <= min``,
+    NaN) also yield ``None``.
+    """
+    if not isinstance(bounds, tuple) or len(bounds) != 2:
+        return None
+    try:
+        lo, hi = float(bounds[0]), float(bounds[1])
+    except (TypeError, ValueError):
+        return None
+    if not (math.isfinite(lo) and math.isfinite(hi)) or hi <= lo:
+        return None
+    return (lo, hi)
+
+
+def _domain_level_fraction(radio: "Radio", control: str, raw: int) -> float | None:
+    """Normalized hamlib fraction for a level's raw code, from its domain.
+
+    Decodes *raw* through ``decode_control_raw`` and divides the display
+    value by the published display maximum, so the radio's own top of
+    scale answers ``1.0``. ``None`` — caller falls back to its legacy
+    scale divisor — when the radio does not implement the protocol,
+    publishes no domain for *control*, or (test doubles) returns
+    unusable values.
+    """
+    if not isinstance(radio, ControlDomainCapable):
+        return None
+    display = radio.decode_control_raw(control, raw)
+    band = _display_band_bounds(radio.control_display_bounds(control))
+    if not isinstance(display, str) or band is None:
+        return None
+    try:
+        fraction = float(display) / band[1]
+    except (TypeError, ValueError, ZeroDivisionError):
+        return None
+    return fraction if math.isfinite(fraction) else None
+
+
+# ---------------------------------------------------------------------------
+# Protocol
+# ---------------------------------------------------------------------------
+
+
+@runtime_checkable
+class RigctldRouting(Protocol):
+    """Vendor-specific rigctl level/func routing.
+
+    The optional ``vfo`` keyword on ``get_level``/``set_level``/
+    ``get_func``/``set_func`` carries the Hamlib VFO label
+    (``"VFOA"``/``"VFOB"``/``"currVFO"`` or ``None``) for vendors
+    that need per-receiver routing under ``vfo_opt`` (see issue #1345).
+    Defaults to ``None`` for backwards compatibility — implementers
+    that do not care about VFO routing may safely ignore it.
+    """
+
+    async def get_level(
+        self, level: str, *, vfo: str | None = None
+    ) -> RigctldResponse: ...
+    async def set_level(
+        self, level: str, value: float, *, vfo: str | None = None
+    ) -> RigctldResponse: ...
+    async def get_func(
+        self, func: str, *, vfo: str | None = None
+    ) -> RigctldResponse: ...
+    async def set_func(
+        self, func: str, on: bool, *, vfo: str | None = None
+    ) -> RigctldResponse: ...
+    def dump_state(self) -> list[str]: ...
+    def get_info(self) -> str: ...
+
+
+def _receiver_for_vfo(vfo: str | None) -> int:
+    """Backend receiver index for a TONE/TSQL request, from the VFO label.
+
+    The public :class:`~rigplane.core.radio_protocol.RigctldRoutingStrategy`
+    carries only ``vfo`` for per-receiver routing, and the rigctld parser
+    forwards only the labels it validates (``VFOA`` / ``VFOB`` /
+    ``currVFO``, :data:`~rigplane.rigctld.protocol.VFO_LABELS`) or ``None``.
+    ``VFOB`` maps to receiver 1 on the dual-RX FTX-1; everything else stays
+    on receiver 0 (MAIN) — the same routing NB/NR/levels already use.
+    """
+
+    if vfo is None:
+        return 0
+    return 1 if vfo.upper() == "VFOB" else 0
+
+
+# ---------------------------------------------------------------------------
+# Yaesu CAT routing
+# ---------------------------------------------------------------------------
+
+_YAESU_DUMP_STATE: list[str] = [
+    "0",  # protocol version
+    "2028",  # rig model — overridden per-radio from TOML by YaesuRouting.dump_state
+    "1",  # ITU region
+    "30000.000000 56000000.000000 0x1ff -1 -1 0x3 0xf",
+    "0 0 0 0 0 0 0",
+    "1800000.000000 54000000.000000 0x1ff 5000 100000 0x3 0xf",
+    "0 0 0 0 0 0 0",
+    "0x1ff 1",
+    "0 0",
+    "0x1ff 3000",
+    "0x1ff 2400",
+    "0x1ff 1800",
+    "0 0",
+    "9999",  # max_rit
+    "9999",  # max_xit
+    "0",
+    "0",
+    "0",  # preamp
+    "0",  # attenuator
+    # has_get_func / has_set_func: RIG_FUNC_NB(0x2) | COMP(0x4) | VOX(0x8)
+    # | TONE(0x10) | TSQL(0x20) | NR(0x200) | APF(0x800) | MON(0x1000)
+    # | LOCK(0x10000) | VSC(0x40000) — bit values per hamlib rig.h.
+    "0x00051A3E",  # has_get_func
+    "0x00051A3E",  # has_set_func
+    "0x540DFB3B",  # has_get_level
+    "0x000DFB3B",  # has_set_level
+    "0",
+    "0",
+]
+
+
+class YaesuRouting:
+    """Yaesu CAT routing for rigctl level/func commands."""
+
+    _S_METER = FieldPath.receiver("main", "meters", "s_meter")
+    _LEVEL_PATHS: dict[str, FieldPath] = {
+        "STRENGTH": _S_METER,
+        "RAWSTR": _S_METER,
+        "AF": FieldPath.receiver("main", "operator_controls", "af_level"),
+        "RF": FieldPath.receiver("main", "operator_controls", "rf_gain"),
+        "SQL": FieldPath.receiver("main", "operator_controls", "squelch"),
+        "NB": FieldPath.receiver("main", "operator_controls", "nb_level"),
+        "NR": FieldPath.receiver("main", "operator_controls", "nr_level"),
+        "PREAMP": FieldPath.receiver("main", "operator_controls", "preamp"),
+        "ATT": FieldPath.receiver("main", "operator_controls", "att"),
+    }
+    _FUNC_PATHS: dict[str, FieldPath] = {
+        "NB": FieldPath.receiver("main", "operator_toggles", "nb"),
+        "NR": FieldPath.receiver("main", "operator_toggles", "nr"),
+        "TONE": FieldPath.receiver("main", "operator_toggles", "repeater_tone"),
+        "TSQL": FieldPath.receiver("main", "operator_toggles", "repeater_tsql"),
+    }
+
+    def __init__(self, radio: "Radio", max_power_w: float) -> None:
+        self._radio = radio
+        self._max_power_w = max_power_w
+        self._state_observer: _StateObserver | None = None
+
+    def set_state_observer(self, observer: _StateObserver | None) -> None:
+        """Install a handler-owned callback for routed backend observations."""
+
+        self._state_observer = observer
+
+    def state_path_for_level(
+        self, level: str, *, receiver: int = 0
+    ) -> FieldPath | None:
+        """Return the StateStore path that can satisfy a Yaesu rigctl level."""
+
+        del receiver
+        return self._LEVEL_PATHS.get(level)
+
+    def state_path_for_func(self, func: str, *, receiver: int = 0) -> FieldPath | None:
+        """Return the StateStore path that can satisfy a Yaesu rigctl function."""
+
+        if func in ("TONE", "TSQL"):
+            # Per-receiver on the dual-RX FTX-1: the poller publishes MAIN
+            # and SUB tone state separately (observations.py).
+            receiver_id = "sub" if receiver == 1 else "main"
+            name = "repeater_tone" if func == "TONE" else "repeater_tsql"
+            return FieldPath.receiver(receiver_id, "operator_toggles", name)
+        del receiver
+        return self._FUNC_PATHS.get(func)
+
+    def format_state_level(self, level: str, value: Any) -> RigctldResponse | None:
+        """Format a projected StateStore value with Yaesu rigctl scaling."""
+
+        try:
+            if level == "STRENGTH":
+                return RigctldResponse(
+                    values=[_format_strength(value, raw_divisor=255.0)]
+                )
+            if level == "RAWSTR":
+                return RigctldResponse(values=[str(int(value))])
+            if level in ("AF", "RF", "SQL"):
+                return RigctldResponse(
+                    values=[_format_normalized_or_raw_float(value, raw_divisor=255.0)]
+                )
+            if level == "NR":
+                # Same domain the live read in get_level consults, so a
+                # level answered from StateStore projection agrees with a
+                # live one; /15 remains only for radios publishing no
+                # nr_level domain (MOR-2479).
+                fraction = _domain_level_fraction(self._radio, "nr_level", int(value))
+                if fraction is not None:
+                    return RigctldResponse(values=[f"{fraction:.6f}"])
+                return RigctldResponse(
+                    values=[_format_raw_scaled_float(value, raw_divisor=15.0)]
+                )
+            if level == "NB":
+                # Same domain the live read in get_level consults, so a
+                # level answered from StateStore projection agrees with a
+                # live one; /10 remains only for radios publishing no
+                # nb_level domain (MOR-2469).
+                fraction = _domain_level_fraction(self._radio, "nb_level", int(value))
+                if fraction is not None:
+                    return RigctldResponse(values=[f"{fraction:.6f}"])
+                return RigctldResponse(
+                    values=[_format_raw_scaled_float(value, raw_divisor=10.0)]
+                )
+            if level == "PREAMP":
+                return RigctldResponse(values=[str(int(value))])
+            if level == "ATT":
+                return RigctldResponse(values=[str(int(bool(value)))])
+        except (TypeError, ValueError):
+            logger.debug("rigctld: invalid Yaesu StateStore level %s=%r", level, value)
+        return None
+
+    def format_state_func(self, func: str, value: Any) -> RigctldResponse | None:
+        """Format a projected StateStore value with Yaesu rigctl func semantics."""
+
+        if func in self._FUNC_PATHS:
+            return RigctldResponse(values=[str(int(bool(value)))])
+        return None
+
+    def _observe(self, path: FieldPath | None, value: object) -> None:
+        observer = self._state_observer
+        if observer is None or path is None:
+            return
+        observer(path, value)
+
+    # -- levels --------------------------------------------------------------
+
+    async def get_level(self, level: str, *, vfo: str | None = None) -> RigctldResponse:
+        # ``vfo`` accepted for protocol conformance (issue #1345). Yaesu CAT
+        # is single-receiver; routing per VFO is not meaningful, ignore.
+        del vfo
+        radio = self._radio
+
+        if level in ("STRENGTH", "RAWSTR"):
+            raw = await radio.get_s_meter()
+            self._observe(self.state_path_for_level(level), raw)
+            if level == "STRENGTH":
+                return RigctldResponse(
+                    values=[str(round((raw / 255.0) * 114.0 - 54.0))]
+                )
+            return RigctldResponse(values=[str(raw)])
+
+        if level == "RFPOWER":
+            raw = await radio.get_rf_power()
+            n = raw / self._max_power_w
+            return RigctldResponse(values=[f"{n:.6f}"])
+
+        if level == "SWR":
+            swr = float(await radio.get_swr())
+            return RigctldResponse(values=[f"{swr:.6f}"])
+
+        # 0–255 → 0.0–1.0
+        if level == "SQL":
+            raw = await radio.get_squelch()
+            self._observe(self.state_path_for_level(level), raw)
+            return RigctldResponse(values=[f"{raw / 255.0:.6f}"])
+        if level in ("AF", "RF"):
+            m = {"AF": "get_af_level", "RF": "get_rf_gain"}[level]
+            raw = await getattr(radio, m)()
+            self._observe(self.state_path_for_level(level), raw)
+            return RigctldResponse(values=[f"{raw / 255.0:.6f}"])
+
+        # 0–100 → 0.0–1.0
+        if level in ("MICGAIN", "MONITOR_GAIN", "COMP"):
+            m = {
+                "MICGAIN": "get_mic_gain",
+                "MONITOR_GAIN": "get_monitor_level",
+                "COMP": "get_compressor_level",
+            }[level]
+            return RigctldResponse(values=[f"{await getattr(radio, m)() / 100.0:.6f}"])
+
+        if level == "NB":
+            raw = await radio.get_nb_level()
+            self._observe(self.state_path_for_level(level), raw)
+            fraction = _domain_level_fraction(radio, "nb_level", raw)
+            if fraction is not None:
+                return RigctldResponse(values=[f"{fraction:.6f}"])
+            return RigctldResponse(values=[f"{raw / 10.0:.6f}"])
+        if level == "NR":
+            raw = await radio.get_nr_level()
+            self._observe(self.state_path_for_level(level), raw)
+            fraction = _domain_level_fraction(radio, "nr_level", raw)
+            if fraction is not None:
+                return RigctldResponse(values=[f"{fraction:.6f}"])
+            return RigctldResponse(values=[f"{raw / 15.0:.6f}"])
+        if level == "NOTCHF":
+            _, freq_idx = await radio.get_manual_notch()
+            if isinstance(radio, ControlDomainCapable):
+                display = radio.decode_control_raw("manual_notch_freq", freq_idx)
+                if isinstance(display, str):
+                    return RigctldResponse(values=[display])
+            return RigctldResponse(values=[str(freq_idx)])
+        if level == "IFSHIFT":
+            return RigctldResponse(values=[str(await radio.get_if_shift())])
+        if level == "CWPITCH":
+            # radio.get_cw_pitch returns Hz directly (Yaesu backend converts
+            # idx → Hz internally per CwControlCapable contract).
+            return RigctldResponse(values=[str(await radio.get_cw_pitch())])
+        if level == "KEYSPD":
+            return RigctldResponse(values=[str(await radio.get_key_speed())])
+
+        # Meters
+        if level in ("COMP_METER", "ID_METER", "VD_METER"):
+            m = {
+                "COMP_METER": "get_comp_meter",
+                "ID_METER": "get_id_meter",
+                "VD_METER": "get_vd_meter",
+            }[level]
+            return RigctldResponse(values=[f"{float(await getattr(radio, m)()):.6f}"])
+
+        if level == "PREAMP":
+            value = await radio.get_preamp()
+            self._observe(self.state_path_for_level(level), value)
+            return RigctldResponse(values=[str(value)])
+        if level == "ATT":
+            value = await radio.get_attenuator()
+            self._observe(self.state_path_for_level(level), bool(value))
+            return RigctldResponse(values=[str(int(value))])
+
+        return _err(HamlibError.EINVAL)
+
+    async def set_level(
+        self, level: str, value: float, *, vfo: str | None = None
+    ) -> RigctldResponse:
+        # ``vfo`` accepted for protocol conformance (issue #1345); ignored.
+        del vfo
+        radio = self._radio
+
+        if level == "RFPOWER":
+            await radio.set_power(round(value * self._max_power_w))
+            return _ok()
+
+        if level in ("AF", "RF", "SQL"):
+            m = {"AF": "set_af_level", "RF": "set_rf_gain", "SQL": "set_squelch"}[level]
+            await getattr(radio, m)(max(0, min(255, round(value * 255))))
+            return _ok()
+
+        if level in ("MICGAIN", "MONITOR_GAIN", "COMP"):
+            m = {
+                "MICGAIN": "set_mic_gain",
+                "MONITOR_GAIN": "set_monitor_level",
+                "COMP": "set_compressor_level",
+            }[level]
+            await getattr(radio, m)(max(0, min(100, round(value * 100))))
+            return _ok()
+
+        if level == "NB":
+            # hamlib carries NB as a 0.0–1.0 fraction; the radio's own
+            # domain decides the band it maps onto (MOR-2469).
+            if isinstance(radio, ControlDomainCapable):
+                band = _display_band_bounds(radio.control_display_bounds("nb_level"))
+                if band is not None:
+                    snapped = await _set_snapped_level(
+                        radio,
+                        "nb_level",
+                        band[0] + value * (band[1] - band[0]),
+                        radio.set_nb_level,
+                    )
+                    if snapped is not None:
+                        return snapped
+            await radio.set_nb_level(max(0, min(10, round(value * 10))))
+            return _ok()
+        if level == "NR":
+            # hamlib carries NR as a 0.0–1.0 fraction; the radio's own
+            # domain decides the band it maps onto (FTX-1: 0–10, per the
+            # CAT manual — not a code constant).
+            if isinstance(radio, ControlDomainCapable):
+                band = _display_band_bounds(radio.control_display_bounds("nr_level"))
+                if band is not None:
+                    snapped = await _set_snapped_level(
+                        radio,
+                        "nr_level",
+                        band[0] + value * (band[1] - band[0]),
+                        radio.set_nr_level,
+                    )
+                    if snapped is not None:
+                        return snapped
+            await radio.set_nr_level(max(0, min(15, round(value * 15))))
+            return _ok()
+        if level == "NOTCHF":
+            snapped = await _set_snapped_level(
+                radio, "manual_notch_freq", value, radio.set_notch_filter
+            )
+            if snapped is not None:
+                return snapped
+            await radio.set_notch_filter(round(value))
+            return _ok()
+        if level == "IFSHIFT":
+            snapped = await _set_snapped_level(
+                radio, "if_shift", value, radio.set_if_shift
+            )
+            if snapped is not None:
+                return snapped
+            await radio.set_if_shift(round(value))
+            return _ok()
+        if level == "CWPITCH":
+            snapped = await _set_snapped_level(
+                radio, "cw_pitch", value, radio.set_cw_pitch
+            )
+            if snapped is not None:
+                return snapped
+            await radio.set_cw_pitch(round(value))
+            return _ok()
+        if level == "KEYSPD":
+            await radio.set_key_speed(round(value))
+            return _ok()
+        if level == "PREAMP":
+            await radio.set_preamp(round(value))
+            return _ok()
+        if level == "ATT":
+            await radio.set_attenuator(round(value))
+            return _ok()
+
+        return _err(HamlibError.EINVAL)
+
+    # -- funcs ---------------------------------------------------------------
+
+    async def get_func(self, func: str, *, vfo: str | None = None) -> RigctldResponse:
+        # ``vfo`` accepted for protocol conformance (issue #1345); TONE/TSQL
+        # derive their per-receiver routing from it below.
+        radio = self._radio
+
+        if func == "VOX":
+            return RigctldResponse(values=[str(int(await radio.get_vox()))])
+        if func == "TUNER":
+            return RigctldResponse(
+                values=[str(int(await radio.get_tuner_status() > 0))]
+            )
+        if func == "COMP":
+            return RigctldResponse(values=[str(int(await radio.get_processor()))])
+        if func == "NB":
+            value = await radio.get_nb_level() > 0
+            self._observe(self.state_path_for_func(func), value)
+            return RigctldResponse(values=[str(int(value))])
+        if func == "NR":
+            value = await radio.get_nr_level() > 0
+            self._observe(self.state_path_for_func(func), value)
+            return RigctldResponse(values=[str(int(value))])
+        if func in ("TONE", "TSQL"):
+            receiver = _receiver_for_vfo(vfo)
+            getter = (
+                radio.get_repeater_tone if func == "TONE" else radio.get_repeater_tsql
+            )
+            try:
+                value = bool(await getter(receiver=receiver))
+            except ValueError:
+                # FTX-1 CT codes 3/4/5 (DCS / PR FREQ / REV TONE) have no
+                # two-boolean pair: the Yaesu getters refuse loudly instead
+                # of inventing False (MOR-2572). Answer "not available" and
+                # record nothing — an observed False would light the
+                # repeater strip OFF while the radio is in DCS. (The write
+                # side of the same condition is ERJCTED, see set_func.)
+                return _err(HamlibError.ENAVAIL)
+            self._observe(self.state_path_for_func(func, receiver=receiver), value)
+            return RigctldResponse(values=[str(int(value))])
+        if func == "LOCK":
+            return RigctldResponse(values=[str(int(await radio.get_dial_lock()))])
+        if func == "SPLIT":
+            return RigctldResponse(values=[str(int(await radio.get_split()))])
+        if func == "AGC":
+            return RigctldResponse(values=[str(int(await radio.get_agc() > 0))])
+        return _err(HamlibError.EINVAL)
+
+    async def set_func(
+        self, func: str, on: bool, *, vfo: str | None = None
+    ) -> RigctldResponse:
+        # ``vfo`` accepted for protocol conformance (issue #1345); TONE/TSQL
+        # derive their per-receiver routing from it below.
+        radio = self._radio
+
+        if func == "VOX":
+            await radio.set_vox(on)
+            return _ok()
+        if func == "TUNER":
+            await radio.set_tuner_status(1 if on else 0)
+            return _ok()
+        if func == "COMP":
+            await radio.set_processor(on)
+            return _ok()
+        if func == "NB":
+            await radio.set_nb(on)
+            return _ok()
+        if func == "NR":
+            await radio.set_nr(on)
+            return _ok()
+        if func in ("TONE", "TSQL"):
+            receiver = _receiver_for_vfo(vfo)
+            setter = (
+                radio.set_repeater_tone if func == "TONE" else radio.set_repeater_tsql
+            )
+            try:
+                await setter(on, receiver=receiver)
+            except ValueError:
+                # The FTX-1 maps TONE/TSQL onto one ``CT`` select and refuses
+                # loudly: the (tone off, tsql on) pair has no CT code, and a
+                # toggle over DCS / PR FREQ / REV TONE would destroy the
+                # radio's configuration. A refused write is the rig rejecting
+                # the command — RPRT -9, not EINVAL.
+                return _err(HamlibError.ERJCTED)
+            return _ok()
+        if func == "LOCK":
+            await radio.set_dial_lock(on)
+            return _ok()
+        if func == "SPLIT":
+            await radio.set_split(on)
+            return _ok()
+        if func == "AGC":
+            await radio.set_agc(1 if on else 0)
+            return _ok()
+
+        return _err(HamlibError.EINVAL)
+
+    # -- dump / info ---------------------------------------------------------
+
+    def dump_state(self) -> list[str]:
+        state = list(_YAESU_DUMP_STATE)
+        # Substitute the rig model from the radio's TOML config (closes #441).
+        # Default 2028 (FTX-1) if the radio doesn't expose hamlib_model_id.
+        model_id = getattr(self._radio, "hamlib_model_id", 2028)
+        state[1] = str(int(model_id))
+        return state
+
+    def get_info(self) -> str:
+        raw_model = getattr(self._radio, "model", "Yaesu")
+        model = raw_model if isinstance(raw_model, str) and raw_model else "Yaesu"
+        return f"Yaesu {model} (rigplane)"
+
+
+# ---------------------------------------------------------------------------
+# Factory
+# ---------------------------------------------------------------------------
+
+
+def create_routing(
+    radio: "Radio",
+    max_power_w: float = 100.0,
+) -> RigctldRouting | None:
+    """Create a vendor-specific :class:`RigctldRouting` for ``radio``.
+
+    Dispatches via the public
+    :class:`~rigplane.core.radio_protocol.RigctldRoutable` Protocol:
+    radios that implement ``rigctld_routing(max_power_w)`` get
+    their custom strategy (Yaesu CAT today; Kenwood TS-590 or others
+    in the future). Radios that do not — Icom CI-V — return ``None``
+    and the handler's built-in Icom routing is used as the default
+    path.
+    """
+    from rigplane.core.radio_protocol import RigctldRoutable
+
+    if isinstance(radio, RigctldRoutable):
+        return radio.rigctld_routing(max_power_w)
+    return None

@@ -1,0 +1,1854 @@
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { mount, unmount, flushSync } from 'svelte';
+import { SvelteMap } from 'svelte/reactivity';
+import { formatFilterWidth } from '../filter-utils';
+import { setLocale } from '$lib/i18n';
+import { deriveIfShift } from '$lib/radio/filter-controls';
+import type { CommandScalarFeedback } from '../../../primitives/scalar/continuous-scalar.svelte';
+import type { ControlDisplayDomain } from '$lib/radio/filter-controls';
+
+const mockProps = {
+  currentMode: 'USB',
+  currentFilter: 2,
+  filterShape: 0,
+  hasFilterShape: true,
+  filterLabels: ['FIL1', 'FIL2', 'FIL3'],
+  filterWidth: 2400,
+  filterWidthMin: 50,
+  filterWidthMax: 9999,
+  filterConfig: {
+    defaults: [3000, 2400, 1800],
+    fixed: false,
+    minHz: 50,
+    maxHz: 3600,
+    stepHz: 50,
+  } as { defaults: number[]; fixed: boolean; minHz: number; maxHz: number; stepHz: number } | null,
+  ifShift: 0,
+  hasIfShift: true,
+  hasPbt: false,
+  pbtInner: 0 as number | null,
+  pbtOuter: 0 as number | null,
+  pbtDomain: null as ControlDisplayDomain | null,
+  ifShiftDomain: null as ControlDisplayDomain | null,
+};
+
+const mockHandlers = {
+  onFilterChange: vi.fn(),
+  onFilterWidthChange: vi.fn(),
+  onFilterWidthReset: vi.fn(),
+  onFilterShapeChange: vi.fn(),
+  onFilterPresetChange: vi.fn(),
+  onFilterDefaults: vi.fn(),
+  onIfShiftChange: vi.fn(),
+  onPbtInnerChange: vi.fn(),
+  onPbtOuterChange: vi.fn(),
+  onPbtReset: vi.fn(),
+};
+
+// MOR-1536: FilterPanel now also reads the filter-select armed signal —
+// default unarmed here, this file's tests are not about that behavior
+// (covered by `mor1536-armed-adoption.isolated.test.ts`).
+const unarmed = { armed: false, value: null };
+// MOR-1689: filter-shape's own armed fact — a DIFFERENT intent
+// (`set_filter_shape`) than filter selection (`set_filter`) above, same
+// shape as `unarmed` (parity with ModePanel's DATA-mode armed mock).
+const shapeArmed: { armed: boolean; value: number | null } = { armed: false, value: null };
+// MOR-1689 leg 2: the full shape command-feedback projection the panel's
+// shape buttons consume for `data-command-phase` and the deduplicated live
+// status. Same mutation-before-mount pattern as `shapeArmed` above.
+const shapeFeedback: {
+  confirmed: number | null;
+  target: number | null;
+  requestedTarget: number | null;
+  phase: 'unavailable' | 'idle' | 'submitted' | 'queued' | 'dispatched'
+  | 'awaiting-confirmation' | 'confirmed' | 'failed' | 'timed-out' | 'cancelled' | 'superseded';
+  busy: boolean;
+  availability: 'available' | 'unavailable';
+  outcome: { phase: 'confirmed' | 'failed' | 'timed-out' | 'cancelled' | 'superseded'; error?: string } | null;
+  lifecycleId: string | null;
+  transitionId: string | null;
+} = {
+  confirmed: 0, target: null, requestedTarget: null, phase: 'idle', busy: false,
+  availability: 'available', outcome: null, lifecycleId: null, transitionId: null,
+};
+function setShapeFeedback(overrides: Partial<typeof shapeFeedback>): void {
+  Object.assign(shapeFeedback, overrides);
+}
+const widthLifecycle = {
+  confirmed: 2400,
+  target: null as number | null,
+  phase: 'idle',
+  busy: false,
+  outcome: null as { phase: 'confirmed' | 'failed' | 'timed-out' | 'cancelled' | 'superseded'; error?: string } | null,
+  presentation: null as {
+    lifecycleId: string; transitionId: string; receiver: 0 | 1; sessionEpoch: number;
+    target: number; status: 'pending' | 'acknowledged' | 'confirmed' | 'failed' | 'timed-out' | 'cancelled' | 'superseded';
+  } | null,
+};
+const propsVersion = new SvelteMap([['value', 0]]);
+const lifecycleState = new SvelteMap([['value', widthLifecycle]]);
+const feedbackOverride = new SvelteMap<string, Readonly<CommandScalarFeedback> | null>([['value', null]]);
+
+function setMockProps(overrides: Partial<typeof mockProps>): void {
+  Object.assign(mockProps, overrides);
+  if ('filterWidth' in overrides) setWidthLifecycle({ confirmed: overrides.filterWidth });
+  propsVersion.set('value', (propsVersion.get('value') ?? 0) + 1);
+}
+
+function setWidthLifecycle(overrides: Partial<typeof widthLifecycle>): void {
+  lifecycleState.set('value', { ...(lifecycleState.get('value') ?? widthLifecycle), ...overrides });
+}
+
+function presentation(
+  lifecycleId: string,
+  status: NonNullable<typeof widthLifecycle.presentation>['status'],
+  target: number,
+  receiver: 0 | 1 = 0,
+  sessionEpoch = 7,
+) {
+  return { lifecycleId, transitionId: `${sessionEpoch}:${lifecycleId}:${status}`, receiver, sessionEpoch, target, status };
+}
+
+function feedbackFromLifecycle(): Readonly<CommandScalarFeedback> {
+  const lifecycle = lifecycleState.get('value') ?? widthLifecycle;
+  const status = lifecycle.presentation?.status;
+  const phase = status === 'pending' ? 'submitted'
+    : status === 'acknowledged' ? 'awaiting-confirmation'
+      : status ?? (lifecycle.phase === 'unavailable' ? 'unavailable' : 'idle');
+  return {
+    confirmed: lifecycle.confirmed,
+    target: lifecycle.busy ? lifecycle.target : null,
+    requestedTarget: lifecycle.presentation?.target ?? lifecycle.target,
+    phase,
+    busy: lifecycle.busy,
+    availability: lifecycle.phase === 'unavailable' ? 'unavailable' : 'available',
+    outcome: lifecycle.outcome,
+    lifecycleId: lifecycle.presentation?.lifecycleId ?? null,
+    transitionId: lifecycle.presentation?.transitionId ?? null,
+    providerGeneration: 1,
+    sessionEpoch: lifecycle.presentation?.sessionEpoch ?? 7,
+    scope: { control: 'filter-width', receiver: lifecycle.presentation?.receiver ?? 0 },
+    repeatPolicy: 'latest-target-wins',
+  } as Readonly<CommandScalarFeedback>;
+}
+
+function setWidthFeedback(overrides: Partial<CommandScalarFeedback>): void {
+  feedbackOverride.set('value', { ...feedbackFromLifecycle(), ...overrides });
+}
+
+const passbandOverride = new SvelteMap<string, Readonly<CommandScalarFeedback> | null>([
+  ['inner', null], ['outer', null], ['ifShift', null],
+]);
+function passbandFeedback(control: string, confirmed: number): Readonly<CommandScalarFeedback> {
+  propsVersion.get('value');
+  return {
+    confirmed, target: null, requestedTarget: null, phase: 'idle', busy: false,
+    availability: 'available', outcome: null, lifecycleId: null, transitionId: null,
+    providerGeneration: 1, sessionEpoch: 7,
+    scope: { control, receiver: 0 }, repeatPolicy: 'latest-target-wins',
+  } as Readonly<CommandScalarFeedback>;
+}
+function setPassbandFeedback(
+  key: 'inner' | 'outer' | 'ifShift', overrides: Partial<CommandScalarFeedback>,
+): void {
+  const base = key === 'inner' ? passbandFeedback('pbt-inner', mockProps.pbtInner ?? 0)
+    : key === 'outer' ? passbandFeedback('pbt-outer', mockProps.pbtOuter ?? 0)
+      : passbandFeedback('if-shift', mockProps.ifShift);
+  passbandOverride.set(key, { ...base, ...overrides });
+}
+
+vi.mock('$lib/runtime/adapters/panel-adapters', () => ({
+  deriveFilterProps: () => {
+    propsVersion.get('value');
+    return { ...mockProps };
+  },
+  getFilterHandlers: () => mockHandlers,
+  getFilterArmed: () => unarmed,
+  getFilterShapeArmed: () => shapeArmed,
+  getFilterShapeControlFeedback: () => shapeFeedback,
+  getFilterWidthControlFeedback: () => feedbackOverride.get('value') ?? feedbackFromLifecycle(),
+  getPbtInnerHzControlFeedback: () => passbandOverride.get('inner')
+    ?? passbandFeedback('pbt-inner', mockProps.pbtInner ?? 0),
+  getPbtOuterHzControlFeedback: () => passbandOverride.get('outer')
+    ?? passbandFeedback('pbt-outer', mockProps.pbtOuter ?? 0),
+  getIfShiftControlFeedback: () => passbandOverride.get('ifShift')
+    ?? passbandFeedback('if-shift', mockProps.ifShift),
+}));
+
+import FilterPanel from '../FilterPanel.svelte';
+
+// ---------------------------------------------------------------------------
+// formatFilterWidth
+// ---------------------------------------------------------------------------
+
+describe('formatFilterWidth', () => {
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+it('returns raw number string for values below 1000', () => {
+    expect(formatFilterWidth(500)).toBe('500');
+  });
+
+  it('returns raw number string for minimum value 50', () => {
+    expect(formatFilterWidth(50)).toBe('50');
+  });
+
+  it('returns raw number string for 999', () => {
+    expect(formatFilterWidth(999)).toBe('999');
+  });
+
+  it('returns "1k" for exactly 1000 Hz', () => {
+    expect(formatFilterWidth(1000)).toBe('1k');
+  });
+
+  it('returns "1.2k" for 1200 Hz', () => {
+    expect(formatFilterWidth(1200)).toBe('1.2k');
+  });
+
+  it('returns "2.4k" for 2400 Hz', () => {
+    expect(formatFilterWidth(2400)).toBe('2.4k');
+  });
+
+  it('returns "3k" for 3000 Hz', () => {
+    expect(formatFilterWidth(3000)).toBe('3k');
+  });
+
+  it('returns "3.6k" for 3600 Hz', () => {
+    expect(formatFilterWidth(3600)).toBe('3.6k');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// FilterPanel component
+// ---------------------------------------------------------------------------
+
+let components: ReturnType<typeof mount>[] = [];
+
+function mountPanel(overrides?: Partial<typeof mockProps>) {
+  if (overrides) setMockProps(overrides);
+  const t = document.createElement('div');
+  document.body.appendChild(t);
+  const component = mount(FilterPanel, { target: t });
+  flushSync();
+  components.push(component);
+  return t;
+}
+
+beforeEach(() => {
+  components = [];
+  shapeArmed.armed = false;
+  shapeArmed.value = null;
+  setShapeFeedback({
+    confirmed: 0, target: null, requestedTarget: null, phase: 'idle', busy: false,
+    availability: 'available', outcome: null, lifecycleId: null, transitionId: null,
+  });
+  setLocale('en-US');
+  setMockProps({
+    currentMode: 'USB',
+    currentFilter: 2,
+    filterShape: 0,
+    hasFilterShape: true,
+    filterLabels: ['FIL1', 'FIL2', 'FIL3'],
+    filterWidth: 2400,
+    filterWidthMin: 50,
+    filterWidthMax: 9999,
+    filterConfig: {
+      defaults: [3000, 2400, 1800],
+      fixed: false,
+      minHz: 50,
+      maxHz: 3600,
+      stepHz: 50,
+    },
+    ifShift: 0,
+    hasIfShift: true,
+    hasPbt: false,
+    pbtInner: 0,
+    pbtOuter: 0,
+    pbtDomain: null,
+    ifShiftDomain: null,
+  });
+  mockHandlers.onFilterChange = vi.fn();
+  mockHandlers.onFilterWidthChange = vi.fn();
+  mockHandlers.onFilterWidthReset = vi.fn();
+  mockHandlers.onFilterShapeChange = vi.fn();
+  mockHandlers.onFilterPresetChange = vi.fn();
+  mockHandlers.onFilterDefaults = vi.fn();
+  mockHandlers.onIfShiftChange = vi.fn();
+  mockHandlers.onPbtInnerChange = vi.fn();
+  mockHandlers.onPbtOuterChange = vi.fn();
+  mockHandlers.onPbtReset = vi.fn();
+  lifecycleState.set('value', {
+    confirmed: 2400,
+    target: null,
+    phase: 'idle',
+    busy: false,
+    outcome: null,
+    presentation: null,
+  });
+  feedbackOverride.set('value', null);
+  passbandOverride.set('inner', null);
+  passbandOverride.set('outer', null);
+  passbandOverride.set('ifShift', null);
+});
+
+afterEach(() => {
+  components.forEach(c => unmount(c));
+  document.body.innerHTML = '';
+});
+
+describe('panel structure', () => {
+  it('renders filter selector buttons', () => {
+    const t = mountPanel();
+    const buttons = Array.from(t.querySelectorAll('button')).map((button) => button.textContent?.trim());
+    expect(buttons).toContain('FIL1');
+    expect(buttons).toContain('FIL2');
+    expect(buttons).toContain('FIL3');
+  });
+
+  it('renders a read-only BW display instead of a Width slider', () => {
+    const t = mountPanel();
+    expect(t.querySelector('.bw-label')?.textContent).toBe('BW');
+    expect(t.querySelector('.bw-value')?.textContent).toBe('2.4kHz');
+    const labels = Array.from(t.querySelectorAll('.vc-label')).map((el) => el.textContent);
+    expect(labels).not.toContain('Width');
+  });
+
+  it('renders the IF Shift slider', () => {
+    const t = mountPanel();
+    const labels = Array.from(t.querySelectorAll('.vc-label'));
+    expect(labels.some(el => el.textContent === 'IF Shift')).toBe(true);
+  });
+
+  it('renders the settings gear button', () => {
+    const t = mountPanel();
+    expect(t.querySelector('.settings-button')?.textContent?.trim()).toBe('⚙');
+  });
+
+  it('IF Shift slider has min=-1200, max=1200, step=25', () => {
+    const t = mountPanel();
+    const sliders = t.querySelectorAll<HTMLElement>('[role="slider"]');
+    const ifShiftSlider = sliders[0];
+    expect(ifShiftSlider.getAttribute('aria-valuemin')).toBe('-1200');
+    expect(ifShiftSlider.getAttribute('aria-valuemax')).toBe('1200');
+  });
+});
+
+describe('Filter Width lifecycle presentation (MOR-1665)', () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+  const tableConfig = {
+    defaults: [2400, 2400, 2400], fixed: false, minHz: 1800, maxHz: 3000, stepHz: 1,
+    table: [1800, 2400, 3000],
+  } as typeof mockProps.filterConfig;
+
+  it('keeps an off-table 2501 Hz reading exact on nonuniform catalog geometry', () => {
+    const t = mountPanel({
+      filterWidth: 2501,
+      filterConfig: {
+        defaults: [2100, 2100, 2100], fixed: false,
+        minHz: 1800, maxHz: 3000, stepHz: 1,
+        table: [1800, 2100, 3000],
+      } as typeof mockProps.filterConfig,
+    });
+    const control = t.querySelector<HTMLElement>('[role="slider"]')!;
+
+    expect(t.querySelector('.vc-value')?.textContent).toBe('2501 Hz');
+    expect(t.querySelector('.vc-hbar')?.getAttribute('style'))
+      .toContain('--vc-fill-percent: 72.27777777777777%');
+    expect(control.getAttribute('aria-valuenow')).toBe('2501');
+    expect(control.getAttribute('aria-valuetext')).toBe('2501 Hz');
+  });
+
+  it.each([
+    [2100, '2.1kHz', '50%'],
+    [2500, '2.5kHz', '72.22222222222221%'],
+  ] as const)('keeps %i Hz exact at its piecewise catalog position', (confirmed, text, percent) => {
+    setWidthFeedback({ confirmed });
+    const t = mountPanel({
+      filterConfig: {
+        defaults: [2100, 2100, 2100], fixed: false,
+        minHz: 1800, maxHz: 3000, stepHz: 1, table: [1800, 2100, 3000],
+      } as typeof mockProps.filterConfig,
+    });
+
+    expect(t.querySelector('.vc-value')?.textContent).toBe(text);
+    expect(t.querySelector('.vc-hbar')?.getAttribute('style')).toContain(`--vc-fill-percent: ${percent}`);
+    expect(t.querySelector('[role="slider"]')?.getAttribute('aria-valuenow')).toBe(String(confirmed));
+  });
+
+  it.each([
+    [null, ''],
+    [1700, '1.7kHz'],
+    [3100, '3.1kHz'],
+  ] as const)('does not fabricate geometry for confirmed value %s', (confirmed, text) => {
+    setWidthFeedback({ confirmed });
+    const t = mountPanel({ filterConfig: {
+      defaults: [2100, 2100, 2100], fixed: false,
+      minHz: 1800, maxHz: 3000, stepHz: 1, table: [1800, 2100, 3000],
+    } as typeof mockProps.filterConfig });
+    const control = t.querySelector<HTMLElement>('[role="slider"]')!;
+
+    expect(t.querySelector('.vc-value')?.textContent).toBe(text);
+    expect(t.querySelector('.vc-hbar')?.getAttribute('style')).toContain('--vc-fill-percent: 0%');
+    expect(control.getAttribute('aria-valuenow')).toBeNull();
+    expect(control.getAttribute('aria-disabled')).toBe('true');
+  });
+
+  it('keeps confirmed, active target, and requested target in their distinct roles', () => {
+    setWidthFeedback({
+      confirmed: 2501, target: 3000, requestedTarget: 2100,
+      phase: 'awaiting-confirmation', busy: true,
+      lifecycleId: 'distinct', transitionId: 'distinct:acknowledged',
+    });
+    const t = mountPanel({ filterConfig: {
+      defaults: [2100, 2100, 2100], fixed: false,
+      minHz: 1800, maxHz: 3000, stepHz: 1, table: [1800, 2100, 3000],
+    } as typeof mockProps.filterConfig });
+    const status = t.querySelector('[data-control-feedback-status]')?.textContent ?? '';
+
+    expect(t.querySelector('.vc-value')?.textContent).toBe('2501 Hz');
+    expect(t.querySelector('[data-pending-width-target]')?.textContent).toContain('3kHz');
+    expect(status).toContain('2.1kHz requested');
+    expect(status).not.toContain('3kHz requested');
+    expect(t.querySelectorAll('[role="status"]')).toHaveLength(1);
+  });
+
+  it('renders the width value text and pending announcement with the Russian Hz unit (ru-RU)', () => {
+    setLocale('ru-RU');
+    const tableConfig = {
+      defaults: [2100, 2100, 2100], fixed: false,
+      minHz: 1800, maxHz: 3000, stepHz: 1, table: [1800, 2100, 3000],
+    } as typeof mockProps.filterConfig;
+    setWidthFeedback({ confirmed: 2501 });
+    const idle = mountPanel({ filterConfig: tableConfig });
+    const control = idle.querySelector<HTMLElement>('[role="slider"]')!;
+    expect(control.getAttribute('aria-valuetext')).toBe('2501 Гц');
+    expect(idle.querySelector('.vc-value')?.textContent).toBe('2501 Гц');
+
+    setWidthFeedback({
+      confirmed: 2100, target: 3000, requestedTarget: 2501,
+      phase: 'awaiting-confirmation', busy: true,
+      lifecycleId: 'ru-unit', transitionId: 'ru-unit:acknowledged',
+    });
+    const busy = mountPanel({ filterConfig: tableConfig });
+    expect(busy.querySelector('[data-control-feedback-status]')?.textContent)
+      .toContain('2501 Гц');
+  });
+
+  it.each(['submitted', 'queued', 'dispatched', 'awaiting-confirmation'] as const)(
+    'localizes the owner-issued %s phase through one table emitter', (phase) => {
+      setWidthFeedback({
+        confirmed: 2100, target: 3000, requestedTarget: 2501, phase, busy: true,
+        lifecycleId: `busy-${phase}`, transitionId: `busy-${phase}:${phase}`,
+      });
+      const t = mountPanel({ filterConfig: {
+        defaults: [2100, 2100, 2100], fixed: false,
+        minHz: 1800, maxHz: 3000, stepHz: 1, table: [1800, 2100, 3000],
+      } as typeof mockProps.filterConfig });
+
+      expect(t.querySelector('[data-pending-width-target]')?.textContent).toContain('3kHz');
+      expect(t.querySelector('[data-control-feedback-status]')?.textContent)
+        .toContain('2501 Hz requested');
+      expect(t.querySelectorAll('[role="status"]')).toHaveLength(1);
+    },
+  );
+
+  it.each([
+    ['pointer-left', 1800], ['pointer-middle', 2100], ['pointer-right', 3000],
+    ['ArrowRight', 3000], ['Home', 1800], ['End', 3000], ['Shift+ArrowRight', 3000],
+    ['wheel', 3000], ['fine-wheel', 3000], ['reset', 1800],
+  ] as const)('%s preserves catalog choices and modified-wheel scrolling (choice %i)', (gesture, expected) => {
+    setWidthFeedback({ confirmed: gesture === 'pointer-middle' ? 1800 : 2100 });
+    const t = mountPanel({ filterConfig: {
+      defaults: [2100, 2100, 2100], fixed: false,
+      minHz: 1800, maxHz: 3000, stepHz: 1, table: [1800, 2100, 3000],
+    } as typeof mockProps.filterConfig });
+    const control = t.querySelector<HTMLElement>('[role="slider"]')!;
+    const hbar = t.querySelector<HTMLElement>('.vc-hbar')!;
+    if (gesture.startsWith('pointer')) {
+      control.setPointerCapture = vi.fn();
+      vi.spyOn(hbar, 'getBoundingClientRect').mockReturnValue({ left: 0, width: 100 } as DOMRect);
+      const x = gesture === 'pointer-left' ? 0 : gesture === 'pointer-middle' ? 50 : 100;
+      control.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, clientX: x, pointerId: 1 }));
+    } else if (gesture.includes('wheel')) {
+      control.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+      control.dispatchEvent(new WheelEvent('wheel', {
+        bubbles: true, cancelable: true, deltaY: -1, shiftKey: gesture === 'fine-wheel',
+      }));
+    } else if (gesture === 'reset') {
+      control.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+    } else {
+      control.dispatchEvent(new KeyboardEvent('keydown', {
+        bubbles: true, key: gesture.replace('Shift+', ''), shiftKey: gesture.startsWith('Shift+'),
+      }));
+    }
+    vi.advanceTimersByTime(60);
+
+    if (gesture === 'fine-wheel') {
+      expect(mockHandlers.onFilterWidthChange).not.toHaveBeenCalled();
+      return;
+    }
+    expect(mockHandlers.onFilterWidthChange).toHaveBeenCalledWith(expected);
+    expect([1800, 2100, 3000]).toContain(mockHandlers.onFilterWidthChange.mock.calls.at(-1)?.[0]);
+  });
+
+  it.each([
+    [1800, -1, 1950, 2700, 3000],
+    [3000, 1, 2700, 1950, 1800],
+  ])('accelerates armed catalog wheel input from %i with one immediate final request',
+    (confirmed, direction, slow, accelerated, bound) => {
+      setWidthFeedback({ confirmed });
+      const t = mountPanel({ filterConfig: {
+        defaults: [confirmed, confirmed, confirmed], fixed: false,
+        minHz: 1800, maxHz: 3000, stepHz: 1, table: [1800, 1950, 2200, 2500, 2700, 3000],
+      } as typeof mockProps.filterConfig });
+      const control = t.querySelector<HTMLElement>('[role="slider"]')!;
+      const wheel = (time: number, deltaY: number, extra: WheelEventInit = {}) => {
+        const event = new WheelEvent('wheel', { deltaY, bubbles: true, cancelable: true, ...extra });
+        Object.defineProperty(event, 'timeStamp', { value: time });
+        control.dispatchEvent(event);
+        flushSync();
+        return event;
+      };
+      expect(wheel(500, direction * 120).defaultPrevented).toBe(false);
+      expect(mockHandlers.onFilterWidthChange).not.toHaveBeenCalled();
+      control.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+      for (const extra of [{ shiftKey: true }, { ctrlKey: true }, { metaKey: true }]) {
+        expect(wheel(600, direction * 120, extra).defaultPrevented).toBe(false);
+      }
+      expect(mockHandlers.onFilterWidthChange).not.toHaveBeenCalled();
+      wheel(1000, direction * 120);
+      expect(mockHandlers.onFilterWidthChange.mock.calls).toEqual([[slow]]);
+      wheel(1030, direction * 120);
+      expect(mockHandlers.onFilterWidthChange.mock.calls).toEqual([[slow], [accelerated]]);
+      expect(control.getAttribute('aria-valuenow')).toBe(String(confirmed));
+      expect(t.querySelector('.vc-value')?.textContent).toBe(confirmed === 1800 ? '1.8kHz' : '3kHz');
+      wheel(1040, direction * 10000);
+      wheel(1050, -direction * 10000);
+      expect(mockHandlers.onFilterWidthChange.mock.calls).toEqual([[slow], [accelerated], [bound], [confirmed]]);
+    },
+  );
+
+  it('invalidates a deferred choice when same-endpoint catalog content changes', () => {
+    setWidthFeedback({ confirmed: 2100 });
+    const t = mountPanel({ filterConfig: {
+      defaults: [2100, 2100, 2100], fixed: false,
+      minHz: 1800, maxHz: 3000, stepHz: 1, table: [1800, 2100, 3000],
+    } as typeof mockProps.filterConfig });
+    const control = t.querySelector<HTMLElement>('[role="slider"]')!;
+    control.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'ArrowRight' }));
+    setMockProps({ filterConfig: {
+      defaults: [2200, 2200, 2200], fixed: false,
+      minHz: 1800, maxHz: 3000, stepHz: 1, table: [1800, 2200, 3000],
+    } as typeof mockProps.filterConfig });
+    flushSync();
+    vi.advanceTimersByTime(60);
+    expect(mockHandlers.onFilterWidthChange).not.toHaveBeenCalled();
+
+    control.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'ArrowRight' }));
+    vi.advanceTimersByTime(60);
+    expect(mockHandlers.onFilterWidthChange).toHaveBeenCalledExactlyOnceWith(2200);
+
+    mockHandlers.onFilterWidthChange.mockClear();
+    control.setPointerCapture = vi.fn();
+    control.hasPointerCapture = vi.fn(() => true);
+    control.releasePointerCapture = vi.fn();
+    vi.spyOn(t.querySelector('.vc-hbar') as HTMLElement, 'getBoundingClientRect')
+      .mockReturnValue({ left: 0, width: 100 } as DOMRect);
+    control.dispatchEvent(new PointerEvent('pointerdown', {
+      bubbles: true, clientX: 100, pointerId: 9,
+    }));
+    expect(mockHandlers.onFilterWidthChange).toHaveBeenCalledExactlyOnceWith(3000);
+    mockHandlers.onFilterWidthChange.mockClear();
+    setMockProps({ currentMode: 'AM' });
+    flushSync();
+    expect(control.releasePointerCapture).toHaveBeenCalledExactlyOnceWith(9);
+    control.dispatchEvent(new PointerEvent('pointermove', {
+      bubbles: true, clientX: 0, pointerId: 9,
+    }));
+    expect(mockHandlers.onFilterWidthChange).not.toHaveBeenCalled();
+  });
+
+  it('keeps the compound table Reset outside scalar reset semantics', () => {
+    const t = mountPanel({ filterConfig: tableConfig });
+    const reset = Array.from(t.querySelectorAll('button'))
+      .find((button) => button.textContent?.trim() === 'Reset')!;
+    (reset as HTMLButtonElement).click();
+
+    // MOR-2519: the compound Reset takes the radio-default width path
+    // (MOR-2535 handler), not a hardcoded Hz write and not the scalar's
+    // own policy reset (table[0]).
+    expect(mockHandlers.onFilterWidthReset).toHaveBeenCalledOnce();
+    expect(mockHandlers.onFilterWidthChange).not.toHaveBeenCalled();
+    expect(mockHandlers.onIfShiftChange).toHaveBeenCalledExactlyOnceWith(0);
+  });
+
+  it.each([
+    [[1800, 1800, 3000], 2100],
+    [[1800, Number.NaN, 3000], 2100],
+  ] as const)('disables malformed table %j without replacing its exact reading', (table, confirmed) => {
+    setWidthFeedback({ confirmed });
+    const t = mountPanel({ filterConfig: {
+      defaults: [2100, 2100, 2100], fixed: false,
+      minHz: 1800, maxHz: 3000, stepHz: 1, table: [...table],
+    } as typeof mockProps.filterConfig });
+    const control = t.querySelector<HTMLElement>('[role="slider"]')!;
+
+    expect(t.querySelector('.vc-value')?.textContent).toBe('2.1kHz');
+    expect(control.getAttribute('aria-disabled')).toBe('true');
+    expect(control.getAttribute('aria-valuenow')).toBeNull();
+    expect(t.querySelector('.vc-hbar')?.getAttribute('style')).toContain('--vc-fill-percent: 0%');
+  });
+
+  it('keeps a single-entry catalog at zero geometry without inventing another value', () => {
+    setWidthFeedback({ confirmed: 2100 });
+    const t = mountPanel({ filterConfig: {
+      defaults: [2100, 2100, 2100], fixed: false,
+      minHz: 2100, maxHz: 2100, stepHz: 1, table: [2100],
+    } as typeof mockProps.filterConfig });
+    const control = t.querySelector<HTMLElement>('[role="slider"]')!;
+
+    expect(t.querySelector('.vc-value')?.textContent).toBe('2.1kHz');
+    expect(t.querySelector('.vc-hbar')?.getAttribute('style')).toContain('--vc-fill-percent: 0%');
+    expect(control.getAttribute('aria-valuenow')).toBe('2100');
+    expect(control.getAttribute('aria-disabled')).toBe('false');
+    control.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'ArrowRight' }));
+    vi.advanceTimersByTime(60);
+    expect(mockHandlers.onFilterWidthChange).not.toHaveBeenCalled();
+  });
+
+  it('retains one localized owner message across locale and table-branch replacement', () => {
+    setWidthFeedback({
+      confirmed: 2100, target: null, requestedTarget: 2501,
+      phase: 'failed', busy: false, outcome: { phase: 'failed', error: 'radio rejected' },
+      lifecycleId: 'frozen', transitionId: 'frozen:failed',
+    });
+    const t = mountPanel({ filterWidthMin: 1800, filterWidthMax: 3000 });
+    const frozen = t.querySelector('[data-filter-width-live]')?.textContent;
+    expect(frozen).toContain('2501 Hz was not applied');
+    expect(frozen?.match(/radio rejected/g)).toHaveLength(1);
+
+    setLocale('ru-RU');
+    setMockProps({ filterConfig: {
+      defaults: [2100, 2100, 2100], fixed: false,
+      minHz: 1800, maxHz: 3000, stepHz: 1, table: [1800, 2100, 3000],
+    } as typeof mockProps.filterConfig });
+    flushSync();
+
+    expect(t.querySelector('[data-filter-width-live]')).toBeNull();
+    expect(t.querySelectorAll('[role="status"]')).toHaveLength(1);
+    expect(t.querySelector('[data-control-feedback-status]')?.textContent).toBe(frozen);
+  });
+
+  it('keeps the canonical BW readout distinct from a pending target and marks the group busy', () => {
+    setWidthLifecycle({
+      target: 3000, phase: 'acknowledged', busy: true,
+      presentation: presentation('main-command', 'acknowledged', 3000),
+    });
+    const t = mountPanel();
+
+    const group = t.querySelector<HTMLElement>('[data-filter-width-lifecycle]');
+    expect(group?.getAttribute('aria-busy')).toBe('true');
+    expect(t.querySelector('[data-confirmed-width]')?.textContent).toBe('2.4kHz');
+    expect(t.querySelector('[data-pending-width-target]')?.textContent).toContain('3kHz');
+    expect(t.querySelector('[data-filter-width-live]')?.textContent).toContain('not yet confirmed');
+  });
+
+  it.each([
+    ['confirmed', 'confirmed'],
+    ['failed', 'not applied'],
+    ['timed-out', 'timed out'],
+    ['cancelled', 'cancelled'],
+    ['superseded', 'superseded'],
+  ] as const)('announces the terminal %s outcome once without changing canonical BW', (phase, message) => {
+    setWidthLifecycle({
+      target: null,
+      phase: phase === 'confirmed' ? 'confirmed' : 'idle',
+      busy: false,
+      outcome: { phase },
+      presentation: presentation('main-command', phase, 3000),
+    });
+    const t = mountPanel();
+
+    expect(t.querySelector<HTMLElement>('[data-filter-width-lifecycle]')?.getAttribute('aria-busy')).toBe('false');
+    expect(t.querySelector('[data-confirmed-width]')?.textContent).toBe('2.4kHz');
+    expect(t.querySelector('[data-pending-width-target]')).toBeNull();
+    expect(t.querySelector('[data-filter-width-live]')?.textContent).toContain(message);
+  });
+
+  it.each(['keyboard', 'pointer'] as const)(
+    'keeps table visuals canonical through raw %s input, pending, and accepted state',
+    (input) => {
+      const t = mountPanel({ filterConfig: tableConfig });
+      const slider = t.querySelector<HTMLElement>('[role="slider"]')!;
+      const hbar = t.querySelector<HTMLElement>('.vc-hbar')!;
+      if (input === 'keyboard') {
+        slider.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
+        vi.advanceTimersByTime(60);
+      } else {
+        slider.setPointerCapture = vi.fn();
+        vi.spyOn(hbar, 'getBoundingClientRect').mockReturnValue({ left: 0, width: 100 } as DOMRect);
+        slider.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, clientX: 100, pointerId: 1 }));
+      }
+      flushSync();
+
+      expect(mockHandlers.onFilterWidthChange).toHaveBeenCalledWith(3000);
+      expect(t.querySelector('.vc-value')?.textContent).toBe('2.4kHz');
+      expect(hbar.getAttribute('style')).toContain('--vc-fill-percent: 50%');
+      expect(slider.getAttribute('aria-valuenow')).toBe('2400');
+      expect(t.querySelector('[data-pending-width-target]')).toBeNull();
+
+      setWidthLifecycle({
+        target: 3000, phase: 'pending', busy: true,
+        presentation: presentation(`table-${input}`, 'pending', 3000),
+      });
+      flushSync();
+      expect(t.querySelector('[data-pending-width-target]')?.textContent).toContain('3kHz');
+      expect(t.querySelector('.vc-value')?.textContent).toBe('2.4kHz');
+
+      setMockProps({ filterWidth: 3000 });
+      setWidthLifecycle({
+        confirmed: 3000, target: null, phase: 'confirmed', busy: false, outcome: { phase: 'confirmed' },
+        presentation: presentation(`table-${input}`, 'confirmed', 3000),
+      });
+      flushSync();
+      expect(t.querySelector('.vc-value')?.textContent).toBe('3kHz');
+      expect(hbar.getAttribute('style')).toContain('--vc-fill-percent: 100%');
+      expect(slider.getAttribute('aria-valuenow')).toBe('3000');
+      expect(t.querySelector('[data-pending-width-target]')).toBeNull();
+    },
+  );
+
+  it.each(['failed', 'timed-out', 'cancelled'] as const)(
+    'keeps table visuals canonical when a raw target is %s',
+    (status) => {
+      const t = mountPanel({ filterConfig: tableConfig });
+      const slider = t.querySelector<HTMLElement>('[role="slider"]')!;
+      slider.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
+      vi.advanceTimersByTime(60);
+      setWidthLifecycle({
+        target: null, phase: 'idle', busy: false, outcome: { phase: status },
+        presentation: presentation(`table-${status}`, status, 3000),
+      });
+      flushSync();
+      expect(t.querySelector('.vc-value')?.textContent).toBe('2.4kHz');
+      expect(t.querySelector('.vc-hbar')?.getAttribute('style')).toContain('--vc-fill-percent: 50%');
+      expect(slider.getAttribute('aria-valuenow')).toBe('2400');
+      expect(t.querySelector('[data-pending-width-target]')).toBeNull();
+    },
+  );
+
+  it('uses the exact new lifecycle target instead of a stale prior pending target', () => {
+    const t = mountPanel();
+    setWidthLifecycle({
+      target: 3000, phase: 'pending', busy: true, outcome: null,
+      presentation: presentation('old-main', 'pending', 3000),
+    });
+    flushSync();
+    setMockProps({ filterWidth: 1800 });
+    setWidthLifecycle({
+      confirmed: 1800, target: null, phase: 'idle', busy: false, outcome: { phase: 'failed' },
+      presentation: presentation('new-main', 'failed', 1800),
+    });
+    flushSync();
+
+    const status = t.querySelector('[data-filter-width-live]')?.textContent ?? '';
+    expect(status).toContain('1.8kHz was not applied');
+    expect(status).not.toContain('3kHz');
+    expect(t.querySelector('[data-confirmed-width]')?.textContent).toBe('1.8kHz');
+  });
+
+  it('freezes one terminal message across retained reads and canonical-only changes', async () => {
+    setWidthLifecycle({
+      target: null, phase: 'idle', busy: false, outcome: { phase: 'failed' },
+      presentation: presentation('failed-main', 'failed', 1800),
+    });
+    const t = mountPanel();
+    const live = t.querySelector('[data-filter-width-live]')!;
+    const frozen = live.textContent;
+    const mutations: MutationRecord[] = [];
+    const observer = new MutationObserver((records) => mutations.push(...records));
+    observer.observe(live, { childList: true, characterData: true, subtree: true });
+
+    setMockProps({ filterWidth: 1800 });
+    setWidthLifecycle({ confirmed: 1800 });
+    flushSync();
+    await Promise.resolve();
+
+    expect(live.textContent).toBe(frozen);
+    expect(mutations).toHaveLength(0);
+    observer.disconnect();
+  });
+
+  it('isolates superseding receiver/session identities and clears the live region on GC', () => {
+    const t = mountPanel();
+    setWidthLifecycle({
+      target: 3000, phase: 'pending', busy: true,
+      presentation: presentation('main-old', 'pending', 3000, 0, 7),
+    });
+    flushSync();
+    setWidthLifecycle({
+      target: 2100, phase: 'pending', busy: true,
+      presentation: presentation('sub-new', 'pending', 2100, 1, 8),
+    });
+    flushSync();
+    expect(t.querySelector('[data-filter-width-live]')?.textContent).toContain('2.1kHz');
+    expect(t.querySelector('[data-pending-width-target]')?.textContent).toContain('2.1kHz');
+
+    setWidthLifecycle({ target: null, phase: 'idle', busy: false, outcome: null, presentation: null });
+    flushSync();
+    expect(t.querySelector('[data-filter-width-live]')).toBeNull();
+  });
+
+  it('restores an open modal draft to canonical state on one failed transition', () => {
+    const t = mountPanel();
+    (t.querySelector('.settings-button') as HTMLButtonElement).click();
+    flushSync();
+    const activeSlider = document.querySelectorAll<HTMLElement>('.filter-modal [role="slider"]')[1];
+    activeSlider.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
+    vi.advanceTimersByTime(60);
+    flushSync();
+    expect(activeSlider.getAttribute('aria-valuenow')).not.toBe('2400');
+
+    setWidthLifecycle({
+      target: null, phase: 'idle', busy: false, outcome: { phase: 'failed' },
+      presentation: presentation('failed-draft', 'failed', 2450),
+    });
+    flushSync();
+    expect(activeSlider.getAttribute('aria-valuenow')).toBe('2400');
+    expect(t.querySelector('[data-filter-width-live]')?.textContent).toContain('2450 Hz was not applied');
+  });
+});
+
+describe('PBT sliders visibility', () => {
+  it('does not render PBT sliders when hasPbt is false (default)', () => {
+    const t = mountPanel();
+    const labels = Array.from(t.querySelectorAll('.vc-label')).map(el => el.textContent);
+    expect(labels).not.toContain('PBT Inner');
+    expect(labels).not.toContain('PBT Outer');
+  });
+
+  it('does not render PBT sliders when hasPbt=false explicitly', () => {
+    const t = mountPanel({ hasPbt: false });
+    const labels = Array.from(t.querySelectorAll('.vc-label')).map(el => el.textContent);
+    expect(labels).not.toContain('PBT Inner');
+    expect(labels).not.toContain('PBT Outer');
+  });
+
+  it('renders PBT Inner slider when hasPbt=true', () => {
+    const t = mountPanel({ hasPbt: true, pbtInner: 100, pbtOuter: -50 });
+    const labels = Array.from(t.querySelectorAll('.vc-label')).map(el => el.textContent);
+    expect(labels).toContain('PBT Inner');
+  });
+
+  it('renders PBT Outer slider when hasPbt=true', () => {
+    const t = mountPanel({ hasPbt: true, pbtInner: 100, pbtOuter: -50 });
+    const labels = Array.from(t.querySelectorAll('.vc-label')).map(el => el.textContent);
+    expect(labels).toContain('PBT Outer');
+  });
+
+  it('renders Reset PBT button when hasPbt=true', () => {
+    const t = mountPanel({ hasPbt: true, pbtInner: 100, pbtOuter: -50 });
+    const buttons = Array.from(t.querySelectorAll('button')).map(el => el.textContent?.trim());
+    expect(buttons).toContain('Reset');
+  });
+
+  it('does not render the Reset PBT button when hasPbt is false (MOR-2497)', () => {
+    // The Reset button used to sit after the {#if hasPbt} block closed, so it
+    // stayed live in FM where the radio has no twin PBT to reset.
+    const t = mountPanel();
+    const buttons = Array.from(t.querySelectorAll('.filter-actions button'))
+      .map(el => el.textContent?.trim());
+    expect(buttons).not.toContain('Reset');
+  });
+
+  it('PBT sliders take their bounds from the lattice domain, not +/-1200 (MOR-2497)', () => {
+    // USB 3600: the measured span is +/-1800 on the 50 Hz lattice — wider
+    // than the fabricated +/-1200 the sliders hardcoded.
+    const t = mountPanel({
+      hasPbt: true,
+      pbtInner: 1800,
+      pbtOuter: 0,
+      pbtDomain: { min: -1800, max: 1800, step: 50, origin: 0 },
+    });
+    const sliders = t.querySelectorAll<HTMLElement>('[role="slider"]');
+    const labels = Array.from(t.querySelectorAll('.vc-label')).map(el => el.textContent);
+    const innerIndex = labels.indexOf('PBT Inner');
+    const outerIndex = labels.indexOf('PBT Outer');
+    expect(sliders[innerIndex].getAttribute('aria-valuemin')).toBe('-1800');
+    expect(sliders[innerIndex].getAttribute('aria-valuemax')).toBe('1800');
+    expect(sliders[outerIndex].getAttribute('aria-valuemin')).toBe('-1800');
+    expect(sliders[outerIndex].getAttribute('aria-valuemax')).toBe('1800');
+  });
+
+  it('keeps the explicit +/-1200/25 constants only as the no-domain (legacy payload) fallback', () => {
+    const t = mountPanel({ hasPbt: true, pbtInner: 0, pbtOuter: 0, pbtDomain: null });
+    const sliders = t.querySelectorAll<HTMLElement>('[role="slider"]');
+    const labels = Array.from(t.querySelectorAll('.vc-label')).map(el => el.textContent);
+    const innerIndex = labels.indexOf('PBT Inner');
+    expect(sliders[innerIndex].getAttribute('aria-valuemin')).toBe('-1200');
+    expect(sliders[innerIndex].getAttribute('aria-valuemax')).toBe('1200');
+  });
+
+  it('renders 3 sliders total when hasPbt=true', () => {
+    const t = mountPanel({ hasPbt: true, pbtInner: 0, pbtOuter: 0 });
+    expect(t.querySelectorAll('[role="slider"]').length).toBe(3);
+    expect(t.querySelectorAll('.vc-bipolar').length).toBe(3);
+  });
+
+  it('renders 1 slider total when hasPbt=false', () => {
+    const t = mountPanel();
+    expect(t.querySelectorAll('[role="slider"]').length).toBe(1);
+    expect(t.querySelectorAll('.vc-bipolar').length).toBe(1);
+  });
+
+  // MOR-2497 review mutation pin: the sliders' step must be the emitted
+  // domain's own step (the lattice spacing), not a hardcoded 25. One
+  // ArrowRight on a centred slider moves by exactly one domain step, so the
+  // dispatched value observes the step the component actually wired in.
+  describe('PBT slider step follows the emitted domain', () => {
+    beforeEach(() => vi.useFakeTimers());
+    afterEach(() => vi.useRealTimers());
+
+    it.each([
+      ['SSB 3600 (50 Hz lattice)', { min: -1800, max: 1800, step: 50, origin: 0 }, 50],
+      ['AM 6000 (200 Hz lattice)', { min: -3000, max: 3000, step: 200, origin: 0 }, 200],
+    ])('%s: one ArrowRight moves the centred inner edge by %s Hz', (_name, domain, stepHz: number) => {
+      const t = mountPanel({ hasPbt: true, pbtInner: 0, pbtOuter: 0, pbtDomain: domain });
+      const labels = Array.from(t.querySelectorAll('.vc-label')).map(el => el.textContent);
+      const innerIndex = labels.indexOf('PBT Inner');
+      const sliders = t.querySelectorAll<HTMLElement>('[role="slider"]');
+      sliders[innerIndex].dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
+      vi.advanceTimersByTime(60);
+      expect(mockHandlers.onPbtInnerChange).toHaveBeenCalledExactlyOnceWith(stepHz);
+    });
+  });
+
+  // MOR-1691: the dispatch count is bounded and deterministic for pointer
+  // and touch gestures — no unbounded per-pixel CAT write stream. A bipolar
+  // pointer drag holds every intermediate candidate as the gesture-local
+  // draft (thumb AND visible number follow it) and dispatches exactly ONE
+  // request when the gesture ends.
+  describe('PBT pointer dispatch is bounded: one committed request per drag (MOR-1691)', () => {
+    const dragPointer = (t: HTMLElement, clientXs: number[]) => {
+      const control = t.querySelector<HTMLElement>('[role="slider"][aria-label="PBT Inner"]')!;
+      const frame = control.closest<HTMLElement>('.vc-bipolar')!;
+      control.setPointerCapture = vi.fn();
+      control.hasPointerCapture = vi.fn(() => true);
+      control.releasePointerCapture = vi.fn();
+      vi.spyOn(frame, 'getBoundingClientRect').mockReturnValue({ left: 0, width: 100 } as DOMRect);
+      control.dispatchEvent(new PointerEvent('pointerdown', {
+        bubbles: true, clientX: clientXs[0], pointerId: 3,
+      }));
+      for (const clientX of clientXs) {
+        control.dispatchEvent(new PointerEvent('pointermove', {
+          bubbles: true, clientX, pointerId: 3,
+        }));
+        flushSync();
+      }
+      return control;
+    };
+
+    it('holds every pointer move as the draft and dispatches once on pointerup', () => {
+      const t = mountPanel({
+        hasPbt: true, pbtInner: 0, pbtOuter: 0,
+        pbtDomain: { min: -1200, max: 1200, step: 50, origin: 0 },
+      });
+      // The track spans 0..100 px over -1200..1200 (step 50): the committed
+      // pointerup at x=75 lands on 600 Hz; the intermediates only draft.
+      const control = dragPointer(t, [10, 40, 75]);
+      expect(mockHandlers.onPbtInnerChange).not.toHaveBeenCalled();
+
+      control.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: 3 }));
+      flushSync();
+      expect(mockHandlers.onPbtInnerChange).toHaveBeenCalledExactlyOnceWith(600);
+    });
+
+    it('discards the deferred candidate on pointercancel', () => {
+      const t = mountPanel({
+        hasPbt: true, pbtInner: 0, pbtOuter: 0,
+        pbtDomain: { min: -1200, max: 1200, step: 50, origin: 0 },
+      });
+      const control = dragPointer(t, [10, 50, 75]);
+      control.dispatchEvent(new PointerEvent('pointercancel', { bubbles: true, pointerId: 3 }));
+      flushSync();
+      expect(mockHandlers.onPbtInnerChange).not.toHaveBeenCalled();
+    });
+  });
+});
+
+/**
+ * MOR-2909 (MOR-2215 audit F1) — the PBT track double-click sends nothing:
+ * no per-lane `set_pbt_inner`/`set_pbt_outer` 0 Hz reset, and no position
+ * command rides the gesture (MOR-2535 ruling: the reset gesture lives on
+ * the row's label/value cell or the Reset button, never on the range
+ * track; the legacy panel has no label/value cells, so the Reset button is
+ * the one dispatch site). Both lanes mount AWAY from 0 so a per-lane 0 Hz
+ * reset would be observable on the wire.
+ */
+describe('PBT track double-click sends nothing (MOR-2909, MOR-2535 ruling)', () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  function pbtTrack(target: HTMLElement, lane: 'PBT Inner' | 'PBT Outer'): HTMLElement {
+    const labels = Array.from(target.querySelectorAll('.vc-label')).map((el) => el.textContent);
+    const sliders = target.querySelectorAll<HTMLElement>('[role="slider"]');
+    return sliders[labels.indexOf(lane)];
+  }
+
+  it('a double-click on either PBT lane track sends no command — no per-lane reset', () => {
+    const t = mountPanel({ hasPbt: true, pbtInner: 500, pbtOuter: -300 });
+    pbtTrack(t, 'PBT Inner').dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+    pbtTrack(t, 'PBT Outer').dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+    flushSync();
+    vi.advanceTimersByTime(60);
+
+    expect(mockHandlers.onPbtInnerChange).not.toHaveBeenCalled();
+    expect(mockHandlers.onPbtOuterChange).not.toHaveBeenCalled();
+    expect(mockHandlers.onPbtReset).not.toHaveBeenCalled();
+  });
+
+  it('the reset goes only through onPbtReset — the Reset button, never the per-lane handlers', () => {
+    const t = mountPanel({ hasPbt: true, pbtInner: 500, pbtOuter: -300 });
+    t.querySelector<HTMLButtonElement>('.filter-actions .pbt-reset-button')!.click();
+    flushSync();
+
+    expect(mockHandlers.onPbtReset).toHaveBeenCalledExactlyOnceWith();
+    expect(mockHandlers.onPbtInnerChange).not.toHaveBeenCalled();
+    expect(mockHandlers.onPbtOuterChange).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * MOR-1494: capability-absent controls must be HIDDEN, not shown dead.
+ * IC-7300 (PBT-only, no `if_shift` command) previously rendered the IF
+ * Shift slider permanently disabled with a PBT-derived stand-in value.
+ * `if_shift` is a real command only on Yaesu-family radios (e.g. FTX-1);
+ * Icom radios expose PBT Inner/Outer instead. The panel must render
+ * IF Shift only when `hasIfShift` (data-driven from the radio's own
+ * capability set) is true — never from a hardcoded model/family check.
+ */
+describe('IF Shift visibility (MOR-1494)', () => {
+  it('hides the IF Shift row for an IC-7300-shaped capability set (pbt, no if_shift)', () => {
+    const t = mountPanel({ hasIfShift: false, hasPbt: true, pbtInner: 0, pbtOuter: 0 });
+    const labels = Array.from(t.querySelectorAll('.vc-label')).map((el) => el.textContent);
+    expect(labels).not.toContain('IF Shift');
+    expect(labels).not.toContain('IF Shift (derived)');
+  });
+
+  it('renders only the real PBT Inner/Outer sliders for an IC-7300-shaped capability set, bound to their own values', () => {
+    const t = mountPanel({ hasIfShift: false, hasPbt: true, pbtInner: 100, pbtOuter: -50 });
+    const labels = Array.from(t.querySelectorAll('.vc-label')).map((el) => el.textContent);
+    expect(labels).toContain('PBT Inner');
+    expect(labels).toContain('PBT Outer');
+    const sliders = t.querySelectorAll<HTMLElement>('[role="slider"]');
+    expect(sliders.length).toBe(2);
+    // PBT Inner renders before PBT Outer (source order) -- values must track
+    // their OWN prop, not a shared/derived stand-in.
+    expect(sliders[0].getAttribute('aria-valuenow')).toBe('100');
+    expect(sliders[1].getAttribute('aria-valuenow')).toBe('-50');
+  });
+
+  it('renders the IF Shift row for an FTX-1-shaped capability set (if_shift, no pbt), bound to the real ifShift value', () => {
+    const t = mountPanel({ hasIfShift: true, hasPbt: false, ifShift: 275 });
+    const labels = Array.from(t.querySelectorAll('.vc-label')).map((el) => el.textContent);
+    expect(labels).toContain('IF Shift');
+    const sliders = t.querySelectorAll<HTMLElement>('[role="slider"]');
+    expect(sliders.length).toBe(1);
+    expect(sliders[0].getAttribute('aria-valuenow')).toBe('275');
+  });
+
+  it('leaves the FTX-1-shaped IF Shift slider enabled (no PBT to disable it on)', () => {
+    const t = mountPanel({ hasIfShift: true, hasPbt: false });
+    const sliders = t.querySelectorAll<HTMLElement>('[role="slider"]');
+    expect(sliders.length).toBe(1);
+    expect(sliders[0].getAttribute('aria-disabled')).not.toBe('true');
+  });
+
+  it('hides the IF Shift row when the capability set has neither if_shift nor pbt', () => {
+    const t = mountPanel({ hasIfShift: false, hasPbt: false });
+    const labels = Array.from(t.querySelectorAll('.vc-label')).map((el) => el.textContent);
+    expect(labels).not.toContain('IF Shift');
+    expect(t.querySelectorAll('[role="slider"]').length).toBe(0);
+  });
+});
+
+/**
+ * MOR-1681: both mounted IF-shift controls (the table-mode row and the
+ * non-table row) take range and step from the profile-published
+ * `controls.if_shift` domain (`ifShiftDomain` on the filter props); the
+ * per-branch constants are today's explicit fallbacks (table-mode 20 Hz,
+ * non-table 25 Hz) for a radio that publishes no usable domain. The
+ * bipolar scalar steps by `domain.step` from the keyboard and snaps
+ * candidates onto the min-anchored lattice (which contains the domain
+ * origin 0 for the identity domain), so the ArrowRight emission pins the
+ * keyboard step AND the lattice.
+ */
+describe('IF Shift domain range and step (MOR-1681)', () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  const FTX1_DOMAIN = { min: -1200, max: 1200, step: 20, origin: 0 } as const;
+  const TABLE_CONFIG = {
+    defaults: [2700], fixed: false, minHz: 500, maxHz: 4000, stepHz: 50,
+    table: [500, 2700, 4000],
+  };
+
+  const stepIfShift = (t: HTMLElement, index = 0) => {
+    t.querySelectorAll<HTMLElement>('[role="slider"]')[index]
+      .dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
+    vi.advanceTimersByTime(60);
+  };
+
+  it('non-table row: ranges and steps by the profile domain (FTX-1: -1200..1200, step 20)', () => {
+    const t = mountPanel({ ifShiftDomain: FTX1_DOMAIN });
+    const slider = t.querySelectorAll<HTMLElement>('[role="slider"]')[0];
+    expect(slider.getAttribute('aria-valuemin')).toBe('-1200');
+    expect(slider.getAttribute('aria-valuemax')).toBe('1200');
+    stepIfShift(t);
+    expect(mockHandlers.onIfShiftChange).toHaveBeenCalledExactlyOnceWith(20);
+  });
+
+  it('non-table row: snaps an off-lattice reading onto the domain lattice before emitting', () => {
+    const t = mountPanel({ ifShift: 275, ifShiftDomain: FTX1_DOMAIN });
+    stepIfShift(t);
+    expect(mockHandlers.onIfShiftChange).toHaveBeenCalledExactlyOnceWith(300);
+  });
+
+  it('non-table row: keeps today\'s step-25 fallback when no domain is published', () => {
+    const t = mountPanel({ ifShiftDomain: null });
+    const slider = t.querySelectorAll<HTMLElement>('[role="slider"]')[0];
+    expect(slider.getAttribute('aria-valuemin')).toBe('-1200');
+    expect(slider.getAttribute('aria-valuemax')).toBe('1200');
+    stepIfShift(t);
+    expect(mockHandlers.onIfShiftChange).toHaveBeenCalledExactlyOnceWith(25);
+  });
+
+  it('table-mode row: ranges and steps by the profile domain, not the branch constant', () => {
+    const t = mountPanel({
+      filterConfig: TABLE_CONFIG,
+      ifShiftDomain: { min: -1000, max: 1000, step: 40, origin: 0 },
+    });
+    // Table mode renders the WIDTH hbar slider first; IF SHIFT is second.
+    const slider = t.querySelectorAll<HTMLElement>('[role="slider"]')[1];
+    expect(slider.getAttribute('aria-valuemin')).toBe('-1000');
+    expect(slider.getAttribute('aria-valuemax')).toBe('1000');
+    stepIfShift(t, 1);
+    expect(mockHandlers.onIfShiftChange).toHaveBeenCalledExactlyOnceWith(40);
+  });
+
+  it('table-mode row: keeps today\'s step-20 fallback when no domain is published', () => {
+    const t = mountPanel({ filterConfig: TABLE_CONFIG, ifShiftDomain: null });
+    stepIfShift(t, 1);
+    expect(mockHandlers.onIfShiftChange).toHaveBeenCalledExactlyOnceWith(20);
+  });
+});
+
+/**
+ * MOR-1687 part 1: PBT Inner/Outer and IF Shift ride the same
+ * feedback-integrated bipolar scalar the width control uses. Confirmed,
+ * target and requested values are all in the DISPLAY unit (Hz on the
+ * measured lattice) — the mock below hands the component exactly the
+ * shapes `getPbtInnerHzControlFeedback`/`getPbtOuterHzControlFeedback`/
+ * `getIfShiftControlFeedback` produce.
+ */
+describe('PBT and IF-shift scalar feedback (MOR-1687 part 1)', () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  const USB_DOMAIN = { min: -1800, max: 1800, step: 50, origin: 0 };
+  const PENDING: Partial<CommandScalarFeedback> = {
+    phase: 'submitted', busy: true, target: 600, requestedTarget: 600,
+    lifecycleId: 'L', transitionId: 'L:submitted',
+  };
+  const sliderOf = (t: HTMLElement, label: string): HTMLElement => {
+    const labels = Array.from(t.querySelectorAll('.vc-label')).map(el => el.textContent);
+    return t.querySelectorAll<HTMLElement>('[role="slider"]')[labels.indexOf(label)];
+  };
+  const valueText = (slider: HTMLElement): string =>
+    slider.closest('.vc-bipolar')!.querySelector<HTMLElement>('.vc-value')!.textContent ?? '';
+  const pendingChip = (t: HTMLElement): string | null =>
+    t.querySelector<HTMLElement>('[data-pending-passband-target]')?.textContent?.trim() ?? null;
+
+  it('shows a pending PBT inner command as PENDING target Hz, never as the confirmed value', () => {
+    setPassbandFeedback('inner', PENDING);
+    const t = mountPanel({ hasPbt: true, pbtInner: 0, pbtOuter: 0, pbtDomain: USB_DOMAIN });
+    const slider = sliderOf(t, 'PBT Inner');
+    expect(slider.getAttribute('aria-busy')).toBe('true');
+    expect(slider.getAttribute('data-command-phase')).toBe('submitted');
+    expect(slider.getAttribute('aria-valuenow')).toBe('0');
+    expect(valueText(slider)).toBe('0\u00a0Hz');
+    expect(pendingChip(t)).toBe('PENDING 600 Hz');
+  });
+
+  it('renders the pending chip through core.filter.passband.pendingChip, not a literal', () => {
+    setPassbandFeedback('inner', PENDING);
+    setLocale('ru-RU');
+    const t = mountPanel({ hasPbt: true, pbtInner: 0, pbtOuter: 0, pbtDomain: USB_DOMAIN });
+    expect(pendingChip(t)).toBe('ОЖИДАНИЕ 600 Гц');
+  });
+
+  const rowStatus = (t: HTMLElement, label: string): string | null =>
+    sliderOf(t, label).closest('.vc-bipolar')
+      ?.querySelector<HTMLElement>('[data-control-feedback-status]')?.textContent ?? null;
+
+  it('announces a submitted passband command politely with the control name and target', () => {
+    setPassbandFeedback('inner', PENDING);
+    const t = mountPanel({ hasPbt: true, pbtInner: 0, pbtOuter: 0, pbtDomain: USB_DOMAIN });
+    expect(rowStatus(t, 'PBT Inner')).toBe('PBT inner 600 Hz requested; not yet confirmed by the radio.');
+  });
+
+  it('announces the confirmed outcome with the confirmed Hz', () => {
+    setPassbandFeedback('inner', {
+      confirmed: 600, requestedTarget: 600, phase: 'confirmed',
+      outcome: { phase: 'confirmed' }, lifecycleId: 'L', transitionId: 'L:confirmed',
+    });
+    const t = mountPanel({ hasPbt: true, pbtInner: 600, pbtOuter: 0, pbtDomain: USB_DOMAIN });
+    expect(rowStatus(t, 'PBT Inner')).toBe('PBT inner confirmed at 600 Hz.');
+  });
+
+  it('names the IF-shift row through the same message family', () => {
+    setPassbandFeedback('ifShift', {
+      phase: 'submitted', busy: true, target: 300, requestedTarget: 300,
+      lifecycleId: 'L', transitionId: 'L:submitted',
+    });
+    const t = mountPanel({ hasIfShift: true, hasPbt: false, ifShift: 0 });
+    expect(rowStatus(t, 'IF Shift')).toBe('IF shift 300 Hz requested; not yet confirmed by the radio.');
+  });
+
+  it('renders the announcement through the passband message family, not the built-in English status (ru-RU)', () => {
+    setPassbandFeedback('inner', PENDING);
+    setLocale('ru-RU');
+    const t = mountPanel({ hasPbt: true, pbtInner: 0, pbtOuter: 0, pbtDomain: USB_DOMAIN });
+    expect(rowStatus(t, 'PBT Inner')).toBe('Запрошен PBT inner 600 Гц; радио ещё не подтвердило значение.');
+  });
+
+  // MOR-1687 leftover: the value/announcement unit is a literal `Hz` no
+  // more — the pins below hold the RENDERED text, never `t(key)`.
+  const describedText = (slider: HTMLElement): string | null => {
+    const id = slider.getAttribute('aria-describedby');
+    return id ? document.getElementById(id)?.textContent ?? null : null;
+  };
+
+  it('describes a pending passband target with the Hz unit in the rendered text (en-US)', () => {
+    setPassbandFeedback('inner', {
+      phase: 'submitted', busy: true, target: 1500, requestedTarget: 1500,
+      lifecycleId: 'L', transitionId: 'L:submitted',
+    });
+    const t = mountPanel({ hasPbt: true, pbtInner: 0, pbtOuter: 0, pbtDomain: USB_DOMAIN });
+    expect(describedText(sliderOf(t, 'PBT Inner'))).toBe('1500 Hz');
+    expect(rowStatus(t, 'PBT Inner'))
+      .toBe('PBT inner 1500 Hz requested; not yet confirmed by the radio.');
+  });
+
+  it('renders the passband target description with the Russian Hz unit (ru-RU)', () => {
+    setPassbandFeedback('inner', PENDING);
+    setLocale('ru-RU');
+    const t = mountPanel({ hasPbt: true, pbtInner: 0, pbtOuter: 0, pbtDomain: USB_DOMAIN });
+    expect(describedText(sliderOf(t, 'PBT Inner'))).toBe('600 Гц');
+  });
+
+  it('keeps the operator\'s requested value visible through the command\'s OWN lifecycle — no snap-back', () => {
+    const t = mountPanel({ hasPbt: true, pbtInner: 0, pbtOuter: 0, pbtDomain: USB_DOMAIN });
+    const slider = sliderOf(t, 'PBT Inner');
+    slider.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
+    vi.advanceTimersByTime(60);
+    flushSync();
+    expect(mockHandlers.onPbtInnerChange).toHaveBeenCalledExactlyOnceWith(50);
+    // Production mints a new command id per dispatch. The represented
+    // pending lifecycle must preserve the newer operator draft.
+    setPassbandFeedback('inner', {
+      phase: 'submitted', busy: true, target: 50, requestedTarget: 50,
+      lifecycleId: 'fresh-1', transitionId: 'fresh-1:submitted',
+    });
+    flushSync();
+    expect(valueText(slider)).toBe('+50\u00a0Hz');
+    expect(slider.getAttribute('aria-valuenow')).toBe('0');
+    expect(slider.getAttribute('data-command-phase')).toBe('submitted');
+    expect(pendingChip(t)).toBe('PENDING 50 Hz');
+    // Readback confirms: the chip retires and the control ends on the
+    // confirmed Hz.
+    setPassbandFeedback('inner', {
+      confirmed: 50, requestedTarget: 50, phase: 'confirmed', busy: false, target: null,
+      outcome: { phase: 'confirmed' }, lifecycleId: 'fresh-1', transitionId: 'fresh-1:confirmed',
+    });
+    flushSync();
+    expect(pendingChip(t)).toBeNull();
+    expect(slider.getAttribute('data-command-phase')).toBe('confirmed');
+    expect(slider.getAttribute('aria-valuenow')).toBe('50');
+    expect(valueText(slider)).toBe('+50\u00a0Hz');
+  });
+
+  it('reports confirmed with the confirmed Hz', () => {
+    setPassbandFeedback('inner', {
+      confirmed: 600, requestedTarget: 600, phase: 'confirmed',
+      outcome: { phase: 'confirmed' }, lifecycleId: 'L', transitionId: 'L:confirmed',
+    });
+    const t = mountPanel({ hasPbt: true, pbtInner: 600, pbtOuter: 0, pbtDomain: USB_DOMAIN });
+    const slider = sliderOf(t, 'PBT Inner');
+    expect(slider.getAttribute('aria-busy')).toBe('false');
+    expect(slider.getAttribute('data-command-phase')).toBe('confirmed');
+    expect(slider.getAttribute('aria-valuenow')).toBe('600');
+    expect(valueText(slider)).toBe('+600\u00a0Hz');
+    expect(pendingChip(t)).toBeNull();
+  });
+
+  it('reports failed and returns to the last confirmed value', () => {
+    const t = mountPanel({ hasPbt: true, pbtInner: 0, pbtOuter: 0, pbtDomain: USB_DOMAIN });
+    const slider = sliderOf(t, 'PBT Inner');
+    slider.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
+    vi.advanceTimersByTime(60);
+    flushSync();
+    expect(valueText(slider)).toBe('+50\u00a0Hz');
+    // The gesture's own command mints a NEW lifecycle id, then fails: the
+    // draft must retire back to the last confirmed value.
+    setPassbandFeedback('inner', {
+      confirmed: 0, requestedTarget: 50, phase: 'failed', busy: false, target: null,
+      outcome: { phase: 'failed', error: 'echo mismatch' },
+      lifecycleId: 'L1', transitionId: 'L1:failed',
+    });
+    flushSync();
+    expect(slider.getAttribute('data-command-phase')).toBe('failed');
+    expect(valueText(slider)).toBe('0\u00a0Hz');
+    expect(slider.getAttribute('aria-valuenow')).toBe('0');
+    expect(pendingChip(t)).toBeNull();
+  });
+
+  it('reports the same lifecycle on the real IF-shift row (native if_shift radio)', () => {
+    setPassbandFeedback('ifShift', {
+      phase: 'submitted', busy: true, target: 300, requestedTarget: 300,
+      lifecycleId: 'L', transitionId: 'L:submitted',
+    });
+    const t = mountPanel({ hasIfShift: true, hasPbt: false, ifShift: 0 });
+    const slider = sliderOf(t, 'IF Shift');
+    expect(slider.getAttribute('data-command-phase')).toBe('submitted');
+    expect(slider.getAttribute('aria-busy')).toBe('true');
+    expect(slider.getAttribute('aria-valuenow')).toBe('0');
+    expect(pendingChip(t)).toBe('PENDING 300 Hz');
+    slider.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
+    vi.advanceTimersByTime(60);
+    flushSync();
+    expect(mockHandlers.onIfShiftChange).toHaveBeenCalledExactlyOnceWith(25);
+    expect(valueText(slider)).toBe('+25\u00a0Hz');
+  });
+
+  it('held (stale) reading: the feedback is absent and the slider keeps dispatching — same contract as the semantic surface (MOR-2425/R40)', () => {
+    setPassbandFeedback('inner', { confirmed: null, phase: 'unavailable', availability: 'unavailable' });
+    const t = mountPanel({ hasPbt: true, pbtInner: 100, pbtOuter: 0, pbtDomain: USB_DOMAIN });
+    const slider = sliderOf(t, 'PBT Inner');
+    expect(slider.getAttribute('aria-disabled')).toBe('false');
+    expect(slider.getAttribute('aria-valuenow')).toBe('100');
+    expect(valueText(slider)).toBe('+100\u00a0Hz');
+    slider.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
+    vi.advanceTimersByTime(60);
+    expect(mockHandlers.onPbtInnerChange).toHaveBeenCalledExactlyOnceWith(150);
+  });
+
+  it('an unobserved reading stays disabled without NaN when the feedback is unavailable', () => {
+    setPassbandFeedback('inner', { confirmed: null, phase: 'unavailable', availability: 'unavailable' });
+    const t = mountPanel({ hasPbt: true, pbtInner: null, pbtOuter: null });
+    const slider = sliderOf(t, 'PBT Inner');
+    expect(slider.getAttribute('aria-disabled')).toBe('true');
+    expect(valueText(slider)).not.toContain('NaN');
+    slider.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
+    vi.advanceTimersByTime(60);
+    expect(mockHandlers.onPbtInnerChange).not.toHaveBeenCalled();
+  });
+});
+
+describe('callbacks', () => {
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('calls onFilterChange when a filter button is clicked', () => {
+    const t = mountPanel();
+    const button = Array.from(t.querySelectorAll('button')).find(el => el.textContent?.trim() === 'FIL3') as HTMLButtonElement;
+    button.click();
+    expect(mockHandlers.onFilterChange).toHaveBeenCalledWith(3);
+  });
+
+  it('calls onIfShiftChange when IF Shift slider changes', () => {
+    const t = mountPanel();
+    const slider = t.querySelectorAll<HTMLElement>('[role="slider"]')[0];
+    slider.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true }));
+    vi.advanceTimersByTime(60);
+
+    expect(mockHandlers.onIfShiftChange).toHaveBeenCalled();
+  });
+
+  it('calls onPbtInnerChange when PBT Inner slider changes', () => {
+    const t = mountPanel({ hasPbt: true, pbtInner: 0, pbtOuter: 0 });
+    const sliders = t.querySelectorAll<HTMLElement>('[role="slider"]');
+    sliders[1].dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
+    vi.advanceTimersByTime(60);
+
+    expect(mockHandlers.onPbtInnerChange).toHaveBeenCalled();
+  });
+
+  it('calls onPbtOuterChange when PBT Outer slider changes', () => {
+    const t = mountPanel({ hasPbt: true, pbtInner: 0, pbtOuter: 0 });
+    const sliders = t.querySelectorAll<HTMLElement>('[role="slider"]');
+    sliders[2].dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true }));
+    vi.advanceTimersByTime(60);
+
+    expect(mockHandlers.onPbtOuterChange).toHaveBeenCalled();
+  });
+
+  it('calls onPbtReset when the reset button is clicked', () => {
+    const t = mountPanel({ hasPbt: true, pbtInner: 100, pbtOuter: -100 });
+    const button = Array.from(t.querySelectorAll('button')).find(el => el.textContent?.trim() === 'Reset') as HTMLButtonElement;
+    button.click();
+    expect(mockHandlers.onPbtReset).toHaveBeenCalledOnce();
+  });
+
+  it('opens the settings modal and calls onFilterPresetChange from a modal slider', () => {
+    const t = mountPanel();
+    const gear = t.querySelector('.settings-button') as HTMLButtonElement;
+    gear.click();
+    flushSync();
+
+    const modal = document.querySelector('.filter-modal');
+    expect(modal).not.toBeNull();
+
+    const sliders = modal?.querySelectorAll<HTMLElement>('[role="slider"]') ?? [];
+    sliders[0].dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
+    vi.advanceTimersByTime(60);
+    expect(mockHandlers.onFilterPresetChange).toHaveBeenCalled();
+  });
+
+  it('calls onFilterDefaults when restore defaults is clicked in the modal', () => {
+    const t = mountPanel();
+    const gear = t.querySelector('.settings-button') as HTMLButtonElement;
+    gear.click();
+    flushSync();
+
+    const button = Array.from(document.querySelectorAll('button')).find(el => el.textContent?.trim() === 'Restore Defaults') as HTMLButtonElement;
+    button.click();
+    expect(mockHandlers.onFilterDefaults).toHaveBeenCalledWith([3000, 2400, 1800]);
+  });
+
+  it('shows SHARP and SOFT shape buttons in the modal', () => {
+    const t = mountPanel();
+    const gear = t.querySelector('.settings-button') as HTMLButtonElement;
+    gear.click();
+    flushSync();
+
+    const buttons = Array.from(document.querySelectorAll('button')).map((el) => el.textContent?.trim());
+    expect(buttons).toContain('SHARP');
+    expect(buttons).toContain('SOFT');
+  });
+
+  it('calls onFilterShapeChange when the SOFT button is clicked in the modal', () => {
+    const t = mountPanel();
+    const gear = t.querySelector('.settings-button') as HTMLButtonElement;
+    gear.click();
+    flushSync();
+
+    const button = Array.from(document.querySelectorAll('button')).find((el) => el.textContent?.trim() === 'SOFT') as HTMLButtonElement;
+    button.click();
+    expect(mockHandlers.onFilterShapeChange).toHaveBeenCalledWith(1);
+  });
+});
+
+/**
+ * MOR-1503: capability-absent controls must be HIDDEN, not shown dead
+ * (same class as MOR-1494's IF-shift row). `filter_shape` is a real
+ * command only on Icom radios (e.g. IC-7300, `rigs/ic7300.toml` declares
+ * the capability); the FTX-1's capability set does not include it, yet
+ * the settings modal rendered the SHARP/SOFT shape buttons
+ * unconditionally. The panel must render the shape section only when
+ * `hasFilterShape` (data-driven from the radio's own capability set) is
+ * true — never from a hardcoded model/family check.
+ */
+describe('filter shape visibility (MOR-1503)', () => {
+  it('hides the SHARP/SOFT shape buttons in the modal for an FTX-1-shaped capability set (no filter_shape)', () => {
+    const t = mountPanel({ hasFilterShape: false });
+    const gear = t.querySelector('.settings-button') as HTMLButtonElement;
+    gear.click();
+    flushSync();
+
+    const buttons = Array.from(document.querySelectorAll('button')).map((el) => el.textContent?.trim());
+    expect(buttons).not.toContain('SHARP');
+    expect(buttons).not.toContain('SOFT');
+  });
+
+  it('hides the whole shape section in the modal for an FTX-1-shaped capability set', () => {
+    const t = mountPanel({ hasFilterShape: false });
+    const gear = t.querySelector('.settings-button') as HTMLButtonElement;
+    gear.click();
+    flushSync();
+
+    expect(document.querySelector('.shape-section')).toBeNull();
+  });
+
+  it('renders the SHARP/SOFT shape buttons in the modal for an IC-7300-shaped capability set (filter_shape)', () => {
+    const t = mountPanel({ hasFilterShape: true });
+    const gear = t.querySelector('.settings-button') as HTMLButtonElement;
+    gear.click();
+    flushSync();
+
+    const buttons = Array.from(document.querySelectorAll('button')).map((el) => el.textContent?.trim());
+    expect(buttons).toContain('SHARP');
+    expect(buttons).toContain('SOFT');
+  });
+});
+
+/**
+ * MOR-1689 — filter-shape pending feedback (SHARP/SOFT). The shape buttons
+ * dispatch `set_filter_shape` and wait for the poll to confirm; until then
+ * the requested target must carry the same structural markers the FIL
+ * buttons (MOR-1536) and DspPanel's notch choices (MOR-1672) already use:
+ * `data-armed` plus `aria-busy` and an `aria-describedby` `.sr-only`
+ * announcement on the actual `<button>`. `data-armed` is a structural
+ * marker here — these raw buttons do not load `control-button-armed.css`
+ * (only `ControlButton.svelte` imports it), so it paints nothing on its
+ * own. The confirmed `class:active` reading stays the sole selection
+ * source — pending never presents the target as confirmed.
+ */
+describe('filter shape pending feedback (MOR-1689)', () => {
+  const shapeButton = (label: string): HTMLButtonElement | undefined =>
+    Array.from(document.querySelectorAll<HTMLButtonElement>('.shape-section .shape-button'))
+      .find((el) => el.textContent?.trim() === label);
+
+  it('marks only the armed target with data-armed while set_filter_shape is in flight', () => {
+    shapeArmed.armed = true;
+    shapeArmed.value = 1;
+    const t = mountPanel();
+    (t.querySelector('.settings-button') as HTMLButtonElement).click();
+    flushSync();
+
+    expect(shapeButton('SHARP')?.dataset.armed).toBeUndefined();
+    expect(shapeButton('SOFT')?.dataset.armed).toBe('true');
+  });
+
+  it('carries aria-busy and an aria-describedby sr-only announcement on the armed target only', () => {
+    shapeArmed.armed = true;
+    shapeArmed.value = 1;
+    const t = mountPanel();
+    (t.querySelector('.settings-button') as HTMLButtonElement).click();
+    flushSync();
+
+    const soft = shapeButton('SOFT')!;
+    expect(soft.getAttribute('aria-busy')).toBe('true');
+    const describedBy = soft.getAttribute('aria-describedby');
+    expect(describedBy).toBeTruthy();
+    const announcement = describedBy ? document.getElementById(describedBy) : null;
+    expect(announcement?.classList.contains('sr-only')).toBe(true);
+
+    expect(shapeButton('SHARP')!.getAttribute('aria-busy')).toBe('false');
+    expect(shapeButton('SHARP')!.getAttribute('aria-describedby')).toBeNull();
+  });
+
+  it('never presents the armed target as confirmed: active tracks filterShape only', () => {
+    shapeArmed.armed = true;
+    shapeArmed.value = 1;
+    const t = mountPanel({ filterShape: 0 });
+    (t.querySelector('.settings-button') as HTMLButtonElement).click();
+    flushSync();
+
+    expect(shapeButton('SHARP')!.classList.contains('active')).toBe(true);
+    expect(shapeButton('SOFT')!.classList.contains('active')).toBe(false);
+    expect(shapeButton('SOFT')!.dataset.armed).toBe('true');
+  });
+
+  it('marks no shape button when nothing is armed', () => {
+    const t = mountPanel();
+    (t.querySelector('.settings-button') as HTMLButtonElement).click();
+    flushSync();
+
+    expect(document.querySelectorAll('.shape-section .shape-button[data-armed]')).toHaveLength(0);
+    expect(document.querySelectorAll('.shape-section .shape-button[aria-busy="true"]')).toHaveLength(0);
+  });
+});
+
+/**
+ * MOR-1689 leg 2 — the shared choice seam on the ACTUAL interactive
+ * element: every shape button carries the control's `data-command-phase`,
+ * the section wrapper carries `aria-busy` for the whole in-flight control,
+ * and a transition-deduplicated polite live region names the requested
+ * target (`data-filter-shape-live`). The italic/underline armed marker is
+ * secondary — never the only indication.
+ */
+describe('filter shape command-phase feedback (MOR-1689)', () => {
+  const shapeButton = (label: string): HTMLButtonElement | undefined =>
+    Array.from(document.querySelectorAll<HTMLButtonElement>('.shape-section .shape-button'))
+      .find((el) => el.textContent?.trim() === label);
+  const liveRegion = (): HTMLElement | null =>
+    document.querySelector<HTMLElement>('[data-filter-shape-live]');
+
+  function openSettings(): void {
+    const t = mountPanel();
+    (t.querySelector('.settings-button') as HTMLButtonElement).click();
+    flushSync();
+  }
+
+  it('puts the lifecycle phase on every shape button and busy on the section while a shape is in flight', () => {
+    setShapeFeedback({
+      phase: 'submitted', busy: true, target: 1, requestedTarget: 1,
+      lifecycleId: '7:shape-1', transitionId: '7:shape-1:submitted',
+    });
+    openSettings();
+
+    expect(shapeButton('SHARP')!.getAttribute('data-command-phase')).toBe('submitted');
+    expect(shapeButton('SOFT')!.getAttribute('data-command-phase')).toBe('submitted');
+    const section = document.querySelector<HTMLElement>('.shape-section')!;
+    expect(section.getAttribute('data-command-phase')).toBe('submitted');
+    expect(section.getAttribute('aria-busy')).toBe('true');
+  });
+
+  it('announces the requested target once per transition through the polite live region', () => {
+    setShapeFeedback({
+      phase: 'submitted', busy: true, target: 1, requestedTarget: 1,
+      lifecycleId: '7:shape-1', transitionId: '7:shape-1:submitted',
+    });
+    openSettings();
+
+    const region = liveRegion();
+    expect(region).not.toBeNull();
+    expect(region!.getAttribute('role')).toBe('status');
+    expect(region!.getAttribute('aria-live')).toBe('polite');
+    expect(region!.textContent).toContain('SOFT');
+    expect(document.querySelectorAll('[data-filter-shape-live]')).toHaveLength(1);
+  });
+
+  it('keeps the canonical selection truthful while the phase is in flight', () => {
+    // Both seams of the same in-flight `set_filter_shape` lifecycle: the
+    // MOR-1519 armed fact marks the requested choice, the MOR-1687
+    // projection carries the phase — selection itself stays canonical.
+    shapeArmed.armed = true;
+    shapeArmed.value = 1;
+    setShapeFeedback({
+      confirmed: 0, phase: 'awaiting-confirmation', busy: true, target: 1, requestedTarget: 1,
+      lifecycleId: '7:shape-1', transitionId: '7:shape-1:acknowledged',
+    });
+    openSettings();
+
+    expect(shapeButton('SHARP')!.classList.contains('active')).toBe(true);
+    expect(shapeButton('SOFT')!.classList.contains('active')).toBe(false);
+    expect(shapeButton('SOFT')!.dataset.armed).toBe('true');
+    expect(shapeButton('SHARP')!.dataset.armed).toBeUndefined();
+  });
+
+  it('renders no live region and an idle phase once the radio confirmed', () => {
+    setShapeFeedback({
+      confirmed: 1, phase: 'confirmed', busy: false, target: null, requestedTarget: 1,
+      outcome: { phase: 'confirmed' }, lifecycleId: '7:shape-1', transitionId: '7:shape-1:confirmed',
+    });
+    openSettings();
+
+    expect(shapeButton('SHARP')!.getAttribute('data-command-phase')).toBe('confirmed');
+    expect(shapeButton('SOFT')!.getAttribute('data-command-phase')).toBe('confirmed');
+    expect(document.querySelector<HTMLElement>('.shape-section')!.getAttribute('aria-busy')).toBe('false');
+    expect(liveRegion()).toBeNull();
+  });
+});
+
+describe('IF Shift semantics', () => {
+  it('can be derived from current PBT offsets', () => {
+    expect(deriveIfShift(-150, 50)).toBe(-50);
+  });
+});
+
+/**
+ * A12 (MOR-1409, Core #2317) — FilterPanel.svelte consumer-boundary fix.
+ *
+ * `panel-props.ts`'s `toFilterProps`/`toAudioSpectrumProps` now return a
+ * `NaN` sentinel for an unobserved `filterWidth` (no more fabricated 2400 Hz
+ * stand-in, deferred from A11 by adjudication 5245697359). Left unguarded,
+ * `formatWidthDisplay`'s call to `formatFilterWidth(NaN)` renders the
+ * literal substring "NaNkHz" in the BW readout (`:207-208`) and the
+ * fixed-config modal row (`:299`) — exactly the defect the adjudication
+ * named. The fix is a `Number.isFinite` guard inside FilterPanel's own
+ * local `formatWidthDisplay`, matching the `'--'`/`'---'` placeholder
+ * convention `frequency-format.ts` established at A11 (corr. 5245817033/
+ * 5245876185) — never the literal "NaN" substring.
+ *
+ * Separately, `:38`'s `normalizedLabels` re-fabrication
+ * (`filterLabels.length > 0 ? filterLabels : ['FIL1','FIL2','FIL3']`)
+ * substitutes the three-label default back in whenever `filterLabels` is
+ * the honest empty array (unknown capability) — this must pass the empty
+ * array through unchanged so the modal renders zero rows, not three
+ * fabricated ones.
+ */
+describe('FilterPanel — no fabricated defaults at the consumer boundary (MOR-1409 A12)', () => {
+  it('does not render a "NaN" substring in the BW readout for a non-finite filterWidth', () => {
+    const t = mountPanel({ filterWidth: Number.NaN });
+    const bwValue = t.querySelector('.bw-value')?.textContent ?? '';
+    expect(bwValue).not.toMatch(/NaN/);
+  });
+
+  it('renders an empty, unlit BW readout for a non-finite filterWidth — never a placeholder (MOR-2667)', () => {
+    const t = mountPanel({ filterWidth: Number.NaN });
+    const bwValue = t.querySelector('.bw-value')?.textContent ?? '';
+    expect(bwValue).toBe('');
+    expect(t.textContent).not.toContain('---');
+  });
+
+  it('still renders the real formatted width for a finite filterWidth', () => {
+    const t = mountPanel({ filterWidth: 2400 });
+    expect(t.querySelector('.bw-value')?.textContent).toBe('2.4kHz');
+  });
+
+  it('does not render a "NaN" substring in the fixed-config modal row for a non-finite filterWidth', () => {
+    const t = mountPanel({
+      filterWidth: Number.NaN,
+      filterConfig: { defaults: [], fixed: true, minHz: 50, maxHz: 3600, stepHz: 50 },
+    });
+    const gear = t.querySelector('.settings-button') as HTMLButtonElement;
+    gear.click();
+    flushSync();
+    const fixedValues = Array.from(document.querySelectorAll('.modal-fixed-value')).map(
+      (el) => el.textContent,
+    );
+    expect(fixedValues.some((text) => /NaN/.test(text ?? ''))).toBe(false);
+  });
+
+  it('renders zero filter-selector buttons for an empty (unknown) filterLabels catalog, not a fabricated FIL1/FIL2/FIL3', () => {
+    const t = mountPanel({ filterLabels: [] });
+    const buttons = Array.from(t.querySelectorAll('button')).map((button) => button.textContent?.trim());
+    expect(buttons).not.toContain('FIL1');
+    expect(buttons).not.toContain('FIL2');
+    expect(buttons).not.toContain('FIL3');
+  });
+
+  it('renders zero modal filter rows for an empty (unknown) filterLabels catalog', () => {
+    const t = mountPanel({ filterLabels: [] });
+    const gear = t.querySelector('.settings-button') as HTMLButtonElement;
+    gear.click();
+    flushSync();
+    const rows = document.querySelectorAll('.modal-filter-row');
+    expect(rows.length).toBe(0);
+  });
+
+  it('still renders the real filter-selector buttons for a populated filterLabels catalog', () => {
+    const t = mountPanel({ filterLabels: ['FIL1', 'FIL2'] });
+    const buttons = Array.from(t.querySelectorAll('button')).map((button) => button.textContent?.trim());
+    expect(buttons).toContain('FIL1');
+    expect(buttons).toContain('FIL2');
+    expect(buttons).not.toContain('FIL3');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// MOR-2667 — no '--- Hz' for unread offsets and widths
+// ---------------------------------------------------------------------------
+
+describe('FilterPanel — no placeholder for unread widths and offsets (MOR-2667)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('announces nothing while a value the width message needs is unread — never a placeholder', () => {
+    setWidthFeedback({
+      confirmed: null, requestedTarget: null, phase: 'failed', busy: false,
+      outcome: { phase: 'failed', error: 'radio refused' },
+      lifecycleId: 'L', transitionId: 'L:failed',
+    });
+    const t = mountPanel({ filterWidthMin: 1800, filterWidthMax: 3000 });
+    expect(t.querySelector('[data-filter-width-live]')).toBeNull();
+    expect(t.textContent).not.toContain('---');
+  });
+
+  it('announces nothing while a value the passband message needs is unread — never a placeholder', () => {
+    setPassbandFeedback('inner', {
+      confirmed: null, requestedTarget: null, phase: 'failed', busy: false,
+      outcome: { phase: 'failed', error: 'radio refused' },
+      lifecycleId: 'L', transitionId: 'L:failed',
+    });
+    const t = mountPanel({
+      hasPbt: true, pbtInner: 0, pbtOuter: 0,
+      pbtDomain: { min: -1800, max: 1800, step: 50, origin: 0 },
+    });
+    const slider = t.querySelectorAll('[role="slider"]');
+    expect(slider.length).toBeGreaterThan(0);
+    const statusRegions = Array.from(t.querySelectorAll('[data-control-feedback-status]'))
+      .map((el) => el.textContent ?? '');
+    expect(statusRegions.every((text) => !text.includes('---'))).toBe(true);
+    expect(t.textContent).not.toContain('---');
+  });
+
+  it('renders an empty fixed-config modal value for a non-finite filterWidth — never a placeholder', () => {
+    const t = mountPanel({
+      filterWidth: Number.NaN,
+      filterConfig: { defaults: [], fixed: true, minHz: 50, maxHz: 3600, stepHz: 50 },
+    });
+    (t.querySelector('.settings-button') as HTMLButtonElement).click();
+    flushSync();
+    const fixedValues = Array.from(document.querySelectorAll('.modal-fixed-value')).map(
+      (el) => el.textContent,
+    );
+    expect(fixedValues.length).toBeGreaterThan(0);
+    for (const text of fixedValues) expect(text).toBe('');
+    expect(t.textContent).not.toContain('---');
+  });
+
+  // MOR-2688 S5b: a read fixed width prints exactly, spaces included, in
+  // both of the formatter's branches.
+  it.each([
+    [2400, '2.4kHz'],
+    [500, '500 Hz'],
+  ] as const)('renders a read fixed-config modal width of %i Hz as %j', (filterWidth, text) => {
+    const t = mountPanel({
+      filterWidth,
+      filterConfig: { defaults: [], fixed: true, minHz: 50, maxHz: 3600, stepHz: 50 },
+    });
+    (t.querySelector('.settings-button') as HTMLButtonElement).click();
+    flushSync();
+    const fixedValues = Array.from(document.querySelectorAll('.modal-fixed-value')).map(
+      (el) => el.textContent,
+    );
+    expect(fixedValues.length).toBeGreaterThan(0);
+    for (const value of fixedValues) expect(value).toBe(text);
+  });
+
+  // Geometry: jsdom has no layout, so the reservations are pinned
+  // structurally against the component source (the MOR-2648/MOR-2659
+  // pattern).
+  const withoutComments = (source: string) => source
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/^\s*\/\/.*$/gm, '');
+  const panelSource = withoutComments(readFileSync('src/components-v2/panels/FilterPanel.svelte', 'utf8'));
+
+  it('keeps the BW readout box reserved, tabular, and strutted while unread', () => {
+    const rule = panelSource.match(/\.bw-value \{([^}]*)\}/);
+    expect(rule).not.toBeNull();
+    // Widest text formatExactWidthDisplay renders today: '9999 Hz' and
+    // '12.5kHz' (7 chars) — 7ch covers both.
+    expect(rule![1]).toContain('min-inline-size: 7ch');
+    expect(rule![1]).toContain('tabular-nums');
+    // The zero-width strut keeps the empty unread box's line-box metrics
+    // in the baseline-aligned .bw-row flex row (the MOR-2657 strut).
+    expect(panelSource).toMatch(/\.bw-value:empty::before \{ content: '\\200b'; \}/);
+  });
+
+  it('keeps the fixed-width modal value box reserved, tabular, and strutted while unread', () => {
+    // `.modal-fixed-value` also ends two grouped selectors — match the one
+    // rule that carries the reservation, not the first occurrence.
+    const rules = panelSource.match(/\.modal-fixed-value \{[^}]*\}/g) ?? [];
+    const rule = rules.map((body) => body.replace(/^\.modal-fixed-value \{/, '').replace(/\}$/, ''))
+      .find((body) => body.includes('min-inline-size'));
+    expect(rule).toBeDefined();
+    // Widest text formatWidthDisplay renders today: '999 Hz' and '9.9kHz'
+    // (7 chars) — 7ch covers both.
+    expect(rule!).toContain('min-inline-size: 7ch');
+    expect(rule!).toContain('tabular-nums');
+    expect(panelSource).toMatch(/\.modal-fixed-value:empty::before \{ content: '\\200b'; \}/);
+  });
+});

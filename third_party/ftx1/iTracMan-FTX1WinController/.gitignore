@@ -1,0 +1,6 @@
+bin/
+obj/
+.vs/
+*.user
+.claude/
+FTX1WinController-v*.zip

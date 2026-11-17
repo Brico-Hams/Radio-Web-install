@@ -24,7 +24,7 @@
       <nav aria-label="Aiuto"><a href="ayuda-referencias.it.html">Documentazione e riferimenti</a> · <a href="ayuda-firmwares.it.html">Libreria firmware</a> · <a href="ayuda-atlas-uv-k5-v3.it.html">Atlas UV-K5 V3</a> · <a href="quansheng.html">Quansheng</a> · <a href="opengd77.html">OpenGD77</a></nav>
       <nav class="languages" aria-label="Lingua"><a href="ayuda-arquitectura.html" hreflang="es" lang="es">Español</a> · <a href="ayuda-arquitectura.en.html" hreflang="en-US" lang="en-US">English (US)</a> · <a href="ayuda-arquitectura.de.html" hreflang="de" lang="de">Deutsch</a> · <a href="ayuda-arquitectura.it.html" hreflang="it" lang="it" aria-current="page">Italiano</a> · <a href="ayuda-arquitectura.fr.html" hreflang="fr" lang="fr">Français</a></nav>
     </header>
-    <nav class="panel" aria-label="Contenuto di questa guida"><h2>In questa guida</h2><ul><li><a href="#modos-de-ejecucion">Modalità di esecuzione</a></li><li><a href="#vista-de-componentes">Vista dei componenti</a></li><li><a href="#modulos">Moduli</a></li><li><a href="#flujo-de-conexion-y-copia-automatica">Flusso di connessione e backup automatico</a></li><li><a href="#capas-de-seguridad">Livelli di sicurezza</a></li><li><a href="#limitaciones-conocidas">Limitazioni note</a></li></ul></nav>
+    <nav class="panel" aria-label="Contenuto di questa guida"><h2>In questa guida</h2><ul><li><a href="#modos-de-ejecucion">Modalità di esecuzione</a></li><li><a href="#vista-de-componentes">Vista dei componenti</a></li><li><a href="#modulos">Moduli</a></li><li><a href="#flujo-de-conexion-y-copia-automatica">Flusso di connessione e backup automatico</a></li><li><a href="#capas-de-seguridad">Livelli di sicurezza</a></li><li><a href="#limitaciones-conocidas">Limitazioni note</a></li><li><a href="#security-review-sonarqube-2026-11-13">Revisione di sicurezza (SonarQube 2026-11-13)</a></li></ul></nav>
     <article class="panel"><h1 id="arquitectura-de-bricohams-radio-workspace">Architettura di Bricohams Radio Workspace</h1>
 <p>Bricohams Radio Workspace è un&#39;applicazione web <strong>locale</strong>. Un piccolo server Node.js serve un elenco chiuso di file statici e poche API di sola lettura. Tutta la comunicazione con la radio avviene nel browser tramite WebUSB o Web Serial.</p>
 <p>&lt;a id=&quot;modos-de-ejecución&quot;&gt;&lt;/a&gt;</p>
@@ -118,6 +118,39 @@
 <li><strong>RepeaterBook:</strong> richiede un token approvato da RepeaterBook ed è presente solo nella versione locale.</li>
 <li><strong>Web:</strong> i dati satellitari possono risalire a un giorno prima (avviso dopo 7 giorni) e firmware/RadioID vengono caricati manualmente.</li>
 <li><strong>Hardware:</strong> esistono letture precedenti di un&#39;unità Quansheng, ma non certificano scritture, residente indipendente o combinazione attuale di APK, slot SAT e telefono. Le prove fisiche di questa revisione sono in sospeso.</li>
+</ul>
+<h2 id="security-review-sonarqube-2026-11-13">Revisione di sicurezza (SonarQube 2026-11-13)</h2>
+<h3 id="corregido">Corretto</h3>
+<p><strong>xml:S6358 – Android application backup should be disabled or restricted</strong> (MEDIUM) — <code>android/app/src/fdroid/AndroidManifest.xml:6</code>.</p>
+<ul>
+<li>*Perché era un difetto:* con il backup abilitato, i dati locali (preferenze, file, database) possono essere esportati su Google Cloud o tramite <code>adb backup</code>, oppure ripristinati da una copia manomessa (CWE-922, OWASP M9/A1). L&#39;overlay <code>&lt;application&gt;</code> del flavor F-Droid non dichiarava l&#39;attributo, quindi l&#39;analisi lo considerava implicito (predefinito <code>true</code>).</li>
+<li>*Modifica:* si aggiunge <code>android:allowBackup=&quot;false&quot;</code> all&#39;overlay.</li>
+<li>*Nessuna perdita di funzionalità:* il manifest principale dichiara già <code>allowBackup=&quot;false&quot;</code>, <code>fullBackupContent=&quot;false&quot;</code> e <code>dataExtractionRules</code>; il valore unito non cambia. Verifica: il <code>manifest merger report</code> del flavor fdroid (<code>processFdroidReleaseMainManifest</code>) mostra <code>allowBackup=false</code>.</li>
+</ul>
+<p><strong>xml:S5332 – Clear-text protocols should not be used</strong> (LOW) — stesso file, riga 6.</p>
+<ul>
+<li>*Perché era un difetto:* su Android &lt; 9 <code>usesCleartextTraffic</code> è implicitamente <code>true</code>, il che consente http non cifrato (intercettazione e manomissione, CWE-319, CWE-200).</li>
+<li>*Modifica:* si aggiunge <code>android:usesCleartextTraffic=&quot;false&quot;</code> all&#39;overlay.</li>
+<li>*Nessuna perdita di funzionalità:* il manifest principale lo imposta già a <code>false</code> e definisce <code>networkSecurityConfig</code>; il risultato unito è identico. Verifica: stesso rapporto di unione; il comportamento di rotore e radio non cambia.</li>
+</ul>
+<p><strong>kotlin:S2245 – Pseudorandom number generators (PRNGs) should not be used in security contexts</strong> (MEDIUM) — <code>android/app/src/main/java/org/bricohams/radio/Rt950Protocol.kt:156</code>.</p>
+<ul>
+<li>*Perché era un difetto:* <code>Random()</code> non è un generatore crittograficamente sicuro; un attaccante che conosce o indovina il suo stato interno può prevedere i valori successivi (CWE-338, CWE-330, OWASP A2 Cryptographic Failures). Il valore predefinito di <code>Rt950Session.random</code> usava <code>Random()</code>.</li>
+<li>*Modifica:* il valore predefinito diventa <code>SecureRandom()</code> (<code>java.security.SecureRandom</code>, sottoclasse di <code>java.util.Random</code>). Il tipo del parametro resta <code>Random</code>, quindi i test possono iniettare un&#39;istanza con seme.</li>
+<li>*Nessuna perdita di funzionalità:* <code>buildKeyFrame</code> usa ancora gli stessi intervalli (<code>nextInt(2)+1</code>, <code>nextInt(5)</code>, <code>nextInt(KEYS.size)</code>), quindi i byte del protocollo RT-950 mantengono il formato. Verifica: (<code>Rt950ProtocolTest</code>: <code>headersAndKeySelection</code>, <code>readAllSkipsUnknownRegions</code>).</li>
+</ul>
+<p><strong>kotlin:S2245 (MEDIUM)</strong> — <code>android/app/src/test/java/org/bricohams/radio/Rt950ProtocolTest.kt:93</code> (e righe 67, 175, 309). Non modificato.</p>
+<ul>
+<li>*Perché Sonar lo segnala:* stesso motivo di sopra (PRNG non crittografico, CWE-338/CWE-330).</li>
+<li>*Decisione:* è un test unitario che usa <code>Random(it.toLong())</code> con seme fisso per generare trame di chiave riproducibili; non è un contesto di sicurezza (non genera segreti) e <code>SecureRandom</code> renderebbe il test non deterministico. Lasciato invariato.</li>
+<li>*Nessuna perdita di funzionalità:* non si tocca nulla. Verifica: <code>Rt950ProtocolTest</code> continua a passare; la classe di produzione accetta qualsiasi <code>Random</code> iniettato.</li>
+</ul>
+<h3 id="not-changed-requires-decision">Non modificato - richiede una decisione</h3>
+<ul>
+<li><strong>Sonar javascript S4036 (LOW, CWE-426/427)</strong> — <code>scripts/build-platform-app.cjs:16,20,27,30</code>, <code>scripts/build-platform-resident.cjs:55,73,82,85,87,89</code>, <code>scripts/export-project.cjs:48,94,177,178,181,230</code>. Gli script invocano <code>arm-none-eabi-*</code>, <code>git</code> e <code>zip</code> per nome. Non esiste un percorso assoluto fisso valido su tutte le macchine (la toolchain ARM e git si installano in posizioni diverse); inventarne uno o richiedere una nuova variabile d&#39;ambiente cambierebbe l&#39;uso. Decisione: accettare il rischio (strumenti di sviluppo eseguiti dallo sviluppatore) o definire una variabile d&#39;ambiente per il percorso della toolchain. (La chiamata a <code>tar.exe</code> alla riga 228 usa già un percorso assoluto.)</li>
+<li><strong>kotlin:S1313 (LOW)</strong> — <code>android/app/src/main/java/org/bricohams/radio/RotorProtocol.kt:14</code>. <code>AP_HOST = &quot;192.168.4.1&quot;</code> è l&#39;indirizzo di fabbrica dell&#39;access point del rotore ESP32; spostarlo nella configurazione romperebbe la connessione predefinita.</li>
+<li><strong>kotlin:S2245 (MEDIUM)</strong> — <code>android/app/src/test/java/org/bricohams/radio/FtxEnhancedDecoderTest.kt:59</code>. È un test unitario con seme fisso <code>Random(7)</code> per riprodurre lo schema di errori; non è un contesto di sicurezza e <code>SecureRandom</code> renderebbe il test non deterministico.</li>
+<li><strong>kotlin:S7204 (HIGH)</strong> — <code>android/app/build.gradle.kts:52</code>. Attivare <code>isMinifyEnabled</code> richiede regole ProGuard/R8 (non esiste alcun <code>proguard-rules.pro</code>) e verificare su un dispositivo che reflection/JSON/BLE funzionino ancora; non è garantibile senza prove fisiche. Decisione: creare le regole keep e provare un APK release minificato.</li>
 </ul></article>
     <footer><p class="translation-note">Traduzione dell&#39;originale spagnolo. In caso di discrepanza prevale la versione spagnola.</p><p>Documento generato dal Markdown versionato. Consulta le fonti e i limiti di ogni guida. <a href="ayuda-firmwares.it.html">Torna all&#39;indice</a>.</p></footer>
   </main>

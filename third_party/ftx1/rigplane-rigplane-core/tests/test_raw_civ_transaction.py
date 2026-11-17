@@ -1,0 +1,567 @@
+"""Response-capable raw CI-V transaction path (MOR-169)."""
+
+from __future__ import annotations
+
+import asyncio
+import time
+
+import pytest
+from test_radio import MockTransport
+
+from rigplane import IC_7610_ADDR
+from rigplane.commands import CONTROLLER_ADDR, build_civ_frame, parse_civ_frame
+from rigplane.core.civ import (
+    CivEvent,
+    CivEventType,
+    CivRequestKey,
+    CivRequestTracker,
+    request_key_from_frame,
+)
+from rigplane.core import tx_safety as tx
+from rigplane.core.exceptions import ConnectionError as RigplaneConnectionError
+from rigplane.radio import IcomRadio
+from rigplane.runtime._civ_rx import _CivDataTransaction
+from rigplane.types import bcd_encode
+
+
+@pytest.fixture
+def transport() -> MockTransport:
+    return MockTransport()
+
+
+@pytest.fixture
+def radio(transport: MockTransport):
+    r = IcomRadio("192.168.1.100", timeout=0.05, model="IC-7610")
+    r._civ_transport = transport
+    r._ctrl_transport = transport
+    r._connected = True
+    r._radio_addr = IC_7610_ADDR
+    yield r
+    r._connected = False
+    r._civ_transport = None
+    r._ctrl_transport = None
+
+
+def _ack() -> bytes:
+    return build_civ_frame(CONTROLLER_ADDR, IC_7610_ADDR, 0xFB)
+
+
+def _nak() -> bytes:
+    return build_civ_frame(CONTROLLER_ADDR, IC_7610_ADDR, 0xFA)
+
+
+def _ptt(value: int = 0) -> bytes:
+    return build_civ_frame(
+        CONTROLLER_ADDR, IC_7610_ADDR, 0x1C, sub=0x00, data=bytes([value])
+    )
+
+
+def _capture_data_transaction(
+    radio: IcomRadio,
+    monkeypatch: pytest.MonkeyPatch,
+) -> list[_CivDataTransaction]:
+    captured: list[_CivDataTransaction] = []
+    runtime = radio._civ_runtime
+    register = runtime._register_civ_data_transaction
+
+    def capture(
+        key: CivRequestKey, *, nak_terminal: bool = True
+    ) -> _CivDataTransaction:
+        transaction = register(key, nak_terminal=nak_terminal)
+        captured.append(transaction)
+        return transaction
+
+    monkeypatch.setattr(runtime, "_register_civ_data_transaction", capture)
+    return captured
+
+
+async def test_raw_civ_transaction_ack_success_releases_owner(
+    radio: IcomRadio, transport: MockTransport
+) -> None:
+    transport.queue_response_on_send(1, _wrap(_ack()))
+
+    result = await radio.send_civ_transaction(
+        0x1A,
+        sub=0x05,
+        data=b"\x01\x53\x01",
+        expect="ack",
+        timeout=0.2,
+    )
+
+    assert result.status == "ack"
+    assert result.frame_bytes == _ack()
+    assert result.frame.command == 0xFB
+    assert radio.external_cat_session_active is False
+    assert transport.sent_packets[-1].endswith(b"\x1a\x05\x01\x53\x01\xfd")
+
+
+async def test_raw_civ_transaction_data_response_success(
+    radio: IcomRadio, transport: MockTransport
+) -> None:
+    response = build_civ_frame(
+        CONTROLLER_ADDR,
+        IC_7610_ADDR,
+        0x03,
+        data=bcd_encode(14_074_000),
+    )
+    transport.queue_response_on_send(1, _wrap(response))
+
+    result = await radio.send_civ_transaction(0x03, expect="data", timeout=0.2)
+
+    assert result.status == "response"
+    assert result.frame_bytes == response
+    assert result.frame.command == 0x03
+    assert result.frame.data == bcd_encode(14_074_000)
+
+
+async def test_raw_civ_transaction_command29_response_preserves_wire_bytes(
+    radio: IcomRadio, transport: MockTransport
+) -> None:
+    response = bytes.fromhex("FEFEE098290103FD")
+    transport.queue_response_on_send(1, _wrap(response))
+
+    result = await radio.send_civ_transaction(
+        0x29,
+        data=b"\x01\x03",
+        expect="data",
+        timeout=0.2,
+    )
+
+    assert result.status == "response"
+    assert result.frame.command == 0x03
+    assert result.frame.receiver == 0x01
+    assert result.frame_bytes == response
+
+
+async def test_raw_civ_transaction_expect_none_is_fire_and_forget(
+    radio: IcomRadio, transport: MockTransport
+) -> None:
+    result = await radio.send_civ_transaction(
+        0x1A,
+        sub=0x05,
+        data=b"\x01\x53\x01",
+        expect="none",
+        timeout=0.2,
+    )
+
+    assert result.status == "sent"
+    assert result.frame is None
+    assert result.frame_bytes is None
+    assert radio.external_cat_session_active is False
+    assert transport.sent_packets[-1].endswith(b"\x1a\x05\x01\x53\x01\xfd")
+
+
+async def test_raw_civ_transaction_nak_is_deterministic_failure_result(
+    radio: IcomRadio, transport: MockTransport
+) -> None:
+    transport.queue_response_on_send(1, _wrap(_nak()))
+
+    result = await radio.send_civ_transaction(
+        0x1A,
+        sub=0x05,
+        data=b"\x01\x53\x01",
+        expect="ack",
+        timeout=0.2,
+    )
+
+    assert result.status == "nak"
+    assert result.frame.command == 0xFA
+    assert radio.external_cat_session_active is False
+
+
+async def test_raw_civ_transaction_data_nak_is_deterministic_failure_result(
+    radio: IcomRadio, transport: MockTransport
+) -> None:
+    transport.queue_response_on_send(1, _wrap(_nak()))
+
+    result = await radio.send_civ_transaction(0x03, expect="data", timeout=0.2)
+
+    assert result.status == "nak"
+    assert result.frame.command == 0xFA
+    assert radio.external_cat_session_active is False
+
+
+@pytest.mark.parametrize(
+    ("command", "sub", "data", "sent", "reply", "status"),
+    [
+        (0x16, 0x56, b"", "FEFE98E01656FD", "FEFEE098FAFD", "nak"),
+        (0x29, None, b"\x00\x16\x56", "FEFE98E029001656FD", "FEFEE098FAFD", "nak"),
+        (
+            0x29,
+            None,
+            b"\x01\x16\x56",
+            "FEFE98E029011656FD",
+            "FEFEE0982901165600FD",
+            "response",
+        ),
+    ],
+    ids=["plain", "cmd29-main", "cmd29-sub"],
+)
+async def test_raw_civ_transaction_settles_the_ic7610_filter_shape_exchange(
+    radio: IcomRadio,
+    transport: MockTransport,
+    command: int,
+    sub: int | None,
+    data: bytes,
+    sent: str,
+    reply: str,
+    status: str,
+) -> None:
+    """The MOR-2733 bench exchange (2026-09-27, MAIN in RTTY, SUB in USB).
+
+    The refusal to MAIN's cmd29 read is the same bare NG as to the plain
+    read, with no 29 prefix.
+    """
+    transport.queue_response_on_send(1, _wrap(bytes.fromhex(reply)))
+
+    result = await radio.send_civ_transaction(
+        command, sub=sub, data=data, expect="data", timeout=0.2
+    )
+
+    assert transport.sent_packets[-1].endswith(bytes.fromhex(sent))
+    assert result.status == status
+    assert result.frame_bytes == bytes.fromhex(reply)
+
+
+async def test_raw_civ_transaction_ack_ignores_orphan_ack_backlog(
+    radio: IcomRadio,
+) -> None:
+    tracker = radio._civ_request_tracker
+    assert tracker.resolve(
+        CivEvent(type=CivEventType.ACK, frame=parse_civ_frame(_ack()))
+    )
+    assert tracker.resolve(
+        CivEvent(type=CivEventType.NAK, frame=parse_civ_frame(_nak()))
+    )
+
+    with pytest.raises(TimeoutError):
+        await radio.send_civ_transaction(
+            0x1A,
+            sub=0x05,
+            data=b"\x01\x53\x01",
+            expect="ack",
+            timeout=0.01,
+        )
+
+    assert radio.external_cat_session_active is False
+    assert tracker.pending_count == 0
+
+
+async def test_raw_civ_transaction_rejects_missing_civ_transport_without_claim(
+    radio: IcomRadio,
+) -> None:
+    radio._civ_transport = None
+
+    with pytest.raises(RigplaneConnectionError, match="Not connected to radio"):
+        await radio.send_civ_transaction(
+            0x1A,
+            sub=0x05,
+            data=b"\x01\x53\x01",
+            expect="ack",
+            timeout=0.01,
+        )
+
+    assert radio.external_cat_session_active is False
+    assert radio._civ_request_tracker.pending_count == 0
+
+
+async def test_raw_civ_transaction_cleans_stale_waiters_and_backlog(
+    radio: IcomRadio, transport: MockTransport
+) -> None:
+    tracker = CivRequestTracker(stale_ttl=0.0)
+    radio._civ_request_tracker = tracker
+    radio._civ_epoch = tracker.generation
+    radio._civ_waiter_ttl_gc_interval = 0.0
+
+    assert tracker.resolve(
+        CivEvent(type=CivEventType.ACK, frame=parse_civ_frame(_ack()))
+    )
+
+    stale_ack = tracker.register_ack(wait=True, consume_backlog=False)
+    stale_response = tracker.register_response(
+        request_key_from_frame(
+            parse_civ_frame(build_civ_frame(radio._radio_addr, CONTROLLER_ADDR, 0x03))
+        )
+    )
+    assert tracker.pending_count == 2
+
+    transport.queue_response_on_send(1, _wrap(_ack()))
+
+    result = await radio.send_civ_transaction(
+        0x1A,
+        sub=0x05,
+        data=b"\x01\x53\x01",
+        expect="ack",
+        timeout=0.2,
+    )
+
+    assert result.status == "ack"
+    assert tracker.pending_count == 0
+    assert tracker.snapshot_stats()["stale_cleaned"] == 2
+    assert tracker.snapshot_stats()["ack_backlog_drops"] == 1
+    with pytest.raises(asyncio.TimeoutError, match="CI-V ACK waiter expired"):
+        stale_ack.result()
+    with pytest.raises(asyncio.TimeoutError, match="CI-V response waiter expired"):
+        stale_response.result()
+
+
+async def test_raw_civ_transaction_timeout_releases_owner(radio: IcomRadio) -> None:
+    with pytest.raises(TimeoutError):
+        await radio.send_civ_transaction(0x03, expect="data", timeout=0.01)
+
+    assert radio.external_cat_session_active is False
+    assert radio._civ_request_tracker.pending_count == 0
+    assert radio._civ_request_tracker.timeout_count == 1
+
+
+async def test_raw_civ_transaction_rejects_competing_owner(radio: IcomRadio) -> None:
+    radio.begin_external_cat_session()
+
+    try:
+        with pytest.raises(RuntimeError, match="CI-V stream is already owned"):
+            await radio.send_civ_transaction(0x03, expect="data", timeout=0.01)
+    finally:
+        radio.end_external_cat_session()
+
+
+async def test_external_cat_begin_rejects_active_raw_transaction(
+    radio: IcomRadio,
+) -> None:
+    task = asyncio.create_task(
+        radio.send_civ_transaction(0x03, expect="data", timeout=1.0)
+    )
+    await asyncio.sleep(0)
+    assert radio.external_cat_session_active is True
+
+    with pytest.raises(RuntimeError, match="CI-V stream is already owned"):
+        radio.begin_external_cat_session()
+
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert radio.external_cat_session_active is False
+    assert radio._civ_request_tracker.pending_count == 0
+    assert radio._civ_request_tracker.timeout_count == 0
+
+
+async def test_raw_civ_transaction_session_releases_on_cancellation(
+    radio: IcomRadio,
+) -> None:
+    task = asyncio.create_task(
+        radio.send_civ_transaction(0x03, expect="data", timeout=1.0)
+    )
+    await asyncio.sleep(0)
+    assert radio.external_cat_session_active is True
+
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert radio.external_cat_session_active is False
+    assert radio._civ_request_tracker.pending_count == 0
+    assert radio._civ_request_tracker.timeout_count == 0
+
+
+@pytest.mark.parametrize(
+    ("first", "late", "expected"),
+    [(_ptt(), _nak(), "response"), (_nak(), _ptt(), "nak")],
+)
+@pytest.mark.parametrize("close_between", [False, True])
+async def test_data_transaction_first_terminal_frame_wins(
+    radio: IcomRadio,
+    monkeypatch: pytest.MonkeyPatch,
+    first: bytes,
+    late: bytes,
+    expected: str,
+    close_between: bool,
+) -> None:
+    runtime = radio._civ_runtime
+    captured = _capture_data_transaction(radio, monkeypatch)
+    task = asyncio.create_task(
+        radio.send_civ_transaction(0x1C, sub=0x00, expect="data", timeout=1.0)
+    )
+    # MOR-4384: answers arrive once the request is on the wire.
+    while not captured or not radio._civ_transport.sent_packets:
+        await asyncio.sleep(0)
+    await runtime._route_civ_frame(parse_civ_frame(first), generation=radio._civ_epoch)
+    if close_between:
+        runtime._close_civ_data_transaction(captured[0])
+    await runtime._route_civ_frame(parse_civ_frame(late), generation=radio._civ_epoch)
+    result = await task
+    response, nak = captured[0].response, captured[0].nak
+    winner, loser = (response, nak) if expected == "response" else (nak, response)
+    assert result.status == expected
+    assert result.frame_bytes == first
+    assert winner.done() and not winner.cancelled()
+    assert loser.cancelled()
+
+
+async def test_data_transaction_identity_does_not_steal_older_same_command(
+    radio: IcomRadio,
+) -> None:
+    observations = []
+    radio._civ_runtime.bind_ptt_observer(
+        provider_generation=1, observer=observations.append
+    )
+    key = request_key_from_frame(
+        parse_civ_frame(build_civ_frame(IC_7610_ADDR, CONTROLLER_ADDR, 0x1C, sub=0x00))
+    )
+    older = radio._civ_request_tracker.register_response(key)
+    transaction = radio._civ_runtime._register_civ_data_transaction(key)
+    # MOR-4384: both are on the wire, the older read first.
+    radio._civ_request_tracker.mark_sent(0.0, futures=(older,))
+    radio._civ_request_tracker.mark_sent(1.0, futures=transaction.futures)
+    with pytest.raises(RuntimeError, match="already active"):
+        radio._civ_runtime._register_civ_data_transaction(key)
+
+    await radio._civ_runtime._route_civ_frame(
+        parse_civ_frame(_ptt()), generation=radio._civ_epoch
+    )
+    assert older.done()
+    assert not transaction.response.done()
+    assert len(observations) == 1
+
+    await radio._civ_runtime._route_civ_frame(
+        parse_civ_frame(_ptt(1)), generation=radio._civ_epoch
+    )
+    assert transaction.response.done()
+    assert len(observations) == 2
+    radio._civ_runtime._close_civ_data_transaction(transaction)
+
+
+async def test_data_transaction_timeout_settles_token_before_late_response(
+    radio: IcomRadio,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observations = []
+    radio._civ_runtime.bind_ptt_observer(
+        provider_generation=1, observer=observations.append
+    )
+    captured = _capture_data_transaction(radio, monkeypatch)
+    with pytest.raises(TimeoutError):
+        await radio.send_civ_transaction(0x1C, sub=0x00, expect="data", timeout=0.01)
+
+    assert captured[0].response.cancelled()
+    assert captured[0].nak.cancelled()
+    await radio._civ_runtime._route_civ_frame(
+        parse_civ_frame(_ptt()), generation=radio._civ_epoch
+    )
+    assert len(observations) == 1
+
+
+async def test_data_transaction_cancel_settles_token_before_late_response(
+    radio: IcomRadio,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observations = []
+    radio._civ_runtime.bind_ptt_observer(
+        provider_generation=1, observer=observations.append
+    )
+    captured = _capture_data_transaction(radio, monkeypatch)
+    task = asyncio.create_task(
+        radio.send_civ_transaction(0x1C, sub=0x00, expect="data", timeout=1.0)
+    )
+    while not captured:
+        await asyncio.sleep(0)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert captured[0].response.cancelled()
+    assert captured[0].nak.cancelled()
+    await radio._civ_runtime._route_civ_frame(
+        parse_civ_frame(_ptt()), generation=radio._civ_epoch
+    )
+    assert len(observations) == 1
+
+
+async def test_refused_managed_ptt_write_leaves_the_next_read_authoritative(
+    radio: IcomRadio, transport: MockTransport
+) -> None:
+    """A refused managed TX write must not be charged to the read behind it.
+
+    ``_civ_rx.py: CivRuntime.write_managed_ptt`` sends with ``expect="none"``
+    and so registers no waiter for its own terminal frame, while
+    ``_civ_rx.py: CivRuntime.request_authoritative_ptt_read`` registers its
+    waiters before dispatching. Send #1 is the write and send #2 the read, and
+    both replies are released on send #2 — the write's refusal reaching the
+    tracker after the read was already registered. The read's own ``1C 00``
+    answer, not that refusal, must decide the read.
+    """
+    radio._civ_min_interval = 0.0
+    radio._civ_get_timeout = 1.0
+    observations: list[tx.ProviderPttObservation] = []
+    observer = observations.append
+    assert radio._capture_managed_tx_port(11, observer)
+    transport.queue_response_on_send(2, _wrap(_nak()))
+    transport.queue_response_on_send(2, _wrap(_ptt(0)))
+
+    await radio._write_managed_ptt(11, True)
+    await radio._request_authoritative_ptt_read(11, observer)
+
+    assert [o.value for o in observations] == [tx.RadioTx.OFF]
+
+
+async def test_authoritative_ptt_read_waits_out_its_own_refusal(
+    radio: IcomRadio, transport: MockTransport
+) -> None:
+    """The price of owning no NAK waiter, stated so it cannot drift silently.
+
+    ``_civ_rx.py: CivRuntime.request_authoritative_ptt_read`` registers no
+    ACK/NAK waiter, so a refusal aimed at the read itself is an orphan too:
+    the read spends its whole ``_civ_get_timeout`` and then fails as a
+    timeout rather than failing fast on the refusal.
+    """
+    radio._civ_min_interval = 0.0
+    radio._civ_get_timeout = 0.05
+    observations: list[tx.ProviderPttObservation] = []
+    observer = observations.append
+    assert radio._capture_managed_tx_port(11, observer)
+    transport.queue_response_on_send(1, _wrap(_nak()))
+
+    started = time.monotonic()
+    with pytest.raises(asyncio.TimeoutError):
+        await radio._request_authoritative_ptt_read(11, observer)
+
+    assert time.monotonic() - started >= radio._civ_get_timeout
+    assert observations == []
+
+
+async def test_pacing_gap_is_not_charged_to_the_answer_window(
+    radio: IcomRadio, transport: MockTransport
+) -> None:
+    """``timeout`` bounds the radio's answer, not this side's send pacing.
+
+    ``execute_civ_transaction`` stamped its deadline on entry, so the
+    outbound ``_civ_min_interval`` gap inside ``_send_civ_frame_now`` came
+    out of the same budget as the response.  The response here is already
+    queued when the frame goes out, so the window is never spent waiting
+    for the radio, and the pacing gap outlasting it makes the mis-charge
+    decisive rather than a matter of scheduling luck.  The window sits an
+    order of magnitude above the handover it does wait for, and the
+    outbound gap above the window, for the reason
+    ``test_radio.py: TestResponseDeadlineOpensAtSend`` records; that test
+    pins the same mis-charge in ``_execute_civ_raw``.
+    """
+    radio._civ_min_interval = 0.8
+    radio._last_civ_send_monotonic = time.monotonic()
+    response = build_civ_frame(
+        CONTROLLER_ADDR,
+        IC_7610_ADDR,
+        0x03,
+        data=bcd_encode(14_074_000),
+    )
+    transport.queue_response_on_send(1, _wrap(response))
+
+    result = await radio.send_civ_transaction(0x03, expect="data", timeout=0.5)
+
+    assert result.status == "response"
+    assert result.frame is not None
+    assert result.frame.command == 0x03
+
+
+def _wrap(civ_frame: bytes) -> bytes:
+    pkt = bytearray(0x16 + len(civ_frame))
+    pkt[0x10] = 0xC1
+    pkt[0x16:] = civ_frame
+    return bytes(pkt)

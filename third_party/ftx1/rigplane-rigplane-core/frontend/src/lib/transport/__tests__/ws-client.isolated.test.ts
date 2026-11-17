@@ -1,0 +1,2761 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import type { WsCommand, WsMessage, WsIncoming } from '../../types/protocol';
+import type { ReceiverState, ServerState } from '../../types/state';
+import type { CommandDeliveryEvent, CommandLifecycleDeliveryEvent, CommandReconciliationDeliveryEvent, ControlSessionTransition } from '../ws-client';
+import { MockWebSocket, instances } from './support/fake-ws-backend';
+
+class ControllerSocket extends MockWebSocket {
+  protocol: string;
+  constructor(url: string, readonly protocols: string[] = []) {
+    super(url);
+    this.protocol = protocols[0] ?? '';
+  }
+}
+
+type ServerStateWithObservation = ServerState & {
+  observationSeq?: number;
+  publicStateSeq?: number;
+  fieldStatus?: Record<string, unknown>;
+};
+
+describe('remote controller channel grouping', () => {
+  beforeEach(() => {
+    vi.resetModules(); vi.useFakeTimers(); instances.length = 0;
+    vi.stubGlobal('WebSocket', ControllerSocket);
+    vi.stubGlobal('fetch', vi.fn(async (_url, init?: RequestInit) => new Response(JSON.stringify(
+      init?.method === 'POST'
+        ? { controller_key: 'a'.repeat(64), generation: 1, ttl_ms: 6000, heartbeat_ms: 2000 }
+        : { protocol_version: 1, mode: 'remote', state: 'idle' },
+    ), { status: init?.method === 'POST' ? 201 : 200 })));
+  });
+  afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); vi.resetModules(); });
+
+  it('attaches primary before scope, clears pending commands on loss and ignores old callbacks', async () => {
+    const { controllerClient } = await import('../controller-client');
+    const { WsChannel } = await import('../ws-client');
+    const control = new WsChannel();
+    const scope = new WsChannel(false);
+    control.send({ type: 'cmd', id: 'local-pending', name: 'set_freq', params: { freq: 2 } });
+    await controllerClient.prepare();
+    control.connect('wss://station.test/api/v1/ws');
+    scope.connect('wss://station.test/api/v1/scope');
+    await vi.waitFor(() => expect(instances).toHaveLength(1));
+    const primary = instances[0] as ControllerSocket;
+    expect(new URL(primary.url).searchParams.get('controller_role')).toBe('primary');
+    expect(primary.protocols).toEqual([`rigplane-controller-v1.${'a'.repeat(64)}`]);
+    expect(primary.url).not.toContain('a'.repeat(64));
+    primary.simulateOpen();
+    expect(primary.sent.some((raw) => JSON.parse(raw).id === 'local-pending')).toBe(false);
+    await vi.waitFor(() => expect(instances).toHaveLength(2));
+    const child = instances[1] as ControllerSocket;
+    expect(child.protocols).toEqual(primary.protocols);
+    child.simulateOpen();
+    const received = vi.fn();
+    control.onMessage(received);
+    primary.simulateClose();
+    expect(child.readyState).toBe(ControllerSocket.CLOSED);
+    expect(control.send({ type: 'cmd', id: 'old', name: 'set_freq', params: { freq: 1 } })).toBe(false);
+    expect(control.send({ type: 'cmd', id: 'old-ptt', name: 'ptt', params: { state: true } })).toBe(false);
+    const count = received.mock.calls.length;
+    primary.simulateMessage(JSON.stringify({ type: 'notification', message: 'late' }));
+    expect(received).toHaveBeenCalledTimes(count);
+    await controllerClient.prepare();
+    control.connect('wss://station.test/api/v1/ws');
+    await vi.waitFor(() => expect(instances).toHaveLength(3));
+    instances[2].simulateOpen();
+    expect(instances[2].sent.some((raw) => JSON.parse(raw).id === 'old')).toBe(false);
+    expect(control.send({ type: 'cmd', id: 'fresh', name: 'ptt', params: { state: true } })).toBe(true);
+    control.disconnect();
+  });
+});
+
+describe('local controller session channels', () => {
+  const sessionKey = 'b'.repeat(64);
+
+  beforeEach(() => {
+    vi.resetModules(); vi.useFakeTimers(); instances.length = 0;
+    vi.stubGlobal('WebSocket', ControllerSocket);
+    let posts = 0;
+    vi.stubGlobal('fetch', vi.fn(async (_url: string, init?: RequestInit) => new Response(JSON.stringify(
+      init?.method === 'POST'
+        ? { controller_key: sessionKey, generation: ++posts, ttl_ms: 6000, heartbeat_ms: 2000 }
+        : { protocol_version: 1, mode: 'local', state: 'idle' },
+    ), { status: init?.method === 'POST' ? 201 : 200 })));
+  });
+  afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); vi.resetModules(); });
+
+  it('attaches every channel with the session subprotocol and recovers after loss without replaying PTT', async () => {
+    const { controllerClient } = await import('../controller-client');
+    const { WsChannel } = await import('../ws-client');
+    const control = new WsChannel();
+    const scope = new WsChannel(false);
+    // Silent-recovery pin: a local session loss must surface no error toast.
+    // Collecting on both channels catches an emit wired into the local
+    // onLoss branch whether or not it is guarded by `control`.
+    const notifications: WsMessage[] = [];
+    control.onMessage((m) => { if (m.type === 'notification') notifications.push(m); });
+    scope.onMessage((m) => { if (m.type === 'notification') notifications.push(m); });
+    await controllerClient.prepare();
+    expect(controllerClient.remote).toBe(false);
+    control.connect('wss://station.test/api/v1/ws');
+    scope.connect('wss://station.test/api/v1/scope');
+    await vi.waitFor(() => expect(instances).toHaveLength(1));
+    const primary = instances[0] as ControllerSocket;
+    expect(primary.protocols).toEqual([`rigplane-controller-v1.${sessionKey}`]);
+    expect(primary.url).not.toContain(sessionKey);
+    expect(new URL(primary.url).searchParams.get('controller_role')).toBe('primary');
+    primary.simulateOpen();
+    await vi.waitFor(() => expect(instances).toHaveLength(2));
+    const child = instances[1] as ControllerSocket;
+    expect(child.protocols).toEqual(primary.protocols);
+    child.simulateOpen();
+    primary.simulateClose();
+    expect(child.readyState).toBe(ControllerSocket.CLOSED);
+    expect(control.send({ type: 'cmd', id: 'stale-ptt', name: 'ptt', params: { state: true } })).toBe(false);
+    control.send({ type: 'cmd', id: 'queued-set', name: 'set_freq', params: { freq: 2 } });
+    await vi.waitFor(() => expect(instances).toHaveLength(3));
+    const recovered = instances[2] as ControllerSocket;
+    expect(recovered.protocols).toEqual([`rigplane-controller-v1.${sessionKey}`]);
+    recovered.simulateOpen();
+    const sentIds = recovered.sent.map((raw) => {
+      try { return (JSON.parse(raw) as { id?: string }).id; } catch { return undefined; }
+    });
+    expect(sentIds).not.toContain('stale-ptt');
+    expect(sentIds).toContain('queued-set');
+    expect(control.send({ type: 'cmd', id: 'fresh-ptt', name: 'ptt', params: { state: true } })).toBe(true);
+    expect(notifications).toEqual([]);
+    control.disconnect();
+    scope.disconnect();
+  });
+
+  it('attaches the control channel from the unauthenticated same-origin relative URL', async () => {
+    const { controllerClient } = await import('../controller-client');
+    const { WsChannel } = await import('../ws-client');
+    const control = new WsChannel();
+    await controllerClient.prepare();
+    control.connect('/api/v1/ws');
+    await vi.waitFor(() => expect(instances).toHaveLength(1));
+    const primary = instances[0] as ControllerSocket;
+    expect(primary.protocols).toEqual([`rigplane-controller-v1.${sessionKey}`]);
+    expect(new URL(primary.url, location.href).pathname).toBe('/api/v1/ws');
+    expect(new URL(primary.url, location.href).searchParams.get('controller_role')).toBe('primary');
+    control.disconnect();
+  });
+
+  it('stays sessionless against an older core that refuses the local POST', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (_url: string, init?: RequestInit) => new Response(JSON.stringify(
+      init?.method === 'POST'
+        ? { error: 'remote_disabled' }
+        : { protocol_version: 1, mode: 'local', state: 'idle' },
+    ), { status: init?.method === 'POST' ? 403 : 200 })));
+    const { controllerClient } = await import('../controller-client');
+    const { WsChannel } = await import('../ws-client');
+    const control = new WsChannel();
+    await controllerClient.prepare();
+    control.connect('wss://station.test/api/v1/ws');
+    await vi.waitFor(() => expect(instances).toHaveLength(1));
+    const socket = instances[0] as ControllerSocket;
+    expect(socket.protocols).toEqual([]);
+    expect(new URL(socket.url).searchParams.has('controller_role')).toBe(false);
+    socket.simulateOpen();
+    expect(control.send({ type: 'cmd', id: 'plain', name: 'set_freq', params: { freq: 1 } })).toBe(true);
+    control.disconnect();
+  });
+});
+
+function normalizedLevelWireVectors(): string[] {
+  const catalog = readFileSync(resolve(process.cwd(), '../docs/api/command-catalog.md'), 'utf8');
+  const match = catalog.match(/<!-- normalized-level-wire-vectors:start -->\n```jsonl\n([\s\S]*?)\n```\n<!-- normalized-level-wire-vectors:end -->/u);
+  if (!match) throw new Error('normalized level wire vectors are missing');
+  return match[1].split('\n').filter(Boolean);
+}
+
+// ─── Mock store before importing ws-client ──────────────────────────────────
+const radioStoreMock = vi.hoisted(() => ({
+  current: null as ServerStateWithObservation | null,
+  listeners: new Set<(state: ServerStateWithObservation | null) => void>(),
+}));
+
+vi.mock('../../stores/connection.svelte', () => ({
+  setWsConnected: vi.fn(),
+  markStateUpdated: vi.fn(),
+  setReconnecting: vi.fn(),
+  setRadioStatus: vi.fn(),
+  isLiveRadioAvailable: vi.fn(() => true),
+  // Under the fast pool's ``isolate: false`` this hoisted mock is shared
+  // module-wide; scope-controller.svelte (loaded by a sibling fast-pool
+  // test) imports the real ``markScopeFrame``, so it must be stubbed here
+  // or that sibling throws "No markScopeFrame export". See issue #771.
+  markScopeFrame: vi.fn(),
+}));
+
+vi.mock('../../stores/radio.svelte', () => ({
+  getRadioState: vi.fn(() => radioStoreMock.current),
+  resetRadioState: vi.fn(() => {
+    radioStoreMock.current = null;
+    for (const handler of radioStoreMock.listeners) handler(null);
+  }),
+  subscribeRadioState: (handler: (state: ServerStateWithObservation | null) => void) => {
+    radioStoreMock.listeners.add(handler);
+    handler(radioStoreMock.current);
+    return () => radioStoreMock.listeners.delete(handler);
+  },
+  isValidServerState: vi.fn(() => true),
+  matchesCurrentCapabilityTopology: vi.fn(() => true),
+  setRadioState: vi.fn((state: ServerStateWithObservation) => {
+    const current = radioStoreMock.current;
+    const lastRevision = current ? current.stateRevision ?? current.revision : -1;
+    const nextRevision = state.stateRevision ?? state.revision;
+    const lastFreshnessRevision = current?.freshnessRevision ?? -1;
+    const nextFreshnessRevision = state.freshnessRevision ?? 0;
+    const lastHealthRevision = current?.healthRevision ?? -1;
+    const nextHealthRevision = state.healthRevision ?? 0;
+    const lastObservationSeq = current?.observationSeq ?? -1;
+    const nextObservationSeq = state.observationSeq ?? 0;
+    const lastPublicStateSeq = current?.publicStateSeq ?? -1;
+    const nextPublicStateSeq = state.publicStateSeq ?? 0;
+    const semanticAdvanced = nextRevision > lastRevision;
+    const semanticCurrent = nextRevision === lastRevision;
+    const metadataAdvanced = semanticCurrent && (
+      nextFreshnessRevision > lastFreshnessRevision
+      || nextHealthRevision > lastHealthRevision
+      || nextObservationSeq > lastObservationSeq
+      || nextPublicStateSeq > lastPublicStateSeq
+    );
+    if (current === null || semanticAdvanced || metadataAdvanced) {
+      radioStoreMock.current = state;
+      for (const handler of radioStoreMock.listeners) handler(state);
+    }
+  }),
+}));
+
+vi.mock('../../stores/capabilities.svelte', () => ({
+  capabilitiesMatchGeneration: vi.fn(() => true),
+  clearCapabilities: vi.fn(),
+  setCapabilities: vi.fn(() => true),
+}));
+
+vi.mock('../http-client', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../http-client')>(),
+  fetchCapabilities: vi.fn(() => new Promise(() => {})),
+}));
+
+import {
+  isLiveRadioAvailable,
+  setRadioStatus,
+  setWsConnected,
+} from '../../stores/connection.svelte';
+import { resetRadioState, setRadioState } from '../../stores/radio.svelte';
+import { clearCapabilities } from '../../stores/capabilities.svelte';
+
+beforeEach(() => {
+  radioStoreMock.current = null;
+  radioStoreMock.listeners.clear();
+  vi.mocked(isLiveRadioAvailable).mockReturnValue(true);
+  vi.mocked(resetRadioState).mockClear();
+  vi.mocked(setRadioState).mockClear();
+});
+
+// ─── Minimal WebSocket mock ──────────────────────────────────────────────────
+type WsEventName = 'open' | 'message' | 'close' | 'error';
+
+function makeReceiver(overrides: Partial<ReceiverState> = {}): ReceiverState {
+  return {
+    freqHz: 14074000,
+    mode: 'USB',
+    filter: 1,
+    dataMode: 0,
+    sMeter: 0,
+    att: 0,
+    preamp: 0,
+    nb: false,
+    nr: false,
+    afLevel: 128,
+    rfGain: 128,
+    squelch: 0,
+    ...overrides,
+  };
+}
+
+function makeState(
+  overrides: Partial<ServerStateWithObservation> & {
+    main?: Partial<ReceiverState>;
+    sub?: Partial<ReceiverState>;
+    connection?: Partial<ServerState['connection']>;
+  } = {},
+): ServerStateWithObservation {
+  const { main, sub, connection, txTarget, ...topLevel } = overrides;
+  const revision = topLevel.stateRevision ?? topLevel.revision ?? 1;
+  return {
+    revision,
+    stateRevision: revision,
+    freshnessRevision: topLevel.freshnessRevision ?? 1,
+    healthRevision: topLevel.healthRevision ?? 1,
+    observationSeq: topLevel.observationSeq ?? revision,
+    publicStateSeq: topLevel.publicStateSeq,
+    updatedAt: '2026-06-03T00:00:00Z',
+    active: 'MAIN',
+    ptt: false,
+    split: false,
+    dualWatch: false,
+    tunerStatus: 0,
+    main: makeReceiver(main),
+    sub: makeReceiver({ freqHz: 7074000, ...sub }),
+    connection: {
+      rigConnected: true,
+      radioReady: true,
+      controlConnected: true,
+      ...connection,
+    },
+    stateContractVersion: 1,
+    providerGeneration: 0,
+    ...topLevel,
+    txTarget: txTarget ?? { status: 'unknown', reason: 'not-observed' },
+  };
+}
+
+function fullEnvelope(state: ServerStateWithObservation): Record<string, unknown> {
+  return {
+    type: 'full',
+    data: state,
+    revision: state.revision,
+    stateRevision: state.stateRevision,
+    freshnessRevision: state.freshnessRevision,
+    healthRevision: state.healthRevision,
+    observationSeq: state.observationSeq,
+    publicStateSeq: state.publicStateSeq,
+    transportSeq: state.transportSeq,
+    stateContractVersion: state.stateContractVersion,
+    providerGeneration: state.providerGeneration,
+  };
+}
+
+function deltaEnvelope(
+  state: ServerStateWithObservation,
+  changed: Record<string, unknown>,
+  removed: string[] = [],
+): Record<string, unknown> {
+  return {
+    type: 'delta',
+    changed,
+    removed,
+    revision: state.revision,
+    stateRevision: state.stateRevision,
+    freshnessRevision: state.freshnessRevision,
+    healthRevision: state.healthRevision,
+    observationSeq: state.observationSeq,
+    publicStateSeq: state.publicStateSeq,
+    transportSeq: state.transportSeq,
+    stateContractVersion: state.stateContractVersion,
+    providerGeneration: state.providerGeneration,
+  };
+}
+
+function sendStateUpdate(socket: MockWebSocket, data: Record<string, unknown>): void {
+  socket.simulateMessage(JSON.stringify({ type: 'state_update', data }));
+}
+
+function makeScopeControls(): NonNullable<ServerStateWithObservation['scopeControls']> {
+  return {
+    receiver: 0,
+    dual: false,
+    mode: 0,
+    span: 10_000,
+    edge: 1,
+    hold: false,
+    refDb: 0,
+    speed: 2,
+    duringTx: false,
+    centerType: 0,
+    vbwNarrow: false,
+    rbw: 0,
+    fixedEdge: { rangeIndex: 0, edge: 1, startHz: 14_000_000, endHz: 14_250_000 },
+  };
+}
+
+// Every command name (including aliases) that the retired legacy
+// auto-optimistic switch used to map to a Store patch. sendCommand must treat
+// each as pure transport: exactly one WS envelope, zero Store writes.
+const LEGACY_OPTIMISTIC_FAMILY: ReadonlyArray<readonly [string, Record<string, unknown>]> = [
+  ['set_freq', { freq: 7_074_000 }],
+  ['set_mode', { mode: 'CW' }],
+  ['set_data_mode', { mode: 1 }],
+  ['set_filter', { filter: 'FIL2' }],
+  ['set_nb', { on: true }],
+  ['set_nr', { on: true }],
+  ['set_nb_level', { level: 5 }],
+  ['set_nr_level', { level: 5 }],
+  ['set_af_level', { level: 42 }],
+  ['set_rf_gain', { level: 42 }],
+  ['set_squelch', { level: 3 }],
+  ['set_att', { level: 12 }],
+  ['set_attenuator', { db: 12 }],
+  ['set_preamp', { level: 1 }],
+  ['set_filter_width', { width: 2_400 }],
+  ['set_digisel', { on: true }],
+  ['set_ip_plus', { on: true }],
+  ['set_ipplus', { on: true }],
+  ['set_dual_watch', { on: true }],
+  ['set_split', { on: true }],
+  ['set_rit_status', { on: true }],
+  ['set_rit_tx_status', { on: true }],
+  ['set_rit_frequency', { freq: 120 }],
+  ['set_tuner_status', { value: 1 }],
+  ['set_mic_gain', { level: 30 }],
+  ['set_cw_pitch', { value: 600 }],
+  ['set_key_speed', { speed: 22 }],
+  ['set_break_in', { mode: 1 }],
+  ['set_vox', { on: true }],
+  ['set_compressor', { on: true }],
+  ['set_comp', { on: true }],
+  ['set_compressor_level', { level: 4 }],
+  ['set_monitor', { on: true }],
+  ['set_monitor_gain', { level: 15 }],
+  ['set_vfo', { vfo: 'B' }],
+  ['set_vfo', { vfo: 'SUB' }],
+  ['set_vfo', { vfo: 'VFOB' }],
+  ['select_vfo', { vfo: 'A' }],
+  ['set_scope_mode', { mode: 1 }],
+  ['set_scope_hold', { on: true }],
+  ['set_scope_ref', { ref: -10 }],
+  ['set_antenna_1', { on: true }],
+  ['set_antenna_2', { on: true }],
+  ['set_rx_antenna_ant1', { on: true }],
+  ['set_rx_antenna_ant2', { on: true }],
+];
+
+// ─── Tests ───────────────────────────────────────────────────────────────────
+
+describe('WsChannel', () => {
+  let originalWebSocket: typeof WebSocket;
+
+  beforeEach(() => {
+    instances.length = 0;
+    vi.useFakeTimers();
+    originalWebSocket = globalThis.WebSocket;
+    // @ts-expect-error mock
+    globalThis.WebSocket = MockWebSocket;
+    vi.mocked(setWsConnected).mockClear();
+  });
+
+  afterEach(() => {
+    globalThis.WebSocket = originalWebSocket;
+    vi.useRealTimers();
+  });
+
+  it('connects and updates wsConnected store', async () => {
+    const { WsChannel } = await import('../ws-client');
+    const ch = new WsChannel();
+    ch.onStateChange((s) => {
+      if (s === 'connected') setWsConnected(true);
+      if (s === 'disconnected') setWsConnected(false);
+    });
+
+    expect(ch.state).toBe('disconnected');
+    ch.connect('ws://test/api/v1/ws');
+    expect(ch.state).toBe('connecting');
+
+    instances[0].simulateOpen();
+    expect(ch.state).toBe('connected');
+    expect(ch.isConnected()).toBe(true);
+    expect(setWsConnected).toHaveBeenCalledWith(true);
+  });
+
+  it('routes JSON messages to onMessage handlers', async () => {
+    const { WsChannel } = await import('../ws-client');
+    const ch = new WsChannel();
+    const received: WsIncoming[] = [];
+    ch.onMessage((m) => received.push(m));
+
+    ch.connect('ws://test');
+    instances[0].simulateOpen();
+    instances[0].simulateMessage(JSON.stringify({ type: 'ack', id: 'abc' }));
+
+    expect(received).toHaveLength(1);
+    expect(received[0].type).toBe('ack');
+  });
+
+  it('drops binary frames from a replaced socket while delivering the current socket', async () => {
+    const { WsChannel } = await import('../ws-client');
+    const ch = new WsChannel();
+    const received: ArrayBuffer[] = [];
+    ch.onBinary((frame) => received.push(frame));
+
+    ch.connect('ws://test');
+    instances[0].simulateOpen();
+    instances[0].simulateClose();
+    vi.advanceTimersByTime(1_300);
+    instances[1].simulateOpen();
+
+    const staleFrame = new ArrayBuffer(1);
+    const currentFrame = new ArrayBuffer(2);
+    instances[0].simulateMessage(staleFrame);
+    instances[1].simulateMessage(currentFrame);
+
+    expect(received).toEqual([currentFrame]);
+  });
+
+  it('ignores a delayed close from a socket replaced after intentional disconnect', async () => {
+    const { WsChannel } = await import('../ws-client');
+    const ch = new WsChannel();
+    const received: ArrayBuffer[] = [];
+    ch.onBinary((frame) => received.push(frame));
+
+    ch.connect('ws://test');
+    const first = instances[0];
+    first.simulateOpen();
+    first.close = vi.fn(() => { first.readyState = MockWebSocket.CLOSED; });
+
+    ch.disconnect();
+    ch.connect('ws://test');
+    const replacement = instances[1];
+    replacement.answersPings = true;
+    replacement.simulateOpen();
+
+    first.simulateClose(1000, 'delayed close', true);
+    const currentFrame = new ArrayBuffer(2);
+    replacement.simulateMessage(currentFrame);
+    vi.advanceTimersByTime(60_000);
+
+    expect(ch.state).toBe('connected');
+    expect(ch.isConnected()).toBe(true);
+    expect(received).toEqual([currentFrame]);
+    expect(instances).toHaveLength(2);
+  });
+
+  it('keeps one channel across a deferred-close hardware demand reacquisition', async () => {
+    const { WsChannel } = await import('../ws-client');
+    const { ScopeController } = await import('../../runtime/scope-controller.svelte');
+    const { PresentationResourceHost } = await import('../../runtime/resource-host');
+    const ch = new WsChannel();
+    const controller = new ScopeController(() => ch);
+    const host = new PresentationResourceHost<unknown>('orientation-session');
+    host.configure('hardware-scope', {
+      available: true,
+      selected: true,
+      driver: controller.hardwareScopeDriver,
+    });
+
+    const portrait = host.acquire('hardware-scope', 'portrait');
+    await Promise.resolve();
+    await Promise.resolve();
+    const first = instances[0];
+    first.simulateOpen();
+    first.close = vi.fn(() => { first.readyState = MockWebSocket.CLOSED; });
+
+    host.release(portrait);
+    const landscape = host.acquire('hardware-scope', 'landscape');
+    await Promise.resolve();
+    await Promise.resolve();
+    const replacement = instances[1];
+    replacement.answersPings = true;
+    replacement.simulateOpen();
+
+    first.simulateClose(1000, 'delayed close', true);
+    vi.advanceTimersByTime(60_000);
+
+    expect(host.snapshot('hardware-scope')).toMatchObject({ demand: 1, health: 'streaming' });
+    expect(ch.state).toBe('connected');
+    expect(ch.isConnected()).toBe(true);
+    expect(instances).toHaveLength(2);
+
+    host.release(landscape);
+    await host.teardown();
+  });
+
+  it('emits correlated PTT delivery events without fabricating RF state', async () => {
+    const { WsChannel } = await import('../ws-client');
+    const ch = new WsChannel();
+    const events: CommandDeliveryEvent[] = [];
+    ch.onCommandDelivery((event) => events.push(event));
+    ch.connect('ws://test');
+    instances[0].simulateOpen();
+
+    expect(ch.send({ type: 'cmd', name: 'ptt_on', id: 'on', params: {} })).toBe(true);
+    instances[0].simulateMessage(JSON.stringify({ type: 'ack', id: 'on' }));
+    instances[0].simulateMessage(JSON.stringify({ type: 'ack', id: 'on' }));
+    instances[0].simulateMessage(JSON.stringify({ type: 'response', id: 'on', ok: true }));
+    expect(ch.send({ type: 'cmd', name: 'ptt_off', id: 'off', params: {} })).toBe(true);
+    instances[0].simulateMessage(JSON.stringify({ type: 'response', id: 'off', ok: false }));
+    instances[0].simulateMessage(JSON.stringify({ type: 'error', id: 'off', message: 'rejected' }));
+
+    expect(events).toMatchObject([
+      { commandId: 'on', kind: 'transport-sent', originalEpoch: 1, eventEpoch: 1 },
+      { commandId: 'on', kind: 'ack', originalEpoch: 1, eventEpoch: 1 },
+      { commandId: 'on', kind: 'response-ok', originalEpoch: 1, eventEpoch: 1 },
+      { commandId: 'off', kind: 'transport-sent', originalEpoch: 1, eventEpoch: 1 },
+      { commandId: 'off', kind: 'response-error', originalEpoch: 1, eventEpoch: 1 },
+      { commandId: 'off', kind: 'error', originalEpoch: 1, eventEpoch: 1, error: 'rejected' },
+    ]);
+  });
+
+  it('correlates generic non-PTT delivery in the sending session', async () => {
+    const { WsChannel } = await import('../ws-client');
+    const ch = new WsChannel();
+    const events: CommandDeliveryEvent[] = [];
+    ch.onCommandDelivery((event) => events.push(event));
+    ch.connect('ws://test');
+    instances[0].simulateOpen();
+
+    expect(ch.send({ type: 'cmd', name: 'set_freq', id: 'freq', params: { freq: 14_074_000 } })).toBe(true);
+    instances[0].simulateMessage(JSON.stringify({ type: 'ack', id: 'freq' }));
+    instances[0].simulateMessage(JSON.stringify({ type: 'response', id: 'freq', ok: true }));
+
+    expect(events).toEqual([
+      { commandId: 'freq', kind: 'transport-sent', originalEpoch: 1, eventEpoch: 1 },
+      { commandId: 'freq', kind: 'ack', originalEpoch: 1, eventEpoch: 1 },
+      { commandId: 'freq', kind: 'response-ok', originalEpoch: 1, eventEpoch: 1 },
+    ]);
+  });
+
+  it('captures a sanitized admitted level only from a response-ok result', async () => {
+    const { WsChannel } = await import('../ws-client');
+    const ch = new WsChannel();
+    const events: CommandDeliveryEvent[] = [];
+    ch.onCommandDelivery((event) => events.push(event));
+    ch.connect('ws://test');
+    instances[0].simulateOpen();
+
+    const send = (id: string) =>
+      ch.send({ type: 'cmd', name: 'set_af_level', id, params: { level: 0.5 } });
+    const responseOk = (id: string, result: Record<string, unknown>) =>
+      instances[0].simulateMessage(JSON.stringify({ type: 'response', id, ok: true, result }));
+
+    expect(send('af-1')).toBe(true);
+    responseOk('af-1', { level: 128, receiver: 0, admitted_level: 128 / 255 });
+    // Only a finite 0..1 number is evidence; anything else must leave the
+    // delivery without the field.
+    for (const [id, bad] of [['af-2', '0.5'], ['af-3', 1.5], ['af-4', Number.NaN], ['af-5', null]] as const) {
+      expect(send(id)).toBe(true);
+      responseOk(id, bad === null ? { level: 128 } : { level: 128, admitted_level: bad });
+    }
+    expect(send('af-6')).toBe(true);
+    responseOk('af-6', { admitted_level: 0.5 });
+    expect(send('af-7')).toBe(true);
+    instances[0].simulateMessage(JSON.stringify({
+      type: 'response', id: 'af-7', ok: false, error: 'command_failed',
+      result: { admitted_level: 0.5 },
+    }));
+    expect(send('af-8')).toBe(true);
+    instances[0].simulateMessage(JSON.stringify({ type: 'ack', id: 'af-8' }));
+
+    const oks = events.filter((event) => event.kind === 'response-ok');
+    expect(oks).toHaveLength(6);
+    expect(oks.filter((event) => event.admittedLevel !== undefined)).toEqual([
+      { commandId: 'af-1', kind: 'response-ok', originalEpoch: 1, eventEpoch: 1, admittedLevel: 128 / 255 },
+      { commandId: 'af-6', kind: 'response-ok', originalEpoch: 1, eventEpoch: 1, admittedLevel: 0.5 },
+    ]);
+    expect(events.filter((event) => event.commandId === 'af-7').map((event) => event.kind))
+      .toEqual(['transport-sent', 'response-error']);
+    const af8 = events.filter((event) => event.commandId === 'af-8');
+    expect(af8.map((event) => event.kind)).toEqual(['transport-sent', 'ack']);
+    expect(af8.every((event) => event.admittedLevel === undefined)).toBe(true);
+  });
+
+  it('captures a sanitized admitted width only from a response-ok result', async () => {
+    const { WsChannel } = await import('../ws-client');
+    const ch = new WsChannel();
+    const events: CommandDeliveryEvent[] = [];
+    ch.onCommandDelivery((event) => events.push(event));
+    ch.connect('ws://test');
+    instances[0].simulateOpen();
+
+    const send = (id: string) =>
+      ch.send({ type: 'cmd', name: 'set_filter_width', id, params: { width: 2350 } });
+    const responseOk = (id: string, result: Record<string, unknown>) =>
+      instances[0].simulateMessage(JSON.stringify({ type: 'response', id, ok: true, result }));
+
+    expect(send('w-1')).toBe(true);
+    responseOk('w-1', { width: 2350, receiver: 0, admitted_width: 2400 });
+    // Only a non-negative safe integer is evidence; anything else must leave
+    // the delivery without the field (dropped, never thrown).
+    for (const [id, bad] of [
+      ['w-2', '2400'], ['w-3', -400], ['w-4', Number.NaN], ['w-5', 2400.5], ['w-6', null],
+    ] as const) {
+      expect(send(id)).toBe(true);
+      responseOk(id, bad === null ? { width: 2350 } : { width: 2350, admitted_width: bad });
+    }
+    expect(send('w-7')).toBe(true);
+    instances[0].simulateMessage(JSON.stringify({
+      type: 'response', id: 'w-7', ok: false, error: 'command_failed',
+      result: { admitted_width: 2400 },
+    }));
+
+    const oks = events.filter((event) => event.kind === 'response-ok');
+    expect(oks).toHaveLength(6);
+    expect(oks.filter((event) => event.admittedWidth !== undefined)).toEqual([
+      { commandId: 'w-1', kind: 'response-ok', originalEpoch: 1, eventEpoch: 1, admittedWidth: 2400 },
+    ]);
+    expect(events.filter((event) => event.commandId === 'w-7').map((event) => event.kind))
+      .toEqual(['transport-sent', 'response-error']);
+  });
+
+  it('strictly decodes correlated private command lifecycle frames', async () => {
+    const { WsChannel } = await import('../ws-client');
+    const ch = new WsChannel();
+    const lifecycle: CommandLifecycleDeliveryEvent[] = [];
+    const ordinary: CommandDeliveryEvent[] = [];
+    const messages: WsIncoming[] = [];
+    ch.onCommandLifecycleDelivery((event) => lifecycle.push(event));
+    ch.onCommandDelivery((event) => ordinary.push(event));
+    ch.onMessage((message) => messages.push(message));
+    ch.connect('ws://test');
+    instances[0].simulateOpen();
+
+    for (const id of ['held', 'timeout', 'failed']) {
+      expect(ch.send({ type: 'cmd', name: 'set_freq', id, params: { freq: 1 } })).toBe(true);
+    }
+    const held = {
+      type: 'command_lifecycle', commandId: 'held', state: 'queued',
+      details: { heldBy: 'tx_interlock', reason: 'tx_active', expiresAt: 12.5, secret: 'drop' },
+      source: 'websocket', session: 'private', target: 'main', timestampMonotonic: 10,
+      originalEpoch: 999, eventEpoch: 999,
+    };
+    instances[0].simulateMessage(JSON.stringify(held));
+    instances[0].simulateMessage(JSON.stringify(held));
+    instances[0].simulateMessage(JSON.stringify({ type: 'response', id: 'held', ok: true }));
+    instances[0].simulateMessage(JSON.stringify({ ...held, state: 'superseded', message: null, details: {} }));
+    instances[0].simulateMessage(JSON.stringify({ type: 'command_lifecycle', commandId: 'timeout', state: 'timed_out', message: 'expired', details: {} }));
+    instances[0].simulateMessage(JSON.stringify({ type: 'response', id: 'timeout', ok: true }));
+    instances[0].simulateMessage(JSON.stringify({ type: 'response', id: 'failed', ok: true }));
+    instances[0].simulateMessage(JSON.stringify({ type: 'command_lifecycle', commandId: 'failed', state: 'failed', message: 'blocked', details: {} }));
+
+    expect(lifecycle).toEqual([
+      { commandId: 'held', kind: 'held', originalEpoch: 1, eventEpoch: 1, reason: 'tx_active', expiresAt: 12.5 },
+      { commandId: 'held', kind: 'superseded', originalEpoch: 1, eventEpoch: 1 },
+      { commandId: 'timeout', kind: 'timed-out', originalEpoch: 1, eventEpoch: 1, error: 'expired' },
+      { commandId: 'failed', kind: 'failed', originalEpoch: 1, eventEpoch: 1, error: 'blocked' },
+    ]);
+    expect(ordinary.filter((event) => event.kind === 'response-ok')).toHaveLength(3);
+    expect(messages).not.toContainEqual(expect.objectContaining({ type: 'command_lifecycle' }));
+  });
+
+  it('maps a TX-interlock refusal onto the semantic blocked reason codes on our failures', async () => {
+    const { WsChannel } = await import('../ws-client');
+    const ch = new WsChannel();
+    const lifecycle: CommandLifecycleDeliveryEvent[] = [];
+    ch.onCommandLifecycleDelivery((event) => lifecycle.push(event));
+    ch.connect('ws://test');
+    instances[0].simulateOpen();
+
+    const ids = ['refused-tx', 'refused-uncertain', 'unmapped', 'undetailed', 'misblocked'] as const;
+    for (const id of ids) {
+      expect(ch.send({ type: 'cmd', name: 'set_freq', id, params: { freq: 1 } })).toBe(true);
+    }
+    const refused = (commandId: string, message: string | null, details: unknown) =>
+      instances[0].simulateMessage(JSON.stringify({
+        type: 'command_lifecycle', commandId, state: 'failed', message, details,
+      }));
+
+    refused('refused-tx', 'TX interlock refusal', { blockedBy: 'tx_interlock', reason: 'radio_transmitting' });
+    refused('refused-uncertain', 'TX interlock refusal', { blockedBy: 'tx_interlock', reason: 'rf_state_unknown' });
+    refused('unmapped', 'TX interlock refusal', { blockedBy: 'tx_interlock', reason: 'not_a_known_code' });
+    refused('undetailed', 'TX interlock refusal', {});
+    refused('misblocked', 'TX interlock refusal', { blockedBy: 'held_queue', reason: 'radio_transmitting' });
+
+    expect(lifecycle).toEqual([
+      { commandId: 'refused-tx', kind: 'failed', originalEpoch: 1, eventEpoch: 1,
+        reason: 'radio-transmitting', error: 'radio-transmitting' },
+      { commandId: 'refused-uncertain', kind: 'failed', originalEpoch: 1, eventEpoch: 1,
+        reason: 'rf-state-unknown', error: 'rf-state-unknown' },
+      { commandId: 'unmapped', kind: 'failed', originalEpoch: 1, eventEpoch: 1, error: 'TX interlock refusal' },
+      { commandId: 'undetailed', kind: 'failed', originalEpoch: 1, eventEpoch: 1, error: 'TX interlock refusal' },
+      { commandId: 'misblocked', kind: 'failed', originalEpoch: 1, eventEpoch: 1, error: 'TX interlock refusal' },
+    ]);
+  });
+
+  it('emits only sanitized reconciliation evidence after physical lifecycle truth', async () => {
+    const { WsChannel } = await import('../ws-client');
+    const ch = new WsChannel();
+    const lifecycle: CommandReconciliationDeliveryEvent[] = [];
+    const ordinary: CommandDeliveryEvent[] = [];
+    ch.onCommandReconciliationDelivery((event) => lifecycle.push(event));
+    ch.onCommandDelivery((event) => ordinary.push(event));
+    ch.connect('ws://test');
+    instances[0].simulateOpen();
+    sendStateUpdate(instances[0], fullEnvelope(makeState({ revision: 4, observationSeq: 8 })));
+    const stateBefore = radioStoreMock.current;
+    const writesBefore = vi.mocked(setRadioState).mock.calls.length;
+
+    ch.send({ type: 'cmd', name: 'set_freq', id: 'reconciled', params: { freq: 1 } });
+    instances[0].simulateMessage(JSON.stringify({ type: 'ack', id: 'reconciled' }));
+    instances[0].simulateMessage(JSON.stringify({ type: 'response', id: 'reconciled', ok: true }));
+    expect(lifecycle).toEqual([]);
+    expect(ordinary.map((event) => event.kind)).toEqual(['transport-sent', 'ack', 'response-ok']);
+
+    instances[0].simulateMessage(JSON.stringify({
+      type: 'command_lifecycle', commandId: 'reconciled', state: 'reconciled',
+      source: 'websocket', target: 'receiver.0.freq_mode.freq_hz',
+      timestampMonotonic: 12.5, message: 'confirmed by matching observation',
+      details: { revision: 5, observationSeq: 9 },
+    }));
+
+    expect(lifecycle).toEqual([{
+      commandId: 'reconciled', kind: 'reconciled', originalEpoch: 1, eventEpoch: 1,
+      revision: 5, observationSeq: 9,
+    }]);
+    expect(radioStoreMock.current).toBe(stateBefore);
+    expect(setRadioState).toHaveBeenCalledTimes(writesBefore);
+  });
+
+  it('rejects malformed, cancelled, and stale-socket reconciliation evidence', async () => {
+    const { WsChannel } = await import('../ws-client');
+    const ch = new WsChannel();
+    const events: CommandReconciliationDeliveryEvent[] = [];
+    ch.onCommandReconciliationDelivery((event) => events.push(event));
+    ch.connect('ws://test');
+    instances[0].simulateOpen();
+    ch.send({ type: 'cmd', name: 'set_freq', id: 'strict', params: {} });
+    const valid = {
+      type: 'command_lifecycle', commandId: 'strict', state: 'reconciled',
+      source: 'websocket', target: 'receiver.0.freq_mode.freq_hz',
+      timestampMonotonic: 12.5, message: 'confirmed by matching observation',
+      details: { revision: 5, observationSeq: 9 },
+    };
+    const invalid = [
+      { ...valid, source: 'public_api' },
+      { ...valid, source: undefined },
+      { ...valid, commandId: ' ' },
+      { ...valid, commandId: undefined },
+      { ...valid, target: null },
+      { ...valid, target: 'not-a-field-path' },
+      { ...valid, target: 'receiver.0.private.secret' },
+      { ...valid, timestampMonotonic: true },
+      { ...valid, timestampMonotonic: Number.NaN },
+      { ...valid, timestampMonotonic: Number.POSITIVE_INFINITY },
+      { ...valid, message: null },
+      { ...valid, message: 'confirmed' },
+      { ...valid, details: null },
+      { ...valid, details: { observationSeq: 9 } },
+      { ...valid, details: { revision: 5 } },
+      { ...valid, details: { revision: true, observationSeq: 9 } },
+      { ...valid, details: { revision: -1, observationSeq: 9 } },
+      { ...valid, details: { revision: 5.5, observationSeq: 9 } },
+      { ...valid, details: { revision: '5', observationSeq: 9 } },
+      { ...valid, details: { revision: Number.MAX_SAFE_INTEGER + 1, observationSeq: 9 } },
+      { ...valid, details: { revision: 5, observationSeq: true } },
+      { ...valid, details: { revision: 5, observationSeq: -1 } },
+      { ...valid, details: { revision: 5, observationSeq: 9.5 } },
+      { ...valid, details: { revision: 5, observationSeq: '9' } },
+      { ...valid, details: { revision: 5, observationSeq: Number.MAX_SAFE_INTEGER + 1 } },
+      { ...valid, details: { revision: 5, observationSeq: Number.POSITIVE_INFINITY } },
+      { ...valid, details: { revision: 5, observationSeq: 9, private: 'drop' } },
+    ];
+    for (const frame of invalid) instances[0].simulateMessage(JSON.stringify(frame));
+    instances[0].simulateMessage('{"type":"command_lifecycle","commandId":"strict","state":"reconciled","source":"websocket","target":"receiver.0.freq_mode.freq_hz","timestampMonotonic":12.5,"message":"confirmed by matching observation","details":{"revision":5,"observationSeq":9,"__proto__":{"private":true}}}');
+    const accessorDetails = {};
+    Object.defineProperties(accessorDetails, {
+      revision: { enumerable: true, get: () => { throw new Error('trap'); } },
+      observationSeq: { enumerable: true, value: 9 },
+    });
+    const parse = vi.spyOn(JSON, 'parse').mockReturnValueOnce({ ...valid, details: accessorDetails });
+    expect(() => instances[0].simulateMessage('{}')).not.toThrow();
+    parse.mockRestore();
+    expect(events).toEqual([]);
+
+    ch.send({ type: 'cmd', name: 'set_freq', id: 'cancelled', params: {} });
+    ch.cancelNonPtt('provider session replaced');
+    instances[0].simulateMessage(JSON.stringify({ ...valid, commandId: 'cancelled' }));
+    expect(events).toEqual([]);
+
+    ch.send({ type: 'cmd', name: 'set_freq', id: 'reused', params: {} });
+    instances[0].simulateClose();
+    vi.advanceTimersByTime(1_300);
+    instances[1].simulateOpen();
+    ch.send({ type: 'cmd', name: 'set_freq', id: 'reused', params: {} });
+    instances[0].simulateMessage(JSON.stringify({ ...valid, commandId: 'reused' }));
+    instances[1].simulateMessage(JSON.stringify({ ...valid, commandId: 'reused' }));
+    expect(events).toEqual([{
+      commandId: 'reused', kind: 'reconciled', originalEpoch: 2, eventEpoch: 2,
+      revision: 5, observationSeq: 9,
+    }]);
+  });
+
+  it('isolates throwing reconciliation subscribers and consumes the correlation first', async () => {
+    const { WsChannel } = await import('../ws-client');
+    const ch = new WsChannel();
+    ch.connect('ws://test');
+    instances[0].simulateOpen();
+    const frame = JSON.stringify({
+      type: 'command_lifecycle', commandId: 'robust', state: 'reconciled',
+      source: 'websocket', target: 'receiver.0.freq_mode.freq_hz',
+      timestampMonotonic: 12.5, message: 'confirmed by matching observation',
+      details: { revision: 5, observationSeq: 9 },
+    });
+    const received: CommandReconciliationDeliveryEvent[] = [];
+    const throwing = vi.fn(() => { throw new Error('faulty consumer'); });
+    ch.onCommandReconciliationDelivery(throwing);
+    ch.onCommandReconciliationDelivery((event) => received.push(event));
+    ch.send({ type: 'cmd', name: 'set_freq', id: 'robust', params: {} });
+    expect(() => instances[0].simulateMessage(frame)).not.toThrow();
+    expect(throwing).toHaveBeenCalledTimes(1);
+    expect(received).toEqual([{
+      commandId: 'robust', kind: 'reconciled', originalEpoch: 1, eventEpoch: 1,
+      revision: 5, observationSeq: 9,
+    }]);
+
+    instances[0].simulateMessage(frame);
+    expect(throwing).toHaveBeenCalledTimes(1);
+    expect(received).toHaveLength(1);
+  });
+
+  it('deduplicates reentrant reconciliation delivery over a stable subscriber snapshot', async () => {
+    const { WsChannel } = await import('../ws-client');
+    const ch = new WsChannel();
+    ch.connect('ws://test');
+    instances[0].simulateOpen();
+    const frame = JSON.stringify({
+      type: 'command_lifecycle', commandId: 'reentrant', state: 'reconciled',
+      source: 'websocket', target: 'receiver.0.freq_mode.freq_hz',
+      timestampMonotonic: 12.5, message: 'confirmed by matching observation',
+      details: { revision: 5, observationSeq: 9 },
+    });
+    const first: CommandReconciliationDeliveryEvent[] = [];
+    const second: CommandReconciliationDeliveryEvent[] = [];
+    const added: CommandReconciliationDeliveryEvent[] = [];
+    let armed = true;
+    ch.onCommandReconciliationDelivery((event) => {
+      first.push(event);
+      if (armed) {
+        armed = false;
+        instances[0].simulateMessage(frame);
+        unsubscribeSecond();
+        ch.onCommandReconciliationDelivery((e) => added.push(e));
+      }
+    });
+    const unsubscribeSecond = ch.onCommandReconciliationDelivery((event) => second.push(event));
+    ch.send({ type: 'cmd', name: 'set_freq', id: 'reentrant', params: {} });
+    instances[0].simulateMessage(frame);
+
+    const delivered = {
+      commandId: 'reentrant', kind: 'reconciled', originalEpoch: 1, eventEpoch: 1,
+      revision: 5, observationSeq: 9,
+    };
+    expect(first).toEqual([delivered]);
+    expect(second).toEqual([delivered]);
+    expect(added).toEqual([]);
+
+    expect(() => { unsubscribeSecond(); unsubscribeSecond(); }).not.toThrow();
+
+    ch.send({ type: 'cmd', name: 'set_freq', id: 'reentrant', params: {} });
+    instances[0].simulateMessage(frame);
+    expect(first).toHaveLength(2);
+    expect(second).toHaveLength(1);
+    expect(added).toEqual([delivered]);
+  });
+
+  it('rejects malformed, stale, cancelled, and evicted lifecycle delivery', async () => {
+    const { WsChannel } = await import('../ws-client');
+    const ch = new WsChannel();
+    const events: CommandLifecycleDeliveryEvent[] = [];
+    ch.onCommandLifecycleDelivery((event) => events.push(event));
+    ch.connect('ws://test');
+    instances[0].simulateOpen();
+    ch.send({ type: 'cmd', name: 'set_freq', id: 'valid', params: {} });
+    const invalid: unknown[] = [null, [], 'text',
+      { type: 'command_lifecycle', commandId: '', state: 'failed' },
+      { type: 'command_lifecycle', commandId: 'unknown', state: 'failed' },
+      { type: 'command_lifecycle', commandId: 'valid', state: 'other' },
+      { type: 'command_lifecycle', commandId: 'valid', state: 'queued', details: null },
+      { type: 'command_lifecycle', commandId: 'valid', state: 'queued', details: { heldBy: 'other', reason: 'tx_active', expiresAt: 1 } },
+      { type: 'command_lifecycle', commandId: 'valid', state: 'queued', details: { heldBy: 'tx_interlock', reason: 'tx_active', expiresAt: true } },
+      { type: 'command_lifecycle', commandId: 'valid', state: 'queued', details: { heldBy: 'tx_interlock', reason: 'tx_active', expiresAt: -1 } },
+      { type: 'command_lifecycle', commandId: 'valid', state: 'failed', message: 3 },
+    ];
+    for (const frame of invalid) instances[0].simulateMessage(JSON.stringify(frame));
+    expect(events).toEqual([]);
+
+    ch.cancelNonPtt('provider changed');
+    instances[0].simulateMessage(JSON.stringify({ type: 'command_lifecycle', commandId: 'valid', state: 'failed', message: null }));
+    for (let i = 0; i <= 100; i += 1) {
+      ch.send({ type: 'cmd', name: 'set_freq', id: `evict-${i}`, params: {} });
+      instances[0].simulateMessage(JSON.stringify({ type: 'response', id: `evict-${i}`, ok: true }));
+    }
+    instances[0].simulateMessage(JSON.stringify({ type: 'command_lifecycle', commandId: 'evict-0', state: 'failed' }));
+    instances[0].simulateMessage(JSON.stringify({ type: 'command_lifecycle', commandId: 'evict-100', state: 'failed' }));
+    expect(events).toEqual([{ commandId: 'evict-100', kind: 'failed', originalEpoch: 1, eventEpoch: 1 }]);
+    expect(instances[0].sent).toHaveLength(102);
+  });
+
+  it('fences lifecycle correlation to its sending socket without consuming responses', async () => {
+    const { WsChannel } = await import('../ws-client');
+    const ch = new WsChannel();
+    const lifecycle: CommandLifecycleDeliveryEvent[] = [];
+    const ordinary: CommandDeliveryEvent[] = [];
+    ch.onCommandLifecycleDelivery((event) => lifecycle.push(event));
+    ch.onCommandDelivery((event) => ordinary.push(event));
+    ch.send({ type: 'cmd', name: 'set_freq', id: 'offline', params: {} });
+    ch.connect('ws://test');
+    instances[0].simulateOpen();
+    instances[0].simulateMessage(JSON.stringify({ type: 'command_lifecycle', commandId: 'offline', state: 'failed' }));
+    ch.send({ type: 'cmd', name: 'set_freq', id: 'before-response', params: {} });
+    instances[0].simulateMessage(JSON.stringify({ type: 'command_lifecycle', commandId: 'before-response', state: 'failed' }));
+    instances[0].simulateMessage(JSON.stringify({ type: 'response', id: 'before-response', ok: true }));
+    ch.send({ type: 'cmd', name: 'set_freq', id: 'sync-error', params: {} });
+    instances[0].simulateMessage(JSON.stringify({ type: 'response', id: 'sync-error', ok: false }));
+    instances[0].simulateMessage(JSON.stringify({ type: 'command_lifecycle', commandId: 'sync-error', state: 'failed' }));
+    ch.send({ type: 'cmd', name: 'set_freq', id: 'reused', params: {} });
+    instances[0].simulateClose();
+    vi.advanceTimersByTime(1_300);
+    instances[1].simulateOpen();
+    ch.send({ type: 'cmd', name: 'set_freq', id: 'reused', params: {} });
+    const terminal = JSON.stringify({ type: 'command_lifecycle', commandId: 'reused', state: 'failed' });
+    instances[0].simulateMessage(terminal);
+    instances[1].simulateMessage(terminal);
+
+    expect(lifecycle).toEqual([
+      { commandId: 'offline', kind: 'failed', originalEpoch: 0, eventEpoch: 1 },
+      { commandId: 'before-response', kind: 'failed', originalEpoch: 1, eventEpoch: 1 },
+      { commandId: 'reused', kind: 'failed', originalEpoch: 2, eventEpoch: 2 },
+    ]);
+    expect(ordinary).toContainEqual(expect.objectContaining({ commandId: 'before-response', kind: 'response-ok' }));
+    expect(ordinary).toContainEqual(expect.objectContaining({ commandId: 'sync-error', kind: 'response-error' }));
+  });
+
+  it('rejects the 101st direct generic send before the wire without evicting correlation', async () => {
+    const { WsChannel } = await import('../ws-client');
+    const ch = new WsChannel();
+    const events: CommandDeliveryEvent[] = [];
+    ch.onCommandDelivery((event) => events.push(event));
+    ch.connect('ws://test');
+    instances[0].simulateOpen();
+
+    for (let i = 0; i < 100; i += 1) {
+      expect(ch.send({
+        type: 'cmd', name: 'set_freq', id: `pending-${i}`, params: { freq: i },
+      })).toBe(true);
+    }
+    expect(ch.send({
+      type: 'cmd', name: 'set_freq', id: 'overflow', params: { freq: 101 },
+    })).toBe(false);
+    expect(instances[0].sent).toHaveLength(100);
+    expect(events.at(-1)).toMatchObject({
+      commandId: 'overflow', kind: 'error', error: 'delivery tracking capacity exceeded',
+    });
+
+    for (let i = 0; i < 100; i += 1) {
+      instances[0].simulateMessage(JSON.stringify({ type: 'response', id: `pending-${i}`, ok: true }));
+    }
+    expect(events.filter((event) => event.kind === 'response-ok')).toHaveLength(100);
+    expect(events).not.toContainEqual(expect.objectContaining({ commandId: 'pending-0', kind: 'error' }));
+  });
+
+  it('cancels generic correlation at disconnect and ignores stale socket results', async () => {
+    const { WsChannel } = await import('../ws-client');
+    const ch = new WsChannel();
+    const events: CommandDeliveryEvent[] = [];
+    ch.onCommandDelivery((event) => events.push(event));
+    ch.connect('ws://test');
+    instances[0].simulateOpen();
+    ch.send({ type: 'cmd', name: 'set_vfo', id: 'old', params: { vfo: 'B' } });
+    instances[0].simulateClose();
+    vi.advanceTimersByTime(1_300);
+    instances[1].simulateOpen();
+    instances[0].simulateMessage(JSON.stringify({ type: 'response', id: 'old', ok: true }));
+
+    expect(events).toEqual([
+      { commandId: 'old', kind: 'transport-sent', originalEpoch: 1, eventEpoch: 1 },
+    ]);
+  });
+
+  it('preserves queued OFF identity and distinguishes stale reconnect events', async () => {
+    const { WsChannel } = await import('../ws-client');
+    const ch = new WsChannel();
+    const events: CommandDeliveryEvent[] = [];
+    ch.onCommandDelivery((event) => events.push(event));
+
+    ch.send({ type: 'cmd', name: 'ptt_off', id: 'off-1', params: {} });
+    ch.send({ type: 'cmd', name: 'ptt', id: 'off-2', params: { state: false } });
+    expect(events).toEqual([]);
+    ch.connect('ws://test');
+    instances[0].simulateOpen();
+    expect(events[0]).toMatchObject({
+      commandId: 'off-2', kind: 'transport-sent', originalEpoch: 0, eventEpoch: 1,
+    });
+
+    instances[0].simulateClose();
+    ch.send({ type: 'cmd', name: 'ptt_off', id: 'off-3', params: {} });
+    vi.advanceTimersByTime(1300);
+    instances[1].simulateOpen();
+    instances[0].simulateMessage(JSON.stringify({ type: 'ack', id: 'off-2' }));
+    instances[0].simulateMessage(JSON.stringify({ type: 'ack', id: 'off-2' }));
+    instances[0].simulateMessage(JSON.stringify({ type: 'response', id: 'off-2', ok: true }));
+    instances[0].simulateMessage(JSON.stringify({ type: 'response', id: 'off-2', ok: true }));
+    instances[0].simulateMessage(JSON.stringify({ type: 'error', id: 'off-2', message: 'stale' }));
+    instances[0].simulateMessage(JSON.stringify({ type: 'error', id: 'off-2', message: 'stale' }));
+
+    expect(events.slice(1)).toMatchObject([
+      { commandId: 'off-3', kind: 'transport-sent', originalEpoch: 1, eventEpoch: 2 },
+      { commandId: 'off-2', kind: 'ack', originalEpoch: 0, eventEpoch: 1 },
+      { commandId: 'off-2', kind: 'response-ok', originalEpoch: 0, eventEpoch: 1 },
+      { commandId: 'off-2', kind: 'error', originalEpoch: 0, eventEpoch: 1 },
+    ]);
+  });
+
+  it('reports a synchronous PTT send failure without a sent event', async () => {
+    const { WsChannel } = await import('../ws-client');
+    const ch = new WsChannel();
+    const events: CommandDeliveryEvent[] = [];
+    ch.onCommandDelivery((event) => events.push(event));
+    ch.connect('ws://test');
+    instances[0].simulateOpen();
+    instances[0].send = () => { throw new Error('socket failed'); };
+
+    expect(ch.send({ type: 'cmd', name: 'ptt_on', id: 'on', params: {} })).toBe(false);
+    expect(events).toEqual([{
+      commandId: 'on', kind: 'error', originalEpoch: 1, eventEpoch: 1, error: 'socket failed',
+    }]);
+  });
+
+  it('routes binary messages to onBinary handlers', async () => {
+    const { WsChannel } = await import('../ws-client');
+    const ch = new WsChannel();
+    const buffers: ArrayBuffer[] = [];
+    ch.onBinary((b) => buffers.push(b));
+
+    ch.connect('ws://test');
+    instances[0].simulateOpen();
+    const buf = new ArrayBuffer(8);
+    instances[0].simulateMessage(buf);
+
+    expect(buffers).toHaveLength(1);
+    expect(buffers[0]).toBe(buf);
+  });
+
+  it('does not crash on malformed JSON frames', async () => {
+    const { WsChannel } = await import('../ws-client');
+    const ch = new WsChannel();
+    const received: WsIncoming[] = [];
+    ch.onMessage((m) => received.push(m));
+
+    ch.connect('ws://test');
+    instances[0].simulateOpen();
+    instances[0].simulateMessage('not-json{{');
+
+    expect(received).toHaveLength(0);
+  });
+
+  it('buffers commands when disconnected and drains on reconnect', async () => {
+    const { WsChannel } = await import('../ws-client');
+    const ch = new WsChannel();
+
+    const cmd: WsCommand = { type: 'cmd', name: 'set_freq', id: '1', params: { freqHz: 14074000 } };
+    const queued = ch.send(cmd);
+    expect(queued).toBe(false);
+
+    ch.connect('ws://test');
+    instances[0].simulateOpen();
+
+    // queue drained on open
+    expect(instances[0].sent).toHaveLength(1);
+    expect(JSON.parse(instances[0].sent[0])).toMatchObject({ type: 'cmd', name: 'set_freq' });
+  });
+
+  it('reconnects with exponential backoff after close', async () => {
+    const { WsChannel } = await import('../ws-client');
+    const ch = new WsChannel();
+
+    ch.connect('ws://test');
+    instances[0].simulateOpen();
+    instances[0].simulateClose();
+
+    expect(ch.state).toBe('disconnected');
+    expect(instances).toHaveLength(1);
+
+    // 1st backoff = 1s ± 20% jitter
+    vi.advanceTimersByTime(1300);
+    expect(instances).toHaveLength(2);
+    expect(ch.state).toBe('reconnecting');
+
+    instances[1].simulateOpen();
+    expect(ch.state).toBe('connected');
+  });
+
+  it('does NOT reconnect after intentional disconnect()', async () => {
+    const { WsChannel } = await import('../ws-client');
+    const ch = new WsChannel();
+
+    ch.connect('ws://test');
+    instances[0].simulateOpen();
+    ch.disconnect();
+
+    vi.advanceTimersByTime(5000);
+    expect(instances).toHaveLength(1);
+    expect(ch.state).toBe('disconnected');
+  });
+
+  it('snapshots control session subscribers for each transition', async () => {
+    const { WsChannel } = await import('../ws-client');
+    const ch = new WsChannel();
+    const order: string[] = [];
+    let added = false;
+    ch.onSessionTransition((transition) => {
+      order.push(`first:${transition.state}`);
+      if (!added) {
+        added = true;
+        ch.onSessionTransition((next) => order.push(`late:${next.state}`));
+      }
+    });
+    ch.onSessionTransition((transition) => order.push(`second:${transition.state}`));
+
+    ch.connect('ws://test');
+    expect(order).toEqual(['first:connecting', 'second:connecting']);
+
+    instances[0].simulateOpen();
+    expect(order).toEqual([
+      'first:connecting',
+      'second:connecting',
+      'first:connected',
+      'second:connected',
+      'late:connected',
+    ]);
+  });
+
+  it('serializes reentrant transitions and aborts open work after callback disconnect', async () => {
+    const { WsChannel } = await import('../ws-client');
+    const ch = new WsChannel();
+    const order: string[] = [];
+    const deliveries: CommandDeliveryEvent[] = [];
+    ch.onSessionTransition((transition) => {
+      order.push(`first:${transition.state}`);
+      if (transition.state === 'connected') ch.disconnect();
+    });
+    ch.onSessionTransition((transition) => order.push(`second:${transition.state}`));
+    ch.onCommandDelivery((event) => deliveries.push(event));
+
+    expect(ch.send({ type: 'cmd', name: 'ptt_off', id: 'off', params: {} })).toBe(false);
+    ch.connect('ws://test');
+    instances[0].simulateOpen();
+    expect(vi.getTimerCount()).toBe(0);
+    vi.advanceTimersByTime(30_001);
+
+    expect(order).toEqual([
+      'first:connecting',
+      'second:connecting',
+      'first:connected',
+      'second:connected',
+      'first:disconnected',
+      'second:disconnected',
+    ]);
+    expect(ch.state).toBe('disconnected');
+    expect(instances).toHaveLength(1);
+    expect(instances[0].sent).toEqual([]);
+    expect(deliveries).toEqual([]);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('closes and reconnects when the server stays silent past the heartbeat timeout', async () => {
+    const { WsChannel } = await import('../ws-client');
+    const ch = new WsChannel();
+    const states: string[] = [];
+    ch.onStateChange((s) => states.push(s));
+
+    ch.connect('ws://test');
+    instances[0].simulateOpen();
+    expect(ch.state).toBe('connected');
+
+    // The client's own ping at 15 s must not count as proof the server is alive.
+    vi.advanceTimersByTime(29_999);
+    const pingFrames = instances[0].sent
+      .map((data) => JSON.parse(data))
+      .filter((msg) => msg.type === 'ping');
+    expect(pingFrames).toHaveLength(1);
+    expect(ch.state).toBe('connected');
+
+    vi.advanceTimersByTime(1);
+    expect(instances[0].readyState).toBe(MockWebSocket.CLOSED);
+    expect(ch.state).toBe('disconnected');
+
+    // First backoff is at most 1.2 s (calcBackoff jitter).
+    vi.advanceTimersByTime(1_300);
+    expect(instances).toHaveLength(2);
+    expect(ch.state).toBe('reconnecting');
+
+    instances[1].simulateOpen();
+    expect(ch.state).toBe('connected');
+    expect(states).toEqual(['connecting', 'connected', 'disconnected', 'reconnecting', 'connected']);
+  });
+
+  it('stays connected through server silence while the server answers keepalive pings', async () => {
+    const { WsChannel } = await import('../ws-client');
+    const ch = new WsChannel();
+
+    ch.connect('ws://test');
+    instances[0].answersPings = true;
+    instances[0].simulateOpen();
+
+    vi.advanceTimersByTime(120_000);
+
+    expect(ch.state).toBe('connected');
+    expect(instances).toHaveLength(1);
+  });
+
+  it("a stale socket's frame does not re-arm or close the newer socket", async () => {
+    const { WsChannel } = await import('../ws-client');
+    const ch = new WsChannel();
+
+    ch.connect('ws://test');
+    const stale = instances[0];
+    stale.simulateOpen();
+    stale.simulateClose();
+    vi.advanceTimersByTime(1_300); // first backoff is at most 1.2 s (calcBackoff jitter)
+    expect(instances).toHaveLength(2);
+    expect(instances[1].readyState).toBe(MockWebSocket.CONNECTING);
+    expect(ch.state).toBe('reconnecting');
+
+    stale.simulateMessage('{}');
+    vi.advanceTimersByTime(30_000);
+
+    expect(instances).toHaveLength(2);
+    expect(instances[1].readyState).toBe(MockWebSocket.CONNECTING);
+    expect(ch.state).toBe('reconnecting');
+  });
+
+  it('binary and malformed text frames re-arm the heartbeat', async () => {
+    const { WsChannel } = await import('../ws-client');
+
+    const framesKeepTheSocketAlive = (deliver: (socket: MockWebSocket) => void) => {
+      const base = instances.length;
+      const ch = new WsChannel();
+      ch.connect('ws://test');
+      const socket = instances[base];
+      socket.answersPings = false;
+      socket.simulateOpen();
+      for (let i = 0; i < 4; i++) {
+        vi.advanceTimersByTime(20_000);
+        deliver(socket);
+      }
+      expect(ch.state).toBe('connected');
+      expect(instances).toHaveLength(base + 1);
+      vi.advanceTimersByTime(30_000);
+      expect(socket.readyState).toBe(MockWebSocket.CLOSED);
+      expect(ch.state).toBe('disconnected');
+      ch.disconnect();
+    };
+
+    framesKeepTheSocketAlive((socket) => socket.simulateMessage(new ArrayBuffer(1)));
+    framesKeepTheSocketAlive((socket) => socket.simulateMessage('not json'));
+  });
+
+  it('resets heartbeat timer on each incoming message', async () => {
+    const { WsChannel } = await import('../ws-client');
+    const ch = new WsChannel();
+
+    ch.connect('ws://test');
+    instances[0].simulateOpen();
+
+    // Five frames 20 s apart: each gap is under the 30 s timeout, but the
+    // 100 s total far exceeds one timeout — only re-arming on every frame
+    // keeps the connection alive.
+    for (let i = 0; i < 5; i++) {
+      vi.advanceTimersByTime(20_000);
+      instances[0].simulateMessage(JSON.stringify({ type: 'ack', id: `${i}` }));
+    }
+    expect(ch.state).toBe('connected');
+    expect(instances).toHaveLength(1);
+
+    vi.advanceTimersByTime(30_000);
+    expect(instances[0].readyState).toBe(MockWebSocket.CLOSED);
+    expect(ch.state).toBe('disconnected');
+    // Cleanup: the close left a reconnect timer armed; disconnect() stops
+    // this channel's still-live visibilitychange listener (document
+    // listeners outlive the `it` block) from reconnecting during a later
+    // test's visibilitychange dispatch.
+    ch.disconnect();
+  });
+
+  it('a message stream does not re-arm the heartbeat timer per message (MOR-4213)', async () => {
+    const { WsChannel } = await import('../ws-client');
+    const ch = new WsChannel();
+
+    ch.connect('ws://test');
+    instances[0].simulateOpen();
+    const armed = vi.spyOn(globalThis, 'setTimeout');
+    const cleared = vi.spyOn(globalThis, 'clearTimeout');
+    // 40 messages a second for 2 s, the measured state-channel rate.
+    for (let i = 0; i < 80; i++) {
+      vi.advanceTimersByTime(25);
+      instances[0].simulateMessage(JSON.stringify({ type: 'ack', id: `${i}` }));
+    }
+    const heartbeatArms = armed.mock.calls.filter(([, delay]) => delay === 30_000);
+    expect(heartbeatArms).toHaveLength(0);
+    expect(cleared).not.toHaveBeenCalled();
+    armed.mockRestore();
+    cleared.mockRestore();
+    // The deadline still follows the newest frame.
+    vi.advanceTimersByTime(29_999);
+    expect(ch.state).toBe('connected');
+    vi.advanceTimersByTime(1);
+    expect(instances[0].readyState).toBe(MockWebSocket.CLOSED);
+    ch.disconnect();
+  });
+
+  it('disconnect stops the keepalive and no ping is sent afterwards', async () => {
+    const { WsChannel } = await import('../ws-client');
+    const ch = new WsChannel();
+
+    ch.connect('ws://test');
+    instances[0].simulateOpen();
+    ch.disconnect();
+
+    expect(vi.getTimerCount()).toBe(0);
+    vi.advanceTimersByTime(60_000);
+    expect(instances[0].sent).toEqual([]);
+  });
+
+  it('a server-side close stops the keepalive interval', async () => {
+    const { WsChannel } = await import('../ws-client');
+    const ch = new WsChannel();
+
+    ch.connect('ws://test');
+    instances[0].simulateOpen();
+    instances[0].simulateClose();
+
+    // After the close only the reconnect timer should remain: onclose
+    // clears the heartbeat timeout and stops the keepalive interval.
+    expect(vi.getTimerCount()).toBe(1);
+    ch.disconnect();
+  });
+
+  it('a late close from a replaced socket does not stop the new keepalive', async () => {
+    const { WsChannel } = await import('../ws-client');
+    const ch = new WsChannel();
+
+    ch.connect('ws://test');
+    const stale = instances[0];
+    stale.simulateOpen();
+    stale.simulateClose();
+    vi.advanceTimersByTime(1_300); // first backoff is at most 1.2 s (calcBackoff jitter)
+    const current = instances[1];
+    current.simulateOpen();
+
+    // Late close event from the already-replaced socket: it must not stop
+    // the channel's keepalive, which now belongs to the new socket.
+    stale.simulateClose(1000, 'delayed close', true);
+    vi.advanceTimersByTime(15_000);
+
+    const pingFrames = current.sent
+      .map((data) => JSON.parse(data))
+      .filter((msg) => msg.type === 'ping');
+    expect(pingFrames).toHaveLength(1);
+    ch.disconnect();
+  });
+
+  it('no ping is sent while reconnecting after a server-side close', async () => {
+    const { WsChannel } = await import('../ws-client');
+    const ch = new WsChannel();
+
+    ch.connect('ws://test');
+    instances[0].simulateOpen();
+    instances[0].simulateClose();
+    vi.advanceTimersByTime(120_000);
+
+    // onclose stops the keepalive interval and clears the heartbeat timeout,
+    // so once the reconnect backoff has fired, no channel timer is left.
+    expect(vi.getTimerCount()).toBe(0);
+    expect(instances).toHaveLength(2);
+    for (const socket of instances) {
+      const pingFrames = socket.sent
+        .map((data) => JSON.parse(data))
+        .filter((msg) => msg.type === 'ping');
+      expect(pingFrames).toHaveLength(0);
+    }
+  });
+
+  it('removes message handler via returned cleanup fn', async () => {
+    const { WsChannel } = await import('../ws-client');
+    const ch = new WsChannel();
+    const received: WsIncoming[] = [];
+    const unsub = ch.onMessage((m) => received.push(m));
+
+    ch.connect('ws://test');
+    instances[0].simulateOpen();
+    instances[0].simulateMessage(JSON.stringify({ type: 'ack', id: '1' }));
+    expect(received).toHaveLength(1);
+
+    unsub();
+    instances[0].simulateMessage(JSON.stringify({ type: 'ack', id: '2' }));
+    expect(received).toHaveLength(1); // no new messages
+  });
+});
+
+describe('control channel singleton', () => {
+  let originalWebSocket: typeof WebSocket;
+
+  beforeEach(() => {
+    instances.length = 0;
+    vi.useFakeTimers();
+    originalWebSocket = globalThis.WebSocket;
+    // @ts-expect-error mock
+    globalThis.WebSocket = MockWebSocket;
+    vi.mocked(setWsConnected).mockClear();
+  });
+
+  afterEach(() => {
+    globalThis.WebSocket = originalWebSocket;
+    vi.useRealTimers();
+    vi.resetModules();
+  });
+
+  it('serializes the documented normalized AF/RF intents byte-for-byte', async () => {
+    const { connect } = await import('../ws-client');
+    const { dispatchRadioIntent } = await import('../../runtime/commands/radio-intents');
+    const vectors = normalizedLevelWireVectors();
+    connect('ws://test/api/v1/ws');
+    instances[0].simulateOpen();
+
+    for (const raw of vectors) {
+      const command = JSON.parse(raw) as {
+        name: 'set_af_level' | 'set_rf_power';
+        id: string;
+        params: Record<string, unknown>;
+      };
+      const params = { ...command.params };
+      if (command.name === 'set_af_level') delete params.level_unit;
+      dispatchRadioIntent({ name: command.name, id: command.id, params } as never);
+    }
+
+    expect(instances[0].sent).toEqual(vectors);
+  });
+
+  it('preserves normalized marker bytes through the offline reconnect queue', async () => {
+    const { WsChannel } = await import('../ws-client');
+    const ch = new WsChannel();
+    const queued = {
+      type: 'cmd', name: 'set_freq', id: 'marker-reconnect',
+      params: { level: 0.5, level_unit: 'normalized' },
+    } as const;
+
+    expect(ch.send(queued)).toBe(false);
+    ch.connect('ws://test/api/v1/ws');
+    instances[0].simulateOpen();
+
+    expect(instances[0].sent).toEqual([JSON.stringify(queued)]);
+  });
+
+  it('publishes each control session epoch before draining a pinned OFF', async () => {
+    const {
+      connect,
+      disconnect,
+      onCommandDelivery,
+      onControlSessionTransition,
+      sendCommand,
+    } = await import('../ws-client');
+    const transitions: ControlSessionTransition[] = [];
+    const order: string[] = [];
+    onControlSessionTransition((transition) => {
+      transitions.push(transition);
+      order.push(`session:${transition.state}:${transition.epoch}`);
+    });
+    onCommandDelivery((event) => {
+      order.push(`delivery:${event.commandId}:${event.eventEpoch}`);
+    });
+
+    expect(sendCommand('ptt_off', {}, 'off-1')).toBe(false);
+    connect('ws://test/api/v1/ws');
+    instances[0].simulateOpen();
+    instances[0].simulateClose();
+    expect(sendCommand('ptt_off', {}, 'off-2')).toBe(false);
+    vi.advanceTimersByTime(1300);
+    instances[1].simulateOpen();
+    disconnect();
+
+    expect(transitions).toEqual([
+      { state: 'connecting', epoch: 0 },
+      { state: 'connected', epoch: 1 },
+      { state: 'disconnected', epoch: 1 },
+      { state: 'reconnecting', epoch: 1 },
+      { state: 'connected', epoch: 2 },
+      { state: 'disconnected', epoch: 2 },
+    ]);
+    expect(order).toEqual([
+      'session:connecting:0',
+      'session:connected:1',
+      'delivery:off-1:1',
+      'session:disconnected:1',
+      'session:reconnecting:1',
+      'session:connected:2',
+      'delivery:off-2:2',
+      'session:disconnected:2',
+    ]);
+  });
+
+  it('unsubscribes the control session transition handler idempotently', async () => {
+    const { connect, disconnect, onControlSessionTransition } = await import('../ws-client');
+    const transitions: ControlSessionTransition[] = [];
+    const unsubscribe = onControlSessionTransition((transition) => transitions.push(transition));
+
+    connect('ws://test/api/v1/ws');
+    instances[0].simulateOpen();
+    unsubscribe();
+    unsubscribe();
+    disconnect();
+    connect('ws://test/api/v1/ws');
+    instances[1].simulateOpen();
+
+    expect(transitions).toEqual([
+      { state: 'connecting', epoch: 0 },
+      { state: 'connected', epoch: 1 },
+    ]);
+  });
+
+  it('clears canonical stores before publishing a disconnected session', async () => {
+    const { connect, disconnect, onControlSessionTransition } = await import('../ws-client');
+    radioStoreMock.current = makeState();
+    vi.mocked(resetRadioState).mockClear();
+    vi.mocked(clearCapabilities).mockClear();
+    const observed: Array<{ state: ServerStateWithObservation | null; capsCleared: boolean }> = [];
+    const unsubscribe = onControlSessionTransition((transition) => {
+      if (transition.state === 'disconnected') observed.push({
+        state: radioStoreMock.current,
+        capsCleared: vi.mocked(clearCapabilities).mock.calls.length === 1,
+      });
+    });
+
+    connect('ws://test/api/v1/ws');
+    instances[0].simulateOpen();
+    instances[0].simulateClose();
+
+    expect(observed).toEqual([{ state: null, capsCleared: true }]);
+    unsubscribe();
+    disconnect();
+  });
+
+  it('keeps the seeded snapshot byte-identical for representative three-argument dispatches', async () => {
+    const { connect, sendCommand } = await import('../ws-client');
+    connect('ws://test/api/v1/ws');
+    instances[0].simulateOpen();
+    sendStateUpdate(instances[0], fullEnvelope(makeState({
+      revision: 1,
+      main: makeReceiver({ freqHz: 14_074_000 }),
+      scopeControls: makeScopeControls(),
+    })));
+    const before = JSON.stringify(radioStoreMock.current);
+    const sentBefore = instances[0].sent.length;
+
+    const representatives: ReadonlyArray<readonly [string, Record<string, unknown>]> = [
+      ['set_freq', { freq: 7_074_000 }],
+      ['set_split', { on: true }],
+      ['set_af_level', { level: 42 }],
+      ['set_vfo', { vfo: 'SUB' }],
+    ];
+    representatives.forEach(([name, params], index) => {
+      expect(sendCommand(name, params, `representative-${index}`)).toBe(true);
+    });
+
+    expect(JSON.stringify(radioStoreMock.current)).toBe(before);
+    expect(instances[0].sent.slice(sentBefore).map((frame) => JSON.parse(frame))).toEqual(
+      representatives.map(([name, params], index) => ({
+        type: 'cmd', name, id: `representative-${index}`, params,
+      })),
+    );
+  });
+
+  it('never writes the Store for any command in the legacy optimistic family', async () => {
+    const { connect, sendCommand } = await import('../ws-client');
+    connect('ws://test/api/v1/ws');
+    instances[0].simulateOpen();
+    sendStateUpdate(instances[0], fullEnvelope(makeState({
+      revision: 1,
+      main: makeReceiver({ freqHz: 14_074_000, activeSlot: 'A' }),
+      scopeControls: makeScopeControls(),
+    })));
+    const before = JSON.stringify(radioStoreMock.current);
+    const sentBefore = instances[0].sent.length;
+
+    LEGACY_OPTIMISTIC_FAMILY.forEach(([name, params], index) => {
+      expect(sendCommand(name, params, `family-${index}`)).toBe(true);
+    });
+
+    expect(JSON.stringify(radioStoreMock.current)).toBe(before);
+    expect(instances[0].sent.slice(sentBefore).map((frame) => JSON.parse(frame))).toEqual(
+      LEGACY_OPTIMISTIC_FAMILY.map(([name, params], index) => ({
+        type: 'cmd', name, id: `family-${index}`, params,
+      })),
+    );
+  });
+
+  it('ignores a legacy fourth optimistic argument in either direction', async () => {
+    const { connect, sendCommand } = await import('../ws-client');
+    connect('ws://test/api/v1/ws');
+    instances[0].simulateOpen();
+    sendStateUpdate(instances[0], fullEnvelope(makeState({
+      revision: 1,
+      main: makeReceiver({ freqHz: 14_074_000 }),
+    })));
+    const before = JSON.stringify(radioStoreMock.current);
+
+    const legacySend = sendCommand as unknown as (
+      name: string,
+      params: Record<string, unknown>,
+      id?: string,
+      options?: { optimistic?: boolean },
+    ) => boolean;
+    expect(legacySend('set_freq', { freq: 7_074_000 }, 'legacy-opt-in', { optimistic: true })).toBe(true);
+    expect(legacySend('set_split', { on: true }, 'legacy-opt-out', { optimistic: false })).toBe(true);
+
+    expect(JSON.stringify(radioStoreMock.current)).toBe(before);
+  });
+
+  it('rejects degraded-health non-PTT dispatch with a truthful delivery error', async () => {
+    // The health gate is scoped to a LIVE transport (MOR-1526 R2): with the
+    // socket open, `!isLiveRadioAvailable()` reflects continuously refreshed
+    // facts, so the refusal is honest. (Offline dispatch is governed by the
+    // transport queue policy instead — see the queue-verdict cases.)
+    vi.mocked(isLiveRadioAvailable).mockReturnValue(false);
+    const { connect, onCommandDelivery, sendCommand } = await import('../ws-client');
+    connect('ws://test/api/v1/ws');
+    instances[0].simulateOpen();
+    const events: CommandDeliveryEvent[] = [];
+    const unsubscribe = onCommandDelivery((event) => events.push(event));
+
+    expect(sendCommand('set_freq', { freq: 14_074_000 }, 'degraded-freq')).toBe(false);
+
+    expect(events).toEqual([{
+      commandId: 'degraded-freq',
+      kind: 'error',
+      originalEpoch: 1,
+      eventEpoch: 1,
+      error: 'radio health is degraded',
+    }]);
+    expect(instances[0].sent.map((frame) => JSON.parse(frame))).toEqual([]);
+    unsubscribe();
+  });
+
+  it('queues idempotent offline dispatch under the transport policy even while health facts are reset (MOR-1526 R2)', async () => {
+    // Transport-offline is NOT the health gate's jurisdiction: after a real
+    // disconnect the 'disconnected' transition resets rigConnected/radioReady/
+    // radioHealth (F1/F2), so `isLiveRadioAvailable()` is false — but the
+    // command must still ride WsChannel.send's offline policy (idempotent
+    // keep-latest queue), not be refused as "health degraded". This is what
+    // keeps the reconnect-dekey matrix's OFF-first ordering assertion
+    // non-vacuous and preserves queued tuning across brief WS blips.
+    vi.mocked(isLiveRadioAvailable).mockReturnValue(false);
+    const { onCommandDelivery, onMessage, sendCommand, connect } = await import('../ws-client');
+    const events: CommandDeliveryEvent[] = [];
+    const notices: unknown[] = [];
+    onCommandDelivery((event) => events.push(event));
+    onMessage((msg) => { if (msg.type === 'notification') notices.push(msg); });
+
+    expect(sendCommand('set_freq', { freq: 14_074_000 }, 'offline-freq')).toBe(false);
+
+    // No health refusal, no toast — the command is queued, not rejected.
+    expect(events).toEqual([]);
+    expect(notices).toEqual([]);
+
+    connect('ws://test/api/v1/ws');
+    instances[0].simulateOpen();
+    expect(instances[0].sent.map((frame) => JSON.parse(frame))).toMatchObject([
+      { type: 'cmd', name: 'set_freq', id: 'offline-freq' },
+    ]);
+  });
+
+  it('propagates the transport queue verdict for offline non-idempotent dispatch', async () => {
+    const { onCommandDelivery, sendCommand } = await import('../ws-client');
+    const events: CommandDeliveryEvent[] = [];
+    const unsubscribe = onCommandDelivery((event) => events.push(event));
+
+    expect(sendCommand('vfo_swap', {}, 'offline-swap')).toBe(false);
+
+    expect(events).toEqual([{
+      commandId: 'offline-swap',
+      kind: 'error',
+      originalEpoch: 0,
+      eventEpoch: 0,
+      error: 'offline non-idempotent command rejected',
+    }]);
+    unsubscribe();
+  });
+
+  it('never mutates radio truth on dispatch; only a contradictory Observation changes it', async () => {
+    const { connect, sendCommand } = await import('../ws-client');
+    connect('ws://test/api/v1/ws');
+    instances[0].simulateOpen();
+    sendStateUpdate(instances[0], fullEnvelope(makeState({ revision: 1, main: makeReceiver({ freqHz: 14_074_000 }) })));
+
+    expect(sendCommand('set_freq', { freq: 7_074_000, receiver: 0 }, 'freq-contradiction')).toBe(true);
+    expect(radioStoreMock.current?.main.freqHz).toBe(14_074_000);
+
+    const observed = makeState({ revision: 2, main: makeReceiver({ freqHz: 14_076_000 }) });
+    sendStateUpdate(instances[0], deltaEnvelope(observed, { main: observed.main }));
+    instances[0].simulateMessage(JSON.stringify({ type: 'ack', id: 'freq-contradiction' }));
+    expect(radioStoreMock.current?.main.freqHz).toBe(14_076_000);
+  });
+
+  it('cancels in-flight generic delivery when provider generation is replaced', async () => {
+    const { connect, onCommandDelivery, sendCommand } = await import('../ws-client');
+    const events: CommandDeliveryEvent[] = [];
+    onCommandDelivery((event) => events.push(event));
+    connect('ws://test/api/v1/ws');
+    instances[0].simulateOpen();
+    sendStateUpdate(instances[0], fullEnvelope(makeState({ providerGeneration: 0 })));
+    sendCommand('set_freq', { freq: 14_074_000 }, 'provider-pending');
+    sendStateUpdate(instances[0], fullEnvelope(makeState({ providerGeneration: 1 })));
+
+    expect(events).toMatchObject([
+      { commandId: 'provider-pending', kind: 'transport-sent', originalEpoch: 1, eventEpoch: 1 },
+      { commandId: 'provider-pending', kind: 'error', cancelled: true, error: 'provider session replaced' },
+    ]);
+  });
+
+  it('fences an acknowledged successful command from matching replacement-provider evidence on the same socket', async () => {
+    const { connect, disconnect, getControlSession, onCommandDelivery } = await import('../ws-client');
+    const { dispatchRadioIntent } = await import('../../runtime/commands/radio-intents');
+    const lifecycle = await import('../../stores/commands.svelte');
+    const deliveries: CommandDeliveryEvent[] = [];
+    onCommandDelivery((event) => deliveries.push(event));
+    connect('ws://test/api/v1/ws');
+    instances[0].simulateOpen();
+    sendStateUpdate(instances[0], fullEnvelope(makeState({
+      providerGeneration: 0, revision: 4, observationSeq: 4,
+      main: makeReceiver({ filterWidth: 3000 }),
+      fieldStatus: { 'main.filterWidth': {
+        storePath: 'main.filterWidth', observed: true, freshness: 'fresh', availability: 'available',
+        lastObservedMonotonic: 4,
+      } },
+    })));
+
+    dispatchRadioIntent({
+      id: 'provider-acknowledged', name: 'set_filter_width',
+      params: { width: 3000, receiver: 0 },
+    });
+    instances[0].simulateMessage(JSON.stringify({ type: 'ack', id: 'provider-acknowledged' }));
+    instances[0].simulateMessage(JSON.stringify({
+      type: 'response', id: 'provider-acknowledged', ok: true,
+    }));
+    expect(lifecycle.getCommandLifecycle('provider-acknowledged', 1)).toMatchObject({
+      status: 'acknowledged', providerGeneration: 0,
+      ackFieldObservationTimes: { 'main.filterWidth': 4 },
+    });
+
+    sendStateUpdate(instances[0], fullEnvelope(makeState({
+      providerGeneration: 1, revision: 5, observationSeq: 5,
+      main: makeReceiver({ filterWidth: 3000 }),
+      fieldStatus: { 'main.filterWidth': {
+        storePath: 'main.filterWidth', observed: true, freshness: 'fresh', availability: 'available',
+        lastObservedMonotonic: 5,
+      } },
+    })));
+
+    expect(getControlSession().epoch).toBe(1);
+    expect(deliveries).not.toContainEqual(expect.objectContaining({
+      commandId: 'provider-acknowledged', cancelled: true,
+    }));
+    expect(lifecycle.getCommandLifecycle('provider-acknowledged', 1)).toMatchObject({
+      status: 'acknowledged', providerGeneration: 0,
+    });
+    lifecycle.resetCommandLifecycle();
+    disconnect();
+  });
+
+  it('keeps all 100 live correlations and rejects the 101st facade send', async () => {
+    const { connect, disconnect } = await import('../ws-client');
+    const { dispatchRadioIntent } = await import('../../runtime/commands/radio-intents');
+    const lifecycle = await import('../../stores/commands.svelte');
+    connect('ws://test/api/v1/ws');
+    instances[0].simulateOpen();
+
+    for (let i = 0; i < 100; i += 1) {
+      dispatchRadioIntent({ id: `pending-${i}`, name: 'set_freq', params: { freq: i } });
+    }
+    expect(() => dispatchRadioIntent({
+      id: 'overflow', name: 'set_freq', params: { freq: 101 },
+    })).toThrow(/capacity/i);
+
+    expect(instances[0].sent).toHaveLength(100);
+    expect(lifecycle.getCommandLifecycles()).toHaveLength(100);
+    expect(lifecycle.getCommandLifecycle('pending-0', 1)?.status).toBe('pending');
+    expect(lifecycle.getCommandLifecycle('overflow', 1)).toBeUndefined();
+    lifecycle.resetCommandLifecycle();
+    disconnect();
+  });
+
+  it('treats set_vfo as pure transport without fabricating receiver or slot truth', async () => {
+    const { connect, sendCommand } = await import('../ws-client');
+    connect('ws://test/api/v1/ws');
+    instances[0].simulateOpen();
+    sendStateUpdate(instances[0], fullEnvelope(makeState({
+      revision: 1,
+      active: 'MAIN',
+      main: makeReceiver({ activeSlot: 'A' }),
+    })));
+    const sentBefore = instances[0].sent.length;
+
+    expect(sendCommand('set_vfo', { vfo: 'B' }, 'vfo-slot')).toBe(true);
+    expect(sendCommand('set_vfo', { vfo: 'SUB' }, 'vfo-receiver')).toBe(true);
+
+    expect(radioStoreMock.current?.active).toBe('MAIN');
+    expect(radioStoreMock.current?.main.activeSlot).toBe('A');
+    expect(instances[0].sent.slice(sentBefore).map((frame) => JSON.parse(frame))).toEqual([
+      { type: 'cmd', name: 'set_vfo', id: 'vfo-slot', params: { vfo: 'B' } },
+      { type: 'cmd', name: 'set_vfo', id: 'vfo-receiver', params: { vfo: 'SUB' } },
+    ]);
+  });
+
+  it('sendCommand returns false and queues when not connected', async () => {
+    const { sendCommand, isConnected } = await import('../ws-client');
+    expect(isConnected()).toBe(false);
+    const result = sendCommand('ptt', { state: true });
+    expect(result).toBe(false);
+  });
+
+  it('sendCommand blocks live-radio commands while radio health is degraded', async () => {
+    vi.mocked(isLiveRadioAvailable).mockReturnValue(false);
+    const { connect, sendCommand } = await import('../ws-client');
+    connect('ws://test/api/v1/ws');
+    instances[0].simulateOpen();
+
+    const result = sendCommand('set_freq', { freq: 14074000, receiver: 0 });
+
+    expect(result).toBe(false);
+    expect(instances[0].sent.map((frame) => JSON.parse(frame))).toEqual([]);
+  });
+
+  it('allows open-socket PTT release aliases while radio health is degraded', async () => {
+    vi.mocked(isLiveRadioAvailable).mockReturnValue(false);
+    radioStoreMock.current = makeState({ ptt: true });
+    const { connect, sendCommand } = await import('../ws-client');
+    connect('ws://test/api/v1/ws');
+    instances[0].simulateOpen();
+
+    expect(sendCommand('ptt_on')).toBe(false);
+    expect(sendCommand('ptt', { state: true })).toBe(false);
+    expect(sendCommand('ptt_off')).toBe(true);
+    expect(radioStoreMock.current?.ptt).toBe(true);
+    expect(sendCommand('ptt', { state: false })).toBe(true);
+    expect(radioStoreMock.current?.ptt).toBe(true);
+
+    expect(instances[0].sent.map((frame) => JSON.parse(frame))).toMatchObject([
+      { name: 'ptt_off' },
+      { name: 'ptt', params: { state: false } },
+    ]);
+  });
+
+  it('coalesces offline PTT release aliases while radio health is degraded', async () => {
+    vi.mocked(isLiveRadioAvailable).mockReturnValue(false);
+    radioStoreMock.current = makeState({ ptt: true });
+    const { connect, sendCommand } = await import('../ws-client');
+
+    expect(sendCommand('ptt_on', {}, 'on-1')).toBe(false);
+    expect(sendCommand('ptt', { state: true }, 'on-2')).toBe(false);
+    expect(sendCommand('ptt_off', {}, 'off-1')).toBe(false);
+    expect(radioStoreMock.current?.ptt).toBe(true);
+    expect(sendCommand('ptt', { state: false }, 'off-2')).toBe(false);
+    expect(radioStoreMock.current?.ptt).toBe(true);
+
+    connect('ws://test/api/v1/ws');
+    instances[0].simulateOpen();
+    expect(radioStoreMock.current?.ptt).toBe(true);
+    expect(instances[0].sent.map((frame) => JSON.parse(frame))).toEqual([
+      { type: 'cmd', name: 'ptt', id: 'off-2', params: { state: false } },
+    ]);
+  });
+
+  it('getChannel returns the same instance for the same name', async () => {
+    const { getChannel } = await import('../ws-client');
+    const a = getChannel('scope');
+    const b = getChannel('scope');
+    expect(a).toBe(b);
+  });
+
+  it('rejects a stale delta without contaminating the accumulated full state', async () => {
+    const { connect } = await import('../ws-client');
+    connect('ws://test/api/v1/ws');
+    instances[0].simulateOpen();
+
+    sendStateUpdate(instances[0], fullEnvelope(makeState({ revision: 5, ptt: false, split: false })));
+    vi.mocked(setRadioState).mockClear();
+
+    sendStateUpdate(instances[0], deltaEnvelope(makeState({ revision: 4 }), { ptt: true }));
+
+    expect(setRadioState).not.toHaveBeenCalled();
+    expect(radioStoreMock.current?.ptt).toBe(false);
+
+    sendStateUpdate(instances[0], deltaEnvelope(makeState({ revision: 6 }), { split: true }));
+
+    expect(setRadioState).toHaveBeenCalledTimes(1);
+    expect(radioStoreMock.current?.revision).toBe(6);
+    expect(radioStoreMock.current?.ptt).toBe(false);
+    expect(radioStoreMock.current?.split).toBe(true);
+  });
+
+  it('rejects an out-of-order equal-revision delta without contaminating the accumulated full state', async () => {
+    const { connect } = await import('../ws-client');
+    connect('ws://test/api/v1/ws');
+    instances[0].simulateOpen();
+
+    sendStateUpdate(instances[0], fullEnvelope(makeState({ revision: 5, ptt: false, split: false, dualWatch: false })));
+    sendStateUpdate(instances[0], deltaEnvelope(makeState({ revision: 6 }), { split: true }));
+    vi.mocked(setRadioState).mockClear();
+
+    sendStateUpdate(instances[0], deltaEnvelope(makeState({ revision: 6 }), { ptt: true }));
+
+    expect(setRadioState).not.toHaveBeenCalled();
+    expect(radioStoreMock.current?.ptt).toBe(false);
+
+    sendStateUpdate(instances[0], deltaEnvelope(makeState({ revision: 7 }), { dualWatch: true }));
+
+    expect(setRadioState).toHaveBeenCalledTimes(1);
+    expect(radioStoreMock.current?.revision).toBe(7);
+    expect(radioStoreMock.current?.ptt).toBe(false);
+    expect(radioStoreMock.current?.split).toBe(true);
+    expect(radioStoreMock.current?.dualWatch).toBe(true);
+  });
+
+  it('applies a valid delta to the accumulated full state and store exactly once', async () => {
+    const { connect } = await import('../ws-client');
+    connect('ws://test/api/v1/ws');
+    instances[0].simulateOpen();
+
+    sendStateUpdate(instances[0], fullEnvelope(makeState({ revision: 5, ptt: false })));
+    vi.mocked(setRadioState).mockClear();
+
+    sendStateUpdate(instances[0], deltaEnvelope(makeState({ revision: 6 }), { ptt: true }));
+
+    expect(setRadioState).toHaveBeenCalledTimes(1);
+    expect(radioStoreMock.current?.revision).toBe(6);
+    expect(radioStoreMock.current?.ptt).toBe(true);
+  });
+
+  it('does not optimistically mutate PTT before authoritative state arrives', async () => {
+    const { connect, sendCommand } = await import('../ws-client');
+    connect('ws://test/api/v1/ws');
+    instances[0].simulateOpen();
+
+    sendStateUpdate(instances[0], fullEnvelope(makeState({ revision: 5, ptt: false, split: false })));
+    sendCommand('ptt_on');
+    sendCommand('ptt', { state: true });
+    sendCommand('ptt_off');
+    sendCommand('ptt', { state: false });
+    expect(radioStoreMock.current?.ptt).toBe(false);
+    vi.mocked(setRadioState).mockClear();
+
+    sendStateUpdate(instances[0], deltaEnvelope(makeState({ revision: 6 }), { split: true }));
+
+    expect(setRadioState).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(setRadioState).mock.calls[0][0].ptt).toBe(false);
+    expect(radioStoreMock.current?.revision).toBe(6);
+    expect(radioStoreMock.current?.ptt).toBe(false);
+    expect(radioStoreMock.current?.split).toBe(true);
+  });
+
+  it('accepts an equal semantic revision when only healthRevision advances', async () => {
+    const { connect } = await import('../ws-client');
+    connect('ws://test/api/v1/ws');
+    instances[0].simulateOpen();
+
+    sendStateUpdate(
+      instances[0],
+      fullEnvelope(makeState({ revision: 5, stateRevision: 5, healthRevision: 1 })),
+    );
+    vi.mocked(setRadioState).mockClear();
+
+    sendStateUpdate(
+      instances[0],
+      deltaEnvelope(makeState({ revision: 5, stateRevision: 5, healthRevision: 2 }), {}),
+    );
+
+    expect(setRadioState).toHaveBeenCalledTimes(1);
+    expect(radioStoreMock.current?.stateRevision).toBe(5);
+    expect(radioStoreMock.current?.healthRevision).toBe(2);
+  });
+
+  it('accepts same-value fieldStatus metadata when only observationSeq advances', async () => {
+    const { connect } = await import('../ws-client');
+    connect('ws://test/api/v1/ws');
+    instances[0].simulateOpen();
+
+    sendStateUpdate(
+      instances[0],
+      fullEnvelope(makeState({
+        revision: 5,
+        stateRevision: 5,
+        freshnessRevision: 1,
+        healthRevision: 1,
+        observationSeq: 1,
+        fieldStatus: {
+          'main.freqHz': {
+            storePath: 'receiver.main.active.freq_mode.freq_hz',
+            observed: true,
+            freshness: 'fresh',
+            availability: 'available',
+            lastObservedMonotonic: 1,
+            source: { provider: 'first' },
+          },
+        },
+      })),
+    );
+    vi.mocked(setRadioState).mockClear();
+
+    const nextFieldStatus = {
+      'main.freqHz': {
+        storePath: 'receiver.main.active.freq_mode.freq_hz',
+        observed: true,
+        freshness: 'fresh',
+        availability: 'available',
+        lastObservedMonotonic: 2,
+        source: { provider: 'second' },
+      },
+    } as const;
+    sendStateUpdate(
+      instances[0],
+      deltaEnvelope(
+        makeState({
+          revision: 5,
+          stateRevision: 5,
+          freshnessRevision: 1,
+          healthRevision: 1,
+          observationSeq: 2,
+        }),
+        { fieldStatus: nextFieldStatus },
+      ),
+    );
+
+    expect(setRadioState).toHaveBeenCalledTimes(1);
+    expect(radioStoreMock.current?.stateRevision).toBe(5);
+    expect(radioStoreMock.current?.freshnessRevision).toBe(1);
+    expect(radioStoreMock.current?.observationSeq).toBe(2);
+    expect(radioStoreMock.current?.fieldStatus?.['main.freqHz']).toEqual(
+      nextFieldStatus['main.freqHz'],
+    );
+  });
+
+  it('accepts wsClients-only deltas when delivery metadata advances', async () => {
+    const { connect } = await import('../ws-client');
+    connect('ws://test/api/v1/ws');
+    instances[0].simulateOpen();
+
+    sendStateUpdate(
+      instances[0],
+      fullEnvelope(makeState({
+        revision: 5,
+        stateRevision: 5,
+        freshnessRevision: 1,
+        healthRevision: 1,
+        observationSeq: 1,
+        publicStateSeq: 1,
+        transportSeq: 1,
+        wsClients: { scope: 0, control: 1, audio: 0 },
+      })),
+    );
+    vi.mocked(setRadioState).mockClear();
+
+    sendStateUpdate(
+      instances[0],
+      deltaEnvelope(
+        makeState({
+          revision: 5,
+          stateRevision: 5,
+          freshnessRevision: 1,
+          healthRevision: 1,
+          observationSeq: 1,
+          publicStateSeq: 2,
+          transportSeq: 2,
+        }),
+        {
+          publicStateSeq: 2,
+          updatedAt: '2026-06-03T00:00:01Z',
+          wsClients: { scope: 0, control: 2, audio: 0 },
+        },
+      ),
+    );
+
+    expect(setRadioState).toHaveBeenCalledTimes(1);
+    expect(radioStoreMock.current?.stateRevision).toBe(5);
+    expect(radioStoreMock.current?.freshnessRevision).toBe(1);
+    expect(radioStoreMock.current?.observationSeq).toBe(1);
+    expect(radioStoreMock.current?.publicStateSeq).toBe(2);
+    expect(radioStoreMock.current?.transportSeq).toBe(2);
+    expect(radioStoreMock.current?.wsClients?.control).toBe(2);
+  });
+
+  it('rejects equal-revision semantic deltas even when delivery metadata advances', async () => {
+    const { connect } = await import('../ws-client');
+    connect('ws://test/api/v1/ws');
+    instances[0].simulateOpen();
+
+    sendStateUpdate(
+      instances[0],
+      fullEnvelope(makeState({
+        revision: 5,
+        stateRevision: 5,
+        publicStateSeq: 1,
+        transportSeq: 1,
+        ptt: true,
+        wsClients: { scope: 0, control: 1, audio: 0 },
+      })),
+    );
+    vi.mocked(setRadioState).mockClear();
+
+    sendStateUpdate(
+      instances[0],
+      deltaEnvelope(
+        makeState({
+          revision: 5,
+          stateRevision: 5,
+          publicStateSeq: 2,
+          transportSeq: 2,
+          ptt: false,
+        }),
+        {
+          publicStateSeq: 2,
+          ptt: false,
+          wsClients: { scope: 0, control: 2, audio: 0 },
+        },
+      ),
+    );
+
+    expect(setRadioState).not.toHaveBeenCalled();
+    expect(radioStoreMock.current?.publicStateSeq).toBe(1);
+    expect(radioStoreMock.current?.wsClients?.control).toBe(1);
+    expect(radioStoreMock.current?.ptt).toBe(true);
+  });
+
+  it('rejects stale semantic deltas even when observationSeq advances', async () => {
+    const { connect } = await import('../ws-client');
+    connect('ws://test/api/v1/ws');
+    instances[0].simulateOpen();
+
+    sendStateUpdate(
+      instances[0],
+      fullEnvelope(makeState({ revision: 6, stateRevision: 6, observationSeq: 6, ptt: true })),
+    );
+    vi.mocked(setRadioState).mockClear();
+
+    sendStateUpdate(
+      instances[0],
+      deltaEnvelope(
+        makeState({ revision: 5, stateRevision: 5, observationSeq: 7, ptt: false }),
+        { ptt: false },
+      ),
+    );
+
+    expect(setRadioState).not.toHaveBeenCalled();
+    expect(radioStoreMock.current?.stateRevision).toBe(6);
+    expect(radioStoreMock.current?.observationSeq).toBe(6);
+    expect(radioStoreMock.current?.ptt).toBe(true);
+  });
+
+  it('feeds connection_status events into the radio status store (MOR-620)', async () => {
+    vi.mocked(setRadioStatus).mockClear();
+    const { connect } = await import('../ws-client');
+    connect('ws://test/api/v1/ws');
+    instances[0].simulateOpen();
+
+    instances[0].simulateMessage(JSON.stringify({
+      type: 'event',
+      name: 'connection_status',
+      data: { state: 'reconnecting', attempt: 2, next_retry_seconds: 5 },
+    }));
+    expect(setRadioStatus).toHaveBeenCalledWith('reconnecting');
+
+    instances[0].simulateMessage(JSON.stringify({
+      type: 'event',
+      name: 'connection_status',
+      data: { state: 'connected' },
+    }));
+    expect(setRadioStatus).toHaveBeenLastCalledWith('connected');
+
+    // Malformed payloads must be ignored, not crash the handler.
+    vi.mocked(setRadioStatus).mockClear();
+    instances[0].simulateMessage(JSON.stringify({ type: 'event', name: 'connection_status' }));
+    instances[0].simulateMessage(JSON.stringify({ type: 'event', name: 'connection_status', data: { state: 7 } }));
+    expect(setRadioStatus).not.toHaveBeenCalled();
+  });
+
+  it('resets radioStatus on every ws disconnect, even without a terminal connection_status event (MOR-1526 F1)', async () => {
+    vi.mocked(setRadioStatus).mockClear();
+    const { connect, disconnect } = await import('../ws-client');
+    connect('ws://test/api/v1/ws');
+    instances[0].simulateOpen();
+
+    // A reconnect starts but the server just vanishes (no terminal event —
+    // radio_reconnect.py's reconnect_loop can exit via CancelledError on
+    // either its watchdog-triggered or attempt-loop path without ever
+    // emitting a final connection_status).
+    instances[0].simulateMessage(JSON.stringify({
+      type: 'event',
+      name: 'connection_status',
+      data: { state: 'reconnecting', attempt: 1, next_retry_seconds: 1 },
+    }));
+    expect(setRadioStatus).toHaveBeenLastCalledWith('reconnecting');
+
+    instances[0].simulateClose();
+
+    expect(setRadioStatus).toHaveBeenLastCalledWith('disconnected');
+    // R2 ruling: rigConnected/radioReady/radioHealth are deliberately NOT
+    // reset by this handler — see the R2 comment in ws-client.ts. Resetting
+    // them would be visible to isLiveRadioAvailable()/sendCommand, a
+    // command-gate change this display fix must not make. Their isolation
+    // is pinned at the store level instead (connection.test.ts's F2 case).
+
+    // simulateClose() drives the singleton `_ctrl` into its own real-timer
+    // reconnect loop (this describe block runs with real timers). Without
+    // an explicit disconnect() here, that dangling backoff timer can fire
+    // mid-run and create a stray MockWebSocket instance that pollutes the
+    // shared `instances` registry for unrelated later tests in this file.
+    disconnect();
+  });
+
+  it('rejects a same-session full snapshot that rolls revision truth backward', async () => {
+    const { connect } = await import('../ws-client');
+    connect('ws://test/api/v1/ws');
+    instances[0].simulateOpen();
+
+    sendStateUpdate(instances[0], fullEnvelope(makeState({ revision: 20, ptt: true, split: true })));
+    vi.mocked(setRadioState).mockClear();
+
+    sendStateUpdate(instances[0], fullEnvelope(makeState({ revision: 1, ptt: false, split: false })));
+
+    expect(setRadioState).not.toHaveBeenCalled();
+    expect(radioStoreMock.current?.revision).toBe(20);
+    expect(radioStoreMock.current?.ptt).toBe(true);
+    expect(radioStoreMock.current?.split).toBe(true);
+  });
+
+});
+
+// ─── MOR-1422: a refused command must be operator-visible ──────────────────
+//
+// `sendCommand` used to drop a non-PTT-off command while
+// `isLiveRadioAvailable()` is false with only a `console.warn` — invisible
+// unless the operator has devtools open. A held control (a jog wheel, a
+// repeated keypress) calls `sendCommand` many times a second, so the fix is
+// ONE notice per refusal burst, not one per call — these tests exercise the
+// debounce with fake timers, and pin the two things that must NOT trigger
+// it: a healthy link, and the always-ungated PTT-off release path.
+describe('sendCommand surfaces a refused command exactly once per burst (MOR-1422)', () => {
+  let originalWebSocket: typeof WebSocket;
+
+  beforeEach(() => {
+    instances.length = 0;
+    vi.useFakeTimers();
+    originalWebSocket = globalThis.WebSocket;
+    // @ts-expect-error mock
+    globalThis.WebSocket = MockWebSocket;
+  });
+
+  afterEach(() => {
+    globalThis.WebSocket = originalWebSocket;
+    vi.useRealTimers();
+    vi.resetModules();
+  });
+
+  it('emits exactly one notification for a burst of refused commands', async () => {
+    vi.mocked(isLiveRadioAvailable).mockReturnValue(false);
+    const { connect, onMessage, sendCommand } = await import('../ws-client');
+    connect('ws://test/api/v1/ws');
+    instances[0].simulateOpen();
+    const notices: unknown[] = [];
+    onMessage((msg) => { if (msg.type === 'notification') notices.push(msg); });
+
+    sendCommand('set_freq', { freq: 14_074_000, receiver: 0 }, 'a');
+    sendCommand('set_freq', { freq: 14_074_100, receiver: 0 }, 'b');
+    sendCommand('set_freq', { freq: 14_074_200, receiver: 0 }, 'c');
+
+    expect(notices).toHaveLength(1);
+    expect(notices[0]).toMatchObject({
+      type: 'notification', level: 'warning', code: 'commandRefusedLinkDegraded',
+    });
+  });
+
+  it('emits a second notification once the debounce window has elapsed', async () => {
+    vi.mocked(isLiveRadioAvailable).mockReturnValue(false);
+    const { connect, onMessage, sendCommand } = await import('../ws-client');
+    connect('ws://test/api/v1/ws');
+    instances[0].simulateOpen();
+    const notices: unknown[] = [];
+    onMessage((msg) => { if (msg.type === 'notification') notices.push(msg); });
+
+    sendCommand('set_freq', { freq: 14_074_000, receiver: 0 }, 'first');
+    vi.advanceTimersByTime(3_000);
+    sendCommand('set_freq', { freq: 14_074_100, receiver: 0 }, 'second');
+
+    expect(notices).toHaveLength(2);
+  });
+
+  it('emits nothing while the link is healthy', async () => {
+    vi.mocked(isLiveRadioAvailable).mockReturnValue(true);
+    const { connect, onMessage, sendCommand } = await import('../ws-client');
+    connect('ws://test/api/v1/ws');
+    instances[0].simulateOpen();
+    const notices: unknown[] = [];
+    onMessage((msg) => { if (msg.type === 'notification') notices.push(msg); });
+
+    sendCommand('set_freq', { freq: 14_074_000, receiver: 0 });
+
+    expect(notices).toHaveLength(0);
+  });
+
+  // The PTT-off release alias is the operator's emergency unkey path — it is
+  // never gated on link health (see the "allows open-socket PTT release
+  // aliases" case above) and must never be buried under a refusal toast either.
+  it('emits nothing for the ungated PTT-off release path', async () => {
+    vi.mocked(isLiveRadioAvailable).mockReturnValue(false);
+    const { onMessage, sendCommand } = await import('../ws-client');
+    const notices: unknown[] = [];
+    onMessage((msg) => { if (msg.type === 'notification') notices.push(msg); });
+
+    sendCommand('ptt_off', {}, 'off-1');
+    sendCommand('ptt', { state: false }, 'off-2');
+
+    expect(notices).toHaveLength(0);
+  });
+});
+
+describe('WsChannel send queue', () => {
+  let originalWebSocket: typeof WebSocket;
+
+  beforeEach(() => {
+    instances.length = 0;
+    vi.useFakeTimers();
+    originalWebSocket = globalThis.WebSocket;
+    // @ts-expect-error mock
+    globalThis.WebSocket = MockWebSocket;
+  });
+
+  afterEach(() => {
+    globalThis.WebSocket = originalWebSocket;
+    vi.useRealTimers();
+    vi.resetModules();
+  });
+
+  it('deduplicates idempotent commands (set_freq) — keeps only latest', async () => {
+    const { WsChannel } = await import('../ws-client');
+    const ch = new WsChannel();
+
+    // Queue multiple set_freq while disconnected
+    ch.send({ type: 'cmd', name: 'set_freq', id: '1', params: { freq: 14000000 } });
+    ch.send({ type: 'cmd', name: 'set_freq', id: '2', params: { freq: 14074000 } });
+    ch.send({ type: 'cmd', name: 'set_freq', id: '3', params: { freq: 14100000 } });
+
+    ch.connect('ws://test');
+    instances[0].simulateOpen();
+
+    // Only the last set_freq should be sent
+    expect(instances[0].sent).toHaveLength(1);
+    expect(JSON.parse(instances[0].sent[0]).params.freq).toBe(14100000);
+  });
+
+  it('never replays a stale offline non-idempotent command', async () => {
+    const { WsChannel } = await import('../ws-client');
+    const ch = new WsChannel();
+    const events: CommandDeliveryEvent[] = [];
+    ch.onCommandDelivery((event) => events.push(event));
+
+    expect(ch.send({ type: 'cmd', name: 'vfo_swap', id: 'swap', params: {} })).toBe(false);
+    ch.connect('ws://test');
+    instances[0].simulateOpen();
+
+    expect(instances[0].sent).toEqual([]);
+    expect(events).toEqual([{
+      commandId: 'swap',
+      kind: 'error',
+      originalEpoch: 0,
+      eventEpoch: 0,
+      error: 'offline non-idempotent command rejected',
+    }]);
+  });
+
+  it('rejects offline non-idempotent overflow instead of retaining a stale replay queue', async () => {
+    const { WsChannel } = await import('../ws-client');
+    const ch = new WsChannel();
+    const events: CommandDeliveryEvent[] = [];
+    ch.onCommandDelivery((event) => events.push(event));
+
+    for (let i = 0; i < 25; i++) {
+      ch.send({ type: 'cmd', name: 'set_af_level', id: `cmd-${i}`, params: { level: i } });
+    }
+
+    ch.connect('ws://test');
+    instances[0].simulateOpen();
+
+    expect(instances[0].sent).toEqual([]);
+    expect(events).toHaveLength(25);
+    expect(events.every((event) => event.kind === 'error')).toBe(true);
+  });
+
+  it('never replays offline PTT-on aliases and coalesces release aliases', async () => {
+    const { WsChannel } = await import('../ws-client');
+    const ch = new WsChannel();
+
+    expect(ch.send({ type: 'cmd', name: 'ptt_on', id: 'on-1', params: {} })).toBe(false);
+    expect(ch.send({ type: 'cmd', name: 'ptt', id: 'on-2', params: { state: true } })).toBe(false);
+    expect(ch.send({ type: 'cmd', name: 'ptt_off', id: 'off-1', params: {} })).toBe(false);
+    expect(ch.send({ type: 'cmd', name: 'ptt', id: 'off-2', params: { state: false } })).toBe(false);
+
+    ch.connect('ws://test');
+    instances[0].simulateOpen();
+
+    expect(instances[0].sent.map((frame) => JSON.parse(frame))).toEqual([
+      { type: 'cmd', name: 'ptt', id: 'off-2', params: { state: false } },
+    ]);
+  });
+
+  it('sends healthy PTT-on and release aliases immediately on an open socket', async () => {
+    const { WsChannel } = await import('../ws-client');
+    const ch = new WsChannel();
+    ch.connect('ws://test');
+    instances[0].simulateOpen();
+
+    expect(ch.send({ type: 'cmd', name: 'ptt_on', id: 'on-1', params: {} })).toBe(true);
+    expect(ch.send({ type: 'cmd', name: 'ptt', id: 'on-2', params: { state: true } })).toBe(true);
+    expect(ch.send({ type: 'cmd', name: 'ptt_off', id: 'off-1', params: {} })).toBe(true);
+    expect(ch.send({ type: 'cmd', name: 'ptt', id: 'off-2', params: { state: false } })).toBe(true);
+
+    expect(instances[0].sent.map((frame) => JSON.parse(frame).id)).toEqual([
+      'on-1',
+      'on-2',
+      'off-1',
+      'off-2',
+    ]);
+  });
+
+  it('pins an offline release beyond ordinary queue capacity', async () => {
+    const { WsChannel } = await import('../ws-client');
+    const ch = new WsChannel();
+
+    ch.send({ type: 'cmd', name: 'ptt_off', id: 'release', params: {} });
+    for (let i = 0; i < 45; i++) {
+      ch.send({ type: 'cmd', name: 'set_af_level', id: `ordinary-${i}`, params: { level: i } });
+    }
+    ch.send({ type: 'cmd', name: 'set_freq', id: 'freq', params: { freq: 14_074_000 } });
+    ch.send({ type: 'cmd', name: 'set_mode', id: 'mode', params: { mode: 'USB' } });
+    ch.send({ type: 'cmd', name: 'set_filter', id: 'filter', params: { filter: 2 } });
+
+    ch.connect('ws://test');
+    instances[0].simulateOpen();
+
+    const drained = instances[0].sent.map((frame) => JSON.parse(frame));
+    expect(drained).toHaveLength(4);
+    expect(drained[0]).toMatchObject({ name: 'ptt_off', id: 'release' });
+    expect(drained.slice(1).map((cmd) => cmd.id)).toEqual(['freq', 'mode', 'filter']);
+  });
+
+  it('allows one new queued release in a later offline episode', async () => {
+    const { WsChannel } = await import('../ws-client');
+    const ch = new WsChannel();
+
+    ch.send({ type: 'cmd', name: 'ptt_off', id: 'release-1', params: {} });
+    ch.connect('ws://test');
+    instances[0].simulateOpen();
+    expect(instances[0].sent.map((frame) => JSON.parse(frame).id)).toEqual(['release-1']);
+
+    ch.disconnect();
+    ch.send({ type: 'cmd', name: 'ptt_off', id: 'release-2', params: {} });
+    ch.connect('ws://test');
+    instances[1].simulateOpen();
+    expect(instances[1].sent.map((frame) => JSON.parse(frame).id)).toEqual(['release-2']);
+  });
+
+  it('handles error response with status field', async () => {
+    const { WsChannel } = await import('../ws-client');
+    const ch = new WsChannel();
+    const received: any[] = [];
+    ch.onMessage((m) => received.push(m));
+
+    ch.connect('ws://test');
+    instances[0].simulateOpen();
+    instances[0].simulateMessage(JSON.stringify({ status: 'error', message: 'Command failed' }));
+
+    expect(received).toHaveLength(1);
+    expect(received[0].level).toBe('error');
+  });
+});
+
+// ─── MOR-1424: visibility-aware reconnect + close observability ────────────
+//
+// The RC stand observed six ws-only reconnects from one tab, each closed
+// client-side within 0-1s at 13-37s growing intervals. Root cause: when the
+// browser's WS handshake never reaches onopen (background-tab throttling),
+// `attempt` keeps growing and `calcBackoff` climbs toward the 30s cap —
+// exactly the churn signature seen. Test (c) below promotes that diagnosis
+// (scratch repro test "4b") into permanent coverage.
+
+function setVisibility(state: 'visible' | 'hidden') {
+  Object.defineProperty(document, 'visibilityState', {
+    value: state,
+    configurable: true,
+  });
+}
+
+describe('WsChannel visibility-aware reconnect + close observability', () => {
+  let originalWebSocket: typeof WebSocket;
+
+  beforeEach(() => {
+    instances.length = 0;
+    vi.useFakeTimers();
+    originalWebSocket = globalThis.WebSocket;
+    // @ts-expect-error mock
+    globalThis.WebSocket = MockWebSocket;
+    setVisibility('visible');
+  });
+
+  afterEach(() => {
+    globalThis.WebSocket = originalWebSocket;
+    setVisibility('visible');
+    vi.useRealTimers();
+    vi.resetModules();
+  });
+
+  it('(a) pauses the reconnect loop while the tab is hidden — no new attempts scheduled', async () => {
+    const { WsChannel } = await import('../ws-client');
+    const ch = new WsChannel();
+    setVisibility('hidden');
+    ch.connect('ws://test');
+    instances[0].simulateOpen();
+    instances[0].simulateClose(1006, '', false);
+
+    expect(ch.state).toBe('disconnected');
+    await vi.advanceTimersByTimeAsync(60_000);
+    // Without the fix this grows to 2+ instances as calcBackoff schedules a
+    // retry against a handshake that keeps getting throttled.
+    expect(instances).toHaveLength(1);
+    // Cleanup: an intentional disconnect prevents this channel's still-live
+    // visibilitychange listener (document listeners outlive the `it` block)
+    // from reconnecting during a later test's visibilitychange dispatch.
+    ch.disconnect();
+  });
+
+  it('(b) reconnects immediately with attempt reset when the tab becomes visible again', async () => {
+    const { WsChannel } = await import('../ws-client');
+    const ch = new WsChannel();
+    setVisibility('hidden');
+    ch.connect('ws://test');
+    instances[0].simulateOpen();
+    instances[0].simulateClose(1006, '', false);
+    expect(instances).toHaveLength(1);
+
+    setVisibility('visible');
+    document.dispatchEvent(new Event('visibilitychange'));
+
+    // attempt was reset to 0 before reconnecting, so _open() sets 'connecting'
+    // (not 'reconnecting') — same as a first-ever connection attempt.
+    expect(instances).toHaveLength(2);
+    expect(ch.state).toBe('connecting');
+  });
+
+  it('(b2) a healthy open socket is left untouched when the tab goes hidden', async () => {
+    const { WsChannel } = await import('../ws-client');
+    const ch = new WsChannel();
+    ch.connect('ws://test');
+    instances[0].simulateOpen();
+    expect(ch.state).toBe('connected');
+
+    setVisibility('hidden');
+    document.dispatchEvent(new Event('visibilitychange'));
+
+    expect(ch.state).toBe('connected');
+    expect(instances).toHaveLength(1);
+    expect(instances[0].readyState).toBe(MockWebSocket.OPEN);
+  });
+
+  it('cancels an already-scheduled reconnect when the tab goes hidden', async () => {
+    const { WsChannel } = await import('../ws-client');
+    const ch = new WsChannel();
+    ch.connect('ws://test');
+    instances[0].simulateOpen();
+    instances[0].simulateClose(1006, '', false); // visible -> timer IS scheduled
+    setVisibility('hidden');
+    document.dispatchEvent(new Event('visibilitychange'));
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(instances).toHaveLength(1); // timer cancelled
+    setVisibility('visible');
+    document.dispatchEvent(new Event('visibilitychange'));
+    expect(instances).toHaveLength(2); // debt recorded -> resumes
+    expect(ch.state).toBe('connecting'); // attempt reset
+    ch.disconnect();
+  });
+
+  it('(c) regression: sockets that error out of CONNECTING grow the backoff toward the 30s cap while visible', async () => {
+    // Fix jitter (calcBackoff mixes in Math.random()) so the growth curve is
+    // exact instead of a wide, occasionally-boundary-flaky band.
+    const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0.5); // multiplier = 0.8 + 0.5*0.4 = 1.0
+    const { WsChannel } = await import('../ws-client');
+    const ch = new WsChannel();
+    ch.connect('ws://test');
+
+    const delays: number[] = [];
+    let lastNow = Date.now();
+    for (let cycle = 0; cycle < 7; cycle++) {
+      const ws = instances[instances.length - 1];
+      // No simulateOpen() — the handshake never completes, so `attempt` is
+      // never reset to 0 and calcBackoff keeps climbing.
+      ws.simulateError();
+      const before = instances.length;
+      let waited = 0;
+      while (instances.length === before && waited < 40_000) {
+        await vi.advanceTimersByTimeAsync(100);
+        waited += 100;
+      }
+      const now = Date.now();
+      delays.push(now - lastNow);
+      lastNow = now;
+    }
+    ch.disconnect();
+    randomSpy.mockRestore();
+
+    // Deterministic backoff bases (attempt 0..6, cap at BACKOFF_MAX_MS):
+    // 1s, 2s, 4s, 8s, 16s, 30s, 30s. Last 3 land squarely in the observed
+    // 13-37s churn band (measured with 100ms polling granularity).
+    const last3 = delays.slice(-3);
+    expect(last3[0]).toBeGreaterThanOrEqual(16_000);
+    expect(last3[0]).toBeLessThan(16_100);
+    expect(last3[1]).toBeGreaterThanOrEqual(30_000);
+    expect(last3[1]).toBeLessThan(30_100);
+    expect(last3[2]).toBeGreaterThanOrEqual(30_000);
+    expect(last3[2]).toBeLessThan(30_100);
+  });
+
+  it('(b3) a fresh connect() clears a stale hidden-pending flag — no spurious extra reconnect on later visibilitychange', async () => {
+    const { WsChannel } = await import('../ws-client');
+    const ch = new WsChannel();
+    setVisibility('hidden');
+    ch.connect('ws://test');
+    instances[0].simulateOpen();
+    instances[0].simulateClose(1006, '', false); // sets reconnectPendingVisibility = true
+    expect(instances).toHaveLength(1);
+
+    // Unrelated fresh reconnect while still hidden (e.g. explicit reconnect()
+    // call, or a manual re-connect) — must supersede the stale pending flag.
+    ch.connect('ws://test');
+    expect(instances).toHaveLength(2);
+    instances[1].simulateOpen();
+    expect(ch.state).toBe('connected');
+
+    setVisibility('visible');
+    document.dispatchEvent(new Event('visibilitychange'));
+
+    // Without the fix, the stale reconnectPendingVisibility flag from the
+    // first episode would fire a spurious extra _open() here even though
+    // the channel is already healthily connected.
+    expect(instances).toHaveLength(2);
+    expect(ch.state).toBe('connected');
+  });
+
+  it('(d) records the last WS close code/reason/wasClean for diagnostics', async () => {
+    const { WsChannel, getLastCloseInfo } = await import('../ws-client');
+    const ch = new WsChannel();
+    ch.connect('ws://test');
+    instances[0].simulateOpen();
+    instances[0].simulateClose(1006, 'abnormal closure', false);
+
+    expect(getLastCloseInfo()).toMatchObject({
+      code: 1006,
+      reason: 'abnormal closure',
+      wasClean: false,
+    });
+  });
+
+  it('(d2) records a clean, intentional close too', async () => {
+    const { WsChannel, getLastCloseInfo } = await import('../ws-client');
+    const ch = new WsChannel();
+    ch.connect('ws://test');
+    instances[0].simulateOpen();
+    ch.disconnect();
+
+    expect(getLastCloseInfo()).toMatchObject({ wasClean: true });
+  });
+});

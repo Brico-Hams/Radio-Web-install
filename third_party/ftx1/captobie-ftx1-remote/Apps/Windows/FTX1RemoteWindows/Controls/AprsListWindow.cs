@@ -1,0 +1,452 @@
+using System.Globalization;
+using System.Runtime.InteropServices;
+using FTX1RemoteWindows.Models;
+using FTX1RemoteWindows.Services;
+using FTX1RemoteWindows.Settings;
+using Microsoft.UI.Dispatching;
+using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Media;
+
+namespace FTX1RemoteWindows.Controls;
+
+public enum AprsListKind
+{
+    Stations,
+    Messages,
+}
+
+/// The FM page's APRS S.LIST / M.LIST windows — the Mac's
+/// APRSStationListView / APRSMessageListView: a table of decoded stations
+/// (newest first) or messages, with an All/Main/Sub source filter. Its own
+/// window rather than a dialog, so it can stay open beside the main one
+/// while operating, as on the Mac. Built in code, like the MENU grid.
+///
+/// Rebuilt from the store on each change; APRS brings a few packets a
+/// minute at most, so there's nothing to gain from diffing rows. The
+/// "Last heard" column is relative ("3 min ago"), its cells re-rendered
+/// every 15 s; their tooltip has the local time.
+public sealed class AprsListWindow : Window
+{
+    private readonly AprsListKind _kind;
+    private readonly AprsStore _store;
+    private readonly Grid _root = new() { Padding = new Thickness(12), RowSpacing = 8 };
+    private readonly ListView _list = new() { SelectionMode = ListViewSelectionMode.None };
+    private readonly TextBlock _countText = new() { Foreground = new SolidColorBrush(Microsoft.UI.Colors.Gray), VerticalAlignment = VerticalAlignment.Center };
+    private readonly StackPanel _emptyPanel = new() { Spacing = 6, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center, MaxWidth = 420 };
+    private readonly TextBlock _emptyHint = new() { TextWrapping = TextWrapping.Wrap, TextAlignment = TextAlignment.Center, Foreground = new SolidColorBrush(Microsoft.UI.Colors.Gray) };
+    private readonly DispatcherQueueTimer _relativeTimeTimer;
+    private AprsSource? _filter;
+    /// Each row's relative-time cell, so the timer re-renders only those.
+    private readonly List<(TextBlock Cell, DateTimeOffset At)> _timeCells = [];
+
+    private static readonly FontFamily MonoFont = new("Consolas");
+
+    /// Column widths; the star column (comment / message text) takes the rest.
+    private static readonly GridLength[] StationColumns =
+        [new(110), new(56), new(140), new(50), new(1, GridUnitType.Star), new(90)];
+    private static readonly GridLength[] MessageColumns =
+        [new(110), new(110), new(56), new(1, GridUnitType.Star), new(150), new(90)];
+
+    private readonly AprsMessaging _messaging;
+    private readonly AprsTransmitter _transmitter;
+    private readonly Button _beaconButton = new() { Content = Loc.S("aprsTransmit.beaconNow") };
+    private readonly TextBlock _sendingText = new()
+    {
+        Text = Loc.S("aprsTransmit.sending"),
+        Foreground = new SolidColorBrush(Microsoft.UI.Colors.Red),
+        FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+        VerticalAlignment = VerticalAlignment.Center,
+    };
+    private readonly TextBlock _statusText = new()
+    {
+        Foreground = new SolidColorBrush(Microsoft.UI.Colors.Gray),
+        VerticalAlignment = VerticalAlignment.Center,
+        TextTrimming = TextTrimming.CharacterEllipsis,
+    };
+    private readonly TextBlock _nextBeaconText = new()
+    {
+        Foreground = new SolidColorBrush(Microsoft.UI.Colors.Gray),
+        VerticalAlignment = VerticalAlignment.Center,
+    };
+
+    public AprsListWindow(AprsListKind kind, AprsStore store, AprsMessaging messaging, AprsTransmitter transmitter)
+    {
+        _kind = kind;
+        _store = store;
+        _messaging = messaging;
+        _transmitter = transmitter;
+        Title = kind == AprsListKind.Stations ? Loc.S("aprsListWindow.aPRSStations") : Loc.S("aprsListWindow.aPRSMessages");
+        // AppWindow sizes are physical pixels; scale from DIPs so the columns
+        // fit at any display scaling.
+        var scale = GetDpiForWindow(WinRT.Interop.WindowNative.GetWindowHandle(this)) / 96.0;
+        AppWindow.Resize(new Windows.Graphics.SizeInt32(
+            (int)((kind == AprsListKind.Stations ? 960 : 860) * scale), (int)(480 * scale)));
+
+        _root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        _root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        _root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+        _root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+
+        var filterBar = new SelectorBar();
+        foreach (var (label, tag) in new[] { (Loc.S("common.all"), ""), ("Main", nameof(AprsSource.Main)), ("Sub", nameof(AprsSource.Sub)) })
+        {
+            filterBar.Items.Add(new SelectorBarItem { Text = label, Tag = tag, IsSelected = tag.Length == 0 });
+        }
+        filterBar.SelectionChanged += (bar, _) =>
+        {
+            _filter = bar.SelectedItem?.Tag is string tag && Enum.TryParse<AprsSource>(tag, out var source) ? source : null;
+            Rebuild();
+        };
+        var toolbar = new Grid();
+        toolbar.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        toolbar.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        toolbar.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        toolbar.Children.Add(filterBar);
+        _countText.HorizontalAlignment = HorizontalAlignment.Right;
+        _countText.Margin = new Thickness(0, 0, 12, 0);
+        Grid.SetColumn(_countText, 1);
+        toolbar.Children.Add(_countText);
+        if (kind == AprsListKind.Messages)
+        {
+            var newMessage = new Button { Content = Loc.S("aprsMessageList.newMessage") };
+            ToolTipService.SetToolTip(newMessage, Loc.S("aprsMessageList.newMessageHelp"));
+            newMessage.Click += async (_, _) => await ComposeAsync("");
+            Grid.SetColumn(newMessage, 2);
+            toolbar.Children.Add(newMessage);
+        }
+        _root.Children.Add(toolbar);
+
+        var header = kind == AprsListKind.Stations
+            ? Row(StationColumns, bold: true, Loc.S("aprsListWindow.callsign"), Loc.S("aprsListWindow.source"), Loc.S("aprsListWindow.position"), Loc.S("aprsListWindow.symbol"), Loc.S("common.comment"), Loc.S("aprsListWindow.lastHeard"))
+            : Row(MessageColumns, bold: true, Loc.S("aprsListWindow.from"), Loc.S("aprsListWindow.to"), Loc.S("aprsListWindow.source"), Loc.S("aprsListWindow.message"), Loc.S("aprsMessageList.status"), Loc.S("aprsListWindow.received"));
+        // Lines the header up with the ListView items' own inner padding.
+        header.Padding = new Thickness(16, 0, 12, 4);
+        Grid.SetRow(header, 1);
+        _root.Children.Add(header);
+
+        _emptyPanel.Children.Add(new TextBlock
+        {
+            Text = kind == AprsListKind.Stations ? Loc.S("aprsListWindow.noStationsHeard") : Loc.S("aprsListWindow.noMessages"),
+            FontSize = 18,
+            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+            HorizontalAlignment = HorizontalAlignment.Center,
+        });
+        _emptyPanel.Children.Add(_emptyHint);
+        Grid.SetRow(_list, 2);
+        Grid.SetRow(_emptyPanel, 2);
+        _root.Children.Add(_list);
+        _root.Children.Add(_emptyPanel);
+        _root.Children.Add(BuildTransmitBar());
+
+        Content = _root;
+        ApplyTheme();
+
+        _store.Changed += Rebuild;
+        _messaging.Changed += UpdateTransmitBar;
+        _transmitter.Changed += UpdateTransmitBar;
+        UpdateTransmitBar();
+        _relativeTimeTimer = DispatcherQueue.CreateTimer();
+        _relativeTimeTimer.Interval = TimeSpan.FromSeconds(15);
+        _relativeTimeTimer.Tick += (_, _) =>
+        {
+            var now = DateTimeOffset.Now;
+            foreach (var (cell, at) in _timeCells)
+            {
+                cell.Text = Relative(now, at);
+            }
+        };
+        _relativeTimeTimer.Start();
+        Closed += (_, _) =>
+        {
+            _store.Changed -= Rebuild;
+            _messaging.Changed -= UpdateTransmitBar;
+            _transmitter.Changed -= UpdateTransmitBar;
+            _relativeTimeTimer.Stop();
+        };
+        Rebuild();
+    }
+
+    /// Follows Settings → Appearance, like the main window.
+    public void ApplyTheme()
+    {
+        ThemeEngine.ApplyTo(_root);
+        _root.Background = ThemeEngine.WindowBackground;
+        Rebuild();
+    }
+
+    private void Rebuild()
+    {
+        _list.Items.Clear();
+        _timeCells.Clear();
+        var now = DateTimeOffset.Now;
+        int shown;
+        if (_kind == AprsListKind.Stations)
+        {
+            var stations = _store.Stations
+                .Where(s => _filter is null || s.Source == _filter)
+                .OrderByDescending(s => s.LastHeardAt)
+                .ToList();
+            foreach (var s in stations)
+            {
+                var row = Row(StationColumns, bold: false,
+                    s.Callsign,
+                    SourceLabel(s.Source),
+                    s.Latitude is { } lat && s.Longitude is { } lon
+                        ? string.Create(CultureInfo.InvariantCulture, $"{lat:0.0000}, {lon:0.0000}")
+                        : "—",
+                    (s.SymbolTable ?? "") + (s.SymbolCode ?? ""),
+                    s.Comment ?? "",
+                    Relative(now, s.LastHeardAt));
+                Decorate(row, timeColumn: 5, s.LastHeardAt);
+                _list.Items.Add(row);
+            }
+            shown = stations.Count;
+        }
+        else
+        {
+            var messages = _store.Messages
+                .Where(m => _filter is null || m.Source == _filter)
+                .OrderByDescending(m => m.ReceivedAt)
+                .ToList();
+            foreach (var m in messages)
+            {
+                var row = Row(MessageColumns, bold: false,
+                    m.From, m.To, m.Delivery is null ? SourceLabel(m.Source) : "", m.Text,
+                    m.Delivery is { } delivery ? DeliveryLabel(delivery) : "", Relative(now, m.ReceivedAt));
+                ((TextBlock)row.Children[1]).FontFamily = MonoFont;
+                if (m.Delivery is { } own)
+                {
+                    ((TextBlock)row.Children[4]).Foreground = DeliveryBrush(own.State);
+                }
+                row.ContextFlyout = MessageMenu(m);
+                Decorate(row, timeColumn: 5, m.ReceivedAt);
+                _list.Items.Add(row);
+            }
+            shown = messages.Count;
+        }
+
+        var total = _kind == AprsListKind.Stations ? _store.Stations.Count : _store.Messages.Count;
+        var isStations = _kind == AprsListKind.Stations;
+        _countText.Text = shown == total
+            ? Loc.P(isStations ? "aprsListWindow.stationCount" : "aprsListWindow.messageCount", total)
+            : Loc.P(isStations ? "aprsListWindow.stationsShown" : "aprsListWindow.messagesShown", total, shown);
+        _emptyPanel.Visibility = shown == 0 ? Visibility.Visible : Visibility.Collapsed;
+        _emptyHint.Text = !AppSettings.AprsEnabled
+            ? Loc.S("common.aPRSDecodingIsOff")
+            : total > 0
+                ? Loc.S("aprsListWindow.nothingFromThisReceiver")
+                : Loc.F(isStations ? "aprsListWindow.decodedStationsAppearHere" : "aprsListWindow.decodedMessagesAppearHere",
+                    AppSettings.AprsFrequencyHz / 1_000_000.0);
+    }
+
+    /// The callsign column in a monospaced font, and the full local time as
+    /// the relative-time cell's tooltip.
+    private void Decorate(Grid row, int timeColumn, DateTimeOffset at)
+    {
+        ((TextBlock)row.Children[0]).FontFamily = MonoFont;
+        var timeCell = (TextBlock)row.Children[timeColumn];
+        ToolTipService.SetToolTip(timeCell, at.ToLocalTime().ToString("G", CultureInfo.CurrentCulture));
+        _timeCells.Add((timeCell, at));
+    }
+
+    // Transmit
+
+    private Grid BuildTransmitBar()
+    {
+        var bar = new Grid { ColumnSpacing = 10, Margin = new Thickness(0, 4, 0, 0) };
+        bar.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        bar.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        bar.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        bar.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        ToolTipService.SetToolTip(_beaconButton, Loc.S("aprsTransmit.beaconNowHelp"));
+        _beaconButton.Click += (_, _) => _messaging.BeaconNow();
+        bar.Children.Add(_beaconButton);
+        Grid.SetColumn(_sendingText, 1);
+        bar.Children.Add(_sendingText);
+        Grid.SetColumn(_statusText, 2);
+        bar.Children.Add(_statusText);
+        Grid.SetColumn(_nextBeaconText, 3);
+        bar.Children.Add(_nextBeaconText);
+        Grid.SetRow(bar, 3);
+        return bar;
+    }
+
+    private void UpdateTransmitBar()
+    {
+        var on = AprsTransmitSettings.Enabled;
+        _beaconButton.IsEnabled = on;
+        _sendingText.Visibility = _transmitter.IsTransmitting ? Visibility.Visible : Visibility.Collapsed;
+        var status = on ? _messaging.BeaconStatus : Loc.S("aprsTransmit.offHint");
+        _statusText.Text = status ?? "";
+        ToolTipService.SetToolTip(_statusText, status);
+        _nextBeaconText.Text = on && _messaging.NextBeaconAt is { } next
+            ? Loc.F("aprsTransmit.nextBeacon", next.ToLocalTime().ToString("t", CultureInfo.CurrentCulture))
+            : "";
+    }
+
+    private static string DeliveryLabel(AprsDelivery delivery) => delivery.State switch
+    {
+        AprsDeliveryState.Pending when delivery.Note is { } note => Loc.F("aprsDelivery.waiting", note),
+        AprsDeliveryState.Pending => delivery.Attempts == 0
+            ? Loc.S("aprsDelivery.queued")
+            : Loc.F("aprsDelivery.sent", delivery.Attempts, AprsMessaging.RetryDelays.Length),
+        AprsDeliveryState.Acked => Loc.S("aprsDelivery.acked"),
+        AprsDeliveryState.Rejected => Loc.S("aprsDelivery.rejected"),
+        AprsDeliveryState.Failed when delivery.Note is { } note => Loc.F("aprsDelivery.failedReason", note),
+        AprsDeliveryState.Failed => Loc.S("aprsDelivery.failed"),
+        _ => Loc.S("aprsDelivery.cancelled"),
+    };
+
+    private static Brush DeliveryBrush(AprsDeliveryState state) => new SolidColorBrush(state switch
+    {
+        AprsDeliveryState.Pending => Microsoft.UI.Colors.Orange,
+        AprsDeliveryState.Acked => Microsoft.UI.Colors.Green,
+        AprsDeliveryState.Rejected or AprsDeliveryState.Failed => Microsoft.UI.Colors.Red,
+        _ => Microsoft.UI.Colors.Gray,
+    });
+
+    /// Right-click: Reply for a received message; Stop Sending / Send Again
+    /// and a new message to the same station for our own.
+    private MenuFlyout MessageMenu(AprsMessage message)
+    {
+        var menu = new MenuFlyout();
+        if (message.Delivery is { } delivery)
+        {
+            var item = new MenuFlyoutItem
+            {
+                Text = delivery.State == AprsDeliveryState.Pending
+                    ? Loc.S("aprsMessageList.cancelSending")
+                    : Loc.S("aprsMessageList.sendAgain"),
+            };
+            item.Click += (_, _) =>
+            {
+                if (delivery.State == AprsDeliveryState.Pending)
+                {
+                    _messaging.Cancel(message.Id);
+                }
+                else
+                {
+                    _messaging.Resend(message.Id);
+                }
+            };
+            menu.Items.Add(item);
+            var again = new MenuFlyoutItem { Text = Loc.F("aprsCompose.messageTo", message.To) };
+            again.Click += async (_, _) => await ComposeAsync(message.To);
+            menu.Items.Add(again);
+        }
+        else
+        {
+            var reply = new MenuFlyoutItem { Text = Loc.F("aprsMessageList.reply", message.From) };
+            reply.Click += async (_, _) => await ComposeAsync(message.From);
+            menu.Items.Add(reply);
+        }
+        return menu;
+    }
+
+    /// New Message / Reply: addressee, text with a character count; Send
+    /// queues it (retried until acked).
+    private async Task ComposeAsync(string to)
+    {
+        var toBox = new TextBox
+        {
+            Header = Loc.S("common.to"),
+            Text = to,
+            PlaceholderText = "N0CALL-9",
+            FontFamily = MonoFont,
+            MaxLength = 9,
+            CharacterCasing = CharacterCasing.Upper,
+        };
+        var textBox = new TextBox
+        {
+            Header = Loc.S("common.message"),
+            AcceptsReturn = false,
+            TextWrapping = TextWrapping.Wrap,
+            MaxLength = AprsOutgoing.MaxMessageLength,
+            MinHeight = 72,
+        };
+        var count = new TextBlock { Foreground = new SolidColorBrush(Microsoft.UI.Colors.Gray), FontSize = 12 };
+        var problem = new TextBlock { Foreground = new SolidColorBrush(Microsoft.UI.Colors.Red), TextWrapping = TextWrapping.Wrap };
+        void UpdateCount() => count.Text = Loc.F("aprsCompose.count", textBox.Text.Length, AprsOutgoing.MaxMessageLength);
+        textBox.TextChanged += (_, _) => UpdateCount();
+        UpdateCount();
+        var panel = new StackPanel { Spacing = 10, Width = 400 };
+        panel.Children.Add(toBox);
+        panel.Children.Add(textBox);
+        panel.Children.Add(count);
+        panel.Children.Add(problem);
+        panel.Children.Add(new TextBlock
+        {
+            Text = Loc.S("aprsCompose.retryNote"),
+            Foreground = new SolidColorBrush(Microsoft.UI.Colors.Gray),
+            FontSize = 12,
+            TextWrapping = TextWrapping.Wrap,
+        });
+        var dialog = new ContentDialog
+        {
+            Title = Loc.S("aprsCompose.title"),
+            Content = panel,
+            PrimaryButtonText = Loc.S("aprsCompose.send"),
+            CloseButtonText = Loc.S("common.cancel"),
+            DefaultButton = ContentDialogButton.Primary,
+            XamlRoot = Content.XamlRoot,
+        };
+        dialog.PrimaryButtonClick += (_, args) =>
+        {
+            if (_messaging.Send(textBox.Text, toBox.Text) is { } failure)
+            {
+                problem.Text = failure.Message();
+                args.Cancel = true;
+            }
+        };
+        await dialog.ShowAsync();
+    }
+
+    private static Grid Row(GridLength[] columns, bool bold, params string[] cells)
+    {
+        var grid = new Grid { ColumnSpacing = 10 };
+        foreach (var width in columns)
+        {
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = width });
+        }
+        for (var i = 0; i < cells.Length; i++)
+        {
+            var text = new TextBlock
+            {
+                Text = cells[i],
+                TextTrimming = TextTrimming.CharacterEllipsis,
+                VerticalAlignment = VerticalAlignment.Center,
+                IsTextSelectionEnabled = !bold,
+            };
+            if (bold)
+            {
+                text.FontWeight = Microsoft.UI.Text.FontWeights.SemiBold;
+            }
+            else if (cells[i].Length > 0)
+            {
+                // Trimmed text stays readable on hover.
+                ToolTipService.SetToolTip(text, cells[i]);
+            }
+            Grid.SetColumn(text, i);
+            grid.Children.Add(text);
+        }
+        return grid;
+    }
+
+    [DllImport("user32.dll")]
+    private static extern uint GetDpiForWindow(IntPtr hwnd);
+
+    private static string SourceLabel(AprsSource source) => source == AprsSource.Main ? "Main" : "Sub";
+
+    private static string Relative(DateTimeOffset now, DateTimeOffset at)
+    {
+        var elapsed = now - at;
+        return elapsed.TotalSeconds switch
+        {
+            < 60 => Loc.S("common.justNow"),
+            < 3600 => Loc.F("common.xMinAgo", (int)elapsed.TotalMinutes),
+            < 86400 => Loc.F("common.xHAgo", (int)elapsed.TotalHours),
+            _ => Loc.F("common.xDAgo", (int)elapsed.TotalDays),
+        };
+    }
+}

@@ -1,0 +1,2614 @@
+/**
+ * Radio semantic view-model contract (MOR-1062).
+ *
+ * The seam between adapters (which consume runtime state and capabilities —
+ * see `lib/runtime/adapters/*`) and semantic UI (which renders only this
+ * shape and nothing else — no transport, store, or manufacturer knowledge).
+ * A design language may change how a fact looks; it may never change which
+ * facts exist. See docs/plans/2026-07-25-ui-composition-architecture-v3.md
+ * and the MOR-977 shared semantic skeleton (Linear comment, 2026-08-03).
+ *
+ * `ActiveRx` and the scheme-conditioned slot/target shapes below mirror the
+ * exact identity types frozen by the MOR-988 "Accepted capability and
+ * presentation semantics" decision (§3.2, §4) — this contract reuses that
+ * vocabulary rather than reinventing it. Every "unknown"/"denied" branch is
+ * intentional and must survive round-tripping — collapsing it into a
+ * boolean or a default is the failure mode this contract exists to prevent.
+ */
+import type { VfoScheme } from '$lib/types/capabilities';
+import type { NrLevelProjection, ControlDisplayDomain } from '$lib/radio/filter-controls';
+import { isSourcelessPermitUnknown, type FrequencyPermit, type TxPermit } from '$lib/utils/tx-permit';
+import type { MeterSourceIdentity as PrimitiveMeterSourceIdentity } from '../primitives/meters/meter-ballistics.svelte';
+import { invalid, record, exactKeys, str } from './validator-primitives';
+
+export type ReceiverId = 'MAIN' | 'SUB';
+export type VfoSlotId = 'A' | 'B';
+
+/**
+ * The `kind` discriminants of `VfoSlot` as the run-time list the page
+ * guard's identifier vocabulary reads (MOR-2716) — the single source
+ * of truth the assertion below ties the union to.
+ */
+export const VFO_SLOT_KINDS = ['slotted', 'relative', 'unslotted', 'unknown'] as const;
+export type VfoSlotKind = (typeof VFO_SLOT_KINDS)[number];
+
+/**
+ * Whether a VFO/target position has an addressable A/B slot at all, distinct
+ * from whether that slot was actually observed. `unslotted` = the scheme has
+ * no A/B concept here (`single`, `ab_shared`); `unknown` = a slotted scheme
+ * (`ab`, `main_sub`) whose slot could not be observed — MOR-988 §3.2/§4:
+ * missing/stale never synthesizes `A`.
+ */
+export type VfoSlot =
+  | { kind: 'slotted'; id: VfoSlotId }
+  | { kind: 'relative'; role: 'selected' | 'unselected' }
+  | { kind: 'unslotted' }
+  | { kind: 'unknown' };
+
+/**
+ * Compile-time tie (MOR-2716): `VfoSlot`'s members carry different fields
+ * per kind, so the union cannot derive its discriminants from
+ * `VFO_SLOT_KINDS` directly. This assertion fails to compile whenever a
+ * `kind` exists on only one side — a fifth slot kind added to the union
+ * but not the array (or vice versa) cannot compile.
+ */
+type RequireTrue<Matches extends true> = Matches;
+export type VfoSlotKindsTiedToVfoSlot = RequireTrue<
+  (<G>() => G extends VfoSlot['kind'] ? 1 : 2) extends
+    (<G>() => G extends VfoSlotKind ? 1 : 2)
+    ? true
+    : false
+>;
+
+/** MOR-988 §3.2 `ActiveRx`, verbatim: an adapter with no observation must never fabricate 'MAIN'. */
+export type ActiveRx =
+  | { status: 'known'; receiver: ReceiverId }
+  | { status: 'unknown' };
+
+/** A boolean radio fact (`split`, `dualWatch`) that can itself be unobserved. */
+export type BooleanFact =
+  | { status: 'known'; value: boolean }
+  | { status: 'unknown' };
+
+/**
+ * Structural = the radio model supports this. Operational = usable right
+ * now, given live capability AND field-observed state. MOR-977 two-level
+ * gating: a control that fails the STRUCTURAL half is absent (nothing to
+ * render); a control that fails only the OPERATIONAL half stays present but
+ * disabled, degrading to an explicit unknown/disabled state rather than a
+ * guessed default — MOR-988 §11.3: "Old v1 servers lacking additive fields
+ * degrade to `unknown`/disabled in v3, not guessed behavior."
+ */
+export interface Availability {
+  structural: boolean;
+  operational: boolean;
+}
+
+export interface VfoViewModel {
+  receiver: ReceiverId;
+  slot: VfoSlot;
+  label: string;
+  frequencyHz: number | null;
+  mode: string | null;
+  filter: string | null;
+  readonly display?: {
+    readonly frequencyHz: DisplayObservation<number>;
+    readonly mode: DisplayObservation<string>;
+    readonly filter: DisplayObservation<string>;
+  };
+  /** The ACTIVE RECEIVER's active VFO — globally unique across the radio. */
+  isActive: boolean;
+  /**
+   * MOR-1335 (vocabulary gap G4): this VFO is the active slot OF ITS OWN
+   * RECEIVER, whether or not that receiver is the radio-wide active one. The
+   * decomposition is exact — `isActive === isActiveSlot && (this receiver is
+   * the active receiver)` — so this is an ADDITIVE qualification of a fact the
+   * vocabulary already carried, not a second opinion about it.
+   *
+   * It exists because the receiver-scoped intents (`set_freq {receiver}`)
+   * write THAT receiver's active VFO: a consumer gating such an intent needs
+   * "the slot this receiver would write", and `isActive` can only name one
+   * such slot per RADIO. On `2/main_sub` that left the SUB receiver with no
+   * addressable VFO at all (the S3b parity gap).
+   *
+   * Unobserved fails CLOSED: a slotted position whose receiver's active-slot
+   * reading was never seen is `false` on BOTH slots — never guessed onto 'A',
+   * the same doctrine `slot: {kind:'unknown'}` follows. An UNSLOTTED position
+   * (and the single unknown-slot position of a receiver whose slot view was
+   * never observed) is `true`: it is the only position that receiver has, it
+   * reads that receiver's own top-level frequency, and there is no second VFO
+   * for a receiver-scoped write to land on instead.
+   */
+  isActiveSlot: boolean;
+  isTxTarget: boolean;
+}
+
+/**
+ * The `status: 'unknown'` reason codes of `TxTargetViewModel` as the
+ * run-time list the page guard's identifier vocabulary reads (MOR-2716) —
+ * one source of truth: the `reason` union below is derived from this array.
+ */
+export const TX_TARGET_UNKNOWN_REASONS = [
+  'not-observed', 'stale', 'unsupported', 'contradiction',
+] as const;
+export type TxTargetUnknownReason = (typeof TX_TARGET_UNKNOWN_REASONS)[number];
+
+export type TxTargetViewModel =
+  | { status: 'known'; receiver: ReceiverId; slot: VfoSlot; frequencyHz: number | null }
+  | { status: 'unknown'; reason: TxTargetUnknownReason };
+
+export interface ScopeAvailabilityViewModel {
+  hardwareScope: Availability;
+  audioFftScope: Availability;
+}
+
+/**
+ * The disabled-reason codes the parser accepts, as the run-time list the
+ * page guard's identifier vocabulary reads (MOR-2716) — one source of
+ * truth: the `DisabledReasonCode` union is derived from this array.
+ */
+export const DISABLED_REASON_CODES = [
+  'capability-unavailable',
+  'field-not-observed',
+  'tx-target-unknown',
+  'out-of-band',
+  /** MOR-1293: a hardware mutex with another control's CURRENT state
+   *  disables this one (e.g. PREAMP while DIGI-SEL is on/unknown, MOR-479).
+   *  Distinct from `capability-unavailable` (the control doesn't exist) and
+   *  `field-not-observed` (this control's OWN reading is unobserved) —
+   *  here the control itself is fine, a PEER control's state disables it. */
+  'mutually-exclusive-control',
+  /** MOR-2511 B2: the active receiver's profile does not declare this control
+   *  (e.g. SUB.att/preamp on FTX-1). The control is structurally absent for
+   *  this receiver regardless of the radio-wide capability. */
+  'receiver-lacks-control',
+] as const;
+export type DisabledReasonCode = (typeof DISABLED_REASON_CODES)[number];
+
+export interface DisabledReason {
+  field: string;
+  code: DisabledReasonCode;
+}
+
+/**
+ * A single TX-adjacent fact (MOR-1244): a value that is either known (with
+ * its type-checked reading) or unknown, paired with the MOR-977 two-level
+ * `Availability` — structural (does this radio model have the control at
+ * all) and operational (is it currently readable). The two are independent:
+ * `structural: false` means nothing to render; `structural: true,
+ * operational: false` means present-but-disabled, degrading to `unknown`
+ * rather than a guessed value, same doctrine as every other fact here.
+ */
+export type TxAuxReading<T> = { status: 'known'; value: T } | { status: 'unknown' };
+export interface TxAuxField<T> {
+  reading: TxAuxReading<T>;
+  availability: Availability;
+}
+export type DisplayObservation<T> =
+  | { readonly state: 'current' | 'stale'; readonly value: T }
+  | { readonly state: 'unknown'; readonly reason: 'not-observed' | 'invalid-value' | 'invalid-evidence' | 'identity-unresolved' }
+  | { readonly state: 'unsupported' };
+
+/**
+ * MOR-3677 — the filter-width DISPLAY state: what the width row and the
+ * spectrum chip render for the active receiver's width. A composed verdict
+ * over the `filterWidth`, `narrow` and `filterWidthRadioDefault` leaves
+ * (derived by `lib/runtime/adapters/filter-width-display.ts`'s
+ * `deriveFilterWidthDisplay`, the ONE definition) rather than a per-leaf
+ * `DisplayObservation`: the FTX-1 reports widths the leaf vocabulary cannot
+ * name — its own mode default (CAT code 000, no Hz exists) and the NARROW
+ * takeover (SH does not follow NARROW, so no Hz may be shown while it is
+ * on). `not-reported` is the honest "the radio answered but carries no Hz
+ * for this mode" (C4FM, an out-of-table code, or the flag leaf still
+ * unpublished by a pre-PR1 backend); `not-observed` is everything else,
+ * fail-closed.
+ */
+export type FilterWidthDisplay = Readonly<
+  | { readonly state: 'known'; readonly hz: number; readonly stale: boolean }
+  | { readonly state: 'radio-default' }
+  | { readonly state: 'narrow' }
+  | { readonly state: 'unknown'; readonly reason: 'not-reported' | 'not-observed' }
+  | { readonly state: 'unsupported' }
+>;
+
+export interface DisplayObservedField<T> extends TxAuxField<T> {
+  readonly display?: DisplayObservation<T>;
+}
+
+export type AtuStatus = 'off' | 'on' | 'tuning';
+
+/**
+ * TX-adjacent facts (MOR-1244, MOR-1262 decomposition slice 1A): ATU/TUNE,
+ * VOX (+gain/anti-vox/delay), COMP (+level), MON (+level), RF power, mic
+ * gain, drive gain. Facts only — no action/dispatch. ATU TUNE is a
+ * transmit-causing action; this contract carries only its honestly-gated
+ * *state*, never a control to trigger it (MOR-1262 §2 slice 1 safety note i).
+ */
+export interface TxAuxViewModel {
+  atu: TxAuxField<AtuStatus>;
+  vox: TxAuxField<boolean>;
+  voxGain: TxAuxField<number>;
+  antiVoxGain: TxAuxField<number>;
+  voxDelay: TxAuxField<number>;
+  compressor: TxAuxField<boolean>;
+  compressorLevel: TxAuxField<number>;
+  monitor: TxAuxField<boolean>;
+  monitorLevel: TxAuxField<number>;
+  rfPower: TxAuxField<number>;
+  micGain: TxAuxField<number>;
+  driveGain: TxAuxField<number>;
+}
+
+/**
+ * A single meter fact (MOR-1262 decomposition slice 2A): a numeric reading
+ * that is either known or unknown, the MOR-977 two-level `Availability`, and
+ * whether the meter reads meaningfully in the CURRENT RF state.
+ *
+ * `relevant` is the one field of this contract that must NOT be derived from
+ * radio state: TX-gated meters (Po/SWR/ALC/COMP/Id) are relevant exactly when
+ * the App-owned TX authority — the same source as the AppGlobalHost lamp
+ * (MOR-1008/MOR-1059) — says the transmitter may be live. Deriving it from
+ * `radioState.ptt` is the open disagreement MOR-1235 reports, and safety
+ * invariant R9 forbids reintroducing it here: this contract EXPOSES the
+ * authority's conclusion, it never computes one.
+ */
+export type MeterReading = { status: 'known'; value: number } | { status: 'unknown' };
+export type MeterEngineeringUnit = 'db' | 'normalized' | 'w' | 'ratio' | 'v' | 'a';
+export type MeterValueDomain =
+  | { readonly kind: 'engineering'; readonly unit: MeterEngineeringUnit }
+  | { readonly kind: 'raw' }
+  | { readonly kind: 'unknown' };
+export type MeterSourcePath =
+  | 'main.sMeter' | 'sub.sMeter'
+  | 'powerMeter' | 'swrMeter' | 'alcMeter' | 'compMeter' | 'vdMeter' | 'idMeter';
+export type MeterSourceIdentity = Readonly<
+  Omit<PrimitiveMeterSourceIdentity, 'path'> & { readonly path: MeterSourcePath }
+>;
+export type MeterPresence = 'present' | 'unavailable' | 'absent';
+export interface MeterField {
+  presence?: MeterPresence;
+  reading: MeterReading;
+  availability: Availability;
+  relevant: boolean;
+  /**
+   * Omitted only by pre-MOR-2425 internal fixtures/callers. Live adapters emit
+   * an explicit domain, including `unknown`; consumers must not infer an
+   * explicit unknown domain from profile calibration metadata.
+   */
+  domain?: MeterValueDomain;
+  source?: MeterSourceIdentity | null;
+}
+
+export interface DisplayObservedMeterField extends MeterField {
+  readonly display?: DisplayObservation<number>;
+}
+
+/**
+ * The authoritative RF state the meters are read against. Member-for-member
+ * the RX/TX surface's own `RfState` (`rx-tx-surface.ts`, MOR-1064) — declared
+ * again here rather than imported because that module already imports this
+ * one, and a contract must not depend on a surface. Agreement is pinned in
+ * `__tests__/meters.test.ts` against the real union and the real reducer.
+ */
+export type MeterRfState = 'receiving' | 'transmitting' | 'uncertain' | 'unknown';
+
+/**
+ * Meter facts (MOR-1262 decomposition slice 2A): S / Po / SWR / ALC / COMP /
+ * Vd / Id — the seven meters the shipped v2 dock renders. Facts only: no
+ * ballistics, no peak-hold, no formatting (those are presentation, slice 2B).
+ */
+export interface MetersViewModel {
+  rfState: MeterRfState;
+  signal: MeterField;
+  power: DisplayObservedMeterField;
+  swr: DisplayObservedMeterField;
+  alc: DisplayObservedMeterField;
+  compression: MeterField;
+  drainVoltage: MeterField;
+  drainCurrent: MeterField;
+}
+
+/**
+ * A single RX-audio fact (MOR-1262 decomposition slice 3A, MOR-1274). Shape-
+ * identical to `TxAuxField` — `{reading, availability}`, no third member —
+ * so it is declared as an alias rather than a near-duplicate: one field shape
+ * for every non-meter fact family, and slice 1A's declaration is left
+ * untouched. The validator is shared for the same reason.
+ */
+export type RxAudioReading<T> = TxAuxReading<T>;
+export type RxAudioField<T> = TxAuxField<T>;
+
+/** What the operator is listening to, verbatim the shipped `RxAudioProps`
+ *  vocabulary (`lib/runtime/props/panel-props.ts::toRxAudioProps`): `local` =
+ *  the rig's own speaker, `live` = the browser RX stream, `mute` = silenced. */
+export type MonitorMode = 'local' | 'live' | 'mute';
+
+/** Dual-receiver audio routing focus, verbatim `AudioRoutingControl.svelte`. */
+export type AudioFocus = 'main' | 'sub' | 'both';
+
+/**
+ * MOD-input readiness — the recorded "web voice TX = noise/squeal" guard.
+ * Member-for-member `lib/runtime/adapters/tx-capabilities.ts`'s own
+ * `ModInputReadiness`, declared again here for the same reason `MeterRfState`
+ * is (a contract must not depend on an adapter); the adapter EXPOSES
+ * `deriveTxCapabilities(...).modInputReadiness` rather than re-deriving it,
+ * and both the union and the derivation are pinned in `__tests__/rx-audio.test.ts`.
+ * `mismatch` is the failure the whole family exists to make visible: the rig
+ * is modulating from MIC/ACC/USB while the web UI streams audio over LAN.
+ */
+export type ModInputReadiness =
+  | { status: 'not-applicable' }
+  | { status: 'ready'; source: number }
+  | { status: 'mismatch'; source: number }
+  | { status: 'unknown' };
+
+/**
+ * RX audio-chain facts (MOR-1262 decomposition slice 3A). Facts only — no
+ * transport, no AudioContext, no lifetime: audio lifetime is App-owned
+ * (MOR-1058, MOR-972 P0) and this group is a pure read-model over a snapshot
+ * the App hands in. Constructing or serializing it must never start a stream.
+ *
+ * `monitorMode` and `liveAudio` come from that App-owned snapshot (the same
+ * relationship `meters.rfState` has to the TX authority); `afLevel` /
+ * `routingFocus` / `routingSplit` / `modInputSource` are two-level-gated facts
+ * that degrade to `unknown` rather than to the shipped panel's fabricated
+ * defaults (0.5 AF, 'both' focus).
+ */
+export interface RxAudioViewModel {
+  monitorMode: MonitorMode;
+  /** Structural = the radio streams audio at all; operational = the audio WS
+   *  is up. Without it a surface cannot honestly offer the `live` mode. */
+  liveAudio: Availability;
+  /** 0..1. In `live` mode the browser volume; otherwise the radio's AF level —
+   *  and `unknown` when that field was never observed, never 0.5. */
+  afLevel: RxAudioField<number>;
+  /** MOR-2579: each receiver's own radio AF level, 0..1, keyed by receiver,
+   *  not by the selection. Present only outside `live` monitoring, on a
+   *  two-receiver radio with the `af_level` and `af_level_sub` capability
+   *  tags (`deriveRxAudio`). */
+  readonly receiverAfLevels?: Readonly<Record<'main' | 'sub', RxAudioField<number>>>;
+  routingFocus: RxAudioField<AudioFocus>;
+  routingSplit: RxAudioField<boolean>;
+  /** The active DATA group's MOD-input source enum (`$lib/radio/mod-input`). */
+  modInputSource: RxAudioField<number>;
+  readonly modInputChoices?: readonly { readonly value: number; readonly label: string }[];
+  modInputReadiness: ModInputReadiness;
+  /** MOR-2792: the server's RX capture is delivering only digital silence
+   *  (bit-exact zeros). Cleared as soon as a non-zero frame arrives. */
+  rxSilent: boolean;
+}
+
+/**
+ * A single mode/filter fact (MOR-1262 decomposition slice 4A, MOR-1280).
+ * Shape-identical to `TxAuxField`, declared as an alias for the same reason
+ * `RxAudioField` is: one field shape per fact family, no near-duplicate.
+ */
+export type ModeFilterField<T> = TxAuxField<T>;
+
+export interface ActiveFilterConfiguration {
+  readonly slots: readonly { readonly filter: number; readonly label: string; readonly factoryWidthHz: number | null }[];
+  readonly fixed: boolean;
+  readonly minHz: number | null;
+  readonly maxHz: number | null;
+  readonly stepHz: number | null;
+  readonly segments: readonly { readonly hzMin: number; readonly hzMax: number; readonly stepHz: number; readonly indexMin: number }[];
+  readonly table: readonly number[];
+}
+
+/**
+ * Mode/filter facts (MOR-1262 decomposition slice 4A). Facts only — no
+ * command emission; choosing a mode or dragging the filter-width control
+ * stays with the surface (slice 4B).
+ *
+ * `modeChoices`/`filterChoices` are the capability-derived choice sets
+ * (`Capabilities.modes` / `.filters`, verbatim) — plain lists, not
+ * `ModeFilterField`-wrapped, because a choice set is a structural fact about
+ * the radio MODEL, not a live reading that can itself go stale. The current
+ * selection and the width bounds ARE readings, and degrade to `unknown`
+ * rather than to `toFilterProps`'s fabricated defaults ('USB', 2400 Hz,
+ * 50..9999 Hz) — see `radio-view-model-adapter.ts`'s `deriveModeFilter`.
+ */
+export interface ModeFilterViewModel {
+  readonly activeFilterConfiguration: ActiveFilterConfiguration | null;
+  currentMode: ModeFilterField<string>;
+  modeChoices: readonly string[];
+  currentFilter: ModeFilterField<number>;
+  filterChoices: readonly string[];
+  /**
+   * MOR-3677: the composed width display state (see `FilterWidthDisplay`).
+   * `filterWidth` keeps its own meaning — the Hz reading or unknown — so
+   * command gating (`usable`) and the feedback lifecycle stay untouched;
+   * this field owns the RENDERING vocabulary only.
+   */
+  filterWidth: ModeFilterField<number>;
+  filterWidthDisplay: FilterWidthDisplay;
+  filterWidthMin: ModeFilterField<number>;
+  filterWidthMax: ModeFilterField<number>;
+}
+
+/**
+ * A single filter-passband fact (MOR-1262 decomposition slice 4A′, MOR-1284).
+ * Shape-identical to `TxAuxField`, declared as an alias for the same reason
+ * `ModeFilterField`/`RxAudioField` are: one field shape per fact family.
+ */
+export type FilterPassbandField<T> = TxAuxField<T>;
+
+/**
+ * Filter-passband facts (MOR-1262 decomposition slice 4A′, MOR-1284): filter
+ * shape, IF-shift, passband tuning (PBT) inner/outer, and the DATA-mode
+ * selector these controls key off. Facts only — no command emission, same
+ * doctrine as `modeFilter` (MOR-1280).
+ *
+ * A SEPARATE group from `modeFilter` rather than five more keys on it: 4A
+ * covers discrete SELECTION facts (which mode/filter is chosen, and the
+ * capability-declared choice sets) gated by a single required-field-is-
+ * signal-free capability check. This family covers continuous passband-
+ * SHAPING facts (family 9 of the MOR-1262 decomposition — FilterPanel +
+ * `filter-controls`) with a different, per-field evidence story (see
+ * `deriveFilterPassband`). Folding both into one `exactKeys` list would mix
+ * two evidence-gate shapes under one allow-list and force every 4B
+ * passband-only consumer to import the selection keys too. One group per
+ * family, same precedent as `txAux`/`meters`/`rxAudio`/`modeFilter`.
+ *
+ * `ifShift`/`pbtInner`/`pbtOuter` consume `$lib/radio/filter-controls`'s
+ * `measuredPbtRawToHz`/`deriveIfShift` — the exact functions `toFilterProps`
+ * calls — never a re-derived formula (X6200 lesson: PBT/filter scaling is
+ * per-radio-model data). The adapter gates PBT structure on a `PbtRange`
+ * derived from THIS request's own `caps` argument (`pbtRangeFromCaps`,
+ * MOR-1284 F1) rather than the capabilities STORE singleton — a fact-layer
+ * value must be a pure function of `(state, caps)`, never of module-global
+ * state that can differ from the `caps` already in hand.
+ */
+export interface FilterPassbandViewModel {
+  filterShape: FilterPassbandField<number>;
+  /**
+   * MOR-1502 review round. `filterShape.availability.structural` above is a
+   * fact-derivation gate — `hasFilters` (part of the same filter subsystem
+   * `modeFilter.filterWidth` is), true for ANY radio with a declared filter
+   * catalog. A radio with filters but no `filter_shape` COMMAND (the FTX-1)
+   * still gets an honest derived `filterShape` READING for consumers of the
+   * raw fact (e.g. `scope-adapter.ts`). This is a SEPARATE, presentation-only
+   * gate: whether the radio has a REAL `filter_shape` command of its own.
+   * The FTX-1 has none — showing its SHARP/SOFT shape CONTROL permanently
+   * disabled is a dead control (same class of defect `ifShiftControlStructural`
+   * fixed, MOR-1494 ruling: hide capability-absent controls, don't show them
+   * dead). `FilterInstrumentHost.svelte` gates the filter-shape ROW on this flag,
+   * and ONLY this flag — never on `filterShape.availability.structural`,
+   * which stays reserved for consumers of the derived fact itself (see
+   * `deriveFilterPassband`'s doc comment). A plain boolean, not
+   * `FilterPassbandField`-wrapped, for the same reason `ifShiftControlStructural`
+   * isn't: a structural fact about the radio MODEL, not a live reading that
+   * can itself go stale.
+   */
+  filterShapeControlStructural: boolean;
+  ifShift: FilterPassbandField<number>;
+  /**
+   * MOR-1494 review round. `ifShift.availability.structural` above is a
+   * fact-derivation gate — `hasIfShiftCap || (hasPbtCap && hasPbtRange)`
+   * as of MOR-1291 (previously `hasIfShiftCap || hasPbtCap`; a radio that
+   * declares `pbt` but no usable `pbt_inner` range can never actually
+   * produce a derived reading, so it no longer claims structural presence
+   * either). A radio with `pbt` AND a declared range still gets an honest
+   * derived `ifShift` READING, e.g. for `scope-adapter.ts`'s passband-center
+   * overlay. This is a SEPARATE, presentation-only gate: whether the radio
+   * has a REAL `if_shift` COMMAND of its own. IC-7300 (PBT-only) has none —
+   * showing its IF-shift CONTROL permanently disabled with a PBT-derived
+   * stand-in is a dead control (the owner's MOR-1494 ruling: hide
+   * capability-absent controls, don't show them dead). `FilterSurface.svelte`
+   * gates the ifShift ROW on this flag, and ONLY this flag — never on
+   * `ifShift.availability.structural`, which stays reserved for consumers of
+   * the derived fact itself (see `deriveFilterPassband`'s doc comment).
+   * A plain boolean, not `FilterPassbandField`-wrapped, for the same reason
+   * `ModeFilterViewModel.modeChoices`/`filterChoices` aren't: a structural
+   * fact about the radio MODEL, not a live reading that can itself go stale.
+   */
+  ifShiftControlStructural: boolean;
+  /**
+   * The IF-shift control's numeric display domain from the profile's
+   * published `controls.if_shift` entry (MOR-1681): `{min, max, step,
+   * origin}` when the radio declares a usable one, absent when it declares
+   * nothing usable — the fact group states the DOMAIN, never a fallback;
+   * consumers keep their own today-behaviour constants for the absent
+   * case. Not a per-field reading: one control, one domain, so it sits on
+   * the group beside the field it governs.
+   */
+  ifShiftDomain?: ControlDisplayDomain;
+  /**
+   * The twin-PBT slider domain on the measured lattice (MOR-2497):
+   * `{min, max, step, origin}` from `measuredPbtDisplayDomain(width, step)`
+   * at the observed filter width and the current mode's declared
+   * `pbtStepHz` — the ONE derivation, shared with `toFilterProps`'s own
+   * `pbtDomain` (#3527); this group never re-states the formula. Absent
+   * when no lattice forms (a mode with no step such as FM, a legacy
+   * payload, an unobserved or degenerate width) — the fact group states
+   * the DOMAIN, never a fallback; `FilterSurface.svelte` then keeps its
+   * own row constants, the same absent-case contract `ifShiftDomain`
+   * above established. Not a per-field reading: one lattice serves both
+   * PBT edges, so it sits on the group beside the fields it governs.
+   */
+  pbtDomain?: ControlDisplayDomain;
+  pbtInner: DisplayObservedField<number>;
+  pbtOuter: DisplayObservedField<number>;
+  /**
+   * NARROW toggle for the active receiver (MOR-2640): `set_narrow`'s
+   * confirmed readback (`main.narrow`/`sub.narrow`). Structural exactly
+   * when the profile declares the `narrow` capability — a radio without
+   * it shows no control (owner rule, same as the DSP toggles).
+   */
+  narrow: FilterPassbandField<boolean>;
+  dataMode: FilterPassbandField<number>;
+  readonly dataModeChoices: readonly { readonly value: number; readonly label: string | null }[];
+  modInputSource?: FilterPassbandField<number>;
+  readonly modInputChoices?: readonly { readonly value: number; readonly label: string }[];
+}
+
+/**
+ * A single DSP fact (MOR-1262 decomposition slice 5A, MOR-1290).
+ * Shape-identical to `TxAuxField`, declared as an alias for the same reason
+ * `FilterPassbandField`/`ModeFilterField`/`RxAudioField` are: one field
+ * shape per fact family.
+ */
+export type DspField<T> = TxAuxField<T>;
+
+/**
+ * DSP facts (MOR-1262 decomposition slice 5A, MOR-1290): noise reduction
+ * (NR), noise blanker (NB, + depth/width), notch (auto/manual), and AGC.
+ * Facts only — no command emission, same doctrine as `modeFilter`/
+ * `filterPassband`. Family enumeration is explicit and CLOSED: filter shape,
+ * IF-shift, and PBT are family 4 (`filterPassband`, MOR-1284) — this group
+ * never duplicates them.
+ *
+ * `nrLevel` carries the shared `projectNrLevel` result; `nbDepth` is decoded
+ * by `resolveControlContract(caps, 'nb_depth')`. Both consume
+ * `$lib/radio/filter-controls` rather than re-deriving a scale (X6200 lesson:
+ * scaling is per-radio-model data). The projection is optional only so
+ * semantic payloads and fixtures produced before MOR-1736 remain valid; the
+ * live adapter always emits it.
+ *
+ * `agcModes` is the capability-derived AGC choice set (`Capabilities.
+ * agcModes`, verbatim) — a plain list, not `DspField`-wrapped, for the same
+ * reason `ModeFilterViewModel`'s `modeChoices`/`filterChoices` aren't: a
+ * choice set is a structural fact about the radio MODEL, not a live reading
+ * that can itself go stale.
+ */
+export interface DspViewModel {
+  nrActive: DspField<boolean>;
+  nrLevel: DspField<number>;
+  /** Optional only for semantic payloads/fixtures produced before MOR-1736. */
+  nrLevelProjection?: NrLevelProjection;
+  nbActive: DspField<boolean>;
+  nbLevel: DspField<number>;
+  nbDepth: DspField<number>;
+  nbWidth: DspField<number>;
+  notchMode: DspField<'off' | 'auto' | 'manual'>;
+  notchFreq: DspField<number>;
+  /**
+   * The manual-notch control's numeric display domain from the profile's
+   * published `controls.manual_notch_freq` entry (MOR-2475): `{min, max, step,
+   * origin}` when the radio declares a usable one, absent when it declares
+   * nothing usable — the fact group states the DOMAIN, never a fallback;
+   * consumers keep their own today-behaviour constants for the absent case.
+   * When present and the field's status is usable, `notchFreq` carries that
+   * field's decoded display value; otherwise it reads the raw `notchFilter`
+   * field as before. Not a per-field reading: one control, one domain, so it
+   * sits on the group beside the field it governs.
+   */
+  notchFreqDomain?: ControlDisplayDomain;
+  manualNotchWidth: DspField<number>;
+  agcMode: DspField<number> & {
+    autoMode?: number;
+    autoSelectedSpeed?: string;
+  };
+  agcModes: readonly number[];
+  agcTimeConstant: DspField<number>;
+}
+
+/**
+ * A single RF-front-end fact (MOR-1262 decomposition slice 6A, MOR-1292).
+ * Shape-identical to `TxAuxField`, declared as an alias for the same reason
+ * `DspField`/`FilterPassbandField`/`ModeFilterField`/`RxAudioField` are: one
+ * field shape per fact family.
+ */
+export type RfFrontEndField<T> = TxAuxField<T>;
+
+/**
+ * RF front-end facts (MOR-1262 decomposition slice 6A, MOR-1292; extended by
+ * slice 6A′, MOR-1293): preamp, attenuator, RF gain, squelch, DIGI-SEL, IP+.
+ * Facts only — no command emission, same doctrine as
+ * `dsp`/`modeFilter`/`filterPassband`. Family enumeration is explicit and
+ * CLOSED: NR/NB/notch/AGC are family 5 (`dsp`, MOR-1290) — this group never
+ * duplicates them.
+ *
+ * `digiSel`/`ipPlus` were deliberately left out of 6A (MOR-1292 review
+ * ruling — enumeration gap identical in kind to the filterShape/IF-shift/PBT
+ * one from MOR-1284) because they are the shipped `RfFrontEndProps` panel's
+ * OWN remaining controls, sourced from the same `toRfFrontEndProps`. This
+ * slice (MOR-1293) closes the gap: EXTENDING this group rather than adding a
+ * sibling, because they share the same panel, the same `rf-frontend-utils`
+ * neighborhood, and the same per-field shape as the original four — a
+ * sibling group would just be this one split for no reason.
+ *
+ * `preamp`/`attenuator`/`rfGain`/`squelch`/`digiSel`/`ipPlus` are plain
+ * pass-through readings: unlike `dsp`'s `nrLevel`/`nbDepth`, the shipped
+ * `toRfFrontEndProps` (`lib/runtime/props/panel-props.ts`) reads
+ * `rx.preamp`/`rx.att`/`rx.rfGain`/`rx.squelch`/`rx.digisel`/`rx.ipplus`
+ * verbatim, with no raw<->display scale conversion — the server already
+ * reports these as display-ready values (dB steps, preamp-level ordinal,
+ * 0-1 gain fractions, booleans). There is no separate "real function" to
+ * consume for the VALUE; the parity surface here is the CAPABILITY gate and
+ * the choice sets below, both copied verbatim from `toRfFrontEndProps`.
+ *
+ * `preValues`/`attValues` are the capability-derived preamp-level and
+ * attenuator-dB choice sets (`Capabilities.preValues`/`.attValues`,
+ * verbatim) — plain lists, not field-wrapped, same reasoning as `dsp`'s
+ * `agcModes`: a choice set is a structural fact about the radio MODEL, not a
+ * live reading that can itself go stale. Per the X6200 lesson, these are
+ * read from the `caps` ARGUMENT only — never a radio-specific fallback table
+ * (the shipped panel's own `[0, 6, 12, 18]`/`[0, 1, 2]` UI-convenience
+ * defaults are presentation, not a fact — the IC-7610's actual ATT ladder
+ * is 16 × 3 dB steps per `rigs/ic7610.toml`, not these values — see
+ * `radio-view-model-adapter.ts`'s `deriveRfFrontEnd`).
+ *
+ * THE MUTEX (MOR-479, MOR-1293): the shipped panel derives an IC-7610
+ * hardware mutex from `digiSel` — the radio silently ignores a PREAMP set
+ * while DIGI-SEL is ON, so `toRfFrontEndProps` disables the PRE control
+ * rather than let it light optimistically. This contract does NOT add a
+ * bespoke boolean for that (no `preDisabled` field here) — it expresses the
+ * mutex through the existing `RadioViewModel.disabledReasons` home, exactly
+ * like every other cross-field disable in this contract (`scope.*`,
+ * `receiver.*`), with `field: 'rfFrontEnd.preamp'` and the new
+ * `'mutually-exclusive-control'` code. See
+ * `radio-view-model-adapter.ts`'s `deriveRfFrontEnd` for the derivation,
+ * which reads the mutex condition off THIS group's own `digiSel` fact —
+ * never off raw state again — so an unobserved DIGI-SEL reading FAILS
+ * CLOSED (the reason is present, disabling PRE) rather than silently
+ * re-enabling the control the way a naive `rawDigisel ?? false` would.
+ */
+export interface RfFrontEndViewModel {
+  preamp: RfFrontEndField<number>;
+  preValues: readonly number[];
+  /** `Capabilities.preLabels` verbatim, keyed by `String(level)`; absent when
+   *  the profile declares none. */
+  preLabels?: Readonly<Record<string, string>>;
+  attenuator: RfFrontEndField<number>;
+  attValues: readonly number[];
+  rfGain: RfFrontEndField<number>;
+  squelch: RfFrontEndField<number>;
+  digiSel: RfFrontEndField<boolean>;
+  ipPlus: RfFrontEndField<boolean>;
+}
+
+/**
+ * A single band fact (MOR-1262 decomposition slice 7A, MOR-1294).
+ * Shape-identical to `TxAuxField`, declared as an alias for the same reason
+ * `RfFrontEndField`/`DspField`/`ModeFilterField`/`RxAudioField` are: one
+ * field shape per fact family.
+ */
+export type BandField<T> = TxAuxField<T>;
+
+/**
+ * One selectable band of the radio's own band plan — `$lib/radio/band-plan`'s
+ * `FlatBand` (the shipped `flattenBands` output over `Capabilities.
+ * freqRanges`) plus the band's TX permit.
+ *
+ * SAFETY (MOR-1294): `defaultHzTxPermit` is the EXISTING `FrequencyPermit`
+ * tri-state, produced by the ONE derivation in this codebase
+ * (`getFrequencyPermit`, `$lib/utils/tx-permit` — the same function
+ * `deriveTxCapabilities` calls for the model's top-level `txPermit`). It is
+ * NOT read off the band plan itself: `freqRanges` describes what the radio
+ * can TUNE, `caps.txBands` describes where it may TRANSMIT, and treating a
+ * band's presence in the plan as permission to key is precisely the fail-open
+ * defect this slice forbids. A default outside `txBands` stays `denied`;
+ * `txBands: null` stays `unknown`.
+ *
+ * It is a POINT SAMPLE at `defaultHz`, and the field name says so (MOR-1294
+ * verify F1). It answers only "if I pick this band and land on its default
+ * frequency, may I key THERE" — the picker label. It is NOT a statement about
+ * the whole band: `txBands` segments are routinely NARROWER than a band-plan
+ * band (WARC segments, regional sub-bands, 60m channels), so a band whose
+ * default sits inside a permitted segment reads `allowed` here while the
+ * operator's LIVE frequency elsewhere in the same band is denied.
+ * `BandViewModel.currentBandTx` is the live-frequency answer and is NEVER
+ * derived from this field; a 7B surface must not present this as "you may
+ * transmit anywhere in this band".
+ */
+export interface BandChoice {
+  name: string;
+  startHz: number;
+  endHz: number;
+  defaultHz: number;
+  /** Icom band-stacking-register index; `null` when the plan declares none. */
+  bsrCode: number | null;
+  defaultHzTxPermit: FrequencyPermit;
+}
+
+/**
+ * Band facts (MOR-1262 decomposition slice 7A, MOR-1294): the current band,
+ * the capability-derived band choice set with its per-band TX permits, and
+ * the tuning envelope a frequency-entry surface validates against. Facts only
+ * — no command emission; selecting a band or committing a typed frequency
+ * stays with the surface (slice 7B).
+ *
+ * `bandChoices` is a plain list, not `BandField`-wrapped, for the same reason
+ * `modeFilter`'s `modeChoices` and `dsp`'s `agcModes` aren't: a choice set is
+ * a structural fact about the radio MODEL, not a live reading that can go
+ * stale. Per the X6200 lesson it is read from the `caps` ARGUMENT only, via
+ * the shipped `flattenBands` — never a frontend band table (the shipped
+ * `BandSelector.svelte`'s hard-coded `BROADCAST_SW_BANDS`/`BROADCAST_LW_MW_BANDS`
+ * presets are UI convenience, not radio facts, and are deliberately absent).
+ *
+ * `currentBand` is the shipped `findActiveBand` lookup over that same `caps`
+ * argument, keyed on the ACTIVE receiver's observed frequency — `unknown`
+ * when the frequency was never observed or when no band of the plan contains
+ * it, where the shipped `toBandSelectorProps` substitutes a fabricated
+ * 14.074 MHz. It is the ACTIVE receiver's entry of `receiverBands` below —
+ * one derivation, not a second one (MOR-2526).
+ *
+ * `receiverBands` (MOR-2526, owner ruling 2026-09-22) is the SAME
+ * `findActiveBand` lookup keyed on EACH receiver's OWN observed frequency: a
+ * receiver whose frequency is known has a band, so the FTX-1 can hold MAIN
+ * on 40 m while SUB sits on 2 m and each panel's tray reads its own entry.
+ * An entry is `unknown` when that receiver's frequency is unobserved OR when
+ * no named band of the plan contains it (the real FTX-1 2 m `freqRange`
+ * carries no named bands, so a 145.5 MHz SUB reads `unknown`, never an
+ * invented band). Both map keys are always present; a radio without a SUB
+ * receiver simply never reads the `sub` entry.
+ *
+ * `currentBandTx` is the FAIL-CLOSED, LIVE-FREQUENCY answer to "may the
+ * operator key right now" — see its own comment below. It is a different
+ * question from `bandChoices[].defaultHzTxPermit`, which is a point sample at
+ * a band's default frequency, and the two must never be conflated.
+ *
+ * `tuneMinHz`/`tuneMaxHz` are the frequency-entry constraint: the envelope of
+ * the declared `freqRanges` (range bounds, not band bounds — the gaps between
+ * bands are still tunable). `null` when the radio declares no range at all;
+ * never `primitives/frequency/frequency-tuning.ts::adjustFreqByDigit`'s
+ * fabricated `0 … 999 MHz` defaults.
+ */
+export interface BandViewModel {
+  currentBand: BandField<string>;
+  /** Per-receiver band readings (MOR-2526); `currentBand` is the active
+   * receiver's entry of this map — the adapter derives each entry once from
+   * its own receiver's frequency and never computes `currentBand` twice. */
+  receiverBands: Readonly<Record<'main' | 'sub', BandField<string>>>;
+  bandChoices: readonly BandChoice[];
+  /**
+   * SAFETY (MOR-1294, corrected by the verify F1 ruling). "May the operator
+   * key RIGHT NOW, at the frequency the radio is actually on."
+   *
+   * Evaluated at the LIVE frequency — `getFrequencyPermit(observedFreqHz,
+   * caps.txBands)`, the same single shipped derivation, just at the correct
+   * argument — and NEVER inherited from `bandChoices[].defaultHzTxPermit`.
+   * Inheriting the point sample is a demonstrated fail-OPEN whenever a
+   * `txBands` segment is narrower than the band-plan band it sits in (live
+   * 14.300 MHz reading `allowed` off a 14.000–14.150 allocation), which is
+   * common, silent, and exactly what "out-of-band must stay denied, never
+   * fail-open" forbids.
+   *
+   * Collapsed fail-closed exactly the way the shipped `getTxPermit` collapses
+   * the tri-state (`$lib/utils/tx-permit`: "unknown fails closed").
+   * `'allowed'` requires ALL of: a POSITIVELY known current band, a choice
+   * entry for it, and a POSITIVELY `allowed` live-frequency permit. An
+   * unobserved/malformed frequency, an out-of-plan frequency, a band
+   * absent from the choice set, an out-of-segment frequency and unconfigured
+   * TX ranges all read `'denied'`. An unknown input must never enable a
+   * TX-adjacent affordance — see `radio-view-model-adapter.ts`'s `deriveBand`,
+   * and the cross-field invariant `validateRadioViewModel` enforces on this
+   * pair.
+   */
+  currentBandTx: TxPermit;
+  tuneMinHz: number | null;
+  tuneMaxHz: number | null;
+}
+
+/**
+ * Repeater controls (MOR-2111 PR1, data + view model): the per-receiver
+ * facts a repeater strip reads. Facts only — no intent dispatch; the strip
+ * (the deck's first operated chips) lands in PR2.
+ *
+ * `inRepeaterBand` is derived from the receiver's OWN observed frequency and
+ * the flagged `freqRanges` — a range-level match, because `findActiveBand`
+ * matches only named sub-bands (`range.bands`) and a bare 2 m / 70 cm range
+ * carries none. Membership comes from profile data, never a hard-coded band.
+ *
+ * `toneMode` is the owner's three-state selector (OFF / TONE / TSQL),
+ * collapsed from the two neutral booleans `repeaterTone` + `repeaterTsql`.
+ * On the FTX-1 both live in one `CT` register, so the pair (tone off,
+ * TSQL on) is unrepresentable and reads `unknown`, never a guessed state.
+ *
+ * `toneFreq` reads the ENC tone frequency from `toneFreq` (centiHz), not
+ * `tsqlFreq`: on the FTX-1 the two are one `CN` register, and the model
+ * names the ENC field because that is the tone a repeater needs.
+ *
+ * `shift` maps the wire `repeaterShift` (0 simplex / 1 plus / 2 minus /
+ * 3 ARS) to simplex / plus / minus / ars. A value outside the radio's
+ * `shiftChoices` reads `unknown`, never `simplex`.
+ */
+export type RepeaterToneMode = 'off' | 'tone' | 'tsql';
+export type RepeaterShift = 'simplex' | 'plus' | 'minus' | 'ars';
+/** Shape-identical to `TxAuxField`, declared as an alias like `BandField`. */
+export type RepeaterField<T> = TxAuxField<T>;
+
+export interface RepeaterReceiverViewModel {
+  inRepeaterBand: RepeaterField<boolean>;
+  toneMode: RepeaterField<RepeaterToneMode>;
+  toneFreq: RepeaterField<number>;
+  shift: RepeaterField<RepeaterShift>;
+}
+
+/** Both map keys are always present; a radio without a SUB receiver simply
+ *  never reads the `sub` entry (same convention as `BandViewModel.receiverBands`). */
+export interface RepeaterViewModel {
+  main: RepeaterReceiverViewModel;
+  sub: RepeaterReceiverViewModel;
+  /** The shift values this radio offers; `ars` only with the
+   *  `repeater_shift_ars` tag. */
+  shiftChoices: readonly RepeaterShift[];
+}
+
+/**
+ * A single RIT/XIT fact (MOR-1262 decomposition slice 8A, MOR-1295).
+ * Shape-identical to `TxAuxField`, declared as an alias for the same reason
+ * `BandField`/`RfFrontEndField`/`DspField`/`ModeFilterField`/`RxAudioField`
+ * are: one field shape per fact family.
+ */
+export type RitXitField<T> = TxAuxField<T>;
+
+/**
+ * RIT/XIT facts (MOR-1262 decomposition slice 8A, MOR-1295): the RIT/XIT
+ * enables and their frequency offset. Facts only — no command emission;
+ * toggling RIT/XIT or dragging the offset stays with a future surface slice.
+ *
+ * `ritOffset`/`xitOffset` are DELIBERATELY two separate fields reading the
+ * SAME underlying register (`ServerStatePublic.ritFreq` — one CI-V RIT/XIT
+ * offset, shared), verbatim the shipped `toRitXitProps`
+ * (`lib/runtime/props/panel-props.ts`): `ritOffset: state?.ritFreq`,
+ * `xitOffset: state?.ritFreq`. This is not a duplicate-in-error; it is
+ * parity with the one existing derivation, which the shipped `RitXitPanel`
+ * itself resolves by displaying whichever is currently active
+ * (`xitActive && !ritActive ? xitOffset : ritOffset`). A future surface
+ * consuming this group makes that same choice from two honestly-identical
+ * readings, not from a field this contract already collapsed for it.
+ */
+export interface RitXitViewModel {
+  ritActive: RitXitField<boolean>;
+  ritOffset: RitXitField<number>;
+  xitActive: RitXitField<boolean>;
+  xitOffset: RitXitField<number>;
+}
+
+/**
+ * A single antenna fact (MOR-1262 decomposition slice 8A, MOR-1295).
+ * Shape-identical to `TxAuxField`, declared as an alias for the same reason
+ * `RitXitField`/`BandField`/`RfFrontEndField`/`DspField` are.
+ */
+export type AntennaField<T> = TxAuxField<T>;
+
+/**
+ * Antenna facts (MOR-1262 decomposition slice 8A, MOR-1295): the selected TX
+ * antenna port, whether the (port-dependent) RX-antenna override is active,
+ * and the capability-declared port count. ATU/tuner state is DELIBERATELY
+ * absent here — it is family 1's `txAux.atu` (MOR-1244) already, and family
+ * enumeration is explicit and CLOSED (same discipline `dsp`/`rfFrontEnd` use
+ * for their own neighbors) — this group never duplicates it.
+ *
+ * `antennaCount` is a plain number, not an `AntennaField`-wrapped reading,
+ * for the same reason `RfFrontEndViewModel.preValues` isn't: a port count is
+ * a structural fact about the radio MODEL (from `caps.antennas`), not a live
+ * reading that can itself go stale — see `radio-view-model-adapter.ts`'s
+ * `deriveAntenna` for why it is also this group's WHOLE evidence gate (the
+ * shipped `AntennaPanel`/`MobileRadioLayout` show nothing at all when
+ * `antennaCount <= 1`, and RX-ANT only nested inside that same condition —
+ * one v2 gate, not two).
+ *
+ * `rxAnt` reads the RX-antenna override for whichever port `txAntenna`
+ * currently names (`ServerStatePublic.rxAntenna1`/`.rxAntenna2`) — the
+ * shipped `toAntennaProps`'s own `txAntenna === 2 ? rxAntenna2 : rxAntenna1`
+ * selection. Per the 4A′/5A "never derive from a half-observed pair" lesson,
+ * it degrades to `unknown` whenever `txAntenna` itself is unobserved — an
+ * honest reading of a port this contract cannot honestly name is not
+ * possible, and silently falling back to port 1 is exactly the fabrication
+ * this contract exists to forbid.
+ */
+export interface AntennaViewModel {
+  txAntenna: AntennaField<number>;
+  rxAnt: AntennaField<boolean>;
+  antennaCount: number;
+}
+
+/**
+ * A single scan fact (MOR-1262 decomposition slice 8A, MOR-1295).
+ * Shape-identical to `TxAuxField`, declared as an alias for the same reason
+ * `AntennaField`/`RitXitField`/`BandField`/`RfFrontEndField` are.
+ */
+export type ScanField<T> = TxAuxField<T>;
+
+/**
+ * Scan facts (MOR-1262 decomposition slice 8A, MOR-1295): whether a scan is
+ * running, its type, and its resume mode. Facts only — the shipped scan-type
+ * / ΔF-span / resume-mode LABEL tables (`ScanPanel.svelte`'s `scanTypes`/
+ * `dfSpans`/`resumeModes` constants) are UI convenience, not radio facts, and
+ * are deliberately absent (X6200 lesson: no UI-only tables in the fact
+ * layer).
+ *
+ * There is no `scan` capability tag anywhere in v2 — the shipped `ScanPanel`
+ * renders unconditionally — so, like `MetersViewModel`, evidence is
+ * per-field "was this ever reported" (`radio-view-model-adapter.ts`'s
+ * `deriveScan`), not a capability check.
+ *
+ * `scanResumeMode` carries the shipped `& 0x0F` mask applied verbatim
+ * (`toScanProps`'s own `(state?.scanResumeMode ?? 0) & 0x0f`) — the raw field
+ * carries a direction bit this contract does not interpret, so the mask is
+ * consumed, not re-derived.
+ */
+export interface ScanViewModel {
+  scanning: ScanField<boolean>;
+  scanType: ScanField<number>;
+  scanResumeMode: ScanField<number>;
+}
+
+/**
+ * A single CW-keyer fact (MOR-1262 decomposition slice 9A, MOR-1296).
+ * Shape-identical to `TxAuxField`, declared as an alias for the same reason
+ * `ScanField`/`AntennaField`/`RitXitField`/`BandField` are.
+ */
+export type CwKeyerField<T> = TxAuxField<T>;
+
+/**
+ * Break-in state as a THREE-VALUED fact, never a boolean and never an int.
+ * `off` = the key does not transmit; `semi` = keying transmits with a
+ * hang-time (the delay fact below applies); `full` = QSK, the key transmits
+ * immediately. That difference is deliberate and is the whole point of the
+ * type: an unreadable break-in state must never present as "the key is
+ * safe".
+ */
+export type BreakInMode = 'off' | 'semi' | 'full';
+
+/**
+ * CW-keyer facts (MOR-1262 decomposition slice 9A, MOR-1296) — SAFETY-CRITICAL.
+ *
+ * FACTS ONLY, and here that phrase carries more weight than in any previous
+ * family: break-in KEYS THE TRANSMITTER. This group carries the READ state of
+ * the keyer and nothing else — no toggle, no action, no command vocabulary,
+ * not even a label table. `CwPanel.svelte`'s AUTO TUNE button (`cw_auto_tune`,
+ * a transmit-causing action) has no representation here at all, the same way
+ * `txAux` carries ATU *state* but never an ATU TUNE control (MOR-1244).
+ * Constructing, validating or serializing this group must not be able to key
+ * the radio; that is pinned by `__tests__/cw-keyer-purity.isolated.test.ts`, not merely
+ * asserted here.
+ *
+ * NO SECOND PERMIT. This group states no TX permission of its own. "May
+ * arming break-in cause the transmitter to key" is answered by the model's
+ * ONE existing `RadioViewModel.txPermit` (produced by `deriveTxCapabilities`,
+ * the same derivation the App TX authority uses — safety invariant R9: TX
+ * truth never comes from `radioState.ptt`), surfaced for this family through
+ * the existing `disabledReasons` home with `field: 'cwKeyer.breakIn'` — the
+ * MOR-1293 ruling that a cross-field disable is a `disabledReasons` entry, not
+ * a bespoke boolean, applied to the safety-critical case. A second permit
+ * field here — or any re-derivation of `getFrequencyPermit` in the CW path —
+ * is the forbidden defect, and `validateRadioViewModel` enforces the
+ * fail-closed half structurally: a model that carries a structurally-available
+ * `breakIn` while `txPermit` is anything other than `'allowed'` is REJECTED
+ * unless it also records that disabled reason.
+ *
+ * THE APF/TPF MUTEX (MOR-479 lineage, MOR-1293 precedent). `toCwProps`
+ * (`lib/runtime/props/panel-props.ts`) disables APF outside CW/CW-R and TPF
+ * outside RTTY/RTTY-R, in its own words "mirrors the MOR-479 preamp mutex".
+ * Same treatment as the DIGI-SEL/PREAMP mutex: no bespoke `apfDisabled`/
+ * `tpfDisabled` booleans here, one `disabledReasons` entry each with the
+ * generic `'mutually-exclusive-control'` code, and FAIL-CLOSED on an unknown
+ * mode (see `radio-view-model-adapter.ts`'s `deriveCwKeyerReasons`).
+ *
+ * Family enumeration is explicit and CLOSED. Three facts the shipped
+ * `CwProps` exposes are deliberately ABSENT because they belong to families
+ * this slice must not duplicate or fabricate:
+ *  - `sidetoneLevel` IS `txAux.monitorLevel` (`state.monitorGain`, family 1);
+ *  - `currentMode` IS `modeFilter.currentMode` (family 4) — the mutex above
+ *    READS that fact rather than re-reading `rx.mode` a second time;
+ *  - `keyerType` has no state field at all in v2 (`toCwProps` hard-codes 0
+ *    while `set_keyer_type` is write-only), so there is no fact to state and
+ *    a placeholder would be exactly the fabrication this contract forbids.
+ * `pitchHz` covers `cwPitch` and `sidetonePitch` together: both shipped props
+ * read the one `state.cwPitch` register, so this is one fact, not two.
+ */
+export interface CwKeyerViewModel {
+  breakIn: CwKeyerField<BreakInMode>;
+  breakInDelay: CwKeyerField<number>;
+  /** Keyer speed in WPM (`state.keySpeed`); `unknown`, never v2's 12. */
+  keyerSpeed: CwKeyerField<number>;
+  /** CW pitch / sidetone pitch in Hz (`state.cwPitch`); `unknown`, never 600. */
+  pitchHz: CwKeyerField<number>;
+  /**
+   * The pitch control's numeric display domain from the profile's published
+   * `controls.cw_pitch` entry (MOR-1682): `{min, max, step, origin}` when the
+   * radio declares a usable one (an exact domain's own lattice, or a legacy
+   * range whose step is its `decode_quantum` when published, else the
+   * adapter's fallback step), absent when it declares nothing usable — the
+   * fact group states the DOMAIN, never a fallback; consumers keep their own
+   * today-behaviour constants for the absent case. Not a per-field reading:
+   * one control, one domain, so it sits on the group beside the fields it
+   * governs.
+   */
+  pitchDomain?: ControlDisplayDomain;
+  /**
+   * The key-speed control's numeric display domain from the profile's
+   * published `controls.key_speed` entry (MOR-2475 F1): same shape and
+   * same absence semantics as `pitchDomain` above — one control, one
+   * domain, sitting on the group beside the field it governs; absent when
+   * the radio declares nothing usable, and consumers keep their own
+   * today-behaviour constants for the absent case.
+   */
+  keySpeedDomain?: ControlDisplayDomain;
+  reversePaddle: CwKeyerField<boolean>;
+  /** Audio peak filter type/level ordinal (`rx.apfTypeLevel`, 0 = off). */
+  apf: CwKeyerField<number>;
+  twinPeak: CwKeyerField<boolean>;
+}
+
+/**
+ * A single scope-control fact (MOR-1262 decomposition slice 11A, MOR-1298).
+ * Shape-identical to `TxAuxField`, declared as an alias for the same reason
+ * `CwKeyerField`/`ScanField`/`AntennaField` are.
+ */
+export type ScopeControlsField<T> = TxAuxField<T>;
+
+/**
+ * Scope-control facts (MOR-1262 decomposition slice 11A/MOR-1298, extended
+ * by slice 11A′/MOR-1299 and slice 11A″/MOR-1330): the twelve
+ * operator-navigated facts off the shipped spectrum toolbar's own
+ * `scopeControls` block (`components/spectrum/SpectrumToolbar.svelte`) —
+ * SPAN preset index, sweep SPEED, DUAL-scope on/off, which RECEIVER
+ * (MAIN=0/SUB=1) feeds the scope (11A), scope MODE (CTR/FIX/S-C/S-F), EDGE,
+ * HOLD and REF level (11A′), plus the four `ScopeSettingsPopover.svelte`
+ * leaves — CENTER TYPE, VBW NARROW, RBW and DURING-TX (11A″). The design doc
+ * that named this toolbar (`docs/plans/2026-04-18-spectrum-controls.md`)
+ * calls the MAIN/SUB selector the "scope-source selector" and proposes
+ * labelling it "SCOPE SRC" — the decomposition ticket's "receiver/source"
+ * pair names this ONE wire field (`ScopeControlsPublic.receiver`), not two.
+ *
+ * FACTS ONLY, and now the COMPLETE set of the twelve `scopeControls.*`
+ * SCALAR leaves the backend gives field-status entries for
+ * (`runtime_helpers.py`'s `_SCOPE_CONTROL_PUBLIC_FIELDS`) — MODE/EDGE/HOLD/
+ * REF were a recorded enumeration gap in 11A (11A′ closed it);
+ * duringTx/centerType/vbwNarrow/rbw were the four scalar leaves
+ * `ScopeSettingsPopover.svelte` reads (`scopeControls?.centerType`/
+ * `?.vbwNarrow`/`?.rbw`/`?.duringTx`) with no registered fact-layer home
+ * until now (11A″ closes that gap too). Same group, same `scope` gate, same
+ * namespace — not a separate "popover" or "display" family. Live scope
+ * FRAMES/WATERFALL DATA remain a wholly different, App-owned resource
+ * demand (12A) and are never carried here — this group states facts about
+ * the scope's CONTROLS, never its pixels.
+ *
+ * EXCLUDED — `fixedEdge`: the backend spec registers a fifth
+ * ScopeSettingsPopover-adjacent leaf, `scopeControls.fixedEdge`
+ * (MOR-1302), but it is deliberately left out of this group. It is a
+ * COMPOSITE — `FixedEdgePublic{rangeIndex, edge, startHz, endHz}`, not a
+ * scalar `int` as the original ticket guessed (MOR-1302's correction) — so
+ * adding it here would need a bespoke nested-object validator, not a
+ * drop-in `ScopeControlsField<number>`/`<boolean>`. And nothing reads it:
+ * `ScopeSettingsPopover.svelte` has no Fixed-Edge control section (verified
+ * by grep — only `centerType`/`vbwNarrow`/`rbw`/`duringTx` are read), nor
+ * does any other v2 component. A composite validator with zero consumers is
+ * exactly the speculative surface "no speculative keys" forbids. If a
+ * future surface reads `fixedEdge`, give it its own ticket.
+ *
+ * PARITY: values mirror the same `scopeControls.<leaf>` register the toolbar
+ * and popover read (`radio.current?.scopeControls`), and availability
+ * reuses the exact same `isFieldAvailable(state, 'scopeControls.<leaf>')`
+ * predicate the toolbar calls for its own `scope{Mode,Edge,Span,Speed,Hold,
+ * Ref,Dual,Receiver}Available` booleans — not a reimplementation. Where
+ * this contract DIVERGES from v2: the toolbar's `scopeControls?.span ?? 3`
+ * / `?? 1` / `?? false` / `?? 0` fallbacks (and the analogous `?.mode` /
+ * `?.edge` / `?.hold ?? false` / `?.refDb ?? 0` reads) fabricate a value on
+ * an unobserved field; here an absent raw reads `unknown`, never those
+ * defaults. When `mode` is absent, the entire row is hidden rather than
+ * fabricating CTR. EDGE's applicability is UI-only, gated on the current MODE
+ * value (`isEdgeApplicable` in `spectrum-toolbar-logic.ts` shows EDGE only
+ * in FIX/S-F modes) — that is a rendering decision, not a fact-availability
+ * distinction, so `edge`'s structural gate here mirrors `span`/`speed`/
+ * `mode`/`hold`/`refDb`, not a mode-conditional gate. The popover itself
+ * only fabricates on two of its four leaves — `vbwNarrow ?? false` and
+ * `duringTx ?? false` pick a concrete default, while `centerType`/`rbw` use
+ * bare `=== val` comparisons against `undefined` (no button lights up, but
+ * no specific value is asserted either) — this contract still reports
+ * `unknown` for all four when the raw field is unobserved, same honesty
+ * story either way.
+ *
+ * STRUCTURAL gate, doubly per the X6200 lesson (scope command support
+ * varies per radio — IC-7300/IC-9700 lack the `27 12`/`27 13` receiver-select
+ * commands even though `scope` is declared, and dual-scope operation is
+ * IC-7610-only in practice per MOR-664): `span`/`speed`/`mode`/`edge`/
+ * `hold`/`refDb`/`duringTx`/`centerType`/`vbwNarrow`/`rbw` are structurally
+ * available under `hasCap('scope')` alone (every scope-bearing single-RX
+ * radio supports them — the backend spec (`state_pipeline_contracts.py`)
+ * declares all ten as read-only ingress leaves with no additional
+ * capability distinction; the four popover leaves get no `dual_rx`
+ * sub-gate, matching MOR-1302's `family DISPLAY` registration), while
+ * `dual`/`receiver` ADDITIONALLY require `hasCap('dual_rx')` — the only
+ * generic capability tag this contract may use, per "no radio-specific
+ * tables in the frontend". This is a real strengthening beyond the shipped
+ * toolbar, which gates DUAL/MAIN-SUB on field-availability alone; where
+ * `dual_rx` still over-declares for a specific radio (e.g. IC-9700, whose
+ * VHF/UHF `dual_rx` is unrelated to scope receiver-select), the OPERATIONAL
+ * half degrades honestly because the backend never observes that leaf for
+ * that radio — same structural/operational split `hardwareScope`/
+ * `audioFftScope` already use.
+ */
+export interface ScopeControlsViewModel {
+  /** Scope mode ordinal: 0=CTR, 1=FIX, 2=S-C (scroll-center), 3=S-F
+   *  (scroll-fixed) — `MODE_BUTTONS` in `spectrum-toolbar-logic.ts` maps the
+   *  ordinal to a display label; that table is UI convenience, not a fact,
+   *  and is deliberately absent here. */
+  mode: ScopeControlsField<number>;
+  /** Fixed-edge preset index 1..4. Applicable only in FIX/S-F modes per the
+   *  toolbar's `isEdgeApplicable`, but that is a rendering decision — this
+   *  fact is structurally available whenever the group is, same as `mode`. */
+  edge: ScopeControlsField<number>;
+  /** Legacy radio span preset index; subscription controls display granted Hz. */
+  span: ScopeControlsField<number>;
+  /** Sweep-speed ordinal 0=FST/1=MID/2=SLO. */
+  speed: ScopeControlsField<number>;
+  hold: ScopeControlsField<boolean>;
+  /** Reference level in dB. The raw value here is whatever the radio
+   *  reports — including half-dB values — never a clamped or stepped
+   *  copy; `refRange` below carries the declared range the UI steps and
+   *  clamps against (`stepRef` in `spectrum-toolbar-logic.ts`). */
+  refDb: ScopeControlsField<number>;
+  /** The radio's declared REF adjustable range, derived from
+   *  capabilities (`ref_min_db`/`ref_max_db`, MOR-3694). `null` when the
+   *  active radio declares none — the REF steppers fail closed then, with
+   *  no fallback range. A capability echo fixed when caps load, not a
+   *  reading. */
+  refRange: { readonly min: number; readonly max: number } | null;
+  dual: ScopeControlsField<boolean>;
+  /** 0=MAIN, 1=SUB. */
+  receiver: ScopeControlsField<number>;
+  /** Whether the scope keeps sweeping while transmitting. Popover's
+   *  `duringTx ?? false` read fabricates a default on absence; here an
+   *  absent raw reads `unknown`. */
+  duringTx: ScopeControlsField<boolean>;
+  /** Sweep-center reference ordinal: 0=Filter, 1=Carrier, 2=Abs.Freq
+   *  (`CENTER_TYPE_LABELS` in `ScopeSettingsPopover.svelte` maps the
+   *  ordinal to a display label; that table is UI convenience, not a fact,
+   *  and is deliberately absent here). */
+  centerType: ScopeControlsField<number>;
+  /** Video-bandwidth-narrow toggle. Popover's `vbwNarrow ?? false` read
+   *  fabricates a default on absence; here an absent raw reads `unknown`. */
+  vbwNarrow: ScopeControlsField<boolean>;
+  /** Resolution-bandwidth ordinal: 0=Wide, 1=Mid, 2=Narrow (`RBW_LABELS` in
+   *  `ScopeSettingsPopover.svelte` maps the ordinal to a display label). */
+  rbw: ScopeControlsField<number>;
+}
+
+/**
+ * A single scope-display fact (MOR-1262 decomposition slice 12A, MOR-1301 —
+ * the LAST A-slice of the vocabulary program). Shape-identical to
+ * `TxAuxField`, declared as an alias for the same reason
+ * `ScopeControlsField`/`CwKeyerField`/etc. are.
+ */
+export type ScopeDisplayField<T> = TxAuxField<T>;
+
+/** Which scope channel the frontend currently treats as "the" scope
+ *  (`ScopeSource` in `lib/runtime/scope-controller.svelte.ts`) — hardware
+ *  CI-V scope frames vs the browser-side audio FFT. */
+export type ScopeSourceKind = 'hardware' | 'audio_fft';
+
+/** The v2 status-bar scope indicator's own state machine
+ *  (`ScopeIndicatorState` in `components-v2/layout/StatusBar.svelte`),
+ *  reproduced verbatim as the closed set of values this fact may take —
+ *  never a UI-only label, an ordinal, or a raw transport/lifecycle string. */
+export type ScopeHealthState =
+  | 'inactive' | 'starting' | 'connecting' | 'waiting'
+  | 'reconnecting' | 'failed' | 'disconnected' | 'connected';
+
+/**
+ * Scope-display facts (MOR-1262 decomposition slice 12A/MOR-1301, the FINAL
+ * A-slice of the vocabulary program): WHICH scope source is currently live
+ * and HOW HEALTHY it is — never scope TUNING (MODE/EDGE/HOLD/REF are
+ * `scopeControls`, slice 11A/11A′, and are not duplicated here per that
+ * slice's binding boundary ruling) and never the scope's PIXELS (live
+ * hardware/audio-FFT frames stay a wholly App-owned resource demand, same
+ * doctrine `ScopeAvailabilityViewModel`'s doc comment already states for
+ * `scope.hardwareScope`/`scope.audioFftScope` — this group is downstream of
+ * those two structural/operational booleans, not a replacement for them).
+ * Band-plan, DX-spot and EiBi overlays are explicitly out of scope too.
+ *
+ * PARITY: `source` mirrors `runtime.defaultScopeStatus.source`
+ * (`lib/runtime/frontend-runtime.ts`) and `health` reproduces the exact
+ * state machine the shipped status-bar scope indicator already computes
+ * from that same status object (`deriveScopeIndicatorState`,
+ * `StatusBar.svelte`) — pinned against the real function in
+ * `__tests__/scope-display-adapter.test.ts` rather than assumed, the same
+ * "agree with the real projector" discipline `deriveRxAudio`'s
+ * `modInputSource` uses. `demand`/`frameSeen`/`lifecycle`/`transport` are
+ * consumed ONLY as inputs to that one classification, never exposed as
+ * their own leaves — they are exactly the "subscription state"/"frame
+ * data" this slice's ticket forbids restating as facts.
+ *
+ * INPUT, not a store read: like `rxAudio` (slice 3A), `defaultScopeStatus`
+ * lives on the `FrontendRuntime` singleton, not on `ServerState`/
+ * `Capabilities` — a fact derivation may not read it directly (MOR-988 §3.2
+ * determinism), so the caller supplies a plain snapshot
+ * (`ScopeDisplaySnapshot`, `radio-view-model-adapter.ts`) and NO snapshot
+ * means NO group, same as `rxAudio`.
+ *
+ * CORRECTION (MOR-1312, slice 12B, MOR-1352): the 12A enumeration called
+ * `runtime.scope.hardwareScopeConnected` (`ScopeController`,
+ * `components/spectrum/SpectrumPanel.svelte`) "fully subsumed by `source` +
+ * `health`". That is false when `source === 'audio_fft'`: `health` then
+ * classifies the SELECTED (audio) channel, and says nothing about whether
+ * the hardware channel is ALSO connected. `hardwareConnected` below closes
+ * that gap as its own leaf rather than folding the input into
+ * `classifyScopeHealth` — that function is pinned byte-identical to the
+ * shipped `deriveScopeIndicatorState`, which does not take this input, so
+ * folding it in would break the parity slice 12A established.
+ */
+export interface ScopeDisplayViewModel {
+  source: ScopeDisplayField<ScopeSourceKind>;
+  health: ScopeDisplayField<ScopeHealthState>;
+  /** Mirrors `runtime.scope.hardwareScopeConnected` verbatim — independent
+   *  of `source`, tracking the hardware channel's own transport regardless
+   *  of which source is currently selected. See the CORRECTION note above. */
+  hardwareConnected: ScopeDisplayField<boolean>;
+}
+
+/**
+ * Receiver-addressed facts mounted with the semantic VFO deck (MOR-2299
+ * slice 1). One entry represents one structural receiver, never one VFO
+ * slot: an A/B radio therefore still has one entry. Every live reading uses
+ * the existing `{reading, availability}` fact shape so zero and `false`
+ * survive without becoming an unknown/default.
+ */
+export type ReceiverIndicatorField<T> = TxAuxField<T>;
+export interface ReceiverSMeterField extends ReceiverIndicatorField<number> {
+  /** Same compatibility rule as `MeterField.domain`. */
+  domain?: MeterValueDomain;
+  source?: MeterSourceIdentity | null;
+}
+export interface ReceiverIndicatorViewModel {
+  receiver: ReceiverId;
+  availability: Availability;
+  /**
+   * @deprecated Pre-MOR-2309 payload compatibility only. Live adapters no
+   * longer emit receiver-scoped RF authority; consumers must use the one
+   * radio-wide `radioWideIndicators.rfState` fact.
+   */
+  rfState?: MeterRfState;
+  sMeter: ReceiverSMeterField;
+  bandwidthHz: ReceiverIndicatorField<number>;
+  /** MOR-2706: the widest filter-width value ANY mode of the mounted
+   *  profile can print — a structural fact derived from the capabilities
+   *  and fixed when they load (never a reading), so the BW fact's slot
+   *  reservation can cover `BW {this} Hz`. Absent exactly when the radio
+   *  declares no `filter_width` capability, which is when `bandwidthHz` is
+   *  structurally absent and the BW fact is not drawn at all. */
+  bandwidthMaxHz?: number;
+  agcMode: ReceiverIndicatorField<number | string>;
+  nbActive: ReceiverIndicatorField<boolean>;
+  nrActive: ReceiverIndicatorField<boolean>;
+  notchMode: ReceiverIndicatorField<'off' | 'auto' | 'manual'>;
+  attenuator: ReceiverIndicatorField<number>;
+  preamp: ReceiverIndicatorField<number>;
+  rfGain: DisplayObservedField<number>;
+  digiSel: ReceiverIndicatorField<boolean>;
+  ipPlus: ReceiverIndicatorField<boolean>;
+  /** The receiver's own squelch LEVEL (the value the squelch slider shows),
+   *  behind the SQL tag: the tag shows while the level is above 0. Absent
+   *  exactly when the radio declares no `squelch` capability (the
+   *  `bandwidthMaxHz` precedent); a never-observed leaf reads `unknown`,
+   *  never 0. */
+  squelch?: ReceiverIndicatorField<number>;
+}
+
+/**
+ * One radio-wide action in the VFO deck's DUAL block (MOR-2309). Structural
+ * answers whether the loaded radio contract supports the action at all;
+ * operational answers whether the existing command handler can accept it
+ * from the current observed topology/state. The callback remains wiring-owned
+ * and is deliberately absent from this serializable semantic contract.
+ */
+export type RadioWideActionAvailability = Availability;
+
+export interface DualActionBlockViewModel {
+  main: RadioWideActionAvailability;
+  sub: RadioWideActionAvailability;
+  equalize: RadioWideActionAvailability;
+  swap: RadioWideActionAvailability;
+}
+
+/**
+ * Singleton radio-wide facts mounted beside the receiver-addressed indicator
+ * rows (MOR-2309). These are references to the same semantic readings already
+ * owned by `antenna`, `txAux.atu`, and `ritXit`; this group does not introduce
+ * a second state reader or command owner. A single-antenna radio still has an
+ * ANT fact even though it has no antenna-selection surface.
+ */
+export interface RadioWideIndicatorsViewModel {
+  /** One live RF fact from the existing App authority; never `ptt` or assignment. */
+  rfState: MeterRfState;
+  antenna: AntennaField<number>;
+  atu: TxAuxField<AtuStatus>;
+  /**
+   * Dial lock ON/OFF from the radio-wide state leaf `dialLock`; `structural`
+   * mirrors the `dial_lock` capability, and a never-observed leaf reads
+   * `unknown`, never `false`.
+   */
+  dialLock: TxAuxField<boolean>;
+  ritActive: RitXitField<boolean>;
+  ritOffset: RitXitField<number>;
+  xitActive: RitXitField<boolean>;
+  xitOffset: RitXitField<number>;
+  actions: DualActionBlockViewModel;
+}
+
+export interface RadioViewModel {
+  topologyId: string;
+  vfoScheme: VfoScheme;
+  activeReceiver: ActiveRx;
+  vfos: readonly VfoViewModel[];
+  /** Orthogonal wire booleans (state.ts `split`/`dualWatch`; independent CI-V
+   *  commands) — both may be true, false, or unobserved independently. */
+  split: BooleanFact;
+  dualWatch: BooleanFact;
+  txTarget: TxTargetViewModel;
+  txPermit: FrequencyPermit;
+  scope: ScopeAvailabilityViewModel;
+  disabledReasons: readonly DisabledReason[];
+  /**
+   * Optional for payload compatibility with pre-MOR-2299 fixtures; the live
+   * adapter always emits the complete structural receiver collection.
+   */
+  readonly receiverIndicators?: readonly ReceiverIndicatorViewModel[];
+  /** Absent only for payload compatibility with pre-MOR-2309 fixtures. The
+   *  live adapter emits exactly one singleton radio-wide projection. */
+  readonly radioWideIndicators?: RadioWideIndicatorsViewModel;
+  /** Absent (MOR-1264 optional group) ⇒ structurally unavailable: this radio
+   *  model has no TX-adjacent controls at all. Never emitted as a placeholder
+   *  of all-unknowns — see `radio-view-model-adapter.ts`'s evidence gate. */
+  readonly txAux?: TxAuxViewModel;
+  /** Absent (MOR-1264 optional group) ⇒ this radio reports no meters at all,
+   *  or the App TX authority was not supplied so no honest TX-relevance could
+   *  be stated — see `radio-view-model-adapter.ts`'s `deriveMeters`. */
+  readonly meters?: MetersViewModel;
+  /** Absent (MOR-1264 optional group) ⇒ the App-owned RX-audio snapshot was
+   *  not supplied, or this radio has no RX-audio chain to describe — see
+   *  `radio-view-model-adapter.ts`'s `deriveRxAudio`. */
+  readonly rxAudio?: RxAudioViewModel;
+  /** Absent (MOR-1264 optional group) ⇒ this radio declares no modes and no
+   *  filters and nothing mode/filter-shaped was ever observed — see
+   *  `radio-view-model-adapter.ts`'s `deriveModeFilter`. */
+  readonly modeFilter?: ModeFilterViewModel;
+  /** Absent (MOR-1264 optional group) ⇒ this radio declares no filters, no
+   *  PBT, no IF-shift and no DATA-mode capability — see
+   *  `radio-view-model-adapter.ts`'s `deriveFilterPassband`. */
+  readonly filterPassband?: FilterPassbandViewModel;
+  /** Absent (MOR-1264 optional group) ⇒ this radio declares no NR, no NB, no
+   *  notch and no AGC capability — see `radio-view-model-adapter.ts`'s
+   *  `deriveDsp`. */
+  readonly dsp?: DspViewModel;
+  /** Absent (MOR-1264 optional group) ⇒ this radio declares no preamp, no
+   *  attenuator, no RF-gain, no squelch, no DIGI-SEL and no IP+ capability
+   *  (MOR-1293 added the latter two) — see
+   *  `radio-view-model-adapter.ts`'s `deriveRfFrontEnd`. */
+  readonly rfFrontEnd?: RfFrontEndViewModel;
+  /** Absent (MOR-1264 optional group) ⇒ this radio declares no frequency
+   *  range at all, so there is no band plan and no tuning envelope to state
+   *  — see `radio-view-model-adapter.ts`'s `deriveBand`. */
+  readonly band?: BandViewModel;
+  /** Absent (MOR-1264 optional group) ⇒ this radio's `freqRanges` declares
+   *  no `repeater` band, so there is no repeater strip to gate — see
+   *  `radio-view-model-adapter.ts`'s `deriveRepeater`. */
+  readonly repeater?: RepeaterViewModel;
+  /** Absent (MOR-1264 optional group) ⇒ this radio declares neither `rit`
+   *  nor `xit` capability — see `radio-view-model-adapter.ts`'s
+   *  `deriveRitXit`. */
+  readonly ritXit?: RitXitViewModel;
+  /** Absent (MOR-1264 optional group) ⇒ this radio declares one antenna
+   *  port or fewer, so there is no port to select — see
+   *  `radio-view-model-adapter.ts`'s `deriveAntenna`. */
+  readonly antenna?: AntennaViewModel;
+  /** Absent (MOR-1264 optional group) ⇒ this radio has never reported
+   *  scanning/scanType/scanResumeMode — see `radio-view-model-adapter.ts`'s
+   *  `deriveScan`. */
+  readonly scan?: ScanViewModel;
+  /** Absent (MOR-1264 optional group) ⇒ this radio declares no `cw`
+   *  capability, so v2 renders no CW panel at all — see
+   *  `radio-view-model-adapter.ts`'s `deriveCwKeyer`. */
+  readonly cwKeyer?: CwKeyerViewModel;
+  /** Absent (MOR-1264 optional group) ⇒ this radio declares no `scope`
+   *  capability, so v2 renders no spectrum toolbar at all — see
+   *  `radio-view-model-adapter.ts`'s `deriveScopeControls`. */
+  readonly scopeControls?: ScopeControlsViewModel;
+  /** Absent (MOR-1264 optional group) ⇒ this radio declares no `scope`
+   *  capability and no audio-FFT scope source — see
+   *  `radio-view-model-adapter.ts`'s `deriveScopeDisplay`. */
+  readonly scopeDisplay?: ScopeDisplayViewModel;
+}
+
+const RECEIVER_IDS: readonly ReceiverId[] = ['MAIN', 'SUB'];
+const SLOT_IDS: readonly VfoSlotId[] = ['A', 'B'];
+const VFO_SCHEMES: readonly VfoScheme[] = ['single', 'ab', 'ab_shared', 'main_sub'];
+
+function oneOf<T>(value: unknown, allowed: readonly T[], path: string): T {
+  if (!allowed.includes(value as T)) invalid(path, allowed.join(' | '));
+  return value as T;
+}
+function bool(value: unknown, path: string): boolean {
+  if (typeof value !== 'boolean') invalid(path, 'a boolean');
+  return value;
+}
+function nullableNumber(value: unknown, path: string): number | null {
+  if (value !== null && (typeof value !== 'number' || !Number.isFinite(value))) {
+    invalid(path, 'a finite number or null');
+  }
+  return value as number | null;
+}
+function nullableString(value: unknown, path: string): string | null {
+  if (value !== null && typeof value !== 'string') invalid(path, 'a string or null');
+  return value as string | null;
+}
+function num(value: unknown, path: string): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) invalid(path, 'a finite number');
+  return value;
+}
+function strOrNum(value: unknown, path: string): string | number {
+  return typeof value === 'string' ? value : num(value, path);
+}
+
+/**
+ * Declares a fact group as optional (MOR-1264, decision (b) of the MOR-1262
+ * decomposition's slice 0): present ⇒ validated strictly by `validate` (the
+ * group runs its own `exactKeys`/shape checks, unchanged); absent (`value`
+ * is `undefined`) ⇒ the field stays `undefined` on the returned model and
+ * the family is structurally unavailable — the MOR-988 §11.3 degrade-to-
+ * unknown doctrine applied at the group level, not a new relaxation.
+ *
+ * A group is optional *only* because its key is listed in the containing
+ * `exactKeys(...)` allow-list alongside the required keys — `exactKeys`
+ * itself is untouched, so a key absent from that list is still rejected as
+ * an extra. This is what keeps "optional" bounded rather than "anything
+ * goes". A future slice declares and reads its group with one line each,
+ * e.g. (MOR-1244, `txAux`) — `validateTxAux` built from the same
+ * `record`/`exactKeys`/`str` imported from `./validator-primitives`:
+ *   exactKeys(v, [...requiredKeys, 'txAux'], '$');
+ *   txAux: optionalGroup(v.txAux, '$.txAux', validateTxAux),
+ */
+export function optionalGroup<T>(
+  value: unknown,
+  path: string,
+  validate: (value: unknown, path: string) => T,
+): T | undefined {
+  return value === undefined ? undefined : validate(value, path);
+}
+
+function validateVfoSlot(value: unknown, path: string): VfoSlot {
+  const v = record(value, path);
+  if (v.kind === 'slotted') {
+    exactKeys(v, ['kind', 'id'], path);
+    return { kind: 'slotted', id: oneOf(v.id, SLOT_IDS, `${path}.id`) };
+  }
+  if (v.kind === 'relative') {
+    exactKeys(v, ['kind', 'role'], path);
+    return {
+      kind: 'relative',
+      role: oneOf(v.role, ['selected', 'unselected'] as const, `${path}.role`),
+    };
+  }
+  if (v.kind === 'unslotted') {
+    exactKeys(v, ['kind'], path);
+    return { kind: 'unslotted' };
+  }
+  if (v.kind === 'unknown') {
+    exactKeys(v, ['kind'], path);
+    return { kind: 'unknown' };
+  }
+  invalid(`${path}.kind`, `'slotted' | 'relative' | 'unslotted' | 'unknown'`);
+}
+function slotEqual(a: VfoSlot, b: VfoSlot): boolean {
+  if (a.kind === 'slotted' && b.kind === 'slotted') return a.id === b.id;
+  if (a.kind === 'relative' && b.kind === 'relative') return a.role === b.role;
+  return a.kind === b.kind;
+}
+
+function validateActiveRx(value: unknown, path: string): ActiveRx {
+  const v = record(value, path);
+  if (v.status === 'known') {
+    exactKeys(v, ['status', 'receiver'], path);
+    return { status: 'known', receiver: oneOf(v.receiver, RECEIVER_IDS, `${path}.receiver`) };
+  }
+  if (v.status === 'unknown') {
+    exactKeys(v, ['status'], path);
+    return { status: 'unknown' };
+  }
+  invalid(`${path}.status`, `'known' | 'unknown'`);
+}
+
+function validateBooleanFact(value: unknown, path: string): BooleanFact {
+  const v = record(value, path);
+  if (v.status === 'known') {
+    exactKeys(v, ['status', 'value'], path);
+    return { status: 'known', value: bool(v.value, `${path}.value`) };
+  }
+  if (v.status === 'unknown') {
+    exactKeys(v, ['status'], path);
+    return { status: 'unknown' };
+  }
+  invalid(`${path}.status`, `'known' | 'unknown'`);
+}
+
+function validateAvailability(value: unknown, path: string): Availability {
+  const v = record(value, path);
+  exactKeys(v, ['structural', 'operational'], path);
+  return { structural: bool(v.structural, `${path}.structural`), operational: bool(v.operational, `${path}.operational`) };
+}
+
+function validateVfo(value: unknown, path: string): VfoViewModel {
+  const v = record(value, path);
+  exactKeys(
+    v,
+    ['receiver', 'slot', 'label', 'frequencyHz', 'mode', 'filter', 'isActive', 'isActiveSlot', 'isTxTarget', 'display'],
+    path,
+  );
+  return {
+    receiver: oneOf(v.receiver, RECEIVER_IDS, `${path}.receiver`),
+    slot: validateVfoSlot(v.slot, `${path}.slot`),
+    label: str(v.label, `${path}.label`),
+    frequencyHz: nullableNumber(v.frequencyHz, `${path}.frequencyHz`),
+    mode: nullableString(v.mode, `${path}.mode`),
+    filter: nullableString(v.filter, `${path}.filter`),
+    isActive: bool(v.isActive, `${path}.isActive`),
+    isActiveSlot: bool(v.isActiveSlot, `${path}.isActiveSlot`),
+    isTxTarget: bool(v.isTxTarget, `${path}.isTxTarget`),
+    ...(v.display !== undefined ? { display: validateVfoDisplay(v.display, `${path}.display`) } : {}),
+  };
+}
+
+function validateVfoDisplay(value: unknown, path: string): NonNullable<VfoViewModel['display']> {
+  const v = record(value, path);
+  exactKeys(v, ['frequencyHz', 'mode', 'filter'], path);
+  return {
+    frequencyHz: validateDisplayObservation(v.frequencyHz, `${path}.frequencyHz`, num),
+    mode: validateDisplayObservation(v.mode, `${path}.mode`, str),
+    filter: validateDisplayObservation(v.filter, `${path}.filter`, str),
+  };
+}
+
+function validateTxTarget(value: unknown, path: string): TxTargetViewModel {
+  const v = record(value, path);
+  if (v.status === 'known') {
+    exactKeys(v, ['status', 'receiver', 'slot', 'frequencyHz'], path);
+    return {
+      status: 'known',
+      receiver: oneOf(v.receiver, RECEIVER_IDS, `${path}.receiver`),
+      slot: validateVfoSlot(v.slot, `${path}.slot`),
+      frequencyHz: nullableNumber(v.frequencyHz, `${path}.frequencyHz`),
+    };
+  }
+  if (v.status === 'unknown') {
+    exactKeys(v, ['status', 'reason'], path);
+    return {
+      status: 'unknown',
+      reason: oneOf(v.reason, ['not-observed', 'stale', 'unsupported', 'contradiction'] as const, `${path}.reason`),
+    };
+  }
+  invalid(`${path}.status`, `'known' | 'unknown'`);
+}
+
+function validateTxPermit(value: unknown, path: string): FrequencyPermit {
+  const v = record(value, path);
+  if (v.status === 'allowed') {
+    exactKeys(v, ['status', 'band'], path);
+    return { status: 'allowed', band: nullableString(v.band, `${path}.band`) };
+  }
+  if (v.status === 'denied') {
+    exactKeys(v, ['status', 'reason'], path);
+    return { status: 'denied', reason: oneOf(v.reason, ['outside-configured-ranges'] as const, `${path}.reason`) };
+  }
+  if (v.status === 'unknown') {
+    exactKeys(v, ['status', 'reason'], path);
+    return {
+      status: 'unknown',
+      reason: oneOf(v.reason, ['ranges-unconfigured', 'tx-target-unknown'] as const, `${path}.reason`),
+    };
+  }
+  invalid(`${path}.status`, `'allowed' | 'denied' | 'unknown'`);
+}
+
+function validateDisabledReason(value: unknown, path: string): DisabledReason {
+  const v = record(value, path);
+  exactKeys(v, ['field', 'code'], path);
+  return { field: str(v.field, `${path}.field`), code: oneOf(v.code, DISABLED_REASON_CODES, `${path}.code`) };
+}
+
+const METER_RF_STATES: readonly MeterRfState[] = ['receiving', 'transmitting', 'uncertain', 'unknown'];
+const METER_SOURCE_PATHS: readonly MeterSourcePath[] = [
+  'main.sMeter', 'sub.sMeter', 'powerMeter', 'swrMeter', 'alcMeter', 'compMeter', 'vdMeter', 'idMeter',
+];
+type MeterSourceExpectation = 'signal' | Exclude<MeterSourcePath, 'main.sMeter' | 'sub.sMeter'>;
+const METER_UNIT_BY_SOURCE = {
+  'main.sMeter': 'db', 'sub.sMeter': 'db', powerMeter: 'w', swrMeter: 'ratio',
+  alcMeter: 'normalized', compMeter: 'db', vdMeter: 'v', idMeter: 'a',
+} as const satisfies Readonly<Record<MeterSourcePath, MeterEngineeringUnit>>;
+
+function validateMeterValueDomain(
+  value: unknown, path: string, expectedSource: MeterSourceExpectation,
+): MeterValueDomain {
+  const v = record(value, path);
+  if (v.kind === 'engineering') {
+    exactKeys(v, ['kind', 'unit'], path);
+    const unit = oneOf(
+      v.unit, ['db', 'normalized', 'w', 'ratio', 'v', 'a'] as const, `${path}.unit`,
+    );
+    const expectedUnit = expectedSource === 'signal' ? 'db' : METER_UNIT_BY_SOURCE[expectedSource];
+    if (unit !== expectedUnit) invalid(`${path}.unit`, expectedUnit);
+    return { kind: 'engineering', unit };
+  }
+  if (v.kind === 'raw' || v.kind === 'unknown') {
+    exactKeys(v, ['kind'], path);
+    return { kind: v.kind };
+  }
+  return invalid(`${path}.kind`, "'engineering' | 'raw' | 'unknown'");
+}
+
+function validateMeterSource(
+  value: unknown, path: string, expected: MeterSourceExpectation,
+): MeterSourceIdentity {
+  const v = record(value, path);
+  exactKeys(v, ['providerGeneration', 'scope', 'receiver', 'path'], path);
+  if (typeof v.providerGeneration !== 'number'
+    || !Number.isSafeInteger(v.providerGeneration) || v.providerGeneration < 0) {
+    invalid(`${path}.providerGeneration`, 'a non-negative safe integer');
+  }
+  const scope = oneOf(v.scope, ['radio', 'receiver'] as const, `${path}.scope`);
+  const receiver = v.receiver === null
+    ? null : oneOf(v.receiver, ['MAIN', 'SUB'] as const, `${path}.receiver`);
+  const sourcePath = oneOf(v.path, METER_SOURCE_PATHS, `${path}.path`);
+  const source: MeterSourceIdentity = {
+    providerGeneration: v.providerGeneration, scope, receiver, path: sourcePath,
+  };
+  if (expected === 'signal') {
+    const coherent = scope === 'receiver'
+      && ((receiver === 'MAIN' && sourcePath === 'main.sMeter')
+        || (receiver === 'SUB' && sourcePath === 'sub.sMeter'));
+    if (!coherent) invalid(path, 'a canonical MAIN/main.sMeter or SUB/sub.sMeter receiver source');
+  } else if (scope !== 'radio' || receiver !== null || sourcePath !== expected) {
+    invalid(path, `the canonical radio source for ${expected}`);
+  }
+  return source;
+}
+
+function validateMeterField(
+  value: unknown, path: string, expectedSource: MeterSourceExpectation,
+): MeterField {
+  const v = record(value, path);
+  exactKeys(v, ['reading', 'availability', 'relevant', 'domain', 'source', 'presence'], path);
+  const r = record(v.reading, `${path}.reading`);
+  let reading: MeterReading;
+  if (r.status === 'known') {
+    exactKeys(r, ['status', 'value'], `${path}.reading`);
+    reading = { status: 'known', value: num(r.value, `${path}.reading.value`) };
+  } else if (r.status === 'unknown') {
+    exactKeys(r, ['status'], `${path}.reading`);
+    reading = { status: 'unknown' };
+  } else {
+    invalid(`${path}.reading.status`, "'known' | 'unknown'");
+  }
+  return {
+    reading,
+    ...(v.presence !== undefined ? { presence: oneOf(v.presence,
+      ['present', 'unavailable', 'absent'] as const, `${path}.presence`) } : {}),
+    availability: validateAvailability(v.availability, `${path}.availability`),
+    relevant: bool(v.relevant, `${path}.relevant`),
+    ...(v.domain !== undefined
+      ? { domain: validateMeterValueDomain(v.domain, `${path}.domain`, expectedSource) }
+      : {}),
+    ...(v.source !== undefined
+      ? { source: v.source === null ? null : validateMeterSource(v.source, `${path}.source`, expectedSource) }
+      : {}),
+  };
+}
+
+function validateDisplayObservedMeterField(
+  value: unknown, path: string, expectedSource: MeterSourceExpectation,
+): DisplayObservedMeterField {
+  const v = record(value, path);
+  exactKeys(v, ['reading', 'availability', 'relevant', 'display', 'domain', 'source', 'presence'], path);
+  const strict = validateMeterField({
+    reading: v.reading, availability: v.availability, relevant: v.relevant,
+    ...(v.presence !== undefined ? { presence: v.presence } : {}),
+    ...(v.domain !== undefined ? { domain: v.domain } : {}),
+    ...(v.source !== undefined ? { source: v.source } : {}),
+  }, path, expectedSource);
+  return {
+    ...strict,
+    ...(v.display !== undefined ? { display: validateDisplayObservation(v.display, `${path}.display`, num) } : {}),
+  };
+}
+
+/** This `exactKeys` list is exactly the seven meters the adapter reads plus
+ *  the authoritative `rfState` — no speculative keys (MOR-1244 finding N4).
+ *  See `radio-view-model-adapter.ts::deriveMeters`. */
+function validateMeters(value: unknown, path: string): MetersViewModel {
+  const v = record(value, path);
+  exactKeys(v, [
+    'rfState', 'signal', 'power', 'swr', 'alc', 'compression', 'drainVoltage', 'drainCurrent',
+  ], path);
+  return {
+    rfState: oneOf(v.rfState, METER_RF_STATES, `${path}.rfState`),
+    signal: validateMeterField(v.signal, `${path}.signal`, 'signal'),
+    power: validateDisplayObservedMeterField(v.power, `${path}.power`, 'powerMeter'),
+    swr: validateDisplayObservedMeterField(v.swr, `${path}.swr`, 'swrMeter'),
+    alc: validateDisplayObservedMeterField(v.alc, `${path}.alc`, 'alcMeter'),
+    compression: validateMeterField(v.compression, `${path}.compression`, 'compMeter'),
+    drainVoltage: validateMeterField(v.drainVoltage, `${path}.drainVoltage`, 'vdMeter'),
+    drainCurrent: validateMeterField(v.drainCurrent, `${path}.drainCurrent`, 'idMeter'),
+  };
+}
+
+const ATU_STATUSES: readonly AtuStatus[] = ['off', 'on', 'tuning'];
+
+function validateTxAuxField<T>(
+  value: unknown, path: string, validateValue: (v: unknown, p: string) => T,
+): TxAuxField<T> {
+  const v = record(value, path);
+  exactKeys(v, ['reading', 'availability'], path);
+  const r = record(v.reading, `${path}.reading`);
+  let reading: TxAuxReading<T>;
+  if (r.status === 'known') {
+    exactKeys(r, ['status', 'value'], `${path}.reading`);
+    reading = { status: 'known', value: validateValue(r.value, `${path}.reading.value`) };
+  } else if (r.status === 'unknown') {
+    exactKeys(r, ['status'], `${path}.reading`);
+    reading = { status: 'unknown' };
+  } else {
+    invalid(`${path}.reading.status`, "'known' | 'unknown'");
+  }
+  return { reading, availability: validateAvailability(v.availability, `${path}.availability`) };
+}
+
+/** N4: this `exactKeys` list is exactly the 12 fields the adapter reads —
+ *  no speculative keys. See `radio-view-model-adapter.ts::deriveTxAux`. */
+function validateTxAux(value: unknown, path: string): TxAuxViewModel {
+  const v = record(value, path);
+  exactKeys(v, [
+    'atu', 'vox', 'voxGain', 'antiVoxGain', 'voxDelay',
+    'compressor', 'compressorLevel', 'monitor', 'monitorLevel',
+    'rfPower', 'micGain', 'driveGain',
+  ], path);
+  return {
+    atu: validateTxAuxField(v.atu, `${path}.atu`, (val, p) => oneOf(val, ATU_STATUSES, p)),
+    vox: validateTxAuxField(v.vox, `${path}.vox`, bool),
+    voxGain: validateTxAuxField(v.voxGain, `${path}.voxGain`, num),
+    antiVoxGain: validateTxAuxField(v.antiVoxGain, `${path}.antiVoxGain`, num),
+    voxDelay: validateTxAuxField(v.voxDelay, `${path}.voxDelay`, num),
+    compressor: validateTxAuxField(v.compressor, `${path}.compressor`, bool),
+    compressorLevel: validateTxAuxField(v.compressorLevel, `${path}.compressorLevel`, num),
+    monitor: validateTxAuxField(v.monitor, `${path}.monitor`, bool),
+    monitorLevel: validateTxAuxField(v.monitorLevel, `${path}.monitorLevel`, num),
+    rfPower: validateTxAuxField(v.rfPower, `${path}.rfPower`, num),
+    micGain: validateTxAuxField(v.micGain, `${path}.micGain`, num),
+    driveGain: validateTxAuxField(v.driveGain, `${path}.driveGain`, num),
+  };
+}
+
+function validateDisplayObservation<T>(
+  value: unknown, path: string, validateValue: (v: unknown, p: string) => T,
+): DisplayObservation<T> {
+  const v = record(value, path);
+  if (v.state === 'current' || v.state === 'stale') {
+    exactKeys(v, ['state', 'value'], path);
+    return { state: v.state, value: validateValue(v.value, `${path}.value`) };
+  }
+  if (v.state === 'unknown') {
+    exactKeys(v, ['state', 'reason'], path);
+    return { state: 'unknown', reason: oneOf(v.reason,
+      ['not-observed', 'invalid-value', 'invalid-evidence', 'identity-unresolved'] as const, `${path}.reason`) };
+  }
+  if (v.state === 'unsupported') {
+    exactKeys(v, ['state'], path);
+    return { state: 'unsupported' };
+  }
+  return invalid(`${path}.state`, "'current' | 'stale' | 'unknown' | 'unsupported'");
+}
+
+function validateDisplayObservedField<T>(
+  value: unknown, path: string, validateValue: (v: unknown, p: string) => T,
+): DisplayObservedField<T> {
+  const v = record(value, path);
+  exactKeys(v, ['reading', 'availability', 'display'], path);
+  const strict = validateTxAuxField({ reading: v.reading, availability: v.availability }, path, validateValue);
+  return {
+    ...strict,
+    ...(v.display !== undefined ? { display: validateDisplayObservation(v.display, `${path}.display`, validateValue) } : {}),
+  };
+}
+
+function validateReceiverSMeterField(
+  value: unknown, path: string, receiver: ReceiverId,
+): ReceiverSMeterField {
+  const v = record(value, path);
+  exactKeys(v, ['reading', 'availability', 'domain', 'source'], path);
+  const strict = validateTxAuxField(
+    { reading: v.reading, availability: v.availability }, path, num,
+  );
+  const domain = v.domain === undefined
+    ? {} : { domain: validateMeterValueDomain(v.domain, `${path}.domain`, 'signal') };
+  if (v.source === undefined) return { ...strict, ...domain };
+  if (v.source === null) return { ...strict, ...domain, source: null };
+  const source = validateMeterSource(v.source, `${path}.source`, 'signal');
+  if (source.receiver !== receiver) {
+    invalid(`${path}.source`, `the canonical ${receiver} receiver source`);
+  }
+  return { ...strict, ...domain, source };
+}
+
+function validateReceiverIndicator(value: unknown, path: string): ReceiverIndicatorViewModel {
+  const v = record(value, path);
+  exactKeys(v, [
+    'receiver', 'availability', 'rfState', 'sMeter', 'bandwidthHz',
+    'bandwidthMaxHz', 'agcMode',
+    'nbActive', 'nrActive', 'notchMode', 'attenuator', 'preamp', 'rfGain',
+    'digiSel', 'ipPlus', 'squelch',
+  ], path);
+  const receiver = oneOf(v.receiver, RECEIVER_IDS, `${path}.receiver`);
+  return {
+    receiver,
+    availability: validateAvailability(v.availability, `${path}.availability`),
+    ...(v.rfState !== undefined
+      ? { rfState: oneOf(v.rfState, METER_RF_STATES, `${path}.rfState`) }
+      : {}),
+    sMeter: validateReceiverSMeterField(v.sMeter, `${path}.sMeter`, receiver),
+    bandwidthHz: validateTxAuxField(v.bandwidthHz, `${path}.bandwidthHz`, num),
+    ...(v.bandwidthMaxHz !== undefined
+      ? { bandwidthMaxHz: num(v.bandwidthMaxHz, `${path}.bandwidthMaxHz`) }
+      : {}),
+    agcMode: validateTxAuxField(v.agcMode, `${path}.agcMode`, strOrNum),
+    nbActive: validateTxAuxField(v.nbActive, `${path}.nbActive`, bool),
+    nrActive: validateTxAuxField(v.nrActive, `${path}.nrActive`, bool),
+    notchMode: validateTxAuxField(
+      v.notchMode, `${path}.notchMode`,
+      (candidate, candidatePath) => oneOf(
+        candidate, ['off', 'auto', 'manual'] as const, candidatePath,
+      ),
+    ),
+    attenuator: validateTxAuxField(v.attenuator, `${path}.attenuator`, num),
+    preamp: validateTxAuxField(v.preamp, `${path}.preamp`, num),
+    rfGain: validateDisplayObservedField(v.rfGain, `${path}.rfGain`, num),
+    digiSel: validateTxAuxField(v.digiSel, `${path}.digiSel`, bool),
+    ipPlus: validateTxAuxField(v.ipPlus, `${path}.ipPlus`, bool),
+    ...(v.squelch !== undefined
+      ? { squelch: validateTxAuxField(v.squelch, `${path}.squelch`, num) }
+      : {}),
+  };
+}
+
+function validateDualActionBlock(value: unknown, path: string): DualActionBlockViewModel {
+  const v = record(value, path);
+  exactKeys(v, ['main', 'sub', 'equalize', 'swap'], path);
+  return {
+    main: validateAvailability(v.main, `${path}.main`),
+    sub: validateAvailability(v.sub, `${path}.sub`),
+    equalize: validateAvailability(v.equalize, `${path}.equalize`),
+    swap: validateAvailability(v.swap, `${path}.swap`),
+  };
+}
+
+function validateRadioWideIndicators(value: unknown, path: string): RadioWideIndicatorsViewModel {
+  const v = record(value, path);
+  exactKeys(v, [
+    'rfState', 'antenna', 'atu', 'dialLock', 'ritActive', 'ritOffset', 'xitActive', 'xitOffset', 'actions',
+  ], path);
+  return {
+    rfState: oneOf(v.rfState, METER_RF_STATES, `${path}.rfState`),
+    antenna: validateTxAuxField(v.antenna, `${path}.antenna`, num),
+    atu: validateTxAuxField(v.atu, `${path}.atu`, (candidate, candidatePath) =>
+      oneOf(candidate, ATU_STATUSES, candidatePath)),
+    dialLock: validateTxAuxField(v.dialLock, `${path}.dialLock`, bool),
+    ritActive: validateTxAuxField(v.ritActive, `${path}.ritActive`, bool),
+    ritOffset: validateTxAuxField(v.ritOffset, `${path}.ritOffset`, num),
+    xitActive: validateTxAuxField(v.xitActive, `${path}.xitActive`, bool),
+    xitOffset: validateTxAuxField(v.xitOffset, `${path}.xitOffset`, num),
+    actions: validateDualActionBlock(v.actions, `${path}.actions`),
+  };
+}
+
+const MONITOR_MODES: readonly MonitorMode[] = ['local', 'live', 'mute'];
+const AUDIO_FOCUSES: readonly AudioFocus[] = ['main', 'sub', 'both'];
+
+/** The `source` carried by `ready`/`mismatch` is the offending/confirmed
+ *  MOD-input enum value; a bare status must NOT carry one (that would make
+ *  "not applicable" indistinguishable from a read). */
+function validateModInputReadiness(value: unknown, path: string): ModInputReadiness {
+  const v = record(value, path);
+  if (v.status === 'ready') {
+    exactKeys(v, ['status', 'source'], path);
+    return { status: 'ready', source: num(v.source, `${path}.source`) };
+  }
+  if (v.status === 'mismatch') {
+    exactKeys(v, ['status', 'source'], path);
+    return { status: 'mismatch', source: num(v.source, `${path}.source`) };
+  }
+  if (v.status === 'not-applicable') {
+    exactKeys(v, ['status'], path);
+    return { status: 'not-applicable' };
+  }
+  if (v.status === 'unknown') {
+    exactKeys(v, ['status'], path);
+    return { status: 'unknown' };
+  }
+  invalid(`${path}.status`, "'not-applicable' | 'ready' | 'mismatch' | 'unknown'");
+}
+
+/** N4 again: no speculative keys.
+ *  The per-field validator is `validateTxAuxField` — `RxAudioField` IS
+ *  `TxAuxField`, so sharing it is the alias's whole point, not a shortcut.
+ *  See `radio-view-model-adapter.ts::deriveRxAudio`. */
+function validateRxAudio(value: unknown, path: string): RxAudioViewModel {
+  const v = record(value, path);
+  exactKeys(v, [
+    'monitorMode', 'liveAudio', 'afLevel', 'receiverAfLevels', 'routingFocus', 'routingSplit',
+    'modInputSource', 'modInputChoices', 'modInputReadiness', 'rxSilent',
+  ], path);
+  const afLevels = v.receiverAfLevels === undefined
+    ? undefined : record(v.receiverAfLevels, `${path}.receiverAfLevels`);
+  if (afLevels !== undefined) exactKeys(afLevels, ['main', 'sub'], `${path}.receiverAfLevels`);
+  return {
+    monitorMode: oneOf(v.monitorMode, MONITOR_MODES, `${path}.monitorMode`),
+    liveAudio: validateAvailability(v.liveAudio, `${path}.liveAudio`),
+    afLevel: validateTxAuxField(v.afLevel, `${path}.afLevel`, num),
+    ...(afLevels === undefined ? {} : {
+      receiverAfLevels: {
+        main: validateTxAuxField(afLevels.main, `${path}.receiverAfLevels.main`, num),
+        sub: validateTxAuxField(afLevels.sub, `${path}.receiverAfLevels.sub`, num),
+      },
+    }),
+    routingFocus: validateTxAuxField(
+      v.routingFocus, `${path}.routingFocus`, (val, p) => oneOf(val, AUDIO_FOCUSES, p),
+    ),
+    routingSplit: validateTxAuxField(v.routingSplit, `${path}.routingSplit`, bool),
+    modInputSource: validateTxAuxField(v.modInputSource, `${path}.modInputSource`, num),
+    ...(v.modInputChoices === undefined ? {} : {
+      modInputChoices: validateModInputChoices(v.modInputChoices, `${path}.modInputChoices`),
+    }),
+    modInputReadiness: validateModInputReadiness(v.modInputReadiness, `${path}.modInputReadiness`),
+    rxSilent: v.rxSilent === true,
+  };
+}
+
+/** A capability-derived choice set: plain strings, no field-shape wrapper —
+ *  see `ModeFilterViewModel`'s doc comment for why. */
+function strArray(value: unknown, path: string): string[] {
+  if (!Array.isArray(value)) invalid(path, 'an array of strings');
+  return value.map((item, i) => str(item, `${path}[${i}]`));
+}
+
+/** Same idea as `strArray`, for `DspViewModel.agcModes` — see its doc comment. */
+function numArray(value: unknown, path: string): number[] {
+  if (!Array.isArray(value)) invalid(path, 'an array of numbers');
+  return value.map((item, i) => num(item, `${path}[${i}]`));
+}
+
+function strRecord(value: unknown, path: string): Record<string, string> {
+  const v = record(value, path);
+  return Object.fromEntries(Object.entries(v).map(([key, item]) => [key, str(item, `${path}.${key}`)]));
+}
+
+function positiveHz(value: unknown, path: string): number {
+  const n = num(value, path);
+  if (n <= 0) invalid(path, 'positive Hz');
+  return n;
+}
+
+function nonBlank(value: unknown, path: string): string {
+  const label = str(value, path);
+  if (!label.trim()) invalid(path, 'a non-empty label');
+  return label;
+}
+
+function validateFilterConfiguration(value: unknown, path: string): ActiveFilterConfiguration | null {
+  if (value === null) return null;
+  const v = record(value, path);
+  exactKeys(v, ['slots', 'fixed', 'minHz', 'maxHz', 'stepHz', 'segments', 'table'], path);
+  if (!Array.isArray(v.slots) || !Array.isArray(v.segments) || !Array.isArray(v.table)) invalid(path, 'configuration arrays');
+  const nullableHz = (n: unknown, p: string) => n === null ? null : positiveHz(n, p);
+  const minHz = nullableHz(v.minHz, path + '.minHz');
+  const maxHz = nullableHz(v.maxHz, path + '.maxHz');
+  if (minHz !== null && maxHz !== null && minHz > maxHz) invalid(path, 'ordered bounds');
+  const table = v.table.map((n, i) => positiveHz(n, path + '.table[' + i + ']'));
+  if (table.some((n, i) => i > 0 && n <= table[i - 1])) invalid(path, 'increasing table widths');
+  return {
+    slots: v.slots.map((item, i) => {
+      const slot = record(item, path + '.slots[' + i + ']');
+      exactKeys(slot, ['filter', 'label', 'factoryWidthHz'], path);
+      if (slot.filter !== i + 1) invalid(path, 'contiguous filter slots from one');
+      return { filter: i + 1, label: nonBlank(slot.label, path), factoryWidthHz: nullableHz(slot.factoryWidthHz, path) };
+    }),
+    fixed: bool(v.fixed, path + '.fixed'), minHz, maxHz, stepHz: nullableHz(v.stepHz, path + '.stepHz'),
+    segments: v.segments.map((item) => {
+      const segment = record(item, path + '.segments');
+      exactKeys(segment, ['hzMin', 'hzMax', 'stepHz', 'indexMin'], path);
+      const hzMin = positiveHz(segment.hzMin, path), hzMax = positiveHz(segment.hzMax, path);
+      const indexMin = num(segment.indexMin, path);
+      if (hzMin > hzMax || !Number.isSafeInteger(indexMin) || indexMin < 0) invalid(path, 'valid segment bounds and index');
+      return { hzMin, hzMax, stepHz: positiveHz(segment.stepHz, path), indexMin };
+    }), table,
+  };
+}
+
+function validateDataModeChoices(value: unknown, path: string): FilterPassbandViewModel['dataModeChoices'] {
+  if (!Array.isArray(value) || value.length > 4) invalid(path, 'DATA choices in 0..3');
+  return value.map((item, i) => {
+    const choice = record(item, path + '[' + i + ']');
+    exactKeys(choice, ['value', 'label'], path);
+    if (choice.value !== i) invalid(path, 'contiguous DATA choices from zero');
+    return { value: i, label: choice.label === null ? null : nonBlank(choice.label, path) };
+  });
+}
+
+function validateModInputChoices(value: unknown, path: string): NonNullable<FilterPassbandViewModel['modInputChoices']> {
+  if (!Array.isArray(value) || value.length > 6) invalid(path, 'MOD input choices in 0..5');
+  const seen = new Set<number>();
+  return value.map((item, i) => {
+    const choice = record(item, path + '[' + i + ']');
+    exactKeys(choice, ['value', 'label'], path);
+    const value = num(choice.value, `${path}[${i}].value`);
+    if (!Number.isSafeInteger(value) || value < 0 || value > 5 || seen.has(value)) {
+      invalid(`${path}[${i}].value`, 'a unique integer in 0..5');
+    }
+    seen.add(value);
+    return { value, label: nonBlank(choice.label, `${path}[${i}].label`) };
+  });
+}
+
+function validateFilterWidthDisplay(value: unknown, path: string): FilterWidthDisplay {
+  const v = record(value, path);
+  const state = str(v.state, `${path}.state`);
+  if (state === 'known') {
+    exactKeys(v, ['state', 'hz', 'stale'], path);
+    const hz = num(v.hz, `${path}.hz`);
+    if (!Number.isSafeInteger(hz) || hz <= 0) invalid(`${path}.hz`, 'a positive safe integer');
+    return { state, hz, stale: bool(v.stale, `${path}.stale`) };
+  }
+  if (state === 'radio-default' || state === 'narrow' || state === 'unsupported') {
+    exactKeys(v, ['state'], path);
+    return { state };
+  }
+  if (state === 'unknown') {
+    exactKeys(v, ['state', 'reason'], path);
+    const reason = str(v.reason, `${path}.reason`);
+    if (reason !== 'not-reported' && reason !== 'not-observed') {
+      invalid(`${path}.reason`, "'not-reported' or 'not-observed'");
+    }
+    return { state, reason };
+  }
+  invalid(`${path}.state`, "a FilterWidthDisplay state ('known' | 'radio-default' | 'narrow' | 'unknown' | 'unsupported')");
+}
+
+function validateModeFilter(value: unknown, path: string): ModeFilterViewModel {
+  const v = record(value, path);
+  exactKeys(v, [
+    'currentMode', 'modeChoices', 'currentFilter', 'filterChoices',
+    'filterWidth', 'filterWidthDisplay', 'filterWidthMin', 'filterWidthMax', 'activeFilterConfiguration',
+  ], path);
+  return {
+    activeFilterConfiguration: validateFilterConfiguration(v.activeFilterConfiguration, `${path}.activeFilterConfiguration`),
+    currentMode: validateTxAuxField(v.currentMode, `${path}.currentMode`, str),
+    modeChoices: strArray(v.modeChoices, `${path}.modeChoices`),
+    currentFilter: validateTxAuxField(v.currentFilter, `${path}.currentFilter`, num),
+    filterChoices: strArray(v.filterChoices, `${path}.filterChoices`),
+    filterWidth: validateTxAuxField(v.filterWidth, `${path}.filterWidth`, num),
+    filterWidthDisplay: validateFilterWidthDisplay(v.filterWidthDisplay, `${path}.filterWidthDisplay`),
+    filterWidthMin: validateTxAuxField(v.filterWidthMin, `${path}.filterWidthMin`, num),
+    filterWidthMax: validateTxAuxField(v.filterWidthMax, `${path}.filterWidthMax`, num),
+  };
+}
+
+function validateFilterPassband(value: unknown, path: string): FilterPassbandViewModel {
+  const v = record(value, path);
+  exactKeys(
+    v,
+    [
+      'filterShape', 'filterShapeControlStructural', 'ifShift', 'ifShiftControlStructural',
+      'ifShiftDomain', 'pbtDomain', 'pbtInner', 'pbtOuter', 'narrow', 'dataMode', 'dataModeChoices',
+      'modInputSource', 'modInputChoices',
+    ],
+    path,
+  );
+  const hasModInputSource = v.modInputSource !== undefined;
+  const hasModInputChoices = v.modInputChoices !== undefined;
+  if (hasModInputSource !== hasModInputChoices) invalid(path, 'MOD input source and choices together');
+  const ifShiftDomain = optionalGroup(
+    v.ifShiftDomain, `${path}.ifShiftDomain`, validateNrLevelDisplayDomain,
+  );
+  const pbtDomain = optionalGroup(
+    v.pbtDomain, `${path}.pbtDomain`, validateNrLevelDisplayDomain,
+  );
+  return {
+    filterShape: validateTxAuxField(v.filterShape, `${path}.filterShape`, num),
+    filterShapeControlStructural: bool(v.filterShapeControlStructural, `${path}.filterShapeControlStructural`),
+    ifShift: validateTxAuxField(v.ifShift, `${path}.ifShift`, num),
+    ifShiftControlStructural: bool(v.ifShiftControlStructural, `${path}.ifShiftControlStructural`),
+    ...(ifShiftDomain !== undefined ? { ifShiftDomain } : {}),
+    ...(pbtDomain !== undefined ? { pbtDomain } : {}),
+    pbtInner: validateDisplayObservedField(v.pbtInner, `${path}.pbtInner`, num),
+    pbtOuter: validateDisplayObservedField(v.pbtOuter, `${path}.pbtOuter`, num),
+    narrow: validateTxAuxField(v.narrow, `${path}.narrow`, bool),
+    dataModeChoices: validateDataModeChoices(v.dataModeChoices, `${path}.dataModeChoices`),
+    dataMode: validateTxAuxField(v.dataMode, `${path}.dataMode`, num),
+    ...(hasModInputSource ? {
+      modInputChoices: validateModInputChoices(v.modInputChoices, `${path}.modInputChoices`),
+      modInputSource: validateTxAuxField(v.modInputSource, `${path}.modInputSource`, num),
+    } : {}),
+  };
+}
+
+const NOTCH_MODES = ['off', 'auto', 'manual'] as const;
+
+type NrLevelDisplayDomain = NonNullable<NrLevelProjection['domain']>;
+
+function exactOwnDataRecord(
+  value: unknown, keys: readonly string[], path: string,
+): Record<string, unknown> {
+  let snapshot: Record<string, unknown> | null = null;
+  try {
+    if (typeof value === 'object' && value !== null && !Array.isArray(value)
+      && Object.getPrototypeOf(value) === Object.prototype) {
+      const ownKeys = Reflect.ownKeys(value);
+      if (ownKeys.length === keys.length
+        && ownKeys.every((key) => typeof key === 'string' && keys.includes(key))) {
+        const candidate: Record<string, unknown> = {};
+        let valid = true;
+        for (const key of keys) {
+          const descriptor = Object.getOwnPropertyDescriptor(value, key);
+          if (!descriptor?.enumerable || !Object.hasOwn(descriptor, 'value')) {
+            valid = false;
+            break;
+          }
+          candidate[key] = descriptor.value;
+        }
+        if (valid) snapshot = candidate;
+      }
+    }
+  } catch {
+    snapshot = null;
+  }
+  if (snapshot === null) invalid(path, `a plain object with exact own data properties [${keys.join(', ')}]`);
+  return snapshot;
+}
+
+function validateNrLevelDisplayDomain(value: unknown, path: string): NrLevelDisplayDomain {
+  const v = exactOwnDataRecord(
+    value, ['min', 'max', 'step', 'origin'] satisfies readonly (keyof NrLevelDisplayDomain)[], path,
+  );
+  return {
+    min: num(v.min, `${path}.min`),
+    max: num(v.max, `${path}.max`),
+    step: num(v.step, `${path}.step`),
+    origin: num(v.origin, `${path}.origin`),
+  };
+}
+
+function validateNrLevelProjection(value: unknown, path: string): NrLevelProjection {
+  const v = exactOwnDataRecord(
+    value, ['value', 'domain', 'adjustable'] satisfies readonly (keyof NrLevelProjection)[], path,
+  );
+  return {
+    value: nullableNumber(v.value, `${path}.value`),
+    domain: v.domain === null ? null : validateNrLevelDisplayDomain(v.domain, `${path}.domain`),
+    adjustable: bool(v.adjustable, `${path}.adjustable`),
+  };
+}
+
+/** N4 again: exactly the adapter's DSP facts, no speculative keys.
+ *  See `radio-view-model-adapter.ts::deriveDsp`. */
+function validateDsp(value: unknown, path: string): DspViewModel {
+  const v = record(value, path);
+  exactKeys(v, [
+    'nrActive', 'nrLevel', 'nrLevelProjection', 'nbActive', 'nbLevel', 'nbDepth', 'nbWidth',
+    'notchMode', 'notchFreq', 'notchFreqDomain', 'manualNotchWidth', 'agcMode', 'agcModes',
+    'agcTimeConstant',
+  ], path);
+  const nrLevelProjection = optionalGroup(
+    v.nrLevelProjection, `${path}.nrLevelProjection`, validateNrLevelProjection,
+  );
+  const notchFreqDomain = optionalGroup(
+    v.notchFreqDomain, `${path}.notchFreqDomain`, validateNrLevelDisplayDomain,
+  );
+  const rawAgcMode = record(v.agcMode, `${path}.agcMode`);
+  exactKeys(rawAgcMode, ['reading', 'availability', 'autoMode', 'autoSelectedSpeed'], `${path}.agcMode`);
+  const agcMode = {
+    ...validateTxAuxField({
+      reading: rawAgcMode.reading,
+      availability: rawAgcMode.availability,
+    }, `${path}.agcMode`, num),
+    ...(rawAgcMode.autoMode === undefined ? {} : {
+      autoMode: num(rawAgcMode.autoMode, `${path}.agcMode.autoMode`),
+    }),
+    ...(rawAgcMode.autoSelectedSpeed === undefined ? {} : {
+      autoSelectedSpeed: nonBlank(rawAgcMode.autoSelectedSpeed, `${path}.agcMode.autoSelectedSpeed`),
+    }),
+  };
+  return {
+    nrActive: validateTxAuxField(v.nrActive, `${path}.nrActive`, bool),
+    nrLevel: validateTxAuxField(v.nrLevel, `${path}.nrLevel`, num),
+    ...(nrLevelProjection !== undefined ? { nrLevelProjection } : {}),
+    nbActive: validateTxAuxField(v.nbActive, `${path}.nbActive`, bool),
+    nbLevel: validateTxAuxField(v.nbLevel, `${path}.nbLevel`, num),
+    nbDepth: validateTxAuxField(v.nbDepth, `${path}.nbDepth`, num),
+    nbWidth: validateTxAuxField(v.nbWidth, `${path}.nbWidth`, num),
+    notchMode: validateTxAuxField(v.notchMode, `${path}.notchMode`, (val, p) => oneOf(val, NOTCH_MODES, p)),
+    notchFreq: validateTxAuxField(v.notchFreq, `${path}.notchFreq`, num),
+    ...(notchFreqDomain !== undefined ? { notchFreqDomain } : {}),
+    manualNotchWidth: validateTxAuxField(v.manualNotchWidth, `${path}.manualNotchWidth`, num),
+    agcMode,
+    agcModes: numArray(v.agcModes, `${path}.agcModes`),
+    agcTimeConstant: validateTxAuxField(v.agcTimeConstant, `${path}.agcTimeConstant`, num),
+  };
+}
+
+/** N4 again: exactly the nine facts the adapter reads (MOR-1293 added
+ *  `digiSel`/`ipPlus` to 6A's original six; MOR-3574 added the optional
+ *  `preLabels`), no speculative keys.
+ *  See `radio-view-model-adapter.ts::deriveRfFrontEnd`. */
+function validateRfFrontEnd(value: unknown, path: string): RfFrontEndViewModel {
+  const v = record(value, path);
+  exactKeys(v, [
+    'preamp', 'preValues', 'preLabels', 'attenuator', 'attValues', 'rfGain', 'squelch', 'digiSel',
+    'ipPlus',
+  ], path);
+  return {
+    preamp: validateTxAuxField(v.preamp, `${path}.preamp`, num),
+    preValues: numArray(v.preValues, `${path}.preValues`),
+    ...(v.preLabels === undefined ? {} : { preLabels: strRecord(v.preLabels, `${path}.preLabels`) }),
+    attenuator: validateTxAuxField(v.attenuator, `${path}.attenuator`, num),
+    attValues: numArray(v.attValues, `${path}.attValues`),
+    rfGain: validateTxAuxField(v.rfGain, `${path}.rfGain`, num),
+    squelch: validateTxAuxField(v.squelch, `${path}.squelch`, num),
+    digiSel: validateTxAuxField(v.digiSel, `${path}.digiSel`, bool),
+    ipPlus: validateTxAuxField(v.ipPlus, `${path}.ipPlus`, bool),
+  };
+}
+
+const TX_PERMITS: readonly TxPermit[] = ['allowed', 'denied'];
+
+/** One band-plan entry plus its own default-frequency TX point sample — the
+ *  permit is validated by the SAME `validateTxPermit` the top-level
+ *  `txPermit` uses, because it IS the same tri-state (MOR-1294); a divergent
+ *  per-band permit shape would be the second derivation this slice exists to
+ *  prevent. */
+function validateBandChoice(value: unknown, path: string): BandChoice {
+  const v = record(value, path);
+  exactKeys(v, ['name', 'startHz', 'endHz', 'defaultHz', 'bsrCode', 'defaultHzTxPermit'], path);
+  return {
+    name: str(v.name, `${path}.name`),
+    startHz: num(v.startHz, `${path}.startHz`),
+    endHz: num(v.endHz, `${path}.endHz`),
+    defaultHz: num(v.defaultHz, `${path}.defaultHz`),
+    bsrCode: nullableNumber(v.bsrCode, `${path}.bsrCode`),
+    defaultHzTxPermit: validateTxPermit(v.defaultHzTxPermit, `${path}.defaultHzTxPermit`),
+  };
+}
+
+/** N4 again: exactly the six facts the adapter reads, no speculative keys.
+ *  See `radio-view-model-adapter.ts::deriveBand`. */
+function validateBand(value: unknown, path: string): BandViewModel {
+  const v = record(value, path);
+  exactKeys(v, ['currentBand', 'receiverBands', 'bandChoices', 'currentBandTx', 'tuneMinHz', 'tuneMaxHz'], path);
+  if (!Array.isArray(v.bandChoices)) invalid(`${path}.bandChoices`, 'an array');
+  const bandsRecord = record(v.receiverBands, `${path}.receiverBands`);
+  exactKeys(bandsRecord, ['main', 'sub'], `${path}.receiverBands`);
+  const receiverBands = {
+    main: validateTxAuxField(bandsRecord.main, `${path}.receiverBands.main`, str),
+    sub: validateTxAuxField(bandsRecord.sub, `${path}.receiverBands.sub`, str),
+  };
+  const currentBand = validateTxAuxField(v.currentBand, `${path}.currentBand`, str);
+  const currentBandTx = oneOf(v.currentBandTx, TX_PERMITS, `${path}.currentBandTx`);
+  // The fail-closed cross-field invariant (MOR-1294), the same shape as the
+  // model-level "txPermit 'allowed' only when txTarget is known" pin below:
+  // a band the radio could not identify must never carry TX permission.
+  if (currentBandTx === 'allowed' && currentBand.reading.status === 'unknown') {
+    invalid(`${path}.currentBandTx`, "'denied' whenever currentBand is unknown (fail-open otherwise)");
+  }
+  return {
+    currentBand,
+    receiverBands,
+    bandChoices: v.bandChoices.map((b, i) => validateBandChoice(b, `${path}.bandChoices[${i}]`)),
+    currentBandTx,
+    tuneMinHz: nullableNumber(v.tuneMinHz, `${path}.tuneMinHz`),
+    tuneMaxHz: nullableNumber(v.tuneMaxHz, `${path}.tuneMaxHz`),
+  };
+}
+
+const REPEATER_TONE_MODES: readonly RepeaterToneMode[] = ['off', 'tone', 'tsql'];
+const REPEATER_SHIFTS: readonly RepeaterShift[] = ['simplex', 'plus', 'minus', 'ars'];
+
+function validateRepeaterReceiver(value: unknown, path: string): RepeaterReceiverViewModel {
+  const v = record(value, path);
+  exactKeys(v, ['inRepeaterBand', 'toneMode', 'toneFreq', 'shift'], path);
+  return {
+    inRepeaterBand: validateTxAuxField(v.inRepeaterBand, `${path}.inRepeaterBand`, bool),
+    toneMode: validateTxAuxField(v.toneMode, `${path}.toneMode`, (val, p) => oneOf(val, REPEATER_TONE_MODES, p)),
+    toneFreq: validateTxAuxField(v.toneFreq, `${path}.toneFreq`, num),
+    shift: validateTxAuxField(v.shift, `${path}.shift`, (val, p) => oneOf(val, REPEATER_SHIFTS, p)),
+  };
+}
+
+/** Exactly the four facts the adapter reads, one per receiver, and the
+ *  radio's shift choices. See `radio-view-model-adapter.ts::deriveRepeater`. */
+function validateRepeater(value: unknown, path: string): RepeaterViewModel {
+  const v = record(value, path);
+  exactKeys(v, ['main', 'sub', 'shiftChoices'], path);
+  if (!Array.isArray(v.shiftChoices)) invalid(`${path}.shiftChoices`, 'an array');
+  return {
+    main: validateRepeaterReceiver(v.main, `${path}.main`),
+    sub: validateRepeaterReceiver(v.sub, `${path}.sub`),
+    shiftChoices: v.shiftChoices.map((shift, i) => oneOf(shift, REPEATER_SHIFTS, `${path}.shiftChoices[${i}]`)),
+  };
+}
+
+/** Exactly the four facts the adapter reads. See
+ *  `radio-view-model-adapter.ts::deriveRitXit`. */
+function validateRitXit(value: unknown, path: string): RitXitViewModel {
+  const v = record(value, path);
+  exactKeys(v, ['ritActive', 'ritOffset', 'xitActive', 'xitOffset'], path);
+  return {
+    ritActive: validateTxAuxField(v.ritActive, `${path}.ritActive`, bool),
+    ritOffset: validateTxAuxField(v.ritOffset, `${path}.ritOffset`, num),
+    xitActive: validateTxAuxField(v.xitActive, `${path}.xitActive`, bool),
+    xitOffset: validateTxAuxField(v.xitOffset, `${path}.xitOffset`, num),
+  };
+}
+
+/** Exactly the three facts the adapter reads. See
+ *  `radio-view-model-adapter.ts::deriveAntenna`. */
+function validateAntenna(value: unknown, path: string): AntennaViewModel {
+  const v = record(value, path);
+  exactKeys(v, ['txAntenna', 'rxAnt', 'antennaCount'], path);
+  return {
+    txAntenna: validateTxAuxField(v.txAntenna, `${path}.txAntenna`, num),
+    rxAnt: validateTxAuxField(v.rxAnt, `${path}.rxAnt`, bool),
+    antennaCount: num(v.antennaCount, `${path}.antennaCount`),
+  };
+}
+
+/** Exactly the three facts the adapter reads. See
+ *  `radio-view-model-adapter.ts::deriveScan`. */
+function validateScan(value: unknown, path: string): ScanViewModel {
+  const v = record(value, path);
+  exactKeys(v, ['scanning', 'scanType', 'scanResumeMode'], path);
+  return {
+    scanning: validateTxAuxField(v.scanning, `${path}.scanning`, bool),
+    scanType: validateTxAuxField(v.scanType, `${path}.scanType`, num),
+    scanResumeMode: validateTxAuxField(v.scanResumeMode, `${path}.scanResumeMode`, num),
+  };
+}
+
+const BREAK_IN_MODES: readonly BreakInMode[] = ['off', 'semi', 'full'];
+
+/** Exactly the seven facts the adapter reads, plus the optional
+ *  profile-declared pitch and key-speed domains (MOR-1682, MOR-2475 F1).
+ *  See `radio-view-model-adapter.ts::deriveCwKeyer`. */
+function validateCwKeyer(value: unknown, path: string): CwKeyerViewModel {
+  const v = record(value, path);
+  exactKeys(v, [
+    'breakIn', 'breakInDelay', 'keyerSpeed', 'pitchHz', 'pitchDomain', 'keySpeedDomain',
+    'reversePaddle', 'apf', 'twinPeak',
+  ], path);
+  const pitchDomain = optionalGroup(
+    v.pitchDomain, `${path}.pitchDomain`, validateNrLevelDisplayDomain,
+  );
+  const keySpeedDomain = optionalGroup(
+    v.keySpeedDomain, `${path}.keySpeedDomain`, validateNrLevelDisplayDomain,
+  );
+  return {
+    breakIn: validateTxAuxField(v.breakIn, `${path}.breakIn`, (val, p) => oneOf(val, BREAK_IN_MODES, p)),
+    breakInDelay: validateTxAuxField(v.breakInDelay, `${path}.breakInDelay`, num),
+    keyerSpeed: validateTxAuxField(v.keyerSpeed, `${path}.keyerSpeed`, num),
+    pitchHz: validateTxAuxField(v.pitchHz, `${path}.pitchHz`, num),
+    ...(pitchDomain !== undefined ? { pitchDomain } : {}),
+    ...(keySpeedDomain !== undefined ? { keySpeedDomain } : {}),
+    reversePaddle: validateTxAuxField(v.reversePaddle, `${path}.reversePaddle`, bool),
+    apf: validateTxAuxField(v.apf, `${path}.apf`, num),
+    twinPeak: validateTxAuxField(v.twinPeak, `${path}.twinPeak`, bool),
+  };
+}
+
+/** Exactly the twelve facts the adapter reads (11A's four, plus 11A′'s
+ *  mode/edge/hold/refDb, plus 11A″'s duringTx/centerType/vbwNarrow/rbw).
+ *  `fixedEdge` is deliberately excluded — see `ScopeControlsViewModel`'s
+ *  doc comment. See `radio-view-model-adapter.ts::deriveScopeControls`. */
+function validateScopeControls(value: unknown, path: string): ScopeControlsViewModel {
+  const v = record(value, path);
+  exactKeys(
+    v,
+    ['mode', 'edge', 'span', 'speed', 'hold', 'refDb', 'refRange', 'dual', 'receiver',
+      'duringTx', 'centerType', 'vbwNarrow', 'rbw'],
+    path,
+  );
+  return {
+    mode: validateTxAuxField(v.mode, `${path}.mode`, num),
+    edge: validateTxAuxField(v.edge, `${path}.edge`, num),
+    span: validateTxAuxField(v.span, `${path}.span`, num),
+    speed: validateTxAuxField(v.speed, `${path}.speed`, num),
+    hold: validateTxAuxField(v.hold, `${path}.hold`, bool),
+    refDb: validateTxAuxField(v.refDb, `${path}.refDb`, num),
+    refRange: validateRefRange(v.refRange, `${path}.refRange`),
+    dual: validateTxAuxField(v.dual, `${path}.dual`, bool),
+    receiver: validateTxAuxField(v.receiver, `${path}.receiver`, num),
+    duringTx: validateTxAuxField(v.duringTx, `${path}.duringTx`, bool),
+    centerType: validateTxAuxField(v.centerType, `${path}.centerType`, num),
+    vbwNarrow: validateTxAuxField(v.vbwNarrow, `${path}.vbwNarrow`, bool),
+    rbw: validateTxAuxField(v.rbw, `${path}.rbw`, num),
+  };
+}
+
+/** MOR-3694: `null` or exactly `{min, max}` with min <= max. */
+function validateRefRange(
+  value: unknown,
+  path: string,
+): { readonly min: number; readonly max: number } | null {
+  if (value === null) return null;
+  const v = record(value, path);
+  exactKeys(v, ['min', 'max'], path);
+  const range = { min: num(v.min, `${path}.min`), max: num(v.max, `${path}.max`) };
+  if (range.min > range.max) invalid(`${path}.min`, 'min <= max');
+  return range;
+}
+
+const SCOPE_SOURCES: readonly ScopeSourceKind[] = ['hardware', 'audio_fft'];
+const SCOPE_HEALTH_STATES: readonly ScopeHealthState[] = [
+  'inactive', 'starting', 'connecting', 'waiting',
+  'reconnecting', 'failed', 'disconnected', 'connected',
+];
+
+function validateScopeDisplay(value: unknown, path: string): ScopeDisplayViewModel {
+  const v = record(value, path);
+  exactKeys(v, ['source', 'health', 'hardwareConnected'], path);
+  return {
+    source: validateTxAuxField(v.source, `${path}.source`, (val, p) => oneOf(val, SCOPE_SOURCES, p)),
+    health: validateTxAuxField(v.health, `${path}.health`, (val, p) => oneOf(val, SCOPE_HEALTH_STATES, p)),
+    hardwareConnected: validateTxAuxField(v.hardwareConnected, `${path}.hardwareConnected`, bool),
+  };
+}
+
+/** Runtime validator (repo idiom: throws TypeError with a `$.path`, see `validateCapabilities`).
+ *  Also enforces two cross-field invariants (review cycle 1, V1): `txPermit`
+ *  cannot be 'allowed' while `txTarget` is unknown (no fail-open), and
+ *  `isTxTarget` can be true only on the VFO a known `txTarget` names. */
+export function validateRadioViewModel(value: unknown): RadioViewModel {
+  const v = record(value, '$');
+  exactKeys(v, [
+    'topologyId', 'vfoScheme', 'activeReceiver', 'vfos', 'split', 'dualWatch',
+    'txTarget', 'txPermit', 'scope', 'disabledReasons', 'txAux', 'meters', 'rxAudio', 'modeFilter',
+    'filterPassband', 'dsp', 'rfFrontEnd', 'band', 'repeater', 'ritXit', 'antenna', 'scan', 'cwKeyer',
+    'scopeControls', 'scopeDisplay', 'receiverIndicators', 'radioWideIndicators',
+  ], '$');
+  if (!Array.isArray(v.vfos)) invalid('$.vfos', 'an array');
+  if (!Array.isArray(v.disabledReasons)) invalid('$.disabledReasons', 'an array');
+  const scope = record(v.scope, '$.scope');
+  exactKeys(scope, ['hardwareScope', 'audioFftScope'], '$.scope');
+
+  const vfos = v.vfos.map((vfo, i) => validateVfo(vfo, `$.vfos[${i}]`));
+  const txTarget = validateTxTarget(v.txTarget, '$.txTarget');
+  const txPermit = validateTxPermit(v.txPermit, '$.txPermit');
+
+  if (txPermit.status === 'allowed' && txTarget.status === 'unknown') {
+    invalid('$.txPermit', "'allowed' only when txTarget is known (fail-open otherwise)");
+  }
+  // MOR-1335 (G4): `isActiveSlot` is what a consumer gates a RECEIVER-SCOPED
+  // write on (`set_freq {receiver}` moves that receiver's active VFO), so the
+  // two invariants below are the safety property of that gate, checked in the
+  // vocabulary rather than trusted to one adapter:
+  //   (a) at most ONE active slot per receiver — otherwise two tiles of the
+  //       same receiver would both claim the VFO a single write can reach, and
+  //       one of them would move a DIFFERENT VFO than its own digits show;
+  //   (b) `isActive` implies `isActiveSlot` — the radio-wide active VFO is by
+  //       definition its own receiver's active slot, and a model that says
+  //       otherwise contradicts itself about which VFO the radio is on.
+  const activeSlotOf = new Set<ReceiverId>();
+  vfos.forEach((vfo, i) => {
+    const matches = txTarget.status === 'known'
+      && vfo.receiver === txTarget.receiver && slotEqual(vfo.slot, txTarget.slot);
+    if (vfo.isTxTarget && !matches) {
+      invalid(`$.vfos[${i}].isTxTarget`, 'true only on the VFO matching a known txTarget');
+    }
+    if (vfo.isActive && !vfo.isActiveSlot) {
+      invalid(`$.vfos[${i}].isActive`, 'true only on a VFO that is its own receiver\'s active slot');
+    }
+    if (vfo.isActiveSlot) {
+      if (activeSlotOf.has(vfo.receiver)) {
+        invalid(`$.vfos[${i}].isActiveSlot`, `at most one active slot per receiver (${vfo.receiver})`);
+      }
+      activeSlotOf.add(vfo.receiver);
+    }
+  });
+
+  // Conditional spread, not `txAux: optionalGroup(...)` directly: an absent
+  // group must OMIT the key, not merely set it to `undefined` — a plain
+  // property assignment still shows up in `Object.keys()`, which would make
+  // "structurally unavailable" indistinguishable from "present" to any
+  // consumer that inventories keys (see the adapter test's exact-key-list
+  // assertion this was verified against).
+  const txAux = optionalGroup(v.txAux, '$.txAux', validateTxAux);
+  const meters = optionalGroup(v.meters, '$.meters', validateMeters);
+  const rxAudio = optionalGroup(v.rxAudio, '$.rxAudio', validateRxAudio);
+  const modeFilter = optionalGroup(v.modeFilter, '$.modeFilter', validateModeFilter);
+  const filterPassband = optionalGroup(v.filterPassband, '$.filterPassband', validateFilterPassband);
+  const dsp = optionalGroup(v.dsp, '$.dsp', validateDsp);
+  const rfFrontEnd = optionalGroup(v.rfFrontEnd, '$.rfFrontEnd', validateRfFrontEnd);
+  const band = optionalGroup(v.band, '$.band', validateBand);
+  const repeater = optionalGroup(v.repeater, '$.repeater', validateRepeater);
+  const ritXit = optionalGroup(v.ritXit, '$.ritXit', validateRitXit);
+  const antenna = optionalGroup(v.antenna, '$.antenna', validateAntenna);
+  const scan = optionalGroup(v.scan, '$.scan', validateScan);
+  const cwKeyer = optionalGroup(v.cwKeyer, '$.cwKeyer', validateCwKeyer);
+  const scopeControls = optionalGroup(v.scopeControls, '$.scopeControls', validateScopeControls);
+  const scopeDisplay = optionalGroup(v.scopeDisplay, '$.scopeDisplay', validateScopeDisplay);
+  const radioWideIndicators = optionalGroup(
+    v.radioWideIndicators, '$.radioWideIndicators', validateRadioWideIndicators,
+  );
+  let receiverIndicators: readonly ReceiverIndicatorViewModel[] | undefined;
+  if (v.receiverIndicators !== undefined) {
+    if (!Array.isArray(v.receiverIndicators)) invalid('$.receiverIndicators', 'an array');
+    receiverIndicators = v.receiverIndicators.map((indicator, i) =>
+      validateReceiverIndicator(indicator, `$.receiverIndicators[${i}]`));
+    const receiverIds = receiverIndicators.map((indicator) => indicator.receiver);
+    if (new Set(receiverIds).size !== receiverIds.length) {
+      invalid('$.receiverIndicators', 'at most one entry per receiver');
+    }
+  }
+
+  const disabledReasons = v.disabledReasons.map((r, i) => validateDisabledReason(r, `$.disabledReasons[${i}]`));
+  // SAFETY, MOR-1296 — the fail-closed half of "no second permit", enforced
+  // structurally rather than left to the adapter. Break-in keys the
+  // transmitter, so a model that presents a structurally-available break-in
+  // fact while the model's ONE `txPermit` is anything other than 'allowed'
+  // must ALSO record that the affordance is disabled. Same shape as the
+  // `band` invariant above (MOR-1294): a producer cannot ship the permissive
+  // half of a TX-adjacent pair while silently dropping the restrictive half.
+  // MOR-4433 exception, exactly the adapter's (`deriveCwKeyerReasons`)
+  // narrow case via the shared `isSourcelessPermitUnknown`: a sourceless
+  // target (`txTarget` `unsupported` — the sourceless class: G7250 and
+  // the sourceless-Yaesu shape) has no source a wait could resolve, so
+  // the unknown permit FOR that reason does not disable break-in and
+  // no entry is required for it. Any other non-allowed permit —
+  // sourced-but-unobserved target, unconfigured bands, denied — still does.
+  if (cwKeyer !== undefined && cwKeyer.breakIn.availability.structural
+    && txPermit.status !== 'allowed' && !isSourcelessPermitUnknown(txTarget, txPermit)
+    && !disabledReasons.some((r) => r.field === 'cwKeyer.breakIn')) {
+    invalid('$.disabledReasons', "a 'cwKeyer.breakIn' entry whenever txPermit is not 'allowed' (fail-open otherwise)");
+  }
+
+  return {
+    topologyId: str(v.topologyId, '$.topologyId'),
+    vfoScheme: oneOf(v.vfoScheme, VFO_SCHEMES, '$.vfoScheme'),
+    activeReceiver: validateActiveRx(v.activeReceiver, '$.activeReceiver'),
+    vfos,
+    split: validateBooleanFact(v.split, '$.split'),
+    dualWatch: validateBooleanFact(v.dualWatch, '$.dualWatch'),
+    txTarget,
+    txPermit,
+    scope: {
+      hardwareScope: validateAvailability(scope.hardwareScope, '$.scope.hardwareScope'),
+      audioFftScope: validateAvailability(scope.audioFftScope, '$.scope.audioFftScope'),
+    },
+    disabledReasons,
+    ...(receiverIndicators !== undefined ? { receiverIndicators } : {}),
+    ...(radioWideIndicators !== undefined ? { radioWideIndicators } : {}),
+    ...(txAux !== undefined ? { txAux } : {}),
+    ...(meters !== undefined ? { meters } : {}),
+    ...(rxAudio !== undefined ? { rxAudio } : {}),
+    ...(modeFilter !== undefined ? { modeFilter } : {}),
+    ...(filterPassband !== undefined ? { filterPassband } : {}),
+    ...(dsp !== undefined ? { dsp } : {}),
+    ...(rfFrontEnd !== undefined ? { rfFrontEnd } : {}),
+    ...(band !== undefined ? { band } : {}),
+    ...(repeater !== undefined ? { repeater } : {}),
+    ...(ritXit !== undefined ? { ritXit } : {}),
+    ...(antenna !== undefined ? { antenna } : {}),
+    ...(scan !== undefined ? { scan } : {}),
+    ...(cwKeyer !== undefined ? { cwKeyer } : {}),
+    ...(scopeControls !== undefined ? { scopeControls } : {}),
+    ...(scopeDisplay !== undefined ? { scopeDisplay } : {}),
+  };
+}

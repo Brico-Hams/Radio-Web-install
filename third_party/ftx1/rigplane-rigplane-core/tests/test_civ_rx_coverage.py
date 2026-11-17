@@ -1,0 +1,7485 @@
+"""Coverage tests for _civ_rx.py — CI-V receive pump, watchdog, state dispatch.
+
+Covers missing lines:
+- 64: cleanup_stale_civ_waiters debug log
+- 89-90: _stop_civ_rx_pump CancelledError handling
+- 112: _start_civ_data_watchdog early return
+- 153: watchdog _last_civ_data_received is None → continue
+- 157-175: watchdog Phase 1 recovery (OpenClose)
+- 229-232: watchdog data resumed (recovering reset)
+- 244: _ensure_civ_runtime raises ConnectionError
+- 276-279: drain queue in civ_rx_loop
+- 287: short packet skip
+- 292-293: ValueError from parse_civ_frame
+- 296-297: Exception from _route_civ_frame
+- 307: from_addr mismatch → return
+- 311: to_addr mismatch → return
+- 401, 414-421: _update_state_cache_from_frame meter/level paths
+- 449-450: sub 0x65 (IP+) handling
+- 456-457: exception in cache update
+- 470-622: _update_radio_state_from_frame all paths
+- 628-632: _notify_change with callback
+- 640-643: _publish_scope_frame queue full
+- 726: _start_civ_worker commander already exists
+- 823: pre-send timeout check
+- 833: ACK sink token error path
+- 851: post-register remaining <= 0 timeout
+"""
+
+from __future__ import annotations
+
+import asyncio
+import dataclasses
+import struct
+import time
+from collections.abc import Generator
+from contextlib import contextmanager
+from typing import Any
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+from rigplane.testing.timing import VirtualClock, await_until
+from test_radio import MockTransport, _wrap_civ_in_udp
+
+from rigplane import IC_7610_ADDR
+from rigplane.core.transport import IcomCivTransport
+from rigplane.runtime import _civ_rx as civ_rx_module
+from rigplane.runtime._civ_rx import CIV_HEADER_SIZE
+from rigplane.runtime._connection_state import RadioConnectionState
+from rigplane.commands import (
+    CONTROLLER_ADDR,
+    build_civ_frame,
+    parse_civ_frame,
+    parse_scope_span_response,
+)
+from rigplane.commands.tone import _encode_tone_freq
+from rigplane.core.acquisition_scheduler import (
+    AcquisitionPriority,
+    AcquisitionScheduler,
+    AcquisitionStatus,
+    MeterObservationCoalescer,
+    StateFreshnessService,
+)
+from rigplane.core.state_acquisition_policy import (
+    AcquisitionPolicy,
+    FieldCapability,
+    MeterCoalescingPolicy,
+    RadioAcquisitionProfile,
+    acquisition_policy_for_class,
+)
+from rigplane.core.state_diagnostics import StateDiagnosticsRecorder
+from rigplane.core.tx_target import KnownTxTarget, TxReceiver, UnknownTxTarget
+from rigplane.core.tx_observation import (
+    OBSERVED_PTT_PATH,
+    ObservedPtt,
+    project_observed_ptt,
+)
+from rigplane.core.state_pipeline_contracts import (
+    CommandIntent,
+    FieldPath,
+    Observation,
+    SourceMetadata,
+    acquisition_class_for_path,
+)
+from rigplane.core.exceptions import TimeoutError as RigplaneTimeoutError
+from rigplane.core.types import HEADER_SIZE
+from rigplane.exceptions import CommandError, ConnectionError
+from rigplane.profiles import resolve_radio_profile
+from rigplane.radio import IcomRadio
+from rigplane.radio_state import RadioState
+from rigplane.scope import ScopeFrame
+from rigplane.core.state_store import (
+    FreshnessClock,
+    FreshnessState,
+    StateSnapshot,
+    StateStore,
+)
+from rigplane.types import CivFrame, Mode, ScopeFixedEdge, bcd_encode
+from rigplane.web.radio_poller import CommandQueue, RadioPoller
+from rigplane.web.runtime_helpers import build_public_state_payload_from_snapshot
+
+# ---------------------------------------------------------------------------
+# Fixtures
+# ---------------------------------------------------------------------------
+
+
+# The eight Icom CI-V scope span presets the ``radio`` fixture's IC-7610
+# profile declares (``rigs/ic7610.toml``: ``[scope].span_presets_hz``).
+# ``test_span_presets_match_the_fixture_profile`` below is what ties this
+# literal to that profile, so a profile edit cannot silently leave these
+# parametrisations testing a table no radio uses.
+_SPAN_PRESETS_HZ = (2500, 5000, 10000, 25000, 50000, 100000, 250000, 500000)
+
+
+@pytest.fixture  # type: ignore[untyped-decorator]
+def transport() -> MockTransport:
+    return MockTransport()
+
+
+@pytest.fixture  # type: ignore[untyped-decorator]
+def radio(transport: MockTransport) -> Generator[IcomRadio, None, None]:
+    r = IcomRadio("192.168.1.100", model="IC-7610")
+    r._civ_transport = transport
+    r._ctrl_transport = transport
+    r._connected = True
+    yield r
+    r._connected = False
+
+
+def _make_frame(
+    cmd: int,
+    sub: int | None = None,
+    data: bytes = b"",
+    from_addr: int = IC_7610_ADDR,
+    to_addr: int = CONTROLLER_ADDR,
+    receiver: int | None = None,
+) -> CivFrame:
+    """Create a CivFrame directly for testing."""
+    return CivFrame(
+        to_addr=to_addr,
+        from_addr=from_addr,
+        command=cmd,
+        sub=sub,
+        data=data,
+        receiver=receiver,
+    )
+
+
+def _make_scope_waveform_frame(
+    *,
+    receiver: int = 0,
+    mode: int,
+    start_hz: int = 14_000_000,
+    end_hz: int = 14_350_000,
+    oor: bool = False,
+) -> CivFrame:
+    """Build a single-packet (LAN-style, seq=seqMax=1) ``0x27``/``0x00``
+    waveform frame, per ``rigplane.scope._ReceiverState.feed``'s sequence-1
+    layout: ``[receiver, seq_bcd, seqMax_bcd, mode, start(5), end(5), oor,
+    pixels...]``.
+
+    When ``oor`` is False and ``mode == 0`` (center), the assembler
+    remaps ``start_hz``/``end_hz`` as ``[center_freq, span]`` into real
+    edges (``center - span``, ``center + span``) -- pass ``start_hz`` as
+    the center frequency and ``end_hz`` as the SPAN value itself (per the
+    IC-7610 CI-V reference p.14 / IC-7300 manual: the raw field carries
+    the same value the ``0x27 0x15`` span table encodes, not half of
+    it). For any other mode both are used as literal edge frequencies,
+    unremapped.
+
+    When ``oor`` is True, ``_ReceiverState.feed`` returns BEFORE that
+    center-mode remap regardless of ``mode`` -- ``start_hz``/``end_hz``
+    below are passed straight through as ``ScopeFrame.start_freq_hz``/
+    ``end_freq_hz`` unmodified (raw ``[center, span]``, not edges).
+    """
+    raw_payload = (
+        bytes([0x01, 0x01, mode])
+        + bcd_encode(start_hz)
+        + bcd_encode(end_hz)
+        + bytes([0x01 if oor else 0x00])
+        + b"\x00"  # one pixel byte
+    )
+    return _make_frame(cmd=0x27, sub=0x00, data=bytes([receiver]) + raw_payload)
+
+
+@contextmanager
+def _spy_state_store_apply(radio: IcomRadio) -> Generator[MagicMock, None, None]:
+    """Spy on ``StateStore.apply`` calls made through ``radio``.
+
+    ``StateStore`` uses ``__slots__`` (no ``apply`` slot), so an
+    instance-level ``patch.object(radio._state_store, "apply", ...)`` fails
+    with "attribute is read-only" — this patches the class method instead,
+    with a wrapper that still calls through to the real implementation
+    bound to ``radio``'s own store.
+    """
+    original_apply = StateStore.apply
+    store = radio._state_store
+
+    def _call_through(observation: Observation) -> Any:
+        return original_apply(store, observation)
+
+    spy = MagicMock(side_effect=_call_through)
+    with patch.object(StateStore, "apply", spy):
+        yield spy
+
+
+def _bcd2(value: int) -> bytes:
+    """Encode a 0-255 value as 2-byte BCD (like IC-7610 meter/level format)."""
+    d = f"{value:04d}"
+    b0 = (int(d[0]) << 4) | int(d[1])
+    b1 = (int(d[2]) << 4) | int(d[3])
+    return bytes([b0, b1])
+
+
+def _acquisition_profile(
+    *paths: FieldPath,
+    policy: AcquisitionPolicy | None = None,
+) -> RadioAcquisitionProfile:
+    acquisition_policy = policy or AcquisitionPolicy(
+        cadence_seconds=1.0,
+        freshness_ttl_seconds=4.0,
+    )
+    return RadioAcquisitionProfile(
+        provider="icom_civ",
+        capabilities=tuple(
+            FieldCapability(
+                path=path, polling=True, stream_like=path.family.value == "meters"
+            )
+            for path in paths
+        ),
+        default_policy=acquisition_policy,
+        # Declared per path: an unowned pollable path resolves to its
+        # acquisition class policy since MOR-2574 step 2, and these tests
+        # drive the numbers passed here (coalescing windows included).
+        field_policies={path: acquisition_policy for path in paths},
+    )
+
+
+@pytest.mark.asyncio
+async def test_relative_vfo_ingress_bootstraps_then_transceive_patches_immediately(
+    radio: IcomRadio,
+) -> None:
+    radio._profile = resolve_radio_profile(model="IC-7300")  # noqa: SLF001
+    store_generation = radio._state_store.begin_provider_generation()  # noqa: SLF001
+    assert store_generation != radio._civ_epoch  # noqa: SLF001
+    radio._state_store.configure_relative_vfo_retention(  # noqa: SLF001
+        generation=store_generation,
+        max_age=31.0,
+        coherence_window=5.0,
+    )
+    radio.send_civ = AsyncMock()  # type: ignore[method-assign]
+
+    for frame in (
+        _make_frame(cmd=0x25, data=b"\x00" + bcd_encode(14_284_000)),
+        _make_frame(cmd=0x26, data=bytes([0, Mode.USB.value, 0, 1])),
+        _make_frame(cmd=0x25, data=b"\x01" + bcd_encode(14_075_000)),
+        _make_frame(cmd=0x26, data=bytes([1, Mode.USB.value, 0, 1])),
+    ):
+        await radio._civ_runtime._route_civ_frame(  # noqa: SLF001
+            frame,
+            generation=radio._civ_epoch,  # noqa: SLF001
+        )
+
+    # The explicit A selection is already ACK-confirmed at this boundary.
+    # Replaying the existing relative readback binds both aliases without any
+    # select/swap/write side path.
+    radio._state_store.apply(  # noqa: SLF001
+        Observation(
+            path=FieldPath.active_slot("0"),
+            value="A",
+            source=SourceMetadata(
+                source="command_response",
+                provider="vfo_binding",
+                native_id="explicit_slot_ack_readback",
+            ),
+            timestamp_monotonic=time.monotonic(),
+            provider_generation=store_generation,
+        )
+    )
+    for frame in (
+        _make_frame(cmd=0x25, data=b"\x00" + bcd_encode(14_284_000)),
+        _make_frame(cmd=0x26, data=bytes([0, Mode.USB.value, 0, 1])),
+        _make_frame(cmd=0x25, data=b"\x01" + bcd_encode(14_075_000)),
+        _make_frame(cmd=0x26, data=bytes([1, Mode.USB.value, 0, 1])),
+    ):
+        await radio._civ_runtime._route_civ_frame(  # noqa: SLF001
+            frame,
+            generation=radio._civ_epoch,  # noqa: SLF001
+        )
+
+    before = radio._state_store.snapshot()  # noqa: SLF001
+    old_mode = before.field("receiver.0.active.freq_mode.mode")
+    old_unselected = before.field("receiver.0.unselected.freq_mode.freq_hz")
+    old_b = before.field("receiver.0.slot.B.freq_mode.freq_hz")
+    for frequency in (14_130_000, 14_123_000):
+        await radio._civ_runtime._route_civ_frame(  # noqa: SLF001
+            _make_frame(
+                cmd=0x00,
+                data=bcd_encode(frequency),
+                to_addr=0x00,
+            ),
+            generation=radio._civ_epoch,  # noqa: SLF001
+        )
+        same_revision = radio._state_store.snapshot()  # noqa: SLF001
+        assert (
+            same_revision.field("receiver.0.active.freq_mode.freq_hz").value
+            == frequency
+        )
+        assert (
+            same_revision.field("receiver.0.slot.A.freq_mode.freq_hz").value
+            == frequency
+        )
+        assert same_revision.field(old_b.path).value == old_b.value
+
+    after = radio._state_store.snapshot()  # noqa: SLF001
+    knob = after.field("receiver.0.active.freq_mode.freq_hz")
+    assert knob.value == 14_123_000
+    assert knob.source.source == "civ_unsolicited"
+    assert knob.last_observed_monotonic > old_mode.last_observed_monotonic
+    assert after.field(old_mode.path).value == old_mode.value
+    assert after.field(old_unselected.path).value == old_unselected.value
+    assert knob.provider_generation == store_generation
+    radio.send_civ.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_relative_vfo_stale_or_invalid_generation_cannot_repopulate(
+    radio: IcomRadio,
+) -> None:
+    radio._profile = resolve_radio_profile(model="IC-7300")  # noqa: SLF001
+    radio._state_store.configure_relative_vfo_retention(  # noqa: SLF001
+        generation=radio._civ_epoch,  # noqa: SLF001
+        max_age=31.0,
+        coherence_window=5.0,
+    )
+    frame = _make_frame(cmd=0x25, data=b"\x00" + bcd_encode(14_285_000))
+
+    await radio._civ_runtime._route_civ_frame(  # noqa: SLF001
+        frame,
+        generation=radio._civ_epoch - 1,  # noqa: SLF001
+    )
+    await radio._civ_runtime._route_civ_frame(  # noqa: SLF001
+        frame,
+        generation=MagicMock(),
+    )
+
+    assert radio._state_store.snapshot().fields == ()  # noqa: SLF001
+
+
+# ---------------------------------------------------------------------------
+# _cleanup_stale_civ_waiters (line 64)
+# ---------------------------------------------------------------------------
+
+
+def test_cleanup_stale_civ_waiters_logs_cleaned_count(radio: IcomRadio) -> None:
+    """When cleanup returns > 0, debug log is emitted (line 64)."""
+    radio._civ_last_waiter_gc_monotonic = 0.0
+    radio._civ_waiter_ttl_gc_interval = 0.0
+    radio._civ_request_tracker.cleanup_stale = MagicMock(return_value=3)
+    radio._civ_runtime._cleanup_stale_civ_waiters()
+    radio._civ_request_tracker.cleanup_stale.assert_called_once()
+
+
+def test_cleanup_stale_civ_waiters_no_log_when_zero(radio: IcomRadio) -> None:
+    """When cleanup returns 0, no debug log (branch not taken)."""
+    radio._civ_last_waiter_gc_monotonic = 0.0
+    radio._civ_waiter_ttl_gc_interval = 0.0
+    radio._civ_request_tracker.cleanup_stale = MagicMock(return_value=0)
+    radio._civ_runtime._cleanup_stale_civ_waiters()  # should not raise
+
+
+# ---------------------------------------------------------------------------
+# _stop_civ_rx_pump (lines 89-90)
+# ---------------------------------------------------------------------------
+
+
+async def test_stop_civ_rx_pump_handles_cancellation(radio: IcomRadio) -> None:
+    """_stop_civ_rx_pump cancels the rx task and handles CancelledError (lines 89-90)."""
+
+    async def _long_task() -> None:
+        try:
+            await asyncio.sleep(100.0)
+        except asyncio.CancelledError:
+            raise
+
+    task = asyncio.create_task(_long_task())
+    radio._civ_rx_task = task
+    await radio._civ_runtime.stop_pump()
+    assert radio._civ_rx_task is None
+    assert task.cancelled()
+
+
+async def test_stop_civ_rx_pump_when_task_is_none(radio: IcomRadio) -> None:
+    """_stop_civ_rx_pump is a no-op when there is no task."""
+    radio._civ_rx_task = None
+    await radio._civ_runtime.stop_pump()  # should not raise
+    assert radio._civ_rx_task is None
+
+
+# ---------------------------------------------------------------------------
+# _start_civ_data_watchdog (line 112)
+# ---------------------------------------------------------------------------
+
+
+def test_start_civ_data_watchdog_returns_early_when_already_running(
+    radio: IcomRadio,
+) -> None:
+    """Returns early without creating a task when watchdog is already running (line 112)."""
+    mock_task = MagicMock()
+    mock_task.done.return_value = False
+    radio._civ_data_watchdog_task = mock_task
+
+    with patch("asyncio.create_task") as mock_create:
+        radio._civ_runtime.start_data_watchdog()
+        mock_create.assert_not_called()
+
+
+def test_start_civ_data_watchdog_creates_task_when_done(radio: IcomRadio) -> None:
+    """Creates a new task when previous watchdog task is done."""
+    mock_task = MagicMock()
+    mock_task.done.return_value = True
+    radio._civ_data_watchdog_task = mock_task
+
+    fake_new_task = MagicMock()
+
+    def _create_task(coro: object, *args: object, **kwargs: object) -> MagicMock:
+        close = getattr(coro, "close", None)
+        if callable(close):
+            close()
+        return fake_new_task
+
+    with patch("asyncio.create_task", side_effect=_create_task) as mock_create:
+        radio._civ_runtime.start_data_watchdog()
+        mock_create.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# _civ_data_watchdog_loop (lines 153, 157-175, 229-232)
+# ---------------------------------------------------------------------------
+
+
+async def test_watchdog_loop_continues_when_no_data_received(radio: IcomRadio) -> None:
+    """Watchdog continues when _last_civ_data_received is not set (line 153)."""
+    # Ensure the attribute is not set so getattr returns None
+    if hasattr(radio, "_last_civ_data_received"):
+        delattr(radio, "_last_civ_data_received")
+
+    iteration_count = [0]
+
+    async def mock_sleep(delay: float) -> None:
+        iteration_count[0] += 1
+        if iteration_count[0] >= 3:
+            raise asyncio.CancelledError()
+
+    with patch("asyncio.sleep", side_effect=mock_sleep):
+        await radio._civ_runtime._civ_data_watchdog_loop()
+
+    assert iteration_count[0] >= 3
+
+
+async def test_watchdog_loop_phase1_sends_open_close(radio: IcomRadio) -> None:
+    """Phase 1 recovery: sends open_close when idle > timeout (lines 157-175)."""
+    # Payload idle, and a send left unanswered: the stall evidence the rule
+    # now requires before OpenClose.
+    radio._last_civ_data_received = time.monotonic() - 10.0
+    radio._last_civ_send_monotonic = time.monotonic() - 5.0
+
+    open_close_calls: list[bool] = []
+
+    async def mock_open_close(*, open_stream: bool) -> None:
+        open_close_calls.append(open_stream)
+
+    sleep_count = [0]
+
+    async def mock_sleep(delay: float) -> None:
+        sleep_count[0] += 1
+        # After 2 iterations in recovery mode, stop
+        if sleep_count[0] >= 2:
+            raise asyncio.CancelledError()
+
+    with (
+        patch("asyncio.sleep", side_effect=mock_sleep),
+        patch.object(radio, "_send_open_close", side_effect=mock_open_close),
+    ):
+        await radio._civ_runtime._civ_data_watchdog_loop()
+
+    # open_close(open_stream=True) should have been called
+    assert True in open_close_calls
+
+
+async def test_watchdog_loop_data_resumed_resets_recovering(radio: IcomRadio) -> None:
+    """When data resumes while recovering, recovering flag is reset (lines 229-232)."""
+    radio._last_civ_data_received = time.monotonic() - 10.0
+    radio._last_civ_send_monotonic = time.monotonic() - 5.0
+
+    sleep_count = [0]
+
+    async def mock_sleep(delay: float) -> None:
+        sleep_count[0] += 1
+        if sleep_count[0] == 1:
+            # After first sleep, reset last received to now (data resumed!)
+            radio._last_civ_data_received = time.monotonic()
+        elif sleep_count[0] >= 3:
+            raise asyncio.CancelledError()
+
+    open_close_calls: list[bool] = []
+
+    async def mock_open_close(*, open_stream: bool) -> None:
+        open_close_calls.append(open_stream)
+
+    with (
+        patch("asyncio.sleep", side_effect=mock_sleep),
+        patch.object(radio, "_send_open_close", side_effect=mock_open_close),
+    ):
+        await radio._civ_runtime._civ_data_watchdog_loop()
+
+    # The loop should have run without error and data resumed path was hit
+
+
+async def test_watchdog_loop_phase1_open_close_exception_ignored(
+    radio: IcomRadio,
+) -> None:
+    """Phase 1: exceptions from _send_open_close are silently ignored (line 177-180)."""
+    radio._last_civ_data_received = time.monotonic() - 10.0
+    radio._last_civ_send_monotonic = time.monotonic() - 5.0
+
+    async def failing_open_close(*, open_stream: bool) -> None:
+        raise OSError("network error")
+
+    sleep_count = [0]
+
+    async def mock_sleep(delay: float) -> None:
+        sleep_count[0] += 1
+        if sleep_count[0] >= 2:
+            raise asyncio.CancelledError()
+
+    # Should not propagate the open_close exception
+    with (
+        patch("asyncio.sleep", side_effect=mock_sleep),
+        patch.object(radio, "_send_open_close", side_effect=failing_open_close),
+    ):
+        await (
+            radio._civ_runtime._civ_data_watchdog_loop()
+        )  # should complete without raising
+
+
+async def test_watchdog_loop_phase2_hands_off_to_lifecycle_recovery(
+    radio: IcomRadio,
+) -> None:
+    """After the OpenClose deadline the watchdog HANDS OFF recovery to the
+    unified lifecycle loop rather than owning the retry/backoff/exhaustion
+    ladder itself (A4 single-owner).
+
+    The detached handoff (``_watchdog_recover``) calls ``soft_reconnect`` ONCE;
+    the attempt count and the per-attempt backoff now live entirely in
+    ``CoreRadioSessionLifecycle._run_recover`` (driven via ``soft_reconnect``),
+    so the watchdog no longer sleeps a 45 s backoff of its own.
+    """
+    radio._last_civ_data_received = 0.0
+    # A send left unanswered, so the stall is a stall under the rule. The
+    # count stays put, so the port is silent and the hand-off bound is 5 s;
+    # the clock jumps past either bound, so the hand-off still happens.
+    radio._last_civ_send_monotonic = 100.0
+    radio._civ_recovering = False
+    radio._force_cleanup_civ = AsyncMock()
+    radio.soft_reconnect = AsyncMock()
+    # Control session alive so the post-recovery re-arm is a no-op spy path.
+    ctrl = MagicMock()
+    ctrl._udp_transport = object()
+    radio._ctrl_transport = ctrl
+
+    delays: list[float] = []
+
+    async def fake_sleep(delay: float) -> None:
+        delays.append(delay)
+
+    monotonic_values = iter([200.0, 200.0, 265.0, 265.1, 265.2])
+
+    def _mono() -> float:
+        try:
+            return next(monotonic_values)
+        except StopIteration:
+            return 265.2
+
+    with (
+        patch("asyncio.sleep", side_effect=fake_sleep),
+        patch("time.monotonic", side_effect=_mono),
+        patch("rigplane.runtime._civ_rx.time.monotonic", side_effect=_mono),
+        patch.object(radio, "_send_open_close", new=AsyncMock()),
+        patch.object(radio._civ_runtime, "start_data_watchdog", MagicMock()),
+    ):
+        await radio._civ_runtime._civ_data_watchdog_loop()
+        # Await the spawned recovery handoff explicitly so it runs inside the
+        # patched scope.
+        spawned = [
+            t for t in asyncio.all_tasks() if t.get_name().startswith("civ-watchdog-")
+        ]
+        for task in spawned:
+            await task
+
+    # The watchdog itself no longer owns a 45 s reconnect backoff sleep — the
+    # backoff moved into the lifecycle RECOVERING loop.  It hands off exactly
+    # once to ``soft_reconnect``.
+    assert all(d < 45.0 for d in delays)
+    radio.soft_reconnect.assert_awaited_once()
+
+
+async def test_watchdog_recover_cleans_up_then_drives_lifecycle(
+    radio: IcomRadio,
+) -> None:
+    """The detached recovery handoff tears down the stalled CI-V transport, then
+    drives the unified lifecycle ``soft_reconnect`` ONCE (A4).
+
+    The per-attempt backoff/cooldown that used to live in the watchdog handoff
+    moved into ``CoreRadioSessionLifecycle._run_recover``; the handoff itself no
+    longer sleeps a backoff before ``soft_reconnect`` — it just cleans up and
+    delegates.  ``force_cleanup`` runs before ``soft_reconnect`` (the
+    rebuild path), preserving the #1217 detached-execution ordering.
+    """
+    order: list[str] = []
+    # Control session alive so the finally re-arm is a no-op spy path.
+    ctrl = MagicMock()
+    ctrl._udp_transport = object()
+    radio._ctrl_transport = ctrl
+
+    async def record_force_cleanup() -> None:
+        order.append("force_cleanup")
+
+    async def record_soft_reconnect() -> None:
+        order.append("soft_reconnect")
+
+    radio._force_cleanup_civ = record_force_cleanup
+    radio.soft_reconnect = record_soft_reconnect
+
+    with patch.object(radio._civ_runtime, "start_data_watchdog", MagicMock()):
+        await radio._civ_runtime._watchdog_recover()
+
+    assert order == ["force_cleanup", "soft_reconnect"]
+
+
+# ---------------------------------------------------------------------------
+# MOR-2625 — a soft reconnect that restores no CI-V payload escalates once
+# to a full reconnect (control-session release, then the same soft_reconnect).
+# ---------------------------------------------------------------------------
+
+
+async def test_watchdog_recover_escalates_when_soft_reconnect_restored_no_data(
+    radio: IcomRadio,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """(a) A soft recovery whose epoch is still this session's, and no payload
+    since, makes the next handoff release the control session before
+    soft_reconnect, in that order."""
+    radio._civ_epoch = 7
+    radio._civ_runtime._soft_recovery_epoch = 7
+    order: list[str] = []
+
+    async def record_force_cleanup() -> None:
+        order.append("force_cleanup")
+
+    async def record_release() -> None:
+        order.append("release")
+
+    radio._force_cleanup_civ = record_force_cleanup
+    radio._control_phase.release = record_release
+    radio._ctrl_transport.remote_id = 0xEF167A45
+    seen: dict[str, int] = {}
+
+    async def record_soft_reconnect() -> None:
+        order.append("soft_reconnect")
+        seen["remote_id"] = radio._ctrl_transport.remote_id
+
+    radio.soft_reconnect = record_soft_reconnect
+
+    with (
+        patch.object(radio._civ_runtime, "start_data_watchdog", MagicMock()),
+        caplog.at_level("WARNING"),
+    ):
+        await radio._civ_runtime._watchdog_recover()
+
+    assert order == ["force_cleanup", "release", "soft_reconnect"]
+    assert seen["remote_id"] == 0
+    assert any(
+        "soft reconnect restored no data, escalating to full reconnect" in r.message
+        for r in caplog.records
+    )
+    assert radio._civ_runtime._soft_recovery_epoch is None
+
+
+async def test_watchdog_recover_stays_soft_after_payload(
+    radio: IcomRadio,
+) -> None:
+    """(b) A payload drained between recoveries clears the epoch, so the next
+    recovery is soft-only."""
+    radio._civ_epoch = 7
+    radio._civ_runtime._soft_recovery_epoch = 7
+    radio._civ_transport.queue_response(b"\x00" * (CIV_HEADER_SIZE + 1))
+
+    def stop_after_batch() -> None:
+        radio._civ_transport = None
+
+    with patch.object(
+        radio._civ_runtime, "_cleanup_stale_civ_waiters", side_effect=stop_after_batch
+    ):
+        await radio._civ_runtime._civ_rx_loop(
+            source_generation=7, store_provider_generation=0
+        )
+
+    assert radio._civ_runtime._soft_recovery_epoch is None
+
+    released = AsyncMock()
+    radio._control_phase.release = released
+    radio._force_cleanup_civ = AsyncMock()
+    radio._ctrl_transport.remote_id = 0xEF167A45
+    seen: list[int] = []
+
+    async def record_soft_reconnect() -> None:
+        seen.append(radio._ctrl_transport.remote_id)
+
+    radio.soft_reconnect = record_soft_reconnect
+    with patch.object(radio._civ_runtime, "start_data_watchdog", MagicMock()):
+        await radio._civ_runtime._watchdog_recover()
+
+    released.assert_not_awaited()
+    assert seen == [0xEF167A45]
+
+
+async def test_watchdog_recover_does_not_escalate_twice(
+    radio: IcomRadio,
+) -> None:
+    """(c) After an escalated recovery that itself restored no payload, the
+    following recovery does not escalate again."""
+    radio._civ_epoch = 7
+    radio._civ_runtime._soft_recovery_epoch = 7
+    radio._force_cleanup_civ = AsyncMock()
+    radio._control_phase.release = AsyncMock()
+    radio.soft_reconnect = AsyncMock()
+
+    with patch.object(radio._civ_runtime, "start_data_watchdog", MagicMock()):
+        await radio._civ_runtime._watchdog_recover()
+        radio._control_phase.release.reset_mock()
+        await radio._civ_runtime._watchdog_recover()
+
+    radio._control_phase.release.assert_not_awaited()
+    assert radio.soft_reconnect.await_count == 2
+
+
+async def test_watchdog_recover_ignores_stale_epoch(radio: IcomRadio) -> None:
+    """(d) A changed CI-V epoch (a new session) ignores a remembered epoch."""
+    radio._civ_epoch = 8
+    radio._civ_runtime._soft_recovery_epoch = 7
+    released = AsyncMock()
+    radio._control_phase.release = released
+    radio._force_cleanup_civ = AsyncMock()
+    radio.soft_reconnect = AsyncMock()
+
+    with patch.object(radio._civ_runtime, "start_data_watchdog", MagicMock()):
+        await radio._civ_runtime._watchdog_recover()
+
+    released.assert_not_awaited()
+    radio.soft_reconnect.assert_awaited_once()
+    assert radio._civ_runtime._soft_recovery_epoch == 8
+
+
+async def test_watchdog_deadline_is_5s_after_no_payload_soft_recovery(
+    radio: IcomRadio,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """(e) After a soft recovery that restored no payload, OpenClose patience
+    is the 5 s silent deadline even while the port keeps answering pings."""
+    clock = _WatchdogClock()
+    radio._civ_epoch = 7
+    radio._civ_runtime._soft_recovery_epoch = 7
+    radio._last_civ_data_received = clock.now
+    radio._last_civ_send_monotonic = clock.now + 0.5
+    radio._civ_transport.rx_packet_count = 0
+    radio._civ_recovering = False
+    radio._force_cleanup_civ = AsyncMock()
+    radio.soft_reconnect = AsyncMock()
+
+    handed_off_at: list[float] = []
+    real_create_task = asyncio.create_task
+
+    def capture(coro: object, *args: object, **kwargs: object) -> asyncio.Task[object]:
+        handed_off_at.append(clock.now)
+        close = getattr(coro, "close", None)
+        if callable(close):
+            close()
+        return real_create_task(asyncio.sleep(0))
+
+    async def tick(delay: float) -> None:
+        clock.advance(delay)
+        radio._civ_transport.rx_packet_count += 1
+
+    with (
+        patch("asyncio.sleep", side_effect=tick),
+        patch("time.monotonic", side_effect=clock.monotonic),
+        patch("rigplane.runtime._civ_rx.time.monotonic", side_effect=clock.monotonic),
+        patch("asyncio.create_task", side_effect=capture),
+        patch.object(radio, "_send_open_close", new=AsyncMock()),
+        caplog.at_level("WARNING"),
+    ):
+        await radio._civ_runtime._civ_data_watchdog_loop()
+
+    assert handed_off_at
+    handoff = next(
+        r for r in caplog.records if "handing off to lifecycle recovery" in r.message
+    )
+    assert "OpenClose failed for 5." in handoff.message
+    assert handed_off_at[0] - radio._last_civ_data_received < 60.0
+
+
+async def test_stop_data_watchdog_cancels_pending_reconnect_task(
+    radio: IcomRadio,
+) -> None:
+    """stop_data_watchdog() must cancel any in-flight detached recovery handoff,
+    so an explicit disconnect during recovery does not let a late
+    soft_reconnect resume (Codex P1 on PR #851).
+
+    Recovery backoff now lives in the lifecycle, so the handoff is "pending"
+    while the (here-blocked) ``soft_reconnect`` is in flight rather than while a
+    watchdog cooldown sleep runs.
+    """
+    radio._force_cleanup_civ = AsyncMock()
+
+    started = asyncio.Event()
+    reached_completion: list[bool] = []
+
+    async def blocking_soft_reconnect() -> None:
+        started.set()
+        # Block until cancelled (stands in for the lifecycle RECOVERING loop's
+        # backoff sleep / in-flight attempt).
+        await asyncio.sleep(60.0)
+        reached_completion.append(True)
+
+    radio.soft_reconnect = blocking_soft_reconnect
+
+    # Spawn the recovery handoff the same way the watchdog does, and register it
+    # on the runtime so stop_data_watchdog can find it.
+    task = asyncio.create_task(
+        radio._civ_runtime._watchdog_recover(),
+        name="civ-watchdog-recover",
+    )
+    radio._civ_runtime._reconnect_task = task
+
+    # Let the task reach the (blocked) soft_reconnect.
+    await started.wait()
+    assert not task.done(), "recovery handoff should still be in flight"
+
+    # Explicit disconnect during recovery.
+    await radio._civ_runtime.stop_data_watchdog()
+
+    assert task.done()
+    assert reached_completion == [], "soft_reconnect must not complete after cancel"
+    assert radio._civ_runtime._reconnect_task is None
+
+
+async def test_watchdog_patient_openclose_before_escalation(
+    radio: IcomRadio,
+) -> None:
+    """Watchdog sends open_close for a patient period before escalating to
+    soft_reconnect. Matches wfview's recovery pattern (icomudpcivdata.cpp:31):
+    persistent OpenClose every 100ms rather than aggressive escalation.
+    """
+    radio._last_civ_data_received = 0.0
+    # The 60 s patience applies only while the port is alive, so pings keep
+    # advancing and a send stays unanswered.
+    radio._last_civ_send_monotonic = 100.0
+    radio._civ_transport.rx_packet_count = 0
+    radio._civ_recovering = False
+    radio.soft_reconnect = AsyncMock()
+    radio._force_cleanup_civ = AsyncMock()
+
+    # Monotonic advances 1 sec per call; recovery_start captured on 2nd call,
+    # then each elapsed_recovery check stays under the 60-sec deadline for
+    # well past the old 5-sec cutoff.
+    mono_time = [200.0]
+
+    def _mono() -> float:
+        mono_time[0] += 1.0
+        radio._civ_transport.rx_packet_count += 1
+        return mono_time[0]
+
+    sleep_count = [0]
+
+    async def fake_sleep(delay: float) -> None:
+        sleep_count[0] += 1
+        if sleep_count[0] >= 30:
+            raise asyncio.CancelledError()
+
+    oc_mock = AsyncMock()
+
+    with (
+        patch("asyncio.sleep", side_effect=fake_sleep),
+        patch("time.monotonic", side_effect=_mono),
+        patch.object(radio, "_send_open_close", new=oc_mock),
+    ):
+        await radio._civ_runtime._civ_data_watchdog_loop()
+
+    # Crossed the old 5-sec deadline many times but NOT escalated.
+    radio.soft_reconnect.assert_not_awaited()
+    # open_close called repeatedly during the patient period.
+    assert oc_mock.await_count >= 10
+
+
+# ---------------------------------------------------------------------------
+# MOR-2623 — a quiet live link is not a stall; unanswered queries or a
+# silent port are, and a silent port gives up in 5 s.
+# ---------------------------------------------------------------------------
+
+
+class _WatchdogClock:
+    """Fake clock the watchdog loop and the test share.
+
+    ``advance`` is what a sleep does: the loop awaits ``asyncio.sleep`` once
+    per tick, and the sleep moves the clock by the delay the loop asked for.
+    """
+
+    def __init__(self, start: float = 1_000.0) -> None:
+        self.now = start
+
+    def monotonic(self) -> float:
+        return self.now
+
+    def advance(self, delay: float) -> None:
+        self.now += delay
+
+
+# ---------------------------------------------------------------------------
+# MOR-2627 — a radio "session free" notice starts the same escalation now.
+# ---------------------------------------------------------------------------
+
+
+def _arm_notice_recovery(radio: IcomRadio) -> tuple[list[str], AsyncMock]:
+    radio._conn_state = RadioConnectionState.CONNECTED
+    radio._civ_recovering = False
+    radio._civ_runtime._reconnect_task = None
+    order: list[str] = []
+    released = AsyncMock()
+
+    async def record_force_cleanup() -> None:
+        order.append("force_cleanup")
+
+    async def record_release() -> None:
+        order.append("release")
+        await released()
+
+    radio._force_cleanup_civ = record_force_cleanup
+    radio._control_phase.release = record_release
+    radio._ctrl_transport.remote_id = 0xEF167A45
+
+    async def record_soft_reconnect() -> None:
+        order.append("soft_reconnect")
+        order.append(f"remote_id={radio._ctrl_transport.remote_id}")
+
+    radio.soft_reconnect = record_soft_reconnect
+    return order, released
+
+
+async def test_request_recovery_now_starts_one_full_reconnect(
+    radio: IcomRadio,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A free-session notice starts exactly one recovery that releases the
+    control session before soft_reconnect and logs the given reason."""
+    order, _released = _arm_notice_recovery(radio)
+    reason = "radio reported the LAN session free (conninfo busy=0)"
+
+    with (
+        patch.object(radio._civ_runtime, "start_data_watchdog", MagicMock()),
+        caplog.at_level("WARNING"),
+    ):
+        radio._civ_runtime.request_recovery_now(reason)
+        radio._civ_runtime.request_recovery_now(reason)
+        task = radio._civ_runtime._reconnect_task
+        assert task is not None
+        await task
+
+    assert order == ["force_cleanup", "release", "soft_reconnect", "remote_id=0"]
+    assert any(reason in r.message for r in caplog.records)
+    assert not any(
+        "soft reconnect restored no data" in r.message for r in caplog.records
+    )
+
+
+@pytest.mark.parametrize(
+    "blocker",
+    ["not_connected", "connecting", "recovering", "live_task"],
+)
+async def test_request_recovery_now_is_a_no_op_when_blocked(
+    radio: IcomRadio,
+    blocker: str,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Not CONNECTED, already recovering, or a live
+    recovery task: do nothing."""
+    _order, released = _arm_notice_recovery(radio)
+    if blocker == "not_connected":
+        radio._conn_state = RadioConnectionState.DISCONNECTED
+    elif blocker == "connecting":
+        radio._conn_state = RadioConnectionState.CONNECTING
+        radio._ctrl_transport._udp_transport = object()
+    elif blocker == "recovering":
+        radio._civ_recovering = True
+    else:
+        live: asyncio.Task[None] = asyncio.create_task(asyncio.sleep(60))
+        radio._civ_runtime._reconnect_task = live
+    try:
+        with caplog.at_level("INFO"):
+            radio._civ_runtime.request_recovery_now("busy=0")
+        assert radio._civ_runtime._reconnect_task is (
+            None if blocker != "live_task" else live
+        )
+        released.assert_not_awaited()
+        ignored = [
+            r
+            for r in caplog.records
+            if "notice ignored" in r.getMessage() and "busy=0" in r.getMessage()
+        ]
+        assert len(ignored) == 1, (
+            f"blocker={blocker}: expected exactly one ignored-notice log line "
+            f"carrying the reason, saw {[r.getMessage() for r in caplog.records]}"
+        )
+    finally:
+        if blocker == "live_task":
+            live.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await live
+
+
+async def test_request_recovery_now_preempts_a_recovery_tail(
+    radio: IcomRadio,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """MOR-3350: a busy=0 notice while a recovery is only in its tail (session
+    re-established, task parked past cleanup) restarts the recovery instead of
+    being dropped silently."""
+    order, _released = _arm_notice_recovery(radio)
+    tail_release = asyncio.Event()
+    tail_entered = asyncio.Event()
+
+    async def tail_soft_reconnect() -> None:
+        order.append("soft_reconnect")
+        order.append(f"remote_id={radio._ctrl_transport.remote_id}")
+        radio._conn_state = RadioConnectionState.CONNECTED
+        tail_entered.set()
+        await asyncio.wait_for(tail_release.wait(), 10.0)
+
+    radio.soft_reconnect = tail_soft_reconnect
+    first: asyncio.Task[None] | None = None
+    second: asyncio.Task[None] | None = None
+    try:
+        with (
+            patch.object(radio._civ_runtime, "start_data_watchdog", MagicMock()),
+            caplog.at_level("INFO"),
+        ):
+            radio._civ_runtime.request_recovery_now("busy=0 (first)")
+            first = radio._civ_runtime._reconnect_task
+            assert first is not None
+            try:
+                await asyncio.wait_for(tail_entered.wait(), 10.0)
+            except asyncio.TimeoutError:
+                pytest.fail("the first recovery never reached its tail")
+            assert radio._conn_state is RadioConnectionState.CONNECTED
+            radio._civ_runtime.request_recovery_now("busy=0 (second)")
+            second = radio._civ_runtime._reconnect_task
+            assert second is not None and second is not first, (
+                "a busy=0 notice during the recovery tail must restart "
+                "the recovery, not be ignored"
+            )
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(first, 10.0)
+            tail_release.set()
+            await asyncio.wait_for(second, 10.0)
+
+        assert (
+            order == ["force_cleanup", "release", "soft_reconnect", "remote_id=0"] * 2
+        )
+        assert any(
+            "restarting the recovery" in r.message and "busy=0 (second)" in r.message
+            for r in caplog.records
+        ), [r.getMessage() for r in caplog.records]
+        assert not any("notice ignored" in r.message for r in caplog.records), [
+            r.getMessage() for r in caplog.records
+        ]
+    finally:
+        tail_release.set()
+        for task in (first, second):
+            if task is not None and not task.done():
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+
+
+@dataclasses.dataclass
+class _PreemptRaceArm:
+    order: list[str]
+    calls: list[str]
+    entered: asyncio.Event
+    entered_second: asyncio.Event
+    go: asyncio.Event
+    never: asyncio.Event
+
+
+def _arm_preempt_race_recovery(radio: IcomRadio) -> _PreemptRaceArm:
+    """Arm a real-lifecycle recovery whose tail parks inside the attempt.
+
+    Mirrors ``_arm_notice_recovery`` for ``_force_cleanup_civ``/``release``
+    but keeps the REAL ``radio.soft_reconnect``: the stubbed
+    ``soft_reconnect_once`` mechanism parks the shared lifecycle recovery
+    in the predecessor's tail, where the identity revalidation would run
+    ``stop_data_watchdog``, then parks forever on a never-set event.
+    """
+    radio._conn_state = RadioConnectionState.CONNECTED
+    radio._civ_recovering = False
+    radio._civ_runtime._reconnect_task = None
+    radio._civ_runtime._recovery_cleaned_task = None
+    radio._civ_runtime._pending_replacement = None
+    arm = _PreemptRaceArm(
+        order=[],
+        calls=[],
+        entered=asyncio.Event(),
+        entered_second=asyncio.Event(),
+        go=asyncio.Event(),
+        never=asyncio.Event(),
+    )
+
+    async def record_force_cleanup() -> None:
+        arm.order.append("force_cleanup")
+        # MOR-3350: let the superseded shared run finish unwinding before the
+        # replacement proceeds to ``soft_reconnect``. Production cleanup
+        # always yields on real teardown I/O, so by the time the replacement
+        # reaches the lifecycle the old run is gone and a fresh run starts;
+        # this stub is instant, which collapses that settling window to zero
+        # and lets the replacement coalesce onto the dying run under load
+        # (it then dies with "superseded" instead of running its fresh
+        # recovery — the CI-only ``entered_second`` timeout). Wait for the
+        # real event, not a sleep. Instant for the first recovery (no shared
+        # run exists yet).
+        await await_until(
+            lambda: (
+                radio._session_lifecycle._recover_task is None
+                or radio._session_lifecycle._recover_task.done()
+            ),
+            timeout=10.0,
+            description="the superseded recovery finishing its unwind",
+        )
+
+    async def record_release() -> None:
+        arm.order.append("release")
+
+    radio._force_cleanup_civ = record_force_cleanup
+    radio._control_phase.release = record_release
+    radio._ctrl_transport.remote_id = 0xEF167A45
+
+    async def parked_tail_attempt() -> None:
+        arm.calls.append("soft_reconnect_once")
+        if len(arm.calls) == 1:
+            radio._conn_state = RadioConnectionState.CONNECTED
+            arm.entered.set()
+            await await_until(
+                arm.go.is_set,
+                timeout=10.0,
+                description="the test releasing the first recovery's tail",
+            )
+            # The teardown the identity revalidation runs in the tail.
+            await radio._civ_runtime.stop_data_watchdog()
+            await arm.never.wait()
+            return
+        arm.entered_second.set()
+        await arm.never.wait()
+
+    mech = radio._session_lifecycle._mech
+    mech.soft_reconnect_once = parked_tail_attempt  # type: ignore[method-assign]
+    return arm
+
+
+async def _cancel_recovery_tasks(*tasks: asyncio.Task[None] | None) -> None:
+    live = [task for task in tasks if task is not None]
+    for task in live:
+        if not task.done():
+            task.cancel()
+    await asyncio.gather(*live, return_exceptions=True)
+
+
+async def test_preempting_recovery_survives_predecessor_teardown(
+    radio: IcomRadio,
+) -> None:
+    """MOR-3350: the replacement recovery survives the predecessor's tail.
+
+    The preempted run's tail teardown (``stop_data_watchdog``, as run by
+    the identity revalidation) must not cancel the replacement it handed
+    off to: the replacement then runs its own fresh lifecycle recovery.
+    """
+    arm = _arm_preempt_race_recovery(radio)
+    first: asyncio.Task[None] | None = None
+    second: asyncio.Task[None] | None = None
+    try:
+        with patch.object(radio._civ_runtime, "start_data_watchdog", MagicMock()):
+            radio._civ_runtime.request_recovery_now("busy=0 (first)")
+            first = radio._civ_runtime._reconnect_task
+            assert first is not None
+            await await_until(
+                arm.entered.is_set,
+                timeout=10.0,
+                description="the first recovery reaching its tail",
+            )
+            # ``go`` first, with no yield before the second notice: the
+            # predecessor's teardown step then runs before the
+            # replacement's first step, while the predecessor is still
+            # the registered lifecycle waiter and the replacement is
+            # not one yet.
+            arm.go.set()
+            radio._civ_runtime.request_recovery_now("busy=0 (second)")
+            second = radio._civ_runtime._reconnect_task
+            assert second is not None and second is not first, (
+                "a busy=0 notice during the recovery tail must restart "
+                "the recovery, not be ignored"
+            )
+            await await_until(
+                arm.entered_second.is_set,
+                timeout=10.0,
+                description="the replacement recovery running its fresh recovery",
+            )
+            assert not second.cancelled()
+            assert not second.done()
+            assert radio._civ_runtime._reconnect_task is second
+            assert arm.calls == ["soft_reconnect_once"] * 2
+            assert arm.order == ["force_cleanup", "release"] * 2
+    finally:
+        arm.go.set()
+        arm.never.set()
+        await _cancel_recovery_tasks(
+            first, second, radio._session_lifecycle._recover_task
+        )
+
+
+async def test_preempted_recovery_tail_does_not_cancel_coalesced_waiter(
+    radio: IcomRadio,
+    transport: MockTransport,
+) -> None:
+    """MOR-3350 P1: a waiter on a preempted tail is not cancelled with it.
+
+    Real lifecycle with a stubbed ``soft_reconnect_once`` mechanism: the
+    first recovery parks in its tail, a waiter joins it through
+    ``_wait_for_civ_transport_recovery`` (the path ``RadioPoller._run``
+    reaches for a background poll), and a second notice preempts the tail.
+    The shared recovery is then cancelled from outside (the teardown side
+    of the handoff — the preempt itself only cancels the predecessor
+    waiter).  The waiter must not read that foreign cancellation as its
+    own: it keeps waiting and returns normally once the replacement
+    recovery completes (the stub restores ``_civ_transport``/CONNECTED).
+    """
+    radio._conn_state = RadioConnectionState.CONNECTED
+    radio._civ_recovering = False
+    radio._civ_runtime._reconnect_task = None
+    radio._civ_runtime._recovery_cleaned_task = None
+    radio._civ_runtime._pending_replacement = None
+    ctrl = MagicMock()
+    ctrl._udp_transport = object()
+    radio._ctrl_transport = ctrl
+    entered = asyncio.Event()
+    entered_second = asyncio.Event()
+    never = asyncio.Event()
+    cleanup_calls = 0
+    calls = 0
+
+    async def record_force_cleanup() -> None:
+        nonlocal cleanup_calls
+        cleanup_calls += 1
+
+    async def record_release() -> None:
+        return None
+
+    radio._force_cleanup_civ = record_force_cleanup
+    radio._control_phase.release = record_release
+
+    async def parked_tail_attempt() -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            # Tail: session re-established, CI-V path still down.
+            radio._conn_state = RadioConnectionState.CONNECTED
+            radio._civ_transport = None
+            entered.set()
+            await never.wait()
+            return
+        # Replacement's fresh recovery restores the CI-V path.
+        radio._civ_transport = transport
+        radio._connected = True
+        entered_second.set()
+
+    mech = radio._session_lifecycle._mech
+    mech.soft_reconnect_once = parked_tail_attempt  # type: ignore[method-assign]
+
+    first: asyncio.Task[None] | None = None
+    second: asyncio.Task[None] | None = None
+    waiter: asyncio.Task[None] | None = None
+    try:
+        with patch.object(radio._civ_runtime, "start_data_watchdog", MagicMock()):
+            radio._civ_runtime.request_recovery_now("busy=0 (first)")
+            first = radio._civ_runtime._reconnect_task
+            assert first is not None
+            try:
+                await asyncio.wait_for(entered.wait(), 10.0)
+            except asyncio.TimeoutError:
+                pytest.fail("the first recovery never reached its tail")
+            waiter = asyncio.create_task(
+                radio._civ_runtime._wait_for_civ_transport_recovery(timeout=5.0)
+            )
+            # The waiter kicked its fast soft_reconnect and coalesced onto
+            # the first recovery's tail (MOR-2083: the kick runs as its own
+            # task, so the registered waiter is the fast-reconnect task,
+            # not the polling waiter itself).
+            tail = radio._session_lifecycle._recover_task
+            assert tail is not None
+            await await_until(
+                lambda: (
+                    radio._session_lifecycle._recovery_waiters.get(
+                        radio._civ_runtime._fast_reconnect_task
+                    )
+                    is tail
+                ),
+                timeout=10.0,
+                description="the waiter joining the recovery tail",
+            )
+            radio._civ_runtime.request_recovery_now("busy=0 (second)")
+            second = radio._civ_runtime._reconnect_task
+            assert second is not None and second is not first
+            # The replacement supersedes the shared tail; the waiter coalesced
+            # onto it was never cancelled itself and must not end cancelled.
+            for _ in range(20):
+                await asyncio.sleep(0)
+            assert not waiter.cancelled(), (
+                "preempting a recovery tail cancelled an unrelated waiter"
+            )
+            await asyncio.wait_for(waiter, 5.0)
+            assert not waiter.cancelled()
+            await asyncio.wait_for(second, 10.0)
+            assert entered_second.is_set(), "the replacement recovery never completed"
+            assert calls == 2
+    finally:
+        never.set()
+        await _cancel_recovery_tasks(
+            first, second, waiter, radio._session_lifecycle._recover_task
+        )
+
+
+async def test_watchdog_handoff_does_not_replace_a_live_reconnect_task(
+    radio: IcomRadio,
+) -> None:
+    """The watchdog's own hand-off leaves a recovery already in flight alone."""
+    clock = _WatchdogClock()
+    radio._last_civ_data_received = clock.now
+    radio._last_civ_send_monotonic = clock.now + 0.5
+    radio._civ_transport.rx_packet_count = 0
+    radio._civ_recovering = False
+    live: asyncio.Task[None] = asyncio.create_task(asyncio.sleep(60))
+    radio._civ_runtime._reconnect_task = live
+    created: list[object] = []
+    real_create_task = asyncio.create_task
+
+    def capture(coro: object, *args: object, **kwargs: object) -> asyncio.Task[object]:
+        created.append(coro)
+        close = getattr(coro, "close", None)
+        if callable(close):
+            close()
+        return real_create_task(asyncio.sleep(0))
+
+    async def tick(delay: float) -> None:
+        clock.advance(delay)
+
+    try:
+        with (
+            patch("asyncio.sleep", side_effect=tick),
+            patch("time.monotonic", side_effect=clock.monotonic),
+            patch(
+                "rigplane.runtime._civ_rx.time.monotonic", side_effect=clock.monotonic
+            ),
+            patch("asyncio.create_task", side_effect=capture),
+            patch.object(radio, "_send_open_close", new=AsyncMock()),
+        ):
+            await radio._civ_runtime._civ_data_watchdog_loop()
+        assert created == []
+        assert radio._civ_runtime._reconnect_task is live
+    finally:
+        live.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await live
+
+
+async def test_watchdog_pings_only_is_not_a_stall(radio: IcomRadio) -> None:
+    """Pings only, nothing sent after the last payload, for > 2 s: no OpenClose
+    and no recovery (MOR-2623 a)."""
+    clock = _WatchdogClock()
+    radio._last_civ_data_received = clock.now
+    radio._last_civ_send_monotonic = clock.now
+    radio._civ_transport.rx_packet_count = 0
+    radio._civ_recovering = False
+
+    async def tick(delay: float) -> None:
+        clock.advance(delay)
+        radio._civ_transport.rx_packet_count += 1
+        if clock.now - radio._last_civ_data_received > 3.0:
+            raise asyncio.CancelledError()
+
+    oc_mock = AsyncMock()
+    with (
+        patch("asyncio.sleep", side_effect=tick),
+        patch("time.monotonic", side_effect=clock.monotonic),
+        patch("rigplane.runtime._civ_rx.time.monotonic", side_effect=clock.monotonic),
+        patch.object(radio, "_send_open_close", new=oc_mock),
+    ):
+        await radio._civ_runtime._civ_data_watchdog_loop()
+
+    oc_mock.assert_not_awaited()
+    assert radio._civ_recovering is False
+
+
+async def test_watchdog_unanswered_send_recovers_while_pings_flow(
+    radio: IcomRadio,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Pings advancing and a send left unanswered for > 2 s: recovery with
+    OpenClose, and the warning names ``queries unanswered`` (MOR-2623 b)."""
+    clock = _WatchdogClock()
+    radio._last_civ_data_received = clock.now
+    radio._last_civ_send_monotonic = clock.now + 0.5
+    radio._civ_transport.rx_packet_count = 0
+    radio._civ_recovering = False
+
+    async def tick(delay: float) -> None:
+        clock.advance(delay)
+        radio._civ_transport.rx_packet_count += 1
+        if clock.now - radio._last_civ_send_monotonic > 3.0:
+            raise asyncio.CancelledError()
+
+    oc_mock = AsyncMock()
+    with (
+        patch("asyncio.sleep", side_effect=tick),
+        patch("time.monotonic", side_effect=clock.monotonic),
+        patch("rigplane.runtime._civ_rx.time.monotonic", side_effect=clock.monotonic),
+        patch.object(radio, "_send_open_close", new=oc_mock),
+        caplog.at_level("WARNING"),
+    ):
+        await radio._civ_runtime._civ_data_watchdog_loop()
+
+    oc_mock.assert_awaited()
+    assert radio._civ_recovering is True
+    assert any("queries unanswered" in r.message for r in caplog.records)
+
+
+async def test_watchdog_silent_port_hands_off_at_5s(
+    radio: IcomRadio,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A port that was healthy and then goes silent hands off to
+    ``_watchdog_recover`` about 5 s after recovery starts, well before 60 s.
+    The warning names ``port silent`` (MOR-2623 c).
+
+    The watchdog only has a silence history from the first tick that saw the
+    transport, so the scenario starts the way production does after connect:
+    one healthy tick (fresh payload, pings advancing), and only then does
+    everything stop.
+    """
+    clock = _WatchdogClock()
+    radio._last_civ_data_received = clock.now
+    radio._last_civ_send_monotonic = clock.now
+    radio._civ_transport.rx_packet_count = 7
+    radio._civ_recovering = False
+    radio._force_cleanup_civ = AsyncMock()
+    radio.soft_reconnect = AsyncMock()
+
+    healthy_ticks = [0]
+    went_silent_at: list[float] = []
+
+    async def tick(delay: float) -> None:
+        clock.advance(delay)
+        if healthy_ticks[0] < 1:
+            healthy_ticks[0] += 1
+            radio._last_civ_data_received = clock.now
+            radio._last_civ_send_monotonic = clock.now
+            radio._civ_transport.rx_packet_count += 1
+            return
+        if not went_silent_at:
+            # One send after the last payload, then nothing: no payload, and
+            # the packet count stays put.
+            radio._last_civ_send_monotonic = clock.now
+            went_silent_at.append(clock.now)
+
+    handed_off_at: list[float] = []
+    real_create_task = asyncio.create_task
+
+    def capture(coro: object, *args: object, **kwargs: object) -> asyncio.Task[object]:
+        handed_off_at.append(clock.now)
+        close = getattr(coro, "close", None)
+        if callable(close):
+            close()
+        return real_create_task(asyncio.sleep(0))
+
+    with (
+        patch("asyncio.sleep", side_effect=tick),
+        patch("time.monotonic", side_effect=clock.monotonic),
+        patch("rigplane.runtime._civ_rx.time.monotonic", side_effect=clock.monotonic),
+        patch("asyncio.create_task", side_effect=capture),
+        patch.object(radio, "_send_open_close", new=AsyncMock()),
+        caplog.at_level("WARNING"),
+    ):
+        await radio._civ_runtime._civ_data_watchdog_loop()
+
+    assert handed_off_at, "silent port must hand off to lifecycle recovery"
+    stall = next(r for r in caplog.records if "requesting data start" in r.message)
+    assert "port silent" in stall.message
+    # The hand-off log names the patience it actually waited, the same way the
+    # phase-2 test reads the clock it drove: about 5 s after recovery starts,
+    # and well before the 60 s live-port deadline.
+    handoff = next(
+        r for r in caplog.records if "handing off to lifecycle recovery" in r.message
+    )
+    assert "OpenClose failed for 5." in handoff.message
+    elapsed = handed_off_at[0] - went_silent_at[0]
+    assert elapsed < 60.0
+
+
+async def test_watchdog_unanswered_live_port_waits_out_60s(radio: IcomRadio) -> None:
+    """Pings advancing and a send unanswered: no hand-off before 60 s
+    (MOR-2623 d)."""
+    clock = _WatchdogClock()
+    radio._last_civ_data_received = clock.now
+    radio._last_civ_send_monotonic = clock.now + 0.5
+    radio._civ_transport.rx_packet_count = 0
+    radio._civ_recovering = False
+    radio.soft_reconnect = AsyncMock()
+
+    async def tick(delay: float) -> None:
+        clock.advance(delay)
+        radio._civ_transport.rx_packet_count += 1
+        if clock.now - radio._last_civ_data_received >= 59.0:
+            raise asyncio.CancelledError()
+
+    with (
+        patch("asyncio.sleep", side_effect=tick),
+        patch("time.monotonic", side_effect=clock.monotonic),
+        patch("rigplane.runtime._civ_rx.time.monotonic", side_effect=clock.monotonic),
+        patch.object(radio, "_send_open_close", new=AsyncMock()),
+    ):
+        await radio._civ_runtime._civ_data_watchdog_loop()
+
+    radio.soft_reconnect.assert_not_awaited()
+    assert radio._civ_runtime._reconnect_task is None
+
+
+async def test_watchdog_transport_swap_rebaselines(radio: IcomRadio) -> None:
+    """A transport object swap re-baselines, so a frozen count on the new
+    object is not read as port silence (MOR-2623 e)."""
+    clock = _WatchdogClock()
+    radio._last_civ_data_received = clock.now
+    radio._last_civ_send_monotonic = clock.now
+    radio._civ_transport.rx_packet_count = 4
+    radio._civ_recovering = False
+
+    swapped = False
+
+    async def tick(delay: float) -> None:
+        nonlocal swapped
+        clock.advance(delay)
+        if not swapped and clock.now - radio._last_civ_data_received > 3.0:
+            fresh = MockTransport()
+            fresh.rx_packet_count = 4
+            radio._civ_transport = fresh
+            swapped = True
+        if clock.now - radio._last_civ_data_received > 6.0:
+            raise asyncio.CancelledError()
+
+    oc_mock = AsyncMock()
+    with (
+        patch("asyncio.sleep", side_effect=tick),
+        patch("time.monotonic", side_effect=clock.monotonic),
+        patch("rigplane.runtime._civ_rx.time.monotonic", side_effect=clock.monotonic),
+        patch.object(radio, "_send_open_close", new=oc_mock),
+    ):
+        await radio._civ_runtime._civ_data_watchdog_loop()
+
+    assert swapped
+    oc_mock.assert_not_awaited()
+    assert radio._civ_recovering is False
+
+
+# ---------------------------------------------------------------------------
+# #1217 — recovery must keep retrying after already_open_stalled / one attempt.
+# ---------------------------------------------------------------------------
+
+
+async def test_watchdog_recover_rearms_watchdog_when_recovery_fails(
+    radio: IcomRadio,
+) -> None:
+    """When the lifecycle recovery handoff fails BUT the control session
+    survives (transient failure, not exhaustion-with-release), the data watchdog
+    is unconditionally re-armed so a later stall is detected again instead of
+    freezing after one episode (#1217 invariant 3: unconditional re-arm).
+    """
+    # Control session still alive so re-arm is appropriate.
+    ctrl = MagicMock()
+    ctrl._udp_transport = object()
+    radio._ctrl_transport = ctrl
+
+    async def failing_force_cleanup() -> None:
+        return None
+
+    async def failing_soft_reconnect() -> None:
+        raise ConnectionError("radio still gone")
+
+    radio._force_cleanup_civ = failing_force_cleanup
+    radio.soft_reconnect = failing_soft_reconnect
+    radio._civ_data_watchdog_task = None
+
+    # Spy on start_data_watchdog instead of running the real loop, so the test
+    # asserts the re-arm without leaking a live watchdog task into the loop.
+    rearm_spy = MagicMock()
+    with patch.object(radio._civ_runtime, "start_data_watchdog", rearm_spy):
+        await radio._civ_runtime._watchdog_recover()
+
+    # A fresh watchdog must have been re-armed so recovery keeps probing.
+    rearm_spy.assert_called_once()
+
+
+async def test_watchdog_does_not_rearm_when_control_session_gone(
+    radio: IcomRadio,
+) -> None:
+    """If the control session is gone (explicit disconnect) the watchdog is not
+    re-armed — there is nothing left to watch."""
+    ctrl = MagicMock()
+    ctrl._udp_transport = None
+    radio._ctrl_transport = ctrl
+
+    async def noop() -> None:
+        return None
+
+    async def failing_soft_reconnect() -> None:
+        raise ConnectionError("gone")
+
+    radio._force_cleanup_civ = noop
+    radio.soft_reconnect = failing_soft_reconnect
+    radio._civ_data_watchdog_task = None
+
+    rearm_spy = MagicMock()
+    with patch.object(radio._civ_runtime, "start_data_watchdog", rearm_spy):
+        await radio._civ_runtime._watchdog_recover()
+
+    rearm_spy.assert_not_called()
+    assert radio._civ_data_watchdog_task is None
+
+
+async def test_stop_data_watchdog_does_not_self_cancel_running_recovery(
+    radio: IcomRadio,
+) -> None:
+    """stop_data_watchdog() must NOT cancel the detached recovery task when it
+    is *itself* the caller.  The recovery helper calls _force_cleanup_civ ->
+    stop_data_watchdog from inside itself; self-cancelling there froze recovery
+    before soft_reconnect ever ran (#1217 root cause).
+    """
+    reached_soft_reconnect: list[bool] = []
+    ctrl = MagicMock()
+    ctrl._udp_transport = object()
+    radio._ctrl_transport = ctrl
+
+    async def real_force_cleanup() -> None:
+        # Mirror the production call chain: cleanup stops the data watchdog,
+        # which in turn inspects _reconnect_task (the current task).
+        await radio._civ_runtime.stop_data_watchdog()
+
+    async def record_soft_reconnect() -> None:
+        reached_soft_reconnect.append(True)
+
+    radio._force_cleanup_civ = real_force_cleanup
+    radio.soft_reconnect = record_soft_reconnect
+    radio._civ_data_watchdog_task = None
+
+    # Spy the re-arm so the helper's finally does not leak a live watchdog task.
+    with patch.object(radio._civ_runtime, "start_data_watchdog", MagicMock()):
+        task = asyncio.create_task(
+            radio._civ_runtime._watchdog_recover(),
+            name="civ-watchdog-recover",
+        )
+        radio._civ_runtime._reconnect_task = task
+        await task
+
+    # soft_reconnect was reached — the self-cancel did NOT abort recovery.
+    assert reached_soft_reconnect == [True]
+
+
+async def test_soft_reconnect_rebuilds_on_already_open_stalled(
+    radio: IcomRadio,
+) -> None:
+    """soft_reconnect must not freeze on already_open_stalled: it tears the
+    stalled CI-V transport down and falls through to a genuine rebuild (#1217).
+
+    Previously the stalled branch logged ``already_open_stalled`` and returned,
+    so recovery never progressed.  Now it must call ``_force_cleanup_civ`` and
+    proceed into the rebuild path (here observed via the control-gone full
+    connect, stubbed so it stays off the network).
+    """
+    # A lingering CI-V transport object with an open socket but no data flow.
+    stalled = MagicMock()
+    stalled._udp_transport = object()
+    radio._civ_transport = stalled
+    radio._last_civ_data_received = time.monotonic() - 999.0  # stalled
+    radio._civ_ready_idle_timeout = 3.0
+
+    # No live control session → the rebuild takes the full-connect branch,
+    # which we stub on the control-phase runtime to keep it off the network.
+    radio._ctrl_transport = None
+
+    force_cleanup_called: list[bool] = []
+
+    async def fake_force_cleanup() -> None:
+        force_cleanup_called.append(True)
+        radio._civ_transport = None  # genuine teardown nulls the transport
+
+    rebuilt: list[bool] = []
+
+    async def fake_connect() -> None:
+        rebuilt.append(True)
+
+    radio._force_cleanup_civ = fake_force_cleanup
+    # A3 deleted the legacy ``ControlPhaseRuntime.connect()`` retry wrapper; the
+    # "control transport gone" rebuild branch now does a single full-connect
+    # attempt via ``_connect_once`` (the lifecycle owns retry).
+    radio._control_phase._connect_once = fake_connect  # type: ignore[method-assign]
+    radio._read_lan_identity_payload = AsyncMock(return_value=b"\x98")
+
+    await radio.soft_reconnect()
+
+    assert force_cleanup_called == [True], (
+        "already_open_stalled must tear down the stalled transport, not freeze"
+    )
+    # After teardown the rebuild path runs a (stubbed) full connect.
+    assert rebuilt == [True]
+
+
+async def test_wait_for_recovery_kicks_soft_reconnect_on_stalled_transport(
+    radio: IcomRadio,
+) -> None:
+    """The poller's recovery-wait must drive soft_reconnect when a transport
+    object lingers in a stalled state, not only when it is None (#1217).
+    Previously a non-None stalled transport spun to timeout without progress.
+    """
+    ctrl = MagicMock()
+    ctrl._udp_transport = object()
+    radio._ctrl_transport = ctrl
+
+    # Transport object present but radio not connected == stalled.
+    radio._civ_transport = MagicMock()
+    radio._conn_state = radio._conn_state.__class__.RECONNECTING
+    radio._civ_recovering = True
+
+    soft_calls: list[bool] = []
+
+    async def record_soft_reconnect() -> None:
+        soft_calls.append(True)
+        # Simulate recovery succeeding so the wait can return.
+        radio._conn_state = radio._conn_state.__class__.CONNECTED
+
+    radio.soft_reconnect = record_soft_reconnect
+
+    await radio._civ_runtime._wait_for_civ_transport_recovery(timeout=2.0)
+
+    assert soft_calls == [True], (
+        "stalled (non-None) transport must trigger a soft_reconnect kick"
+    )
+
+
+def _make_stuck_soft_reconnect() -> tuple[Any, asyncio.Event, dict[str, Any]]:
+    """Build a soft_reconnect stub that blocks until ``release`` is set.
+
+    Returns ``(stub, release, state)`` where ``state`` records ``calls``
+    and ``cancelled``. The stub never returns on its own, so a poller
+    that awaits it unboundedly hangs forever.
+    """
+    release = asyncio.Event()
+    state: dict[str, Any] = {"calls": 0, "cancelled": False}
+
+    async def stuck_soft_reconnect() -> None:
+        state["calls"] += 1
+        try:
+            await release.wait()
+        except asyncio.CancelledError:
+            state["cancelled"] = True
+            raise
+
+    return stuck_soft_reconnect, release, state
+
+
+def _arm_recovery_wait_scenario(radio: IcomRadio) -> None:
+    """Put the ``radio`` fixture in the stuck-recovery scenario (MOR-2083).
+
+    Control transport alive, CI-V transport gone, so the poller must kick
+    one fast soft_reconnect and then wait for recovery.
+    """
+    ctrl = MagicMock()
+    ctrl._udp_transport = object()
+    radio._ctrl_transport = ctrl
+    radio._civ_transport = None
+
+
+async def test_wait_for_recovery_bounds_stuck_soft_reconnect(
+    radio: IcomRadio,
+) -> None:
+    """A never-returning soft_reconnect must not freeze the poller (MOR-2083).
+
+    The inner wait is bounded by the recovery deadline and fails with the
+    same ``TimeoutError("CI-V transport recovery timed out")`` the loop
+    raises at the deadline. The outer ``wait_for`` only guards against a
+    regression: on the old code the inner await hangs and only the outer
+    fires (empty message), so the ``match`` fails.
+    """
+    _arm_recovery_wait_scenario(radio)
+    stub, release, state = _make_stuck_soft_reconnect()
+    radio.soft_reconnect = stub
+
+    start = time.monotonic()
+    with pytest.raises(RigplaneTimeoutError, match="CI-V transport recovery timed out"):
+        await asyncio.wait_for(
+            radio._civ_runtime._wait_for_civ_transport_recovery(timeout=0.6),
+            timeout=5.0,
+        )
+    elapsed = time.monotonic() - start
+
+    assert elapsed < 2.5, (
+        f"recovery wait was not bounded by the deadline: {elapsed:.2f}s"
+    )
+    assert not radio._civ_recovery_lock.locked(), "the recovery lock must be released"
+    assert not state["cancelled"], (
+        "the poller timeout must abandon its wait, never cancel the recovery"
+    )
+
+    release.set()
+    fast = radio._civ_runtime._fast_reconnect_task
+    assert fast is not None
+    await asyncio.wait_for(fast, timeout=5.0)
+    assert not state["cancelled"]
+    assert state["calls"] == 1
+
+
+async def test_wait_for_recovery_timeout_does_not_cancel_soft_reconnect(
+    radio: IcomRadio,
+) -> None:
+    """The poller timeout abandons its wait; the recovery task runs on.
+
+    Cancelling the awaiting coroutine must not cancel the shared recovery
+    (``soft_reconnect`` coalesces onto the lifecycle's ``_recover_task``,
+    also awaited by the watchdog): after the poller fails, the stuck task
+    is still pending and untouched, and finishes normally once released.
+    """
+    _arm_recovery_wait_scenario(radio)
+    stub, release, state = _make_stuck_soft_reconnect()
+    radio.soft_reconnect = stub
+
+    with pytest.raises(RigplaneTimeoutError, match="CI-V transport recovery timed out"):
+        await asyncio.wait_for(
+            radio._civ_runtime._wait_for_civ_transport_recovery(timeout=0.6),
+            timeout=5.0,
+        )
+
+    fast = radio._civ_runtime._fast_reconnect_task
+    assert fast is not None
+    assert not fast.done(), "the abandoned recovery task must keep running"
+    assert not state["cancelled"]
+
+    release.set()
+    await asyncio.wait_for(fast, timeout=5.0)
+    assert not state["cancelled"]
+    assert state["calls"] == 1
+
+
+async def test_watchdog_recover_rearms_after_successful_recovery(
+    radio: IcomRadio,
+) -> None:
+    """After a SUCCESSFUL lifecycle recovery handoff the watchdog is re-armed so
+    a later stall is detected and handed off again — the detector keeps watching
+    forever even though the lifecycle owns the bounded per-episode retry ladder
+    (A4 single-owner; #1217 invariant 3).
+    """
+    ctrl = MagicMock()
+    ctrl._udp_transport = object()
+    radio._ctrl_transport = ctrl
+
+    async def noop() -> None:
+        return None
+
+    async def ok_soft_reconnect() -> None:
+        # Lifecycle RECOVERING loop succeeded on an attempt.
+        return None
+
+    radio._force_cleanup_civ = noop
+    radio.soft_reconnect = ok_soft_reconnect
+    radio._civ_data_watchdog_task = None
+
+    rearm_spy = MagicMock()
+    with patch.object(radio._civ_runtime, "start_data_watchdog", rearm_spy):
+        await radio._civ_runtime._watchdog_recover()
+
+    rearm_spy.assert_called_once()
+
+
+async def test_watchdog_detects_but_lifecycle_owns_attempt_count(
+    radio: IcomRadio,
+) -> None:
+    """SINGLE-OWNER assertion (A4): the watchdog handoff DETECTS+triggers, but
+    the lifecycle owns the attempt count / backoff / exhaustion.
+
+    The detached handoff (``_watchdog_recover``) calls ``radio.soft_reconnect``
+    exactly ONCE.  ``radio.soft_reconnect`` routes into the unified lifecycle
+    RECOVERING loop, which is the SINGLE place that performs the
+    ``_MAX_RECONNECTS`` attempts of the per-attempt primitive
+    (``soft_reconnect_once``) with backoff and then routes exhaustion through
+    CLOSING + full release.  The watchdog itself counts nothing.
+    """
+    from rigplane.runtime.session_lifecycle import LifecycleState
+
+    ctrl = MagicMock()
+    ctrl._udp_transport = object()
+    radio._ctrl_transport = ctrl
+
+    lifecycle = radio._session_lifecycle
+    lifecycle._recovery_backoff_s = (0.0, 0.0, 0.0)  # no wall-clock backoff
+
+    attempts: list[int] = []
+
+    async def counting_failure() -> None:
+        attempts.append(1)
+        raise ConnectionError("injected per-attempt failure")
+
+    # The per-attempt primitive owned by the lifecycle.
+    lifecycle._mech.soft_reconnect_once = counting_failure  # type: ignore[method-assign]
+
+    async def noop() -> None:
+        return None
+
+    radio._force_cleanup_civ = noop
+
+    # Count how many times the watchdog handoff invokes the (lifecycle) recovery.
+    handoff_calls: list[int] = []
+    real_soft_reconnect = radio.soft_reconnect
+
+    async def counting_soft_reconnect() -> None:
+        handoff_calls.append(1)
+        await real_soft_reconnect()
+
+    radio.soft_reconnect = counting_soft_reconnect  # type: ignore[method-assign]
+
+    with patch.object(radio._civ_runtime, "start_data_watchdog", MagicMock()):
+        await radio._civ_runtime._watchdog_recover()
+
+    # The watchdog triggered recovery exactly once (it does NOT loop attempts).
+    assert handoff_calls == [1]
+    # The lifecycle owns the attempt count: it ran _MAX_RECONNECTS attempts of
+    # the per-attempt primitive before exhausting.
+    assert len(attempts) == lifecycle._max_recovery_attempts
+    # Exhaustion routed through CLOSING + full release -> DISCONNECTED.
+    assert lifecycle.state is LifecycleState.DISCONNECTED
+
+
+# ---------------------------------------------------------------------------
+# _ensure_civ_runtime (line 244)
+# ---------------------------------------------------------------------------
+
+
+def test_ensure_civ_runtime_raises_when_no_transport(radio: IcomRadio) -> None:
+    """_ensure_civ_runtime raises ConnectionError when civ_transport is None (line 244)."""
+    radio._civ_transport = None
+    with pytest.raises(ConnectionError, match="Not connected to radio"):
+        radio._civ_runtime._ensure_civ_runtime()
+
+
+def test_ensure_civ_runtime_ok_when_transport_present(radio: IcomRadio) -> None:
+    """_ensure_civ_runtime does nothing when transport is set."""
+    radio._civ_runtime._ensure_civ_runtime()  # should not raise
+
+
+# ---------------------------------------------------------------------------
+# _civ_rx_loop — drain queue (lines 276-279), short packet (287)
+# ---------------------------------------------------------------------------
+
+
+async def test_civ_rx_loop_drains_extra_packets_from_queue(
+    radio: IcomRadio, transport: MockTransport
+) -> None:
+    """rx loop drains all packets from _packet_queue non-blocking (lines 276-279)."""
+    # Put a valid CI-V packet directly in the queue (bypassing receive_packet)
+    freq_data = bcd_encode(14_074_000)
+    civ = build_civ_frame(CONTROLLER_ADDR, IC_7610_ADDR, 0x03, data=freq_data)
+    udp_pkt = _wrap_civ_in_udp(civ)
+
+    # Queue one packet via normal path
+    transport.queue_response(udp_pkt)
+    # Put another packet directly in _packet_queue to test draining
+    transport._packet_queue.put_nowait(udp_pkt)
+
+    frames_routed = [0]
+
+    async def counting_route(
+        frame: CivFrame,
+        *,
+        generation: int,
+        store_provider_generation: int | None = None,
+    ) -> None:
+        del store_provider_generation
+        frames_routed[0] += 1
+
+    # Run rx loop briefly: get the queued packet, drain extra, then timeout and exit
+    radio._civ_rx_task = None
+    radio._civ_runtime.start_pump()
+    assert radio._civ_rx_task is not None
+
+    with patch.object(
+        radio._civ_runtime, "_route_civ_frame", side_effect=counting_route
+    ):
+        # Let loop run for a short time, then cancel
+        await asyncio.sleep(0.05)
+        radio._civ_rx_task.cancel()
+        try:
+            await radio._civ_rx_task
+        except asyncio.CancelledError:
+            pass
+
+    # At least the normal receive path ran
+    assert radio._civ_rx_task is None or radio._civ_rx_task.done()
+
+
+async def test_civ_rx_loop_sheds_stale_scope_backlog_but_keeps_control_packets(
+    radio: IcomRadio, transport: MockTransport
+) -> None:
+    """Under heavy backlog, stale scope-only packets are shed but control survives."""
+    runtime = radio._civ_runtime
+
+    scope_data = b"\x00\x01\x02"
+    scope_civ = build_civ_frame(
+        CONTROLLER_ADDR, IC_7610_ADDR, 0x27, sub=0x00, data=scope_data
+    )
+    scope_udp = _wrap_civ_in_udp(scope_civ)
+
+    freq_data = bcd_encode(14_074_000)
+    freq_civ = build_civ_frame(CONTROLLER_ADDR, IC_7610_ADDR, 0x03, data=freq_data)
+    freq_udp = _wrap_civ_in_udp(freq_civ)
+
+    packets = [scope_udp] * 300 + [freq_udp]
+    shed = runtime._shed_scope_backlog(packets)
+
+    assert len(shed) < len(packets)
+    assert freq_udp in shed
+    assert sum(1 for pkt in shed if pkt == scope_udp) == 64
+
+
+async def test_civ_rx_loop_skips_short_packets(
+    radio: IcomRadio, transport: MockTransport
+) -> None:
+    """rx loop skips packets shorter than CIV_HEADER_SIZE (line 287)."""
+    # Queue a packet that is too short to contain CI-V data
+    transport.queue_response(b"\x00" * 5)  # Only 5 bytes, < 21
+
+    # Also queue a sentinel to detect loop iteration
+    freq_data = bcd_encode(7_074_000)
+    civ = build_civ_frame(CONTROLLER_ADDR, IC_7610_ADDR, 0x03, data=freq_data)
+    transport.queue_response(_wrap_civ_in_udp(civ))
+
+    frames_routed = [0]
+
+    async def counting_route(
+        frame: CivFrame,
+        *,
+        generation: int,
+        store_provider_generation: int | None = None,
+    ) -> None:
+        del store_provider_generation
+        frames_routed[0] += 1
+
+    with patch.object(
+        radio._civ_runtime, "_route_civ_frame", side_effect=counting_route
+    ):
+        radio._civ_runtime.start_pump()
+        await asyncio.sleep(0.1)
+        if radio._civ_rx_task:
+            radio._civ_rx_task.cancel()
+            try:
+                await radio._civ_rx_task
+            except asyncio.CancelledError:
+                pass
+
+    # Short packet is skipped, but valid packet processed
+    assert frames_routed[0] >= 1
+
+
+async def test_civ_rx_loop_skips_invalid_civ_frames(
+    radio: IcomRadio, transport: MockTransport
+) -> None:
+    """rx loop handles ValueError from parse_civ_frame gracefully (lines 292-293)."""
+    # Build a UDP packet with valid header but garbage CI-V data (no 0xFE 0xFE preamble)
+    import struct
+
+    header_size = CIV_HEADER_SIZE
+    garbage_civ = b"\xff\xff\xff\xff"  # Not a valid CI-V frame
+    total_len = header_size + len(garbage_civ)
+    pkt = bytearray(total_len)
+    struct.pack_into("<I", pkt, 0, total_len)
+    # Fill rest of header with zeros
+    pkt[header_size:] = garbage_civ
+    transport.queue_response(bytes(pkt))
+
+    # Queue valid packet to confirm loop continues
+    freq_data = bcd_encode(14_000_000)
+    civ = build_civ_frame(CONTROLLER_ADDR, IC_7610_ADDR, 0x03, data=freq_data)
+    transport.queue_response(_wrap_civ_in_udp(civ))
+
+    frames_routed = [0]
+
+    async def counting_route(
+        frame: CivFrame,
+        *,
+        generation: int,
+        store_provider_generation: int | None = None,
+    ) -> None:
+        del store_provider_generation
+        frames_routed[0] += 1
+
+    with patch.object(
+        radio._civ_runtime, "_route_civ_frame", side_effect=counting_route
+    ):
+        radio._civ_runtime.start_pump()
+        await asyncio.sleep(0.15)
+        if radio._civ_rx_task:
+            radio._civ_rx_task.cancel()
+            try:
+                await radio._civ_rx_task
+            except asyncio.CancelledError:
+                pass
+
+
+async def test_civ_rx_loop_handles_route_exception(
+    radio: IcomRadio, transport: MockTransport
+) -> None:
+    """rx loop continues when _route_civ_frame raises (lines 296-297)."""
+    freq_data = bcd_encode(14_074_000)
+    civ = build_civ_frame(CONTROLLER_ADDR, IC_7610_ADDR, 0x03, data=freq_data)
+    transport.queue_response(_wrap_civ_in_udp(civ))
+
+    async def exploding_route(
+        frame: CivFrame,
+        *,
+        generation: int,
+        store_provider_generation: int | None = None,
+    ) -> None:
+        del store_provider_generation
+        raise RuntimeError("route exploded")
+
+    with patch.object(
+        radio._civ_runtime, "_route_civ_frame", side_effect=exploding_route
+    ):
+        radio._civ_runtime.start_pump()
+        await asyncio.sleep(0.1)
+        if radio._civ_rx_task:
+            radio._civ_rx_task.cancel()
+            try:
+                await radio._civ_rx_task
+            except asyncio.CancelledError:
+                pass
+    # Loop should have survived the exception
+
+
+@pytest.mark.asyncio
+async def test_running_old_pump_is_not_relabelled_when_host_civ_epoch_advances(
+    radio: IcomRadio, transport: MockTransport
+) -> None:
+    """The captured CI-V epoch remains the first stale-pump guard."""
+
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    original_receive = transport.receive_packet
+
+    async def delayed_receive(*, timeout: float) -> bytes:
+        entered.set()
+        await release.wait()
+        return await original_receive(timeout=timeout)
+
+    freq = 14_074_000
+    frame_bytes = build_civ_frame(
+        CONTROLLER_ADDR,
+        IC_7610_ADDR,
+        0x03,
+        data=bcd_encode(freq),
+    )
+    transport.queue_response(_wrap_civ_in_udp(frame_bytes))
+    transport.receive_packet = delayed_receive  # type: ignore[method-assign]
+    old_store_generation = radio._state_store.provider_generation  # noqa: SLF001
+
+    radio._civ_runtime.start_pump()  # noqa: SLF001
+    await entered.wait()
+    radio._civ_epoch = radio._civ_request_tracker.advance_generation(  # noqa: SLF001
+        ConnectionError("test epoch advance")
+    )
+    assert radio._state_store.provider_generation == old_store_generation  # noqa: SLF001
+    release.set()
+    await asyncio.sleep(0.05)
+    await radio._civ_runtime.stop_pump()  # noqa: SLF001
+
+    with pytest.raises(KeyError):
+        radio._state_store.snapshot().field(  # noqa: SLF001
+            "receiver.0.freq_mode.freq_hz"
+        )
+
+
+def test_advance_generation_advances_independent_store_token(radio: IcomRadio) -> None:
+    radio._state_store.begin_provider_generation()  # noqa: SLF001
+    old_civ = radio._civ_epoch  # noqa: SLF001
+    old_store = radio._state_store.provider_generation  # noqa: SLF001
+
+    radio._civ_runtime.advance_generation("test replacement")  # noqa: SLF001
+
+    assert radio._civ_epoch != old_civ  # noqa: SLF001
+    assert radio._state_store.provider_generation == old_store + 1  # noqa: SLF001
+    assert radio._state_store.provider_generation != radio._civ_epoch  # noqa: SLF001
+
+
+def test_old_generation_generic_civ_result_changes_no_store_state(
+    radio: IcomRadio,
+) -> None:
+    old_store_generation = radio._state_store.provider_generation  # noqa: SLF001
+    radio._civ_runtime.advance_generation("test replacement")  # noqa: SLF001
+    before = radio._state_store.snapshot().to_dict()  # noqa: SLF001
+    before.pop("generatedAtMonotonic")
+
+    radio._civ_runtime._apply_state_store_observations(  # noqa: SLF001
+        _make_frame(cmd=0x14, sub=0x01, data=_bcd2(128)),
+        generation=old_store_generation,
+    )
+
+    after = radio._state_store.snapshot().to_dict()  # noqa: SLF001
+    after.pop("generatedAtMonotonic")
+    assert after == before
+
+
+def test_current_generation_generic_civ_result_is_accepted(radio: IcomRadio) -> None:
+    radio._civ_runtime.advance_generation("test replacement")  # noqa: SLF001
+    current_store_generation = radio._state_store.provider_generation  # noqa: SLF001
+
+    radio._civ_runtime._apply_state_store_observations(  # noqa: SLF001
+        _make_frame(cmd=0x14, sub=0x01, data=_bcd2(128)),
+        generation=current_store_generation,
+    )
+
+    field = radio._state_store.snapshot().field(  # noqa: SLF001
+        "receiver.0.operator_controls.af_level"
+    )
+    assert field.provider_generation == current_store_generation
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("payload", "expected", "source"),
+    (
+        (b"\x00", ObservedPtt.OFF, "poll_response"),
+        (b"\x01", ObservedPtt.ON, "poll_response"),
+        (b"", ObservedPtt.UNKNOWN, "command_response"),
+        (b"\x02", ObservedPtt.UNKNOWN, "command_response"),
+        (b"\xff", ObservedPtt.UNKNOWN, "command_response"),
+        (b"\x00\x00", ObservedPtt.UNKNOWN, "command_response"),
+        (b"\x01\x00", ObservedPtt.UNKNOWN, "command_response"),
+    ),
+    ids=("off", "on", "empty", "two", "ff", "double-off", "double-on"),
+)
+async def test_civ_ptt_readback_emits_canonical_observed_state(
+    radio: IcomRadio,
+    payload: bytes,
+    expected: ObservedPtt,
+    source: str,
+) -> None:
+    """PTT readback reaches the canonical state projection through the store."""
+    await radio._civ_runtime._route_civ_frame(  # noqa: SLF001
+        _make_frame(cmd=0x1C, sub=0x00, data=payload),
+        generation=radio._civ_epoch,  # noqa: SLF001
+    )
+
+    snapshot = radio._state_store.snapshot()  # noqa: SLF001
+    observed = snapshot.field(OBSERVED_PTT_PATH)
+    assert observed.value is expected
+    acquisition = radio._profile.state_acquisition  # noqa: SLF001
+    assert acquisition is not None
+    ptt_policy = acquisition.policy_for(FieldPath.global_("tx_state", "ptt"))
+    assert observed.max_age == ptt_policy.freshness_ttl_seconds
+    assert observed.provider_generation == snapshot.provider_generation
+    assert observed.source.source == source
+    assert project_observed_ptt(snapshot) is expected
+
+    if payload in (b"\x00", b"\x01"):
+        assert snapshot.field("global.tx_state.ptt").value is (payload == b"\x01")
+
+
+@pytest.mark.asyncio
+async def test_unsolicited_civ_ptt_readback_has_unsolicited_provenance(
+    radio: IcomRadio,
+) -> None:
+    await radio._civ_runtime._route_civ_frame(  # noqa: SLF001
+        _make_frame(cmd=0x1C, sub=0x00, data=b"\x01", to_addr=0x00),
+        generation=radio._civ_epoch,  # noqa: SLF001
+    )
+
+    snapshot = radio._state_store.snapshot()  # noqa: SLF001
+    observed = snapshot.field(OBSERVED_PTT_PATH)
+    assert observed.value is ObservedPtt.ON
+    assert observed.source.source == "civ_unsolicited"
+    assert snapshot.field("global.tx_state.ptt").value is True
+
+
+@pytest.mark.asyncio
+async def test_civ_ptt_producer_drops_non_ptt_foreign_and_echo_frames(
+    radio: IcomRadio,
+) -> None:
+    """Only accepted PTT ingress from the configured radio can produce evidence."""
+    for frame in (
+        _make_frame(cmd=0xFB),
+        _make_frame(cmd=0xFA),
+        _make_frame(cmd=0x1D, sub=0x00, data=b"\x01"),
+        _make_frame(cmd=0x1C, sub=0x01, data=b"\x01"),
+        _make_frame(cmd=0x1C, sub=0x00, data=b"\x01", from_addr=0x94),
+        _make_frame(
+            cmd=0x1C,
+            sub=0x00,
+            data=b"\x01",
+            from_addr=CONTROLLER_ADDR,
+        ),
+    ):
+        await radio._civ_runtime._route_civ_frame(  # noqa: SLF001
+            frame,
+            generation=radio._civ_epoch,  # noqa: SLF001
+        )
+
+    with pytest.raises(KeyError):
+        radio._state_store.snapshot().field(OBSERVED_PTT_PATH)  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+async def test_old_civ_epoch_ptt_readback_cannot_restore_observed_state(
+    radio: IcomRadio,
+) -> None:
+    await radio._civ_runtime._route_civ_frame(  # noqa: SLF001
+        _make_frame(cmd=0x1C, sub=0x00, data=b"\x01"),
+        generation=radio._civ_epoch,  # noqa: SLF001
+    )
+    assert project_observed_ptt(radio._state_store.snapshot()) is ObservedPtt.ON  # noqa: SLF001
+
+    old_civ_generation = radio._civ_epoch  # noqa: SLF001
+    radio._civ_runtime.advance_generation("test replacement")  # noqa: SLF001
+    assert project_observed_ptt(radio._state_store.snapshot()) is ObservedPtt.UNKNOWN  # noqa: SLF001
+
+    await radio._civ_runtime._route_civ_frame(  # noqa: SLF001
+        _make_frame(cmd=0x1C, sub=0x00, data=b"\x01"),
+        generation=old_civ_generation,
+    )
+
+    with pytest.raises(KeyError):
+        radio._state_store.snapshot().field(OBSERVED_PTT_PATH)  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+async def test_old_store_generation_ptt_readback_cannot_restore_observed_state(
+    radio: IcomRadio,
+) -> None:
+    await radio._civ_runtime._route_civ_frame(  # noqa: SLF001
+        _make_frame(cmd=0x1C, sub=0x00, data=b"\x01"),
+        generation=radio._civ_epoch,  # noqa: SLF001
+    )
+    assert project_observed_ptt(radio._state_store.snapshot()) is ObservedPtt.ON  # noqa: SLF001
+
+    old_store_generation = radio._state_store.provider_generation  # noqa: SLF001
+    radio._civ_runtime.advance_generation("test replacement")  # noqa: SLF001
+    assert project_observed_ptt(radio._state_store.snapshot()) is ObservedPtt.UNKNOWN  # noqa: SLF001
+
+    await radio._civ_runtime._route_civ_frame(  # noqa: SLF001
+        _make_frame(cmd=0x1C, sub=0x00, data=b"\x01"),
+        generation=radio._civ_epoch,  # noqa: SLF001
+        store_provider_generation=old_store_generation,
+    )
+
+    snapshot = radio._state_store.snapshot()  # noqa: SLF001
+    assert project_observed_ptt(snapshot) is ObservedPtt.UNKNOWN
+    with pytest.raises(KeyError):
+        snapshot.field(OBSERVED_PTT_PATH)
+
+
+@pytest.mark.asyncio
+async def test_observed_ptt_expires_to_unknown_after_its_store_max_age(
+    radio: IcomRadio,
+) -> None:
+    clock = FreshnessClock(start=100.0)
+    radio._state_store._freshness_clock = clock  # noqa: SLF001
+    with patch("rigplane.runtime._civ_rx.time.monotonic", return_value=100.0):
+        await radio._civ_runtime._route_civ_frame(  # noqa: SLF001
+            _make_frame(cmd=0x1C, sub=0x00, data=b"\x01"),
+            generation=radio._civ_epoch,  # noqa: SLF001
+        )
+    observed = radio._state_store.snapshot().field(OBSERVED_PTT_PATH)  # noqa: SLF001
+
+    clock.advance(observed.max_age - 0.001)
+    assert project_observed_ptt(radio._state_store.snapshot()) is ObservedPtt.ON  # noqa: SLF001
+    clock.advance(0.001)
+
+    assert project_observed_ptt(radio._state_store.snapshot()) is ObservedPtt.UNKNOWN  # noqa: SLF001
+    assert (
+        radio._state_store.snapshot().field(OBSERVED_PTT_PATH).freshness
+        is FreshnessState.FRESH
+    )  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("payload", "legacy_value"),
+    (
+        (b"", True),
+        (b"\x02", True),
+        (b"\xff", True),
+        (b"\x00\x00", False),
+        (b"\x01\x00", True),
+    ),
+    ids=("empty", "two", "ff", "double-off", "double-on"),
+)
+async def test_malformed_ptt_payloads_preserve_legacy_behavior(
+    radio: IcomRadio,
+    payload: bytes,
+    legacy_value: bool,
+) -> None:
+    await radio._civ_runtime._route_civ_frame(  # noqa: SLF001
+        _make_frame(cmd=0x1C, sub=0x00, data=b"\x01"),
+        generation=radio._civ_epoch,  # noqa: SLF001
+    )
+    await radio._civ_runtime._route_civ_frame(  # noqa: SLF001
+        _make_frame(cmd=0x1C, sub=0x00, data=payload),
+        generation=radio._civ_epoch,  # noqa: SLF001
+    )
+
+    snapshot = radio._state_store.snapshot()  # noqa: SLF001
+    assert snapshot.field("global.tx_state.ptt").value is legacy_value
+    assert snapshot.field(OBSERVED_PTT_PATH).value is ObservedPtt.UNKNOWN
+
+
+def test_old_generation_queued_meter_flush_mutates_nothing_after_reconnect(
+    radio: IcomRadio,
+) -> None:
+    path = FieldPath.receiver("main", "meters", "s_meter")
+    policy = AcquisitionPolicy(
+        cadence_seconds=1.0,
+        freshness_ttl_seconds=4.0,
+        meter_coalescing=MeterCoalescingPolicy(window_seconds=0.2),
+    )
+    radio._acquisition_scheduler = AcquisitionScheduler(  # noqa: SLF001
+        profile=_acquisition_profile(path, policy=policy)
+    )
+    radio._meter_observation_coalescer = MeterObservationCoalescer()  # noqa: SLF001
+    generation = radio._state_store.provider_generation  # noqa: SLF001
+
+    with patch("rigplane.runtime._civ_rx.time.monotonic", return_value=100.0):
+        radio._civ_runtime._apply_state_store_observations(  # noqa: SLF001
+            _make_frame(cmd=0x15, sub=0x02, data=_bcd2(111)),
+            generation=generation,
+        )
+    with patch("rigplane.runtime._civ_rx.time.monotonic", return_value=100.05):
+        radio._civ_runtime._apply_state_store_observations(  # noqa: SLF001
+            _make_frame(cmd=0x15, sub=0x02, data=_bcd2(222)),
+            generation=generation,
+        )
+    assert radio._meter_observation_coalescer._pending  # noqa: SLF001
+
+    radio._civ_runtime.advance_generation("test replacement")  # noqa: SLF001
+    before = radio._state_store.snapshot().to_dict()  # noqa: SLF001
+    before.pop("generatedAtMonotonic")
+    radio._civ_runtime.flush_due_meter_observations(now=100.3)  # noqa: SLF001
+
+    after = radio._state_store.snapshot().to_dict()  # noqa: SLF001
+    after.pop("generatedAtMonotonic")
+    assert after == before
+
+
+# ---------------------------------------------------------------------------
+# _route_civ_frame — from_addr / to_addr checks (lines 307, 311)
+# ---------------------------------------------------------------------------
+
+
+async def test_route_civ_frame_wrong_from_addr(radio: IcomRadio) -> None:
+    """Frame with wrong from_addr is silently dropped (line 307)."""
+    frame = _make_frame(cmd=0x03, from_addr=0x00)  # wrong: not IC_7610_ADDR (0x94)
+    await radio._civ_runtime._route_civ_frame(frame, generation=radio._civ_epoch)
+    # No error, no state change expected
+
+
+async def test_route_civ_frame_wrong_to_addr(radio: IcomRadio) -> None:
+    """Frame addressed to unknown dest is silently dropped (line 311)."""
+    frame = _make_frame(cmd=0x03, to_addr=0x12)  # not CONTROLLER_ADDR or 0x00
+    await radio._civ_runtime._route_civ_frame(frame, generation=radio._civ_epoch)
+
+
+async def test_route_civ_frame_broadcast_addr_accepted(radio: IcomRadio) -> None:
+    """Frame addressed to 0x00 (broadcast) is accepted (line 310)."""
+    freq_data = bcd_encode(14_074_000)
+    frame = _make_frame(cmd=0x03, to_addr=0x00, data=freq_data)
+    await radio._civ_runtime._route_civ_frame(frame, generation=radio._civ_epoch)
+
+
+# ---------------------------------------------------------------------------
+# _update_state_cache_from_frame — various command branches
+# ---------------------------------------------------------------------------
+
+
+def test_update_state_cache_s_meter_sub_02(radio: IcomRadio) -> None:
+    """cmd 0x15 sub 0x02 updates s_meter cache (line 401)."""
+    frame = _make_frame(cmd=0x15, sub=0x02, data=_bcd2(100))
+    radio._civ_runtime._update_state_cache_from_frame(frame)
+    # State cache should have been updated; no error expected
+
+
+def test_update_state_cache_level_rf_power(radio: IcomRadio) -> None:
+    """cmd 0x14 sub 0x0A updates power level (line 410-413)."""
+    frame = _make_frame(cmd=0x14, sub=0x0A, data=_bcd2(128))
+    radio._civ_runtime._update_state_cache_from_frame(frame)
+
+
+def test_update_state_cache_level_rf_gain(radio: IcomRadio) -> None:
+    """cmd 0x14 sub 0x02 updates RF gain (line 414-415)."""
+    frame = _make_frame(cmd=0x14, sub=0x02, data=_bcd2(200))
+    radio._civ_runtime._update_state_cache_from_frame(frame)
+
+
+def test_update_state_cache_level_af_level(radio: IcomRadio) -> None:
+    """cmd 0x14 sub 0x01 updates AF level (line 416-418)."""
+    frame = _make_frame(cmd=0x14, sub=0x01, data=_bcd2(150))
+    radio._civ_runtime._update_state_cache_from_frame(frame)
+
+
+def test_update_state_cache_af_level_pins_canonical_four_nibble_value(
+    radio: IcomRadio,
+) -> None:
+    """cmd 0x14 sub 0x01 af_level via the public entry point (Z1a regression pin).
+
+    Forward guard only: this does not go red today — ``_handle_14`` already
+    decodes af_level with the canonical 4-nibble BCD formula and wins over
+    the (now-deleted) diverged 3-nibble inline mirror, so the correct value
+    already appears before this change. It locks that value in through the
+    public ``_update_state_cache_from_frame`` entry point so a later change
+    to the mirror cannot silently regress it.
+    """
+    radio._radio_state = RadioState()
+    frame = _make_frame(cmd=0x14, sub=0x01, data=bytes([0x02, 0x55]))
+
+    radio._civ_runtime._update_state_cache_from_frame(frame)
+
+    assert radio._radio_state.main.af_level == 255
+
+
+def test_update_state_cache_cmd29_sub_level_does_not_overwrite_main(
+    radio: IcomRadio,
+) -> None:
+    """SUB cmd29 level responses must update SUB state only."""
+    radio._radio_state = RadioState()
+    radio._radio_state.main.af_level = 10
+    radio._radio_state.sub.af_level = 20
+
+    frame = _make_frame(cmd=0x14, sub=0x01, data=_bcd2(150), receiver=0x01)
+
+    radio._civ_runtime._update_state_cache_from_frame(frame)
+
+    assert radio._radio_state.main.af_level == 10
+    assert radio._radio_state.sub.af_level == 150
+
+
+def test_update_state_cache_level_squelch(radio: IcomRadio) -> None:
+    """cmd 0x14 sub 0x03 updates squelch (line 419-421)."""
+    frame = _make_frame(cmd=0x14, sub=0x03, data=_bcd2(50))
+    radio._civ_runtime._update_state_cache_from_frame(frame)
+
+
+def test_update_state_cache_cmd29_sub_bool_does_not_overwrite_main(
+    radio: IcomRadio,
+) -> None:
+    """SUB cmd29 boolean responses must update SUB indicators only."""
+    radio._radio_state = RadioState()
+    radio._radio_state.main.nb = False
+    radio._radio_state.sub.nb = False
+
+    frame = _make_frame(cmd=0x16, sub=0x22, data=bytes([0x01]), receiver=0x01)
+
+    radio._civ_runtime._update_state_cache_from_frame(frame)
+
+    assert radio._radio_state.main.nb is False
+    assert radio._radio_state.sub.nb is True
+
+
+def test_update_state_cache_ip_plus(radio: IcomRadio) -> None:
+    """cmd 0x16 sub 0x65 fires IP+ change notification (lines 449-450)."""
+    notify_calls: dict[str, dict[str, object]] = {}
+
+    def _on_change(name: str, data: dict[str, object]) -> None:
+        notify_calls[name] = data
+
+    radio._on_state_change = _on_change
+    frame = _make_frame(cmd=0x16, sub=0x65, data=bytes([0x01]))
+    radio._civ_runtime._update_state_cache_from_frame(frame)
+    assert "ipplus_changed" in notify_calls
+
+
+def test_update_state_cache_filter_width_decodes_index_to_hz(radio: IcomRadio) -> None:
+    """Filter width response stores Hz decoded from the profile mapping.
+
+    MOR-437: the RadioState mirror was removed; the value lands in the
+    StateStore (and the private executor _state_cache fallback) instead.
+    """
+    radio._radio_state = RadioState()
+    radio._radio_state.main.mode = "USB"
+    frame = _make_frame(cmd=0x1A, sub=0x03, data=b"\x00\x19", receiver=0x00)
+
+    radio._civ_runtime._update_state_cache_from_frame(frame)
+
+    # Legacy RadioState mirror is no longer written.
+    assert radio._radio_state.main.filter_width is None
+    # Profile-dependent decode (USB, BCD index 0x19=19 → 1500 Hz) lands in store.
+    field = radio._state_store.snapshot().field(
+        "receiver.0.active.freq_mode.filter_width"
+    )
+    assert field.value == 1500
+    # Executor cache fallback keeps the same decoded value.
+    assert radio._state_cache.filter_width == 1500
+
+
+def test_update_state_cache_x6200_filter_width_decodes_raw_byte_index() -> None:
+    """X6200 raw 0x1c maps to 1800 Hz; it must not be BCD-decoded."""
+    radio = IcomRadio("192.168.1.100", model="X6200")
+    radio._radio_state = RadioState()
+    radio._radio_state.main.mode = "USB"
+    frame = _make_frame(
+        cmd=0x1A,
+        sub=0x03,
+        data=b"\x1c",
+        from_addr=0xA4,
+        receiver=0x00,
+    )
+
+    radio._civ_runtime._update_state_cache_from_frame(frame)
+
+    field = radio._state_store.snapshot().field(
+        "receiver.0.active.freq_mode.filter_width"
+    )
+    assert field.value == 1800
+    assert radio._state_cache.filter_width == 1800
+
+
+def test_update_state_cache_exception_suppressed(radio: IcomRadio) -> None:
+    """Exception in cache update is suppressed (lines 456-457)."""
+    # StateCache uses slots=True, so replace the whole object with a MagicMock
+    mock_cache = MagicMock()
+    mock_cache.update_freq = MagicMock(side_effect=RuntimeError("oops"))
+    radio._state_cache = mock_cache
+    freq_data = bcd_encode(14_074_000)
+    frame = _make_frame(cmd=0x03, data=freq_data)
+    # Should NOT raise, exception is swallowed
+    radio._civ_runtime._update_state_cache_from_frame(frame)
+
+
+@pytest.mark.parametrize(  # type: ignore[untyped-decorator]
+    ("frame", "path", "expected", "expected_source"),
+    [
+        (
+            _make_frame(cmd=0x00, data=bcd_encode(7_074_000)),
+            "receiver.0.active.freq_mode.freq_hz",
+            7_074_000,
+            "civ_unsolicited",
+        ),
+        (
+            _make_frame(cmd=0x03, data=bcd_encode(14_074_000)),
+            "receiver.0.active.freq_mode.freq_hz",
+            14_074_000,
+            "command_response",
+        ),
+        (
+            _make_frame(cmd=0x01, data=bytes([Mode.USB.value, 1])),
+            "receiver.0.active.freq_mode.mode",
+            "USB",
+            "civ_unsolicited",
+        ),
+        (
+            _make_frame(cmd=0x04, data=bytes([Mode.LSB.value, 2])),
+            "receiver.0.active.freq_mode.mode",
+            "LSB",
+            "command_response",
+        ),
+        (
+            _make_frame(cmd=0x04, data=bytes([Mode.LSB.value, 2])),
+            "receiver.0.active.freq_mode.filter_num",
+            2,
+            "command_response",
+        ),
+        (
+            _make_frame(cmd=0x01, data=bytes([Mode.USB.value, 1])),
+            "receiver.0.active.freq_mode.filter_num",
+            1,
+            "civ_unsolicited",
+        ),
+        (
+            _make_frame(cmd=0x25, data=bytes([0x01]) + bcd_encode(21_074_000)),
+            "receiver.1.active.freq_mode.freq_hz",
+            21_074_000,
+            "command_response",
+        ),
+        (
+            _make_frame(cmd=0x26, data=bytes([0x01, Mode.CW.value, 0x00, 3])),
+            "receiver.1.active.freq_mode.mode",
+            "CW",
+            "command_response",
+        ),
+        (
+            _make_frame(cmd=0x26, data=bytes([0x01, Mode.CW.value, 0x00, 3])),
+            "receiver.1.active.freq_mode.filter_num",
+            3,
+            "command_response",
+        ),
+        (
+            _make_frame(cmd=0x15, sub=0x02, data=_bcd2(150), receiver=0x01),
+            "receiver.1.meters.s_meter",
+            6,
+            "command_response",
+        ),
+        (
+            _make_frame(cmd=0x15, sub=0x11, data=_bcd2(143)),
+            "global.meters.power",
+            50.0,
+            "command_response",
+        ),
+        (
+            _make_frame(cmd=0x15, sub=0x12, data=_bcd2(48)),
+            "global.meters.swr",
+            1.5,
+            "command_response",
+        ),
+        (
+            _make_frame(cmd=0x15, sub=0x13, data=_bcd2(120)),
+            "global.meters.alc",
+            1.0,
+            "command_response",
+        ),
+        # PA-telemetry meters promoted to neutral observations (MOR-460);
+        # values calibrated through the IC-7610 tables since MOR-2540.
+        (
+            _make_frame(cmd=0x15, sub=0x14, data=_bcd2(42)),
+            "global.meters.comp",
+            # 42·15/130 ≈ 4.85 dB (guide anchors: 0=0 dB, 130=15 dB).
+            (42 / 130) * 15.0,
+            "command_response",
+        ),
+        (
+            _make_frame(cmd=0x15, sub=0x15, data=_bcd2(130)),
+            "global.meters.vd",
+            # 130·10/151 ≈ 8.61 V (guide anchors: 0=0 V, 151=10 V).
+            (130 / 151) * 10.0,
+            "command_response",
+        ),
+        (
+            _make_frame(cmd=0x15, sub=0x16, data=_bcd2(55)),
+            "global.meters.id",
+            # 55·10/77 ≈ 7.14 A (guide anchors: 0=0 A, 77=10 A).
+            (55 / 77) * 10.0,
+            "command_response",
+        ),
+        (
+            _make_frame(cmd=0x14, sub=0x01, data=_bcd2(87), receiver=0x01),
+            "receiver.1.operator_controls.af_level",
+            87 / 255.0,
+            "command_response",
+        ),
+        (
+            _make_frame(cmd=0x14, sub=0x02, data=_bcd2(111), receiver=0x01),
+            "receiver.1.operator_controls.rf_gain",
+            111 / 255.0,
+            "command_response",
+        ),
+        (
+            _make_frame(cmd=0x14, sub=0x03, data=_bcd2(45), receiver=0x01),
+            "receiver.1.operator_controls.squelch",
+            45 / 255.0,
+            "command_response",
+        ),
+        (
+            _make_frame(cmd=0x14, sub=0x07, data=_bcd2(142), receiver=0x01),
+            "receiver.1.operator_controls.pbt_inner",
+            142,
+            "command_response",
+        ),
+        (
+            _make_frame(cmd=0x14, sub=0x08, data=_bcd2(143), receiver=0x01),
+            "receiver.1.operator_controls.pbt_outer",
+            143,
+            "command_response",
+        ),
+        (
+            _make_frame(cmd=0x16, sub=0x22, data=b"\x01", receiver=0x01),
+            "receiver.1.operator_toggles.nb",
+            True,
+            "command_response",
+        ),
+        (
+            _make_frame(cmd=0x16, sub=0x40, data=b"\x00", receiver=0x01),
+            "receiver.1.operator_toggles.nr",
+            False,
+            "command_response",
+        ),
+        (
+            _make_frame(cmd=0x18, data=b"\x01"),
+            "global.tx_state.power_on",
+            True,
+            "command_response",
+        ),
+        (
+            _make_frame(cmd=0x1C, sub=0x00, data=b"\x01"),
+            "global.tx_state.ptt",
+            True,
+            "poll_response",
+        ),
+        (
+            _make_frame(cmd=0x07, data=bytes([0xD2, 0x01])),
+            "global.slow_state.active",
+            "SUB",
+            "command_response",
+        ),
+        (
+            _make_frame(cmd=0x21, sub=0x00, data=b"\x00\x02\x01"),
+            "global.operator_controls.rit_freq",
+            -200,
+            "command_response",
+        ),
+        (
+            _make_frame(cmd=0x21, sub=0x01, data=b"\x01"),
+            "global.tx_state.rit_on",
+            True,
+            "command_response",
+        ),
+        (
+            _make_frame(cmd=0x21, sub=0x02, data=b"\x01"),
+            "global.tx_state.rit_tx",
+            True,
+            "command_response",
+        ),
+    ],
+)
+def test_update_state_cache_projects_supported_fields_into_state_store(
+    radio: IcomRadio,
+    frame: CivFrame,
+    path: str,
+    expected: object,
+    expected_source: str,
+) -> None:
+    radio._civ_runtime._update_state_cache_from_frame(frame)
+
+    field = radio._state_store.snapshot().field(path)
+
+    assert field.value == expected
+    assert field.source.source == expected_source
+
+
+@pytest.mark.parametrize(  # type: ignore[untyped-decorator]
+    "frame",
+    [
+        _make_frame(cmd=0x04, data=bytes([Mode.USB.value])),
+        _make_frame(cmd=0x26, data=bytes([0x00, Mode.USB.value])),
+        _make_frame(cmd=0x26, data=bytes([0x00, Mode.USB.value, 0x00])),
+    ],
+)
+def test_update_state_cache_omits_filter_num_when_byte_absent(
+    radio: IcomRadio,
+    frame: CivFrame,
+) -> None:
+    """MOR-478: mode-only frames must not emit a filter_num observation."""
+    radio._civ_runtime._update_state_cache_from_frame(frame)
+
+    target_receiver = "1" if frame.command == 0x26 and frame.data[0] else "0"
+    snapshot = radio._state_store.snapshot()
+    # The mode observation still lands.
+    snapshot.field(f"receiver.{target_receiver}.active.freq_mode.mode")
+    # No filter_num observation is emitted (no crash, KeyError on lookup).
+    with pytest.raises(KeyError):
+        snapshot.field(f"receiver.{target_receiver}.active.freq_mode.filter_num")
+
+
+@pytest.mark.parametrize(  # type: ignore[untyped-decorator]
+    ("frame", "target_receiver", "expected"),
+    [
+        # MAIN, USB, DATA1, filter 2
+        (_make_frame(cmd=0x26, data=bytes([0x00, Mode.USB.value, 0x01, 0x02])), "0", 1),
+        # SUB, CW, DATA3, filter 1
+        (_make_frame(cmd=0x26, data=bytes([0x01, Mode.CW.value, 0x03, 0x01])), "1", 3),
+        # MAIN, USB, DATA OFF (3-byte frame, no filter byte)
+        (_make_frame(cmd=0x26, data=bytes([0x00, Mode.USB.value, 0x00])), "0", 0),
+    ],
+)
+def test_update_state_cache_projects_data_mode_from_cmd26(
+    radio: IcomRadio,
+    frame: CivFrame,
+    target_receiver: str,
+    expected: int,
+) -> None:
+    """MOR-334 regression: the 0x26 answer carries the DATA-mode flag in data[2].
+
+    The StateStore observation path dropped data[2], so D1/D2/D3 never reached
+    the web UI even though the legacy ``_handle_26`` mirror read it.
+    """
+    radio._civ_runtime._update_state_cache_from_frame(frame)
+
+    field = radio._state_store.snapshot().field(
+        f"receiver.{target_receiver}.active.freq_mode.data_mode"
+    )
+    assert field.value == expected
+
+
+# ---------------------------------------------------------------------------
+# MOR-437: slow-state bool/status families observation-backed
+# ---------------------------------------------------------------------------
+
+# (frame, store path, public status path, expected value)
+_SLOW_STATE_TOGGLE_CASES = (
+    (
+        _make_frame(cmd=0x16, sub=0x41, data=b"\x01", receiver=0x00),
+        "receiver.0.operator_toggles.auto_notch",
+        "main.autoNotch",
+        True,
+    ),
+    (
+        _make_frame(cmd=0x16, sub=0x48, data=b"\x01", receiver=0x00),
+        "receiver.0.operator_toggles.manual_notch",
+        "main.manualNotch",
+        True,
+    ),
+    (
+        _make_frame(cmd=0x16, sub=0x42, data=b"\x01", receiver=0x00),
+        "receiver.0.operator_toggles.repeater_tone",
+        "main.repeaterTone",
+        True,
+    ),
+    (
+        _make_frame(cmd=0x16, sub=0x43, data=b"\x01", receiver=0x00),
+        "receiver.0.operator_toggles.repeater_tsql",
+        "main.repeaterTsql",
+        True,
+    ),
+    (
+        _make_frame(cmd=0x16, sub=0x4F, data=b"\x01", receiver=0x00),
+        "receiver.0.operator_toggles.twin_peak_filter",
+        "main.twinPeakFilter",
+        True,
+    ),
+    # DIGI-SEL (0x4E) and IP+ (0x65) receiver toggles — previously had no
+    # StateStore observation, so they were invisible on IC-7610 (MOR-477).
+    (
+        _make_frame(cmd=0x16, sub=0x4E, data=b"\x01", receiver=0x00),
+        "receiver.0.operator_toggles.digisel",
+        "main.digisel",
+        True,
+    ),
+    (
+        _make_frame(cmd=0x16, sub=0x65, data=b"\x01", receiver=0x00),
+        "receiver.0.operator_toggles.ipplus",
+        "main.ipplus",
+        True,
+    ),
+    (
+        _make_frame(cmd=0x16, sub=0x44, data=b"\x01"),
+        "global.tx_state.compressor_on",
+        "compressorOn",
+        True,
+    ),
+    (
+        _make_frame(cmd=0x16, sub=0x45, data=b"\x01"),
+        "global.tx_state.monitor_on",
+        "monitorOn",
+        True,
+    ),
+    (
+        _make_frame(cmd=0x16, sub=0x46, data=b"\x01"),
+        "global.tx_state.vox_on",
+        "voxOn",
+        True,
+    ),
+    (
+        _make_frame(cmd=0x0F, data=b"\x01"),
+        "global.tx_state.split",
+        "split",
+        True,
+    ),
+    (
+        _make_frame(cmd=0x07, data=bytes([0xC2, 0x01])),
+        "global.tx_state.dual_watch",
+        "dualWatch",
+        True,
+    ),
+    (
+        _make_frame(cmd=0x1C, sub=0x01, data=b"\x02"),
+        "global.operator_controls.tuner_status",
+        "tunerStatus",
+        2,
+    ),
+    # 0x12 0x00 0x01 RX-ANT for ANT1 ON → global slow-state bool (MOR-462).
+    (
+        _make_frame(cmd=0x12, sub=0x00, data=b"\x01"),
+        "global.slow_state.rx_antenna_1",
+        "rxAntenna1",
+        True,
+    ),
+    # 0x12 0x01 0x01 RX-ANT for ANT2 ON → global slow-state bool (MOR-462).
+    (
+        _make_frame(cmd=0x12, sub=0x01, data=b"\x01"),
+        "global.slow_state.rx_antenna_2",
+        "rxAntenna2",
+        True,
+    ),
+)
+
+
+@pytest.mark.parametrize(  # type: ignore[untyped-decorator]
+    ("frame", "store_path", "public_path", "expected"),
+    _SLOW_STATE_TOGGLE_CASES,
+    ids=[entry[1] for entry in _SLOW_STATE_TOGGLE_CASES],
+)
+def test_slow_state_toggle_observation_backed(
+    radio: IcomRadio,
+    frame: CivFrame,
+    store_path: str,
+    public_path: str,
+    expected: object,
+) -> None:
+    """MOR-437: 0x16/0x0F/0x07/0x1C slow-state families emit StateStore observations."""
+    radio._civ_runtime._update_state_cache_from_frame(frame)
+
+    field = radio._state_store.snapshot().field(store_path)
+    assert field.value == expected
+    # A slow-state toggle expires only where the fixture's own profile declares
+    # a TTL for it (MOR-437, MOR-2425).
+    assert field.max_age == _expected_observation_max_age(radio, store_path)
+    assert field.freshness is FreshnessState.FRESH
+
+
+@pytest.mark.parametrize(  # type: ignore[untyped-decorator]
+    ("frame", "store_path", "public_path", "expected"),
+    _SLOW_STATE_TOGGLE_CASES,
+    ids=[entry[1] for entry in _SLOW_STATE_TOGGLE_CASES],
+)
+def test_slow_state_toggle_survives_unrelated_poll_cycle(
+    radio: IcomRadio,
+    frame: CivFrame,
+    store_path: str,
+    public_path: str,
+    expected: object,
+) -> None:
+    """The observed value must not snap back when an unrelated frame arrives."""
+    radio._civ_runtime._update_state_cache_from_frame(frame)
+    # An unrelated S-meter poll on the next cycle must not disturb the toggle.
+    radio._civ_runtime._update_state_cache_from_frame(
+        _make_frame(cmd=0x15, sub=0x02, data=_bcd2(120), receiver=0x00)
+    )
+
+    field = radio._state_store.snapshot().field(store_path)
+    assert field.value == expected
+    assert field.freshness is FreshnessState.FRESH
+
+
+@pytest.mark.parametrize(  # type: ignore[untyped-decorator]
+    ("frame", "store_path", "public_path", "expected"),
+    _SLOW_STATE_TOGGLE_CASES,
+    ids=[entry[1] for entry in _SLOW_STATE_TOGGLE_CASES],
+)
+def test_slow_state_toggle_projects_available(
+    radio: IcomRadio,
+    frame: CivFrame,
+    store_path: str,
+    public_path: str,
+    expected: object,
+) -> None:
+    """Once observed, the public key projects to availability=available."""
+    from rigplane.web.runtime_helpers import (
+        build_public_state_payload_from_snapshot,
+    )
+
+    radio._civ_runtime._update_state_cache_from_frame(frame)
+    payload = build_public_state_payload_from_snapshot(
+        radio._state_store.snapshot(),
+        radio=None,
+        receiver_count=2,
+    )
+
+    status = payload["fieldStatus"][public_path]
+    assert status["observed"] is True
+    assert status["availability"] == "available"
+
+
+# ---------------------------------------------------------------------------
+# MOR-437 (BE-2): value-scaled level/control families observation-backed.
+#
+# Each case feeds a known raw CI-V payload and asserts the EXACT decoded value
+# (compared against the same decode the removed mirror used), so a wrong scale
+# would fail here rather than silently projecting a bad number.
+# (frame, store path, public status path, expected decoded value)
+# ---------------------------------------------------------------------------
+_VALUE_CONTROL_CASES = (
+    # 0x11 attenuator: BCD nibble 0x18 → 18 dB.
+    (
+        _make_frame(cmd=0x11, data=bytes([0x18]), receiver=0x00),
+        "receiver.0.operator_controls.att",
+        "main.att",
+        18,
+    ),
+    # 0x16 0x02 preamp: raw byte verbatim.
+    (
+        _make_frame(cmd=0x16, sub=0x02, data=b"\x01", receiver=0x00),
+        "receiver.0.operator_controls.preamp",
+        "main.preamp",
+        1,
+    ),
+    # 0x16 0x12 agc: BCD nibble 0x03 → 3.
+    (
+        _make_frame(cmd=0x16, sub=0x12, data=b"\x03", receiver=0x00),
+        "receiver.0.operator_controls.agc",
+        "main.agc",
+        3,
+    ),
+    # 0x14 levels (4-digit BCD pair).
+    (
+        _make_frame(cmd=0x14, sub=0x03, data=_bcd2(50), receiver=0x00),
+        "receiver.0.operator_controls.squelch",
+        "main.squelch",
+        50 / 255.0,
+    ),
+    (
+        _make_frame(cmd=0x14, sub=0x01, data=_bcd2(128), receiver=0x00),
+        "receiver.0.operator_controls.af_level",
+        "main.afLevel",
+        128 / 255.0,
+    ),
+    (
+        _make_frame(cmd=0x14, sub=0x02, data=_bcd2(64), receiver=0x00),
+        "receiver.0.operator_controls.rf_gain",
+        "main.rfGain",
+        64 / 255.0,
+    ),
+    (
+        _make_frame(cmd=0x14, sub=0x0A, data=_bcd2(128)),
+        "global.operator_controls.power_level",
+        "powerLevel",
+        128 / 255.0,
+    ),
+    (
+        _make_frame(cmd=0x14, sub=0x06, data=_bcd2(91), receiver=0x00),
+        "receiver.0.operator_controls.nr_level",
+        "main.nrLevel",
+        91,
+    ),
+    (
+        _make_frame(cmd=0x14, sub=0x12, data=_bcd2(94), receiver=0x00),
+        "receiver.0.operator_controls.nb_level",
+        "main.nbLevel",
+        94,
+    ),
+    (
+        _make_frame(cmd=0x14, sub=0x0B, data=_bcd2(101)),
+        "global.operator_controls.mic_gain",
+        "micGain",
+        101,
+    ),
+    (
+        _make_frame(cmd=0x14, sub=0x0E, data=_bcd2(103)),
+        "global.operator_controls.compressor_level",
+        "compressorLevel",
+        103,
+    ),
+    (
+        _make_frame(cmd=0x14, sub=0x15, data=_bcd2(106)),
+        "global.operator_controls.monitor_gain",
+        "monitorGain",
+        106,
+    ),
+    # 0x14 0x09 cw_pitch: non-linear raw level → Hz (level 128 → 600 Hz).
+    (
+        _make_frame(cmd=0x14, sub=0x09, data=_bcd2(128)),
+        "global.operator_controls.cw_pitch",
+        "cwPitch",
+        600,
+    ),
+    # 0x14 0x0C key_speed: raw level → WPM (level 146 → 30 WPM) (MOR-493).
+    (
+        _make_frame(cmd=0x14, sub=0x0C, data=_bcd2(146)),
+        "global.operator_controls.key_speed",
+        "keySpeed",
+        30,
+    ),
+    # 0x1A 0x03 filter_width: profile-dependent index → Hz (USB index 19 → 1500).
+    (
+        _make_frame(cmd=0x1A, sub=0x03, data=b"\x00\x19", receiver=0x00),
+        "receiver.0.active.freq_mode.filter_width",
+        "main.filterWidth",
+        1500,
+    ),
+    # 0x1A 0x06 data_mode: raw byte.
+    (
+        _make_frame(cmd=0x1A, sub=0x06, data=b"\x02", receiver=0x00),
+        "receiver.0.active.freq_mode.data_mode",
+        "main.dataMode",
+        2,
+    ),
+    # 0x1A 0x04 agc_time_constant: 1-byte BCD 0x13 → 13.
+    (
+        _make_frame(cmd=0x1A, sub=0x04, data=b"\x13", receiver=0x00),
+        "receiver.0.operator_controls.agc_time_constant",
+        "main.agcTimeConstant",
+        13,
+    ),
+    # 0x1B 0x00 tone_freq: BCD freq-encoded 88.5 Hz → 8850 centiHz (MOR-451).
+    (
+        _make_frame(cmd=0x1B, sub=0x00, data=_encode_tone_freq(8850), receiver=0x00),
+        "receiver.0.operator_controls.tone_freq",
+        "main.toneFreq",
+        8850,
+    ),
+    # 0x1B 0x01 tsql_freq: BCD freq-encoded 88.5 Hz → 8850 centiHz (MOR-451).
+    (
+        _make_frame(cmd=0x1B, sub=0x01, data=_encode_tone_freq(8850), receiver=0x00),
+        "receiver.0.operator_controls.tsql_freq",
+        "main.tsqlFreq",
+        8850,
+    ),
+    # 0x16 0x32 audio_peak_filter: BCD-nibble mode 0x02 → 2 (MID) (MOR-452).
+    (
+        _make_frame(cmd=0x16, sub=0x32, data=b"\x02", receiver=0x00),
+        "receiver.0.operator_controls.audio_peak_filter",
+        "main.audioPeakFilter",
+        2,
+    ),
+    # 0x14 0x05 apf_type_level: 4-digit BCD pair (interim 0-255 device scale,
+    # re-scaling tracked in MOR-453) (MOR-452).
+    (
+        _make_frame(cmd=0x14, sub=0x05, data=_bcd2(90), receiver=0x00),
+        "receiver.0.operator_controls.apf_type_level",
+        "main.apfTypeLevel",
+        90,
+    ),
+    # 0x14 0x16 vox_gain: 4-digit BCD pair (interim device scale — MOR-453)
+    # promoted to a global operator-control int (MOR-459).
+    (
+        _make_frame(cmd=0x14, sub=0x16, data=_bcd2(50)),
+        "global.operator_controls.vox_gain",
+        "voxGain",
+        50,
+    ),
+    # 0x14 0x17 anti_vox_gain: 4-digit BCD pair (interim device scale — MOR-453)
+    # promoted to a global operator-control int (MOR-459).
+    (
+        _make_frame(cmd=0x14, sub=0x17, data=_bcd2(30)),
+        "global.operator_controls.anti_vox_gain",
+        "antiVoxGain",
+        30,
+    ),
+    # 0x1A 0x05 0x02 0x92 vox_delay: 1-byte BCD ctl-mem level (0-20) promoted to
+    # a global operator-control int (MOR-459). 02 92 is where this fixture's
+    # IC-7610 profile declares get_vox_delay; the control number is resolved
+    # per profile (MOR-2975), pinned for four radios in
+    # tests/test_mor2975_ctl_mem_decode.py.
+    (
+        _make_frame(cmd=0x1A, sub=0x05, data=b"\x02\x92\x12"),
+        "global.operator_controls.vox_delay",
+        "voxDelay",
+        12,
+    ),
+    # 0x10 tuning_step: device step index (0-8), BCD nibble-pair byte 0x05 → 5;
+    # NOT Hz. Promoted to a global slow-state int (MOR-461).
+    (
+        _make_frame(cmd=0x10, data=b"\x05"),
+        "global.slow_state.tuning_step",
+        "tuningStep",
+        5,
+    ),
+    # 0x12 0x01 antenna selection: sub 0x01 → ANT2 (value 2). Promoted to a
+    # global operator-control int (MOR-462). Data byte 0x00 keeps RX-ANT off.
+    (
+        _make_frame(cmd=0x12, sub=0x01, data=b"\x00"),
+        "global.operator_controls.tx_antenna",
+        "txAntenna",
+        2,
+    ),
+)
+
+
+def _public_value_control_expected(public_path: str, value: object) -> object:
+    if public_path in {"main.afLevel", "main.rfGain", "main.squelch", "powerLevel"}:
+        if isinstance(value, int) and not isinstance(value, bool):
+            return value / 255
+    return value
+
+
+def _expected_observation_max_age(radio: IcomRadio, store_path: str) -> float | None:
+    """What ``_observation`` stamps: the resolved policy TTL, else the table,
+    else the profile default.
+
+    Written out here rather than delegated to ``_civ_rx``'s own resolver: the
+    store spells receivers ``0``/``1`` and ``[state_acquisition.field_policies]``
+    spells them ``main``/``sub``, and that translation is the part worth
+    restating independently. The rule is ``_observation_max_age``'s
+    (MOR-2576, MOR-1815 residual fix): a declared entry or a pollable
+    capability resolves through ``policy_for``; a path the profile does not
+    poll keeps the rig-blind table entry where one exists, and otherwise the
+    profile default TTL — so only an explicit ``"never"`` (or a pollable
+    class resolving to the MOR-2615 deliberate ``None``) still stamps
+    ``None``.
+    """
+
+    from rigplane.runtime._civ_rx import _OBSERVATION_MAX_AGE_SECONDS
+
+    path = FieldPath.parse(store_path)
+    spellings = [path]
+    if path.receiver_id in ("0", "1"):
+        spellings.append(
+            dataclasses.replace(
+                path, receiver_id="main" if path.receiver_id == "0" else "sub"
+            )
+        )
+    acquisition = radio._profile.state_acquisition  # noqa: SLF001
+    if acquisition is not None:
+        for candidate in spellings:
+            if candidate in acquisition.field_policies or (
+                acquisition.capability_for(candidate).can_poll
+            ):
+                return acquisition.policy_for(candidate).freshness_ttl_seconds
+        table_ttl = _OBSERVATION_MAX_AGE_SECONDS.get(
+            (path.scope.value, path.family.value, path.name)
+        )
+        if table_ttl is not None:
+            return table_ttl
+        return acquisition.policy_for(spellings[0]).freshness_ttl_seconds
+    return _OBSERVATION_MAX_AGE_SECONDS.get(
+        (path.scope.value, path.family.value, path.name)
+    )
+
+
+def _use_ctcss_fixture_profile(radio: IcomRadio, store_path: str) -> None:
+    """Use a tone-capable profile only for the two CTCSS observation cases."""
+    if store_path.endswith((".tone_freq", ".tsql_freq")):
+        radio._profile = resolve_radio_profile(model="IC-7300")  # noqa: SLF001
+
+
+@pytest.mark.parametrize(  # type: ignore[untyped-decorator]
+    ("frame", "store_path", "public_path", "expected"),
+    _VALUE_CONTROL_CASES,
+    ids=[entry[1] for entry in _VALUE_CONTROL_CASES],
+)
+def test_value_control_observation_value(
+    radio_with_state: IcomRadio,
+    frame: CivFrame,
+    store_path: str,
+    public_path: str,
+    expected: object,
+) -> None:
+    """MOR-437 (BE-2): level/value CI-V families emit the exact decoded value."""
+    _use_ctcss_fixture_profile(radio_with_state, store_path)
+    # A real mode is required so the profile-dependent filter_width decode runs.
+    radio_with_state._radio_state.main.mode = "USB"
+    radio_with_state._civ_runtime._update_state_cache_from_frame(frame)
+
+    field = radio_with_state._state_store.snapshot().field(store_path)
+    assert field.value == expected
+    assert field.max_age == _expected_observation_max_age(radio_with_state, store_path)
+    assert field.freshness is FreshnessState.FRESH
+
+
+@pytest.mark.parametrize(  # type: ignore[untyped-decorator]
+    ("frame", "store_path", "public_path", "expected"),
+    _VALUE_CONTROL_CASES,
+    ids=[entry[1] for entry in _VALUE_CONTROL_CASES],
+)
+def test_value_control_survives_unrelated_poll_cycle(
+    radio_with_state: IcomRadio,
+    frame: CivFrame,
+    store_path: str,
+    public_path: str,
+    expected: object,
+) -> None:
+    """The observed value must not snap back when an unrelated frame arrives."""
+    _use_ctcss_fixture_profile(radio_with_state, store_path)
+    radio_with_state._radio_state.main.mode = "USB"
+    radio_with_state._civ_runtime._update_state_cache_from_frame(frame)
+    # An unrelated S-meter poll on the next cycle must not disturb the value.
+    radio_with_state._civ_runtime._update_state_cache_from_frame(
+        _make_frame(cmd=0x15, sub=0x02, data=_bcd2(120), receiver=0x00)
+    )
+
+    field = radio_with_state._state_store.snapshot().field(store_path)
+    assert field.value == expected
+    assert field.freshness is FreshnessState.FRESH
+
+
+@pytest.mark.parametrize(  # type: ignore[untyped-decorator]
+    ("frame", "store_path", "public_path", "expected"),
+    _VALUE_CONTROL_CASES,
+    ids=[entry[1] for entry in _VALUE_CONTROL_CASES],
+)
+def test_value_control_projects_available(
+    radio_with_state: IcomRadio,
+    frame: CivFrame,
+    store_path: str,
+    public_path: str,
+    expected: object,
+) -> None:
+    """Once observed, the public key projects available with the right value."""
+    from rigplane.web.runtime_helpers import (
+        build_public_state_payload_from_snapshot,
+    )
+
+    _use_ctcss_fixture_profile(radio_with_state, store_path)
+    radio_with_state._radio_state.main.mode = "USB"
+    radio_with_state._civ_runtime._update_state_cache_from_frame(frame)
+    payload = build_public_state_payload_from_snapshot(
+        radio_with_state._state_store.snapshot(),
+        radio=None,
+        receiver_count=2,
+    )
+
+    status = payload["fieldStatus"][public_path]
+    assert status["observed"] is True
+    assert status["availability"] == "available"
+
+    # The decoded value also lands in the main public state payload at the
+    # camelCase public path (top-level for globals, ``main.*`` for receiver).
+    node: Any = payload
+    for segment in public_path.split("."):
+        node = node[segment]
+    assert node == _public_value_control_expected(public_path, expected)
+
+
+def test_civ_projected_active_rit_xit_fields_become_stale(
+    radio: IcomRadio,
+) -> None:
+    try:
+        frames_and_paths = (
+            (
+                _make_frame(cmd=0x07, data=bytes([0xD2, 0x01])),
+                "global.slow_state.active",
+            ),
+            (
+                _make_frame(cmd=0x21, sub=0x00, data=b"\x00\x02\x01"),
+                "global.operator_controls.rit_freq",
+            ),
+            (_make_frame(cmd=0x21, sub=0x01, data=b"\x01"), "global.tx_state.rit_on"),
+            (_make_frame(cmd=0x21, sub=0x02, data=b"\x01"), "global.tx_state.rit_tx"),
+        )
+
+        for frame, _path in frames_and_paths:
+            radio._civ_runtime._update_state_cache_from_frame(frame)
+
+        fields = tuple(
+            radio._state_store.snapshot().field(path)
+            for _frame, path in frames_and_paths
+        )
+        # MOR-2615: rit_on/rit_tx are class-resolved SETTING fields with no
+        # TTL of their own, so they stamp None and never expire by time;
+        # active (CONTROL) and rit_freq (PANEL) keep finite TTLs. The idle
+        # horizon below covers only the expiring pair.
+        expiring = tuple(field for field in fields if field.max_age is not None)
+        assert {str(field.path) for field in expiring} == {
+            "global.slow_state.active",
+            "global.operator_controls.rit_freq",
+        }
+        max_age = max(field.max_age or 0.0 for field in expiring)
+
+        assert all(field.freshness is FreshnessState.FRESH for field in fields)
+
+        stale = radio._state_store.mark_stale_due(now=time.monotonic() + max_age + 1.0)
+
+        expected_paths = {str(field.path) for field in expiring}
+        assert {
+            str(transition.path) for transition in stale.freshness
+        } >= expected_paths
+        assert {
+            str(request.path) for request in stale.reconciliation_requests
+        } >= expected_paths
+        assert {
+            str(field.path)
+            for field in radio._state_store.snapshot().fields
+            if field.freshness is FreshnessState.FRESH
+        } >= {
+            "global.tx_state.rit_on",
+            "global.tx_state.rit_tx",
+        }
+    finally:
+        radio._connected = False
+
+
+def test_update_state_cache_records_scheduler_result_for_matching_pending_request(
+    radio: IcomRadio,
+) -> None:
+    class _SpyScheduler(AcquisitionScheduler):
+        def __init__(self, *, profile: RadioAcquisitionProfile) -> None:
+            super().__init__(profile=profile)
+            self.recorded_count = 0
+
+        def record_acquisition_result(self, request, change_set):  # type: ignore[no-untyped-def]
+            self.recorded_count += 1
+            return super().record_acquisition_result(request, change_set)
+
+    path = FieldPath.active("main", "freq_mode", "freq_hz")
+    scheduler = _SpyScheduler(profile=_acquisition_profile(path))
+    scheduler.due_requests(now=0.0)
+    pending = scheduler.pending_requests()
+    assert len(pending) == 1
+    scheduler.record_dispatch(
+        pending[0].id, paths=pending[0].paths, now=time.monotonic()
+    )
+    radio._acquisition_scheduler = scheduler
+
+    radio._civ_runtime._update_state_cache_from_frame(
+        _make_frame(cmd=0x03, data=bcd_encode(14_074_000))
+    )
+
+    assert scheduler.recorded_count == 1
+    assert scheduler.pending_requests() == ()
+
+
+def test_a_frame_decoded_before_the_request_was_dispatched_does_not_credit_it(
+    radio: IcomRadio,
+) -> None:
+    """Crediting is anchored to the request's own dispatch.
+
+    A pending request the drain has not sent is completed by no frame; once
+    it is sent, a frame decoded after that send completes it.
+    """
+
+    path = FieldPath.active("main", "freq_mode", "freq_hz")
+    scheduler = AcquisitionScheduler(profile=_acquisition_profile(path))
+    scheduler.due_requests(now=0.0)
+    pending = scheduler.pending_requests()
+    assert len(pending) == 1
+    radio._acquisition_scheduler = scheduler
+
+    radio._civ_runtime._update_state_cache_from_frame(
+        _make_frame(cmd=0x03, data=bcd_encode(14_074_000))
+    )
+
+    assert scheduler.pending_requests() == pending
+
+    scheduler.record_dispatch(
+        pending[0].id, paths=pending[0].paths, now=time.monotonic()
+    )
+    radio._civ_runtime._update_state_cache_from_frame(
+        _make_frame(cmd=0x03, data=bcd_encode(14_074_000))
+    )
+
+    assert scheduler.pending_requests() == ()
+
+
+def test_reconciliation_answer_landing_after_dekey_still_credits_pending_request(
+    radio: IcomRadio,
+) -> None:
+    """MOR-1533 (1): the dispatch gate must not blind the credit path.
+
+    A ``tx_only`` RECONCILIATION request queued while TX was active (the
+    scheduler's cached ``tx_active`` from a ``due_requests`` drain) whose
+    answer lands after de-key must still be credited by
+    ``_record_scheduler_result_for_observation``. MOR-1531 gated
+    RECONCILIATION/tx_only entries out of ``pending_requests()`` while
+    ``tx_active`` is False; since ``_civ_rx.py`` used that same method to
+    look up the request an incoming answer completes, the answer became
+    invisible to the credit loop once TX ended and the request lingered in
+    ``_requests_by_key`` forever. The fix splits dispatch
+    (``dispatchable_requests()``, filtered) from lookup
+    (``pending_requests()``, unfiltered).
+    """
+
+    swr = FieldPath.global_("meters", "swr")
+    policy = AcquisitionPolicy(
+        cadence_seconds=None,
+        freshness_ttl_seconds=2.0,
+        tx_only=True,
+    )
+    scheduler = AcquisitionScheduler(profile=_acquisition_profile(swr, policy=policy))
+    radio._acquisition_scheduler = scheduler
+
+    # Drain cycle while TX active: caches tx_active=True, then a
+    # stale-reconciliation hint (as StateFreshnessService would emit it) is
+    # queued and sent to the radio.
+    scheduler.due_requests(now=100.0, tx_active=True)
+    result = scheduler.ensure_fresh(
+        swr,
+        max_age=2.0,
+        priority=AcquisitionPriority.RECONCILIATION,
+        reason="stale",
+    )
+    assert result.status is AcquisitionStatus.QUEUED
+    assert result.request is not None
+    scheduler.record_dispatch(
+        result.request.id, paths=result.request.paths, now=time.monotonic()
+    )
+
+    # De-key before the answer arrives: the next drain caches tx_active=False.
+    scheduler.due_requests(now=100.5, tx_active=False)
+
+    # The radio's answer to the still-outstanding request lands now, after
+    # de-key.
+    radio._civ_runtime._apply_state_store_observations(
+        _make_frame(cmd=0x15, sub=0x12, data=_bcd2(48))
+    )
+
+    # pending_requests() is unfiltered by design (MOR-1533), so it already
+    # proves crediting on its own; re-affirming tx_active=True here just
+    # confirms nothing resurfaces once the tx_only gate reopens either.
+    scheduler.due_requests(now=101.0, tx_active=True)
+    assert scheduler.pending_requests() == (), (
+        "answer landing after de-key must have credited the outstanding "
+        "tx_only reconciliation request -- instead it lingered in "
+        "_requests_by_key and resurfaced once TX resumed"
+    )
+
+
+@pytest.mark.parametrize(  # type: ignore[untyped-decorator]
+    ("path", "cmd", "receiver", "payload", "stored_path", "expected"),
+    [
+        (
+            FieldPath.active("main", "freq_mode", "freq_hz"),
+            0x25,
+            0x00,
+            bcd_encode(14_074_000),
+            "receiver.0.active.freq_mode.freq_hz",
+            14_074_000,
+        ),
+        (
+            FieldPath.active("sub", "freq_mode", "freq_hz"),
+            0x25,
+            0x01,
+            bcd_encode(7_100_000),
+            "receiver.1.active.freq_mode.freq_hz",
+            7_100_000,
+        ),
+        (
+            FieldPath.active("main", "freq_mode", "mode"),
+            0x26,
+            0x00,
+            bytes([Mode.USB.value, 0x00, 1]),
+            "receiver.0.active.freq_mode.mode",
+            "USB",
+        ),
+        (
+            FieldPath.active("sub", "freq_mode", "mode"),
+            0x26,
+            0x01,
+            bytes([Mode.CW.value, 0x00, 3]),
+            "receiver.1.active.freq_mode.mode",
+            "CW",
+        ),
+    ],
+)
+async def test_scheduler_active_freq_mode_request_completes_from_civ_rx_loop(
+    radio: IcomRadio,
+    transport: MockTransport,
+    path: FieldPath,
+    cmd: int,
+    receiver: int,
+    payload: bytes,
+    stored_path: str,
+    expected: object,
+) -> None:
+    scheduler = AcquisitionScheduler(profile=_acquisition_profile(path))
+    radio._acquisition_scheduler = scheduler
+    poller = RadioPoller(radio, CommandQueue(), radio_state=RadioState())
+
+    # MOR-2280: the cadence call left the poller for
+    # ``StateFreshnessService.tick``; the drain sends what it finds queued.
+    StateFreshnessService(
+        store=poller._state_store,  # noqa: SLF001
+        scheduler=scheduler,
+    ).tick()
+    await poller._send_query()  # noqa: SLF001
+
+    assert scheduler.pending_requests()[0].paths == (path,)
+
+    civ = build_civ_frame(
+        CONTROLLER_ADDR,
+        IC_7610_ADDR,
+        cmd,
+        data=bytes([receiver]) + payload,
+    )
+    transport.queue_response(_wrap_civ_in_udp(civ))
+
+    radio._civ_runtime.start_pump()
+    try:
+        for _ in range(20):
+            if scheduler.pending_requests() == ():
+                break
+            await asyncio.sleep(0.01)
+    finally:
+        await radio._civ_runtime.stop_pump()
+        radio._connected = False
+
+    assert scheduler.pending_requests() == ()
+    assert radio._state_store.snapshot().field(stored_path).value == expected
+
+
+@pytest.mark.asyncio  # type: ignore[untyped-decorator]
+async def test_post_write_readback_is_sent_after_the_ack_and_credited_by_its_answer(
+    radio: IcomRadio,
+) -> None:
+    """Owner ruling R39: the read-back's answer is the one it asked for.
+
+    The whole chain, through the real scheduler, the real drain and the real
+    CI-V receive path: the cadence poll's query goes out, a write is acked and
+    ``RadioPoller._request_post_write_readback`` runs, and the next drain pass
+    must put the same query on the wire a second time. Until then the
+    pre-write query's answer, decoded before that second send, must leave the
+    read-back pending.
+    """
+
+    path = FieldPath.active("main", "freq_mode", "freq_hz")
+    scheduler = AcquisitionScheduler(profile=_acquisition_profile(path))
+    radio._acquisition_scheduler = scheduler  # noqa: SLF001
+    sent: list[tuple[int, bytes]] = []
+
+    async def _record_send(cmd: int, **kwargs: Any) -> None:
+        sent.append((cmd, bytes(kwargs.get("data") or b"")))
+
+    radio.send_civ = _record_send  # type: ignore[method-assign,assignment]
+    poller = RadioPoller(radio, CommandQueue(), radio_state=RadioState())
+
+    StateFreshnessService(
+        store=poller._state_store,  # noqa: SLF001
+        scheduler=scheduler,
+    ).tick()
+    await poller._send_query()  # noqa: SLF001
+
+    assert len(sent) == 1
+    assert scheduler.pending_requests()[0].paths == (path,)
+
+    before_the_readback_send = time.monotonic()
+
+    poller._request_post_write_readback(  # noqa: SLF001
+        CommandIntent(
+            id="cmd-1",
+            name="set_freq",
+            params={"freq_hz": 14_074_000, "receiver": 0},
+            source="websocket",
+            target=path,
+            expected_observations=(path,),
+        )
+    )
+
+    await poller._send_query()  # noqa: SLF001
+
+    assert sent == [sent[0], sent[0]], (
+        "the drain must put the read-back's query on the wire after the ack; "
+        "instead the pass sent nothing new"
+    )
+
+    # The pre-write query's answer, decoded before the read-back's own query
+    # went out.
+    with patch(
+        "rigplane.runtime._civ_rx.time.monotonic",
+        return_value=before_the_readback_send,
+    ):
+        radio._civ_runtime._apply_state_store_observations(  # noqa: SLF001
+            _make_frame(cmd=0x25, data=b"\x00" + bcd_encode(14_000_000))
+        )
+
+    assert scheduler.pending_requests() != (), (
+        "a reply decoded before the read-back's own query went out must not complete it"
+    )
+
+    radio._civ_runtime._apply_state_store_observations(  # noqa: SLF001
+        _make_frame(cmd=0x25, data=b"\x00" + bcd_encode(14_074_000))
+    )
+
+    assert scheduler.pending_requests() == ()
+    assert (
+        radio._state_store.snapshot()  # noqa: SLF001
+        .field("receiver.0.active.freq_mode.freq_hz")
+        .value
+        == 14_074_000
+    )
+
+
+def test_meter_coalescing_applies_latest_due_sample_and_records_diagnostics(
+    radio: IcomRadio,
+) -> None:
+    path = FieldPath.receiver("main", "meters", "s_meter")
+    policy = AcquisitionPolicy(
+        cadence_seconds=1.0,
+        freshness_ttl_seconds=4.0,
+        meter_coalescing=MeterCoalescingPolicy(window_seconds=0.2, max_samples=2),
+    )
+    radio._acquisition_scheduler = AcquisitionScheduler(
+        profile=_acquisition_profile(path, policy=policy)
+    )
+    radio._meter_observation_coalescer = MeterObservationCoalescer()
+    radio._state_diagnostics = StateDiagnosticsRecorder(enabled=True)
+    events: list[tuple[str, dict[str, object]]] = []
+    radio._on_state_change = lambda name, data: events.append((name, data))
+
+    # MOR-334 regression (s_meter stuck at 0): seed-then-coalesce. The FIRST
+    # sample for a path is applied immediately (the store was empty, so holding
+    # it in the coalescer would leave the public projection at the sMeter=0
+    # default until a later sample/flush). Subsequent samples coalesce.
+    with patch(
+        "rigplane.runtime._civ_rx.time.monotonic",
+        return_value=100.0,
+    ):
+        radio._civ_runtime._apply_state_store_observations(
+            _make_frame(cmd=0x15, sub=0x02, data=_bcd2(111))
+        )
+
+    # First sample applied immediately (calibrated raw 111 -> -8).
+    assert radio._state_store.snapshot().field("receiver.0.meters.s_meter").value == -8
+
+    with patch(
+        "rigplane.runtime._civ_rx.time.monotonic",
+        return_value=100.1,
+    ):
+        radio._civ_runtime._apply_state_store_observations(
+            _make_frame(cmd=0x15, sub=0x02, data=_bcd2(222))
+        )
+
+    # Second sample coalesced (store still holds the seeded value until flush).
+    assert radio._state_store.snapshot().field("receiver.0.meters.s_meter").value == -8
+
+    radio._civ_runtime.flush_due_meter_observations(now=100.3)
+
+    # After the window elapses the coalesced latest sample lands (raw 222 -> 31).
+    assert radio._state_store.snapshot().field("receiver.0.meters.s_meter").value == 31
+    # MOR-4211: the second answer, 0.1 s later, does not re-stamp power_on.
+    assert events == [
+        (
+            "state_store_changed",
+            {"coalesced": False, "paths": ["receiver.0.meters.s_meter"]},
+        ),
+        (
+            "state_store_changed",
+            {"coalesced": False, "paths": ["global.tx_state.power_on"]},
+        ),
+        (
+            "state_store_changed",
+            {"coalesced": True, "paths": ["receiver.0.meters.s_meter"]},
+        ),
+    ]
+    meter_events = [
+        event
+        for event in radio._state_diagnostics.events()
+        if event.kind == "meter_coalescing"
+    ]
+    assert meter_events[-1].details == {
+        "pendingSampleCount": 0,
+        "pendingPaths": [],
+        "droppedSampleCount": 0,
+        "coalescedSampleCount": 0,
+        "nextFlushMonotonic": None,
+    }
+
+
+def test_first_coalesced_meter_sample_seeds_store_immediately(
+    radio: IcomRadio,
+) -> None:
+    """MOR-334 regression (s_meter stuck at 0): the first meter sample for an
+    unseen path is applied immediately rather than held in the coalescer.
+
+    The coalescer only flushes a sample once it has aged past its window, and
+    the post-record flush runs with ``now`` equal to the sample's own
+    timestamp, so the very first sample for a path would otherwise never reach
+    the store until a *later* sample arrived. Until then the public projection
+    falls back to the RadioState ``sMeter=0`` default — the reported stuck-at-0.
+    """
+    path = FieldPath.receiver("main", "meters", "s_meter")
+    policy = AcquisitionPolicy(
+        cadence_seconds=1.0,
+        freshness_ttl_seconds=4.0,
+        meter_coalescing=MeterCoalescingPolicy(window_seconds=0.2),
+    )
+    radio._acquisition_scheduler = AcquisitionScheduler(
+        profile=_acquisition_profile(path, policy=policy)
+    )
+    radio._meter_observation_coalescer = MeterObservationCoalescer()
+
+    # A single sample, no later sample and no explicit flush: the value must
+    # already be in the store (calibrated raw 150 -> 6).
+    radio._civ_runtime._apply_state_store_observations(
+        _make_frame(cmd=0x15, sub=0x02, data=_bcd2(150))
+    )
+
+    assert radio._state_store.snapshot().field("receiver.0.meters.s_meter").value == 6
+    # The seed went straight to the store, not the coalescer.
+    assert radio._meter_observation_coalescer._pending == []  # noqa: SLF001
+
+
+def test_stale_meter_sample_applies_immediately_and_reaches_projection(
+    radio: IcomRadio,
+) -> None:
+    """MOR-334 regression (s_meter stuck low / "S0 with signal present").
+
+    A live meter arriving ~1/s with a short freshness TTL decays to ``stale``
+    between arrivals. The seed-only fix held every post-seed sample in the
+    coalescer behind that stale reading, so the public projection (the thing the
+    WS broadcasts) lagged 1-2 samples and sat at the floor. After the fix, a
+    sample whose stored value has already decayed past freshness is applied
+    immediately and the *projected* payload — not just the store — carries it.
+    """
+    from rigplane.web.runtime_helpers import build_public_state_payload_from_snapshot
+
+    path = FieldPath.receiver("main", "meters", "s_meter")
+    # IC-7610 streaming-meter shape: fast cadence with a short freshness TTL
+    # (0.8s). Frames below arrive 1s apart, so the value decays to stale between
+    # them.
+    policy = AcquisitionPolicy(
+        cadence_seconds=0.2,
+        freshness_ttl_seconds=0.8,
+        meter_coalescing=MeterCoalescingPolicy(window_seconds=0.2),
+    )
+    radio._acquisition_scheduler = AcquisitionScheduler(
+        profile=_acquisition_profile(path, policy=policy)
+    )
+    radio._meter_observation_coalescer = MeterObservationCoalescer()
+
+    stored_path = "receiver.0.meters.s_meter"
+
+    # First sample seeds (calibrated raw 0 -> -54 = S0 floor).
+    with patch("rigplane.runtime._civ_rx.time.monotonic", return_value=100.0):
+        radio._civ_runtime._apply_state_store_observations(
+            _make_frame(cmd=0x15, sub=0x02, data=_bcd2(0))
+        )
+    assert radio._state_store.snapshot().field(stored_path).value == -54
+
+    # Second sample arrives ~1s later — the seeded value has decayed past the
+    # 0.8s TTL, so the live reading (calibrated raw 122 -> -4) must land in the
+    # store immediately rather than being held behind the stale floor.
+    with patch("rigplane.runtime._civ_rx.time.monotonic", return_value=101.0):
+        radio._civ_runtime._apply_state_store_observations(
+            _make_frame(cmd=0x15, sub=0x02, data=_bcd2(122))
+        )
+    stored = radio._state_store.snapshot().field(stored_path).value
+    assert stored != -54, "live meter must not stay stuck at the S0 floor"
+    assert stored == -4
+    # The coalescer is not holding the live sample.
+    assert radio._meter_observation_coalescer._pending == []  # noqa: SLF001
+
+    # The value survives all the way to the projected WS payload.
+    payload = build_public_state_payload_from_snapshot(
+        radio._state_store.snapshot(),
+        radio=None,
+        receiver_count=2,
+    )
+    assert payload["main"]["sMeter"] == -4
+
+
+def test_fresh_burst_meter_samples_still_coalesce(radio: IcomRadio) -> None:
+    """The stale-apply fix must not defeat burst coalescing: when the stored
+    value is still FRESH, rapid samples within the window coalesce as before.
+    """
+    path = FieldPath.receiver("main", "meters", "s_meter")
+    policy = AcquisitionPolicy(
+        cadence_seconds=1.0,
+        freshness_ttl_seconds=4.0,
+        meter_coalescing=MeterCoalescingPolicy(window_seconds=0.2),
+    )
+    radio._acquisition_scheduler = AcquisitionScheduler(
+        profile=_acquisition_profile(path, policy=policy)
+    )
+    radio._meter_observation_coalescer = MeterObservationCoalescer()
+    stored_path = "receiver.0.meters.s_meter"
+
+    # Seed (raw 111 -> -8).
+    with patch("rigplane.runtime._civ_rx.time.monotonic", return_value=200.0):
+        radio._civ_runtime._apply_state_store_observations(
+            _make_frame(cmd=0x15, sub=0x02, data=_bcd2(111))
+        )
+    assert radio._state_store.snapshot().field(stored_path).value == -8
+
+    # A second sample 0.05s later, still FRESH (TTL 4.0s) and within the 0.2s
+    # window — coalesced, so the store still holds the seeded value.
+    with patch("rigplane.runtime._civ_rx.time.monotonic", return_value=200.05):
+        radio._civ_runtime._apply_state_store_observations(
+            _make_frame(cmd=0x15, sub=0x02, data=_bcd2(222))
+        )
+    assert radio._state_store.snapshot().field(stored_path).value == -8
+    assert radio._meter_observation_coalescer._pending != []  # noqa: SLF001
+
+    # After the window elapses the coalesced latest sample lands (raw 222 -> 31).
+    radio._civ_runtime.flush_due_meter_observations(now=200.3)
+    assert radio._state_store.snapshot().field(stored_path).value == 31
+
+
+def test_meter_value_survives_freshness_window_between_live_arrivals(
+    radio: IcomRadio,
+) -> None:
+    """MOR-334 (s_meter stuck-low, 3rd attempt): the stale *window*, not apply.
+
+    The prior regression tests projected the payload immediately after applying a
+    sample — while the field is still FRESH — which is exactly the window the live
+    failure hides in. On real hardware the meter arrives ~1/s; if the freshness
+    TTL is SHORTER than that interval the field decays to ``stale`` between every
+    arrival, and a stale/last-known meter floors to S0 on the LCD layout
+    (``rx.sMeter ?? -54``). This test advances the clock PAST the inter-arrival
+    interval, runs the freshness-decay tick (the production
+    ``StateFreshnessService`` path), and asserts the projected WS payload the
+    frontend consumes still carries the real last-known value — not the floor.
+
+    Fail-without: with the meter TTL at the old 0.6s the field is ``stale`` 0.9s
+    after the sample and the public S-meter sits behind a stale reading. Pass-
+    with: the TTL exceeds the live cadence, so a streaming meter stays FRESH and
+    the real value reaches the UI.
+    """
+    from rigplane.web.runtime_helpers import build_public_state_payload_from_snapshot
+
+    path = FieldPath.receiver("main", "meters", "s_meter")
+    # Production cadence: fast nominal cadence, short coalescing window, and the
+    # freshness TTL the shipped IC-7610 CI-V path assigns to s_meter — the
+    # ``field_policies`` entry in ``rigs/ic7610.toml``, which is the fixture
+    # radio's own profile. The observation carries that TTL into the store, so
+    # the test asserts against the real shipped value rather than a synthetic one.
+    ic7610_acquisition = resolve_radio_profile(model="IC-7610").state_acquisition
+    assert ic7610_acquisition is not None
+    s_meter_ttl = ic7610_acquisition.field_policies[path].freshness_ttl_seconds
+    assert s_meter_ttl is not None
+    policy = AcquisitionPolicy(
+        cadence_seconds=0.2,
+        freshness_ttl_seconds=4.0,
+        meter_coalescing=MeterCoalescingPolicy(window_seconds=0.2),
+    )
+    radio._acquisition_scheduler = AcquisitionScheduler(
+        profile=_acquisition_profile(path, policy=policy)
+    )
+    radio._meter_observation_coalescer = MeterObservationCoalescer()
+    stored_path = "receiver.0.meters.s_meter"
+
+    # A real mid-scale sample (raw 122 -> calibrated -4 dB-rel-S9 ≈ S8) arrives.
+    with patch("rigplane.runtime._civ_rx.time.monotonic", return_value=300.0):
+        radio._civ_runtime._apply_state_store_observations(
+            _make_frame(cmd=0x15, sub=0x02, data=_bcd2(122))
+        )
+    assert radio._state_store.snapshot().field(stored_path).value == -4
+
+    # The next live frame is ~1s away. Drive the freshness-decay tick (the
+    # production StateFreshnessService loop) to the moment just before that next
+    # arrival — i.e. one full inter-arrival interval after the sample. This is the
+    # exact window the old 0.6s TTL fell into (0.9s age > 0.6s TTL -> STALE); the
+    # prior sim never advanced the clock here, so it missed the failure.
+    inter_arrival = 1.0
+    decay_at = 300.0 + inter_arrival - 0.1  # 0.9s after the sample
+    radio._state_store.mark_stale_due(now=decay_at)
+
+    field = radio._state_store.snapshot().field(stored_path)
+    # The shipped TTL must exceed the ~1s live inter-arrival interval so the field
+    # stays FRESH between arrivals (the actual fix).
+    assert s_meter_ttl > 1.0, (
+        "s_meter freshness TTL must exceed the ~1/s live inter-arrival interval "
+        "or the field decays to stale (S0 floor) between every frame"
+    )
+    assert field.freshness is FreshnessState.FRESH
+
+    # The real last-known value reaches the projected WS payload — never the
+    # floor — across the inter-arrival window.
+    payload = build_public_state_payload_from_snapshot(
+        radio._state_store.snapshot(),
+        radio=None,
+        receiver_count=2,
+    )
+    assert payload["main"]["sMeter"] == -4
+    assert payload["main"]["sMeter"] != -54  # the calibrated S0 floor
+
+
+@pytest.mark.parametrize(
+    ("sub", "name"),
+    [
+        (0x00, "tone_freq"),
+        (0x01, "tsql_freq"),
+    ],
+)
+def test_tone_and_tsql_freq_observations_fall_back_to_the_table(
+    radio: IcomRadio, sub: int, name: str
+) -> None:
+    """The table is what a path with no declared field policy still gets.
+
+    ``rigs/ic9700.toml`` has no ``field_policies`` entry for these two paths
+    (its MOR-2540 entries cover only the four TX meters), so they reach
+    ``_observation``'s
+    ``_OBSERVATION_MAX_AGE_SECONDS`` fallback rather than a profile TTL —
+    and ``state_store.py: StateStore.mark_stale_due`` skips any entry whose
+    ``max_age`` is ``None``, so without the fallback the field would report
+    ``FRESH`` for the lifetime of the process.
+
+    The profile default TTL is deliberately NOT the fallback: it is 8.0 s on
+    this profile, which the assertion below would reject.
+    """
+
+    from rigplane.runtime._civ_rx import _OBSERVATION_MAX_AGE_SECONDS
+
+    profile = resolve_radio_profile(model="IC-9700")
+    radio._profile = profile  # noqa: SLF001
+    assert profile.state_acquisition is not None
+    stored = FieldPath.receiver("0", "operator_controls", name)
+    assert (
+        FieldPath.receiver("main", "operator_controls", name)
+        not in profile.state_acquisition.field_policies
+    )
+    declared_ttl = _OBSERVATION_MAX_AGE_SECONDS[("receiver", "operator_controls", name)]
+    assert (
+        declared_ttl != profile.state_acquisition.default_policy.freshness_ttl_seconds
+    )
+
+    observed_at = 500.0
+    with patch("rigplane.runtime._civ_rx.time.monotonic", return_value=observed_at):
+        radio._civ_runtime._apply_state_store_observations(
+            _make_frame(cmd=0x1B, sub=sub, data=_encode_tone_freq(8850), receiver=0x00)
+        )
+    assert radio._state_store.snapshot().field(str(stored)).value == 8850
+    assert radio._state_store.snapshot().field(str(stored)).max_age == declared_ttl
+
+    # Inside the declared TTL the value is still the radio's truth.
+    radio._state_store.mark_stale_due(now=observed_at + declared_ttl - 0.1)
+    assert radio._state_store.snapshot().field(str(stored)).freshness is (
+        FreshnessState.FRESH
+    )
+
+    # Past it, the freshness driver must be able to retire the value and ask
+    # for it again.
+    delta = radio._state_store.mark_stale_due(now=observed_at + declared_ttl + 0.1)
+    assert radio._state_store.snapshot().field(str(stored)).freshness is (
+        FreshnessState.STALE
+    )
+    assert [t.path for t in delta.freshness] == [stored]
+    assert [(r.path, r.max_age) for r in delta.reconciliation_requests] == [
+        (stored, declared_ttl)
+    ]
+
+
+def test_s_meter_stamps_its_meter_class_ttl_with_no_field_policies(
+    radio: IcomRadio,
+) -> None:
+    """A streaming meter with no own entry resolves through its class.
+
+    ``rigs/ic705.toml`` has no ``field_policies`` entry for ``s_meter`` but
+    polls it, so MOR-2576 resolves the stamp through ``policy_for``: the
+    meter class TTL (1.1 s against a 0.3 s class cadence). The default
+    policy is still NOT the answer — ``default_freshness_ttl_seconds`` is
+    8.0 s, which would keep a stopped S-meter reporting FRESH far past the
+    window MOR-334 settled on.
+    """
+
+    radio._profile = resolve_radio_profile(model="IC-705")  # noqa: SLF001
+    stored = FieldPath.receiver("0", "meters", "s_meter")
+    acquisition = radio._profile.state_acquisition
+    assert acquisition is not None
+    policy = acquisition.policy_for(FieldPath.receiver("main", "meters", "s_meter"))
+    assert policy.cadence_seconds == 0.3
+    assert policy.freshness_ttl_seconds == 1.1
+    assert (
+        policy.freshness_ttl_seconds != acquisition.default_policy.freshness_ttl_seconds
+    )
+
+    with patch("rigplane.runtime._civ_rx.time.monotonic", return_value=700.0):
+        radio._civ_runtime._apply_state_store_observations(
+            _make_frame(cmd=0x15, sub=0x02, data=_bcd2(122))
+        )
+    assert radio._state_store.snapshot().field(str(stored)).max_age == (
+        policy.freshness_ttl_seconds
+    )
+
+
+# Four IC-7300 fields under the owner's ruling R41: a field the operator has
+# not touched must not turn "stale" on a healthy link. ``pbt_inner`` and
+# ``filter_width`` are cadence-polled, so they keep their policy's finite
+# TTL; ``rit_on`` and ``tone_freq`` are on-demand and ``rigs/ic7300.toml``
+# gives them ``freshness_ttl_seconds = "never"``.
+_R41_IC7300_POLLED = (
+    "receiver.0.operator_controls.pbt_inner",
+    "receiver.0.active.freq_mode.filter_width",
+)
+_R41_IC7300_ON_DEMAND = (
+    "global.tx_state.rit_on",
+    "receiver.0.operator_controls.tone_freq",
+)
+
+
+def test_ic7300_profile_supplies_the_civ_observation_max_age(
+    radio: IcomRadio,
+) -> None:
+    """R41: the CI-V ingress stamps the profile's TTL, not the table's.
+
+    ``rit_on`` and ``tone_freq`` took 10.0 s and 25.0 s from
+    ``_OBSERVATION_MAX_AGE_SECONDS`` before this: a finite TTL on two fields
+    no cadence read renews, so an idle link could retire them.
+    """
+
+    radio._profile = resolve_radio_profile(model="IC-7300")  # noqa: SLF001
+    observed_at = 500.0
+    frames = (
+        _make_frame(cmd=0x14, sub=0x07, data=_bcd2(128), receiver=0x00),
+        _make_frame(cmd=0x21, sub=0x01, data=b"\x01"),
+        _make_frame(cmd=0x1B, sub=0x00, data=_encode_tone_freq(8850), receiver=0x00),
+        _make_frame(cmd=0x1A, sub=0x03, data=_bcd2(31), receiver=0x00),
+    )
+    with patch("rigplane.runtime._civ_rx.time.monotonic", return_value=observed_at):
+        for frame in frames:
+            radio._civ_runtime._apply_state_store_observations(frame)
+
+    snapshot = radio._state_store.snapshot()
+    for path in _R41_IC7300_POLLED:
+        expected = _expected_observation_max_age(radio, path)
+        assert expected is not None, path
+        assert snapshot.field(path).max_age == expected, path
+    for path in _R41_IC7300_ON_DEMAND:
+        assert snapshot.field(path).max_age is None, path
+
+    # 60 s idle: nothing re-reads the two on-demand fields, and nothing may
+    # retire them either. (The two polled ones do decay here — no cadence read
+    # renewed them; ``..._polled_pbt_stays_fresh_across_its_own_cadence``
+    # covers the answered case.)
+    on_demand = list(_R41_IC7300_ON_DEMAND)
+    delta = radio._state_store.mark_stale_due(now=observed_at + 60.0)
+    assert set(on_demand).isdisjoint(str(t.path) for t in delta.freshness)
+    for path in on_demand:
+        assert radio._state_store.snapshot().field(path).freshness is (
+            FreshnessState.FRESH
+        ), path
+
+
+def test_ic7300_polled_pbt_stays_fresh_across_its_own_cadence(
+    radio: IcomRadio,
+) -> None:
+    """``pbt_inner`` keeps a TTL because a cadence read renews it.
+
+    Its policy TTL is at least twice its policy cadence, so a link that
+    answers every cadence read leaves the field FRESH throughout — the
+    field decays only when the reads stop.
+    """
+
+    profile = resolve_radio_profile(model="IC-7300")
+    radio._profile = profile  # noqa: SLF001
+    assert profile.state_acquisition is not None
+    policy = profile.state_acquisition.policy_for(
+        FieldPath.receiver("main", "operator_controls", "pbt_inner")
+    )
+    assert policy.freshness_ttl_seconds >= 2 * policy.cadence_seconds
+    stored = "receiver.0.operator_controls.pbt_inner"
+
+    start = 500.0
+    for step in range(13):  # 13 reads, one per policy cadence
+        now = start + step * policy.cadence_seconds
+        with patch("rigplane.runtime._civ_rx.time.monotonic", return_value=now):
+            radio._civ_runtime._apply_state_store_observations(
+                _make_frame(cmd=0x14, sub=0x07, data=_bcd2(128), receiver=0x00)
+            )
+        radio._state_store.mark_stale_due(now=now)
+        assert radio._state_store.snapshot().field(stored).freshness is (
+            FreshnessState.FRESH
+        )
+
+    # Stop answering and it does expire — the TTL is real, not disabled.
+    radio._state_store.mark_stale_due(
+        now=start + 12 * policy.cadence_seconds + policy.freshness_ttl_seconds + 0.1
+    )
+    assert radio._state_store.snapshot().field(stored).freshness is (
+        FreshnessState.STALE
+    )
+
+
+def test_ptt_observation_max_age_matches_the_ic7300_profile_policy(
+    radio: IcomRadio,
+) -> None:
+    """``rigs/ic7300.toml`` has no ``field_policies`` entry for ``ptt``, so the
+    CI-V ingress stamps its acquisition-class TTL, which clears the class
+    cadence by 2x or more.
+    """
+
+    profile = resolve_radio_profile(model="IC-7300")
+    radio._profile = profile  # noqa: SLF001
+    assert profile.state_acquisition is not None
+    ptt = FieldPath.global_("tx_state", "ptt")
+    assert ptt not in profile.state_acquisition.field_policies
+    policy = profile.state_acquisition.policy_for(ptt)
+    assert policy == acquisition_policy_for_class(acquisition_class_for_path(ptt))
+    assert policy.freshness_ttl_seconds >= 2 * policy.cadence_seconds
+
+    with patch("rigplane.runtime._civ_rx.time.monotonic", return_value=800.0):
+        radio._civ_runtime._apply_state_store_observations(
+            _make_frame(cmd=0x1C, sub=0x00, data=b"\x00")
+        )
+    field = radio._state_store.snapshot().field("global.tx_state.ptt")
+    assert field.max_age == policy.freshness_ttl_seconds
+
+
+@pytest.mark.parametrize(
+    ("receiver", "stored"),
+    [
+        (0x00, "receiver.0.operator_controls.pbt_inner"),
+        (0x01, "receiver.1.operator_controls.pbt_inner"),
+    ],
+)
+def test_ic7610_pbt_takes_the_profile_ttl_including_the_sub_receiver(
+    radio: IcomRadio, receiver: int, stored: str
+) -> None:
+    """IC-7610's profile TTL, not the table's — for both receivers.
+
+    ``rigs/ic7610.toml`` has no ``field_policies`` entry for
+    ``receiver.main``/``receiver.sub`` ``pbt_inner``, so ``policy_for``
+    resolves it to its acquisition-class TTL, which differs from the
+    table's entry for the same (scope, family, name) (asserted below).  The
+    profile spells the receiver ``main``/``sub`` and the CI-V ingress spells
+    it ``0``/``1``, so neither case lands without
+    ``_profile_path_for_observation``'s alias resolution.
+    """
+
+    from rigplane.runtime._civ_rx import _OBSERVATION_MAX_AGE_SECONDS
+
+    profile = resolve_radio_profile(model="IC-7610")
+    radio._profile = profile  # noqa: SLF001
+    assert profile.state_acquisition is not None
+    path = FieldPath.receiver(
+        "main" if receiver == 0x00 else "sub", "operator_controls", "pbt_inner"
+    )
+    assert path not in profile.state_acquisition.field_policies
+    policy = profile.state_acquisition.policy_for(path)
+    assert policy.freshness_ttl_seconds is not None
+    table_ttl = _OBSERVATION_MAX_AGE_SECONDS[
+        ("receiver", "operator_controls", "pbt_inner")
+    ]
+    assert table_ttl == 10.0
+    assert policy.freshness_ttl_seconds != table_ttl
+
+    observed_at = 900.0
+    with patch("rigplane.runtime._civ_rx.time.monotonic", return_value=observed_at):
+        radio._civ_runtime._apply_state_store_observations(
+            _make_frame(cmd=0x14, sub=0x07, data=_bcd2(128), receiver=receiver)
+        )
+    field = radio._state_store.snapshot().field(stored)
+    assert field.max_age == policy.freshness_ttl_seconds
+
+    # Expiry still works where it is cadence-backed, and on the profile's
+    # schedule rather than the table's.
+    radio._state_store.mark_stale_due(
+        now=observed_at + policy.freshness_ttl_seconds + 0.1
+    )
+    assert radio._state_store.snapshot().field(stored).freshness is (
+        FreshnessState.STALE
+    )
+
+
+def test_same_value_coalesced_meter_flush_completes_scheduler_request(
+    radio: IcomRadio,
+) -> None:
+    path = FieldPath.receiver("main", "meters", "s_meter")
+    stored_path = FieldPath.receiver("0", "meters", "s_meter")
+    policy = AcquisitionPolicy(
+        cadence_seconds=1.0,
+        freshness_ttl_seconds=4.0,
+        meter_coalescing=MeterCoalescingPolicy(window_seconds=0.2),
+    )
+    radio._state_store.apply(
+        radio._civ_runtime._observation(
+            stored_path,
+            -8,
+            frame=_make_frame(cmd=0x15, sub=0x02, data=_bcd2(111)),
+            quality=("confirmed", "calibrated"),
+        )
+    )
+    scheduler = AcquisitionScheduler(profile=_acquisition_profile(path, policy=policy))
+    scheduler.due_requests(now=100.0)
+    pending = scheduler.pending_requests()
+    assert len(pending) == 1
+    scheduler.record_dispatch(pending[0].id, paths=pending[0].paths, now=100.0)
+    radio._acquisition_scheduler = scheduler
+    radio._meter_observation_coalescer = MeterObservationCoalescer()
+    radio._state_diagnostics = StateDiagnosticsRecorder(enabled=True)
+
+    with patch("rigplane.runtime._civ_rx.time.monotonic", return_value=100.0):
+        radio._civ_runtime._apply_state_store_observations(
+            _make_frame(cmd=0x15, sub=0x02, data=_bcd2(111))
+        )
+    changeset = radio._civ_runtime.flush_due_meter_observations(now=100.2)
+
+    assert changeset is not None
+    assert changeset.changes == ()
+    assert scheduler.pending_requests() == ()
+    assert (
+        scheduler.diagnostics()["cadenceByPath"][str(path)]["nextDueMonotonic"] == 101.0
+    )
+    assert any(
+        event.kind == "acquisition_result"
+        and event.details["paths"] == [str(path)]
+        and event.details["changed"] is False
+        for event in radio._state_diagnostics.events()
+    )
+
+
+def test_same_value_coalesced_meter_flush_notifies_state_store_changed(
+    radio: IcomRadio,
+) -> None:
+    path = FieldPath.receiver("main", "meters", "s_meter")
+    policy = AcquisitionPolicy(
+        cadence_seconds=1.0,
+        freshness_ttl_seconds=4.0,
+        meter_coalescing=MeterCoalescingPolicy(window_seconds=0.2),
+    )
+    radio._acquisition_scheduler = AcquisitionScheduler(
+        profile=_acquisition_profile(path, policy=policy)
+    )
+    radio._meter_observation_coalescer = MeterObservationCoalescer()
+    events: list[tuple[str, dict[str, object]]] = []
+    radio._on_state_change = lambda name, data: events.append((name, data))
+    frame = _make_frame(cmd=0x15, sub=0x02, data=_bcd2(111))
+    with patch("rigplane.runtime._civ_rx.time.monotonic", return_value=100.0):
+        radio._civ_runtime._apply_state_store_observations(frame)
+    before = radio._state_store.snapshot()
+    events.clear()
+
+    with patch("rigplane.runtime._civ_rx.time.monotonic", return_value=100.1):
+        radio._civ_runtime._apply_state_store_observations(frame)
+    assert not any(data["coalesced"] for _, data in events)
+    events.clear()
+    changeset = radio._civ_runtime.flush_due_meter_observations(now=100.3)
+
+    assert changeset is not None
+    assert changeset.changes == ()
+    assert changeset.observed_paths == (FieldPath.receiver("0", "meters", "s_meter"),)
+    assert radio._state_store.snapshot().state_revision == before.state_revision
+    assert events == [
+        (
+            "state_store_changed",
+            {"coalesced": True, "paths": ["receiver.0.meters.s_meter"]},
+        ),
+    ]
+
+
+def test_same_value_stale_refresh_notifies_state_store_changed(
+    radio: IcomRadio,
+) -> None:
+    path = FieldPath.receiver("main", "meters", "s_meter")
+    events: list[tuple[str, dict[str, object]]] = []
+    radio._on_state_change = lambda name, data: events.append((name, data))
+
+    radio._state_store.apply(
+        radio._civ_runtime._observation(
+            path,
+            111,
+            frame=_make_frame(cmd=0x15, sub=0x02, data=_bcd2(111)),
+        )
+    )
+    radio._state_store.mark_stale_due(now=time.monotonic() + 1.0)
+
+    radio._civ_runtime._apply_state_store_observations(
+        _make_frame(cmd=0x15, sub=0x02, data=_bcd2(111))
+    )
+
+    # The MOR-2544 power_on liveness inference applies alongside the meter
+    # refresh on this IC-7610 frame; the meter event still comes first.
+    assert events == [
+        (
+            "state_store_changed",
+            {"coalesced": False, "paths": ["receiver.0.meters.s_meter"]},
+        ),
+        (
+            "state_store_changed",
+            {"coalesced": False, "paths": ["global.tx_state.power_on"]},
+        ),
+    ]
+
+
+@pytest.mark.parametrize(  # type: ignore[untyped-decorator]
+    ("frame", "field_name", "initial_value"),
+    [
+        (_make_frame(cmd=0x03, data=bcd_encode(14_074_000)), "freq", 0),
+        (_make_frame(cmd=0x04, data=bytes([Mode.LSB.value, 2])), "mode", "USB"),
+        (_make_frame(cmd=0x1C, sub=0x00, data=b"\x01"), "ptt", False),
+        (_make_frame(cmd=0x18, data=b"\x01"), "powerstat", False),
+    ],
+)
+def test_update_state_cache_applies_state_store_before_legacy_cache_mirror(
+    radio: IcomRadio,
+    frame: CivFrame,
+    field_name: str,
+    initial_value: object,
+) -> None:
+    setattr(radio._state_cache, field_name, initial_value)
+    seen_legacy_values: list[object] = []
+    original_apply = type(radio._state_store).apply
+
+    def apply_and_record(store: object, observation: object) -> object:
+        seen_legacy_values.append(getattr(radio._state_cache, field_name))
+        return original_apply(store, observation)
+
+    with patch.object(
+        type(radio._state_store),
+        "apply",
+        autospec=True,
+        side_effect=apply_and_record,
+    ):
+        radio._civ_runtime._update_state_cache_from_frame(frame)
+
+    # The 0x04 mode frame now also emits a filter_num observation (MOR-478), so
+    # ``apply`` is invoked once per observation. Every apply must still observe
+    # the *pre-mirror* legacy value, proving the store projection precedes the
+    # legacy cache mutation regardless of how many observations a frame yields.
+    assert seen_legacy_values
+    assert all(value == initial_value for value in seen_legacy_values)
+
+
+def test_update_state_cache_applies_command_response_observation_once(
+    radio: IcomRadio,
+) -> None:
+    frame = _make_frame(cmd=0x03, data=bcd_encode(14_074_000))
+
+    radio._civ_runtime._update_state_cache_from_frame(frame)
+
+    snapshot = radio._state_store.snapshot()
+    delta = radio._state_store.delta_since(StateSnapshot.empty())
+
+    # The 0x03 frame yields exactly one freq observation; the MOR-2544
+    # power_on liveness inference (IC-7610: power control, no power-status
+    # query) adds exactly one more — each applied once. (``snapshot.fields``
+    # is path-sorted, so the old single-change order pin no longer applies.)
+    assert snapshot.state_revision == 2
+    assert snapshot.observation_seq == 2
+    assert [str(change.path) for change in delta.changes] == [
+        "receiver.0.active.freq_mode.freq_hz",
+        "global.tx_state.power_on",
+    ]
+    assert radio._radio_state.main.freq == 14_074_000
+
+
+@pytest.mark.parametrize(  # type: ignore[untyped-decorator]
+    ("frame", "expected_observation_seq"),
+    [
+        # Short 0x03 freq payload: the decoder skips it quietly (no
+        # exception, zero observations), so the frame still counts as a
+        # decoded answer and only the MOR-2544 power_on liveness inference
+        # lands (seq 1). The payloads below raise during decode, which
+        # aborts the whole frame before any observation — inference
+        # included (seq 0).
+        (_make_frame(cmd=0x03, data=b"\x12\x34"), 1),
+        (_make_frame(cmd=0x04, data=b""), 0),
+        (_make_frame(cmd=0x04, data=bytes([0xFF, 0x01])), 0),
+        (_make_frame(cmd=0x26, data=bytes([0x00, 0xFF])), 0),
+    ],
+)
+async def test_route_civ_frame_contains_observation_decode_failures(
+    radio: IcomRadio,
+    frame: CivFrame,
+    expected_observation_seq: int,
+) -> None:
+    radio._civ_request_tracker.resolve = MagicMock()
+    await radio._civ_runtime._route_civ_frame(
+        frame,
+        generation=radio._civ_epoch,
+    )
+    radio._civ_request_tracker.resolve.assert_called_once()
+    event = radio._civ_request_tracker.resolve.call_args.args[0]
+    assert event.frame == frame
+    # MockTransport carries the LAN ingress-order contract (MOR-4209).
+    radio._civ_request_tracker.resolve.assert_called_once_with(
+        event,
+        generation=radio._civ_epoch,
+        ordered_ingress=IcomCivTransport.ordered_ingress,
+    )
+    assert radio._state_store.snapshot().observation_seq == expected_observation_seq
+
+
+def test_update_state_cache_cmd07_d2_projects_active_receiver_and_legacy_mirror(
+    radio: IcomRadio,
+) -> None:
+    radio._radio_state = RadioState()
+
+    radio._civ_runtime._update_state_cache_from_frame(
+        _make_frame(cmd=0x07, data=bytes([0xD2, 0x01]))
+    )
+
+    assert radio._radio_state.active == "SUB"
+    field = radio._state_store.snapshot().field("global.slow_state.active")
+    assert field.value == "SUB"
+    assert field.source.source == "command_response"
+
+
+# ---------------------------------------------------------------------------
+# _update_radio_state_from_frame (lines 470-622)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture  # type: ignore[untyped-decorator]
+def radio_with_state(radio: IcomRadio) -> IcomRadio:
+    """Radio with RadioState set for testing _update_radio_state_from_frame."""
+    radio._radio_state = RadioState()
+    return radio
+
+
+def test_update_radio_state_freq_cmd03(radio_with_state: IcomRadio) -> None:
+    """cmd 0x03 updates receiver frequency (line 482-483)."""
+    rs = radio_with_state._radio_state
+    frame = _make_frame(cmd=0x03, data=bcd_encode(14_074_000))
+    radio_with_state._civ_runtime._update_radio_state_from_frame(frame)
+    assert rs.main.freq == 14_074_000
+
+
+def test_update_radio_state_freq_cmd00(radio_with_state: IcomRadio) -> None:
+    """cmd 0x00 (unsolicited transceive) also updates frequency (line 481)."""
+    rs = radio_with_state._radio_state
+    frame = _make_frame(cmd=0x00, data=bcd_encode(7_074_000))
+    radio_with_state._civ_runtime._update_radio_state_from_frame(frame)
+    assert rs.main.freq == 7_074_000
+
+
+def test_update_radio_state_mode_cmd04(radio_with_state: IcomRadio) -> None:
+    """cmd 0x04 updates receiver mode and filter (lines 485-490)."""
+    rs = radio_with_state._radio_state
+    frame = _make_frame(cmd=0x04, data=bytes([Mode.LSB.value, 2]))
+    radio_with_state._civ_runtime._update_radio_state_from_frame(frame)
+    assert rs.main.mode == "LSB"
+    assert rs.main.filter == 2
+
+
+def test_update_radio_state_mode_cmd01(radio_with_state: IcomRadio) -> None:
+    """cmd 0x01 (unsolicited) updates mode (line 485)."""
+    rs = radio_with_state._radio_state
+    frame = _make_frame(cmd=0x01, data=bytes([Mode.USB.value, 1]))
+    radio_with_state._civ_runtime._update_radio_state_from_frame(frame)
+    assert rs.main.mode == "USB"
+
+
+def test_update_radio_state_cmd25_rx_frequency(radio_with_state: IcomRadio) -> None:
+    """cmd 0x25 updates dual-receiver frequency (lines 493-502)."""
+    rs = radio_with_state._radio_state
+    # data[0]=0x00 (MAIN), data[1:6]=freq BCD
+    freq_bcd = bcd_encode(21_000_000)
+    frame = _make_frame(cmd=0x25, data=bytes([0x00]) + freq_bcd)
+    radio_with_state._civ_runtime._update_radio_state_from_frame(frame)
+    assert rs.main.freq == 21_000_000
+
+
+def test_update_radio_state_cmd25_sub_receiver(radio_with_state: IcomRadio) -> None:
+    """cmd 0x25 with receiver=0x01 updates SUB receiver (line 501)."""
+    rs = radio_with_state._radio_state
+    freq_bcd = bcd_encode(28_000_000)
+    frame = _make_frame(cmd=0x25, data=bytes([0x01]) + freq_bcd)
+    radio_with_state._civ_runtime._update_radio_state_from_frame(frame)
+    assert rs.sub.freq == 28_000_000
+
+
+def test_update_radio_state_cmd25_short_data_ignored(
+    radio_with_state: IcomRadio,
+) -> None:
+    """cmd 0x25 with short data is ignored (condition: len >= 6)."""
+    frame = _make_frame(cmd=0x25, data=bytes([0x00, 0x01, 0x02]))
+    radio_with_state._civ_runtime._update_radio_state_from_frame(
+        frame
+    )  # should not raise
+
+
+def test_update_radio_state_cmd26_rx_mode(radio_with_state: IcomRadio) -> None:
+    """cmd 0x26 updates dual-receiver mode (lines 504-518)."""
+    rs = radio_with_state._radio_state
+    frame = _make_frame(cmd=0x26, data=bytes([0x01, Mode.CW.value, 0x00, 3]))
+    radio_with_state._civ_runtime._update_radio_state_from_frame(frame)
+    assert rs.sub.mode == "CW"
+    assert rs.sub.filter == 3
+
+
+def test_update_radio_state_cmd26_minimal(radio_with_state: IcomRadio) -> None:
+    """cmd 0x26 with minimal 2-byte data."""
+    frame = _make_frame(cmd=0x26, data=bytes([0x00, Mode.FM.value]))
+    radio_with_state._civ_runtime._update_radio_state_from_frame(frame)
+    # No crash
+
+
+def test_update_radio_state_cmd26_with_data_mode(radio_with_state: IcomRadio) -> None:
+    """cmd 0x26 with data_mode byte (line 516)."""
+    rs = radio_with_state._radio_state
+    frame = _make_frame(cmd=0x26, data=bytes([0x00, Mode.USB.value, 0x03]))
+    radio_with_state._civ_runtime._update_radio_state_from_frame(frame)
+    assert rs.main.data_mode == 3
+
+
+def test_update_radio_state_cmd15_smeter(radio_with_state: IcomRadio) -> None:
+    """cmd 0x15 sub 0x02 updates s_meter on active receiver (lines 521-528)."""
+    rs = radio_with_state._radio_state
+    frame = _make_frame(cmd=0x15, sub=0x02, data=_bcd2(150))
+    radio_with_state._civ_runtime._update_radio_state_from_frame(frame)
+    assert rs.main.s_meter == 150
+
+
+def test_cmd15_smeter_observation_uses_calibrated_db_domain(
+    radio_with_state: IcomRadio,
+) -> None:
+    frame = _make_frame(cmd=0x15, sub=0x02, data=_bcd2(130))
+
+    radio_with_state._civ_runtime._update_state_cache_from_frame(frame)
+
+    field = radio_with_state._state_store.snapshot().field("receiver.0.meters.s_meter")
+    assert field.value == 0
+    assert field.quality == ("confirmed", "calibrated")
+
+
+def test_cmd15_smeter_without_calibration_table_marks_uncalibrated() -> None:
+    radio = IcomRadio("192.168.1.100", model="X6200")
+    radio._radio_state = RadioState()
+    frame = _make_frame(cmd=0x15, sub=0x02, data=_bcd2(42))
+
+    radio._civ_runtime._update_state_cache_from_frame(frame)
+
+    field = radio._state_store.snapshot().field("receiver.0.meters.s_meter")
+    assert field.value == 42
+    assert field.quality == ("confirmed", "uncalibrated")
+
+
+@pytest.mark.parametrize(  # type: ignore[untyped-decorator]
+    ("sub", "store_path", "raw", "expected_value", "expected_quality"),
+    [
+        (0x11, "global.meters.power", 143, 50.0, ("confirmed", "calibrated")),
+        (0x12, "global.meters.swr", 48, 1.5, ("confirmed", "calibrated")),
+        (0x13, "global.meters.alc", 60, 0.5, ("confirmed", "calibrated")),
+        # Calibrated through the MOR-2540 tables (IC-7610 CI-V Reference
+        # Guide (2021), command table): 42·15/130 ≈ 4.85 dB,
+        # 130·10/151 ≈ 8.61 V, 55·10/77 ≈ 7.14 A.
+        (0x14, "global.meters.comp", 42, 42 * 15 / 130, ("confirmed", "calibrated")),
+        (0x15, "global.meters.vd", 130, 130 * 10 / 151, ("confirmed", "calibrated")),
+        (0x16, "global.meters.id", 55, 55 * 10 / 77, ("confirmed", "calibrated")),
+    ],
+)
+def test_cmd15_tx_pa_meter_observations_emit_engineering_units(
+    radio_with_state: IcomRadio,
+    sub: int,
+    store_path: str,
+    raw: int,
+    expected_value: float,
+    expected_quality: tuple[str, ...],
+) -> None:
+    frame = _make_frame(cmd=0x15, sub=sub, data=_bcd2(raw))
+
+    radio_with_state._civ_runtime._update_state_cache_from_frame(frame)
+
+    field = radio_with_state._state_store.snapshot().field(store_path)
+    assert field.value == pytest.approx(expected_value)
+    assert field.quality == expected_quality
+
+
+def test_cmd15_tx_pa_meter_without_table_marks_uncalibrated() -> None:
+    radio = IcomRadio("192.168.1.100", model="X6200")
+    radio._radio_state = RadioState()
+    frame = _make_frame(cmd=0x15, sub=0x11, data=_bcd2(143))
+
+    radio._civ_runtime._update_state_cache_from_frame(frame)
+
+    field = radio._state_store.snapshot().field("global.meters.power")
+    assert field.value == 143
+    assert field.quality == ("confirmed", "uncalibrated")
+
+
+def test_update_radio_state_cmd14_af_level(radio_with_state: IcomRadio) -> None:
+    """cmd 0x14 sub 0x01 updates AF level (lines 531-541)."""
+    rs = radio_with_state._radio_state
+    frame = _make_frame(cmd=0x14, sub=0x01, data=_bcd2(200))
+    radio_with_state._civ_runtime._update_radio_state_from_frame(frame)
+    assert rs.main.af_level == 200
+
+
+def test_update_radio_state_cmd14_rf_gain(radio_with_state: IcomRadio) -> None:
+    """cmd 0x14 sub 0x02 RF gain is observation-backed (MOR-437)."""
+    rs = radio_with_state._radio_state
+    frame = _make_frame(cmd=0x14, sub=0x02, data=_bcd2(180))
+    radio_with_state._civ_runtime._update_state_cache_from_frame(frame)
+    # Legacy mirror removed: StateStore is the source of truth.
+    assert rs.main.rf_gain == 0
+    field = radio_with_state._state_store.snapshot().field(
+        "receiver.0.operator_controls.rf_gain"
+    )
+    assert field.value == pytest.approx(180 / 255.0)
+
+
+def test_update_radio_state_cmd14_squelch(radio_with_state: IcomRadio) -> None:
+    """cmd 0x14 sub 0x03 squelch is observation-backed (MOR-437)."""
+    rs = radio_with_state._radio_state
+    frame = _make_frame(cmd=0x14, sub=0x03, data=_bcd2(50))
+    radio_with_state._civ_runtime._update_state_cache_from_frame(frame)
+    assert rs.main.squelch == 0
+    field = radio_with_state._state_store.snapshot().field(
+        "receiver.0.operator_controls.squelch"
+    )
+    assert field.value == pytest.approx(50 / 255.0)
+
+
+def test_update_radio_state_cmd14_power_level(radio_with_state: IcomRadio) -> None:
+    """cmd 0x14 sub 0x0A keeps the raw mirror and stores normalized state."""
+    rs = radio_with_state._radio_state
+    frame = _make_frame(cmd=0x14, sub=0x0A, data=_bcd2(128))
+    radio_with_state._civ_runtime._update_state_cache_from_frame(frame)
+    assert rs.power_level == 128
+    field = radio_with_state._state_store.snapshot().field(
+        "global.operator_controls.power_level"
+    )
+    assert field.value == pytest.approx(128 / 255.0)
+
+
+@pytest.mark.parametrize(
+    ("frame", "expected_path", "expected_value"),
+    [
+        (
+            _make_frame(cmd=0x14, sub=0x03, data=_bcd2(45), receiver=0x01),
+            "receiver.1.operator_controls.squelch",
+            45 / 255.0,
+        ),
+        (
+            _make_frame(cmd=0x14, sub=0x0A, data=_bcd2(128)),
+            "global.operator_controls.power_level",
+            128 / 255.0,
+        ),
+    ],
+)
+def test_observations_from_frame_normalizes_selected_cmd14_controls(
+    radio: IcomRadio,
+    frame: CivFrame,
+    expected_path: str,
+    expected_value: float,
+) -> None:
+    observations = radio._civ_runtime._observations_from_frame(frame)
+
+    assert len(observations) == 1
+    observation = observations[0]
+    assert str(observation.path) == expected_path
+    assert observation.value == pytest.approx(expected_value)
+
+
+def test_observations_from_frame_marks_only_exact_ptt_readback_as_poll_response(
+    radio: IcomRadio,
+) -> None:
+    """A directed one-byte CI-V PTT readback is radio truth, not a setter ACK.
+
+    The Web TX authority projector may accept ``poll_response`` for PTT, so
+    this deliberately pins the narrow wire shape rather than promoting generic
+    command responses.
+    """
+    readback = _make_frame(cmd=0x1C, sub=0x00, data=b"\x00")
+    assert radio._civ_runtime._observations_from_frame(readback)[0].source.source == (
+        "poll_response"
+    )
+
+    for frame in (
+        _make_frame(cmd=0x1C, sub=0x00, data=b"\x00\x01"),
+        _make_frame(cmd=0x1C, sub=0x00, data=b"\x02"),
+        _make_frame(cmd=0x1C, sub=0x01, data=b"\x00"),
+        _make_frame(cmd=0x14, sub=0x03, data=_bcd2(45)),
+        _make_frame(cmd=0x1C, sub=0x00, data=b"\x00", to_addr=0x99),
+        _make_frame(cmd=0x1C, sub=0x00, data=b"\x00", from_addr=0x99),
+    ):
+        observations = radio._civ_runtime._observations_from_frame(frame)
+        if observations:
+            assert observations[0].source.source == "command_response"
+
+    unsolicited = _make_frame(cmd=0x1C, sub=0x00, data=b"\x01", to_addr=0x00)
+    assert (
+        radio._civ_runtime._observations_from_frame(unsolicited)[0].source.source
+        == "civ_unsolicited"
+    )
+
+
+@pytest.mark.parametrize(  # type: ignore[untyped-decorator]
+    ("sub", "value", "field"),
+    [
+        (0x07, 92, "pbt_inner"),
+        (0x08, 93, "pbt_outer"),
+        (0x13, 95, "digisel_shift"),
+    ],
+)
+def test_update_radio_state_cmd14_receiver_dsp_levels(
+    radio_with_state: IcomRadio,
+    sub: int,
+    value: int,
+    field: str,
+) -> None:
+    rs = radio_with_state._radio_state
+    frame = _make_frame(cmd=0x14, sub=sub, data=_bcd2(value), receiver=0x01)
+    radio_with_state._civ_runtime._update_radio_state_from_frame(frame)
+    assert getattr(rs.sub, field) == value
+
+
+@pytest.mark.parametrize(  # type: ignore[untyped-decorator]
+    ("sub", "value", "field"),
+    [
+        (0x05, 90, "apf_type_level"),
+        (0x06, 91, "nr_level"),
+        (0x12, 94, "nb_level"),
+    ],
+)
+def test_update_radio_state_cmd14_receiver_dsp_levels_observation_backed(
+    radio_with_state: IcomRadio,
+    sub: int,
+    value: int,
+    field: str,
+) -> None:
+    """MOR-437/MOR-452: apf_type_level/nr_level/nb_level mirror removed; store is truth."""
+    rs = radio_with_state._radio_state
+    frame = _make_frame(cmd=0x14, sub=sub, data=_bcd2(value), receiver=0x01)
+    radio_with_state._civ_runtime._update_state_cache_from_frame(frame)
+    assert getattr(rs.sub, field) == 0
+    store_field = radio_with_state._state_store.snapshot().field(
+        f"receiver.1.operator_controls.{field}"
+    )
+    assert store_field.value == value
+
+
+def test_update_radio_state_cmd14_notch_filter_observation_backed_on_sub(
+    radio_with_state: IcomRadio,
+) -> None:
+    """MOR-1548: notch_filter (0x14 0x0D) reclassified receiver-scoped.
+
+    Unlike apf_type_level/nr_level/nb_level above, notch_filter has no
+    legacy per-receiver ``ReceiverState`` mirror attribute (its old mirror
+    lived on the global ``RadioState`` dataclass), so this is a standalone
+    test rather than a member of the parametrize group above.
+    """
+    frame = _make_frame(cmd=0x14, sub=0x0D, data=_bcd2(102), receiver=0x01)
+    radio_with_state._civ_runtime._update_state_cache_from_frame(frame)
+    store_field = radio_with_state._state_store.snapshot().field(
+        "receiver.1.operator_controls.notch_filter"
+    )
+    assert store_field.value == 102
+
+
+def test_update_radio_state_cmd14_notch_filter_sub_does_not_clobber_main(
+    radio_with_state: IcomRadio,
+) -> None:
+    """MOR-1548: a SUB notch (0x14 0x0D) readback must land on
+    ``receiver.1.operator_controls.notch_filter`` and leave MAIN's own fact
+    (``receiver.0...``) untouched — the pre-fix behavior routed both
+    receivers' readbacks into a single shared
+    ``global.operator_controls.notch_filter`` field, so SUB's observation
+    would silently overwrite MAIN's value (PR #2461 verifier finding)."""
+    civ = radio_with_state._civ_runtime
+
+    main_frame = _make_frame(cmd=0x14, sub=0x0D, data=_bcd2(50), receiver=0x00)
+    civ._update_state_cache_from_frame(main_frame)
+    sub_frame = _make_frame(cmd=0x14, sub=0x0D, data=_bcd2(200), receiver=0x01)
+    civ._update_state_cache_from_frame(sub_frame)
+
+    snapshot = radio_with_state._state_store.snapshot()
+    main_field = snapshot.field("receiver.0.operator_controls.notch_filter")
+    sub_field = snapshot.field("receiver.1.operator_controls.notch_filter")
+    assert main_field.value == 50
+    assert sub_field.value == 200
+    # The old shared global field must never have been populated at all —
+    # both observations must resolve through the receiver-scoped family.
+    with pytest.raises(KeyError):
+        snapshot.field("global.operator_controls.notch_filter")
+
+
+@pytest.mark.parametrize(  # type: ignore[untyped-decorator]
+    ("sub", "raw", "field", "expected"),
+    [
+        (0x14, 105, "drive_gain", 105),
+    ],
+)
+def test_update_radio_state_cmd14_global_dsp_levels(
+    radio_with_state: IcomRadio,
+    sub: int,
+    raw: int,
+    field: str,
+    expected: int,
+) -> None:
+    rs = radio_with_state._radio_state
+    frame = _make_frame(cmd=0x14, sub=sub, data=_bcd2(raw))
+    radio_with_state._civ_runtime._update_radio_state_from_frame(frame)
+    assert getattr(rs, field) == expected
+
+
+@pytest.mark.parametrize(  # type: ignore[untyped-decorator]
+    ("sub", "raw", "field", "expected"),
+    [
+        # cw_pitch raw level 128 → 600 Hz via the non-linear set_cw_pitch map.
+        (0x09, 128, "cw_pitch", 600),
+        (0x0B, 101, "mic_gain", 101),
+        (0x0E, 103, "compressor_level", 103),
+        (0x15, 106, "monitor_gain", 106),
+        # VOX gain trio promoted to neutral observations (MOR-459); device scale.
+        (0x16, 107, "vox_gain", 107),
+        (0x17, 108, "anti_vox_gain", 108),
+        # key_speed raw level 146 → 30 WPM via the linear key-speed map (MOR-493).
+        (0x0C, 146, "key_speed", 30),
+        # break_in_delay promoted to a neutral observation (MOR-1493
+        # field-policy membership wave); plain BCD-pair decode. notch_filter
+        # (0x0D) moved to the receiver-scoped test above under MOR-1548.
+        (0x0F, 104, "break_in_delay", 104),
+    ],
+)
+def test_update_radio_state_cmd14_global_dsp_levels_observation_backed(
+    radio_with_state: IcomRadio,
+    sub: int,
+    raw: int,
+    field: str,
+    expected: int,
+) -> None:
+    """MOR-437/MOR-459/MOR-1493: cw_pitch/mic_gain/compressor_level/
+    monitor_gain, the VOX gain pair (vox_gain/anti_vox_gain), and
+    break_in_delay are observation-backed; the legacy
+    global RadioState mirror was removed.
+
+    cw_pitch in particular asserts the exact non-linear raw→Hz mapping
+    (level 128 → 600 Hz) the mirror and ``set_cw_pitch`` use.
+    """
+    rs = radio_with_state._radio_state
+    frame = _make_frame(cmd=0x14, sub=sub, data=_bcd2(raw))
+    radio_with_state._civ_runtime._update_state_cache_from_frame(frame)
+    assert getattr(rs, field) == 0
+    store_field = radio_with_state._state_store.snapshot().field(
+        f"global.operator_controls.{field}"
+    )
+    assert store_field.value == expected
+
+
+def test_missing_key_speed_control_fails_closed_and_later_frames_still_decode(
+    radio_with_state: IcomRadio,
+) -> None:
+    """A profile without a key_speed control must fail closed per frame.
+
+    The decode ValueError from ``_observations_from_frame`` is caught in
+    ``_apply_state_store_observations``, which logs at debug and returns:
+    that frame publishes no key-speed observation, and the next frame
+    decodes through its own control as if nothing happened.
+    """
+    controls = dict(radio_with_state._profile.controls or {})
+    del controls["key_speed"]
+    radio_with_state._profile = dataclasses.replace(  # noqa: SLF001
+        radio_with_state._profile, controls=controls
+    )
+    runtime = radio_with_state._civ_runtime
+
+    runtime._update_state_cache_from_frame(
+        _make_frame(cmd=0x14, sub=0x0C, data=_bcd2(146))
+    )
+    with pytest.raises(KeyError):
+        radio_with_state._state_store.snapshot().field(
+            "global.operator_controls.key_speed"
+        )
+
+    runtime._update_state_cache_from_frame(
+        _make_frame(cmd=0x14, sub=0x09, data=_bcd2(128))
+    )
+    field = radio_with_state._state_store.snapshot().field(
+        "global.operator_controls.cw_pitch"
+    )
+    assert field.value == 600
+
+
+def test_update_radio_state_cmd11_attenuator(radio_with_state: IcomRadio) -> None:
+    """cmd 0x11 attenuator is observation-backed (MOR-437)."""
+    rs = radio_with_state._radio_state
+    frame = _make_frame(cmd=0x11, data=bytes([0x18]))  # 0x18 BCD = 18 dB
+    radio_with_state._civ_runtime._update_state_cache_from_frame(frame)
+    # Legacy mirror removed from _handle_11; StateStore is the source of truth.
+    assert rs.main.att == 0
+    field = radio_with_state._state_store.snapshot().field(
+        "receiver.0.operator_controls.att"
+    )
+    assert field.value == 18
+
+
+def test_update_radio_state_cmd12_antenna_ant1_mirror_removed(
+    radio_with_state: IcomRadio,
+) -> None:
+    """MOR-462: cmd 0x12 sub 0x00 mirror removed; ``_handle_12`` is a no-op.
+
+    The mirror path (``_update_radio_state_from_frame`` → ``_handle_12``) no
+    longer writes ``RadioState``; the fields stay at their defaults. The
+    StateStore observation pipeline is the source of truth (covered by
+    ``test_update_radio_state_cmd12_tx_antenna_observation_backed``).
+    """
+    rs = radio_with_state._radio_state
+    frame = _make_frame(cmd=0x12, sub=0x00, data=bytes([0x01]))
+    radio_with_state._civ_runtime._update_radio_state_from_frame(frame)
+    assert rs.tx_antenna == 1
+    assert rs.rx_antenna_1 is False
+
+
+def test_update_radio_state_cmd12_antenna_ant2_mirror_removed(
+    radio_with_state: IcomRadio,
+) -> None:
+    """MOR-462: cmd 0x12 sub 0x01 mirror removed; ``_handle_12`` is a no-op.
+
+    The mirror path no longer writes ``RadioState``: ``tx_antenna`` stays at its
+    default 1 (not 2) and ``rx_antenna_2`` stays ``False`` even though the frame
+    selects ANT2 with RX-ANT ON. The StateStore observation pipeline carries the
+    real values.
+    """
+    rs = radio_with_state._radio_state
+    frame = _make_frame(cmd=0x12, sub=0x01, data=bytes([0x01]))
+    radio_with_state._civ_runtime._update_radio_state_from_frame(frame)
+    assert rs.tx_antenna == 1
+    assert rs.rx_antenna_2 is False
+
+
+def test_update_radio_state_cmd16_preamp(radio_with_state: IcomRadio) -> None:
+    """cmd 0x16 sub 0x02 preamp is observation-backed (MOR-437)."""
+    rs = radio_with_state._radio_state
+    frame = _make_frame(cmd=0x16, sub=0x02, data=bytes([0x01]))
+    radio_with_state._civ_runtime._update_state_cache_from_frame(frame)
+    # Legacy mirror removed: preamp lands in the StateStore as a raw byte value.
+    assert rs.main.preamp == 0
+    field = radio_with_state._state_store.snapshot().field(
+        "receiver.0.operator_controls.preamp"
+    )
+    assert field.value == 1
+
+
+def test_update_radio_state_cmd16_nb(radio_with_state: IcomRadio) -> None:
+    """cmd 0x16 sub 0x22 updates noise blanker."""
+    rs = radio_with_state._radio_state
+    frame = _make_frame(cmd=0x16, sub=0x22, data=bytes([0x01]))
+    radio_with_state._civ_runtime._update_radio_state_from_frame(frame)
+    assert rs.main.nb is True
+
+
+def test_update_radio_state_cmd16_nr(radio_with_state: IcomRadio) -> None:
+    """cmd 0x16 sub 0x40 updates noise reduction."""
+    rs = radio_with_state._radio_state
+    frame = _make_frame(cmd=0x16, sub=0x40, data=bytes([0x01]))
+    radio_with_state._civ_runtime._update_radio_state_from_frame(frame)
+    assert rs.main.nr is True
+
+
+def test_update_radio_state_cmd16_digisel(radio_with_state: IcomRadio) -> None:
+    """cmd 0x16 sub 0x4E updates DIGI-SEL."""
+    rs = radio_with_state._radio_state
+    frame = _make_frame(cmd=0x16, sub=0x4E, data=bytes([0x01]))
+    radio_with_state._civ_runtime._update_radio_state_from_frame(frame)
+    assert rs.main.digisel is True
+
+
+def test_update_radio_state_cmd16_ipplus(radio_with_state: IcomRadio) -> None:
+    """cmd 0x16 sub 0x65 updates IP+ (line 572-573)."""
+    rs = radio_with_state._radio_state
+    frame = _make_frame(cmd=0x16, sub=0x65, data=bytes([0x01]))
+    radio_with_state._civ_runtime._update_radio_state_from_frame(frame)
+    assert rs.main.ipplus is True
+
+
+@pytest.mark.parametrize(  # type: ignore[untyped-decorator]
+    ("cmd", "sub", "data", "receiver", "target", "field", "expected"),
+    [
+        (0x15, 0x07, b"\x01", None, "radio", "overflow", True),
+        # 0x15/0x01 + 0x15/0x05 s_meter_sql_open promoted to the neutral ``dcd``
+        # receiver toggle (MOR-466); 0x41 auto_notch, 0x44 compressor_on,
+        # 0x45 monitor_on, 0x46 vox_on, 0x48 manual_notch (MOR-437); 0x12 agc +
+        # 0x1A/0x04 agc_time_constant (BE-2); 0x32 audio_peak_filter +
+        # 0x4F twin_peak_filter (MOR-452); and 0x56 filter_shape + 0x47
+        # break_in (MOR-1491/1493 field-policy membership wave) are now
+        # observation-backed — the legacy RadioState mirror was removed, so
+        # they no longer belong here.
+        (0x16, 0x50, b"\x01", None, "radio", "dial_lock", True),
+        (0x16, 0x58, b"\x02", None, "radio", "ssb_tx_bandwidth", 2),
+    ],
+)
+def test_update_radio_state_operator_toggle_family(
+    radio_with_state: IcomRadio,
+    cmd: int,
+    sub: int,
+    data: bytes,
+    receiver: int | None,
+    target: str,
+    field: str,
+    expected: object,
+) -> None:
+    rs = radio_with_state._radio_state
+    frame = _make_frame(cmd=cmd, sub=sub, data=data, receiver=receiver)
+    radio_with_state._civ_runtime._update_radio_state_from_frame(frame)
+
+    owner = {"radio": rs, "sub": rs.sub}[target]
+    assert getattr(owner, field) == expected
+
+
+def test_update_radio_state_cmd16_agc_observation_backed(
+    radio_with_state: IcomRadio,
+) -> None:
+    """MOR-437: cmd 0x16/0x12 agc mirror removed; StateStore is source of truth."""
+    rs = radio_with_state._radio_state
+    frame = _make_frame(cmd=0x16, sub=0x12, data=b"\x03", receiver=0x01)
+    radio_with_state._civ_runtime._update_state_cache_from_frame(frame)
+    # BCD-nibble decode of 0x03 == 3, matching the removed legacy mirror.
+    assert rs.sub.agc == 0
+    field = radio_with_state._state_store.snapshot().field(
+        "receiver.1.operator_controls.agc"
+    )
+    assert field.value == 3
+
+
+def test_update_radio_state_cmd16_audio_peak_filter_observation_backed(
+    radio_with_state: IcomRadio,
+) -> None:
+    """MOR-452: cmd 0x16/0x32 mirror removed; StateStore is source of truth."""
+    rs = radio_with_state._radio_state
+    frame = _make_frame(cmd=0x16, sub=0x32, data=b"\x02", receiver=0x01)
+    radio_with_state._civ_runtime._update_state_cache_from_frame(frame)
+    # BCD-nibble decode of 0x02 == 2 (MID), matching the removed legacy mirror.
+    assert rs.sub.audio_peak_filter == 0
+    field = radio_with_state._state_store.snapshot().field(
+        "receiver.1.operator_controls.audio_peak_filter"
+    )
+    assert field.value == 2
+
+
+def test_update_radio_state_cmd16_filter_shape_observation_backed(
+    radio_with_state: IcomRadio,
+) -> None:
+    """MOR-1491: cmd 0x16/0x56 mirror removed; StateStore is source of truth."""
+    rs = radio_with_state._radio_state
+    frame = _make_frame(cmd=0x16, sub=0x56, data=b"\x01", receiver=0x01)
+    radio_with_state._civ_runtime._update_state_cache_from_frame(frame)
+    # BCD-nibble decode of 0x01 == 1 (SOFT), matching the removed legacy mirror.
+    assert rs.sub.filter_shape == 0
+    field = radio_with_state._state_store.snapshot().field(
+        "receiver.1.operator_controls.filter_shape"
+    )
+    assert field.value == 1
+
+
+def test_update_radio_state_cmd16_manual_notch_width_observation_backed(
+    radio_with_state: IcomRadio,
+) -> None:
+    """MOR-1492: cmd 0x16/0x57 has no legacy mirror at all — this is the first
+    time it lands anywhere; ``_handle_16`` never wrote it before either.
+    """
+    frame = _make_frame(cmd=0x16, sub=0x57, data=b"\x02", receiver=0x01)
+    radio_with_state._civ_runtime._update_state_cache_from_frame(frame)
+    # BCD-nibble decode of 0x02 == 2 (NAR).
+    field = radio_with_state._state_store.snapshot().field(
+        "receiver.1.operator_controls.manual_notch_width"
+    )
+    assert field.value == 2
+
+
+def test_update_radio_state_cmd16_break_in_observation_backed(
+    radio_with_state: IcomRadio,
+) -> None:
+    """MOR-1493: cmd 0x16/0x47 mirror removed; StateStore is source of truth."""
+    rs = radio_with_state._radio_state
+    frame = _make_frame(cmd=0x16, sub=0x47, data=b"\x02")
+    radio_with_state._civ_runtime._update_state_cache_from_frame(frame)
+    # BCD-nibble decode of 0x02 == 2 (FULL), matching the removed legacy mirror.
+    assert rs.break_in == 0
+    field = radio_with_state._state_store.snapshot().field(
+        "global.operator_controls.break_in"
+    )
+    assert field.value == 2
+
+
+def test_update_radio_state_cmd16_twin_peak_filter_observation_backed(
+    radio_with_state: IcomRadio,
+) -> None:
+    """MOR-452: cmd 0x16/0x4F mirror removed; StateStore is source of truth."""
+    rs = radio_with_state._radio_state
+    frame = _make_frame(cmd=0x16, sub=0x4F, data=b"\x01", receiver=0x01)
+    radio_with_state._civ_runtime._update_state_cache_from_frame(frame)
+    # Legacy ReceiverState mirror stays at its default; the store carries truth.
+    assert rs.sub.twin_peak_filter is False
+    field = radio_with_state._state_store.snapshot().field(
+        "receiver.1.operator_toggles.twin_peak_filter"
+    )
+    assert field.value is True
+
+
+@pytest.mark.parametrize(  # type: ignore[untyped-decorator]
+    ("sub", "field"),
+    [(0x42, "repeater_tone"), (0x43, "repeater_tsql")],
+)
+def test_update_radio_state_cmd16_repeater_tone_observation_backed(
+    radio_with_state: IcomRadio,
+    sub: int,
+    field: str,
+) -> None:
+    """MOR-451: cmd 0x16/0x42-0x43 mirror removed; StateStore is source of truth."""
+    rs = radio_with_state._radio_state
+    frame = _make_frame(cmd=0x16, sub=sub, data=b"\x01", receiver=0x01)
+    radio_with_state._civ_runtime._update_state_cache_from_frame(frame)
+    # Legacy ReceiverState mirror stays at its default; the store carries truth.
+    assert getattr(rs.sub, field) is False
+    store_field = radio_with_state._state_store.snapshot().field(
+        f"receiver.1.operator_toggles.{field}"
+    )
+    assert store_field.value is True
+
+
+@pytest.mark.parametrize(  # type: ignore[untyped-decorator]
+    ("sub", "field"),
+    [(0x00, "tone_freq"), (0x01, "tsql_freq")],
+)
+def test_update_radio_state_cmd1b_tone_freq_observation_backed(
+    radio_with_state: IcomRadio,
+    sub: int,
+    field: str,
+) -> None:
+    """MOR-451: cmd 0x1B/0x00-0x01 mirror removed; StateStore is source of truth."""
+    radio_with_state._profile = resolve_radio_profile(model="IC-7300")  # noqa: SLF001
+    rs = radio_with_state._radio_state
+    frame = _make_frame(cmd=0x1B, sub=sub, data=_encode_tone_freq(8850), receiver=0x01)
+    radio_with_state._civ_runtime._update_state_cache_from_frame(frame)
+    # Legacy ReceiverState mirror stays at its default 0; the store carries truth.
+    assert getattr(rs.sub, field) == 0
+    store_field = radio_with_state._state_store.snapshot().field(
+        f"receiver.1.operator_controls.{field}"
+    )
+    assert store_field.value == 8850
+
+
+@pytest.mark.parametrize(  # type: ignore[untyped-decorator]
+    ("sub", "field"),
+    [(0x00, "tone_freq"), (0x01, "tsql_freq")],
+)
+@pytest.mark.parametrize(
+    ("domain", "rejected_data"),
+    [
+        (None, _encode_tone_freq(10000)),
+        ((), _encode_tone_freq(10000)),
+        ((8850.0,), _encode_tone_freq(10000)),
+        ((8851,), _encode_tone_freq(10000)),
+        ((10000, 8850), _encode_tone_freq(10000)),
+        ((6700, 8850), _encode_tone_freq(10000)),
+        ((6700, 8850), b"\x00\x0a\x00"),
+    ],
+)
+def test_cmd1b_rejected_profile_value_preserves_state_truth(
+    radio_with_state: IcomRadio,
+    sub: int,
+    field: str,
+    domain: tuple | None,
+    rejected_data: bytes,
+) -> None:
+    radio_with_state._profile = resolve_radio_profile(model="IC-7300")  # noqa: SLF001
+    path = f"receiver.1.operator_controls.{field}"
+    radio_with_state._civ_runtime._update_state_cache_from_frame(
+        _make_frame(cmd=0x1B, sub=sub, data=_encode_tone_freq(8850), receiver=0x01)
+    )
+    before = radio_with_state._state_store.snapshot()
+    assert before.field(path).value == 8850
+
+    radio_with_state._profile = dataclasses.replace(  # noqa: SLF001
+        radio_with_state._profile,
+        ctcss_tones_centihz=domain,
+    )
+    radio_with_state._civ_runtime._update_state_cache_from_frame(
+        _make_frame(cmd=0x1B, sub=sub, data=rejected_data, receiver=0x01)
+    )
+
+    after = radio_with_state._state_store.snapshot()
+    assert after.observation_seq == before.observation_seq
+    assert after.field(path) == before.field(path)
+
+
+def test_update_radio_state_cmd1a_agc_time_constant_observation_backed(
+    radio_with_state: IcomRadio,
+) -> None:
+    """MOR-437: cmd 0x1A/0x04 agc_time_constant is observation-backed."""
+    rs = radio_with_state._radio_state
+    frame = _make_frame(cmd=0x1A, sub=0x04, data=b"\x13", receiver=0x01)
+    radio_with_state._civ_runtime._update_state_cache_from_frame(frame)
+    # 1-byte BCD decode of 0x13 == 13, matching the removed legacy mirror.
+    assert rs.sub.agc_time_constant == 0
+    field = radio_with_state._state_store.snapshot().field(
+        "receiver.1.operator_controls.agc_time_constant"
+    )
+    assert field.value == 13
+
+
+def test_update_radio_state_cmd16_via_data_sub(radio_with_state: IcomRadio) -> None:
+    """cmd 0x16 with sub=0x00 reads sub-code from data[0] (observation path)."""
+    rs = radio_with_state._radio_state
+    # sub=None, data[0]=0x02 (preamp), data[1]=0x01
+    frame = _make_frame(cmd=0x16, sub=None, data=bytes([0x02, 0x01]))
+    radio_with_state._civ_runtime._update_state_cache_from_frame(frame)
+    # MOR-437: preamp mirror removed; the embedded-sub frame still observes it.
+    assert rs.main.preamp == 0
+    field = radio_with_state._state_store.snapshot().field(
+        "receiver.0.operator_controls.preamp"
+    )
+    assert field.value == 1
+
+
+def test_update_radio_state_cmd1a_sub03_ignored(radio_with_state: IcomRadio) -> None:
+    """cmd 0x1A sub 0x03 (filter width code) is intentionally ignored (lines 576-581)."""
+    rs = radio_with_state._radio_state
+    old_filter = rs.main.filter
+    frame = _make_frame(cmd=0x1A, sub=0x03, data=bytes([0x34]))
+    radio_with_state._civ_runtime._update_radio_state_from_frame(frame)
+    assert rs.main.filter == old_filter  # unchanged
+
+
+def test_update_radio_state_cmd1a_sub06_data_mode(radio_with_state: IcomRadio) -> None:
+    """cmd 0x1A sub 0x06 data_mode is observation-backed (MOR-437)."""
+    rs = radio_with_state._radio_state
+    frame = _make_frame(cmd=0x1A, sub=0x06, data=bytes([0x02]))
+    radio_with_state._civ_runtime._update_state_cache_from_frame(frame)
+    # Legacy mirror removed: data_mode lands in the active-slot StateStore path.
+    assert rs.main.data_mode == 0
+    field = radio_with_state._state_store.snapshot().field(
+        "receiver.0.active.freq_mode.data_mode"
+    )
+    assert field.value == 2
+
+
+@pytest.mark.parametrize(  # type: ignore[untyped-decorator]
+    ("data", "field", "expected"),
+    [
+        (b"\x00\x70\x05\x11", "ref_adjust", 511),
+        (b"\x02\x28\x45", "dash_ratio", 45),
+        (b"\x02\x90\x09", "nb_depth", 9),
+        (b"\x02\x91\x02\x55", "nb_width", 255),
+    ],
+)
+def test_update_radio_state_cmd1a_ctl_mem_dsp_levels(
+    radio_with_state: IcomRadio,
+    data: bytes,
+    field: str,
+    expected: int,
+) -> None:
+    rs = radio_with_state._radio_state
+    frame = _make_frame(cmd=0x1A, sub=0x05, data=data)
+    radio_with_state._civ_runtime._update_radio_state_from_frame(frame)
+    assert getattr(rs, field) == expected
+
+
+def test_update_radio_state_cmd1a_vox_delay_observation_backed(
+    radio_with_state: IcomRadio,
+) -> None:
+    """MOR-459: cmd 0x1A/0x05 0x02 0x92 vox_delay mirror removed; store is truth.
+
+    VOX hang delay is promoted to a neutral global operator-control int; the
+    legacy ``RadioState.vox_delay`` mirror is no longer written and stays at its
+    default 0 while the StateStore carries the decoded value.
+    """
+    rs = radio_with_state._radio_state
+    frame = _make_frame(cmd=0x1A, sub=0x05, data=b"\x02\x92\x12")
+    radio_with_state._civ_runtime._update_state_cache_from_frame(frame)
+    assert rs.vox_delay == 0
+    store_field = radio_with_state._state_store.snapshot().field(
+        "global.operator_controls.vox_delay"
+    )
+    assert store_field.value == 12
+
+
+def test_update_radio_state_cmd10_tuning_step_observation_backed(
+    radio_with_state: IcomRadio,
+) -> None:
+    """MOR-461: cmd 0x10 tuning_step mirror removed; the StateStore is truth.
+
+    The tuning step is a device step *index* (0-8, BCD byte 0x05 → 5), NOT Hz.
+    It is promoted to a neutral global slow-state int; the legacy
+    ``RadioState.tuning_step`` mirror is no longer written and stays at its
+    default 0 while the StateStore carries the decoded value. The legacy
+    ``tuning_step_changed`` notify event is retained for back-compat.
+    """
+    rs = radio_with_state._radio_state
+    frame = _make_frame(cmd=0x10, data=b"\x05")
+    radio_with_state._civ_runtime._update_state_cache_from_frame(frame)
+    assert rs.tuning_step == 0
+    store_field = radio_with_state._state_store.snapshot().field(
+        "global.slow_state.tuning_step"
+    )
+    assert store_field.value == 5
+
+
+def test_update_radio_state_cmd12_tx_antenna_observation_backed(
+    radio_with_state: IcomRadio,
+) -> None:
+    """MOR-462: cmd 0x12 tx_antenna mirror removed at BOTH decode sites.
+
+    Antenna selection (sub 0x01 → ANT2) is promoted to a neutral global
+    operator-control int; the legacy ``RadioState.tx_antenna`` mirror — written
+    by both the inline ``_update_state_cache_from_frame`` branch and ``_handle_12``
+    — is no longer written and stays at its default 1 while the StateStore
+    carries the decoded value 2.
+    """
+    rs = radio_with_state._radio_state
+    frame = _make_frame(cmd=0x12, sub=0x01, data=b"\x00")
+    radio_with_state._civ_runtime._update_state_cache_from_frame(frame)
+    assert rs.tx_antenna == 1
+    store_field = radio_with_state._state_store.snapshot().field(
+        "global.operator_controls.tx_antenna"
+    )
+    assert store_field.value == 2
+
+
+def test_update_radio_state_cmd12_rx_antenna_observation_backed(
+    radio_with_state: IcomRadio,
+) -> None:
+    """MOR-462: cmd 0x12 rx_antenna_1/2 mirror removed at BOTH decode sites.
+
+    The per-connector RX-ANT toggle (0x12 0x00 data byte) is promoted to a
+    neutral global slow-state bool; the legacy ``RadioState.rx_antenna_1`` mirror
+    — written by both the inline ``_update_state_cache_from_frame`` branch and
+    ``_handle_12`` — is no longer written and stays at its default ``False`` while
+    the StateStore carries the decoded ``True``.
+    """
+    rs = radio_with_state._radio_state
+    frame = _make_frame(cmd=0x12, sub=0x00, data=b"\x01")
+    radio_with_state._civ_runtime._update_state_cache_from_frame(frame)
+    assert rs.rx_antenna_1 is False
+    store_field = radio_with_state._state_store.snapshot().field(
+        "global.slow_state.rx_antenna_1"
+    )
+    assert store_field.value is True
+
+
+def test_update_radio_state_cmd1a_af_mute(radio_with_state: IcomRadio) -> None:
+    rs = radio_with_state._radio_state
+    frame = _make_frame(cmd=0x1A, sub=0x09, data=b"\x01", receiver=0x01)
+    radio_with_state._civ_runtime._update_radio_state_from_frame(frame)
+    assert rs.sub.af_mute is True
+
+
+def test_update_radio_state_cmd1c_ptt(radio_with_state: IcomRadio) -> None:
+    """cmd 0x1C sub 0x00 updates global PTT (lines 585-588)."""
+    rs = radio_with_state._radio_state
+    frame = _make_frame(cmd=0x1C, sub=0x00, data=bytes([0x01]))
+    radio_with_state._civ_runtime._update_radio_state_from_frame(frame)
+    assert rs.ptt is True
+
+
+def test_update_radio_state_cmd0f_split(radio_with_state: IcomRadio) -> None:
+    """cmd 0x0F split is now observation-backed (MOR-437) → StateStore."""
+    frame = _make_frame(cmd=0x0F, data=bytes([0x01]))
+    radio_with_state._civ_runtime._update_state_cache_from_frame(frame)
+    field = radio_with_state._state_store.snapshot().field("global.tx_state.split")
+    assert field.value is True
+
+
+def test_update_radio_state_cmd07_active_receiver(radio_with_state: IcomRadio) -> None:
+    """cmd 0x07 sub 0xD2 updates active receiver (lines 595-608)."""
+    rs = radio_with_state._radio_state
+    assert rs.active == "MAIN"
+    # data[0]=0xD2 (active receiver sub), data[1]=0x01 (SUB)
+    frame = _make_frame(cmd=0x07, data=bytes([0xD2, 0x01]))
+    radio_with_state._civ_runtime._update_radio_state_from_frame(frame)
+    assert rs.active == "SUB"
+
+
+def test_update_radio_state_cmd07_dual_watch(radio_with_state: IcomRadio) -> None:
+    """cmd 0x07 sub 0xC2 dual watch is observation-backed (MOR-437)."""
+    frame = _make_frame(cmd=0x07, data=bytes([0xC2, 0x01]))
+    radio_with_state._civ_runtime._update_state_cache_from_frame(frame)
+    field = radio_with_state._state_store.snapshot().field("global.tx_state.dual_watch")
+    assert field.value is True
+
+
+def test_update_radio_state_cmd07_active_receiver_main(
+    radio_with_state: IcomRadio,
+) -> None:
+    """cmd 0x07 with val=0x00 sets active to MAIN."""
+    rs = radio_with_state._radio_state
+    rs.active = "SUB"
+    frame = _make_frame(cmd=0x07, data=bytes([0xD2, 0x00]))
+    radio_with_state._civ_runtime._update_radio_state_from_frame(frame)
+    assert rs.active == "MAIN"
+
+
+def test_update_radio_state_advanced_scope_family(
+    radio_with_state: IcomRadio,
+) -> None:
+    """Readable scope-control responses project into RadioState.scope_controls."""
+    rs = radio_with_state._radio_state
+
+    for frame in (
+        _make_frame(cmd=0x27, sub=0x12, data=b"\x01"),
+        _make_frame(cmd=0x27, sub=0x13, data=b"\x01"),
+        _make_frame(cmd=0x27, sub=0x14, data=b"\x01\x03"),
+        _make_frame(cmd=0x27, sub=0x15, data=b"\x01" + bcd_encode(250_000)),
+        _make_frame(cmd=0x27, sub=0x16, data=b"\x01\x04"),
+        _make_frame(cmd=0x27, sub=0x17, data=b"\x01\x01"),
+        _make_frame(cmd=0x27, sub=0x19, data=b"\x01\x10\x50\x01"),
+        _make_frame(cmd=0x27, sub=0x1A, data=b"\x01\x02"),
+        _make_frame(cmd=0x27, sub=0x1B, data=b"\x01"),
+        _make_frame(cmd=0x27, sub=0x1C, data=b"\x01\x02"),
+        _make_frame(cmd=0x27, sub=0x1D, data=b"\x01\x01"),
+        _make_frame(
+            cmd=0x27,
+            sub=0x1E,
+            data=b"\x06\x04" + bcd_encode(14_000_000) + bcd_encode(14_350_000),
+        ),
+        _make_frame(cmd=0x27, sub=0x1F, data=b"\x01\x02"),
+    ):
+        radio_with_state._civ_runtime._update_radio_state_from_frame(frame)
+
+    assert rs.scope_controls.receiver == 1
+    assert rs.scope_controls.dual is True
+    assert rs.scope_controls.mode == 3
+    assert rs.scope_controls.span == 6
+    assert rs.scope_controls.edge == 4
+    assert rs.scope_controls.hold is True
+    assert rs.scope_controls.ref_db == -10.5
+    assert rs.scope_controls.speed == 2
+    assert rs.scope_controls.during_tx is True
+    assert rs.scope_controls.center_type == 2
+    assert rs.scope_controls.vbw_narrow is True
+    assert rs.scope_controls.fixed_edge.range_index == 6
+    assert rs.scope_controls.fixed_edge.edge == 4
+    assert rs.scope_controls.fixed_edge.start_hz == 14_000_000
+    assert rs.scope_controls.fixed_edge.end_hz == 14_350_000
+    assert rs.scope_controls.rbw == 2
+
+
+# ---------------------------------------------------------------------------
+# MOR-557: 0x27 scope-control answers must reach the StateStore, not only the
+# legacy RadioState mirror — otherwise the v2 scope toolbar gates every
+# control on ``availability: missing`` and goes dead.
+# (frame, {store path: expected decoded value})
+# ---------------------------------------------------------------------------
+_SCOPE_CONTROL_OBSERVATION_CASES = (
+    (
+        _make_frame(cmd=0x27, sub=0x12, data=b"\x01"),
+        {"scope_controls.global.display.receiver": 1},
+    ),
+    (
+        _make_frame(cmd=0x27, sub=0x13, data=b"\x01"),
+        {"scope_controls.global.display.dual": True},
+    ),
+    (
+        _make_frame(cmd=0x27, sub=0x14, data=b"\x00\x03"),
+        {
+            "scope_controls.global.display.mode": 3,
+            "scope_controls.global.display.receiver": 0,
+        },
+    ),
+    (
+        _make_frame(cmd=0x27, sub=0x15, data=b"\x00" + bcd_encode(250_000)),
+        {
+            "scope_controls.global.display.span": 6,
+            "scope_controls.global.display.receiver": 0,
+        },
+    ),
+    (
+        _make_frame(cmd=0x27, sub=0x16, data=b"\x00\x04"),
+        {
+            "scope_controls.global.display.edge": 4,
+            "scope_controls.global.display.receiver": 0,
+        },
+    ),
+    (
+        _make_frame(cmd=0x27, sub=0x17, data=b"\x00\x01"),
+        {
+            "scope_controls.global.display.hold": True,
+            "scope_controls.global.display.receiver": 0,
+        },
+    ),
+    (
+        _make_frame(cmd=0x27, sub=0x19, data=b"\x00\x10\x50\x01"),
+        {
+            "scope_controls.global.display.ref_db": -10.5,
+            "scope_controls.global.display.receiver": 0,
+        },
+    ),
+    (
+        _make_frame(cmd=0x27, sub=0x1A, data=b"\x00\x02"),
+        {
+            "scope_controls.global.display.speed": 2,
+            "scope_controls.global.display.receiver": 0,
+        },
+    ),
+    # MOR-1329: the five MOR-1302 leaves (during_tx/center_type/vbw_narrow/
+    # fixed_edge/rbw) had a registered field-status spec but no 0x27 decoder
+    # wired to emit an observation for them — this closes that gap.
+    (
+        _make_frame(cmd=0x27, sub=0x1B, data=b"\x01"),
+        {"scope_controls.global.display.during_tx": True},
+    ),
+    (
+        _make_frame(cmd=0x27, sub=0x1C, data=b"\x00\x02"),
+        {
+            "scope_controls.global.display.center_type": 2,
+            "scope_controls.global.display.receiver": 0,
+        },
+    ),
+    (
+        _make_frame(cmd=0x27, sub=0x1D, data=b"\x00\x01"),
+        {
+            "scope_controls.global.display.vbw_narrow": True,
+            "scope_controls.global.display.receiver": 0,
+        },
+    ),
+    (
+        _make_frame(
+            cmd=0x27,
+            sub=0x1E,
+            data=b"\x06\x04" + bcd_encode(14_000_000) + bcd_encode(14_350_000),
+        ),
+        {
+            "scope_controls.global.display.fixed_edge": ScopeFixedEdge(
+                range_index=6,
+                edge=4,
+                start_hz=14_000_000,
+                end_hz=14_350_000,
+            ),
+        },
+    ),
+    (
+        _make_frame(cmd=0x27, sub=0x1F, data=b"\x00\x02"),
+        {
+            "scope_controls.global.display.rbw": 2,
+            "scope_controls.global.display.receiver": 0,
+        },
+    ),
+)
+
+
+@pytest.mark.parametrize(  # type: ignore[untyped-decorator]
+    ("frame", "expected"),
+    _SCOPE_CONTROL_OBSERVATION_CASES,
+    ids=[f"sub_0x{entry[0].sub:02x}" for entry in _SCOPE_CONTROL_OBSERVATION_CASES],
+)
+def test_scope_control_observation_backed(
+    radio: IcomRadio,
+    frame: CivFrame,
+    expected: dict[str, object],
+) -> None:
+    """MOR-557: 0x27 scope-control responses emit StateStore observations."""
+    radio._civ_runtime._update_state_cache_from_frame(
+        _make_frame(cmd=0x27, sub=0x12, data=b"\x00")
+    )
+    radio._civ_runtime._update_state_cache_from_frame(frame)
+
+    snapshot = radio._state_store.snapshot()
+    for store_path, value in expected.items():
+        field = snapshot.field(store_path)
+        assert field.value == value
+        assert field.freshness is FreshnessState.FRESH
+        # The fixture's IC-7610 profile polls the scope controls, so the
+        # decay window is its policy TTL rather than this module's fallback
+        # table (MOR-557, MOR-2425).
+        assert field.max_age == _expected_observation_max_age(radio, store_path)
+
+
+def test_scope_waterfall_data_emits_no_observations(radio: IcomRadio) -> None:
+    """0x27 sub 0x00 never decodes via ``_observations_from_frame`` — the
+    typed-getter response path (`_scope_control_observations`) is only
+    reached for subs 0x12-0x1F; ``_route_civ_frame`` short-circuits sub
+    0x00 before that dispatch (see that function's docstring).
+
+    MOR-2222 adds a separate, later path — the waveform-stream mode
+    republish in ``_route_civ_frame`` / `_publish_scope_mode_observation` —
+    that *does* write ``scope_controls.global.display.mode`` from sub 0x00
+    frames. That path is not exercised through
+    ``_observations_from_frame`` and is covered instead by
+    ``test_scope_waveform_mode_change_emits_single_observation`` below.
+    """
+    frame = _make_frame(cmd=0x27, sub=0x00, data=b"\x00\x01\x01" + b"\x00" * 16)
+    assert radio._civ_runtime._observations_from_frame(frame) == ()
+
+
+async def test_scope_waveform_mode_change_emits_single_observation(
+    radio: IcomRadio,
+) -> None:
+    """MOR-2222: a waveform frame with a changed mode publishes exactly one
+    ``scope_controls.global.display.mode`` StateStore observation."""
+    with _spy_state_store_apply(radio) as apply_spy:
+        frame = _make_scope_waveform_frame(mode=1)
+        await radio._civ_runtime._route_civ_frame(frame, generation=radio._civ_epoch)
+
+    mode_calls = [
+        call
+        for call in apply_spy.call_args_list
+        if str(call.args[0].path) == "scope_controls.global.display.mode"
+    ]
+    assert len(mode_calls) == 1
+    assert mode_calls[0].args[0].value == 1
+
+    field = radio._state_store.snapshot().field("scope_controls.global.display.mode")
+    assert field.value == 1
+    assert field.freshness is FreshnessState.FRESH
+
+
+async def test_scope_waveform_mode_unchanged_emits_no_observation(
+    radio: IcomRadio,
+) -> None:
+    """MOR-2222: a second waveform frame with the same mode is a no-op —
+    the stream change-detects before writing, since it runs at up to
+    ~15 fps and every write would otherwise thrash the StateStore."""
+    first = _make_scope_waveform_frame(mode=1)
+    await radio._civ_runtime._route_civ_frame(first, generation=radio._civ_epoch)
+
+    with _spy_state_store_apply(radio) as apply_spy:
+        second = _make_scope_waveform_frame(mode=1)
+        await radio._civ_runtime._route_civ_frame(second, generation=radio._civ_epoch)
+
+    assert apply_spy.call_count == 0
+
+
+async def test_scope_waveform_fixed_mode_emits_no_span_edge_or_fixed_edge(
+    radio: IcomRadio,
+) -> None:
+    """MOR-2222/MOR-2256: a fixed-mode (``mode != 0``) waveform frame
+    republishes nothing beyond ``mode`` itself. ``edge`` has no
+    frame-carried source at all. ``fixed_edge`` has no declared table of
+    legal (start_hz, end_hz) pairs to match a frame's edges against
+    (``RadioProfile.scope_fixed_edge_ranges`` describes bands, not
+    specific stored presets) — MOR-2256 rules out guessing which
+    preset is active. ``span`` is center-mode-only by construction
+    (``_publish_scope_span_observation`` returns immediately when
+    ``scope_frame.mode != 0``), so a fixed-mode frame never reaches its
+    exact-match lookup regardless of width."""
+    with _spy_state_store_apply(radio) as apply_spy:
+        frame = _make_scope_waveform_frame(
+            mode=1, start_hz=14_000_000, end_hz=14_350_000
+        )
+        await radio._civ_runtime._route_civ_frame(frame, generation=radio._civ_epoch)
+
+    applied_paths = {str(call.args[0].path) for call in apply_spy.call_args_list}
+    assert "scope_controls.global.display.edge" not in applied_paths
+    assert "scope_controls.global.display.span" not in applied_paths
+    assert "scope_controls.global.display.fixed_edge" not in applied_paths
+
+
+@pytest.mark.parametrize("preset_index", range(len(_SPAN_PRESETS_HZ)))
+async def test_scope_waveform_center_mode_span_matches_reply_path_parity(
+    radio: IcomRadio, preset_index: int
+) -> None:
+    """MOR-2256/#3063: a center-mode frame built the way the radio
+    actually encodes it publishes the same span index the 0x27/0x15
+    reply path decodes for the identical preset value -- parity over all
+    eight declared presets.
+
+    Per the IC-7610 CI-V reference (p.14, "Scope waveform data") and the
+    IC-7300 manual, the raw payload's center-mode fields are the center
+    frequency and the SPAN value itself (the same value the 0x27/0x15
+    span table encodes), not half of it -- so ``end_hz`` below is a real
+    preset value, not an invented half-span. Both this stream path and
+    the reply path resolve through the same ``_span_index_for_hz``
+    helper against the profile's declared ``scope_span_presets_hz``, so
+    parity here also guards against the two drifting apart in the future.
+    """
+    preset_hz = _SPAN_PRESETS_HZ[preset_index]
+
+    reply_frame = _make_frame(cmd=0x27, sub=0x15, data=b"\x00" + bcd_encode(preset_hz))
+    _receiver, expected_index = parse_scope_span_response(
+        reply_frame, radio._profile.scope_span_presets_hz
+    )
+    assert expected_index == preset_index  # sanity: table order is the index
+
+    with _spy_state_store_apply(radio) as apply_spy:
+        frame = _make_scope_waveform_frame(
+            mode=0, start_hz=14_000_000, end_hz=preset_hz
+        )
+        await radio._civ_runtime._route_civ_frame(frame, generation=radio._civ_epoch)
+
+    span_calls = [
+        call
+        for call in apply_spy.call_args_list
+        if str(call.args[0].path) == "scope_controls.global.display.span"
+    ]
+    assert len(span_calls) == 1
+    assert span_calls[0].args[0].value == expected_index
+
+    field = radio._state_store.snapshot().field("scope_controls.global.display.span")
+    assert field.value == expected_index
+    assert field.freshness is FreshnessState.FRESH
+
+
+def test_span_presets_match_the_fixture_profile(radio: IcomRadio) -> None:
+    """``_SPAN_PRESETS_HZ`` above -- which parametrises the
+    parity test and annotates the expected indices below -- is the table
+    the ``radio`` fixture's own profile declares, not a second copy that
+    could drift from ``rigs/ic7610.toml``."""
+    assert radio._profile.scope_span_presets_hz == _SPAN_PRESETS_HZ
+
+
+async def test_scope_waveform_center_mode_unknown_width_emits_no_span(
+    radio: IcomRadio,
+) -> None:
+    """MOR-2256: a center-mode frame whose (correctly-decoded) span has
+    no exact match in the profile's ``scope_span_presets_hz`` publishes
+    nothing — not a nearest-value guess. 999 Hz is not one of the eight declared
+    presets (2500/5000/10000/25000/50000/100000/250000/500000); ``end_hz``
+    here is the raw span field itself (see the parity test above for the
+    encoding), so no doubling/halving is involved in choosing this value."""
+    with _spy_state_store_apply(radio) as apply_spy:
+        frame = _make_scope_waveform_frame(mode=0, start_hz=14_000_000, end_hz=999)
+        await radio._civ_runtime._route_civ_frame(frame, generation=radio._civ_epoch)
+
+    applied_paths = {str(call.args[0].path) for call in apply_spy.call_args_list}
+    assert "scope_controls.global.display.span" not in applied_paths
+
+
+async def test_scope_waveform_center_mode_span_unchanged_emits_no_second_observation(
+    radio: IcomRadio,
+) -> None:
+    """MOR-2256: two consecutive center-mode frames with the same matching
+    span publish exactly one ``span`` observation total, not one per
+    frame — mirrors ``test_scope_waveform_mode_unchanged_emits_no_observation``."""
+    first = _make_scope_waveform_frame(mode=0, start_hz=14_000_000, end_hz=2_500)
+    await radio._civ_runtime._route_civ_frame(first, generation=radio._civ_epoch)
+
+    with _spy_state_store_apply(radio) as apply_spy:
+        second = _make_scope_waveform_frame(mode=0, start_hz=14_100_000, end_hz=2_500)
+        await radio._civ_runtime._route_civ_frame(second, generation=radio._civ_epoch)
+
+    span_calls = [
+        call
+        for call in apply_spy.call_args_list
+        if str(call.args[0].path) == "scope_controls.global.display.span"
+    ]
+    assert span_calls == []
+
+
+async def test_scope_waveform_mode_out_of_range_emits_no_observation(
+    radio: IcomRadio,
+) -> None:
+    """#3063 review: ``ScopeFrame.mode`` is documented 0-3 (the reply
+    path -- ``_decode_scope_value(minimum=0, maximum=3)`` -- can never
+    produce anything else); a corrupted/unexpected 0x27/0x00 frame
+    claiming mode 255 must not be written to the StateStore."""
+    with _spy_state_store_apply(radio) as apply_spy:
+        frame = _make_scope_waveform_frame(mode=255)
+        await radio._civ_runtime._route_civ_frame(frame, generation=radio._civ_epoch)
+
+    applied_paths = {str(call.args[0].path) for call in apply_spy.call_args_list}
+    assert "scope_controls.global.display.mode" not in applied_paths
+
+
+async def test_scope_waveform_mode_observation_survives_connect_generation(
+    radio: IcomRadio,
+) -> None:
+    """#3063 review: on a connected radio, ``advance_generation("connect")``
+    (via ``_control_phase.py``) bumps the StateStore's provider generation
+    away from 0 through ``begin_provider_generation()``. Before this fix,
+    ``_publish_scope_mode_observation`` applied an ``Observation`` whose
+    ``provider_generation`` defaulted to 0 (unbound), so
+    ``StateStore._is_current_observation`` rejected every stream
+    observation from the moment of connect onward -- the field never
+    updated. Simulates that bump directly (mirrors
+    ``test_relative_vfo_ingress_bootstraps_then_transceive_patches_immediately``'s
+    own ``begin_provider_generation()`` call) and asserts the field is
+    written anyway."""
+    store_generation = radio._state_store.begin_provider_generation()  # noqa: SLF001
+    assert store_generation != 0
+
+    frame = _make_scope_waveform_frame(mode=2)
+    await radio._civ_runtime._route_civ_frame(frame, generation=radio._civ_epoch)
+
+    field = radio._state_store.snapshot().field("scope_controls.global.display.mode")
+    assert field.value == 2
+    assert field.freshness is FreshnessState.FRESH
+
+
+async def test_scope_waveform_out_of_range_center_frame_emits_no_span(
+    radio: IcomRadio,
+) -> None:
+    """#3063 review, second round: ``_ReceiverState.feed`` returns BEFORE
+    the center-mode edge expansion when the frame's out-of-range flag is
+    set, so ``ScopeFrame.start_freq_hz``/``end_freq_hz`` are then the
+    raw, unexpanded ``[center, span]`` pair, not real edges. The
+    verifier's example: center 450 kHz, span 500 kHz (matching
+    the largest declared preset), OOR set -- computing
+    ``end_freq_hz - start_freq_hz`` as if these were edges gives
+    ``500_000 - 450_000 == 50_000``, halved to 25_000, which wrongly
+    matches index 3 (the fourth declared preset is 25_000 Hz) instead of
+    publishing nothing."""
+    with _spy_state_store_apply(radio) as apply_spy:
+        frame = _make_scope_waveform_frame(
+            mode=0, start_hz=450_000, end_hz=500_000, oor=True
+        )
+        await radio._civ_runtime._route_civ_frame(frame, generation=radio._civ_epoch)
+
+    applied_paths = {str(call.args[0].path) for call in apply_spy.call_args_list}
+    assert "scope_controls.global.display.span" not in applied_paths
+
+
+async def test_scope_waveform_span_observation_survives_connect_generation(
+    radio: IcomRadio,
+) -> None:
+    """#3063 review, second round: the same connect-generation gap as
+    ``test_scope_waveform_mode_observation_survives_connect_generation``
+    above, but for the span path -- only the mode path had this test
+    before this round."""
+    store_generation = radio._state_store.begin_provider_generation()  # noqa: SLF001
+    assert store_generation != 0
+
+    frame = _make_scope_waveform_frame(mode=0, start_hz=14_000_000, end_hz=5_000)
+    await radio._civ_runtime._route_civ_frame(frame, generation=radio._civ_epoch)
+
+    field = radio._state_store.snapshot().field("scope_controls.global.display.span")
+    assert field.value == 1  # _SPAN_PRESETS_HZ.index(5000)
+    assert field.freshness is FreshnessState.FRESH
+
+
+async def test_scope_waveform_span_rejected_apply_retries_on_next_frame(
+    radio: IcomRadio,
+) -> None:
+    """#3063 review, second round: the per-receiver change-detect cache
+    (``_scope_stream_last_span``) must only remember a value once
+    ``StateStore.apply`` actually accepted it -- signaled by
+    ``changeset.observed_paths`` being non-empty, the same distinction
+    ``StateStore._apply_one``/``_empty_changeset`` use internally.
+    Forces the first attempt to be rejected (``StateStore.apply`` mocked
+    to return an empty ``ChangeSet`` once), then feeds the identical
+    frame again with ``apply`` unmocked: if the cache had been written on
+    the rejected attempt, this second, otherwise-identical frame would be
+    treated as "unchanged" and skipped -- the field would never land.
+    """
+    original_apply = StateStore.apply
+    store = radio._state_store
+    empty_changeset = store._empty_changeset()  # noqa: SLF001
+    span_path = "scope_controls.global.display.span"
+    rejected = {"done": False}
+
+    def _reject_span_once(observation: Observation) -> Any:
+        # A mode=0 frame also publishes ``mode`` -- only the span
+        # observation's OWN first apply call should be rejected, not
+        # whichever observation happens to reach apply() first.
+        if not rejected["done"] and str(observation.path) == span_path:
+            rejected["done"] = True
+            return empty_changeset
+        return original_apply(store, observation)
+
+    frame = _make_scope_waveform_frame(mode=0, start_hz=14_000_000, end_hz=10_000)
+
+    with patch.object(StateStore, "apply", side_effect=_reject_span_once):
+        await radio._civ_runtime._route_civ_frame(frame, generation=radio._civ_epoch)
+    assert rejected["done"], "test setup did not exercise the span apply call"
+
+    with pytest.raises(KeyError):
+        radio._state_store.snapshot().field("scope_controls.global.display.span")
+
+    second = _make_scope_waveform_frame(mode=0, start_hz=14_050_000, end_hz=10_000)
+    await radio._civ_runtime._route_civ_frame(second, generation=radio._civ_epoch)
+
+    field = radio._state_store.snapshot().field("scope_controls.global.display.span")
+    assert field.value == 2  # _SPAN_PRESETS_HZ.index(10000)
+    assert field.freshness is FreshnessState.FRESH
+
+
+def test_scope_control_observations_project_public(radio: IcomRadio) -> None:
+    """MOR-557: observed scope controls surface as scopeControls.* available."""
+    from rigplane.web.runtime_helpers import (
+        build_public_state_payload_from_snapshot,
+    )
+
+    for frame, _expected in _SCOPE_CONTROL_OBSERVATION_CASES:
+        if frame.sub == 0x14:
+            radio._civ_runtime._update_state_cache_from_frame(
+                _make_frame(cmd=0x27, sub=0x12, data=b"\x00")
+            )
+        radio._civ_runtime._update_state_cache_from_frame(frame)
+
+    payload = build_public_state_payload_from_snapshot(
+        radio._state_store.snapshot(),
+        radio=None,
+        receiver_count=2,
+    )
+
+    sc = payload["scopeControls"]
+    assert sc["receiver"] == 0
+    assert sc["dual"] is True
+    assert sc["mode"] == 3
+    assert sc["span"] == 6
+    assert sc["edge"] == 4
+    assert sc["hold"] is True
+    assert sc["refDb"] == -10.5
+    assert sc["speed"] == 2
+    # MOR-1329: five new leaves
+    assert sc["duringTx"] is True
+    assert sc["centerType"] == 2
+    assert sc["vbwNarrow"] is True
+    assert sc["fixedEdge"]["rangeIndex"] == 6
+    assert sc["fixedEdge"]["edge"] == 4
+    assert sc["fixedEdge"]["startHz"] == 14_000_000
+    assert sc["fixedEdge"]["endHz"] == 14_350_000
+    assert sc["rbw"] == 2
+
+    suffixes = (
+        "receiver",
+        "dual",
+        "mode",
+        "span",
+        "edge",
+        "hold",
+        "refDb",
+        "speed",
+        "duringTx",
+        "centerType",
+        "vbwNarrow",
+        "fixedEdge",
+        "rbw",
+    )
+    for suffix in suffixes:
+        status = payload["fieldStatus"][f"scopeControls.{suffix}"]
+        assert status["observed"] is True, suffix
+        assert status["availability"] == "available", suffix
+
+
+def test_civ_expects_response_scope_get(
+    radio_with_state: IcomRadio,
+) -> None:
+    """Scope GET (empty data) expects a response."""
+    frame = _make_frame(cmd=0x27, sub=0x14, data=b"")
+    assert radio_with_state._civ_runtime._civ_expects_response(frame) is True
+
+
+def test_civ_expects_response_scope_set(
+    radio_with_state: IcomRadio,
+) -> None:
+    """Scope SET (non-empty data) does not expect a data response."""
+    frame = _make_frame(cmd=0x27, sub=0x14, data=b"\x00\x03")
+    assert radio_with_state._civ_runtime._civ_expects_response(frame) is False
+
+    # Single-byte SET (scope_on 0x27 0x10 0x01)
+    frame = _make_frame(cmd=0x27, sub=0x10, data=b"\x01")
+    assert radio_with_state._civ_runtime._civ_expects_response(frame) is False
+
+
+def test_civ_expects_response_main_sub_band_read_vs_set() -> None:
+    """07 D2 is the active-receiver read; 07 D2 with a payload byte is a write (ACK only).
+
+    Classified as a write, the read's fire-and-forget ACK sink is never
+    retired by its ``07 D2 xx`` data reply, so every later blocking command
+    drops it and marks an ACK unclaimed -- which made each managed-TX unkey
+    settle UNCERTAIN on an IC-9700 polling the active receiver.
+    """
+    from rigplane.commands._frame import parse_civ_frame
+    from rigplane.runtime._civ_rx import CivRuntime
+
+    read = parse_civ_frame(bytes.fromhex("fefea2e007d2fd"))
+    write_like = parse_civ_frame(bytes.fromhex("fefea2e007d201fd"))
+    assert CivRuntime._civ_expects_response(read) is True
+    assert CivRuntime._civ_expects_response(write_like) is False
+
+
+def test_update_radio_state_exception_suppressed(radio_with_state: IcomRadio) -> None:
+    """Exception in _update_radio_state_from_frame is suppressed (line 621-622)."""
+    # RadioState uses slots=True, so replace the whole object with a MagicMock
+    mock_state = MagicMock()
+    mock_state.receiver = MagicMock(side_effect=RuntimeError("oops"))
+    radio_with_state._radio_state = mock_state
+    frame = _make_frame(cmd=0x03, data=bcd_encode(14_000_000))
+    radio_with_state._civ_runtime._update_radio_state_from_frame(
+        frame
+    )  # should not raise
+
+
+def test_update_radio_state_with_receiver_field_set(
+    radio_with_state: IcomRadio,
+) -> None:
+    """When frame.receiver is not None, uses MAIN/SUB based on receiver byte (lines 473-476)."""
+    rs = radio_with_state._radio_state
+    freq_data = bcd_encode(7_000_000)
+    # receiver=0x01 means SUB
+    frame = _make_frame(cmd=0x03, data=freq_data, receiver=0x01)
+    radio_with_state._civ_runtime._update_radio_state_from_frame(frame)
+    assert rs.sub.freq == 7_000_000
+
+
+def test_update_radio_state_returns_when_no_radio_state(radio: IcomRadio) -> None:
+    """When _radio_state is None (not set), method returns immediately (line 469)."""
+    radio._radio_state = None
+    frame = _make_frame(cmd=0x03, data=bcd_encode(14_000_000))
+    radio._civ_runtime._update_radio_state_from_frame(frame)  # should not raise
+
+
+# ---------------------------------------------------------------------------
+# _notify_change with callback (lines 628-632)
+# ---------------------------------------------------------------------------
+
+
+def test_notify_change_calls_callback(radio: IcomRadio) -> None:
+    """_notify_change invokes _on_state_change callback (lines 628-632)."""
+    calls: list[tuple[str, dict[str, object]]] = []
+
+    def my_callback(event_name: str, data: dict[str, object]) -> None:
+        calls.append((event_name, data))
+
+    radio._on_state_change = my_callback
+    radio._civ_runtime._notify_change("test_event", {"key": "value"})
+    assert calls == [("test_event", {"key": "value"})]
+
+
+def test_notify_change_callback_exception_suppressed(radio: IcomRadio) -> None:
+    """Exception in callback is suppressed (not propagated)."""
+
+    def failing_callback(event_name: str, data: dict[str, object]) -> None:
+        raise RuntimeError("callback error")
+
+    radio._on_state_change = failing_callback
+    radio._civ_runtime._notify_change("test_event", {})  # should not raise
+
+
+def test_notify_change_no_callback_debug_log(radio: IcomRadio) -> None:
+    """When no callback set, logs debug message (line 634)."""
+    radio._on_state_change = None
+    radio._civ_runtime._notify_change("test_event", {})  # should not raise
+
+
+# ---------------------------------------------------------------------------
+# _publish_scope_frame — queue full (lines 640-643)
+# ---------------------------------------------------------------------------
+
+
+def test_publish_scope_frame_invokes_callback(radio: IcomRadio) -> None:
+    """_publish_scope_frame invokes the scope callback if set."""
+    received = []
+    radio._scope_callback = lambda f: received.append(f)
+
+    dummy_frame = ScopeFrame(
+        receiver=0,
+        mode=1,
+        start_freq_hz=14_000_000,
+        end_freq_hz=14_350_000,
+        pixels=bytes([50] * 10),
+        out_of_range=False,
+    )
+    radio._civ_runtime._publish_scope_frame(dummy_frame)
+    assert received == [dummy_frame]
+
+
+# ---------------------------------------------------------------------------
+# _start_civ_worker — commander already exists (line 726)
+# ---------------------------------------------------------------------------
+
+
+async def test_start_civ_worker_reuses_existing_commander(radio: IcomRadio) -> None:
+    """_start_civ_worker reuses existing commander if already created (line 726)."""
+    from rigplane.commander import IcomCommander
+
+    # Pre-create a commander
+    mock_commander = MagicMock(spec=IcomCommander)
+    radio._commander = mock_commander
+
+    with patch("rigplane._civ_rx.IcomCommander") as mock_cls:
+        radio._civ_runtime.start_worker()
+        mock_cls.assert_not_called()  # Commander should NOT be re-created
+
+
+# ---------------------------------------------------------------------------
+# ACK-sink answer windows (MOR-4384)
+# ---------------------------------------------------------------------------
+
+
+async def test_cleanup_expires_a_sink_whose_answer_window_closed(
+    radio: IcomRadio,
+) -> None:
+    """A sent sink leaves once its own answer window from the send closed.
+
+    MOR-4384: nothing drains or presumes sinks lost before a blocking
+    command; the runtime's housekeeping expires a sink only when its
+    window (``_civ_get_timeout`` from its send stamp) is over, and records
+    that its late FB/FA could still arrive unclaimed.
+    """
+    tracker = radio._civ_request_tracker
+    closed = tracker.register_ack(wait=False)
+    open_ = tracker.register_ack(wait=False)
+    assert isinstance(closed, int) and isinstance(open_, int)
+    radio._civ_get_timeout = 2.0
+    tracker.mark_sent(0.0, token=closed)
+    tracker.mark_sent(float("inf"), token=open_)
+
+    radio._civ_runtime._cleanup_stale_civ_waiters()
+
+    assert tracker.ack_sink_count == 1
+    assert tracker.ack_unclaimed_at is not None
+
+
+# ---------------------------------------------------------------------------
+# _check_connected (line 687-688)
+# ---------------------------------------------------------------------------
+
+
+def test_check_connected_raises_when_not_connected(radio: IcomRadio) -> None:
+    """_check_connected raises when _connected is False."""
+    radio._connected = False
+    with pytest.raises(ConnectionError, match="Not connected to radio"):
+        radio._civ_runtime._check_connected()
+
+
+def test_check_connected_raises_when_civ_transport_none(radio: IcomRadio) -> None:
+    """_check_connected raises when _civ_transport is None."""
+    radio._civ_transport = None
+    with pytest.raises(ConnectionError, match="Not connected to radio"):
+        radio._civ_runtime._check_connected()
+
+
+# ---------------------------------------------------------------------------
+# Transceiver status family (#136) — state projection
+# ---------------------------------------------------------------------------
+
+
+def test_update_radio_state_tuner_status(radio_with_state: IcomRadio) -> None:
+    """Tuner/ATU status (0x1C 0x01) is observation-backed (MOR-437)."""
+    frame = CivFrame(0xE0, 0x98, 0x1C, 0x01, b"\x02")
+    radio_with_state._civ_runtime._update_state_cache_from_frame(frame)
+    field = radio_with_state._state_store.snapshot().field(
+        "global.operator_controls.tuner_status"
+    )
+    assert field.value == 2
+
+
+#: Directed IC-7610 1C/03 reply: 7.100 MHz in the five-byte BCD
+#: operating-frequency format (same as commands 00/03/05).
+_TX_FREQ_REPLY = "FE FE E0 98 1C 03 00 00 10 07 00 FD"
+
+
+def _feed_selected_and_split(
+    radio: IcomRadio,
+    *,
+    selected_sub: bool,
+    split_on: bool | None,
+) -> None:
+    """Feed the 07 D2 selected-band read and (unless ``None``) the 0F split
+    readback into the radio's state store, as the poll loop would."""
+
+    runtime = radio._civ_runtime
+    runtime._update_state_cache_from_frame(
+        _make_frame(cmd=0x07, data=b"\xd2\x01" if selected_sub else b"\xd2\x00")
+    )
+    if split_on is not None:
+        runtime._update_state_cache_from_frame(
+            _make_frame(cmd=0x0F, data=b"\x01" if split_on else b"\x00")
+        )
+
+
+def test_update_radio_state_direct_tx_frequency_stamps_profile_declared_max_age(
+    radio_with_state: IcomRadio,
+) -> None:
+    # Full directed IC-7610 response: 1C/03 + 7.100 MHz in five-byte BCD.
+    # max_age is the profile's declared tx_target TTL (MOR-2540:
+    # rigs/ic7610.toml field_policies."global.tx_state.tx_target"), no longer
+    # the profile-default TTL this field inherited before it was declared.
+    # A FRESH split=OFF readback licenses the MAIN label (the reply itself
+    # carries no receiver).
+    _feed_selected_and_split(radio_with_state, selected_sub=False, split_on=False)
+    frame = parse_civ_frame(bytes.fromhex(_TX_FREQ_REPLY))
+    radio_with_state._civ_runtime._update_state_cache_from_frame(frame)
+
+    snapshot = radio_with_state._state_store.snapshot()
+    field = snapshot.field("global.tx_state.tx_target")
+    assert field.value == KnownTxTarget(
+        receiver="MAIN", slot=None, frequency_hz=7_100_000
+    )
+    assert field.max_age == 4.0
+    radio_with_state._state_store.mark_stale_due(
+        now=field.last_observed_monotonic + field.max_age + 0.001
+    )
+    assert (
+        radio_with_state._state_store.snapshot()
+        .field("global.tx_state.tx_target")
+        .freshness
+        is FreshnessState.STALE
+    )
+
+
+def test_direct_tx_frequency_max_age_falls_back_without_state_acquisition(
+    radio_with_state: IcomRadio,
+) -> None:
+    """MOR-2223: with no [state_acquisition] block on the profile, the
+    directed 1C/03 response still gets a finite max_age on tx_target — the
+    shared fallback — instead of aging forever (StateStore.mark_stale_due
+    only ages entries with max_age set)."""
+    _feed_selected_and_split(radio_with_state, selected_sub=False, split_on=False)
+    radio_with_state._profile = dataclasses.replace(
+        radio_with_state._profile, state_acquisition=None
+    )
+    frame = parse_civ_frame(bytes.fromhex(_TX_FREQ_REPLY))
+    radio_with_state._civ_runtime._update_state_cache_from_frame(frame)
+
+    field = radio_with_state._state_store.snapshot().field("global.tx_state.tx_target")
+    assert field.value == KnownTxTarget(
+        receiver="MAIN", slot=None, frequency_hz=7_100_000
+    )
+    assert field.max_age == 3.0
+
+
+def test_undecodable_tx_frequency_reply_produces_no_tx_target(
+    radio_with_state: IcomRadio,
+) -> None:
+    """MOR-2540 fail closed: a 1C/03 reply that does not decode never writes
+    tx_target — a short payload misses the five-byte branch guard, and a
+    full-length invalid-BCD payload is rejected by ``bcd_decode`` itself,
+    which ``_apply_state_store_observations`` catches so the frame publishes
+    nothing."""
+
+    # Feed a FRESH split=OFF first so the receiver rule licenses a label:
+    # the decoder's own payload rejection is what must stop the publish
+    # here, not the missing split fact (review R2 B4).
+    _feed_selected_and_split(radio_with_state, selected_sub=False, split_on=False)
+    runtime = radio_with_state._civ_runtime
+    runtime._update_state_cache_from_frame(
+        _make_frame(cmd=0x1C, sub=0x03, data=b"\x00\x00\x10\x07")
+    )
+    runtime._update_state_cache_from_frame(
+        _make_frame(cmd=0x1C, sub=0x03, data=b"\xff\xff\xff\xff\xff")
+    )
+
+    with pytest.raises(KeyError):
+        radio_with_state._state_store.snapshot().field("global.tx_state.tx_target")
+
+
+@pytest.mark.parametrize(
+    ("selected_sub", "split_on", "expected_receiver"),
+    [
+        pytest.param(False, False, "MAIN", id="main-selected-split-off"),
+        pytest.param(False, True, "SUB", id="main-selected-split-on"),
+        pytest.param(True, False, "MAIN", id="sub-selected-split-off"),
+        pytest.param(True, True, "SUB", id="sub-selected-split-on"),
+    ],
+)
+def test_tx_target_receiver_follows_fresh_split_not_selected_band(
+    radio_with_state: IcomRadio,
+    selected_sub: bool,
+    split_on: bool,
+    expected_receiver: TxReceiver,
+) -> None:
+    """MOR-2540 B1: a plain 1C/03 reply carries no receiver, so the label
+    follows the profile's ``main_unless_split`` rule (IC-7610 Basic Manual
+    p.3-2 "transmit on only the Main band (except in Split Frequency
+    operation)", p.4-9: split = Main receives, Sub transmits): MAIN unless a
+    FRESH split readback is ON, then SUB. The selected band never decides
+    it — MAIN selected + split ON must label SUB, and SUB selected + split
+    OFF must label MAIN."""
+
+    _feed_selected_and_split(
+        radio_with_state, selected_sub=selected_sub, split_on=split_on
+    )
+    radio_with_state._civ_runtime._update_state_cache_from_frame(
+        parse_civ_frame(bytes.fromhex(_TX_FREQ_REPLY))
+    )
+
+    field = radio_with_state._state_store.snapshot().field("global.tx_state.tx_target")
+    assert field.value == KnownTxTarget(
+        receiver=expected_receiver, slot=None, frequency_hz=7_100_000
+    )
+
+
+def test_tx_target_fails_closed_immediately_when_split_is_unknown(
+    radio_with_state: IcomRadio,
+) -> None:
+    """MOR-2540 fail closed: with no 0F split fact in the store, the
+    transceiver-wide reply cannot name a receiver, so it publishes an
+    unknown target at once — TUNE reads tx-target-unknown immediately,
+    and the reply still credits its scheduler request (review R2 B3)."""
+
+    _feed_selected_and_split(radio_with_state, selected_sub=False, split_on=None)
+    radio_with_state._civ_runtime._update_state_cache_from_frame(
+        parse_civ_frame(bytes.fromhex(_TX_FREQ_REPLY))
+    )
+
+    field = radio_with_state._state_store.snapshot().field("global.tx_state.tx_target")
+    assert field.value == UnknownTxTarget(reason="not-observed")
+
+
+def test_tx_target_fails_closed_immediately_when_split_is_stale(
+    radio_with_state: IcomRadio,
+) -> None:
+    """MOR-2540 fail closed: a split readback older than its own TTL no
+    longer licenses a receiver label — a stale fact must not keep badging
+    the band it last saw, and the previously known target is withdrawn at
+    once rather than lingering until its own TTL."""
+
+    # A known MAIN-labelled target first (split ON would label SUB; either
+    # way the label below must be gone).
+    _feed_selected_and_split(radio_with_state, selected_sub=True, split_on=True)
+    radio_with_state._civ_runtime._update_state_cache_from_frame(
+        parse_civ_frame(bytes.fromhex(_TX_FREQ_REPLY))
+    )
+    store = radio_with_state._state_store
+    known = store.snapshot().field("global.tx_state.tx_target")
+    assert known.value == KnownTxTarget(
+        receiver="SUB", slot=None, frequency_hz=7_100_000
+    )
+
+    split = store.snapshot().field("global.tx_state.split")
+    assert split.value is True
+    store.mark_stale_due(now=split.last_observed_monotonic + split.max_age + 0.001)
+    assert (
+        store.snapshot().field("global.tx_state.split").freshness
+        is FreshnessState.STALE
+    )
+    radio_with_state._civ_runtime._update_state_cache_from_frame(
+        parse_civ_frame(bytes.fromhex(_TX_FREQ_REPLY))
+    )
+
+    field = store.snapshot().field("global.tx_state.tx_target")
+    assert field.value == UnknownTxTarget(reason="stale")
+
+
+def _split_and_tx_target_acquisition() -> RadioAcquisitionProfile:
+    """A split/tx_target acquisition shape — the review R2 B3
+    reproduction's scheduler model."""
+
+    split = FieldPath.global_("tx_state", "split")
+    tx_target = FieldPath.global_("tx_state", "tx_target")
+    return RadioAcquisitionProfile(
+        provider="icom_civ",
+        capabilities=(
+            FieldCapability(path=split, polling=True),
+            FieldCapability(path=tx_target, polling=True),
+        ),
+        field_policies={
+            split: AcquisitionPolicy(cadence_seconds=1.5, freshness_ttl_seconds=3.0),
+            tx_target: AcquisitionPolicy(
+                cadence_seconds=1.0, freshness_ttl_seconds=4.0
+            ),
+        },
+    )
+
+
+def test_unlabelled_1c03_reply_credits_its_request_and_resumes_on_cadence(
+    radio_with_state: IcomRadio,
+) -> None:
+    """MOR-2540 review R2 B3: a 1C 03 reply arriving while split is stale
+    must still close out its pending scheduler request and fail closed at
+    once.
+
+    Before the fix the unlabelled reply produced no observation, so the
+    only credit path (``_record_scheduler_result_for_observation``) never
+    ran: the drain held the request for max_age (4.0 s) plus the healthy
+    grace (6.0 s), the next 1C 03 went out ~11 s later, and a sub-second
+    split gap cost an ~8 s TUNE outage. Now the reply publishes an
+    UnknownTxTarget: the request is credited, the next cadence read is
+    issued on schedule, and the target reads unknown immediately."""
+
+    tx_target = FieldPath.global_("tx_state", "tx_target")
+    scheduler = AcquisitionScheduler(profile=_split_and_tx_target_acquisition())
+    radio_with_state._acquisition_scheduler = scheduler  # noqa: SLF001
+
+    # A known target first, then split ages past its own 3.0 s TTL.
+    _feed_selected_and_split(radio_with_state, selected_sub=False, split_on=False)
+    radio_with_state._civ_runtime._update_state_cache_from_frame(
+        parse_civ_frame(bytes.fromhex(_TX_FREQ_REPLY))
+    )
+    store = radio_with_state._state_store
+    split_field = store.snapshot().field("global.tx_state.split")
+    store.mark_stale_due(
+        now=split_field.last_observed_monotonic + split_field.max_age + 0.001
+    )
+
+    # The drain issues and dispatches the tx_target read.
+    scheduler.due_requests(now=0.0)
+    pending = scheduler.pending_requests()
+    assert any(tx_target in request.paths for request in pending)
+    for request in pending:
+        scheduler.record_dispatch(request.id, paths=request.paths, now=time.monotonic())
+
+    # The radio answers 1C 03 while split is STALE.
+    radio_with_state._civ_runtime._update_state_cache_from_frame(
+        parse_civ_frame(bytes.fromhex(_TX_FREQ_REPLY))
+    )
+
+    # The reply closed its request out: nothing is pending for tx_target...
+    assert not any(
+        tx_target in request.paths for request in scheduler.pending_requests()
+    )
+    # ...so the next cadence read is issued on schedule (1.0 s cadence),
+    # not held by the drain until max_age + healthy grace (~11 s).
+    resent = scheduler.due_requests(now=time.monotonic() + 1.5)
+    assert any(tx_target in request.paths for request in resent)
+    # And the target failed closed at once.
+    field = store.snapshot().field(tx_target)
+    assert field.value == UnknownTxTarget(reason="stale")
+
+
+def test_direct_tx_frequency_coexists_with_ic7300_derived_target() -> None:
+    radio = IcomRadio("192.0.2.1", model="IC-7300")
+    radio._radio_state = RadioState()
+    frame = parse_civ_frame(bytes.fromhex("FE FE E0 94 1C 03 00 00 50 14 00 FD"))
+    radio._civ_runtime._update_state_cache_from_frame(frame)
+
+    path = FieldPath.global_("tx_state", "tx_target")
+    direct = radio._state_store.snapshot().field(path)
+    assert direct.value == KnownTxTarget(
+        receiver="MAIN", slot=None, frequency_hz=14_500_000
+    )
+    assert direct.max_age == 3.0
+
+    # The ordinary IC-7300 derivation remains authoritative when it follows a
+    # one-off direct response, and retains the same finite profile TTL.
+    derived_at = direct.last_observed_monotonic + 0.1
+    radio._state_store.apply(
+        Observation(
+            path=path,
+            value=KnownTxTarget(receiver="MAIN", slot="A", frequency_hz=14_250_000),
+            source=SourceMetadata(source="local_reconcile", provider="icom_civ"),
+            timestamp_monotonic=derived_at,
+            max_age=direct.max_age,
+            provider_generation=radio._state_store.provider_generation,
+        )
+    )
+    derived = radio._state_store.snapshot().field(path)
+    assert derived.value == KnownTxTarget(
+        receiver="MAIN", slot="A", frequency_hz=14_250_000
+    )
+    radio._state_store.mark_stale_due(now=derived_at + derived.max_age + 0.001)
+    assert radio._state_store.snapshot().field(path).freshness is FreshnessState.STALE
+
+
+def test_update_radio_state_rit_frequency(radio_with_state: IcomRadio) -> None:
+    """RIT frequency (0x21 0x00) → RadioState.rit_freq."""
+    # 150 Hz positive: d0=0x50, d1=0x01, sign=0x00
+    frame = CivFrame(0xE0, 0x98, 0x21, 0x00, b"\x50\x01\x00")
+    radio_with_state._civ_runtime._update_radio_state_from_frame(frame)
+    assert radio_with_state._radio_state.rit_freq == 150
+
+
+def test_update_radio_state_rit_frequency_negative(radio_with_state: IcomRadio) -> None:
+    """RIT frequency negative (0x21 0x00) → RadioState.rit_freq."""
+    frame = CivFrame(0xE0, 0x98, 0x21, 0x00, b"\x00\x02\x01")
+    radio_with_state._civ_runtime._update_radio_state_from_frame(frame)
+    assert radio_with_state._radio_state.rit_freq == -200
+
+
+def test_update_radio_state_rit_status(radio_with_state: IcomRadio) -> None:
+    """RIT status (0x21 0x01) → RadioState.rit_on."""
+    frame = CivFrame(0xE0, 0x98, 0x21, 0x01, b"\x01")
+    radio_with_state._civ_runtime._update_radio_state_from_frame(frame)
+    assert radio_with_state._radio_state.rit_on is True
+
+
+def test_update_radio_state_rit_tx_status(radio_with_state: IcomRadio) -> None:
+    """RIT TX status (0x21 0x02) → RadioState.rit_tx."""
+    frame = CivFrame(0xE0, 0x98, 0x21, 0x02, b"\x01")
+    radio_with_state._civ_runtime._update_radio_state_from_frame(frame)
+    assert radio_with_state._radio_state.rit_tx is True
+
+
+def test_update_radio_state_comp_meter_observation_backed(
+    radio_with_state: IcomRadio,
+) -> None:
+    """MOR-460: comp meter (0x15 0x14) mirror removed; the StateStore is truth.
+
+    The PA compression meter is promoted to ``global.meters.comp``; the legacy
+    ``RadioState.comp_meter`` mirror is no longer written and stays at its
+    default 0 while the StateStore carries the decoded value.
+    """
+    rs = radio_with_state._radio_state
+    # 42 BCD: 0x00 0x42. Calibrated (MOR-2540): 42·15/130 ≈ 4.85 dB
+    # (guide anchors: 0=0 dB, 130=15 dB).
+    frame = CivFrame(0xE0, 0x98, 0x15, 0x14, b"\x00\x42")
+    radio_with_state._civ_runtime._update_state_cache_from_frame(frame)
+    assert rs.comp_meter == 0
+    field = radio_with_state._state_store.snapshot().field("global.meters.comp")
+    assert field.value == (42 / 130) * 15.0
+
+
+def test_update_radio_state_vd_meter_observation_backed(
+    radio_with_state: IcomRadio,
+) -> None:
+    """MOR-460: vd meter (0x15 0x15) mirror removed; the StateStore is truth.
+
+    The PA supply-voltage meter is promoted to ``global.meters.vd``; the legacy
+    ``RadioState.vd_meter`` mirror is no longer written and stays at its default
+    0 while the StateStore carries the decoded value.
+    """
+    rs = radio_with_state._radio_state
+    # BCD 0130 = raw 130. Calibrated (MOR-2540): 130·10/151 ≈ 8.61 V
+    # (guide anchors: 0=0 V, 151=10 V).
+    frame = CivFrame(0xE0, 0x98, 0x15, 0x15, b"\x01\x30")
+    radio_with_state._civ_runtime._update_state_cache_from_frame(frame)
+    assert rs.vd_meter == 0
+    field = radio_with_state._state_store.snapshot().field("global.meters.vd")
+    assert field.value == (130 / 151) * 10.0
+
+
+def test_update_radio_state_id_meter_observation_backed(
+    radio_with_state: IcomRadio,
+) -> None:
+    """MOR-460: id meter (0x15 0x16) mirror removed; the StateStore is truth.
+
+    The PA drain-current meter is promoted to ``global.meters.id``; the legacy
+    ``RadioState.id_meter`` mirror is no longer written and stays at its default
+    0 while the StateStore carries the decoded value.
+    """
+    rs = radio_with_state._radio_state
+    # BCD 0055 = raw 55. Calibrated (MOR-2540): 55·10/77 ≈ 7.14 A
+    # (guide anchors: 0=0 A, 77=10 A).
+    frame = CivFrame(0xE0, 0x98, 0x15, 0x16, b"\x00\x55")
+    radio_with_state._civ_runtime._update_state_cache_from_frame(frame)
+    assert rs.id_meter == 0
+    field = radio_with_state._state_store.snapshot().field("global.meters.id")
+    assert field.value == (55 / 77) * 10.0
+
+
+def test_update_radio_state_power_meter(radio_with_state: IcomRadio) -> None:
+    """Power meter (0x15 0x11) → RadioState.power_meter."""
+    frame = CivFrame(0xE0, 0x98, 0x15, 0x11, b"\x01\x50")
+    radio_with_state._civ_runtime._update_radio_state_from_frame(frame)
+    assert radio_with_state._radio_state.power_meter == 150
+
+
+def test_update_radio_state_swr_meter(radio_with_state: IcomRadio) -> None:
+    """SWR meter (0x15 0x12) → RadioState.swr_meter."""
+    frame = CivFrame(0xE0, 0x98, 0x15, 0x12, b"\x00\x48")
+    radio_with_state._civ_runtime._update_radio_state_from_frame(frame)
+    assert radio_with_state._radio_state.swr_meter == 48
+
+
+def test_update_radio_state_alc_meter(radio_with_state: IcomRadio) -> None:
+    """ALC meter (0x15 0x13) → RadioState.alc_meter."""
+    frame = CivFrame(0xE0, 0x98, 0x15, 0x13, b"\x01\x20")
+    radio_with_state._civ_runtime._update_radio_state_from_frame(frame)
+    assert radio_with_state._radio_state.alc_meter == 120
+
+
+@pytest.mark.parametrize(  # type: ignore[untyped-decorator]
+    "sub",
+    [0x01, 0x05],
+)
+def test_update_radio_state_cmd15_dcd_observation_backed(
+    radio_with_state: IcomRadio,
+    sub: int,
+) -> None:
+    """MOR-466: cmd 0x15 sub 0x01/0x05 squelch-open mirror removed; store is truth.
+
+    The squelch-open / DCD (RX-busy) status is promoted to the neutral
+    ``receiver.<id>.operator_toggles.dcd`` bool; the legacy
+    ``ReceiverState.s_meter_sql_open`` mirror is no longer written and stays at
+    its default ``False`` while the StateStore carries the decoded bool. Both
+    subs feed the same ``dcd`` path.
+    """
+    frame = CivFrame(0xE0, 0x98, 0x15, sub, b"\x01")
+    radio_with_state._civ_runtime._update_state_cache_from_frame(frame)
+    rs = radio_with_state._radio_state
+    assert rs.receiver(rs.active).s_meter_sql_open is False
+    field = radio_with_state._state_store.snapshot().field(
+        "receiver.0.operator_toggles.dcd"
+    )
+    assert field.value is True
+
+
+def test_update_radio_state_cmd15_dcd_false(radio_with_state: IcomRadio) -> None:
+    """MOR-466: a zero squelch-open byte observes ``dcd`` as False."""
+    frame = CivFrame(0xE0, 0x98, 0x15, 0x05, b"\x00")
+    radio_with_state._civ_runtime._update_state_cache_from_frame(frame)
+    field = radio_with_state._state_store.snapshot().field(
+        "receiver.0.operator_toggles.dcd"
+    )
+    assert field.value is False
+
+
+# ---------------------------------------------------------------------------
+# MOR-2544 — power_on inferred from CI-V liveness when the profile declares
+# power control but no power-status query (get_powerstat undeclared).
+# ---------------------------------------------------------------------------
+
+_POWER_ON_PATH = "global.tx_state.power_on"
+
+
+async def _route_frame_at(radio: IcomRadio, frame: CivFrame, at: float) -> None:
+    """Route one CI-V frame through the real rx path at a fixed monotonic time."""
+    with patch("rigplane.runtime._civ_rx.time.monotonic", return_value=at):
+        await radio._civ_runtime._route_civ_frame(  # noqa: SLF001
+            frame,
+            generation=radio._civ_epoch,  # noqa: SLF001
+        )
+
+
+@pytest.mark.asyncio
+async def test_power_on_inferred_true_and_kept_fresh_while_civ_answers_arrive(
+    radio: IcomRadio,
+) -> None:
+    """MOR-2544 (a): IC-7610 answers → power_on True, fresh past one 30 s TTL.
+
+    RED at 302b96e1: nothing publishes ``power_on`` without a 0x18 frame, so
+    the first ``snapshot().field`` lookup raises ``KeyError``.
+    """
+    clock = FreshnessClock(start=100.0)
+    radio._state_store._freshness_clock = clock  # noqa: SLF001
+    meter = _make_frame(cmd=0x15, sub=0x02, data=_bcd2(42))
+
+    await _route_frame_at(radio, meter, 100.0)
+    field = radio._state_store.snapshot().field(_POWER_ON_PATH)  # noqa: SLF001
+    assert field.value is True
+    assert field.freshness is FreshnessState.FRESH
+    assert field.max_age == 30.0
+
+    # Answers keep arriving every 15 s; 45 s after the FIRST answer — well
+    # past one 30 s TTL measured from it — a freshness tick still finds the
+    # field FRESH because every answer re-stamped it.
+    for at in (115.0, 130.0):
+        clock.advance(15.0)
+        await _route_frame_at(radio, meter, at)
+    clock.advance(15.0)  # now 145.0; last answer at 130.0
+    radio._state_store.mark_stale_due(now=145.0)  # noqa: SLF001
+    field = radio._state_store.snapshot().field(_POWER_ON_PATH)  # noqa: SLF001
+    assert field.value is True
+    assert field.freshness is FreshnessState.FRESH
+
+    # When answers stop, the same 30 s TTL decays the field normally.
+    clock.advance(31.0)  # now 176.0; last answer still 130.0
+    radio._state_store.mark_stale_due(now=176.0)  # noqa: SLF001
+    assert (
+        radio._state_store.snapshot().field(_POWER_ON_PATH).freshness  # noqa: SLF001
+        is FreshnessState.STALE
+    )
+
+
+def _power_on_events(
+    events: list[tuple[str, dict[str, Any]]],
+) -> list[tuple[str, dict[str, Any]]]:
+    return [
+        event
+        for event in events
+        if event[0] == "state_store_changed" and _POWER_ON_PATH in event[1]["paths"]
+    ]
+
+
+def test_inferred_power_on_is_not_restamped_by_every_answer(
+    radio: IcomRadio, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """MOR-4211: answers inside half the 30 s TTL do not re-apply power_on.
+
+    An unchanged re-stamp is still a ``state_store_changed`` event, and
+    each such event drives a state broadcast.
+    """
+    clock = VirtualClock(start=100.0)
+    clock.scope_to(monkeypatch, civ_rx_module)
+    events: list[tuple[str, dict[str, Any]]] = []
+    radio._on_state_change = lambda name, data: events.append((name, data))
+    answer = _make_frame(cmd=0x16, sub=0x22, data=b"\x01")
+
+    for _ in range(10):
+        radio._civ_runtime._apply_state_store_observations(answer)  # noqa: SLF001
+        clock.advance(1.0)
+
+    assert len(_power_on_events(events)) == 1
+    field = radio._state_store.snapshot().field(_POWER_ON_PATH)  # noqa: SLF001
+    assert field.value is True
+    assert field.last_observed_monotonic == 100.0
+
+
+def test_inferred_power_on_is_restamped_once_half_its_ttl_has_passed(
+    radio: IcomRadio, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """MOR-4211: the first answer at half the TTL re-stamps power_on."""
+    clock = VirtualClock(start=100.0)
+    clock.scope_to(monkeypatch, civ_rx_module)
+    answer = _make_frame(cmd=0x16, sub=0x22, data=b"\x01")
+    radio._civ_runtime._apply_state_store_observations(answer)  # noqa: SLF001
+
+    clock.advance(14.9)
+    radio._civ_runtime._apply_state_store_observations(answer)  # noqa: SLF001
+    store = radio._state_store  # noqa: SLF001
+    assert store.snapshot().field(_POWER_ON_PATH).last_observed_monotonic == 100.0
+
+    clock.advance(0.1)
+    radio._civ_runtime._apply_state_store_observations(answer)  # noqa: SLF001
+    assert store.snapshot().field(_POWER_ON_PATH).last_observed_monotonic == 115.0
+
+
+def test_stale_inferred_power_on_is_restamped_by_the_next_answer(
+    radio: IcomRadio, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """MOR-4211: a real freshness change (STALE -> FRESH) still lands and notifies."""
+    clock = VirtualClock(start=100.0)
+    clock.scope_to(monkeypatch, civ_rx_module)
+    events: list[tuple[str, dict[str, Any]]] = []
+    radio._on_state_change = lambda name, data: events.append((name, data))
+    answer = _make_frame(cmd=0x16, sub=0x22, data=b"\x01")
+    store = radio._state_store  # noqa: SLF001
+    radio._civ_runtime._apply_state_store_observations(answer)  # noqa: SLF001
+
+    clock.advance(31.0)
+    store.mark_stale_due(now=clock())
+    assert store.snapshot().field(_POWER_ON_PATH).freshness is FreshnessState.STALE
+    radio._civ_runtime._apply_state_store_observations(answer)  # noqa: SLF001
+
+    field = store.snapshot().field(_POWER_ON_PATH)
+    assert field.freshness is FreshnessState.FRESH
+    assert field.last_observed_monotonic == 131.0
+    assert len(_power_on_events(events)) == 2
+
+
+def test_unchanged_reread_of_a_polled_field_still_publishes_its_observation(
+    radio: IcomRadio, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """MOR-4211: a same-value re-read keeps notifying with its own path.
+
+    The web client confirms a pending command on the commanded field's own
+    post-ack observation, whatever value it carries
+    (``pending-intent-table.ts: latestPendingParam`` reads
+    ``fieldStatus[path].lastObservedMonotonic``), so a polled field's
+    unchanged re-read must still move its marker and announce the path.
+    """
+    clock = VirtualClock(start=100.0)
+    clock.scope_to(monkeypatch, civ_rx_module)
+    events: list[tuple[str, dict[str, Any]]] = []
+    radio._on_state_change = lambda name, data: events.append((name, data))
+    answer = _make_frame(cmd=0x16, sub=0x22, data=b"\x01")
+    path = "receiver.0.operator_toggles.nb"
+
+    radio._civ_runtime._apply_state_store_observations(answer)  # noqa: SLF001
+    clock.advance(1.0)
+    events.clear()
+    radio._civ_runtime._apply_state_store_observations(answer)  # noqa: SLF001
+
+    assert events == [
+        ("state_store_changed", {"coalesced": False, "paths": [path]}),
+    ]
+    field = radio._state_store.snapshot().field(path)  # noqa: SLF001
+    assert field.value is True
+    assert field.last_observed_monotonic == 101.0
+
+
+@pytest.mark.asyncio
+async def test_power_on_inference_accepted_after_connect_advances_generation(
+    radio: IcomRadio,
+) -> None:
+    """MOR-2544 (review finding 1): the inferred observation must carry the
+    store's live provider generation, or ``StateStore.apply`` rejects it
+    after any connect — on a connected radio ``powerOn`` would stay null.
+
+    RED at 3b4473cc: the inference was appended after the generation-stamping
+    loop with ``provider_generation=0``, so at generation ≥ 1 the store
+    rejects it and ``snapshot().field`` raises ``KeyError``.
+    """
+    radio._civ_runtime.advance_generation("connect")  # noqa: SLF001
+    assert radio._state_store.provider_generation >= 1  # noqa: SLF001
+
+    await _route_frame_at(radio, _make_frame(cmd=0x15, sub=0x02, data=_bcd2(42)), 100.0)
+
+    field = radio._state_store.snapshot().field(_POWER_ON_PATH)  # noqa: SLF001
+    assert field.value is True
+    assert (
+        field.provider_generation == radio._state_store.provider_generation  # noqa: SLF001
+    )
+
+
+@pytest.mark.asyncio
+async def test_powerstat_is_fire_and_forget_only_for_power_on(
+    radio: IcomRadio,
+) -> None:
+    send_raw = AsyncMock(return_value=None)
+    send_expect = AsyncMock(return_value=_make_frame(cmd=0xFB))
+
+    with (
+        patch.object(radio, "_send_civ_raw", send_raw),
+        patch.object(radio, "_send_civ_expect", send_expect),
+    ):
+        await radio.set_powerstat(True)
+        send_raw.assert_awaited_once()
+        assert send_raw.await_args.kwargs["wait_response"] is False
+        send_expect.assert_not_awaited()
+
+        send_raw.reset_mock()
+        await radio.set_powerstat(False)
+        send_raw.assert_not_awaited()
+        send_expect.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_powerstat_ack_records_last_commanded_and_answers_clear_it(
+    radio: IcomRadio,
+) -> None:
+    """MOR-2544 (review findings 2–3): the power command's acknowledgement is
+    ``0xFB`` (parsed by ``set_powerstat``; never a ``0x18 00`` frame), and the
+    ACKed state is retained on the radio — outside the store, so it survives
+    ``advance_generation``. A NAK records nothing; the next decoded answer
+    overrides the retained command.
+
+    RED at 3b4473cc: ``_last_commanded_powerstat`` does not exist
+    (``AttributeError``) and nothing records the ACK.
+    """
+    ack = _make_frame(cmd=0xFB)
+    nak = _make_frame(cmd=0xFA)
+
+    with patch.object(radio, "_send_civ_expect", AsyncMock(return_value=ack)):
+        await radio.set_powerstat(False)
+    assert radio._last_commanded_powerstat is False  # noqa: SLF001
+
+    # A rejected power-off (0xFA) raises and does not touch the retained state.
+    with patch.object(radio, "_send_civ_expect", AsyncMock(return_value=nak)):
+        with pytest.raises(CommandError):
+            await radio.set_powerstat(False)
+    assert radio._last_commanded_powerstat is False  # noqa: SLF001
+
+    # The retained command survives every store-clearing generation advance.
+    for reason in ("watchdog-timeout", "reconnect-attempt", "serial-soft-reconnect"):
+        radio._civ_runtime.advance_generation(reason)  # noqa: SLF001
+    assert radio._last_commanded_powerstat is False  # noqa: SLF001
+
+    # The next decoded frame from the radio is fresh ON evidence: it clears
+    # the retained command and re-observes power_on=True through the store.
+    await _route_frame_at(radio, _make_frame(cmd=0x15, sub=0x02, data=_bcd2(42)), 100.0)
+    assert radio._last_commanded_powerstat is None  # noqa: SLF001
+    assert (
+        radio._state_store.snapshot().field(_POWER_ON_PATH).value  # noqa: SLF001
+        is True
+    )
+
+
+@pytest.mark.asyncio
+async def test_fire_and_forget_power_on_writes_no_power_on_observation(
+    radio: IcomRadio,
+) -> None:
+    """Dispatching POWER ON does not fabricate a provider observation."""
+    with patch.object(
+        radio, "_send_civ_expect", AsyncMock(return_value=_make_frame(cmd=0xFB))
+    ):
+        await radio.set_powerstat(False)
+    before = radio._state_store.snapshot()  # noqa: SLF001
+    assert before.field(_POWER_ON_PATH).value is False  # noqa: SLF001
+
+    with patch.object(radio, "_send_civ_raw", AsyncMock(return_value=None)):
+        await radio.set_powerstat(True)
+    snapshot = radio._state_store.snapshot()  # noqa: SLF001
+    assert snapshot.field(_POWER_ON_PATH).value is False  # noqa: SLF001
+    assert snapshot.observation_seq == before.observation_seq  # noqa: SLF001
+
+
+def _public_power_payload(radio: IcomRadio, *, receiver_count: int) -> dict[str, Any]:
+    """The exact public payload the frontend consumes for ``powerOn``."""
+    return build_public_state_payload_from_snapshot(
+        radio._state_store.snapshot(),  # noqa: SLF001
+        radio=radio,
+        receiver_count=receiver_count,
+    )
+
+
+async def _acknowledged_power_off(radio: IcomRadio) -> None:
+    """Run the real POWER OFF command against a radio that answers 0xFB.
+
+    Calls ``IcomRadio.set_powerstat`` directly — the provider seam every
+    command surface funnels into — so the ACKed power state lands in the
+    store as a generation-stamped provider observation built by the same
+    helper the CI-V receive path uses.
+    """
+    with patch.object(
+        radio, "_send_civ_expect", AsyncMock(return_value=_make_frame(cmd=0xFB))
+    ):
+        await radio.set_powerstat(False)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(  # type: ignore[untyped-decorator]
+    ("model", "receiver_count"),
+    [("IC-7610", 2), ("IC-7300", 1)],
+    ids=["lan-ic7610", "ic7300-profile"],
+)
+async def test_power_cycle_through_public_payload_and_field_status(
+    radio: IcomRadio,
+    model: str,
+    receiver_count: int,
+) -> None:
+    """MOR-2544 full cycle, IC-7610 (the LAN fixture) and IC-7300 profile:
+
+    both parametrisations run the LAN IC-7610 fixture with only
+    ``_profile`` swapped (no serial transport is exercised — the IC-7300
+    leg varies the profile, not the link shape).
+
+    answers → ``powerOn: true``; ACKed power-off → ``false``; repeated
+    ``advance_generation`` (watchdog / soft reconnect) with no answers →
+    still ``false`` with a frontend-accepted ``fieldStatus.powerOn``; the
+    POWER ON dispatch does not create an observation; the first answer after
+    startup publishes ``true``.
+
+    RED at 3b4473cc: ``set_powerstat`` observed nothing from the ACK and the
+    radio had no ``_last_commanded_powerstat`` (``AttributeError``), so the
+    ACKed power-off left the stale observed True in the payload and every
+    generation clear dropped ``powerOn`` back to ``None``.
+    """
+    radio._profile = resolve_radio_profile(model=model)  # noqa: SLF001
+    meter = _make_frame(cmd=0x15, sub=0x02, data=_bcd2(42))
+
+    # A connect advances the store generation; nothing observed yet → unknown.
+    radio._civ_runtime.advance_generation("connect")  # noqa: SLF001
+    assert radio._state_store.provider_generation >= 1  # noqa: SLF001
+    payload = _public_power_payload(radio, receiver_count=receiver_count)
+    assert payload["powerOn"] is None
+    assert payload["fieldStatus"]["powerOn"]["observed"] is False
+
+    # Answers arrive → liveness inference observes power_on=True at the live
+    # generation; the payload publishes it as an available field.
+    await _route_frame_at(radio, meter, 100.0)
+    payload = _public_power_payload(radio, receiver_count=receiver_count)
+    assert payload["powerOn"] is True
+    assert payload["fieldStatus"]["powerOn"]["observed"] is True
+
+    # ACKed power-off → the provider observes False from the ACK; the payload
+    # flips immediately.
+    await _acknowledged_power_off(radio)
+    assert radio._last_commanded_powerstat is False  # noqa: SLF001
+    payload = _public_power_payload(radio, receiver_count=receiver_count)
+    assert payload["powerOn"] is False
+    assert payload["fieldStatus"]["powerOn"]["observed"] is True
+
+    # Watchdog timeouts / soft reconnects clear the store, but the retained
+    # ACKed OFF keeps publishing an available False.
+    for reason in ("watchdog-timeout", "reconnect-attempt", "serial-soft-reconnect"):
+        radio._civ_runtime.advance_generation(reason)  # noqa: SLF001
+        payload = _public_power_payload(radio, receiver_count=receiver_count)
+        assert payload["powerOn"] is False
+        status = payload["fieldStatus"]["powerOn"]
+        assert status["availability"] == "available"
+    with pytest.raises(KeyError):
+        radio._state_store.snapshot().field(_POWER_ON_PATH)  # noqa: SLF001
+
+    # POWER ON is dispatched without inventing an ACK-backed ON observation.
+    with patch.object(radio, "_send_civ_raw", AsyncMock(return_value=None)):
+        await radio.set_powerstat(True)
+    radio._civ_runtime.advance_generation("watchdog-timeout")  # noqa: SLF001
+    payload = _public_power_payload(radio, receiver_count=receiver_count)
+    assert payload["powerOn"] is False
+
+    # The first fresh answer clears retained OFF and observes True.
+    await _route_frame_at(radio, meter, 105.0)
+    assert radio._last_commanded_powerstat is None  # noqa: SLF001
+    payload = _public_power_payload(radio, receiver_count=receiver_count)
+    assert payload["powerOn"] is True
+    assert payload["fieldStatus"]["powerOn"]["observed"] is True
+
+
+def test_restart_is_honest_unknown() -> None:
+    """MOR-2544: the retained last-commanded power is a runtime attribute — a
+    process restart (a fresh radio object) loses it and reads unknown.
+
+    RED at 3b4473cc: ``_last_commanded_powerstat`` does not exist
+    (``AttributeError``).
+    """
+    fresh = IcomRadio("192.168.1.100", model="IC-7610")
+    try:
+        assert fresh._last_commanded_powerstat is None  # noqa: SLF001
+        payload = _public_power_payload(fresh, receiver_count=2)
+        assert payload["powerOn"] is None
+        assert payload["fieldStatus"]["powerOn"]["observed"] is False
+    finally:
+        fresh._connected = False  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+async def test_power_on_unknown_before_first_answer_then_observed(
+    radio: IcomRadio,
+) -> None:
+    """MOR-2544 (c): no answer yet → unknown (no default); first answer → True.
+
+    RED at 302b96e1 on the final assert: without the inference the field is
+    still unobserved after the meter frame.
+    """
+    with pytest.raises(KeyError):
+        radio._state_store.snapshot().field(_POWER_ON_PATH)  # noqa: SLF001
+
+    await _route_frame_at(radio, _make_frame(cmd=0x15, sub=0x02, data=_bcd2(42)), 100.0)
+
+    assert (
+        radio._state_store.snapshot().field(_POWER_ON_PATH).value  # noqa: SLF001
+        is True
+    )
+
+
+@pytest.mark.asyncio
+async def test_ftx1_profile_never_infers_power_on(radio: IcomRadio) -> None:
+    """MOR-2544 (d): FTX-1 declares no ``power_control`` → nothing fabricated.
+
+    RED at 302b96e1: ``infers_power_on_from_liveness`` does not exist yet.
+    """
+    ftx1 = resolve_radio_profile(model="FTX-1")
+    assert ftx1.infers_power_on_from_liveness is False
+    radio._profile = ftx1  # noqa: SLF001
+
+    await _route_frame_at(radio, _make_frame(cmd=0x15, sub=0x02, data=_bcd2(42)), 100.0)
+
+    with pytest.raises(KeyError):
+        radio._state_store.snapshot().field(_POWER_ON_PATH)  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+async def test_profile_with_power_status_query_skips_inference(
+    radio: IcomRadio,
+) -> None:
+    """MOR-2544 (e): a declared ``get_powerstat`` query wins; inference off.
+
+    RED at 302b96e1: ``infers_power_on_from_liveness`` does not exist yet.
+    """
+    profile = radio._profile  # noqa: SLF001
+    assert profile.infers_power_on_from_liveness is True
+    with_query = dataclasses.replace(
+        profile,
+        command_names=profile.command_names | {"get_powerstat"},
+    )
+    assert with_query.infers_power_on_from_liveness is False
+    radio._profile = with_query  # noqa: SLF001
+
+    await _route_frame_at(radio, _make_frame(cmd=0x15, sub=0x02, data=_bcd2(42)), 100.0)
+
+    with pytest.raises(KeyError):
+        radio._state_store.snapshot().field(_POWER_ON_PATH)  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(  # type: ignore[untyped-decorator]
+    ("model", "receiver_count"),
+    [("X6100", 1), ("X6200", 1)],
+)
+async def test_rf_power_level_profiles_never_infer_power_on(
+    radio: IcomRadio,
+    model: str,
+    receiver_count: int,
+) -> None:
+    """MOR-2544 (f): Xiegu X6100/X6200 declare ``power_control`` for the
+    0x14 0x0A RF-power level only — no bound ``power_on``/``power_off``,
+    ``global.tx_state.power_on`` declared unsupported — so liveness must
+    not publish ``powerOn`` behind a power button whose command refuses.
+
+    RED at 003e71d4: the predicate matched on ``power_control`` alone,
+    so one meter frame after a connect published ``powerOn: true``.
+    """
+    profile = resolve_radio_profile(model=model)
+    assert profile.supports_capability("power_control")
+    assert not profile.supports_command("power_off")
+    assert profile.infers_power_on_from_liveness is False
+    radio._profile = profile  # noqa: SLF001
+
+    radio._civ_runtime.advance_generation("connect")  # noqa: SLF001
+    assert radio._state_store.provider_generation >= 1  # noqa: SLF001
+
+    await _route_frame_at(radio, _make_frame(cmd=0x15, sub=0x02, data=_bcd2(42)), 100.0)
+
+    payload = _public_power_payload(radio, receiver_count=receiver_count)
+    assert payload["powerOn"] is None
+    assert payload["fieldStatus"]["powerOn"]["observed"] is False
+
+
+@pytest.mark.asyncio
+async def test_power_readback_overrides_liveness_and_clears_retained_command(
+    radio: IcomRadio,
+) -> None:
+    """MOR-2544 (g): a ``0x18 00`` readback is explicit truth, not liveness.
+
+    At store generation ≥ 1 on the IC-7610 profile: a meter frame infers
+    ``power_on=True``; an ACKed power-off retains ``False``; the ``0x18
+    00`` readback then publishes ``power_on=False`` (the liveness
+    inference must not re-stamp True over the readback) and clears the
+    retained last-commanded power state.
+
+    Reviewer mutations at 003e71d4 — M4 (inference applied to 0x18) and
+    M6 (no clear on 0x18) — both stayed green against the existing
+    suite; this pins both.
+    """
+    radio._civ_runtime.advance_generation("connect")  # noqa: SLF001
+    assert radio._state_store.provider_generation >= 1  # noqa: SLF001
+
+    await _route_frame_at(radio, _make_frame(cmd=0x15, sub=0x02, data=_bcd2(42)), 100.0)
+    assert (
+        radio._state_store.snapshot().field(_POWER_ON_PATH).value  # noqa: SLF001
+        is True
+    )
+
+    await _acknowledged_power_off(radio)
+    assert radio._last_commanded_powerstat is False  # noqa: SLF001
+
+    await _route_frame_at(radio, _make_frame(cmd=0x18, data=b"\x00"), 105.0)
+
+    assert (
+        radio._state_store.snapshot().field(_POWER_ON_PATH).value  # noqa: SLF001
+        is False
+    )
+    assert radio._last_commanded_powerstat is None  # noqa: SLF001
+
+
+def test_transceiver_id_reply_never_becomes_store_evidence(
+    radio: IcomRadio,
+) -> None:
+    """MOR-3078: ``19 00`` answers the identity probe, never the store.
+
+    A transceiver-ID reply (or our own ``19 00`` echo shape) must create
+    no store observation at all — on a profile that infers ``power_on``
+    from liveness (the fixture's IC-7610), it must not count as the
+    liveness evidence MOR-2544 stamps on decoded answers: a
+    present-but-silent radio has to keep reading as answering nothing,
+    or the startup gate's silence predicates break. The skip is scoped
+    to the probe's own ``19 00`` shape: a sibling frame under the same
+    command with a different sub still projects its liveness observation.
+    """
+
+    with pytest.raises(KeyError):
+        radio._state_store.snapshot().field(_POWER_ON_PATH)  # noqa: SLF001
+
+    radio._civ_runtime._apply_state_store_observations(  # noqa: SLF001
+        _make_frame(cmd=0x19, sub=0x00, data=b"\x94")
+    )
+
+    with pytest.raises(KeyError):
+        radio._state_store.snapshot().field(_POWER_ON_PATH)  # noqa: SLF001
+
+    radio._civ_runtime._apply_state_store_observations(  # noqa: SLF001
+        _make_frame(cmd=0x19, sub=0x01, data=b"\x94")
+    )
+
+    assert (
+        radio._state_store.snapshot().field(_POWER_ON_PATH).value is True  # noqa: SLF001
+    )
+
+
+# ---------------------------------------------------------------------------
+# Idle / header-only packet liveness: only a CI-V payload may advance the
+# pump's payload-liveness markers.
+# ---------------------------------------------------------------------------
+
+
+def _idle_civ_datagram() -> bytes:
+    """A 16-byte ptype=0 idle control packet: UDP header only, no payload."""
+    data = bytearray(HEADER_SIZE)
+    struct.pack_into("<I", data, 0, HEADER_SIZE)
+    struct.pack_into("<H", data, 4, 0x00)
+    struct.pack_into("<H", data, 6, 0)
+    struct.pack_into("<I", data, 8, 0xDEADBEEF)
+    struct.pack_into("<I", data, 0x0C, 0x00010001)
+    return bytes(data)
+
+
+class _ControlledTime:
+    """A callable standing in for monotonic() at chosen instants."""
+
+    def __init__(self, start: float) -> None:
+        self._value = start
+
+    def set(self, value: float) -> None:
+        self._value = value
+
+    def __call__(self) -> float:
+        return self._value
+
+
+async def test_idle_datagram_does_not_claim_payload_liveness(
+    radio: IcomRadio, transport: MockTransport
+) -> None:
+    """An idle-only batch must leave the startup liveness markers alone.
+
+    The pump stamps its startup liveness on entry; one header-only batch
+    routes zero frames and must preserve that stamp, the recovery marker,
+    and the stream-ready/recovering flags.
+    """
+    clock = _ControlledTime(10.0)
+    with patch("rigplane.runtime._civ_rx.time", monotonic=clock):
+        marker = radio._civ_epoch
+        radio._civ_runtime._soft_recovery_epoch = marker
+        radio._civ_recovering = True
+        radio._civ_stream_ready = False
+        routed: list[CivFrame] = []
+        original_route = radio._civ_runtime._route_civ_frame
+
+        async def _count_route(
+            frame: CivFrame,
+            *,
+            generation: int,
+            store_provider_generation: int | None = None,
+        ) -> None:
+            routed.append(frame)
+            await original_route(
+                frame,
+                generation=generation,
+                store_provider_generation=store_provider_generation,
+            )
+
+        entries = 0
+        entered_once = asyncio.Event()
+        processed = asyncio.Event()
+        last_succeeded = False
+        original_receive = transport.receive_packet
+
+        async def _count_receive(timeout: float = 5.0) -> bytes:
+            nonlocal entries, last_succeeded
+            entries += 1
+            if entries == 1:
+                entered_once.set()
+            elif last_succeeded:
+                processed.set()
+            try:
+                result = await original_receive(timeout)
+            except asyncio.TimeoutError:
+                last_succeeded = False
+                raise
+            last_succeeded = True
+            return result
+
+        with (
+            patch.object(
+                radio._civ_runtime, "_route_civ_frame", side_effect=_count_route
+            ),
+            patch.object(transport, "receive_packet", side_effect=_count_receive),
+        ):
+            radio._civ_runtime.start_pump()
+            try:
+                await asyncio.wait_for(entered_once.wait(), 2.0)
+                clock.set(30.0)
+                transport.queue_response(_idle_civ_datagram())
+                await asyncio.wait_for(processed.wait(), 2.0)
+                assert radio._last_civ_data_received == 10.0
+                assert radio._civ_runtime._soft_recovery_epoch == marker
+                assert radio._civ_stream_ready is False
+                assert radio._civ_recovering is True
+                assert routed == []
+            finally:
+                await radio._civ_runtime.stop_pump()
+
+
+async def test_mixed_idle_and_valid_batch_establishes_liveness(
+    radio: IcomRadio, transport: MockTransport
+) -> None:
+    """Positive control: one batch holding idle plus a payload advances.
+
+    The header-only member routes nothing, the CI-V member routes one
+    frame, and the batch stamps fresh liveness and restores the flags.
+    """
+    clock = _ControlledTime(10.0)
+    with patch("rigplane.runtime._civ_rx.time", monotonic=clock):
+        marker = radio._civ_epoch
+        radio._civ_runtime._soft_recovery_epoch = marker
+        radio._civ_recovering = True
+        radio._civ_stream_ready = False
+        routed: list[CivFrame] = []
+        original_route = radio._civ_runtime._route_civ_frame
+
+        async def _count_route(
+            frame: CivFrame,
+            *,
+            generation: int,
+            store_provider_generation: int | None = None,
+        ) -> None:
+            routed.append(frame)
+            await original_route(
+                frame,
+                generation=generation,
+                store_provider_generation=store_provider_generation,
+            )
+
+        entries = 0
+        entered_once = asyncio.Event()
+        processed = asyncio.Event()
+        last_succeeded = False
+        original_receive = transport.receive_packet
+
+        async def _count_receive(timeout: float = 5.0) -> bytes:
+            nonlocal entries, last_succeeded
+            entries += 1
+            if entries == 1:
+                entered_once.set()
+            elif last_succeeded:
+                processed.set()
+            try:
+                result = await original_receive(timeout)
+            except asyncio.TimeoutError:
+                last_succeeded = False
+                raise
+            last_succeeded = True
+            return result
+
+        with (
+            patch.object(
+                radio._civ_runtime, "_route_civ_frame", side_effect=_count_route
+            ),
+            patch.object(transport, "receive_packet", side_effect=_count_receive),
+        ):
+            radio._civ_runtime.start_pump()
+            try:
+                await asyncio.wait_for(entered_once.wait(), 2.0)
+                clock.set(30.0)
+                civ = build_civ_frame(
+                    CONTROLLER_ADDR, IC_7610_ADDR, 0x03, data=bcd_encode(14_074_000)
+                )
+                transport.queue_response(_idle_civ_datagram())
+                # The pump drains this queue into the same batch as the
+                # receive above, so both members share one liveness stamp.
+                transport._packet_queue.put_nowait(_wrap_civ_in_udp(civ))  # noqa: SLF001
+                await asyncio.wait_for(processed.wait(), 2.0)
+                assert radio._last_civ_data_received == 30.0
+                assert radio._civ_runtime._soft_recovery_epoch is None
+                assert radio._civ_stream_ready is True
+                assert radio._civ_recovering is False
+                assert len(routed) == 1
+            finally:
+                await radio._civ_runtime.stop_pump()
+
+
+@pytest.mark.parametrize("middle_mode", [0, 1])
+async def test_scope_selection_return_refreshes_stream_display_facts(
+    radio, middle_mode
+):
+    for receiver, mode, hz in ((0, 0, 5000), (1, middle_mode, 2500), (0, 0, 5000)):
+        radio._civ_runtime._update_state_cache_from_frame(
+            _make_frame(cmd=0x27, sub=0x12, data=bytes([receiver]))
+        )
+        await radio._civ_runtime._route_civ_frame(
+            _make_scope_waveform_frame(receiver=receiver, mode=mode, end_hz=hz),
+            generation=radio._civ_epoch,
+        )
+        snapshot = radio._state_store.snapshot()
+        assert snapshot.field("scope_controls.global.display.mode").value == mode
+        if mode == 0:
+            assert snapshot.field("scope_controls.global.display.span").value == (
+                radio._profile.scope_span_presets_hz.index(hz)
+            )

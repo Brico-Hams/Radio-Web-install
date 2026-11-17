@@ -1,0 +1,180 @@
+/**
+ * MOR-1266 (v3-rework slice S1, MOR-1263 §3 item 1) — the `desktop-v2`
+ * presentation entrypoint's v1 layout manifest (schema, validator and
+ * registry: `./contract`, MOR-1066), following the MOR-1092/94/67
+ * declaration idiom.
+ *
+ * MANIFEST FIRST, NOT DOM FIRST (MOR-1263 decomposition §3, item 1 vs item
+ * 2). MOR-1266 registered these zones deliberately AHEAD of the DOM, while
+ * `components-v2/layout/RadioLayout.svelte` still gated its semantic mount on
+ * `skinId === 'sdr-test'` and `desktop-v2` therefore still rendered the legacy
+ * `<VfoHeader>` and the sidebars' `<TxPanel>`.
+ *
+ * MOR-1263 STEP 2 (MOR-1313) CLOSED THAT GAP: RadioLayout no longer knows any
+ * skin id — it reads the active manifest's zone declarations and suppresses
+ * the legacy twin of every surface a declared zone mounts. The two zones below
+ * are consequently DOM-backed now, not forward-declared
+ * (`__tests__/forward-declaration-inventory.test.ts`), and this file is a
+ * description of what `desktop-v2` composes rather than a promise about it.
+ */
+import { registerLayout, type LayoutManifest } from './contract';
+
+/**
+ * `receiver-deck` names the real DOM section (`RadioLayout.svelte`'s
+ * `<section class="receiver-deck">`) that hosts the `vfo` surface; `rx-tx`
+ * names the area the sidebars' legacy `<TxPanel>` used to occupy. Since
+ * MOR-1313 both declarations are what actually decides the rendered tree.
+ *
+ * Neither is bound to a `data-zone-id` element in the single composition —
+ * unlike the dual-receiver-cockpit's `rx-tx` zone, which IS
+ * (`SemanticRadioSurfaces.svelte`, `strips="dual"`). That stays deliberate:
+ * MOR-1069 established that a zone element exists only where an arrangement
+ * must place it, and the single composition places nothing. The zone ids are
+ * read here as DECLARATIONS — what this layout mounts where — which is exactly
+ * what per-zone suppression consumes.
+ */
+const DESKTOP_V2_ZONES = [
+  { id: 'receiver-deck', surfaces: ['vfo'] },
+  { id: 'rx-tx', surfaces: ['rxTx'] },
+  // MOR-1336 (S4): txAux becomes zone-OWNED here. Declared but deliberately not
+  // `required` — a radio whose MOR-1244 evidence gate declined the group must
+  // still resolve this layout, and the surface self-gates on `view.txAux`.
+  { id: 'tx-aux', surfaces: ['txAux'] },
+  // MOR-1341 (S5): meters becomes zone-OWNED here too, and RadioLayout.svelte
+  // retires the legacy `<MetersDockPanel>` the moment this zone is declared
+  // (mirroring `hideTxPanel`'s `tx-aux` precedent). Not `required` — a radio
+  // reporting no meter fields at all must still resolve this layout, and the
+  // surface self-gates on `view.meters`.
+  { id: 'meters', surfaces: ['meters'] },
+  // MOR-1365 (S6a): scopeDisplay becomes zone-OWNED here too, retiring the
+  // status bar's legacy scope indicator via the MOR-1364 suppression channel
+  // (`StatusBar.svelte`'s `!declared.has('scopeDisplay')` guard). Pure
+  // readout, zero focusable elements, so MOR-1069 cannot be disturbed. Not
+  // `required` — a radio the MOR-1301 evidence gate declined must still
+  // resolve this layout, and the surface self-gates on `view.scopeDisplay`.
+  // The dual-receiver cockpit manifest is deliberately untouched;
+  // `scopeDisplay` keeps mounting bare there (12B's own shape).
+  { id: 'scope-display', surfaces: ['scopeDisplay'] },
+  // MOR-1366 (S7): filter and rfFrontEnd become zone-OWNED here, closing the
+  // double-presentation defect §0.1 of the rework tail found live on
+  // `desktop-v2` (FilterSurface/RfFrontEndSurface already mounted bare in the
+  // receiver deck via MOR-1304/MOR-1306's `zoned(...)` single-composition
+  // mounts, while `LeftSidebar`'s ModePanel/FilterPanel/RfFrontEnd and the
+  // settings modal's RF FRONT END section kept rendering a legacy third
+  // copy). The MOR-1364 (S6-pre) suppression channel already carries the
+  // `!declared.has('filter')` / `!declared.has('rfFrontEnd')` predicates on
+  // those hosts as no-ops; declaring the zones here is what activates them.
+  // Not `required` on either — a radio whose evidence gate declines both
+  // groups (`caps.modes`/`caps.filters` empty, or none of
+  // preamp/attenuator/rf_gain/squelch/digisel/ip_plus) must still resolve
+  // this layout, and each surface self-gates on its own view-model group.
+  { id: 'filter', surfaces: ['filter'] },
+  { id: 'rf-front-end', surfaces: ['rfFrontEnd'] },
+  // MOR-1367 (S8): band, antenna and ritXit/scan become zone-OWNED here, which
+  // is what activates the S6-pre suppression channel for the RIT / XIT, SCAN
+  // and ANTENNA sidebar panels and the `desktop-rit` modal section — closing
+  // the live double-presentation these three families have shown on the
+  // flagship skin since their B-slices mounted the surfaces (§0.1).
+  //
+  // `band` is the one that is NOT a plain retirement: `BandSelector` hosts the
+  // LW/MW + SWL broadcast tabs (16 presets) that the vocabulary deliberately
+  // excludes from `bandChoices` (`semantic/radio-view-model.ts:494-496`), so
+  // declaring this zone retires the component's HAM half ONLY, through
+  // `hamBands={!declared.has('band')}` — a prop, never a mount gate (S10 §4a).
+  //
+  // None is `required`, for the same reason as `tx-aux`/`meters`: a radio whose
+  // evidence gate declined the group must still resolve this layout, and each
+  // surface self-gates on its own `view.*` leaf.
+  { id: 'band', surfaces: ['band'] },
+  { id: 'antenna', surfaces: ['antenna'] },
+  { id: 'rit-xit-scan', surfaces: ['ritXitScan'] },
+  // MOR-2111: the repeater panel. Not `required`: it draws only while a
+  // receiver is tuned to a range the profile flags `repeater = true`.
+  { id: 'repeater', surfaces: ['repeater'] },
+  // MOR-1368 (S9): the cross-sidebar family. `rxAudio`, `dsp` and `cwKeyer`
+  // become zone-OWNED, and the MOR-1364 suppression channel retires their
+  // legacy twins in BOTH sidebars (a cross-sidebar drag can move `rx-audio`,
+  // `dsp` and `cw` to either side) plus the settings modal's `desktop-dsp`,
+  // `desktop-agc` and `desktop-cw` sections. `AgcPanel` retires WITH `dsp`,
+  // not on a zone of its own: `DspSurface` covers the AGC leaf (5A/MOR-1290),
+  // so a `dsp` zone that left `AgcPanel` standing would ship a half-double.
+  //
+  // SAFETY (MOR-1310, the wave's only SAFETY-CRITICAL surface): declaring
+  // `cw-keyer` makes `CwKeyerSurface` the SOLE break-in affordance on the
+  // flagship skin. That is a relocation of ownership and nothing else — this
+  // declaration writes no key path, mounts no second TX permit, and the R9
+  // count (exactly one `<RxTxSurface>` on screen) is unchanged by it.
+  //
+  // None `required`: each surface self-gates on its own view-model group
+  // (`view.rxAudio` / `view.dsp` / `view.cwKeyer`), so a radio with no audio
+  // chain, no DSP capability or no keyer must still resolve this layout.
+  { id: 'rx-audio', surfaces: ['rxAudio'] },
+  { id: 'dsp', surfaces: ['dsp'] },
+  { id: 'cw-keyer', surfaces: ['cwKeyer'] },
+  // MOR-2425 (Memory lane, phase B2): memory becomes zone-OWNED here too,
+  // closing the ledger entry `zone-ownership-coverage.test.ts` opened in
+  // phase B1. Unlike its siblings above, `memory` has no MOR-1262
+  // RadioViewModel group to self-gate on — its local catalogue is
+  // browser-side (see `MemorySurface.svelte`'s header; the radio's own
+  // stored channels arrive through `radioMemories`), so the
+  // surface mounts unconditionally, matching the legacy `MemoryPanel`'s own
+  // unconditional render. Declaring this zone activates the MOR-1364
+  // suppression channel for both sidebars' legacy `MemoryPanel` mount.
+  //
+  // Not `required`: the surface has no evidence gate to decline, so there is
+  // nothing for `requiredSemanticSurfaces` to force-restore here, same as
+  // every other non-vfo/rxTx zone in this manifest.
+  { id: 'memory', surfaces: ['memory'] },
+  // MOR-1370 (S6b-2): scopeControls becomes zone-OWNED here. Declaring it
+  // activates the MOR-1369 (S6b-1) suppression channel: `RadioLayout.svelte`
+  // already forwards `hideScopeControls={declared.has('scopeControls')}` to
+  // `SpectrumPanel`, retiring the scope toolbar's twelve fact-backed
+  // `scopeControls.*` leaves (mode/edge/span/speed/hold/refDb/dual/receiver/
+  // duringTx/centerType/vbwNarrow/rbw).
+  // `ScopeControlsSurface` is control-bearing (MOR-1304 canon) and mounts
+  // single-composition-only, so the dual-receiver cockpit is untouched by
+  // this declaration.
+  //
+  // Not `required`: a radio whose evidence gate declines the `scope`
+  // capability must still resolve this layout, and the surface self-gates on
+  // `view.scopeControls`.
+  { id: 'scope-controls', surfaces: ['scopeControls'] },
+] as const;
+
+export const desktopV2Layout: LayoutManifest = {
+  schemaVersion: 1,
+  id: 'desktop-v2',
+  displayName: 'Desktop',
+  zones: DESKTOP_V2_ZONES,
+  /**
+   * All four canonical classes: the semantic receiver deck composes
+   * `VfoSurface` per receiver, with the VFO operations group always mounted
+   * regardless, and TX is receiver-count-agnostic. This is the flagship,
+   * already-shipped v2 skin every real Icom radio uses today
+   * (`resolveSkinId`'s default `auto` destination when any scope is
+   * available).
+   */
+  compatibleTopologies: ['1/single', '1/ab', '2/ab_shared', '2/main_sub'],
+  requiredSemanticSurfaces: ['vfo', 'rxTx'],
+  /**
+   * Fluid, no recorded breakpoints — mirroring `sdr-test`'s declaration for
+   * the SAME shared `RadioLayout.svelte` `.content-row`/`.radio-layout`
+   * rules (both skins fall into the same non-`sdr-test`-scoped "else"
+   * branch). The stylesheet does implement two shared reflows (`max-width:
+   * 1200px`, `max-width: 1024px`) — the MOR-1261 chrome-breakpoints doctrine
+   * would allow recording them declaratively while no instrument stage
+   * exists — but they are not specific to `desktop-v2`: `sdr-test`'s
+   * manifest already declares `[]` against the identical rules, and
+   * recording a different set here for the one physical stylesheet would
+   * just disagree with that sibling declaration rather than describe a real
+   * difference. Left `[]`, consistent with `sdr-test`.
+   */
+  stageSizing: { mode: 'fluid', responsiveBreakpoints: [] },
+  /**
+   * No fallback: terminal by construction, same reasoning as `mobile` and
+   * `lcd-cockpit`.
+   */
+  fallbackLayoutId: null,
+};
+
+registerLayout(desktopV2Layout);

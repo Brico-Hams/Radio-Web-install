@@ -23,6 +23,7 @@ const pages = Object.freeze({
   "ICOM-CUSTOM-FIRMWARE.md": "ayuda-icom.html",
   "ICOM-FIRMWARE-INTERNALS.md": "ayuda-icom-internals.html",
   "ICOM-PATCH-ANALYSIS.md": "ayuda-icom-parches.html",
+  "FTX1-KNOWLEDGE.md": "ayuda-ftx1-conocimiento.html",
   "KARINA.md": "ayuda-karina.html",
   "BRICOHAMS-FIRMWARE.md": "ayuda-bricohams.html",
   "ESTADO-ENTREGA.md": "ayuda-entrega.html",

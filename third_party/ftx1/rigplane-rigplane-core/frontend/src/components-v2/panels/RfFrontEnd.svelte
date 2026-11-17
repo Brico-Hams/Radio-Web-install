@@ -1,0 +1,340 @@
+<script lang="ts">
+  import { onDestroy } from 'svelte';
+  import { ValueControl } from '../controls/value-control';
+  import { normalizedPercentDisplay } from '../../primitives/scalar/value-control-core';
+  import { finiteValue, valueText } from '../../primitives/reading-text';
+  import {
+    createContinuousPair,
+    createLegacyContinuousPairPolicy,
+    type ContinuousPairInput,
+  } from '../../primitives/scalar/continuous-pair.svelte';
+  import {
+    createContinuousScalar,
+    createHBarContinuousScalarPolicy,
+    type ContinuousScalarInput,
+  } from '../../primitives/scalar/continuous-scalar.svelte';
+  import DualParamRenderer from '../controls/value-control/DualParamRenderer.svelte';
+  import AttenuatorControl from '../controls/AttenuatorControl.svelte';
+  import { HardwareButton } from '$lib/Button';
+  import { shouldShowPanel } from './rf-frontend-utils';
+  import { getShortcutHint } from '../layout/shortcut-hints';
+  import { t } from '$lib/i18n';
+
+  import {
+    deriveRfFrontEndProps, getRfFrontEndHandlers, getPreampArmed, getAttenuatorArmed,
+    getRfSqlControlFeedback,
+  } from '$lib/runtime/adapters/panel-adapters';
+
+  const handlers = getRfFrontEndHandlers();
+  let p = $derived(deriveRfFrontEndProps());
+  // MOR-1536: freshest in-flight `set_preamp`/`set_attenuator` targets,
+  // DISPLAY ONLY (see `panel-adapters.ts`'s ARMED-SIGNAL CONTRACT). `pre`/
+  // `att` below stay the sole selection source — armed only marks the
+  // button the pending command is racing toward, never a substitute for
+  // the confirmed reading. Attenuator: wired for the 2-value HardwareButton
+  // toggle below only — the `>2`-value `AttenuatorControl` branch is
+  // unwired (see PR body).
+  let preArmed = $derived(getPreampArmed());
+  let attArmed = $derived(getAttenuatorArmed());
+  const armedIdBase = $props.id();
+
+  let att = $derived(p.att);
+  let pre = $derived(p.pre);
+  let preDisabled = $derived(p.preDisabled);
+  let preDisabledReason = $derived(p.preDisabledReason);
+  let digiSel = $derived(p.digiSel);
+  let ipPlus = $derived(p.ipPlus);
+  // MOR-2979: the ATT/DIGI-SEL/IP+ keys expose the confirmed on/off and stay
+  // disabled until observed — knownness rides the existing availability
+  // flags (`toRfFrontEndProps`), same seam as #3927's choice keys.
+  let attKnown = $derived(p.attAvailable ?? true);
+  let digiSelKnown = $derived(p.digiSelAvailable ?? true);
+  let ipPlusKnown = $derived(p.ipPlusAvailable ?? true);
+  const onRfGainChange = handlers.onRfGainChange;
+  const onSquelchChange = handlers.onSquelchChange;
+  const onAttChange = handlers.onAttChange;
+  const onPreChange = handlers.onPreChange;
+  const onDigiSelToggle = handlers.onDigiSelToggle;
+  const onIpPlusToggle = handlers.onIpPlusToggle;
+
+  let showRfGain = $derived(p.showRfGain);
+  let showSquelch = $derived(p.showSquelch);
+  let showAtt = $derived(p.showAtt);
+  let showPre = $derived(p.showPre);
+  let showDigiSel = $derived(p.showDigiSel);
+  let showIpPlus = $derived(p.showIpPlus);
+  let showRfSqlDual = $derived(showRfGain && showSquelch);
+  let visible = $derived(shouldShowPanel(showRfGain, showAtt, showPre, showSquelch));
+
+  const rfSqlDomain = Object.freeze({
+    min: 0, max: 1, step: 0.01, defaultValue: 0, fineStepDivisor: 10,
+  });
+  let rfSqlFeedback = $derived(getRfSqlControlFeedback());
+  function rfSqlPairInput(): Readonly<ContinuousPairInput> {
+    const common = {
+      domain: rfSqlDomain,
+      enabled: showRfSqlDual,
+      requestRf: onRfGainChange,
+      requestSql: onSquelchChange,
+    };
+    if (rfSqlFeedback === null) return {
+      ...common,
+      evidence: 'reading',
+      ownerKey: 'legacy-rf-sql:authority-unresolved',
+      enabled: false,
+      rf: { reading: { status: 'unknown' }, availability: 'unavailable' },
+      sql: { reading: { status: 'unknown' }, availability: 'unavailable' },
+    };
+    return {
+      ...common,
+      evidence: 'command-feedback',
+      rf: rfSqlFeedback.rf,
+      sql: rfSqlFeedback.sql,
+    };
+  }
+  function rfGainInput(): Readonly<ContinuousScalarInput> {
+    const common = { domain: rfSqlDomain, request: onRfGainChange };
+    if (rfSqlFeedback === null) return {
+      ...common,
+      evidence: 'reading',
+      ownerKey: 'legacy-rf-gain:authority-unresolved',
+      enabled: false,
+      reading: { status: 'unknown' },
+    };
+    return {
+      ...common,
+      evidence: 'command-feedback',
+      enabled: showRfGain && !showRfSqlDual,
+      command: rfSqlFeedback.rf.command,
+      feedback: rfSqlFeedback.rf.feedback,
+    };
+  }
+  const rfSqlBinding = createContinuousPair(
+    rfSqlPairInput,
+    createLegacyContinuousPairPolicy({ keyboardDebounceMs: 0 }),
+  );
+  const rfGainBinding = createContinuousScalar(
+    rfGainInput,
+    createHBarContinuousScalarPolicy({ preview: 'optimistic', debounceMs: 50 }),
+  );
+  onDestroy(() => {
+    rfSqlBinding.destroy();
+    rfGainBinding.destroy();
+  });
+
+  let attValues = $derived(p.attValues);
+  let attLabels = $derived(p.attLabels);
+  let preOptions = $derived(p.preOptions);
+  const rfGainShortcut = getShortcutHint('adjust_rf_gain');
+  const attShortcut = getShortcutHint('cycle_att');
+  const preShortcut = getShortcutHint('cycle_preamp');
+  // MOR-2658: unread is an empty reserved slot — never the '—' placeholder,
+  // and never a '%' without its number. The renderer (HBarRenderer) calls
+  // this with Number.NaN for an unread value.
+  const displayRfGain = (value: number): string =>
+    valueText(finiteValue(value), normalizedPercentDisplay);
+  const feedbackIntegratedControl = { 'feedback-policy': 'feedback-integrated' } as const;
+</script>
+
+{#if visible}
+  <div class="controls">
+    {#if showRfSqlDual}
+      <DualParamRenderer
+        binding={rfSqlBinding}
+        rfAccentColor="#22C55E"
+        sqlAccentColor="#F59E0B"
+        shortcutHint={rfGainShortcut}
+        title={rfGainShortcut}
+        variant="hardware-illuminated"
+      />
+    {:else if showRfGain}
+      <div data-control="rf-gain">
+        <ValueControl
+          {...feedbackIntegratedControl}
+          binding={rfGainBinding}
+          label="RF Gain"
+          renderer="hbar"
+          displayFn={displayRfGain}
+          accentColor="#22C55E"
+          shortcutHint={rfGainShortcut}
+          title={rfGainShortcut}
+          variant="hardware-illuminated"
+        />
+      </div>
+    {/if}
+
+    {#if showAtt}
+      {#if attValues.length <= 2}
+        {@const attArmedId = `${armedIdBase}-att`}
+        <HardwareButton
+          active={att > 0}
+          pressed={attKnown ? att > 0 : undefined}
+          disabled={!attKnown}
+          indicator="edge-left"
+          color="amber"
+          title={attShortcut}
+          shortcutHint={attShortcut}
+          armed={attArmed.armed}
+          describedBy={attArmed.armed ? attArmedId : undefined}
+          onclick={() => onAttChange(att > 0 ? 0 : attValues[attValues.length - 1])}
+        >
+          ATT
+        </HardwareButton>
+        {#if attArmed.armed}
+          <span id={attArmedId} class="sr-only">{t('core.rfFrontEnd.att.pendingAnnouncement')}</span>
+        {/if}
+      {:else}
+        <div class="control-row" data-shortcut-hint={attShortcut ?? undefined} title={attShortcut ?? undefined}>
+          <span class="control-label">ATT</span>
+          <AttenuatorControl values={attValues} selected={att} onchange={onAttChange} labels={attLabels} shortcutHint={attShortcut} title={attShortcut} />
+        </div>
+      {/if}
+    {/if}
+
+    {#if showPre}
+      <div class="control-row" data-shortcut-hint={preShortcut ?? undefined} title={preShortcut ?? undefined}>
+        <span class="control-label">PRE</span>
+        <div class="button-group">
+          {#each preOptions as option}
+            {@const isPreArmed = preArmed.armed && preArmed.value === option.value}
+            {@const preArmedId = `${armedIdBase}-pre-${option.value}`}
+            <HardwareButton
+              active={pre === option.value}
+              indicator="edge-left"
+              color="cyan"
+              disabled={preDisabled}
+              title={preDisabled ? preDisabledReason : preShortcut}
+              shortcutHint={preShortcut}
+              armed={isPreArmed}
+              describedBy={isPreArmed ? preArmedId : undefined}
+              onclick={() => onPreChange(option.value)}
+            >
+              {option.label}
+            </HardwareButton>
+            {#if isPreArmed}
+              <span id={preArmedId} class="sr-only">{t('core.rfFrontEnd.preamp.pendingAnnouncement')}</span>
+            {/if}
+          {/each}
+        </div>
+      </div>
+    {/if}
+
+    {#if showDigiSel || showIpPlus}
+      <div class="button-row">
+        {#if showDigiSel}
+          <HardwareButton
+            active={digiSel}
+            pressed={digiSelKnown ? digiSel : undefined}
+            disabled={!digiSelKnown}
+            indicator="edge-left"
+            color="green"
+            onclick={() => onDigiSelToggle(!digiSel)}
+          >
+            DIGI-SEL
+          </HardwareButton>
+        {/if}
+        {#if showIpPlus}
+          <HardwareButton
+            active={ipPlus}
+            pressed={ipPlusKnown ? ipPlus : undefined}
+            disabled={!ipPlusKnown}
+            indicator="edge-left"
+            color="cyan"
+            onclick={() => onIpPlusToggle(!ipPlus)}
+          >
+            IP+
+          </HardwareButton>
+        {/if}
+      </div>
+    {/if}
+  </div>
+{/if}
+
+<style>
+  .controls {
+    padding: 8px 10px 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .control-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    min-width: 0;
+  }
+
+  /* MOR-2658: the RF-gain value box stays reserved for unread AND each
+     known value — `4ch` covers the widest text (`100%`), and
+     `inline-block` is what makes the min-width apply to the renderer's
+     inline value span, so a first reading cannot shift the row. */
+  [data-control="rf-gain"] :global(.vc-value) {
+    display: inline-block;
+    min-width: 4ch;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .control-label {
+    color: var(--v2-text-dim);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    flex-shrink: 0;
+    min-width: 34px;
+  }
+
+  .control-row > :global(.segmented-button),
+  .control-row > :global(.att-control),
+  .control-row > .button-group {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  .control-row :global(.segment),
+  .control-row :global(.more-button) {
+    min-height: 28px;
+    padding: 4px 8px;
+    font-size: 10px;
+  }
+
+  .control-row :global(.segmented-button) {
+    width: 100%;
+  }
+
+  .control-row :global(.segment) {
+    flex: 1 1 0;
+    min-width: 0;
+  }
+
+  .button-row {
+    display: flex;
+    gap: 6px;
+  }
+
+  .button-row > :global(button) {
+    flex: 1 1 0;
+    min-width: 0;
+  }
+
+  .button-group {
+    display: flex;
+    gap: 4px;
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  .button-group > :global(button) {
+    flex: 1 1 0;
+    min-width: 0;
+  }
+
+  /* MOR-1536 — same convention as `ModePanel.svelte`'s `.sr-only`: visually
+     hidden, `position: absolute` removes it from the flex layout so it
+     never consumes visible space. */
+  .sr-only {
+    position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+    overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+  }
+</style>

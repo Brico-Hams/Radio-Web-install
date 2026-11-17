@@ -1,0 +1,8 @@
+/target
+/logs
+**/*.rs.bk
+*.csv
+!tests/fixtures/*.csv
+doc/*.pdf
+__pycache__/
+private/

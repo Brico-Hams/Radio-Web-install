@@ -1,0 +1,64 @@
+<script lang="ts">
+  import ControlButton from './ControlButton.svelte';
+  import type { HardwareButtonProps } from './types';
+
+  interface Props extends HardwareButtonProps {
+    children?: any;
+  }
+
+  let {
+    active = false,
+    disabled = false,
+    pressed,
+    compact = false,
+    indicator = 'dot',
+    color = 'cyan',
+    title = null,
+    shortcutHint = null,
+    armed = false,
+    describedBy,
+    ariaLabel,
+    ariaExpanded,
+    ariaControls,
+    role,
+    ariaChecked,
+    tabindex,
+    onkeydown,
+    data,
+    onclick,
+    onpointerdown,
+    onpointerup,
+    onpointercancel,
+    onpointerleave,
+    children
+  }: Props = $props();
+</script>
+
+<ControlButton
+  {active}
+  {disabled}
+  {pressed}
+  {compact}
+  surface="hardware"
+  indicatorStyle={indicator}
+  indicatorColor={color}
+  {title}
+  {shortcutHint}
+  {armed}
+  {describedBy}
+  {ariaLabel}
+  {ariaExpanded}
+  {ariaControls}
+  {role}
+  {ariaChecked}
+  {tabindex}
+  {onkeydown}
+  {data}
+  {onclick}
+  {onpointerdown}
+  {onpointerup}
+  {onpointercancel}
+  {onpointerleave}
+>
+  {@render children?.()}
+</ControlButton>

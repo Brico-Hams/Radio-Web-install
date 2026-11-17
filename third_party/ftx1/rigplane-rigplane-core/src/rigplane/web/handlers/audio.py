@@ -1,0 +1,2561 @@
+"""Audio WebSocket handlers — broadcaster + per-client handler."""
+
+from __future__ import annotations
+from ...runtime.controller_authority import (
+    ControllerAuthority,
+    ControllerError,
+    ControllerTicket,
+)
+
+import asyncio
+import inspect
+import logging
+import math
+import time
+from collections.abc import AsyncIterator, Awaitable, Mapping
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Any, Callable, Literal, Protocol, TypedDict, cast
+
+from rigplane.audio._codecs import decode_ulaw_to_pcm16
+from rigplane.audio._transcoder import PcmOpusTranscoder, create_pcm_opus_transcoder
+from ...audio import route as audio_route
+from ...audio.bus import STAGE_RX_POST_DSP
+from ...audio.session import RxSubscription
+from ...audio._usb_pairing import AudioCandidate
+from ...audio.usb_driver import (
+    AudioAlreadyStartedError,
+    audio_start_failure_details,
+    audio_start_failure_holder,
+    audio_start_failure_reason,
+)
+from ...dsp.tap_registry import TapHandle, TapRegistry
+from ...env_config import (
+    get_audio_broadcaster_high_watermark,
+)
+from ...runtime.managed_tx_state import ManagedTxIntentKind
+from ...types import AudioCodec
+from ..api_contract import (  # noqa: TID251
+    AudioReceiveFailureRecord,
+    AudioReceiveRecord,
+)
+from ..protocol import (  # noqa: TID251
+    AUDIO_CODEC_OPUS,
+    AUDIO_CODEC_PCM16,
+    AUDIO_HEADER_SIZE,
+    MSG_TYPE_AUDIO_RX,
+    MSG_TYPE_AUDIO_TX,
+    decode_json,
+    encode_audio_frame,
+    encode_json,
+)
+from ..runtime_helpers import runtime_capabilities  # noqa: TID251
+from ..transport import Connection  # noqa: TID251
+from ...ws import WS_OP_BINARY, WS_OP_TEXT  # noqa: TID251
+
+if TYPE_CHECKING:
+    from ...audio.session import TxLease
+    from ...dsp.pipeline import DSPPipeline
+    from ...radio_protocol import Radio
+    from ...runtime.managed_tx_authority import ManagedTxAuthority
+
+from ...capabilities import CAP_AUDIO, CAP_LAN_DUAL_RX_AUDIO_ROUTING
+from ...capabilities import CAP_MOD_INPUT_ROUTING, CAP_TX
+
+__all__ = [
+    "AudioBroadcaster",
+    "AudioHandler",
+    "AudioTxFormat",
+    "RxPcmTapSource",
+    "audio_tx_format_message",
+]
+
+logger = logging.getLogger(__name__)
+
+_PLAYBACK_COUNTERS = {
+    "receivedFrames",
+    "validFrames",
+    "decodedFrames",
+    "scheduledFrames",
+    "suspendedDrops",
+}
+_PLAYBACK_KEYS = _PLAYBACK_COUNTERS | {
+    "schemaVersion",
+    "contextState",
+    "sampleRate",
+    "pcmPeak",
+    "resumeOutcome",
+    "lastResumeError",
+}
+_RESUME_ERROR_NAMES = {
+    "NotAllowedError",
+    "InvalidStateError",
+    "NotSupportedError",
+    "AbortError",
+    "SecurityError",
+    "UnknownError",
+}
+
+
+_CAPTURE_ERROR_NAMES = frozenset(
+    {
+        "NotAllowedError",
+        "NotFoundError",
+        "NotReadableError",
+        "OverconstrainedError",
+        "AbortError",
+        "SecurityError",
+        "InvalidStateError",
+        "TypeError",
+        "unknown",
+    }
+)
+
+
+class AudioTxFormat(TypedDict):
+    """The ``audio_tx_format`` ack payload (MOR-1791) as ONE typed
+    producer output: the handler sends it, and the api-channel golden
+    documents commit the same bytes (key order is the wire order —
+    :func:`audio_tx_format_message` builds it, nothing else)."""
+
+    type: Literal["audio_tx_format"]
+    codec: Literal["opus", "pcm16"]
+    opus_decode: bool
+    sample_rate: int
+
+
+def audio_tx_format_message(opus_decode: bool, sample_rate: int) -> AudioTxFormat:
+    """Build the ``audio_tx_format`` ack payload.
+
+    ``opus_decode`` is whether this server can decode a browser Opus TX
+    frame at all; ``codec`` restates it as the codec the client should
+    send (Opus when decodable, else its existing PCM16 capture path).
+    """
+    return AudioTxFormat(
+        type="audio_tx_format",
+        codec="opus" if opus_decode else "pcm16",
+        opus_decode=opus_decode,
+        sample_rate=sample_rate,
+    )
+
+
+def _bounded_audio_stats(message: dict[str, Any]) -> dict[str, Any]:
+    stats: dict[str, Any] = {}
+    category = message.get("microphoneCaptureError")
+    if isinstance(category, str) and category in _CAPTURE_ERROR_NAMES:
+        stats["microphoneCaptureError"] = category
+    for key, maximum in (
+        ("underruns", 0xFFFFFFFF),
+        ("dropped_frames", 0xFFFFFFFF),
+        ("buffer_depth_ms", 60000),
+    ):
+        value = message.get(key)
+        if (
+            isinstance(value, (int, float))
+            and not isinstance(value, bool)
+            and 0 <= value <= maximum
+            and math.isfinite(value)
+        ):
+            stats[key] = value
+    playback = message.get("playback")
+    if not isinstance(playback, dict) or set(playback) != _PLAYBACK_KEYS:
+        return stats
+    if type(playback["schemaVersion"]) is not int or playback["schemaVersion"] != 1:
+        return stats
+    for key in _PLAYBACK_COUNTERS:
+        if type(playback[key]) is not int or not 0 <= playback[key] <= 0xFFFFFFFF:
+            return stats
+    if playback["contextState"] not in (
+        "unavailable",
+        "running",
+        "suspended",
+        "closed",
+        "interrupted",
+        "unknown",
+    ):
+        return stats
+    if playback["resumeOutcome"] not in (
+        "not_attempted",
+        "pending",
+        "resolved",
+        "rejected",
+    ):
+        return stats
+    rate = playback["sampleRate"]
+    if rate is not None and (
+        not isinstance(rate, (int, float))
+        or isinstance(rate, bool)
+        or not 0 < rate <= 384000
+        or not math.isfinite(rate)
+    ):
+        return stats
+    peak = playback["pcmPeak"]
+    if peak is not None and (type(peak) is not int or not 0 <= peak <= 100):
+        return stats
+    error = playback["lastResumeError"]
+    if error is not None and (
+        not isinstance(error, str) or error not in _RESUME_ERROR_NAMES
+    ):
+        return stats
+    if (playback["resumeOutcome"] == "rejected") != (error is not None):
+        return stats
+    stats["playback"] = dict(playback)
+    return stats
+
+
+_TX_CLEANUP_STOP_TIMEOUT_SECONDS = 2.0
+_PCM_TAP_CODECS = frozenset(
+    {
+        AudioCodec.PCM_1CH_16BIT,
+        AudioCodec.PCM_2CH_16BIT,
+        AudioCodec.ULAW_1CH,
+        AudioCodec.ULAW_2CH,
+    }
+)
+
+# Adaptive egress codec controller windows (MOR-588, ADR §3.6).
+# Degradation must be SUSTAINED for DEGRADE_WINDOW_S before PCM16→Opus
+# engages; Opus→PCM16 requires a fully clean CLEAN_WINDOW_S; DWELL_S is
+# the minimum hold after ANY switch (anti-flap). Per-instance copies on
+# the broadcaster make them injectable for deterministic tests.
+DEGRADE_WINDOW_S = 3.0
+CLEAN_WINDOW_S = 30.0
+DWELL_S = 10.0
+DEGRADE_UNDERRUN_THRESHOLD = 3
+DEGRADE_QUEUE_DROP_THRESHOLD = 5
+
+# Fixed Opus egress frame duration (MOR-596).  Radio RX packets are not
+# Opus-frame-aligned (IC-7610 LAN @48k stereo ≈1280 B ≈6.67 ms), while
+# ``PcmOpusTranscoder`` accepts exactly one fixed frame per encode call —
+# per-client PCM is therefore reframed into exact 20 ms frames before encode.
+OPUS_EGRESS_FRAME_MS = 20
+
+
+@dataclass
+class _AdaptiveEgressState:
+    """Per-client adaptive egress controller state (MOR-588, ADR §3.6).
+
+    Exists ONLY for browser WS clients that declared Opus decode
+    capability (``preferred_rx_codec=opus``) on an adaptive-enabled
+    broadcaster. The initial codec is always PCM16 — Opus is never the
+    initial codec and engages only on sustained link degradation.
+    """
+
+    codec: int = AUDIO_CODEC_PCM16
+    # time.monotonic() of the last codec switch (dwell anchor); None
+    # until the first switch.
+    last_switch: float | None = None
+    # Start of the current continuous degradation episode; reset when
+    # evidence stops for longer than the degrade window.
+    degrade_since: float | None = None
+    # Most recent degradation evidence (clean-window anchor).
+    last_evidence: float | None = None
+    # High-water marks of the cumulative MOR-585 counters; a counter
+    # rising past its mark is one unit of degradation evidence.
+    seen_underruns: int = 0
+    seen_queue_drops: int = 0
+    # Rolling degradation evidence samples: (monotonic time,
+    # underrun delta, ws_queue_drops delta).
+    degrade_samples: list[tuple[float, int, int]] = field(default_factory=list)
+    degrade_threshold_met: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class RxPcmTapSource:
+    """Validated source format for the broadcaster's decoded-PCM tap."""
+
+    codec: AudioCodec
+    sample_rate: int
+
+
+@dataclass(frozen=True, slots=True)
+class BrowserTxAudioFacts:
+    available: bool
+    route: str | None
+    required_mod_input_source: int | None
+    codec: AudioCodec | None = None
+    path: str | None = None
+    lifecycle: tuple[Any, ...] | None = None
+
+
+def _tx_codec_for_radio(radio: object) -> AudioCodec | None:
+    codec = getattr(radio, "audio_tx_codec", None)
+    if codec is None:
+        codec = getattr(getattr(radio, "audio_stream_contract", None), "tx_codec", None)
+    if codec is None:
+        codec = getattr(radio, "audio_codec", None)
+    supported = (AudioCodec.PCM_1CH_16BIT, AudioCodec.OPUS_1CH)
+    return codec if isinstance(codec, AudioCodec) and codec in supported else None
+
+
+def _concrete_async_method(owner: object, name: str, method: object) -> Any | None:
+    if not callable(method) or not asyncio.iscoroutinefunction(method):
+        return None
+    if name in getattr(owner, "__dict__", {}):
+        return None
+    base = next((cls for cls in type(owner).__mro__ if name in cls.__dict__), None)
+    if (
+        base is None
+        or getattr(base, "_is_protocol", False)
+        or getattr(base.__dict__[name], "__isabstractmethod__", False)
+    ):
+        return None
+    if getattr(method, "__self__", None) is not owner:
+        return None
+    args = (b"",) if "push" in name else ("web",) if name == "acquire_tx" else ()
+    kwargs = {"sample_rate": 48_000} if name == "start_audio_tx_pcm" else {}
+    try:
+        inspect.signature(method).bind(*args, **kwargs)
+    except (TypeError, ValueError):
+        return None
+    return method
+
+
+def _lifecycle(
+    owner: object, names: tuple[str, ...]
+) -> tuple[tuple[Any, ...] | None, bool]:
+    raw = tuple(getattr(owner, name, None) for name in names)
+    methods = tuple(
+        _concrete_async_method(owner, name, method)
+        for name, method in zip(names, raw, strict=True)
+    )
+    return (methods if all(methods) else None), any(item is not None for item in raw)
+
+
+def _tx_path(radio: object, codec: AudioCodec) -> tuple[str, tuple[Any, ...]] | None:
+    neutral, has_neutral = _lifecycle(radio, ("start_tx", "push_tx", "stop_tx"))
+    session = getattr(radio, "audio_session", None)
+    if session is not None:
+        acquire_raw = getattr(session, "acquire_tx", None)
+        acquire = _concrete_async_method(session, "acquire_tx", acquire_raw)
+        return ("session", (acquire, *neutral[1:])) if acquire and neutral else None
+    if has_neutral:
+        return ("neutral", neutral) if neutral is not None else None
+    suffix = "pcm" if codec == AudioCodec.PCM_1CH_16BIT else "opus"
+    lifecycle, _ = _lifecycle(
+        radio, tuple(f"{op}_audio_tx_{suffix}" for op in ("start", "push", "stop"))
+    )
+    return (suffix, lifecycle) if lifecycle is not None else None
+
+
+def browser_tx_audio_facts(radio: "Radio | None") -> BrowserTxAudioFacts:
+    """Resolve the exact fail-closed structural snapshot for HTTP and audio WS."""
+    unavailable = BrowserTxAudioFacts(False, None, None)
+    caps = runtime_capabilities(radio)
+    if radio is None or not {CAP_AUDIO, CAP_TX}.issubset(caps):
+        return unavailable
+    try:
+        codec = _tx_codec_for_radio(radio)
+        if codec is None:
+            return unavailable
+        if (path := _tx_path(radio, codec)) is None:
+            return BrowserTxAudioFacts(False, None, None, codec)
+        route = audio_route.resolve_audio_route(radio)
+        source, policy = route.tx_audio_source, route.data_mode_policy
+        if (source, policy) not in {
+            (audio_route.TxAudioSource.LAN, audio_route.DataModePolicy.DATA2_LAN),
+            (audio_route.TxAudioSource.LAN, audio_route.DataModePolicy.DATA1_LAN),
+            (audio_route.TxAudioSource.LAN, audio_route.DataModePolicy.LEGACY),
+            (audio_route.TxAudioSource.USB, audio_route.DataModePolicy.DATA1_USB),
+            (audio_route.TxAudioSource.ACC, audio_route.DataModePolicy.LEGACY),
+        }:
+            return unavailable
+        required = (
+            audio_route.rigctld_wsjtx_policy(route)[1]
+            if CAP_MOD_INPUT_ROUTING in caps
+            else None
+        )
+        if required is not None and (
+            source is not audio_route.TxAudioSource.LAN
+            or not isinstance(required, int)
+            or isinstance(required, bool)
+            or not 0 <= required <= 9_007_199_254_740_991
+        ):
+            return unavailable
+        return BrowserTxAudioFacts(
+            True, source.value, required, codec, path[0], path[1]
+        )
+    except Exception:
+        return unavailable
+
+
+def _is_benign_tx_restart(exc: RuntimeError) -> bool:
+    """True when TX start failed only because the stream is already open.
+
+    The Icom LAN stream and the USB driver raise
+    :class:`~rigplane.audio.usb_driver.AudioAlreadyStartedError` (a
+    ``RuntimeError`` subclass, MOR-563), meaning the poller (or a prior
+    client) already opened TX and the handler can simply reuse it —
+    re-raising would close the audio WebSocket (MOR-541 review note,
+    MOR-544). The substring fallback covers not-yet-migrated raisers that
+    still signal the same condition with a bare ``RuntimeError``.
+    """
+    if isinstance(exc, AudioAlreadyStartedError):
+        return True
+    text = str(exc).lower()
+    return "already transmitting" in text or "already started" in text
+
+
+def _parse_preferred_rx_codec(msg: dict[str, Any]) -> int | None:
+    value = msg.get("preferred_rx_codec")
+    if value in ("pcm16", "pcm", "raw"):
+        return AUDIO_CODEC_PCM16
+    if value == "opus":
+        return AUDIO_CODEC_OPUS
+    return None
+
+
+def _parse_client_identity(msg: dict[str, Any]) -> str | None:
+    """Stable per-browser token from an ``audio_start`` (MOR-924).
+
+    Used for reconnect coalescing: a browser sends the same ``client_id``
+    on every (re)subscribe so the broadcaster can drop its prior, now-stale
+    subscription. Absent/blank/non-string is treated as "no identity" — old
+    clients that never send one keep the pre-MOR-924 behavior unchanged.
+    """
+    value = msg.get("client_id")
+    if isinstance(value, str) and value:
+        return value
+    return None
+
+
+class _AudioPacketLike(Protocol):
+    data: bytes
+
+
+class _AudioSubscription(Protocol):
+    async def start(self) -> None: ...
+
+    def stop(self) -> None: ...
+
+    def __aiter__(self) -> AsyncIterator[_AudioPacketLike | None]: ...
+
+
+class _AudioBus(Protocol):
+    def subscribe(self, name: str = "") -> _AudioSubscription: ...
+
+
+class AudioBroadcaster:
+    """Single-instance RX audio broadcaster shared by all AudioHandler clients.
+
+    Uses :class:`~rigplane.audio_bus.AudioBus` to subscribe to the radio-native
+    RX stream.  Browser WebSocket clients may receive a consumer-specific
+    transport codec, while PCM taps continue to see decoded radio audio.
+    """
+
+    HIGH_WATERMARK: int = 10
+
+    def __init__(
+        self,
+        radio: "Radio | None",
+        *,
+        on_client_count_change: Callable[[], None] | None = None,
+        on_rx_start_status_change: Callable[[], None] | None = None,
+        adaptive_egress: bool = False,
+    ) -> None:
+        self.HIGH_WATERMARK = get_audio_broadcaster_high_watermark()
+        self._radio = radio
+        self._on_client_count_change = on_client_count_change
+        # MOR-4279: fired when a relay/RX start sets or drops the retained
+        # failure, so the web server re-delivers the ``audioReceive`` state
+        # leaf even when no audio client (and thus no client-count change)
+        # accompanied the attempt (tap-only relays: audio scope, CW tune).
+        self._on_rx_start_status_change = on_rx_start_status_change
+        self._clients: dict[int, asyncio.Queue[bytes]] = {}
+        self._client_ws: dict[int, Connection] = {}
+        self._client_rx_codec: dict[int, int] = {}
+        # Stable per-browser identity supplied by the client on audio_start
+        # (MOR-924 reconnect coalescing). When a browser's audio WS drops on
+        # a soft_reconnect / audio re-arm and the client reconnects, the new
+        # subscribe carries the same identity; the prior (now-zombie)
+        # subscription is dropped synchronously so subscribers converge to
+        # exactly one per browser instead of waiting up to the 60 s pong
+        # timeout for ``reap_dead_clients`` to notice the half-open socket.
+        self._client_identity: dict[int, str] = {}
+        # RX source handle: a session-routed RxSubscription when the radio
+        # owns an AudioSession (MOR-608 — registers RX demand so the
+        # MOR-581 watchdog covers browser-only listeners), or a legacy
+        # bus AudioSubscription for radios without one. Both yield the
+        # same AudioPacket|None stream via ``async for``.
+        self._subscription: _AudioSubscription | RxSubscription | None = None
+        self._relay_task: asyncio.Task[None] | None = None
+        self._passive_tap_handle: TapHandle | None = None
+        self._rx_start_attempt = 0
+        self._rx_start_failure: (
+            tuple[object, object, str, tuple[AudioCandidate, ...], str | None] | None
+        ) = None
+        self._seq: int = 0
+        self._web_codec: int = AUDIO_CODEC_PCM16
+        self._radio_codec: AudioCodec | None = None
+        self._sample_rate: int = 48000
+        self._channels: int = 1
+        # Per-client egress encoder pool (MOR-584, ADR §3.6): each Opus
+        # WS client owns a dedicated transcoder (Opus encoders are
+        # stateful), keyed by client id and torn down on disconnect.
+        # Value: (transcoder, (sample_rate, channels, frame_ms)).
+        self._client_opus_transcoders: dict[
+            int, tuple[PcmOpusTranscoder, tuple[int, int, int]]
+        ] = {}
+        # Per-client PCM reframing accumulators for Opus egress (MOR-596):
+        # s16le bytes buffered until a full 20 ms frame is available.
+        # Cleared on unsubscribe/reap, adaptive switch to PCM16, and any
+        # codec-state refresh (sample rate / channel changes).
+        self._client_opus_pcm_buffers: dict[int, bytearray] = {}
+        # Per-client link-quality state (MOR-585, ADR §3.6): the latest
+        # client-reported ``audio_stats`` snapshot plus the server-side
+        # drop-oldest eviction counter for the bounded WS queue.  Stats
+        # collection only — read by the step-19 adaptive egress codec
+        # controller; nothing here changes codec selection or behavior.
+        self._client_link_quality: dict[int, dict[str, Any]] = {}
+        # One anonymous, allowlisted failure retained for this process lifetime.
+        # A client report is not proof of an OS permission denial or freshness.
+        self._last_capture_failure_category: str | None = None
+        self._client_queue_drops: dict[int, int] = {}
+        # Adaptive egress codec controller (MOR-588, ADR §3.6): per-client
+        # PCM16↔Opus switching driven by the MOR-585 link-quality signals.
+        # INERT when ``adaptive_egress`` is off (the default) — egress
+        # stays the static MOR-584 per-connection choice and a client's
+        # codec never changes mid-stream. Windows/dwell and the clock are
+        # per-instance so tests can drive them deterministically.
+        self._adaptive_egress = adaptive_egress
+        self._adaptive_degrade_window_s: float = DEGRADE_WINDOW_S
+        self._adaptive_clean_window_s: float = CLEAN_WINDOW_S
+        self._adaptive_dwell_s: float = DWELL_S
+        self._adaptive_monotonic: Callable[[], float] = time.monotonic
+        self._client_adaptive: dict[int, _AdaptiveEgressState] = {}
+        self._ack_tasks: set[asyncio.Task[None]] = set()
+        self._browser_opus_warned: bool = False
+        self._lock = asyncio.Lock()
+        # Optional DSP pipeline (inserted between codec decode and tap/distribute).
+        # NOTE: the DSP pipeline and the tap registry both operate on decoded
+        # PCM16.  When the radio's native codec is Opus (IC-705 and future
+        # Opus-only models) we pass the frame through un-decoded to preserve
+        # wire quality, so neither DSP nor taps run.  See ``_refresh_codec_state``
+        # for the one-shot warning that fires when this combination is detected,
+        # and ``docs/internals/rfc-audio-v1-mini.md`` for the user-facing note.
+        # Issue #762.
+        self._dsp_pipeline: DSPPipeline | None = None
+        # One-shot flag so the Opus-DSP warning log fires at most once per
+        # broadcaster lifetime, regardless of whether DSP or codec is set first.
+        self._dsp_opus_warned: bool = False
+        # Named RX tap stages (MOR-565): the broadcaster hosts ``rx.post_dsp``
+        # — decoded PCM16 after the optional DSP pipeline. This is the
+        # pre-existing multi-consumer tap registry, renamed into the
+        # stage scheme; ``_tap_registry`` stays as a compat alias for
+        # existing consumers (CW auto-tuner, tests). The pre-DSP ``rx.pcm``
+        # stage lives on AudioBus (see ``rigplane.audio.bus``).
+        self._stage_taps: dict[str, TapRegistry] = {STAGE_RX_POST_DSP: TapRegistry()}
+        self._tap_registry = self._stage_taps[STAGE_RX_POST_DSP]
+        self._legacy_tap_handle: TapHandle | None = None
+        # Flag raised by invalidate_codec_state(); checked at top of each
+        # _relay_loop iteration to pick up mid-stream mono↔stereo switches
+        # driven by the audio_config WS handler (issue #766, unblocks #721).
+        self._codec_stale: bool = False
+
+    async def subscribe(
+        self,
+        ws: Connection | None = None,
+        *,
+        preferred_rx_codec: int | None = None,
+        identity: str | None = None,
+    ) -> asyncio.Queue[bytes]:
+        """Register a new WebSocket client and start relaying if first.
+
+        ``identity`` is a stable per-browser token (MOR-924). When set, any
+        EXISTING client carrying the same identity — a stale subscription
+        left behind by the same browser's previous WS before its half-open
+        socket is reaped — is dropped and its WS closed before the new
+        client is registered, so subscribers converge to exactly one per
+        browser on reconnect instead of leaking a zombie fan-out target.
+        """
+        queue: asyncio.Queue[bytes] = asyncio.Queue(maxsize=self.HIGH_WATERMARK)
+        client_id = id(queue)
+        stale_ws: list[Connection] = []
+        async with self._lock:
+            if identity is not None:
+                for old_id in [
+                    cid
+                    for cid, ident in self._client_identity.items()
+                    if ident == identity
+                ]:
+                    old_ws = self._drop_client(old_id)
+                    if old_ws is not None:
+                        stale_ws.append(old_ws)
+            self._clients[client_id] = queue
+            if ws is not None:
+                self._client_ws[client_id] = ws
+            if identity is not None:
+                self._client_identity[client_id] = identity
+            if preferred_rx_codec is not None:
+                self._client_rx_codec[client_id] = preferred_rx_codec
+            if self._adaptive_egress and preferred_rx_codec == AUDIO_CODEC_OPUS:
+                # Adaptive eligibility (MOR-588): only clients that
+                # DECLARED Opus decode capability adapt; explicit-PCM16
+                # and no-preference clients keep the static MOR-584
+                # choice (clients without Opus decode are pinned PCM16,
+                # ADR §3.6). Initial state is always PCM16.
+                self._client_adaptive[client_id] = _AdaptiveEgressState()
+            # Start relay if no active subscription, or if relay task died
+            relay_alive = self._relay_task is not None and not self._relay_task.done()
+            if self._subscription is None or not relay_alive:
+                # Clean up stale subscription/task if needed
+                if self._subscription is not None and not relay_alive:
+                    logger.info("audio-broadcaster: relay task dead, restarting")
+                    if self._relay_task is not None:
+                        self._relay_task.cancel()
+                        self._relay_task = None
+                    await self._release_subscription()
+                if self._radio:
+                    await self._start_relay()
+        # Close any superseded sockets OUTSIDE the lock — the close awaits a
+        # drain and must never block subscribe under the broadcaster lock.
+        for old_ws in stale_ws:
+            try:
+                await old_ws.close(1001, "superseded by reconnect")
+            except Exception:
+                logger.debug(
+                    "audio-broadcaster: superseded ws close failed", exc_info=True
+                )
+        if stale_ws:
+            logger.info(
+                "audio-broadcaster: dropped %d superseded client(s) on reconnect "
+                "(identity=%s)",
+                len(stale_ws),
+                identity,
+            )
+        self._notify_client_count_change()
+        logger.info("audio-broadcaster: client added (total=%d)", len(self._clients))
+        return queue
+
+    def _drop_client(self, client_id: int) -> Connection | None:
+        """Remove ALL per-client state for ``client_id``. Returns its ws (if any).
+
+        Single source of truth for per-client teardown — used by the
+        reconnect-coalescing path in :meth:`subscribe`, :meth:`unsubscribe`,
+        :meth:`reap_dead_clients`, and the relay loop's mid-stream dead-client
+        sweep, so a new per-client dict can never be forgotten in one of them.
+
+        Callers that mutate the client maps concurrently
+        (subscribe/unsubscribe/reap_dead_clients) hold ``self._lock``; the
+        relay loop calls this WITHOUT the lock, which is safe because every
+        map mutation here is an idempotent ``.pop(id, None)`` (this mirrors
+        the prior inline sweep, which was also lock-free). Closing the
+        returned ws is the caller's job and must happen outside the lock.
+        """
+        ws = self._client_ws.pop(client_id, None)
+        self._clients.pop(client_id, None)
+        self._client_identity.pop(client_id, None)
+        self._client_rx_codec.pop(client_id, None)
+        self._client_opus_transcoders.pop(client_id, None)
+        self._client_opus_pcm_buffers.pop(client_id, None)
+        self._client_link_quality.pop(client_id, None)
+        self._client_queue_drops.pop(client_id, None)
+        self._client_adaptive.pop(client_id, None)
+        return ws
+
+    async def unsubscribe(self, queue: asyncio.Queue[bytes]) -> None:
+        """Unregister a client and stop relay if last (unless PCM tap is active)."""
+        client_id = id(queue)
+        removed = False
+        async with self._lock:
+            removed = client_id in self._clients
+            self._drop_client(client_id)
+            if (
+                not self._clients
+                and self._subscription is not None
+                and not self._tap_registry.demand
+            ):
+                await self._stop_relay()
+        if removed:
+            self._notify_client_count_change()
+        logger.info("audio-broadcaster: client removed (total=%d)", len(self._clients))
+
+    def _notify_client_count_change(self) -> None:
+        if self._on_client_count_change is None:
+            return
+        try:
+            self._on_client_count_change()
+        except Exception:
+            logger.debug(
+                "audio-broadcaster: client count callback failed", exc_info=True
+            )
+
+    def taps(self, stage: str) -> TapRegistry:
+        """Return the :class:`TapRegistry` for a named RX stage (MOR-565).
+
+        Only ``STAGE_RX_POST_DSP`` is hosted on the broadcaster; reserved
+        stage names raise ``KeyError``. Same accessor shape as
+        :meth:`rigplane.audio.bus.AudioBus.taps`.
+        """
+        return self._stage_taps[stage]
+
+    def _resolve_rx_route(self) -> tuple[str, Any] | None:
+        """Resolve the exact session-first RX source used by the relay."""
+        radio = self._radio
+        if radio is None or CAP_AUDIO not in runtime_capabilities(radio):
+            return None
+        session = getattr(radio, "audio_session", None)
+        if session is not None:
+            if not callable(getattr(session, "subscribe_rx", None)):
+                raise TypeError("audio_session.subscribe_rx must be callable")
+            return ("session", session)
+        bus = getattr(radio, "audio_bus", None)
+        if bus is None:
+            raise TypeError("audio_bus is required for runtime audio")
+        if not callable(getattr(bus, "subscribe", None)):
+            raise TypeError("audio_bus.subscribe must be callable")
+        return ("bus", bus)
+
+    def invalidate_rx_start_status(self) -> None:
+        had_failure = self._rx_start_failure is not None
+        self._rx_start_attempt += 1
+        self._rx_start_failure = None
+        if had_failure:
+            self._notify_rx_start_status_change()
+
+    def _notify_rx_start_status_change(self) -> None:
+        if self._on_rx_start_status_change is None:
+            return
+        try:
+            self._on_rx_start_status_change()
+        except Exception:
+            logger.debug(
+                "audio-broadcaster: RX start status callback failed", exc_info=True
+            )
+
+    def rx_start_status(self) -> AudioReceiveRecord:
+        failure = self._rx_start_failure
+        if failure is not None:
+            try:
+                route = self._resolve_rx_route()
+            except Exception:
+                route = None
+            if (
+                self._radio is not failure[0]
+                or route is None
+                or route[1] is not failure[1]
+            ):
+                self._rx_start_failure = None
+        payload: AudioReceiveFailureRecord | None = None
+        if self._rx_start_failure is not None:
+            _, _, reason, candidates, holder = self._rx_start_failure
+            payload = {
+                "stage": "rx_start",
+                "code": "core_rx_start_failed",
+                "reason": reason,
+            }
+            if holder:
+                payload["holder"] = holder
+            if candidates:
+                payload["candidates"] = [
+                    {
+                        "stableId": candidate.stable_id,
+                        "displayName": candidate.display_name,
+                        "direction": candidate.direction,
+                        "hostApi": candidate.hostapi,
+                        "portAudioIndex": candidate.portaudio_index,
+                        "nearRadio": candidate.near_radio,
+                    }
+                    for candidate in candidates
+                ]
+        return {"schemaVersion": 1, "failure": payload}
+
+    def _rx_start_current(self, attempt: int, radio: object, source: object) -> bool:
+        if attempt != self._rx_start_attempt or radio is not self._radio:
+            return False
+        try:
+            route = self._resolve_rx_route()
+        except Exception:
+            return False
+        return route is not None and route[1] is source
+
+    @property
+    def rx_pcm_tap_source(self) -> RxPcmTapSource | None:
+        """Return a descriptor only when the selected route yields PCM16."""
+        radio = self._radio
+        if radio is None:
+            return None
+        try:
+            if self._resolve_rx_route() is None:
+                return None
+            codec = radio.audio_codec  # type: ignore[attr-defined]
+            sample_rate = radio.audio_sample_rate  # type: ignore[attr-defined]
+        except Exception:
+            return None
+        if (
+            not isinstance(codec, AudioCodec)
+            or codec not in _PCM_TAP_CODECS
+            or not isinstance(sample_rate, int)
+            or isinstance(sample_rate, bool)
+            or sample_rate <= 0
+        ):
+            return None
+        return RxPcmTapSource(codec=codec, sample_rate=sample_rate)
+
+    def set_pcm_tap(self, callback: "Callable[[bytes], None] | None") -> None:
+        """Register a tap that receives decoded PCM16 audio data.
+
+        Compatibility wrapper around :class:`TapRegistry` (Pro-stable
+        surface). Manages a single "legacy" tap slot on the
+        ``rx.post_dsp`` stage. For new consumers prefer
+        ``taps(STAGE_RX_POST_DSP).register()`` directly.
+
+        Args:
+            callback: Function receiving PCM16 bytes, or None to unregister.
+        """
+        # Unregister previous legacy tap if any
+        if self._legacy_tap_handle is not None:
+            self._tap_registry.unregister(self._legacy_tap_handle)
+            self._legacy_tap_handle = None
+        if callback is not None:
+            self._legacy_tap_handle = self._tap_registry.register("legacy", callback)
+
+    def set_dsp_pipeline(self, pipeline: "DSPPipeline | None") -> None:
+        """Attach or detach a DSP processing pipeline.
+
+        When set, every decoded PCM16 frame is passed through
+        :meth:`DSPPipeline.process_bytes` before tap distribution and
+        client encoding.  Pass ``None`` to remove the pipeline.
+
+        NOTE: DSP (and the PCM tap registry used by the FFT scope) are
+        silently skipped when the radio's native codec is Opus.  Issue
+        #762 — a one-shot WARNING is logged the first time this
+        combination is observed; see :meth:`_maybe_warn_dsp_opus_gate`.
+        """
+        self._dsp_pipeline = pipeline
+        if pipeline is not None:
+            self._maybe_warn_dsp_opus_gate()
+
+    def _maybe_warn_dsp_opus_gate(self) -> None:
+        """Fire a one-shot WARNING if DSP is active on an Opus-native radio.
+
+        Safe to call from either order: ``set_dsp_pipeline`` call site,
+        or from codec refresh when the codec flips to Opus mid-stream.
+        Issue #762.
+        """
+        if self._dsp_opus_warned:
+            return
+        if self._dsp_pipeline is None:
+            return
+        if self._radio_codec not in (AudioCodec.OPUS_1CH, AudioCodec.OPUS_2CH):
+            return
+        logger.warning(
+            "audio-broadcaster: DSP pipeline is configured but the radio's "
+            "native codec is Opus — DSP and FFT-scope tap dispatch are "
+            "skipped to preserve wire quality.  See issue #762 / "
+            "docs/internals/rfc-audio-v1-mini.md."
+        )
+        self._dsp_opus_warned = True
+
+    def set_passive_pcm_tap(self, callback: Callable[[bytes], None] | None) -> None:
+        """Observe active RX without keeping the relay alive."""
+        if self._passive_tap_handle is not None:
+            self._tap_registry.unregister(self._passive_tap_handle)
+            self._passive_tap_handle = None
+        if callback is not None:
+            self._passive_tap_handle = self._tap_registry.register(
+                "passive-analyzer", callback, passive=True
+            )
+
+    async def release_relay_if_idle(self) -> None:
+        """Release scope-only RX demand after its tap is removed."""
+        async with self._lock:
+            if not self._clients and not self._tap_registry.demand:
+                await self._stop_relay()
+
+    async def ensure_relay(self) -> None:
+        """Ensure the relay loop is running (for PCM tap consumers like FFT scope).
+
+        Unlike :meth:`subscribe`, this does not create a client queue —
+        it just guarantees that audio packets flow through the relay so
+        that the PCM tap callback fires.
+        """
+        async with self._lock:
+            relay_alive = self._relay_task is not None and not self._relay_task.done()
+            if not relay_alive and self._radio:
+                # A dead relay may leave a stale handle behind — release it
+                # so session RX demand never leaks across a restart.
+                await self._release_subscription()
+                await self._start_relay()
+                logger.info("audio-broadcaster: relay started for PCM tap")
+
+    async def reap_dead_clients(self) -> int:
+        """Remove clients whose WebSocket is no longer alive. Returns count removed."""
+        async with self._lock:
+            dead_ids = [
+                cid for cid, ws in list(self._client_ws.items()) if not ws.is_alive()
+            ]
+            for cid in dead_ids:
+                self._drop_client(cid)
+            # Stop relay if no clients remain (and no PCM tap active)
+            if (
+                not self._clients
+                and self._subscription is not None
+                and not self._tap_registry.demand
+            ):
+                await self._stop_relay()
+            remaining = len(self._clients)
+        if dead_ids:
+            self._notify_client_count_change()
+            logger.info(
+                "audio-broadcaster: reaped %d dead clients (total=%d)",
+                len(dead_ids),
+                remaining,
+            )
+        return len(dead_ids)
+
+    def invalidate_codec_state(self) -> None:
+        """Mark broadcaster's cached codec state as stale.
+
+        The next ``_relay_loop`` iteration will call ``_refresh_codec_state``
+        to pick up any radio-side codec / channel / sample-rate changes.
+        Called by ``AudioHandler._handle_audio_config`` after a successful
+        CI-V Phones L/R Mix set, since that can flip the radio from mono
+        to stereo output (issue #766, unblocks #721).
+        """
+        self._codec_stale = True
+
+    def _refresh_codec_state(self, *, first: bool = False) -> None:
+        """Read radio's current codec / channels / sample rate into cache.
+
+        Called from ``_start_relay`` (``first=True``) and from ``_relay_loop``
+        whenever ``invalidate_codec_state`` has been called since the last
+        refresh. Behavior-preserving extraction of the block previously
+        inlined in ``_start_relay``.
+        """
+        # Resolve browser transport from the radio-native codec plus profile
+        # consumer policy; this must not feed back into the radio conninfo codec.
+        _codec = getattr(self._radio, "audio_codec", None)
+        if isinstance(_codec, AudioCodec):
+            self._radio_codec = _codec
+            self._channels = (
+                2
+                if _codec
+                in (
+                    AudioCodec.PCM_2CH_16BIT,
+                    AudioCodec.ULAW_2CH,
+                    AudioCodec.OPUS_2CH,
+                )
+                else 1
+            )
+            self._web_codec = self._resolve_web_rx_codec(_codec)
+            logger.info(
+                "audio-broadcaster: radio codec=%s (0x%02x) → web_codec=0x%02x",
+                _codec.name,
+                int(_codec),
+                self._web_codec,
+            )
+        elif first:
+            logger.warning(
+                "audio-broadcaster: no radio codec info, defaulting to PCM16"
+            )
+        _sr = getattr(self._radio, "audio_sample_rate", None)
+        if isinstance(_sr, int) and not isinstance(_sr, bool) and _sr > 0:
+            self._sample_rate = _sr
+        logger.info(
+            "audio-broadcaster: %s codec=0x%02x sr=%d ch=%d",
+            "starting relay" if first else "codec state refreshed",
+            self._web_codec,
+            self._sample_rate,
+            self._channels,
+        )
+        # Format may have changed — drop partial reframing buffers so no
+        # stale PCM concatenates across a codec/format switch (MOR-596).
+        self._client_opus_pcm_buffers.clear()
+        # Re-check DSP-on-Opus after the codec may have just flipped.
+        # Issue #762.
+        self._maybe_warn_dsp_opus_gate()
+
+    def _resolve_web_rx_codec(self, radio_codec: AudioCodec) -> int:
+        """Resolve the DEFAULT browser RX transport from profile policy.
+
+        Applies to clients that sent no ``preferred_rx_codec``; clients
+        with an explicit preference are resolved per-connection in
+        :meth:`_client_egress_codec` (MOR-584).
+        """
+        if radio_codec in (AudioCodec.OPUS_1CH, AudioCodec.OPUS_2CH):
+            return AUDIO_CODEC_OPUS
+
+        default_codec = {
+            AudioCodec.PCM_1CH_16BIT: AUDIO_CODEC_PCM16,
+            AudioCodec.PCM_2CH_16BIT: AUDIO_CODEC_PCM16,
+            AudioCodec.ULAW_1CH: AUDIO_CODEC_PCM16,
+            AudioCodec.ULAW_2CH: AUDIO_CODEC_PCM16,
+        }.get(radio_codec, AUDIO_CODEC_PCM16)
+
+        backend_id = getattr(self._radio, "backend_id", None)
+        if isinstance(backend_id, str) and backend_id != "rigplane":
+            return default_codec
+
+        profile = getattr(self._radio, "profile", None)
+        transport = getattr(profile, "browser_rx_transport", None)
+        transcode_to_opus = getattr(profile, "browser_rx_transcode_to_opus", None)
+        if transport == "pcm":
+            return AUDIO_CODEC_PCM16
+        if transport == "opus":
+            return AUDIO_CODEC_OPUS if transcode_to_opus is not False else default_codec
+        if transport == "auto" and transcode_to_opus is True:
+            return AUDIO_CODEC_OPUS
+        return default_codec
+
+    def _client_egress_codec(self, client_id: int) -> int:
+        """Resolve one client's egress codec (MOR-584, static per connection).
+
+        Ladder: adaptive controller state (MOR-588, flag-gated; PCM16
+        initial, Opus only on sustained degradation) → client-requested
+        (``preferred_rx_codec`` at negotiation) → profile policy default
+        (``_resolve_web_rx_codec`` cached in ``_web_codec``) → PCM16.
+        Opus-native radios pass through un-decoded for every client —
+        there is no PCM to re-encode (issue #762).
+        """
+        if self._radio_codec in (AudioCodec.OPUS_1CH, AudioCodec.OPUS_2CH):
+            return AUDIO_CODEC_OPUS
+        adaptive = self._client_adaptive.get(client_id)
+        if adaptive is not None:
+            return adaptive.codec
+        return self._client_rx_codec.get(client_id, self._web_codec)
+
+    def negotiated_rx_format(self, queue: asyncio.Queue[bytes]) -> dict[str, Any]:
+        """Describe the egress format a subscribed client will receive.
+
+        Backs the ``audio_format`` ack sent after ``audio_start``
+        (MOR-584).  ``frame_ms`` is the 20 ms nominal — advisory like
+        the wire header; consumers must size buffers from actual
+        payloads (#765).
+        """
+        codec = self._client_egress_codec(id(queue))
+        return {
+            "codec": "opus" if codec == AUDIO_CODEC_OPUS else "pcm16",
+            "sample_rate": self._sample_rate,
+            "channels": self._channels,
+            "frame_ms": 20,
+        }
+
+    def record_client_stats(
+        self,
+        queue: asyncio.Queue[bytes],
+        stats: dict[str, Any],
+    ) -> None:
+        """Record one client's latest self-reported link-quality (MOR-585).
+
+        Latest-wins snapshot from the periodic ``audio_stats`` uplink
+        (underruns, buffer depth, client-side drops).  Ignored for
+        queues not (or no longer) subscribed, so a stats message racing
+        a disconnect cannot leak per-client state.
+        """
+        client_id = id(queue)
+        if client_id not in self._clients:
+            return
+        bounded = _bounded_audio_stats(stats)
+        self._client_link_quality[client_id] = bounded
+        category = bounded.get("microphoneCaptureError")
+        if category is not None:
+            self._last_capture_failure_category = category
+        self._adaptive_evaluate(client_id)
+
+    def client_link_quality(self, queue: asyncio.Queue[bytes]) -> dict[str, Any]:
+        """One client's link-quality snapshot (MOR-585, ADR §3.6).
+
+        The latest client-reported ``audio_stats`` fields merged with the
+        server-side ``ws_queue_drops`` counter (drop-oldest evictions of
+        the bounded per-client WS queue).  This is the signal surface the
+        step-19 adaptive egress codec controller and the ``rx.egress``
+        taps read; nothing in this step consumes it.
+        """
+        client_id = id(queue)
+        snapshot: dict[str, Any] = dict(self._client_link_quality.get(client_id, {}))
+        if "playback" in snapshot:
+            snapshot["playback"] = dict(snapshot["playback"])
+        snapshot["ws_queue_drops"] = self._client_queue_drops.get(client_id, 0)
+        return snapshot
+
+    def capture_diagnostics(self) -> dict[str, Any]:
+        """Last safe browser-reported failure, not a hardware or permission verdict."""
+        return {
+            "schemaVersion": 1,
+            "lastFailureCategory": self._last_capture_failure_category,
+        }
+
+    def playback_diagnostics(self) -> dict[str, Any]:
+        """Anonymous, bounded latest self-reports from current subscriptions.
+
+        Read synchronously on the server event loop. Revalidate retained data
+        at this public boundary; legacy clients have no playback report. These
+        counters do not establish freshness or audible speaker output.
+        """
+        clients: list[dict[str, Any]] = []
+        reported = 0
+        for client_id in self._clients:
+            retained = self._client_link_quality.get(client_id)
+            if not isinstance(retained, dict):
+                continue
+            playback = _bounded_audio_stats(retained).get("playback")
+            if playback is None:
+                continue
+            reported += 1
+            if len(clients) < 8:
+                clients.append(playback)
+        active = len(self._clients)
+        return {
+            "schemaVersion": 1,
+            "state": (
+                "available"
+                if reported
+                else "no_playback_reports"
+                if active
+                else "no_clients"
+            ),
+            "activeClients": min(active, 0xFFFFFFFF),
+            "reportedClients": min(reported, 0xFFFFFFFF),
+            "omittedClients": min(max(reported - len(clients), 0), 0xFFFFFFFF),
+            "clients": clients,
+        }
+
+    def _adaptive_evaluate(self, client_id: int) -> None:
+        """Run one adaptive controller step for one client (MOR-588).
+
+        Called per ``audio_stats`` uplink and per relay-loop frame (the
+        latter covers the server-side ``ws_queue_drops`` signal for
+        clients whose stats uplink is absent or stalled). No-op for
+        non-adaptive clients, so the flag-off path stays MOR-584 static.
+
+        Evidence = either MOR-585 cumulative counter rising (client
+        playback ``underruns``, server ``ws_queue_drops``). A degradation
+        episode is continuous evidence with gaps shorter than the degrade
+        window; PCM16→Opus fires once the rolling window contains the ADR
+        §3.6 threshold (>= 3 underruns OR >= 5 queue drops), Opus→PCM16
+        once no evidence arrives for the clean window — both gated by the
+        dwell since the previous switch.
+        """
+        state = self._client_adaptive.get(client_id)
+        if state is None:
+            return
+        if self._radio_codec in (AudioCodec.OPUS_1CH, AudioCodec.OPUS_2CH):
+            return  # pass-through for everyone — nothing to adapt (#762)
+        now = self._adaptive_monotonic()
+        stats = self._client_link_quality.get(client_id, {})
+        underruns = int(stats.get("underruns", 0))
+        queue_drops = self._client_queue_drops.get(client_id, 0)
+        underrun_delta = max(0, underruns - state.seen_underruns)
+        queue_drop_delta = max(0, queue_drops - state.seen_queue_drops)
+        evidence = underrun_delta > 0 or queue_drop_delta > 0
+        state.seen_underruns = max(state.seen_underruns, underruns)
+        state.seen_queue_drops = max(state.seen_queue_drops, queue_drops)
+        if evidence:
+            state.last_evidence = now
+            if state.degrade_since is None:
+                state.degrade_since = now
+            state.degrade_samples.append((now, underrun_delta, queue_drop_delta))
+            threshold_cutoff = now - self._adaptive_degrade_window_s
+            threshold_samples = [
+                sample
+                for sample in state.degrade_samples
+                if sample[0] >= threshold_cutoff
+            ]
+            rolling_underruns = sum(sample[1] for sample in threshold_samples)
+            rolling_queue_drops = sum(sample[2] for sample in threshold_samples)
+            if (
+                rolling_underruns >= DEGRADE_UNDERRUN_THRESHOLD
+                or rolling_queue_drops >= DEGRADE_QUEUE_DROP_THRESHOLD
+            ):
+                state.degrade_threshold_met = True
+        elif (
+            state.degrade_since is not None
+            and state.last_evidence is not None
+            and now - state.last_evidence > self._adaptive_degrade_window_s
+        ):
+            state.degrade_since = None  # episode over — evidence stopped
+            state.degrade_samples.clear()
+            state.degrade_threshold_met = False
+
+        cutoff = now - self._adaptive_degrade_window_s
+        state.degrade_samples = [
+            sample for sample in state.degrade_samples if sample[0] >= cutoff
+        ]
+        if (
+            not state.degrade_samples
+            and state.degrade_since is not None
+            and (
+                state.last_evidence is None
+                or now - state.last_evidence > self._adaptive_degrade_window_s
+            )
+        ):
+            state.degrade_since = None
+
+        dwell_ok = (
+            state.last_switch is None
+            or now - state.last_switch >= self._adaptive_dwell_s
+        )
+        if (
+            state.codec == AUDIO_CODEC_PCM16
+            and dwell_ok
+            and state.degrade_since is not None
+            and now - state.degrade_since >= self._adaptive_degrade_window_s
+            and state.degrade_threshold_met
+        ):
+            self._adaptive_switch(client_id, state, AUDIO_CODEC_OPUS, now)
+        elif (
+            state.codec == AUDIO_CODEC_OPUS
+            and dwell_ok
+            and (
+                state.last_evidence is None
+                or now - state.last_evidence >= self._adaptive_clean_window_s
+            )
+        ):
+            self._adaptive_switch(client_id, state, AUDIO_CODEC_PCM16, now)
+
+    def _adaptive_switch(
+        self, client_id: int, state: _AdaptiveEgressState, codec: int, now: float
+    ) -> None:
+        """Apply one adaptive codec switch (MOR-588).
+
+        Changing ``state.codec`` re-routes ``_client_egress_codec`` and
+        thereby the MOR-584 encoder pool: the next Opus frame lazily
+        constructs a FRESH per-client transcoder; switching back to
+        PCM16 tears the encoder down here. A fresh ``audio_format`` ack
+        mirrors the new codec to the client.
+        """
+        state.codec = codec
+        state.last_switch = now
+        state.degrade_since = None
+        state.degrade_samples.clear()
+        state.degrade_threshold_met = False
+        if codec != AUDIO_CODEC_OPUS:
+            self._client_opus_transcoders.pop(client_id, None)
+            self._client_opus_pcm_buffers.pop(client_id, None)
+        logger.info(
+            "audio-broadcaster: adaptive egress switch → %s (client=%d)",
+            "opus" if codec == AUDIO_CODEC_OPUS else "pcm16",
+            client_id,
+        )
+        self._send_adaptive_format_ack(client_id)
+
+    def _send_adaptive_format_ack(self, client_id: int) -> None:
+        """Send a fresh ``audio_format`` ack after an adaptive switch.
+
+        Advisory and fire-and-forget, like the ``audio_start`` ack
+        (MOR-584): the browser decodes from the per-frame header codec
+        byte regardless; this only refreshes its negotiated-format view.
+        Never blocks the relay loop — whole WS frames are written
+        atomically, so a text send may interleave with the sender loop's
+        binary frames but never corrupt them.
+        """
+        ws = self._client_ws.get(client_id)
+        queue = self._clients.get(client_id)
+        if ws is None or queue is None:
+            return
+        payload = encode_json(
+            {"type": "audio_format", **self.negotiated_rx_format(queue)}
+        )
+
+        async def _send() -> None:
+            try:
+                await ws.send_text(payload)
+            except Exception:
+                logger.debug(
+                    "audio-broadcaster: adaptive audio_format ack failed",
+                    exc_info=True,
+                )
+
+        try:
+            task = asyncio.get_running_loop().create_task(_send())
+        except RuntimeError:
+            return  # no running loop (sync test context) — ack is advisory
+        self._ack_tasks.add(task)
+        task.add_done_callback(self._ack_tasks.discard)
+
+    def _encode_client_rx_frame(
+        self,
+        client_id: int,
+        pcm_data: bytes,
+        frame_ms: int,
+    ) -> list[tuple[int, int, bytes]]:
+        """Apply ONE client's RX transport encoding after PCM consumers run.
+
+        Sits downstream of the PCM spine (decode → DSP → tap fan-out):
+        only browser WS clients reach here.  The AudioBridge, FFT scope
+        and other taps consume PCM upstream and never touch these
+        encoders (T1a digital-path invariant).
+
+        Returns 0..N ``(codec, frame_ms, payload)`` frames.  PCM16 and
+        Opus-native pass-through stay strictly 1:1; Opus egress on PCM
+        radios buffers s16le per client and emits exact 20 ms Opus
+        frames (MOR-596) — radio packets are not Opus-frame-aligned, so
+        per-packet encode raised ``AudioFormatError`` on every frame and
+        silently fell back to PCM16.
+        """
+        if self._client_egress_codec(client_id) != AUDIO_CODEC_OPUS:
+            return [(AUDIO_CODEC_PCM16, frame_ms, pcm_data)]
+        if self._radio_codec in (AudioCodec.OPUS_1CH, AudioCodec.OPUS_2CH):
+            return [(AUDIO_CODEC_OPUS, frame_ms, pcm_data)]
+
+        key = (self._sample_rate, self._channels, OPUS_EGRESS_FRAME_MS)
+        frame_bytes = (
+            self._sample_rate * OPUS_EGRESS_FRAME_MS // 1000 * self._channels * 2
+        )
+        try:
+            entry = self._client_opus_transcoders.get(client_id)
+            if entry is None or entry[1] != key:
+                entry = (
+                    create_pcm_opus_transcoder(
+                        sample_rate=self._sample_rate,
+                        channels=self._channels,
+                        frame_ms=OPUS_EGRESS_FRAME_MS,
+                    ),
+                    key,
+                )
+                self._client_opus_transcoders[client_id] = entry
+            buf = self._client_opus_pcm_buffers.setdefault(client_id, bytearray())
+            buf.extend(pcm_data)
+            frames: list[tuple[int, int, bytes]] = []
+            while len(buf) >= frame_bytes:
+                chunk = bytes(buf[:frame_bytes])
+                del buf[:frame_bytes]
+                opus = entry[0].pcm_to_opus(chunk)
+                frames.append((AUDIO_CODEC_OPUS, OPUS_EGRESS_FRAME_MS, opus))
+            return frames
+        except Exception as exc:
+            if not self._browser_opus_warned:
+                logger.warning(
+                    "audio: browser Opus transcode unavailable, emitting PCM16: %s",
+                    exc,
+                )
+                self._browser_opus_warned = True
+            self._client_opus_transcoders.pop(client_id, None)
+            self._client_opus_pcm_buffers.pop(client_id, None)
+            return [(AUDIO_CODEC_PCM16, frame_ms, pcm_data)]
+
+    async def _apply_phones_mix_off(self) -> None:
+        """Force Phones L/R Mix = OFF so the LAN stream is separated stereo.
+
+        Dual-RX routing contract (#792, epic #787): the frontend recovers
+        ``focus`` × ``split_stereo`` by gating the splitter's L=MAIN /
+        R=SUB outputs.  If the radio was left in Mix ON from a prior
+        session or from the physical menu, it pre-sums the receivers
+        before LAN transmission and the frontend can no longer isolate
+        a single receiver.  Send 0x1A 05 00 72 00 once per relay start
+        so new sessions always begin in a predictable state.
+
+        Gated on the ``lan_dual_rx_audio_routing`` capability.  Declared
+        only on IC-7610 — IC-9700 also has ``receiver_count=2`` but its
+        menu layout does not include ``0x1A 05 00 72``, and FTX-1 runs
+        on Yaesu CAT which has no ``send_civ`` at all.  Sending this
+        CI-V on either would silent-NAK (IC-9700) or raise AttributeError
+        (FTX-1).  Issue #799.
+        """
+        if not self._radio:
+            return
+        if CAP_LAN_DUAL_RX_AUDIO_ROUTING not in self._radio.capabilities:
+            return
+        try:
+            await self._radio.send_civ(  # type: ignore[attr-defined]
+                0x1A,
+                sub=0x05,
+                data=bytes([0x00, 0x72, 0x00]),
+                wait_response=False,
+            )
+            logger.info("audio-broadcaster: Phones L/R Mix = OFF sent (1A 05 00 72 00)")
+        except Exception:
+            logger.warning(
+                "audio-broadcaster: Phones L/R Mix init failed", exc_info=True
+            )
+
+    async def _start_relay(self) -> None:
+        if self._radio is None:
+            return
+        radio = self._radio
+        self._rx_start_attempt += 1
+        attempt = self._rx_start_attempt
+        source: object | None = None
+        try:
+            route = self._resolve_rx_route()
+            if route is None:
+                return
+            route_kind, source = route
+            await self._apply_phones_mix_off()
+            self._refresh_codec_state(first=True)
+            if route_kind == "session":
+                # Session-routed RX demand (MOR-608, ADR §3.2 option a):
+                # subscribing through the radio-owned AudioSession registers
+                # this relay's demand (session leaves IDLE → RX_ONLY), so
+                # the MOR-581 health watchdog covers browser-only listeners
+                # and reconnects go through ``AudioSession.reestablish()``.
+                # Mirrors the MOR-580 TX-lease pattern in AudioHandler.
+                subscription = await route[1].subscribe_rx("web-audio")
+            else:
+                # Legacy bus path for radios without a session (bare test
+                # doubles, not-yet-migrated backends).
+                subscription = cast(_AudioBus, source).subscribe(name="web-audio")
+                await subscription.start()
+            if not self._rx_start_current(attempt, radio, source):
+                if isinstance(subscription, RxSubscription):
+                    await subscription.release()
+                else:
+                    subscription.stop()
+                return
+            self._subscription = subscription
+            if self._rx_start_failure is not None:
+                # A retry succeeded where the previous attempt failed
+                # (MOR-4279): the retained failure is dropped and control
+                # clients learn the record recovered — a tap-only relay
+                # has no client-count change that would carry the news.
+                self._rx_start_failure = None
+                self._notify_rx_start_status_change()
+            self._relay_task = asyncio.create_task(self._relay_loop())
+        except Exception as exc:
+            if source is not None and not self._rx_start_current(
+                attempt, radio, source
+            ):
+                return
+            logger.exception("audio-broadcaster: failed to start relay")
+            self._subscription = None
+            if source is not None:
+                reason, candidates = audio_start_failure_details(exc)
+                self._rx_start_failure = (
+                    radio,
+                    source,
+                    reason,
+                    candidates,
+                    audio_start_failure_holder(exc),
+                )
+                self._notify_rx_start_status_change()
+            await self._notify_relay_start_failure(exc)
+
+    async def _notify_relay_start_failure(self, exc: Exception) -> None:
+        """Surface a relay/RX start failure to connected WS clients (MOR-582).
+
+        Without this the browser was told nothing and waited on dead air
+        forever (ADR §3.4 problem P2: "subscribed" with zero frames). Reuses
+        the handler's error envelope shape: ``{"type": "error", "message"}``.
+
+        MOR-3823: the frame never carries exception text — host-side refusal
+        detail ("select explicit RX/TX devices") is meaningless to a remote
+        client. ``message`` keeps the fixed prefix the frontend matches on
+        and appends only the category token; the same token rides in
+        ``reason`` so clients can branch without parsing the message. The one
+        extra detail is ``holder``, the executable file name of the program
+        holding the device, on the ``device_in_use`` category only (MOR-4030).
+        """
+        if not self._client_ws:
+            return
+        reason = audio_start_failure_reason(exc)
+        holder = audio_start_failure_holder(exc)
+        payload = encode_json(
+            {
+                "type": "error",
+                "message": f"audio_start: RX audio failed to start: {reason}",
+                "reason": reason,
+                # The holding program's file name for the in-use category only.
+                **({"holder": holder} if holder else {}),
+            }
+        )
+        for ws in list(self._client_ws.values()):
+            try:
+                await ws.send_text(payload)
+            except Exception:
+                logger.debug(
+                    "audio-broadcaster: failed to notify client of RX start failure",
+                    exc_info=True,
+                )
+
+    async def _relay_loop(self) -> None:
+        """Read packets from AudioBus subscription and fan out to WS clients."""
+        if self._subscription is None:
+            return
+        try:
+            async for pkt in self._subscription:
+                if pkt is None:
+                    continue
+                if self._codec_stale:
+                    self._refresh_codec_state()
+                    self._codec_stale = False
+                if self._seq < 3 or self._seq % 500 == 0:
+                    logger.info(
+                        "audio: rx packet #%d, web_codec=0x%02x, data=%d bytes",
+                        self._seq,
+                        self._web_codec,
+                        len(pkt.data),
+                    )
+
+                # Decode audio data if needed
+                audio_data = pkt.data
+                if self._radio_codec in (AudioCodec.ULAW_1CH, AudioCodec.ULAW_2CH):
+                    try:
+                        audio_data = decode_ulaw_to_pcm16(audio_data)
+                    except Exception as e:
+                        logger.warning("audio: failed to decode ulaw data: %s", e)
+                        # Fall back to original data
+                        audio_data = pkt.data
+
+                # Apply DSP pipeline if configured (operates on s16le PCM).
+                # Opus-native radios bypass DSP to avoid decode + re-encode
+                # quality loss on the wire; see issue #762 for the design
+                # note and ``_maybe_warn_dsp_opus_gate`` for the one-shot
+                # warning that surfaces this asymmetry to the operator.
+                if self._dsp_pipeline is not None and self._radio_codec not in (
+                    AudioCodec.OPUS_1CH,
+                    AudioCodec.OPUS_2CH,
+                ):
+                    try:
+                        audio_data = self._dsp_pipeline.process_bytes(
+                            audio_data, self._sample_rate
+                        )
+                    except Exception:
+                        logger.debug("audio: dsp pipeline error", exc_info=True)
+
+                # Fan out PCM data to all registered taps (FFT scope, analyzers, etc.).
+                # Opus-native radios do not feed taps — consumers get silence.
+                # Same rationale as the DSP gate above.  Issue #762.
+                if self._tap_registry.active and self._radio_codec not in (
+                    AudioCodec.OPUS_1CH,
+                    AudioCodec.OPUS_2CH,
+                ):
+                    self._tap_registry.feed(audio_data)
+
+                # frame_ms is derived from the actual payload size (issue #765).
+                # The hardcoded 20 ms here was the root cause of the 2026-04-16
+                # companion crash (epic #764): IC-7610 dispatches 1364-byte PCM16
+                # mono packets ~= 14.2 ms, not 20 ms, and downstream consumers
+                # trusted the label.  Browser ignores frame_ms (rx-player.ts
+                # sizes buffers from payload); companion + native clients need
+                # the header to match reality.  See protocol.py docstring.
+                _bytes_per_sample = 2
+                _denom = max(1, self._sample_rate * self._channels * _bytes_per_sample)
+                _frame_ms = max(1, min((len(audio_data) * 1000) // _denom, 255))
+                # Per-client egress encode (MOR-584): the PCM spine above
+                # (decode → DSP → taps) is shared; from here each browser
+                # WS client gets its own negotiated wire codec.  Pass-
+                # through payloads (PCM16, Opus-native) reuse one cached
+                # frame per codec and stay strictly 1:1; Opus transcodes
+                # are per-client and N:M — the reframing accumulator may
+                # emit 0..N exact 20 ms frames per radio packet (MOR-596),
+                # all carrying this packet's seq.
+                shared_frames: dict[int, bytes] = {}
+                dead_ids: list[int] = []
+                for client_id, q in list(self._clients.items()):
+                    ws = self._client_ws.get(client_id)
+                    if ws is not None and not ws.is_alive():
+                        dead_ids.append(client_id)
+                        continue
+                    # Adaptive controller step (MOR-588): no-op unless the
+                    # client opted into adaptation on a flag-on broadcaster.
+                    if self._client_adaptive:
+                        self._adaptive_evaluate(client_id)
+                    out_frames = self._encode_client_rx_frame(
+                        client_id, audio_data, _frame_ms
+                    )
+                    for codec, hdr_frame_ms, payload in out_frames:
+                        shared = payload is audio_data
+                        frame = shared_frames.get(codec) if shared else None
+                        if frame is None:
+                            frame = encode_audio_frame(
+                                MSG_TYPE_AUDIO_RX,
+                                codec,
+                                self._seq,
+                                self._sample_rate // 100,
+                                self._channels,
+                                hdr_frame_ms,
+                                payload,
+                            )
+                            if shared:
+                                shared_frames[codec] = frame
+                        try:
+                            q.put_nowait(frame)
+                        except asyncio.QueueFull:
+                            # Drop-oldest eviction: count it per client —
+                            # this is the server-side WS congestion signal
+                            # for the adaptive egress codec controller
+                            # (MOR-585, ADR §3.6 detection-signals table).
+                            self._client_queue_drops[client_id] = (
+                                self._client_queue_drops.get(client_id, 0) + 1
+                            )
+                            try:
+                                q.get_nowait()
+                            except asyncio.QueueEmpty:
+                                pass
+                            try:
+                                q.put_nowait(frame)
+                            except asyncio.QueueFull:
+                                pass
+                self._seq = (self._seq + 1) & 0xFFFF
+                for client_id in dead_ids:
+                    self._drop_client(client_id)
+                    logger.info("audio-broadcaster: removed dead client during relay")
+                if dead_ids:
+                    self._notify_client_count_change()
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            logger.exception("audio-broadcaster: relay loop error")
+
+    async def _release_subscription(self) -> None:
+        """Release the RX source handle, whichever path owns it (MOR-608).
+
+        Session-routed handles drop their RX demand via the ASYNC
+        ``RxSubscription.release()`` (serialized by the session lock);
+        legacy bus handles keep the sync ``stop()``. Awaiting the release
+        while holding the broadcaster ``_lock`` is safe: the session lock
+        and ``_lock`` are distinct and the session never calls back into
+        the broadcaster, so there is no inverse acquisition order.
+        """
+        subscription = self._subscription
+        self._subscription = None
+        if subscription is None:
+            return
+        if isinstance(subscription, RxSubscription):
+            await subscription.release()
+        else:
+            subscription.stop()
+
+    async def _stop_relay(self) -> None:
+        self._rx_start_attempt += 1
+        if self._relay_task is not None:
+            self._relay_task.cancel()
+            try:
+                await self._relay_task
+            except asyncio.CancelledError:
+                pass
+            self._relay_task = None
+        await self._release_subscription()
+        logger.info("audio-broadcaster: relay stopped")
+
+
+class AudioHandler:
+    """Handler for the /api/v1/audio WebSocket channel.
+
+    Streams RX audio from the radio to the browser as binary audio frames,
+    and accepts TX audio frames from the browser to push to the radio.
+
+    Control flow:
+        Client sends JSON text: ``audio_start`` / ``audio_stop``
+        Server sends binary audio frames continuously while RX is active.
+        Client sends binary Opus frames while TX is active (after PTT on).
+
+    Args:
+        ws: Established WebSocket connection.
+        radio: Radio protocol instance (may be None).
+        broadcaster: Optional RX audio broadcaster.
+        tx_gate: Optional async predicate — ``True`` means a browser TX
+            frame may reach the radio. The server passes its managed TX
+            predicate (``rigplane.runtime.tx_gate.tx_gate_open``, MOR-2863),
+            so mic audio flows only while RigPlane holds the key: managed
+            intent keyed or a fresh ``ObservedPtt.ON`` (MOR-2870). ``None``
+            leaves the handler ungated (direct-construction test doubles).
+    """
+
+    def __init__(
+        self,
+        ws: Connection,
+        radio: "Radio | None",
+        broadcaster: "AudioBroadcaster | None" = None,
+        tx_gate: Callable[[], Awaitable[bool]] | None = None,
+        controller: ControllerAuthority | None = None,
+        controller_ticket: ControllerTicket | None = None,
+        controller_audio_source: object | None = None,
+        controller_audio_loss: Callable[[ControllerTicket, object], Awaitable[None]]
+        | None = None,
+        controller_track_stop: Callable[[Awaitable[None]], Awaitable[None]]
+        | None = None,
+        managed_tx_authority: ManagedTxAuthority | None = None,
+    ) -> None:
+        self._ws = ws
+        self._radio = radio
+        self._broadcaster = broadcaster
+        self._tx_gate = tx_gate
+        self._controller = controller
+        self._controller_ticket = controller_ticket
+        self._controller_audio_source = controller_audio_source
+        self._controller_audio_loss = controller_audio_loss
+        self._controller_track_stop = controller_track_stop
+        self._managed_tx_authority = managed_tx_authority
+        self._controller_claimed = False
+        self._rx_active = False
+        self._tx_active = False
+        # TX lease on the radio-owned AudioSession singleton (MOR-580,
+        # ADR §3.3). None when the radio lacks a session (legacy direct
+        # path) or when TX is not active.
+        self._tx_lease: TxLease | None = None
+        self._tx_facts: BrowserTxAudioFacts | None = None
+        # Per-key counters for once-per-frame TX warnings (MOR-1788), applied
+        # by ``_warn_tx_throttled``; cleared at every TX session start.
+        self._tx_warn_counts: dict[str, int] = {}
+        self._tx_stop_lock = asyncio.Lock()
+        self._seq: int = 0
+        self._last_logged_capture_category: str | None = None
+        self._frame_queue: asyncio.Queue[bytes] = asyncio.Queue()
+        self._done = asyncio.Event()
+        # Opus decoder for TX when radio uses PCM codec.
+        # Created lazily on TX start so we pass the radio's negotiated sample rate
+        # (otherwise a 24 kHz radio silently drops TX audio decoded at 48 kHz — #691).
+        self._transcoder: PcmOpusTranscoder | None = None
+        self._transcoder_rate: int = 0
+
+    async def run(self) -> None:
+        """Run the audio channel lifecycle.
+
+        Reader and sender run as concurrent tasks. When EITHER exits
+        (WS close, send timeout, error), the other is cancelled and
+        cleanup (unsubscribe from broadcaster) runs unconditionally.
+        """
+        reader = asyncio.create_task(self._reader_loop(), name="audio-reader")
+        sender = asyncio.create_task(self._sender_loop(), name="audio-sender")
+        try:
+            # Wait for the first task to finish — then cancel the other
+            done, pending = await asyncio.wait(
+                {reader, sender}, return_when=asyncio.FIRST_COMPLETED
+            )
+            await self._fence_controller_audio()
+            # Log which task exited first
+            for task in done:
+                exc = task.exception() if not task.cancelled() else None
+                if exc:
+                    logger.warning(
+                        "audio: %s exited with error: %s", task.get_name(), exc
+                    )
+                else:
+                    logger.debug("audio: %s exited normally", task.get_name())
+            # Cancel the remaining task and close WS to unblock any stuck recv()
+            for task in pending:
+                task.cancel()
+            # Close WS to ensure recv() in reader raises EOF. Bounded: an
+            # unbounded close() awaits drain(), which can wedge against a
+            # saturated buffer and a peer that stopped reading (MOR-1429
+            # review); fall back to a hard abort() (never blocks).
+            try:
+                await asyncio.wait_for(
+                    self._ws.close(1001, "peer task exited"), timeout=1.0
+                )
+            except Exception:
+                self._ws.abort()
+            for task in pending:
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+        except asyncio.CancelledError:
+            logger.info("audio: handler cancelled")
+            reader.cancel()
+            sender.cancel()
+            raise
+        except Exception:
+            logger.exception("audio: handler error")
+            reader.cancel()
+            sender.cancel()
+        finally:
+            self._done.set()
+            await self._fence_controller_audio()
+            for task in (reader, sender):
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(reader, sender, return_exceptions=True)
+            await self._stop_rx()
+            await self._stop_tx(
+                reason="handler exit",
+                timeout=_TX_CLEANUP_STOP_TIMEOUT_SECONDS,
+                suppress_errors=True,
+            )
+            logger.info("audio: handler finished")
+
+    async def _reader_loop(self) -> None:
+        """Read control messages and TX audio from client."""
+        try:
+            while True:
+                opcode, payload = await self._ws.recv()
+                if opcode == WS_OP_TEXT:
+                    try:
+                        msg = decode_json(payload.decode("utf-8"))
+                    except ValueError:
+                        continue
+                    await self._handle_control(msg)
+                elif opcode == WS_OP_BINARY:
+                    # TX audio frame from browser
+                    await self._handle_tx_audio(payload)
+        except EOFError as exc:
+            logger.info("audio: reader EOF: %s", exc)
+        except asyncio.IncompleteReadError as exc:
+            logger.info("audio: reader incomplete: %s", exc)
+
+    async def _handle_control(self, msg: dict[str, Any]) -> None:
+        """Handle audio_start / audio_stop messages."""
+        msg_type = msg.get("type", "")
+        # Periodic audio_stats (~1.5 s per client, MOR-585) stays at DEBUG;
+        # everything else keeps the established INFO trace.
+        logger.log(
+            logging.DEBUG if msg_type == "audio_stats" else logging.INFO,
+            "audio: control msg: %s",
+            _bounded_audio_stats(msg) if msg_type == "audio_stats" else msg,
+        )
+        direction = msg.get("direction", "rx")
+
+        if msg_type == "audio_start":
+            if direction == "rx":
+                await self._start_rx(
+                    preferred_rx_codec=_parse_preferred_rx_codec(msg),
+                    identity=_parse_client_identity(msg),
+                )
+            elif direction == "tx":
+                if self._controller is not None and self._controller_ticket is not None:
+                    try:
+                        self._controller.validate(self._controller_ticket)
+                        if self._controller_ticket.remote:
+                            self._controller.claim_audio(
+                                self._controller_ticket, self._controller_audio_source
+                            )
+                            self._controller_claimed = True
+                    except ControllerError as exc:
+                        await self._send_error(exc.code)
+                        return
+                was_active = self._tx_active or self._tx_lease is not None
+                previous_facts = self._tx_facts
+                try:
+                    facts = browser_tx_audio_facts(self._radio)
+                    transcoder_ready = facts.codec != AudioCodec.PCM_1CH_16BIT or (
+                        self._ensure_tx_transcoder()
+                    )
+                except BaseException:
+                    await self._abort_tx_start(previous_facts, was_active)
+                    raise
+                if not facts.available:
+                    await self._abort_tx_start(previous_facts, was_active)
+                    logger.warning("audio: TX start refused — TX audio unavailable")
+                    await self._send_error("audio_start: TX audio unavailable")
+                    return
+                if not transcoder_ready:
+                    # MOR-1173: a missing Opus→PCM transcoder must not deny the
+                    # whole session.  ``audio_start`` cannot know which codec the
+                    # browser will actually send, and browser PCM16 → radio PCM16
+                    # is forwarded in ``_handle_tx_audio`` with no transcoder at
+                    # all — ``tx-mic.ts`` deliberately falls back to PCM16 where
+                    # WebCodecs is unreliable.  The real hazard, a browser Opus
+                    # frame with no decoder, is already dropped fail-closed per
+                    # frame (``action=dropped_no_transcoder``, #1569), so arm the
+                    # session and let that guard do its job.  Warn loudly so an
+                    # operator can still diagnose a missing native opus codec.
+                    logger.warning(
+                        "audio: TX Opus decoder unavailable at %d Hz "
+                        "(native opus codec missing?) — browser PCM16 TX still "
+                        "works, browser Opus TX frames will be dropped",
+                        self._tx_sample_rate(),
+                    )
+                assert facts.lifecycle is not None
+                start = facts.lifecycle[0]
+                try:
+                    if facts.path == "session":
+                        if self._tx_lease is None or self._tx_lease.released:
+                            self._tx_lease = await start("web")
+                    elif facts.path == "pcm":
+                        await start(sample_rate=self._tx_sample_rate())
+                    else:
+                        await start()
+                except RuntimeError as exc:
+                    if _is_benign_tx_restart(exc):
+                        logger.info("audio: TX already started by poller, reusing")
+                    else:
+                        await self._abort_tx_start(previous_facts, was_active)
+                        raise
+                except BaseException:
+                    await self._abort_tx_start(previous_facts, was_active)
+                    raise
+                self._tx_facts = facts
+                self._tx_active = True
+                # New TX session: clear the MOR-1788 warning counters so a
+                # recurrence is never hidden by an earlier session's backlog.
+                self._tx_warn_counts.clear()
+                logger.info("audio: TX active")
+                await self._send_tx_format(transcoder_ready)
+        elif msg_type == "audio_stop":
+            if direction == "rx":
+                await self._stop_rx()
+            elif direction == "tx":
+                await self._stop_tx(reason="client request", force=True)
+        elif msg_type == "audio_config":
+            await self._handle_audio_config(msg)
+        elif msg_type == "audio_stats":
+            self._handle_audio_stats(msg)
+
+    def _handle_audio_stats(self, msg: dict[str, Any]) -> None:
+        """Record the client's periodic link-quality report (MOR-585).
+
+        Legacy link metrics and the additive playback object are filtered
+        by ``_bounded_audio_stats`` before retention.
+        """
+        stats = _bounded_audio_stats(msg)
+        if self._rx_active and self._broadcaster is not None:
+            self._broadcaster.record_client_stats(self._frame_queue, stats)
+            category = stats.get("microphoneCaptureError")
+            if category is not None and category != self._last_logged_capture_category:
+                # This existing diagnostic log is collected in Support bundles.
+                # Never log the inbound message, labels, identifiers or raw error.
+                logger.info(
+                    "browser microphone capture rejected: category=%s", category
+                )
+                self._last_logged_capture_category = category
+
+    async def _abort_tx_start(
+        self, previous_facts: BrowserTxAudioFacts | None, was_active: bool
+    ) -> None:
+        self._tx_facts = previous_facts if was_active else None
+        if was_active:
+            await self._stop_tx(reason="failed TX audio restart", force=True)
+        elif self._controller_claimed:
+            await self._fence_controller_audio()
+            self._release_controller_audio()
+
+    async def _fence_controller_audio(self) -> None:
+        if (
+            self._controller_claimed
+            and self._controller_audio_loss is not None
+            and self._controller_ticket is not None
+        ):
+            await self._controller_audio_loss(
+                self._controller_ticket, self._controller_audio_source
+            )
+
+    def _release_controller_audio(self) -> None:
+        if (
+            self._controller is not None
+            and self._controller_ticket is not None
+            and self._controller_claimed
+        ):
+            self._controller.release_audio(
+                self._controller_ticket, self._controller_audio_source
+            )
+            self._controller_claimed = False
+
+    async def _stop_tx(
+        self,
+        *,
+        reason: str,
+        timeout: float | None = None,
+        suppress_errors: bool = False,
+        force: bool = False,
+    ) -> None:
+        """Release this handler's active TX ownership, optionally bounded."""
+        async with self._tx_stop_lock:
+            await self._fence_controller_audio()
+            if not self._tx_active and self._tx_lease is None:
+                if not force or self._tx_facts is None:
+                    self._release_controller_audio()
+                    return
+            was_active = self._tx_active
+            self._tx_active = False
+            facts, self._tx_facts = self._tx_facts, None
+
+            try:
+                lease = self._tx_lease
+                if lease is not None:
+                    # Session path (MOR-580): drop this handler's TX demand;
+                    # the session disarms radio TX only when the lease
+                    # refcount reaches zero (release is idempotent).
+                    self._tx_lease = None
+                    stop_tx: Awaitable[None] = lease.release()
+                elif facts is not None and facts.path == "session":
+                    # Session radio with no held lease: this handler owns no
+                    # TX demand — never direct-stop the radio out from under
+                    # other lease holders (bridge, poller PTT). MOR-580.
+                    logger.info(
+                        "audio: TX stop skipped (%s, no session lease held)", reason
+                    )
+                    return
+                elif facts is not None and facts.lifecycle is not None:
+                    stop_tx = facts.lifecycle[2]()
+                else:
+                    if (
+                        not was_active
+                        or not self._radio
+                        or CAP_AUDIO not in getattr(self._radio, "capabilities", ())
+                    ):
+                        logger.info(
+                            "audio: TX cleanup skipped (%s, no active snapshot)",
+                            reason,
+                        )
+                        return
+                    stop_tx_method = getattr(self._radio, "stop_tx", None)
+                    if stop_tx_method is not None:
+                        # Neutral AudioTransport surface (MOR-544).
+                        stop_tx = stop_tx_method()
+                    else:
+                        stop_tx = self._legacy_tx_lifecycle("stop")
+                if self._controller_track_stop is not None:
+                    owned_stop = asyncio.ensure_future(
+                        self._controller_track_stop(stop_tx)
+                    )
+
+                    def settled(done: asyncio.Future[None]) -> None:
+                        if (
+                            not done.cancelled()
+                            and done.exception() is None
+                            and (done.result() is None or done.result() is True)
+                        ):
+                            self._release_controller_audio()
+
+                    owned_stop.add_done_callback(settled)
+                    stop_tx = asyncio.shield(owned_stop)
+                if timeout is None:
+                    await stop_tx
+                else:
+                    await self._await_bounded_tx_stop(stop_tx, timeout=timeout)
+            except TimeoutError:
+                if timeout is None:
+                    logger.warning(
+                        "audio: TX stop timed out during %s", reason, exc_info=True
+                    )
+                else:
+                    logger.warning(
+                        "audio: TX stop timed out during %s after %.1fs",
+                        reason,
+                        timeout,
+                    )
+                if not suppress_errors:
+                    raise
+            except Exception:
+                logger.warning("audio: TX stop failed during %s", reason, exc_info=True)
+                if not suppress_errors:
+                    raise
+            else:
+                if self._controller_track_stop is None:
+                    self._release_controller_audio()
+                logger.info("audio: TX stopped (%s)", reason)
+
+    async def _await_bounded_tx_stop(
+        self,
+        stop_tx: Awaitable[None],
+        *,
+        timeout: float,
+    ) -> None:
+        task = asyncio.ensure_future(stop_tx)
+        done, pending = await asyncio.wait({task}, timeout=timeout)
+        if pending:
+            task.cancel()
+            task.add_done_callback(self._consume_late_tx_stop)
+            raise TimeoutError
+        await next(iter(done))
+
+    @staticmethod
+    def _consume_late_tx_stop(task: asyncio.Future[None]) -> None:
+        try:
+            task.result()
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            logger.debug("audio: late TX stop failed after timeout", exc_info=True)
+
+    # --------------------------------------------------------------
+    # audio_config — MAIN/SUB focus + stereo split (issue #752, revised in #788)
+    # --------------------------------------------------------------
+    #
+    # IC-7610 CI-V ``0x1A 05 00 72`` "Connectors > Phones > L/R Mix" —
+    # per official CI-V reference p. 5: **data is 00 or 01 only**.
+    #
+    #   0x00 = Mix OFF → L=MAIN, R=SUB separated in the LAN stream.
+    #   0x01 = Mix ON  → radio pre-sums MAIN + SUB to both channels
+    #                    before transmission (LAN output becomes mono).
+    #
+    # Contract for dual-RX routing (epic #787, #792): the backend must
+    # **always** keep Mix OFF while a 2-channel codec is active.  The
+    # frontend recovers ``focus`` × ``split_stereo`` purely via WebAudio
+    # gain/pan on the separated L=MAIN / R=SUB pair (#789).  If Mix is
+    # ON the radio has already mixed the receivers, so ``focus=main`` /
+    # ``focus=sub`` can no longer isolate a single receiver — the
+    # frontend would play the summed signal instead.
+    #
+    # Both ``focus`` and ``split_stereo`` stay on the wire so the client
+    # can persist + echo them, but neither round-trips to CI-V anymore.
+    # Broadcaster start-up also forces Mix OFF once per session via
+    # :meth:`AudioBroadcaster._apply_phones_mix_off` so the LAN stream
+    # is separated from the first packet, independent of prior radio
+    # state.
+    _VALID_AUDIO_FOCUS: frozenset[str] = frozenset({"main", "sub", "both"})
+
+    async def _handle_audio_config(self, msg: dict[str, Any]) -> None:
+        """Apply MAIN/SUB audio focus + stereo split via CI-V Phones L/R Mix.
+
+        Fire-and-forget on radios declaring the
+        ``lan_dual_rx_audio_routing`` capability (IC-7610 only today —
+        see ``capabilities.CAP_LAN_DUAL_RX_AUDIO_ROUTING``).  Echoes the
+        applied config back on the WS so the client can confirm
+        persistence.  Silent no-op on radios that don't declare the
+        capability — e.g. IC-9700 (dual-RX but different menu layout)
+        and FTX-1 (Yaesu CAT, no ``send_civ`` at all).  Issue #799.
+        """
+        if self._controller is not None and self._controller_ticket is not None:
+            try:
+                self._controller.validate(self._controller_ticket)
+            except ControllerError as exc:
+                await self._send_error(exc.code)
+                return
+        focus = msg.get("focus", "")
+        split_stereo = bool(msg.get("split_stereo", False))
+
+        if focus not in self._VALID_AUDIO_FOCUS:
+            await self._send_error(
+                f"audio_config: invalid focus {focus!r}; "
+                f"expected one of {sorted(self._VALID_AUDIO_FOCUS)}"
+            )
+            return
+
+        if not self._radio:
+            return  # no radio attached — cannot apply
+        if CAP_LAN_DUAL_RX_AUDIO_ROUTING not in self._radio.capabilities:
+            logger.debug(
+                "audio_config: ignored — radio lacks lan_dual_rx_audio_routing"
+            )
+            return
+
+        # Phones L/R Mix is always kept OFF (0x00) on dual-RX radios; see
+        # class-level comment above and #792.  ``focus`` / ``split_stereo``
+        # echo back for client-side persistence but don't drive CI-V.
+        phones_byte = 0x00
+        try:
+            await self._radio.send_civ(  # type: ignore[attr-defined]
+                0x1A,
+                sub=0x05,
+                data=bytes([0x00, 0x72, phones_byte]),
+                wait_response=False,
+            )
+        except Exception:
+            logger.warning("audio_config: CI-V send failed", exc_info=True)
+            await self._send_error("audio_config: CI-V send failed")
+            return
+
+        logger.info(
+            "audio_config: focus=%s split_stereo=%s → phones=0x%02X",
+            focus,
+            split_stereo,
+            phones_byte,
+        )
+        # Radio may switch mono↔stereo output after this CI-V; broadcaster's
+        # cached codec/channels must be refreshed on the next relay iteration
+        # (issue #766, unblocks #721 stereo toggle).
+        if self._broadcaster is not None:
+            self._broadcaster.invalidate_codec_state()
+        await self._send_json(
+            {
+                "type": "audio_config",
+                "focus": focus,
+                "split_stereo": split_stereo,
+                "applied": True,
+            }
+        )
+
+    async def _send_json(self, obj: Mapping[str, Any]) -> None:
+        """Send a JSON message to the WS client."""
+        try:
+            await self._ws.send_text(encode_json(obj))
+        except Exception:
+            logger.debug("audio: _send_json failed", exc_info=True)
+
+    async def _send_error(self, message: str) -> None:
+        """Send an error message envelope to the WS client."""
+        await self._send_json({"type": "error", "message": message})
+
+    async def _send_tx_format(self, opus_decode: bool) -> None:
+        """Advertise the TX codec this server can accept (MOR-1791).
+
+        The TX mirror of the RX-side ``audio_format`` ack (MOR-584), sent
+        once per armed ``audio_start direction=tx``.  Purely additive: no
+        field is removed and no version is bumped, so a client that ignores
+        audio-WS text frames is affected in no way.
+
+        ``opus_decode`` is the same fact the server already logs — whether a
+        browser Opus TX frame can be decoded at all on the radio's PCM TX
+        leg.  ``codec`` restates it as the codec the client should send, so
+        a browser facing a missing native opus codec can switch to its
+        existing PCM16 capture path instead of keying the radio while every
+        frame is dropped fail-closed.  When Opus IS decodable the ack names
+        Opus and the client keeps its own choice, exactly as before.
+        """
+        await self._send_json(
+            audio_tx_format_message(opus_decode, self._tx_sample_rate())
+        )
+
+    def _ensure_tx_transcoder(self) -> bool:
+        """Create (or recreate) the TX Opus→PCM transcoder at the radio's rate.
+
+        TX-side fix for issue #691: previously the transcoder was constructed
+        in ``__init__`` before the radio's negotiated ``audio_sample_rate`` was
+        known, so the browser's 24 kHz Opus stream was decoded to 48 kHz PCM
+        and the radio silently dropped TX audio. Called on ``audio_start
+        direction=tx``, when the rate is guaranteed available.
+        """
+        rate = self._tx_sample_rate()
+        if self._transcoder is not None and self._transcoder_rate == rate:
+            return True
+        try:
+            self._transcoder = create_pcm_opus_transcoder(sample_rate=rate)
+            self._transcoder_rate = rate
+            logger.info("audio: TX transcoder ready at %d Hz", rate)
+        except Exception:
+            logger.debug("audio: TX transcoder unavailable (opus codec missing?)")
+            self._transcoder = None
+            self._transcoder_rate = 0
+            return False
+        return True
+
+    def _tx_codec(self) -> AudioCodec | None:
+        # Under the ``rigplane.web.*`` strict override with
+        # ``follow_imports = "skip"``, ``AudioCodec`` resolves to ``Any`` in
+        # this module's view, so the function effectively returns
+        # ``Any | None`` and the ``getattr`` results below are also ``Any``.
+        # That triggers ``no-any-return``; suppress it locally rather than
+        # carrying a runtime-redundant ``cast``.  ``warn_unused_ignores`` is
+        # off for ``rigplane.web.*``, so the ignore stays safe in any future
+        # non-strict context.
+        #
+        # Preference order (MOR-544): first-class ``audio_tx_codec``
+        # (AudioTransport) → contract ``tx_codec`` → RX ``audio_codec``.
+        tx_codec = getattr(self._radio, "audio_tx_codec", None)
+        if tx_codec is not None:
+            return tx_codec  # type: ignore[no-any-return]
+        contract = getattr(self._radio, "audio_stream_contract", None)
+        tx_codec = getattr(contract, "tx_codec", None)
+        if tx_codec is not None:
+            return tx_codec  # type: ignore[no-any-return]
+        return getattr(self._radio, "audio_codec", None)  # type: ignore[no-any-return]
+
+    def _tx_sample_rate(self) -> int:
+        """Resolve the TX sample rate: contract → radio property → 48000.
+
+        Single source for both the legacy ``start_audio_tx_pcm`` call and
+        the TX transcoder (the two used to carry half-duplicated fallback
+        chains; unified in MOR-544)."""
+        contract = getattr(self._radio, "audio_stream_contract", None)
+        sr = getattr(contract, "tx_sample_rate_hz", None)
+        if not isinstance(sr, int) or isinstance(sr, bool) or sr <= 0:
+            sr = getattr(self._radio, "audio_sample_rate", None)
+        if isinstance(sr, int) and not isinstance(sr, bool) and sr > 0:
+            return sr
+        return 48000
+
+    async def _legacy_tx_lifecycle(self, op: str) -> None:
+        """Per-codec TX ``"start"``/``"stop"`` fallback for radios without
+        the neutral ``AudioTransport`` surface (MOR-544)."""
+        if self._tx_codec() == AudioCodec.PCM_1CH_16BIT:
+            if op == "start":
+                await self._radio.start_audio_tx_pcm(  # type: ignore[union-attr]
+                    sample_rate=self._tx_sample_rate()
+                )
+            else:
+                await self._radio.stop_audio_tx_pcm()  # type: ignore[union-attr]
+        elif op == "start":
+            await self._radio.start_audio_tx_opus()  # type: ignore[union-attr]
+        else:
+            await self._radio.stop_audio_tx_opus()  # type: ignore[union-attr]
+
+    def _remote_tx_currency(self) -> tuple[int, int, str] | None:
+        authority = self._managed_tx_authority
+        controller = self._controller
+        ticket = self._controller_ticket
+        source = self._controller_audio_source
+        if (
+            authority is None
+            or controller is None
+            or ticket is None
+            or not ticket.remote
+            or source is None
+        ):
+            return None
+        try:
+            controller.validate(ticket)
+            projection = authority.snapshot_nowait()
+            generation = projection.provider_generation
+            intent = projection.state.intent
+            if (
+                generation is None
+                or intent.kind is not ManagedTxIntentKind.PTT
+                or not intent.owner_token
+                or not controller.audio_matches(ticket, source, intent.owner_token)
+            ):
+                return None
+            return generation, projection.state.effect_epoch, intent.owner_token
+        except Exception:
+            return None
+
+    async def _push_tx(
+        self,
+        data: bytes,
+        *,
+        legacy_method: str,
+        tx_currency: tuple[int, int, str] | None = None,
+    ) -> None:
+        """Push TX bytes via the held session lease (MOR-580); without one,
+        via neutral ``push_tx``, falling back to the named legacy per-codec
+        push method (MOR-544)."""
+        ticket = self._controller_ticket
+        remote = ticket is not None and ticket.remote
+
+        async def submission_guard() -> bool:
+            if self._tx_gate is None:
+                return not remote
+            if await self._tx_gate() is not True:
+                return False
+            return not remote or (
+                tx_currency is not None and self._remote_tx_currency() == tx_currency
+            )
+
+        if self._tx_gate is not None or remote:
+            try:
+                if await submission_guard() is not True:
+                    return
+            except Exception:
+                return
+        lease = self._tx_lease
+        if lease is not None and not lease.released:
+            if self._tx_gate is None and not remote:
+                await lease.push(data)
+            else:
+                await lease.push(data, submission_guard=submission_guard)
+            return
+        facts = self._tx_facts
+        if facts is not None and facts.lifecycle is not None:
+            if facts.path == "session":
+                raise RuntimeError("browser TX audio session lease is unavailable")
+            await facts.lifecycle[1](data)
+            return
+        push_tx = getattr(self._radio, "push_tx", None)
+        if push_tx is not None:
+            await push_tx(data)
+        else:
+            await getattr(self._radio, legacy_method)(data)
+
+    async def _start_rx(
+        self,
+        *,
+        preferred_rx_codec: int | None = None,
+        identity: str | None = None,
+    ) -> None:
+        """Subscribe to audio broadcaster for RX frames."""
+        if not self._broadcaster:
+            return
+        self._rx_active = True
+        self._frame_queue = await self._broadcaster.subscribe(
+            ws=self._ws,
+            preferred_rx_codec=preferred_rx_codec,
+            identity=identity,
+        )
+        # Per-connection negotiation ack (MOR-584): tell the client which
+        # wire codec/format it will receive.  Advisory and fire-and-forget
+        # — legacy clients ignore text frames on the audio WS and keep
+        # decoding from the per-frame binary header.
+        await self._send_json(
+            {
+                "type": "audio_format",
+                **self._broadcaster.negotiated_rx_format(self._frame_queue),
+            }
+        )
+        logger.info("audio: subscribed to RX broadcast")
+
+    async def _stop_rx(self) -> None:
+        """Unsubscribe from audio broadcaster."""
+        if not self._rx_active or not self._broadcaster:
+            return
+        self._rx_active = False
+        await self._broadcaster.unsubscribe(self._frame_queue)
+        logger.info("audio: unsubscribed from RX broadcast")
+
+    def _warn_tx_throttled(
+        self, key: str, message: str, *args: Any, exc_info: bool = False
+    ) -> None:
+        """Log a once-per-frame TX warning with repeat throttling (MOR-1788).
+
+        TX warnings fire once per inbound frame (~50/s) and would otherwise
+        bury the single diagnostic line that explains the cause.  Same policy
+        as the UDP error site in ``rigplane.core.transport``: the first three
+        occurrences are logged in full, then every hundredth is logged along
+        with the number of occurrences suppressed since the last emitted
+        line, so no information is lost.  Counters are kept per site key in
+        ``self._tx_warn_counts`` and cleared at TX session start.
+        """
+        n = self._tx_warn_counts.get(key, 0) + 1
+        self._tx_warn_counts[key] = n
+        if n <= 3:
+            logger.warning(message + " (#%d)", *args, n, exc_info=exc_info)
+        elif n % 100 == 0:
+            prev_logged = 3 if n == 100 else n - 100
+            logger.warning(
+                message + " (#%d, suppressed %d)",
+                *args,
+                n,
+                n - prev_logged - 1,
+                exc_info=exc_info,
+            )
+
+    async def _handle_tx_audio(self, payload: bytes) -> None:
+        """Forward TX audio from browser to radio."""
+        if not self._tx_active:
+            logger.debug(
+                "audio: TX frame ignored (tx_active=False), size=%d", len(payload)
+            )
+            return
+        tx_currency = None
+        ticket = self._controller_ticket
+        if ticket is not None and ticket.remote:
+            tx_currency = self._remote_tx_currency()
+            if tx_currency is None:
+                return
+        # MOR-2870: the web path gets the bridge's fail-closed rule — a
+        # frame reaches the rig only while the managed intent is keyed or a
+        # fresh ObservedPtt.ON says the radio transmits, whoever keyed it
+        # (MOR-3921). ``_tx_active`` merely says the client started its
+        # stream; a late or lost ``audio_stop`` must never keep mic audio
+        # flowing on RF.
+        if self._tx_gate is not None:
+            try:
+                gate_open = await self._tx_gate() is True
+            except Exception:
+                logger.debug("audio: TX gate check failed closed", exc_info=True)
+                gate_open = False
+            if not gate_open:
+                self._warn_tx_throttled(
+                    "tx_gate_closed",
+                    "audio: TX frame dropped action=dropped_tx_gate_closed size=%d",
+                    len(payload),
+                )
+                return
+        facts = self._tx_facts
+        if facts is None and not self._radio:
+            self._warn_tx_throttled(
+                "no_radio", "audio: TX frame ignored (no radio), size=%d", len(payload)
+            )
+            return
+        if facts is None and CAP_AUDIO not in self._radio.capabilities:  # type: ignore[union-attr]
+            self._warn_tx_throttled(
+                "no_capability",
+                "audio: TX frame ignored (radio missing audio capability), size=%d",
+                len(payload),
+            )
+            return
+        if len(payload) < AUDIO_HEADER_SIZE:
+            self._warn_tx_throttled(
+                "frame_too_small",
+                "audio: TX frame too small (%d < %d), ignoring",
+                len(payload),
+                AUDIO_HEADER_SIZE,
+            )
+            return
+        # Anything but 0x11 is dropped, including the retired 0x12 frame
+        # (MOR-3921): fail-closed, never pushed.
+        if payload[0] != MSG_TYPE_AUDIO_TX:
+            self._warn_tx_throttled(
+                "wrong_type",
+                "audio: TX frame wrong type 0x%02x, ignoring",
+                payload[0],
+            )
+            return
+        browser_codec = payload[1]
+        audio_data = payload[AUDIO_HEADER_SIZE:]
+        if audio_data:
+            try:
+                tx_codec = facts.codec if facts is not None else self._tx_codec()
+                if (
+                    browser_codec == AUDIO_CODEC_PCM16
+                    and tx_codec == AudioCodec.PCM_1CH_16BIT
+                ):
+                    await self._push_tx(
+                        audio_data,
+                        legacy_method="push_audio_tx_pcm",
+                        tx_currency=tx_currency,
+                    )
+                    tx_data_desc = f"{len(audio_data)} bytes pcm"
+                elif (
+                    browser_codec == AUDIO_CODEC_OPUS
+                    and tx_codec == AudioCodec.PCM_1CH_16BIT
+                ):
+                    if self._transcoder is None:
+                        self._warn_tx_throttled(
+                            "dropped_no_transcoder",
+                            "audio: TX frame dropped incoming_codec=opus "
+                            "radio_tx_codec=%s sample_rate=%d "
+                            "action=dropped_no_transcoder",
+                            tx_codec.name,
+                            self._tx_sample_rate(),
+                        )
+                        return
+                    try:
+                        # Decode Opus → PCM16
+                        pcm_data = self._transcoder.opus_to_pcm(audio_data)
+                    except Exception as e:
+                        self._warn_tx_throttled(
+                            "dropped_transcode_failed",
+                            "audio: TX frame dropped incoming_codec=opus "
+                            "radio_tx_codec=%s sample_rate=%d "
+                            "action=dropped_transcode_failed error=%s",
+                            tx_codec.name,
+                            self._tx_sample_rate(),
+                            e,
+                        )
+                        return
+                    # A native playback refusal belongs to the outer push
+                    # error boundary, not the successfully completed decoder.
+                    await self._push_tx(
+                        pcm_data,
+                        legacy_method="push_audio_tx_pcm",
+                        tx_currency=tx_currency,
+                    )
+                    tx_data_desc = f"{len(pcm_data)} bytes pcm"
+                elif browser_codec == AUDIO_CODEC_OPUS:
+                    # Radio uses Opus or PCM_1CH_8BIT/etc → send Opus as-is
+                    await self._push_tx(
+                        audio_data,
+                        legacy_method="push_audio_tx_opus",
+                        tx_currency=tx_currency,
+                    )
+                    tx_data_desc = f"{len(audio_data)} bytes opus"
+                else:
+                    self._warn_tx_throttled(
+                        "unsupported_codec",
+                        "audio: unsupported browser TX codec 0x%02x, dropping frame",
+                        browser_codec,
+                    )
+                    return
+
+                # Log every 50th frame to avoid spam
+                if not hasattr(self, "_tx_frame_count"):
+                    self._tx_frame_count = 0
+                self._tx_frame_count += 1
+                if self._tx_frame_count <= 3 or self._tx_frame_count % 50 == 0:
+                    logger.info(
+                        "audio: TX frame #%d pushed to radio (%s)",
+                        self._tx_frame_count,
+                        tx_data_desc,
+                    )
+            except Exception:
+                self._warn_tx_throttled(
+                    "push_tx_error", "audio: push TX error", exc_info=True
+                )
+
+    async def _sender_loop(self) -> None:
+        """Send queued audio frames to the WebSocket client."""
+        sent = 0
+        try:
+            while not self._done.is_set():
+                try:
+                    frame = await asyncio.wait_for(
+                        self._frame_queue.get(),
+                        timeout=0.5,
+                    )
+                    # Wrap send in timeout to detect dead WebSocket connections
+                    # If send blocks >5s, connection is likely dead (half-open TCP)
+                    try:
+                        await asyncio.wait_for(
+                            self._ws.send_binary(frame),
+                            timeout=5.0,
+                        )
+                    except TimeoutError:
+                        logger.warning(
+                            "audio: send timeout after %d frames (dead connection), exiting",
+                            sent,
+                        )
+                        break  # Exit loop, trigger cleanup in finally
+                    sent += 1
+                    if sent <= 3 or sent % 500 == 0:
+                        logger.info(
+                            "audio: sent frame #%d (%d bytes)", sent, len(frame)
+                        )
+                except TimeoutError:
+                    continue
+        except asyncio.CancelledError:
+            logger.info("audio: sender cancelled after %d frames", sent)
+        except (EOFError, OSError) as exc:
+            logger.info("audio: sender stopped after %d frames: %s", sent, exc)
+        except Exception:
+            logger.exception("audio: sender error after %d frames", sent)

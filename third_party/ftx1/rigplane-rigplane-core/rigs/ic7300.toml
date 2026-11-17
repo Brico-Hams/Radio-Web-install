@@ -1,0 +1,1694 @@
+# Rig Configuration — IC-7300
+# This file defines the IC-7300 radio profile in TOML format.
+# See _schema.md for field documentation.
+#
+# Source: IC-7300 Full Manual (English) v6, §19 CONTROL COMMAND
+#         (original IC-7300, CI-V addr 0x94 — NOT the IC-7300MK2, which has a
+#         different command set)
+#         wfview IC-7300.rig
+#         Hardware testing
+
+[identity]
+# Native 19 00 answer observed on IC-7300; independent of the CI-V address.
+expected_ids = ["94"]
+
+[radio]
+id = "icom_ic7300"
+model = "IC-7300"
+civ_addr = 0x94
+default_baud = 115200  # Required for scope data over serial CI-V
+receiver_count = 1
+has_lan = false
+has_wifi = false
+
+[spectrum]
+seq_max = 11
+amp_max = 160
+data_len_max = 475
+
+# Pin mono-first codec (#797). The global default is stereo-first, but single-RX
+# firmware has not been hardware-validated to accept stereo rx_codec at conninfo;
+# negotiating stereo risks immediate session rejection (error=0xFFFFFFFF).
+# ``_control_phase`` also retries with mono on rejection, so this is a secondary
+# safety belt plus an explicit intent marker.
+[audio]
+codec_preference = ["PCM_1CH_16BIT", "ULAW_1CH"]
+# IC-7300 Advanced Manual (rev 11a), MENU > SET > Connectors:
+# "ACC/USB AF Output Level (Default: 50%)" for [ACC] and [USB] (MOR-4210).
+
+[usb]
+# W1 Windows recording: tests/fixtures/usb_audio/windows/w1-gtr7-ic7300.json.
+audio_codec = [{ vid = "08BB", pid = "2901" }]
+
+[scope]
+span_presets_hz = [2500, 5000, 10000, 25000, 50000, 100000, 250000, 500000]
+# MOR-4385: the 27 15 numbers (IC-7300 CI-V Reference Guide) are
+# ±half-widths: the scope display spans center ± value, and the
+# center-mode waveform payload carries that same value (IC-7610 CI-V
+# Reference Guide p.14, "Scope waveform data", quoted in
+# runtime/_civ_rx.py: CivRuntime._publish_scope_span_observation).
+span_preset_semantics = "half_width"
+# 27 19: adjustable range -20.0 ~ +20.0 dB in 0.5 dB steps (MOR-3694;
+# owner-confirmed, and the range the IC-7300MK2 CI-V guide p.25 documents
+# for the same command on that radio, see ic7300mk2.toml).
+ref_min_db = -20.0
+ref_max_db = 20.0
+ref_step_db = 0.5
+
+# ── Capabilities ─────────────────────────────────────────────────
+# Feature tags determine which UI panels and controls are rendered.
+# Grouped by functional area.
+
+[capabilities]
+features = [
+    # Receiver
+    "audio",
+    "af_level",
+    "rf_gain",
+    "squelch",
+    # RF front end
+    "attenuator",
+    "preamp",
+    "ip_plus",
+    # NOTE: no digisel on IC-7300
+    # Antenna topology is declared below; IC-7300 has no antenna-selection control.
+    # NOTE: no rx_antenna on IC-7300 (single antenna)
+    # DSP / Noise
+    "nb",
+    "nr",
+    "notch",
+    "twin_peak",
+    # Filter
+    "pbt",
+    "filter_width",
+    "filter_shape",
+    # TX
+    "tx",
+    "split",
+    "vox",
+    "compressor",
+    "monitor",
+    # NOTE: no drive_gain on IC-7300
+    "ssb_tx_bw",
+    # CW
+    "cw",
+    "break_in",
+    # RIT / XIT
+    "rit",
+    "xit",
+    # Tuner
+    "tuner",
+    # Metering
+    "meters",
+    # Scope
+    "scope",
+    # Tone
+    "repeater_tone",
+    "tsql",
+    # Data
+    "data_mode",
+    # System
+    "power_control",
+    "dial_lock",
+    "scan",
+    "speech",
+    "bsr",
+    # AGC
+    "agc",
+    "tuning_step",
+    "band_edge",
+    "xfc",
+    # System
+    "system_settings",
+]
+# MOR-1447 leg 2: the IC-7300 front panel wires RF gain and squelch as one
+# physical concentric knob (hard left = RF min/SQL min, center = RF max/SQL
+# min, hard right = SQL max/RF max) — the live gate radio for this control
+# model. MOR-2467: the IC-7610 likewise wires RF gain and squelch as one
+# physical concentric knob and now declares "combined" in rigs/ic7610.toml.
+# Other Icom-family profiles (IC-705, IC-9700) stay on the "separate" default:
+# no CAT audit/manual excerpt in this repo documents their physical RF/SQL
+# layout, so declaring "combined" for them would be a guess rather than a
+# data-driven fact.
+rf_sql_control_model = "combined"
+
+# Per-check_id validation classification (MOR-2105 part 2), a check_id-grained
+# sibling to a future [validation].write_only_controls list (IC-7300 does not
+# need one today). scope_dual.set (27 13, p.19-7) is documented and the radio
+# answers it, but IC-7300 has only one scope, so 00 (Single only) is the only
+# legal value it can ever hold -- the RMVR read-modify-verify-restore harness
+# would flip to a value the radio can never report back, not because
+# anything is broken. The source is the manual page and data-column fact
+# establishing that.
+#
+# scope_receiver.set (27 12, same page, live bench 2026-08-30: 27 12 00, see
+# get_scope_main_sub below) is fixed-value for the SAME reason -- one
+# receiver -- but is deliberately NOT declared here: receiver_count above
+# already states that fact, and validation/hardware.py derives
+# scope_receiver.set's fixed-value status from it instead of restating it as
+# a second, independently-editable source of truth (MOR-2105 part 2, F1).
+[validation.fixed_value]
+"scope_dual.set" = "IC-7300 Advanced Manual (11a) command table p.19-7: 27 13 data column = 00 (Single only)"
+
+[state_acquisition]
+provider = "icom_civ"
+default_cadence_seconds = 1.5
+default_freshness_ttl_seconds = 3.0
+default_reconciliation_priority = "poll"
+adaptive_decay = false
+external_cat_pause = "pause_polling"
+meter_coalescing_window_seconds = 0.2
+
+[state_acquisition.capabilities]
+unsolicited_push = [
+    "receiver.main.active.freq_mode.freq_hz",
+    "receiver.main.active.freq_mode.mode",
+]
+polling_only = [
+    "receiver.main.active.freq_mode.freq_hz",
+    "receiver.main.active.freq_mode.mode",
+    "receiver.main.unselected.freq_mode.freq_hz",
+    "receiver.main.unselected.freq_mode.mode",
+    "receiver.main.operator_controls.af_level",
+    "receiver.main.operator_controls.rf_gain",
+    "receiver.main.operator_controls.squelch",
+    "receiver.main.operator_controls.att",
+    "receiver.main.operator_controls.preamp",
+    "receiver.main.operator_controls.agc",
+    "receiver.main.operator_toggles.nb",
+    "receiver.main.operator_toggles.nr",
+    # MOR-2449: IP+ has the same plain CI-V 0x16/0x65 read path as IC-7610,
+    # but this single-RX profile had omitted it from acquisition entirely.
+    "receiver.main.operator_toggles.ipplus",
+    "global.operator_controls.power_level",
+    "global.tx_state.compressor_on",
+    "global.operator_controls.compressor_level",
+    "global.tx_state.ptt",
+    "global.operator_controls.tuner_status",
+    "global.tx_state.split",
+    # MOR-1452: documented-readable §19 0x14 sub-commands (0x0B/0x15/0x16/0x17,
+    # see docs/validation/cat-audits/ic7300.md) that the poller never queried —
+    # the TX-aux panel showed them as an honest but permanent "?".
+    # The active profile declares getters for these 4 controls. The acquisition
+    # scheduler resolves their canonical getter names through the profile-bound
+    # resolver and this profile's CommandMap, not a hardcoded scheduler table.
+    "global.operator_controls.mic_gain",
+    "global.operator_controls.monitor_gain",
+    "global.operator_controls.vox_gain",
+    "global.operator_controls.anti_vox_gain",
+    # MOR-2425 (owner ruling, 2026-09-07): the ten panel knobs. As
+    # command_response-only membership they were never re-read after their
+    # first observation, so a front-panel turn reached the web only when a
+    # command happened to touch the same field.
+    "receiver.main.active.freq_mode.filter_width",
+    "receiver.main.operator_controls.pbt_inner",
+    "receiver.main.operator_controls.pbt_outer",
+    "receiver.main.operator_controls.nr_level",
+    "receiver.main.operator_controls.nb_level",
+    "receiver.main.operator_controls.notch_filter",
+    "receiver.main.operator_controls.manual_notch_width",
+    "receiver.main.operator_toggles.auto_notch",
+    "receiver.main.operator_toggles.manual_notch",
+    "global.operator_controls.rit_freq",
+    # MOR-1485: TX/PA meters (0x15 0x11-0x16). ``[commands]`` already declares
+    # get_power_meter/get_swr/get_alc/get_comp_meter/get_vd_meter/get_id_meter
+    # below. The acquisition scheduler resolves those canonical getter names
+    # through the profile-bound resolver and this active profile's CommandMap,
+    # not a hardcoded scheduler table. The gap was purely acquisition
+    # membership: no field_policies entry meant due_requests() never touched
+    # these paths, so rigctld's own one-shot reads (proven healthy —
+    # ``_OBSERVABLE_CMD15_FIELDS``, ``_civ_rx.py``) were the only thing that
+    # ever populated them, and the always-polling web panel never saw a live
+    # value. Not stream_like_meters (that class is pinned to a fast cadence
+    # and a <=2.0s TTL by
+    # test_known_profiles_stream_like_meters_use_fast_non_decaying_policies
+    # for every profile including this one) — plain polling_only instead.
+    "global.meters.power",
+    "global.meters.swr",
+    "global.meters.alc",
+    "global.meters.comp",
+    "global.meters.vd",
+    "global.meters.id",
+    "scope_controls.global.display.receiver",
+    "scope_controls.global.display.dual",
+    "scope_controls.global.display.mode",
+    "scope_controls.global.display.span",
+    "scope_controls.global.display.edge",
+    "scope_controls.global.display.hold",
+    "scope_controls.global.display.ref_db",
+    "scope_controls.global.display.speed",
+    "scope_controls.global.display.during_tx",
+    "scope_controls.global.display.center_type",
+    "scope_controls.global.display.vbw_narrow",
+    "scope_controls.global.display.fixed_edge",
+]
+stream_like_meters = [
+    "receiver.main.meters.s_meter",
+]
+command_response_observable = [
+    "receiver.main.active.freq_mode.freq_hz",
+    "receiver.main.active.freq_mode.mode",
+    "receiver.main.operator_controls.af_level",
+    "receiver.main.operator_controls.rf_gain",
+    "receiver.main.operator_controls.squelch",
+    "receiver.main.operator_controls.att",
+    "receiver.main.operator_controls.preamp",
+    "receiver.main.operator_controls.agc",
+    "receiver.main.operator_toggles.nb",
+    "receiver.main.operator_toggles.nr",
+    "global.operator_controls.power_level",
+    "global.tx_state.compressor_on",
+    "global.operator_controls.compressor_level",
+    "global.tx_state.ptt",
+    "global.operator_controls.tuner_status",
+    "global.tx_state.split",
+    # MOR-1483 (field-policy membership wave, leg 1): VOX/MON toggles.
+    # Non-polling (command_response only) — riding the MOR-1490
+    # prime_unobserved mechanism rather than a poll cadence; see the
+    # field_policies comment below.
+    "global.tx_state.vox_on",
+    "global.tx_state.monitor_on",
+    # MOR-1483 (leg 2): voxDelay (1A-05 ctl-mem 01-91, this radio's control
+    # number — see docs/validation/cat-audits/ic7300.md) is now addable as
+    # sub=0x05 with data=01 91. The ingress decode already matches this
+    # prefix too. Non-polling, same prime_unobserved mechanism as the toggles
+    # above.
+    "global.operator_controls.vox_delay",
+    # MOR-1491 (field-policy membership wave, leg 2): filter/PBT facts.
+    "receiver.main.active.freq_mode.filter_width",
+    # MOR-1546: filter-select (filter_num) and DATA-mode carry the #2452
+    # armed affordance but had NO acquisition capability declared at all --
+    # ``_availability_for`` (acquisition_scheduler.py) rejects any
+    # ``ensure_fresh`` request for a path with no declared capability
+    # (UNKNOWN availability), so their armed confirm could not even reach
+    # the post-write readback (``RadioPoller._request_post_write_readback``)
+    # without this. MOR-2425: also given a non-polling
+    # field_policies entry below so prime_unobserved() can reach them, per
+    # R36b.
+    "receiver.main.active.freq_mode.filter_num",
+    "receiver.main.active.freq_mode.data_mode",
+    "receiver.main.operator_controls.filter_shape",
+    "receiver.main.operator_controls.pbt_inner",
+    "receiver.main.operator_controls.pbt_outer",
+    # MOR-1492 (field-policy membership wave, leg 3): DSP level facts.
+    "receiver.main.operator_controls.nr_level",
+    "receiver.main.operator_controls.nb_level",
+    "receiver.main.operator_toggles.auto_notch",
+    "receiver.main.operator_toggles.manual_notch",
+    # notch_filter reclassified receiver-scoped under MOR-1548, matching
+    # ic7610.toml's per-receiver cmd29 route rationale for 0x14 0x0D; this
+    # single-RX profile only ever resolves to "main".
+    "receiver.main.operator_controls.notch_filter",
+    "receiver.main.operator_controls.manual_notch_width",
+    "receiver.main.operator_controls.agc_time_constant",
+    # MOR-1493 (field-policy membership wave, leg 4): RIT/XIT and CW keyer
+    # facts.
+    "global.operator_controls.rit_freq",
+    "global.tx_state.rit_on",
+    "global.tx_state.rit_tx",
+    "global.operator_controls.break_in",
+    "global.operator_controls.break_in_delay",
+    "global.operator_controls.key_speed",
+    "global.operator_controls.cw_pitch",
+    "receiver.main.operator_toggles.twin_peak_filter",
+    # MOR-2234 group B: CTCSS tone / TSQL tone frequency (0x1B 0x00 / 0x1B
+    # 0x01). ``[commands]`` below declares get_tone_freq/get_tsql_freq,
+    # ``runtime/_state_queries.py: acquisition_query_resolver_for_profile``
+    # resolves both through _RECEIVER_CONTROL_GETTERS, and
+    # ``runtime/_civ_rx.py: CivRuntime._observations_from_frame`` decodes the
+    # 0x1B replies -- but neither path was in ANY list here, so
+    # ``capability_for`` returned the default UNKNOWN and neither
+    # ``due_requests`` nor ``prime_unobserved`` ever asked for them.
+    # Non-polling membership, not polling_only: reached by prime_unobserved
+    # off the matching field_policies entries below, and refreshed on
+    # command response. Pinned by
+    # test_ic7300_real_profile_primes_tone_and_tsql_freq_and_sends_1b_reads.
+    "receiver.main.operator_controls.tone_freq",
+    "receiver.main.operator_controls.tsql_freq",
+]
+supported_controls = [
+    "receiver.main.active.freq_mode.freq_hz",
+    "receiver.main.active.freq_mode.mode",
+    "receiver.main.operator_controls.af_level",
+    "receiver.main.operator_controls.rf_gain",
+    "receiver.main.operator_controls.squelch",
+    "receiver.main.operator_controls.att",
+    "receiver.main.operator_controls.preamp",
+    "receiver.main.operator_controls.agc",
+    "receiver.main.operator_toggles.nb",
+    "receiver.main.operator_toggles.nr",
+    "global.operator_controls.power_level",
+    "global.tx_state.compressor_on",
+    "global.operator_controls.compressor_level",
+    "global.tx_state.ptt",
+    "global.operator_controls.tuner_status",
+    "global.tx_state.split",
+]
+
+# MOR-2593: a pollable path with no entry below takes its acquisition-class
+# policy (RadioAcquisitionProfile.policy_for). Each entry says why it exists
+# in `reason`.
+
+# MOR-2425 (owner ruling, 2026-09-07): 0.2s -> 0.4s. freshness_ttl_seconds
+# stays 2.0s: the <=2.0s bound on a streaming meter's TTL is about detecting a
+# stopped stream promptly (MOR-334), not about the cadence, and 0.4s still
+# leaves the TTL five sample intervals of headroom.
+[state_acquisition.field_policies."receiver.main.meters.s_meter"]
+reason = "a stream-like meter keeps the coalescing window, which its class policy does not carry (as on the IC-7610, MOR-2590); 0.4 s is the MOR-2425 owner ruling"
+cadence_seconds = 0.4
+freshness_ttl_seconds = 2.0
+adaptive_decay = false
+meter_coalescing_window_seconds = 0.2
+
+# Po/SWR/ALC/COMP are meaningful only while transmitting (`tx_only = true`),
+# so AcquisitionScheduler.due_requests skips their cadence group entirely
+# while PTT reads false -- ZERO steady-state (RX) serial cost.
+#
+# MOR-2425/T141: observed on the bench 2026-09-08 -- after dekey the four
+# stayed in the store carrying their last transmit values instead of leaving
+# it. The clause below declares them absent while `global.tx_state.ptt` reads
+# false, so StateFreshnessService.tick discards them (tests/
+# test_acquisition_scheduler.py::
+# test_tick_discards_every_ic7300_transmit_meter_on_dekey). `tx_only` stays
+# and gains nothing from the clause: AcquisitionScheduler.
+# unobserved_startup_paths already excludes a tx_only path (tests/
+# test_startup_state_gate.py::
+# test_unobserved_tx_only_path_does_not_keep_the_predicate_incomplete).
+[state_acquisition.field_policies."global.meters.power"]
+reason = "available_when: absent while PTT reads false, so the last TX reading is discarded on dekey (observed on the bench 2026-09-08, MOR-2425/T141)"
+cadence_seconds = 1.0
+freshness_ttl_seconds = 2.0
+adaptive_decay = false
+tx_only = true
+available_when = [
+    { field = "global.tx_state.ptt", equals = true },
+]
+
+[state_acquisition.field_policies."global.meters.swr"]
+reason = "available_when: absent while PTT reads false, so the last TX reading is discarded on dekey (observed on the bench 2026-09-08, MOR-2425/T141)"
+cadence_seconds = 1.0
+freshness_ttl_seconds = 2.0
+adaptive_decay = false
+tx_only = true
+available_when = [
+    { field = "global.tx_state.ptt", equals = true },
+]
+
+[state_acquisition.field_policies."global.meters.alc"]
+reason = "available_when: absent while PTT reads false, so the last TX reading is discarded on dekey (observed on the bench 2026-09-08, MOR-2425/T141)"
+cadence_seconds = 1.0
+freshness_ttl_seconds = 2.0
+adaptive_decay = false
+tx_only = true
+available_when = [
+    { field = "global.tx_state.ptt", equals = true },
+]
+
+[state_acquisition.field_policies."global.meters.comp"]
+reason = "available_when: absent while PTT reads false, so the last TX reading is discarded on dekey (observed on the bench 2026-09-08, MOR-2425/T141)"
+cadence_seconds = 1.0
+freshness_ttl_seconds = 2.0
+adaptive_decay = false
+tx_only = true
+available_when = [
+    { field = "global.tx_state.ptt", equals = true },
+]
+
+[state_acquisition.field_policies."global.meters.id"]
+reason = "available_when: absent while PTT reads false, so the last TX reading is discarded on dekey, as for Po/SWR/ALC/COMP here and for the IC-7610's id (MOR-2590)"
+cadence_seconds = 1.0
+freshness_ttl_seconds = 2.0
+adaptive_decay = false
+tx_only = true
+available_when = [
+    { field = "global.tx_state.ptt", equals = true },
+]
+
+# MOR-1483/1491/1492/1493 (field-policy membership wave): non-polling
+# (command_response) membership riding the MOR-1490 priming mechanism
+# (AcquisitionScheduler.prime_unobserved). These fields are deliberately
+# NOT in [state_acquisition.capabilities].polling_only above, so
+# due_requests() never touches them; instead prime_unobserved() queues a
+# BACKGROUND read for each once it's never-observed, re-deriving the
+# never-observed set every ~30s
+# (StateFreshnessService.PRIME_REDERIVE_INTERVAL_SECONDS) until each field
+# lands its first observation — worst case a few re-derive windows if the
+# scheduler's 5-path-per-call burst cap (prime_unobserved's
+# _PRIME_UNOBSERVED_BURST_LIMIT) paces this whole group across multiple
+# calls. These capabilities carry polling=False, so due_requests never
+# reaches them (_poll_cadence_groups skips any capability whose can_poll is
+# false) and freshness_ttl_seconds is "never": no cadence read refreshes
+# them. cadence_seconds is still load-bearing — with no TTL,
+# prime_unobserved passes it as the prime read's max_age.
+[state_acquisition.field_policies."global.tx_state.vox_on"]
+reason = "on-demand, not polled: prime_unobserved (MOR-1490) reads only field_policies paths, and the never TTL keeps the value from expiring"
+cadence_seconds = 25.0
+freshness_ttl_seconds = "never"
+reconciliation_priority = "command_response"
+adaptive_decay = false
+
+[state_acquisition.field_policies."global.tx_state.monitor_on"]
+reason = "on-demand, not polled: prime_unobserved (MOR-1490) reads only field_policies paths, and the never TTL keeps the value from expiring"
+cadence_seconds = 25.0
+freshness_ttl_seconds = "never"
+reconciliation_priority = "command_response"
+adaptive_decay = false
+
+# MOR-1483 (leg 2): voxDelay joins the same non-polling membership as the
+# VOX/MON toggles above.
+[state_acquisition.field_policies."global.operator_controls.vox_delay"]
+reason = "on-demand, not polled: prime_unobserved (MOR-1490) reads only field_policies paths, and the never TTL keeps the value from expiring"
+cadence_seconds = 25.0
+freshness_ttl_seconds = "never"
+reconciliation_priority = "command_response"
+adaptive_decay = false
+
+# prime_unobserved() iterates field_policies only, so without an entry here
+# these two paths are never primed.
+[state_acquisition.field_policies."receiver.main.active.freq_mode.filter_num"]
+reason = "on-demand, not polled: prime_unobserved (MOR-1490) reads only field_policies paths, and the never TTL keeps the value from expiring"
+cadence_seconds = 25.0
+freshness_ttl_seconds = "never"
+reconciliation_priority = "command_response"
+adaptive_decay = false
+
+[state_acquisition.field_policies."receiver.main.active.freq_mode.data_mode"]
+reason = "on-demand, not polled: prime_unobserved (MOR-1490) reads only field_policies paths, and the never TTL keeps the value from expiring"
+cadence_seconds = 25.0
+freshness_ttl_seconds = "never"
+reconciliation_priority = "command_response"
+adaptive_decay = false
+
+[state_acquisition.field_policies."receiver.main.operator_controls.filter_shape"]
+reason = "on-demand, not polled: prime_unobserved (MOR-1490) reads only field_policies paths, and the never TTL keeps the value from expiring"
+cadence_seconds = 25.0
+freshness_ttl_seconds = "never"
+reconciliation_priority = "command_response"
+adaptive_decay = false
+
+[state_acquisition.field_policies."receiver.main.operator_controls.agc_time_constant"]
+reason = "on-demand, not polled: prime_unobserved (MOR-1490) reads only field_policies paths, and the never TTL keeps the value from expiring"
+cadence_seconds = 25.0
+freshness_ttl_seconds = "never"
+reconciliation_priority = "command_response"
+adaptive_decay = false
+
+[state_acquisition.field_policies."global.tx_state.rit_on"]
+reason = "on-demand, not polled: prime_unobserved (MOR-1490) reads only field_policies paths, and the never TTL keeps the value from expiring"
+cadence_seconds = 25.0
+freshness_ttl_seconds = "never"
+reconciliation_priority = "command_response"
+adaptive_decay = false
+
+[state_acquisition.field_policies."global.tx_state.rit_tx"]
+reason = "on-demand, not polled: prime_unobserved (MOR-1490) reads only field_policies paths, and the never TTL keeps the value from expiring"
+cadence_seconds = 25.0
+freshness_ttl_seconds = "never"
+reconciliation_priority = "command_response"
+adaptive_decay = false
+
+[state_acquisition.field_policies."global.operator_controls.break_in"]
+reason = "on-demand, not polled: prime_unobserved (MOR-1490) reads only field_policies paths, and the never TTL keeps the value from expiring"
+cadence_seconds = 25.0
+freshness_ttl_seconds = "never"
+reconciliation_priority = "command_response"
+adaptive_decay = false
+
+[state_acquisition.field_policies."global.operator_controls.break_in_delay"]
+reason = "on-demand, not polled: prime_unobserved (MOR-1490) reads only field_policies paths, and the never TTL keeps the value from expiring"
+cadence_seconds = 25.0
+freshness_ttl_seconds = "never"
+reconciliation_priority = "command_response"
+adaptive_decay = false
+
+[state_acquisition.field_policies."global.operator_controls.key_speed"]
+reason = "on-demand, not polled: prime_unobserved (MOR-1490) reads only field_policies paths, and the never TTL keeps the value from expiring"
+cadence_seconds = 25.0
+freshness_ttl_seconds = "never"
+reconciliation_priority = "command_response"
+adaptive_decay = false
+
+[state_acquisition.field_policies."global.operator_controls.cw_pitch"]
+reason = "on-demand, not polled: prime_unobserved (MOR-1490) reads only field_policies paths, and the never TTL keeps the value from expiring"
+cadence_seconds = 25.0
+freshness_ttl_seconds = "never"
+reconciliation_priority = "command_response"
+adaptive_decay = false
+
+[state_acquisition.field_policies."receiver.main.operator_toggles.twin_peak_filter"]
+reason = "on-demand, not polled: prime_unobserved (MOR-1490) reads only field_policies paths, and the never TTL keeps the value from expiring"
+cadence_seconds = 25.0
+freshness_ttl_seconds = "never"
+reconciliation_priority = "command_response"
+adaptive_decay = false
+
+# MOR-2234 group B: tone/TSQL frequency join the same non-polling
+# command_response membership as the CW keyer setpoints above.
+[state_acquisition.field_policies."receiver.main.operator_controls.tone_freq"]
+reason = "on-demand, not polled: prime_unobserved (MOR-1490) reads only field_policies paths, and the never TTL keeps the value from expiring"
+cadence_seconds = 25.0
+freshness_ttl_seconds = "never"
+reconciliation_priority = "command_response"
+adaptive_decay = false
+
+[state_acquisition.field_policies."receiver.main.operator_controls.tsql_freq"]
+reason = "on-demand, not polled: prime_unobserved (MOR-1490) reads only field_policies paths, and the never TTL keeps the value from expiring"
+cadence_seconds = 25.0
+freshness_ttl_seconds = "never"
+reconciliation_priority = "command_response"
+adaptive_decay = false
+
+# ── Parameterized Capabilities ───────────────────────────────────
+
+[attenuator]
+# CI-V 0x11: binary toggle only
+# 0x00=OFF, 0x20=20dB ON
+values = [0, 20]
+
+[preamp]
+# CI-V 0x16 0x02: 0=OFF, 1=P.AMP1, 2=P.AMP2
+values = [0, 1, 2]
+
+[agc]
+# CI-V 0x16 0x12: 1=FAST, 2=MID, 3=SLOW (wfview IC-7300.rig lists Min/Max 0-2 for UI)
+modes = [1, 2, 3]
+labels = { "1" = "FAST", "2" = "MID", "3" = "SLOW" }
+
+[scan_types]
+# CI-V 0x0E family: source IC-7300 Advanced Manual (11a) p.19-3 + live
+# bench 2026-08-30 (0E 13 ACKed). 0x13 = fine dF scan, absent from the old
+# code-level VALID_SCAN_TYPES frozenset this domain replaces (MOR-2007
+# ruling 4).
+values = [0x01, 0x02, 0x03, 0x12, 0x13, 0x22, 0x23]
+
+[scan_resume]
+# CI-V 0x0E family: source IC-7300 Advanced Manual (11a) p.19-3, per the
+# owner's cross-check that all four documented CI-V guides list only
+# these two states -- not the 0xD1/0xD2 5s/10s the old code-level
+# VALID_SCAN_RESUME frozenset accepted on every radio (MOR-2007 ruling 4).
+values = [0xD0, 0xD3]
+
+[antenna]
+tx_count = 1
+has_rx_ant = false
+
+[notch]
+# CI-V 0x16 0x57: Manual notch width
+# 0=WIDE, 1=MID, 2=NAR (same as IC-7610)
+width_values = [0, 1, 2]
+width_labels = { "0" = "WIDE", "1" = "MID", "2" = "NAR" }
+
+[ssb_tx_bw]
+# CI-V 0x16 0x58: SSB TX bandwidth
+# 0=WIDE, 1=MID, 2=NAR
+values = [0, 1, 2]
+labels = { "0" = "WIDE", "1" = "MID", "2" = "NAR" }
+
+[filter_shape]
+# CI-V 0x16 0x56: DSP IF filter type (docs/validation/cat-audits/ic7300.md
+# "16 56 DSP filter type" — presence-confirmed; SHARP/SOFT values come from
+# the shared IC-7610/IC-7300-family command table, same basis as the
+# [commands] get/set_filter_shape entry below) (MOR-1534).
+values = [0, 1]
+labels = { "0" = "SHARP", "1" = "SOFT" }
+
+[break_in]
+# CI-V 0x16 0x47: 0=OFF, 1=Semi, 2=Full (wfview rig lists Max=1; CI-V supports three levels)
+values = [0, 1, 2]
+labels = { "0" = "OFF", "1" = "SEMI", "2" = "FULL" }
+
+[rit]
+# CI-V 0x21 0x00. NOT the operator-facing domain: [controls.rit] is the
+# authority and declares ±9999 Hz in 1 Hz steps (MOR-1883), matching the
+# shared builder commands/system.py::set_rit_frequency and a live 4701 Hz
+# bench write. This wfview-sourced ±999 is kept only as the historical
+# note it always was; nothing in the codebase reads range_hz.
+range_hz = 999
+
+[cw]
+# CI-V 0x14 0x09: CW pitch 300-900 Hz
+# CI-V 0x14 0x0C: Key speed 6-48 WPM
+pitch_min_hz = 300
+pitch_max_hz = 900
+speed_min_wpm = 6
+speed_max_wpm = 48
+# dash_ratio: control 0161, IC-7300 Advanced Manual (11a) command table
+# p.19-6, range 28..45; confirmed on the wire by live bench 2026-08-30 (read
+# of 1A 05 01 61 answered 30). Refutes the earlier "no dash_ratio" note --
+# see get_dash_ratio / set_dash_ratio in [commands.overrides] (D2, MOR-2014).
+
+[nb]
+# CI-V 0x1A 0x05 0x01 0x89: NB depth 1-10, NB width 0-255 (wfview NB Depth Min/Max)
+depth_min = 1
+depth_max = 10
+width_min = 0
+width_max = 255
+
+[power]
+max_watts = 100
+
+# ── Memory channels, write side only (MOR-3644) ───────────────────
+# The IC-7300 addresses a memory channel by number alone: channels
+# 0001-0099 (01-99) plus the programmed scan edges 0100/0101 (P1/P2),
+# which the bounds below leave out (Advanced Manual 11a p.19-11). The
+# read listing stays OFF: the 1A 00 read reply is not documented in the
+# provided extracts, so no memory_read capability is declared and
+# read_memory_entries refuses.
+[memory]
+addressing = "channel"
+first_group = 0
+last_group = 0
+first_channel = 1
+last_channel = 99
+recall = true  # 08 + channel selects the channel, the bare 08 "Select the Memory mode" (Advanced Manual 11a p.19-3); not yet bench-verified (MOR-4219)
+
+# The verified 1A 00 write record (MOR-3644), field by field from the
+# IC-7300 Advanced Manual (11a) p.19-11 "Memory content". The manual's
+# header row prints the channel-data span TWICE -- r-i, o, !0, !1, !2-!4,
+# !5-!7, then "r-!7" again, then the name !8-@7 -- and its NOTE spells it
+# out: "The same data as r-!7 are stored in r-!7 ... When the Split
+# function is ON, the data of r-!7 is used for transmit. Even if the
+# Split function is OFF, enter the data into r-!7 ..." -- so the record
+# is select byte + the 14-byte span x copies + the 10-character name.
+# The field table below declares ONE copy: offsets are relative to the
+# record AFTER the address (guide bytes q,w: channel 2-byte BCD); the
+# guide's position labels map as: e -> 0 (split|
+# select), r-i -> 1-5 (frequency), o -> 6 (mode), !0 -> 7 (filter), !1 ->
+# 8 (data|tone), !2-!4 -> 9-11 (tone), !5-!7 -> 12-14 (tsql); the name
+# (!8-@7, 10 characters) is declared at 15-24 and lands after the last
+# block copy. Mode and filter are the raw bytes of the
+# 47-byte read block's mode + filter pair (the manual's 2-byte "operating
+# mode setting"); the tone fields use the 1B 00 encoding. The record has
+# NO duplex, DTCS, DV or call-sign fields -- the IC-7300 memory channel
+# simply does not carry them. Split and select are written 00 (both OFF;
+# the manual documents 00 for P1/P2 and OFF as the normal value).
+[memory.write_layout]
+clear = "1a00_ff"  # Advanced Manual 11a p.19-11: 1A 00 + channel + FF (P1/P2 excluded)
+record_length = 25  # one copy: select + the 14-byte span + the 10-byte name
+copies = 2  # p.19-11 NOTE: the span is stored twice (TX copy = RX values when not split)
+tone_max = 2  # the !1 tone nibble is 0=OFF, 1=TONE, 2=TSQL (no DTCS on this radio)
+default_tone_centihz = 8850  # an unset tone/tsql writes the default tone (88.5 Hz); zeros are not a valid CTCSS value
+fields = [
+  { field = "select", offset = 0, length = 1, encoding = "select" },                            # e
+  { field = "frequency", offset = 1, length = 5, encoding = "frequency", max_hz = 74_800_000 },  # r-i: receiver tops at 74.8 MHz (spec, 4 m per MOR-3782)
+  { field = "mode", offset = 6, length = 1, encoding = "mode" },                                # o
+  { field = "filter", offset = 7, length = 1, encoding = "filter" },                            # !0
+  { field = "data_tone", offset = 8, length = 1, encoding = "data_tone" },                      # !1: tone 0=OFF, 1=TONE, 2=TSQL (no DTCS)
+  { field = "tone", offset = 9, length = 3, encoding = "tone" },                                # !2-!4
+  { field = "tsql", offset = 12, length = 3, encoding = "tsql" },                               # !5-!7
+  { field = "name", offset = 15, length = 10, encoding = "name" },                              # !8-@7
+]
+
+[ctcss]
+table = "standard_50"
+
+[modes]
+list = ["USB", "LSB", "CW", "CW-R", "AM", "FM", "RTTY", "RTTY-R"]
+# MOR-3679: the CW modes, named once here for every client.
+families = { cw = ["CW", "CW-R"] }
+
+[data_mode]
+# CI-V 0x1A 0x06: DATA sub-mode (0=OFF, 1=DATA1)
+# IC-7300 has only 1 DATA mode
+count = 1
+labels = { "0" = "OFF", "1" = "DATA" }
+
+# Modulation input sources
+# CI-V 0x1A 0x05 0x00 0x66-0x67: get/set mod input per DATA mode
+inputs = [
+    { value = 0, name = "MIC" },
+    { value = 1, name = "ACC" },
+    { value = 2, name = "MIC+ACC" },
+    { value = 3, name = "USB" },
+    { value = 4, name = "MIC+USB" },
+]
+
+[filters]
+list = ["FIL1", "FIL2", "FIL3"]
+# CI-V 0x1A 0x03: width is a BCD-encoded index, not raw Hz (CI-V Reference p.19).
+encoding = "segmented_bcd_index"
+width_min_hz = 50
+width_max_hz = 9999
+
+# Twin PBT step, per mode. Source: IC-7300 Advanced Manual p.40, "Using the
+# Twin PBT" -- its heading names the modes that have it, "SSB, CW, RTTY and AM
+# modes", and its text reads "The PBT is adjustable in 50 Hz steps in the SSB,
+# CW, and RTTY modes, and 200 Hz in the AM mode." FM is absent from that list
+# and therefore declares no pbt_step_hz: the absence means the mode has no twin
+# PBT, not that a default applies. The 50 Hz figure is independently confirmed
+# by a bench sweep of every raw 0..255 on the IC-7610 over LAN and the IC-7300
+# over serial on 2026-09-16 (MOR-2497); 200 Hz for AM is the manual alone.
+#
+# The -D and -R variants take the SSB/CW/RTTY figure by inference: the manual
+# names the base modes, not each variant.
+#
+# Do not confuse with step_hz in the same tables, which quantises the WIDTH.
+[filters.width.USB]
+pbt_step_hz = 50
+min_hz = 50
+max_hz = 3600
+defaults = [3000, 2400, 1800]
+segments = [
+    { hz_min = 50, hz_max = 500, step_hz = 50, index_min = 0 },
+    { hz_min = 600, hz_max = 3600, step_hz = 100, index_min = 10 },
+]
+
+[filters.width.LSB]
+pbt_step_hz = 50
+min_hz = 50
+max_hz = 3600
+defaults = [3000, 2400, 1800]
+segments = [
+    { hz_min = 50, hz_max = 500, step_hz = 50, index_min = 0 },
+    { hz_min = 600, hz_max = 3600, step_hz = 100, index_min = 10 },
+]
+
+[filters.width.CW]
+pbt_step_hz = 50
+min_hz = 50
+max_hz = 3600
+defaults = [1200, 500, 250]
+segments = [
+    { hz_min = 50, hz_max = 500, step_hz = 50, index_min = 0 },
+    { hz_min = 600, hz_max = 3600, step_hz = 100, index_min = 10 },
+]
+
+[filters.width.RTTY]
+pbt_step_hz = 50
+min_hz = 50
+max_hz = 2700
+defaults = [2400, 500, 250]
+segments = [
+    { hz_min = 50, hz_max = 500, step_hz = 50, index_min = 0 },
+    { hz_min = 600, hz_max = 2700, step_hz = 100, index_min = 10 },
+]
+
+[filters.width.AM]
+pbt_step_hz = 200
+min_hz = 200
+max_hz = 10000
+step_hz = 200
+defaults = [9000, 6000, 3000]
+segments = [
+    { hz_min = 200, hz_max = 10000, step_hz = 200, index_min = 0 },
+]
+
+[filters.width.FM]
+fixed = true
+defaults = [15000, 10000, 7000]
+
+[vfo]
+scheme = "ab"
+readback = "selected_unselected"
+main_select = [0x00]  # VFO A
+sub_select = [0x01]   # VFO B
+swap_ab = [0xB0]
+equal_ab = [0xA0]
+
+# ── Frequency Ranges ─────────────────────────────────────────────
+# MOR-3782: receiver coverage per IC-7300_Advanced_Manual_11a,
+# Section 16 SPECIFICATIONS — "Frequency coverage: Receiver
+# 0.030000 ~ 74.800000*1" (footnote: "*1 Some frequency ranges are
+# not guaranteed"), so every IC-7300 tunes and receives up to
+# 74.800 MHz. The VHF RX range below carries no `bands` table on
+# purpose: it is tune/receive only, and transmit permission comes
+# from `bands` — the 4 m band is declared in its own range above it.
+
+[[freq_ranges.ranges]]
+label = "HF"
+start_hz = 30_000
+end_hz = 60_000_000
+
+[[freq_ranges.ranges.bands]]
+name = "160m"
+start_hz = 1_800_000
+end_hz = 2_000_000
+default_hz = 1_825_000
+bsr_code = 0x01
+
+[[freq_ranges.ranges.bands]]
+name = "80m"
+start_hz = 3_500_000
+end_hz = 4_000_000
+default_hz = 3_700_000
+bsr_code = 0x02
+
+[[freq_ranges.ranges.bands]]
+name = "60m"
+start_hz = 5_330_000
+end_hz = 5_410_000
+default_hz = 5_357_000
+
+[[freq_ranges.ranges.bands]]
+name = "40m"
+start_hz = 7_000_000
+end_hz = 7_300_000
+default_hz = 7_100_000
+bsr_code = 0x03
+
+[[freq_ranges.ranges.bands]]
+name = "30m"
+start_hz = 10_100_000
+end_hz = 10_150_000
+default_hz = 10_130_000
+bsr_code = 0x04
+
+[[freq_ranges.ranges.bands]]
+name = "20m"
+start_hz = 14_000_000
+end_hz = 14_350_000
+default_hz = 14_200_000
+bsr_code = 0x05
+
+[[freq_ranges.ranges.bands]]
+name = "17m"
+start_hz = 18_068_000
+end_hz = 18_168_000
+default_hz = 18_120_000
+bsr_code = 0x06
+
+[[freq_ranges.ranges.bands]]
+name = "15m"
+start_hz = 21_000_000
+end_hz = 21_450_000
+default_hz = 21_200_000
+bsr_code = 0x07
+
+[[freq_ranges.ranges.bands]]
+name = "12m"
+start_hz = 24_890_000
+end_hz = 24_990_000
+default_hz = 24_940_000
+bsr_code = 0x08
+
+[[freq_ranges.ranges.bands]]
+name = "10m"
+start_hz = 28_000_000
+end_hz = 29_700_000
+default_hz = 28_500_000
+bsr_code = 0x09
+
+[[freq_ranges.ranges]]
+label = "6m"
+start_hz = 50_000_000
+end_hz = 54_000_000
+
+[[freq_ranges.ranges.bands]]
+name = "6m"
+start_hz = 50_000_000
+end_hz = 54_000_000
+default_hz = 50_125_000
+bsr_code = 0x0A
+
+# MOR-4300: the 4 m band is plain profile data, shown in every
+# band-plan region. EU versions transmit 70.000-70.500 MHz; every
+# version receives it (receiver coverage quote above), and the radio
+# itself decides whether it transmits there (MOR-4303). Edges and
+# power: IC-7300 Advanced Manual (11a), section 16 SPECIFICATIONS —
+# "Transmitter … 70.000000 ~ 70.500000*2" (footnote *2 "Depending
+# on the transceiver version"); "70 MHz band*2 SSB/CW/RTTY/FM 2~50
+# W". No bsr_code: the manual's CI-V "Band stacking register,
+# Command 1A 01" frequency-band-code table lists 01-10 (1.8-50 MHz)
+# and 11 = GENE ("Other than above") — no 70 MHz code exists, so the
+# band button tunes default_hz directly.
+[[freq_ranges.ranges]]
+label = "4m"
+start_hz = 70_000_000
+end_hz = 70_500_000
+
+[[freq_ranges.ranges.bands]]
+name = "4m"
+start_hz = 70_000_000
+end_hz = 70_500_000
+default_hz = 70_200_000
+max_power_w = 50
+
+[[freq_ranges.ranges]]
+label = "VHF RX"
+start_hz = 60_000_000
+end_hz = 74_800_000
+
+# ── CI-V Commands ────────────────────────────────────────────────
+# Grouped by capability area. Wire bytes as integer arrays.
+# Source: IC-7300 Full Manual (English) v6, §19 CONTROL COMMAND (original IC-7300)
+#
+# IC-7300 has NO Command29 support (single receiver).
+
+# PROVENANCE OPEN (D2, MOR-2008 batch 4): the following are left
+# deliberately undeclared rather than guessed. House pattern:
+# rigs/ic9700.toml "PROVENANCE OPEN (D2, MOR-2015)".
+# - get_memory_mode [0x08]: the IC-7300 Advanced Manual (11a) p.19-3
+#   phrases 0x08 as "Select the Memory mode" (imperative), not "Send/read"
+#   like this table's other bidirectional rows -- no live-bench probe has
+#   settled whether it answers a bare read.
+[commands]
+
+# ── Frequency / Mode ──
+get_freq = [0x03]
+set_freq = [0x05]
+get_mode = [0x04]
+set_mode = [0x06]
+get_band_edge_freq = [0x02]
+get_selected_freq = [0x25, 0x00]          # source: IC-7300 Advanced Manual (11a) p.19-7 (detail p.19-13)
+# Direct SET payload: five BCD bytes; IC-7300 Full Manual (12a), p.19-13.
+set_selected_freq = [0x25, 0x00]
+set_unselected_freq = [0x25, 0x01]
+get_unselected_freq = [0x25, 0x01]        # source: IC-7300 Advanced Manual (11a) p.19-7 (detail p.19-13)
+get_selected_mode = [0x26, 0x00]          # source: IC-7300 Advanced Manual (11a) p.19-7 (detail p.19-13)
+get_unselected_mode = [0x26, 0x01]        # source: IC-7300 Advanced Manual (11a) p.19-7 (detail p.19-13)
+# SET: selector, mode, DATA 00/01, filter 01..03; omitted fields reset defaults.
+# Source: owner-supplied IC-7300 Advanced Manual (11a), pp.19-7/19-13.
+# Bench-probed 2026-10-22 on an IC-7300 (RX only, MOR-3115): 26 01 SET with explicit mode/DATA/filter was ACKed, read back exactly, and left the selected VFO unchanged.
+set_unselected_mode = [0x26, 0x01]
+# set_selected_mode stays undeclared to preserve ordinary 0x06 mode routing.
+
+# ── TX Band Edge ──
+get_tx_band_count = [0x1E, 0x00]          # source: IC-7300 Advanced Manual (11a) p.19-7
+get_tx_band_edge = [0x1E, 0x01]           # source: IC-7300 Advanced Manual (11a) p.19-7 (detail p.19-9)
+
+# ── VFO ──
+set_vfo = [0x07]
+get_split = [0x0F]
+set_split = [0x0F]
+
+# ── Tuning ──
+get_tuning_step = [0x10]
+set_tuning_step = [0x10]
+
+# ── RF Front End (Attenuator / Preamp) ──
+get_attenuator = [0x11]
+set_attenuator = [0x11]
+get_preamp = [0x16, 0x02]
+set_preamp = [0x16, 0x02]
+get_ip_plus = [0x16, 0x65]
+set_ip_plus = [0x16, 0x65]
+
+# ── Audio / AF ──
+get_af_level = [0x14, 0x01]
+set_af_level = [0x14, 0x01]
+get_rf_gain = [0x14, 0x02]
+set_rf_gain = [0x14, 0x02]
+get_squelch = [0x14, 0x03]
+set_squelch = [0x14, 0x03]
+
+# ── DSP / Noise (NB, NR, Notch, APF, Twin Peak) ──
+get_nb = [0x16, 0x22]
+set_nb = [0x16, 0x22]
+get_nb_level = [0x14, 0x12]
+set_nb_level = [0x14, 0x12]
+get_nr = [0x16, 0x40]
+set_nr = [0x16, 0x40]
+get_nr_level = [0x14, 0x06]
+set_nr_level = [0x14, 0x06]
+get_auto_notch = [0x16, 0x41]
+set_auto_notch = [0x16, 0x41]
+get_manual_notch = [0x16, 0x48]
+set_manual_notch = [0x16, 0x48]
+get_notch_filter = [0x14, 0x0D]           # Notch position 0-255
+set_notch_filter = [0x14, 0x0D]
+get_manual_notch_width = [0x16, 0x57]     # 0=WIDE, 1=MID, 2=NAR
+set_manual_notch_width = [0x16, 0x57]
+get_twin_peak_filter = [0x16, 0x4F]
+set_twin_peak_filter = [0x16, 0x4F]
+
+# ── Filter (PBT, IF width, shape) ──
+get_pbt_inner = [0x14, 0x07]
+set_pbt_inner = [0x14, 0x07]
+get_pbt_outer = [0x14, 0x08]
+set_pbt_outer = [0x14, 0x08]
+get_filter_width = [0x1A, 0x03]           # 50-10000 Hz
+set_filter_width = [0x1A, 0x03]
+get_filter_shape = [0x16, 0x56]
+set_filter_shape = [0x16, 0x56]
+get_agc = [0x16, 0x12]
+set_agc = [0x16, 0x12]
+get_agc_time_constant = [0x1A, 0x04]
+set_agc_time_constant = [0x1A, 0x04]
+
+# ── TX Controls (Power, Mic, Compressor, Monitor, VOX) ──
+ptt_on = [0x1C, 0x00, 0x01]
+ptt_off = [0x1C, 0x00, 0x00]
+get_transceiver_status = [0x1C, 0x00]     # source: IC-7300 Advanced Manual (11a) command table p.19-7
+get_rf_power = [0x14, 0x0A]
+set_rf_power = [0x14, 0x0A]
+get_mic_gain = [0x14, 0x0B]
+set_mic_gain = [0x14, 0x0B]
+get_compressor = [0x16, 0x44]
+set_compressor = [0x16, 0x44]
+get_compressor_level = [0x14, 0x0E]
+set_compressor_level = [0x14, 0x0E]
+get_monitor = [0x16, 0x45]
+set_monitor = [0x16, 0x45]
+get_monitor_gain = [0x14, 0x15]
+set_monitor_gain = [0x14, 0x15]
+get_vox = [0x16, 0x46]
+set_vox = [0x16, 0x46]
+get_vox_gain = [0x14, 0x16]
+set_vox_gain = [0x14, 0x16]
+get_anti_vox_gain = [0x14, 0x17]
+set_anti_vox_gain = [0x14, 0x17]
+get_ssb_tx_bandwidth = [0x16, 0x58]
+set_ssb_tx_bandwidth = [0x16, 0x58]
+
+# ── Split ──
+get_xfc_status = [0x1C, 0x02]             # XFC = transmit frequency monitor
+set_xfc_status = [0x1C, 0x02]
+
+# ── CW ──
+send_cw = [0x17]
+stop_cw = [0x17]
+get_cw_pitch = [0x14, 0x09]
+set_cw_pitch = [0x14, 0x09]
+get_key_speed = [0x14, 0x0C]
+set_key_speed = [0x14, 0x0C]
+get_break_in = [0x16, 0x47]
+set_break_in = [0x16, 0x47]
+get_break_in_delay = [0x14, 0x0F]
+set_break_in_delay = [0x14, 0x0F]
+
+# ── RIT / ∂TX (XIT) ──
+get_rit_frequency = [0x21, 0x00]
+set_rit_frequency = [0x21, 0x00]
+get_rit_status = [0x21, 0x01]
+set_rit_status = [0x21, 0x01]
+get_rit_tx_status = [0x21, 0x02]          # ∂TX on/off
+set_rit_tx_status = [0x21, 0x02]
+
+# ── Tuner / ATU ──
+get_tuner_status = [0x1C, 0x01]
+set_tuner_status = [0x1C, 0x01]
+
+# ── Meters ──
+get_s_meter = [0x15, 0x02]
+get_s_meter_sql_status = [0x15, 0x01]
+get_various_squelch = [0x15, 0x05]
+get_overflow_status = [0x15, 0x07]
+get_power_meter = [0x15, 0x11]
+get_swr = [0x15, 0x12]
+get_alc = [0x15, 0x13]
+get_comp_meter = [0x15, 0x14]
+get_vd_meter = [0x15, 0x15]
+get_id_meter = [0x15, 0x16]
+
+# ── Tone / TSQL ──
+get_repeater_tone = [0x16, 0x42]
+set_repeater_tone = [0x16, 0x42]
+get_repeater_tsql = [0x16, 0x43]
+set_repeater_tsql = [0x16, 0x43]
+get_tone_freq = [0x1B, 0x00]
+set_tone_freq = [0x1B, 0x00]
+get_tsql_freq = [0x1B, 0x01]
+set_tsql_freq = [0x1B, 0x01]
+
+# ── Data Mode ──
+get_data_mode = [0x1A, 0x06]
+set_data_mode = { bytes = [0x1A, 0x06], value_variants = { "0" = [0x1A, 0x06, 0x00, 0x00], "1" = [0x1A, 0x06, 0x01, 0x01] } }
+
+# ── Scope ──
+get_scope_wave = [0x27, 0x00]
+scope_on = [0x27, 0x10]
+scope_off = [0x27, 0x10]
+scope_data_output = [0x27, 0x11]
+# scope_main_sub (0x27 0x12) exists on the wire with a fixed reply -- single
+# receiver, so the answer is always 00 (Main) -- IC-7300 Advanced Manual
+# (11a) command table p.19-7; live bench 2026-08-30 replied 27 12 00 (D2,
+# MOR-2014). Refutes the earlier "no scope_main_sub" note.
+get_scope_main_sub = [0x27, 0x12]         # source: IC-7300 Advanced Manual (11a) p.19-7 (fixed value 00 = Main only); live bench 2026-08-30 reply 27 12 00
+get_scope_single_dual = [0x27, 0x13]      # source: IC-7300 Advanced Manual (11a) p.19-7 (data column 00 = Single only); bench 2026-09-01: 27 13 -> fe fe e0 94 27 13 00 fd (27 12 -> fe fe e0 94 27 12 00 fd alongside it, 03 answering either side, 0x27 0x00 scope frames filtered out)
+get_scope_mode = [0x27, 0x14]
+get_scope_span = [0x27, 0x15]
+get_scope_edge = [0x27, 0x16]
+get_scope_hold = [0x27, 0x17]
+get_scope_ref = [0x27, 0x19]
+get_scope_speed = [0x27, 0x1A]
+get_scope_during_tx = [0x27, 0x1B]
+get_scope_center_type = [0x27, 0x1C]
+get_scope_vbw = [0x27, 0x1D]
+get_scope_fixed_edge = [0x27, 0x1E]
+# MOR-3012: the 0x27 scope table documents no RBW sub-command anywhere
+# (pp.19-7/19-8: 00, 10-17, 19, 1A-1E, 20; 1C is center type, 1D is VBW).
+get_scope_rbw = { absent = "IC-7300 Advanced Manual 11a sec.19 command table pp.19-7/19-8: the 0x27 scope table runs 00, 10-17, 19, 1A-1E, 20 with no RBW sub-command (1C is center type, 1D is VBW)" }
+
+# ── Scan ──
+scan_start = [0x0E]
+scan_stop = [0x0E]
+scan_start_type = [0x0E]                  # source: IC-7300 Advanced Manual (11a) p.19-3 (0x0E family incl. 0x13 fine-ΔF); live bench 2026-08-30: 0E 13 ACKed, 0E 00 stop ACKed
+scan_set_df_span = [0x0E]                 # source: IC-7300 Advanced Manual (11a) p.19-3, 0x0E Ax (x=1-7) -- matches VALID_DF_SPANS (D2 residual closed, MOR-2007)
+scan_set_resume = [0x0E]                  # source: IC-7300 Advanced Manual (11a) p.19-3; domain resolved below (MOR-2007 ruling 4, D2 residual closed)
+
+# ── System / Power ──
+power_on = [0x18]
+power_off = [0x18]
+get_transceiver_id = [0x19, 0x00]
+set_speech = [0x13]
+get_dial_lock = [0x16, 0x50]
+set_dial_lock = [0x16, 0x50]
+
+# ── Band Stacking Register ──
+get_bsr = [0x1A, 0x01]                    # source: IC-7300 Advanced Manual (11a) p.19-4 (detail p.19-10)
+set_bsr = [0x1A, 0x01]                    # source: IC-7300 Advanced Manual (11a) p.19-4 (detail p.19-10)
+
+# ── Memory ──
+# get_memory_mode -- PROVENANCE OPEN above, left undeclared
+set_memory_mode = [0x08]                  # source: IC-7300 Advanced Manual (11a) p.19-3
+memory_write = [0x09]                     # source: IC-7300 Advanced Manual (11a) p.19-3
+memory_to_vfo = [0x0A]                    # source: IC-7300 Advanced Manual (11a) p.19-3 -- payload MOR-2055, see commands/memory.py: build_memory_to_vfo
+memory_clear = [0x1A, 0x00]               # the declared 1a00_ff clear form's command bytes (Advanced Manual 11a p.19-11: 1A 00 + channel + FF, MOR-3644); the radio's bare 0x0B clear (p.19-3) is not the form this package sends -- MOR-2055 keeps the IC-7610 on 0x0B
+get_memory_contents = [0x1A, 0x00]        # source: IC-7300 Advanced Manual (11a) p.19-4 (detail p.19-11)
+set_memory_contents = [0x1A, 0x00]        # source: IC-7300 Advanced Manual (11a) p.19-4 (detail p.19-11)
+
+# Menu 0x1A 0x05 sub-addresses: see [commands.overrides] (wfview IC-7300.rig)
+
+[commands.overrides]
+# 0x1A 0x05 menu: RX/TX EQ + per-band scope edges (wfview IC-7300.rig)
+get_ssb_rx_hpflpf = [0x1A, 0x05, 0x00, 0x01]
+set_ssb_rx_hpflpf = [0x1A, 0x05, 0x00, 0x01]
+get_ssb_rx_bass = [0x1A, 0x05, 0x00, 0x02]
+set_ssb_rx_bass = [0x1A, 0x05, 0x00, 0x02]
+get_ssb_rx_treble = [0x1A, 0x05, 0x00, 0x03]
+set_ssb_rx_treble = [0x1A, 0x05, 0x00, 0x03]
+get_am_rx_hpflpf = [0x1A, 0x05, 0x00, 0x04]
+set_am_rx_hpflpf = [0x1A, 0x05, 0x00, 0x04]
+get_am_rx_bass = [0x1A, 0x05, 0x00, 0x05]
+set_am_rx_bass = [0x1A, 0x05, 0x00, 0x05]
+get_am_rx_treble = [0x1A, 0x05, 0x00, 0x06]
+set_am_rx_treble = [0x1A, 0x05, 0x00, 0x06]
+get_fm_rx_hpflpf = [0x1A, 0x05, 0x00, 0x07]
+set_fm_rx_hpflpf = [0x1A, 0x05, 0x00, 0x07]
+get_fm_rx_bass = [0x1A, 0x05, 0x00, 0x08]
+set_fm_rx_bass = [0x1A, 0x05, 0x00, 0x08]
+get_fm_rx_treble = [0x1A, 0x05, 0x00, 0x09]
+set_fm_rx_treble = [0x1A, 0x05, 0x00, 0x09]
+get_cw_rx_hpflpf = [0x1A, 0x05, 0x00, 0x10]
+set_cw_rx_hpflpf = [0x1A, 0x05, 0x00, 0x10]
+get_ssb_tx_bass = [0x1A, 0x05, 0x00, 0x12]
+set_ssb_tx_bass = [0x1A, 0x05, 0x00, 0x12]
+get_ssb_tx_treble = [0x1A, 0x05, 0x00, 0x13]
+set_ssb_tx_treble = [0x1A, 0x05, 0x00, 0x13]
+get_am_tx_bass = [0x1A, 0x05, 0x00, 0x17]
+set_am_tx_bass = [0x1A, 0x05, 0x00, 0x17]
+get_am_tx_treble = [0x1A, 0x05, 0x00, 0x18]
+set_am_tx_treble = [0x1A, 0x05, 0x00, 0x18]
+get_fm_tx_bass = [0x1A, 0x05, 0x00, 0x19]
+set_fm_tx_bass = [0x1A, 0x05, 0x00, 0x19]
+get_fm_tx_treble = [0x1A, 0x05, 0x00, 0x20]
+set_fm_tx_treble = [0x1A, 0x05, 0x00, 0x20]
+get_scope_edge1_1p6mhz = [0x1A, 0x05, 0x01, 0x12]
+set_scope_edge1_1p6mhz = [0x1A, 0x05, 0x01, 0x12]
+get_scope_edge2_1p6mhz = [0x1A, 0x05, 0x01, 0x13]
+set_scope_edge2_1p6mhz = [0x1A, 0x05, 0x01, 0x13]
+get_scope_edge3_1p6mhz = [0x1A, 0x05, 0x01, 0x14]
+set_scope_edge3_1p6mhz = [0x1A, 0x05, 0x01, 0x14]
+get_scope_edge1_2mhz = [0x1A, 0x05, 0x01, 0x15]
+set_scope_edge1_2mhz = [0x1A, 0x05, 0x01, 0x15]
+get_scope_edge2_2mhz = [0x1A, 0x05, 0x01, 0x16]
+set_scope_edge2_2mhz = [0x1A, 0x05, 0x01, 0x16]
+get_scope_edge3_2mhz = [0x1A, 0x05, 0x01, 0x17]
+set_scope_edge3_2mhz = [0x1A, 0x05, 0x01, 0x17]
+get_scope_edge1_6mhz = [0x1A, 0x05, 0x01, 0x18]
+set_scope_edge1_6mhz = [0x1A, 0x05, 0x01, 0x18]
+get_scope_edge2_6mhz = [0x1A, 0x05, 0x01, 0x19]
+set_scope_edge2_6mhz = [0x1A, 0x05, 0x01, 0x19]
+get_scope_edge3_6mhz = [0x1A, 0x05, 0x01, 0x20]
+set_scope_edge3_6mhz = [0x1A, 0x05, 0x01, 0x20]
+get_scope_edge1_8mhz = [0x1A, 0x05, 0x01, 0x21]
+set_scope_edge1_8mhz = [0x1A, 0x05, 0x01, 0x21]
+get_scope_edge2_8mhz = [0x1A, 0x05, 0x01, 0x22]
+set_scope_edge2_8mhz = [0x1A, 0x05, 0x01, 0x22]
+get_scope_edge3_8mhz = [0x1A, 0x05, 0x01, 0x23]
+set_scope_edge3_8mhz = [0x1A, 0x05, 0x01, 0x23]
+get_scope_edge1_11mhz = [0x1A, 0x05, 0x01, 0x24]
+set_scope_edge1_11mhz = [0x1A, 0x05, 0x01, 0x24]
+get_scope_edge2_11mhz = [0x1A, 0x05, 0x01, 0x25]
+set_scope_edge2_11mhz = [0x1A, 0x05, 0x01, 0x25]
+get_scope_edge3_11mhz = [0x1A, 0x05, 0x01, 0x26]
+set_scope_edge3_11mhz = [0x1A, 0x05, 0x01, 0x26]
+get_scope_edge1_15mhz = [0x1A, 0x05, 0x01, 0x27]
+set_scope_edge1_15mhz = [0x1A, 0x05, 0x01, 0x27]
+get_scope_edge2_15mhz = [0x1A, 0x05, 0x01, 0x28]
+set_scope_edge2_15mhz = [0x1A, 0x05, 0x01, 0x28]
+get_scope_edge3_15mhz = [0x1A, 0x05, 0x01, 0x29]
+set_scope_edge3_15mhz = [0x1A, 0x05, 0x01, 0x29]
+get_scope_edge1_20mhz = [0x1A, 0x05, 0x01, 0x30]
+set_scope_edge1_20mhz = [0x1A, 0x05, 0x01, 0x30]
+get_scope_edge2_20mhz = [0x1A, 0x05, 0x01, 0x31]
+set_scope_edge2_20mhz = [0x1A, 0x05, 0x01, 0x31]
+get_scope_edge3_20mhz = [0x1A, 0x05, 0x01, 0x32]
+set_scope_edge3_20mhz = [0x1A, 0x05, 0x01, 0x32]
+get_scope_edge1_22mhz = [0x1A, 0x05, 0x01, 0x33]
+set_scope_edge1_22mhz = [0x1A, 0x05, 0x01, 0x33]
+get_scope_edge2_22mhz = [0x1A, 0x05, 0x01, 0x34]
+set_scope_edge2_22mhz = [0x1A, 0x05, 0x01, 0x34]
+get_scope_edge3_22mhz = [0x1A, 0x05, 0x01, 0x35]
+set_scope_edge3_22mhz = [0x1A, 0x05, 0x01, 0x35]
+get_scope_edge1_26mhz = [0x1A, 0x05, 0x01, 0x36]
+set_scope_edge1_26mhz = [0x1A, 0x05, 0x01, 0x36]
+get_scope_edge2_26mhz = [0x1A, 0x05, 0x01, 0x37]
+set_scope_edge2_26mhz = [0x1A, 0x05, 0x01, 0x37]
+get_scope_edge3_26mhz = [0x1A, 0x05, 0x01, 0x38]
+set_scope_edge3_26mhz = [0x1A, 0x05, 0x01, 0x38]
+get_scope_edge1_30mhz = [0x1A, 0x05, 0x01, 0x39]
+set_scope_edge1_30mhz = [0x1A, 0x05, 0x01, 0x39]
+get_scope_edge2_30mhz = [0x1A, 0x05, 0x01, 0x40]
+set_scope_edge2_30mhz = [0x1A, 0x05, 0x01, 0x40]
+get_scope_edge3_30mhz = [0x1A, 0x05, 0x01, 0x41]
+set_scope_edge3_30mhz = [0x1A, 0x05, 0x01, 0x41]
+get_scope_edge1_45mhz = [0x1A, 0x05, 0x01, 0x42]
+set_scope_edge1_45mhz = [0x1A, 0x05, 0x01, 0x42]
+get_scope_edge2_45mhz = [0x1A, 0x05, 0x01, 0x43]
+set_scope_edge2_45mhz = [0x1A, 0x05, 0x01, 0x43]
+get_scope_edge3_45mhz = [0x1A, 0x05, 0x01, 0x44]
+set_scope_edge3_45mhz = [0x1A, 0x05, 0x01, 0x44]
+get_scope_edge1_60mhz = [0x1A, 0x05, 0x01, 0x45]
+set_scope_edge1_60mhz = [0x1A, 0x05, 0x01, 0x45]
+get_scope_edge2_60mhz = [0x1A, 0x05, 0x01, 0x46]
+set_scope_edge2_60mhz = [0x1A, 0x05, 0x01, 0x46]
+get_scope_edge3_60mhz = [0x1A, 0x05, 0x01, 0x47]
+set_scope_edge3_60mhz = [0x1A, 0x05, 0x01, 0x47]
+get_scope_edge1_74mhz = [0x1A, 0x05, 0x01, 0x48]
+set_scope_edge1_74mhz = [0x1A, 0x05, 0x01, 0x48]
+get_scope_edge2_74mhz = [0x1A, 0x05, 0x01, 0x49]
+set_scope_edge2_74mhz = [0x1A, 0x05, 0x01, 0x49]
+get_scope_edge3_74mhz = [0x1A, 0x05, 0x01, 0x50]
+set_scope_edge3_74mhz = [0x1A, 0x05, 0x01, 0x50]
+get_scope_edge4_1p6mhz = [0x1A, 0x05, 0x02, 0x04]
+set_scope_edge4_1p6mhz = [0x1A, 0x05, 0x02, 0x04]
+get_scope_edge4_2mhz = [0x1A, 0x05, 0x02, 0x05]
+set_scope_edge4_2mhz = [0x1A, 0x05, 0x02, 0x05]
+get_scope_edge4_6mhz = [0x1A, 0x05, 0x02, 0x06]
+set_scope_edge4_6mhz = [0x1A, 0x05, 0x02, 0x06]
+get_scope_edge4_8mhz = [0x1A, 0x05, 0x02, 0x07]
+set_scope_edge4_8mhz = [0x1A, 0x05, 0x02, 0x07]
+get_scope_edge4_11mhz = [0x1A, 0x05, 0x02, 0x08]
+set_scope_edge4_11mhz = [0x1A, 0x05, 0x02, 0x08]
+get_scope_edge4_15mhz = [0x1A, 0x05, 0x02, 0x09]
+set_scope_edge4_15mhz = [0x1A, 0x05, 0x02, 0x09]
+get_scope_edge4_20mhz = [0x1A, 0x05, 0x02, 0x10]
+set_scope_edge4_20mhz = [0x1A, 0x05, 0x02, 0x10]
+get_scope_edge4_22mhz = [0x1A, 0x05, 0x02, 0x11]
+set_scope_edge4_22mhz = [0x1A, 0x05, 0x02, 0x11]
+get_scope_edge4_26mhz = [0x1A, 0x05, 0x02, 0x12]
+set_scope_edge4_26mhz = [0x1A, 0x05, 0x02, 0x12]
+get_scope_edge4_30mhz = [0x1A, 0x05, 0x02, 0x13]
+set_scope_edge4_30mhz = [0x1A, 0x05, 0x02, 0x13]
+get_scope_edge4_45mhz = [0x1A, 0x05, 0x02, 0x14]
+set_scope_edge4_45mhz = [0x1A, 0x05, 0x02, 0x14]
+get_scope_edge4_60mhz = [0x1A, 0x05, 0x02, 0x15]
+set_scope_edge4_60mhz = [0x1A, 0x05, 0x02, 0x15]
+get_scope_edge4_74mhz = [0x1A, 0x05, 0x02, 0x16]
+set_scope_edge4_74mhz = [0x1A, 0x05, 0x02, 0x16]
+
+# IC-7300-specific menu sub-addresses (also in wfview; not all rigs share these)
+get_acc1_mod_level = [0x1A, 0x05, 0x00, 0x64]
+set_acc1_mod_level = [0x1A, 0x05, 0x00, 0x64]
+get_usb_mod_level = [0x1A, 0x05, 0x00, 0x65]
+set_usb_mod_level = [0x1A, 0x05, 0x00, 0x65]
+get_data_off_mod_input = [0x1A, 0x05, 0x00, 0x66]
+set_data_off_mod_input = [0x1A, 0x05, 0x00, 0x66]
+get_data1_mod_input = [0x1A, 0x05, 0x00, 0x67]
+set_data1_mod_input = [0x1A, 0x05, 0x00, 0x67]
+# MOR-3012: one DATA mode only -- 1A 05 documents just 0066 (MOD input
+# during DATA OFF) and 0067 (during DATA); no DATA2/DATA3 rows (0093/
+# 0094 there are Display Language and date setting).
+get_data2_mod_input = { absent = "IC-7300 Advanced Manual 11a sec.19 command table p.19-5: 1A 05 has only 0066 (MOD input during DATA OFF) and 0067 (during DATA); no DATA2 row (0093 there is Display Language)" }
+get_data3_mod_input = { absent = "IC-7300 Advanced Manual 11a sec.19 command table p.19-5: 1A 05 has only 0066 (MOD input during DATA OFF) and 0067 (during DATA); no DATA3 row (0094 there is date setting)" }
+get_civ_transceive = [0x1A, 0x05, 0x00, 0x71]
+set_civ_transceive = [0x1A, 0x05, 0x00, 0x71]
+# MOR-2118: measured 2026-09-01 14:39-14:41 UTC, remote testbed. Owner
+# toggled the front-panel "CI-V Output (for ANT)" setting OFF->ON between
+# two passes, changing nothing else:
+#   1A 05 00 61 -> 00     / 00        did NOT move
+#   1A 05 01 57 -> 00 14  / 00 14     unchanged (level-shaped, not a toggle)
+#   1A 05 00 73 -> 00     / 01        moved with the setting
+# The manual disagrees with itself on the address: p.19-5 assigns 1A 05
+# 0073 to "CI-V Output (for ANT) capability"; three notes on p.19-7 (under
+# 1C 00 and 1C 03) instead name 1A 05 0157 for the same setting, but p.19-6
+# assigns 0157 to "present number" (0001 to 9999), an unrelated counter --
+# the bench measurement above resolves the contradiction in favor of 0073.
+# Independent corroboration: docs/validation/cat-audits/ic7300.md (a
+# different manual extraction) also lists 1A 05 0073 for this setting.
+get_civ_output_ant = [0x1A, 0x05, 0x00, 0x73]  # source: IC-7300 Advanced Manual (11a) p.19-5
+set_civ_output_ant = [0x1A, 0x05, 0x00, 0x73]
+get_system_date = [0x1A, 0x05, 0x00, 0x94]
+set_system_date = [0x1A, 0x05, 0x00, 0x94]
+get_system_time = [0x1A, 0x05, 0x00, 0x95]
+set_system_time = [0x1A, 0x05, 0x00, 0x95]
+get_utc_offset = [0x1A, 0x05, 0x00, 0x96]
+set_utc_offset = [0x1A, 0x05, 0x00, 0x96]
+get_quick_split = [0x1A, 0x05, 0x00, 0x30]  # source: IC-7300 Advanced Manual (11a) p.19-4, control 0030 "quick split set" (the old hardcoded fallback sent 0x33, split lock, not this address)
+set_quick_split = [0x1A, 0x05, 0x00, 0x30]  # source: IC-7300 Advanced Manual (11a) p.19-4, control 0030 "quick split set" (the old hardcoded fallback sent 0x33, split lock, not this address)
+get_dash_ratio = [0x1A, 0x05, 0x01, 0x61]  # source: IC-7300 Advanced Manual (11a) command table p.19-6, control 0161 (28..45); live bench 2026-08-30: read of 1A 05 01 61 answered 30
+set_dash_ratio = [0x1A, 0x05, 0x01, 0x61]  # source: IC-7300 Advanced Manual (11a) command table p.19-6, control 0161 (28..45); live bench 2026-08-30: read of 1A 05 01 61 answered 30
+get_nb_depth = [0x1A, 0x05, 0x01, 0x89]
+set_nb_depth = [0x1A, 0x05, 0x01, 0x89]
+get_nb_width = [0x1A, 0x05, 0x01, 0x90]
+set_nb_width = [0x1A, 0x05, 0x01, 0x90]
+get_vox_delay = [0x1A, 0x05, 0x01, 0x91]     # 0-20 (0.0-2.0 sec)
+set_vox_delay = [0x1A, 0x05, 0x01, 0x91]     # 0-20 (0.0-2.0 sec)
+
+[protocol]
+type = "civ"
+
+[controls.attenuator]
+style = "toggle"
+
+[controls.nb]
+style = "toggle_and_level"
+
+[controls.nr]
+style = "toggle_and_level"
+
+# Level control ranges — raw CI-V values and display mapping
+# IC-7300: single receiver, no cmd29, VFO A/B scheme
+
+[controls.pbt_inner]
+raw_min = 0
+raw_max = 255
+raw_center = 128
+display_min = -1200
+display_max = 1200
+display_unit = "Hz"
+
+[controls.pbt_outer]
+raw_min = 0
+raw_max = 255
+raw_center = 128
+display_min = -1200
+display_max = 1200
+display_unit = "Hz"
+
+[controls.af_level]
+raw_min = 0
+raw_max = 255
+
+[controls.rf_gain]
+raw_min = 0
+raw_max = 255
+
+[controls.squelch]
+raw_min = 0
+raw_max = 255
+
+[controls.nr_level]
+raw_min = 0
+raw_max = 255
+
+[controls.nb_level]
+raw_min = 0
+raw_max = 255
+
+[controls.mic_gain]
+raw_min = 0
+raw_max = 255
+
+[controls.rf_power]
+raw_min = 0
+raw_max = 255
+
+[controls.monitor_gain]
+raw_min = 0
+raw_max = 255
+
+[controls.compressor_level]
+raw_min = 0
+raw_max = 255
+
+[controls.cw_pitch]
+raw_min = 0
+raw_max = 255
+display_min = 300
+display_max = 900
+display_unit = "Hz"
+decode_quantum = 5  # reproduces the pre-existing CW-pitch decode for every raw level (pinned by tests/test_control_domain_math.py::test_ci_v_cw_pitch_decode_matches_the_deleted_formula_vectors)
+encode_rounding = "ceil"  # reproduces the pre-existing CW-pitch encode for every Hz in 300-900 (pinned by tests/test_control_domain_math.py::test_ci_v_cw_pitch_encode_matches_the_deleted_formula_vectors)
+
+[controls.key_speed]
+raw_min = 0
+raw_max = 255
+display_min = 6
+display_max = 48
+display_unit = "WPM"
+decode_quantum = 1  # reproduces the pre-existing key-speed decode for every raw level (pinned by tests/test_control_domain_math.py::test_ci_v_key_speed_decode_matches_the_deleted_formula_vectors)
+encode_rounding = "nearest_half_down"  # reproduces the pre-existing key-speed encode for every WPM in 6-48 (pinned by tests/test_control_domain_math.py::test_ci_v_key_speed_encode_matches_the_deleted_formula_vectors)
+
+[controls.rit]
+# MOR-1883: exact-form domain (MOR-1730 frontend contract). Range is the
+# shared CI-V builder's +/-9999 Hz in 1 Hz BCD steps (commands/system.py
+# set_rit_frequency), confirmed by a live 4701 Hz write on the bench
+# IC-7300 (2026-08-15) and the Full Manual RIT range of +/-9.999 kHz.
+# The previous legacy +/-999 contradicted all three sources.
+mapping = "identity"
+raw_min = -9999
+raw_max = 9999
+raw_step = 1
+raw_origin = 0
+display_min = -9999
+display_max = 9999
+display_step = 1
+display_origin = 0
+display_unit = "Hz"
+quantization = "reject"
+restoration = "exact"
+
+# SWR meter calibration — piecewise-linear lookup from raw 0–255 to SWR ratio.
+# First four points are firmware-anchored per the IC-7300 CI-V Reference (00=1.0,
+# 48=1.5, 80=2.0, 120=3.0). Fifth point (240, 6.0) follows wfview IC-7300.rig
+# (with the upstream `RigVal=2410` typo corrected to 240; matches IC-705/IC-9700
+# sibling models). See P3-01 (issue #1173) and the R1 research note.
+[meters.swr]
+redline_raw = 120
+
+[[meters.swr.calibration]]
+raw = 0
+actual = 1.0
+label = "1.0"
+
+[[meters.swr.calibration]]
+raw = 48
+actual = 1.5
+label = "1.5"
+
+[[meters.swr.calibration]]
+raw = 80
+actual = 2.0
+label = "2.0"
+
+[[meters.swr.calibration]]
+raw = 120
+actual = 3.0
+label = "3.0"
+
+[[meters.swr.calibration]]
+raw = 240
+actual = 6.0
+label = "6.0+"
+
+# S-meter calibration — piecewise-linear lookup from raw 0-255 to dB-rel-S9.
+# Anchors verified against the official Icom CI-V Reference Guide's command
+# 15 02 ("Read S-meter level") table: "00 00=S0 ~ 01 20=S9 ~ 02 41=S9+60 dB".
+# Confirmed identically worded in BOTH the IC-7300MK2 CI-V Reference Guide
+# (icomuk.co.uk/files/icom/PDF/productAdditionalFile/
+# IC-7300MK2_ENG_CI-V_0.pdf) — the same source this repo's own CAT audit
+# (docs/validation/cat-audits/ic7300.md) already cites as standing in for
+# the original IC-7300's identically-numbered command table — and the
+# IC-7610 CI-V Reference Guide (radiomanual.info mirror), so this is the
+# documented Icom convention, not IC-7300-specific guesswork (MOR-1451;
+# live evidence: main.sMeter raw 53 rendered as "S9+40" with no curve
+# declared here before this table existed). Only the S0/S9/S9+60 anchors
+# are published; intermediate S-units interpolate linearly between them.
+#
+# NOTE for a future ticket, out of MOR-1451's scope: rigs/ic7610.toml's own
+# [meters.s_meter] table declares S9 at raw 130 (not 120) and its top
+# anchor at S9+40 (raw 240, not S9+60/241) — inconsistent with the IC-7610
+# CI-V Reference Guide's own S-meter table quoted above. IC-7610 is retired
+# from the live bench (2026-08-04) so this was not corrected here.
+[meters.s_meter]
+redline_raw = 120
+
+[[meters.s_meter.calibration]]
+raw = 0
+actual = -54.0
+label = "S0"
+
+[[meters.s_meter.calibration]]
+raw = 120
+actual = 0.0
+label = "S9"
+
+[[meters.s_meter.calibration]]
+raw = 241
+actual = 60.0
+label = "S9+60"
+
+# PA/TX telemetry meter calibration (MOR-1527) -- power / ALC / COMP / Vd / Id.
+# Before this table existed these five meters had no [[meters.<key>.
+# calibration]] block on this profile, so the backend published the raw
+# CI-V byte (`_civ_rx.py`'s `_calibrated_meter_value` -> `interpolate_meter`
+# returns `(raw, False)` with no table) and the frontend rendered it as a
+# naked device-scale number with no unit -- the live finding behind this
+# ticket: the Vd tile read "158" with nothing to say it wasn't volts.
+#
+# Source: hamlib's own IC-7300 driver (rigs/icom/ic7300.c,
+# IC7300_RFPOWER_METER_CAL / IC7300_ALC_CAL / IC7300_COMP_METER_CAL /
+# IC7300_VD_METER_CAL / IC7300_ID_METER_CAL), verified against commit
+# cfaf1573deabe962452a42b58402e4f158554676 (2026-06-19):
+# https://github.com/Hamlib/Hamlib/blob/cfaf1573deabe962452a42b58402e4f158554676/rigs/icom/ic7300.c#L93-L131
+# The existing [meters.swr] table above (raw 0/48/80/120/240 -> 1.0/1.5/
+# 2.0/3.0/6.0) is the SAME source and matches exactly, which is why hamlib
+# is trusted here as a documented-Icom-convention proxy the same way it
+# already stood in for wfview's SWR table.
+#
+# Provenance is honest, not uniform: hamlib-sourced but NOT independently
+# live-validated on this bench for power/ALC/COMP/Id. Vd is the exception --
+# live-corroborated: interpolating this table at raw 158 (13/10.0 ..
+# 241/16.0) gives 13.82 V, which reproduces the operator's own live IC-7300
+# bench reading ("~13.8 V" at that same raw byte, the finding that opened
+# this ticket) to within rounding. Bench validation of the remaining four
+# curves against a real load/meter is tracked as a MOR-1410 follow-up, not
+# claimed here.
+#
+# ALC's `actual` column is stored in this repo's percent convention (0-100,
+# matching rigs/ic7610.toml's own [meters.alc] table: raw 0/120 ->
+# actual 0.0/100.0) rather than hamlib's normalized 0.0-1.0 scale --
+# `_civ_rx.py`'s `_calibrated_meter_value` divides the interpolated ALC
+# value by 100 back to the 0-1 domain before publishing, so this profile
+# must speak the 0-100 wire format the loader expects, not hamlib's own
+# units verbatim.
+[[meters.power.calibration]]
+raw = 0
+actual = 0.0
+label = "0"
+
+[[meters.power.calibration]]
+raw = 21
+actual = 5.0
+label = "5"
+
+[[meters.power.calibration]]
+raw = 43
+actual = 10.0
+label = "10"
+
+[[meters.power.calibration]]
+raw = 65
+actual = 15.0
+label = "15"
+
+[[meters.power.calibration]]
+raw = 83
+actual = 20.0
+label = "20"
+
+[[meters.power.calibration]]
+raw = 95
+actual = 25.0
+label = "25"
+
+[[meters.power.calibration]]
+raw = 105
+actual = 30.0
+label = "30"
+
+[[meters.power.calibration]]
+raw = 114
+actual = 35.0
+label = "35"
+
+[[meters.power.calibration]]
+raw = 124
+actual = 40.0
+label = "40"
+
+[[meters.power.calibration]]
+raw = 143
+actual = 50.0
+label = "50"
+
+[[meters.power.calibration]]
+raw = 183
+actual = 75.0
+label = "75"
+
+[[meters.power.calibration]]
+raw = 213
+actual = 100.0
+label = "100"
+
+[[meters.power.calibration]]
+raw = 255
+actual = 120.0
+label = "120"
+
+[[meters.alc.calibration]]
+raw = 0
+actual = 0.0
+label = "0"
+
+[[meters.alc.calibration]]
+raw = 120
+actual = 100.0
+label = "100"
+
+[[meters.comp.calibration]]
+raw = 0
+actual = 0.0
+label = "0"
+
+[[meters.comp.calibration]]
+raw = 130
+actual = 15.0
+label = "15"
+
+[[meters.comp.calibration]]
+raw = 241
+actual = 30.0
+label = "30"
+
+[[meters.vd.calibration]]
+raw = 0
+actual = 0.0
+label = "0"
+
+[[meters.vd.calibration]]
+raw = 13
+actual = 10.0
+label = "10"
+
+[[meters.vd.calibration]]
+raw = 241
+actual = 16.0
+label = "16"
+
+[[meters.id.calibration]]
+raw = 0
+actual = 0.0
+label = "0"
+
+[[meters.id.calibration]]
+raw = 97
+actual = 10.0
+label = "10"
+
+[[meters.id.calibration]]
+raw = 146
+actual = 15.0
+label = "15"
+
+[[meters.id.calibration]]
+raw = 241
+actual = 25.0
+label = "25"
+
+[tx_policy]
+# Measured on the bench (MOR-1912): a controlled write-during-transmit
+# battery — frequency, mode, split, RIT — sent to the IC-7300 while an
+# operator held a front-panel key. Every write was accepted and applied
+# (byte-identical to the receiving baseline, confirmed by read-back), so
+# there is no measured refusal to record here.
+refused_during_tx = []
+# The CI-V PTT read-back (cmd 0x1C sub 0x00) is a plain on/off byte with no
+# source attribution — it cannot say whether CAT or the front panel keyed
+# the radio. Positive-RX rule: only the receiving byte is listed, so the
+# transmitting byte (and anything unrecognised) is correctly not-receiving
+# without inventing an attribution the radio never reported.
+tx_state_map = { "0" = "rx" }

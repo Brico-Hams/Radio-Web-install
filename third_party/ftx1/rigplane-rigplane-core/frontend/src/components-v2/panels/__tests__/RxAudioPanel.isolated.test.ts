@@ -1,0 +1,449 @@
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { mount, unmount, flushSync } from 'svelte';
+import { readFileSync } from 'node:fs';
+import { buildMonitorOptions, formatMonitorStatus } from '../audio-utils';
+import RxAudioPanel from '../RxAudioPanel.svelte';
+
+// ---------------------------------------------------------------------------
+// Mock runtime adapters so RxAudioPanel can self-wire in tests
+// ---------------------------------------------------------------------------
+
+const mockProps = {
+  monitorMode: 'local' as 'local' | 'live' | 'mute',
+  afLevel: 0.5,
+  hasAfLevel: true,
+  hasLiveAudio: false,
+  isAudioConnected: true,
+  hasDualReceiver: false,
+  hasAudioRouting: false,
+};
+
+// MOR-2527: the routing sub-control is stubbed so the mount gate is pinned on
+// the PANEL's own prop, not on the control's internals (same function-stub
+// pattern as LcdLayout.command-bus-migration.isolated.test.ts).
+const routingMounts = vi.hoisted(() => ({ count: 0 }));
+vi.mock('../AudioRoutingControl.svelte', () => ({
+  default: () => { routingMounts.count += 1; },
+}));
+
+const mockHandlers = {
+  onMonitorModeChange: vi.fn(),
+  onAfLevelChange: vi.fn(),
+};
+
+vi.mock('$lib/runtime/adapters/audio-adapter', () => ({
+  deriveRxAudioProps: () => mockProps,
+  getRxAudioHandlers: () => mockHandlers,
+}));
+
+// MOR-2910: the AF level control reads the shared AF command-feedback lane.
+// The accessor is mocked with a hoisted mutable snapshot so the display
+// tests keep driving the confirmed reading, and the wiring tests below can
+// advance the feedback lifecycle without the real runtime.
+const afFeedback = vi.hoisted(() => ({ value: null as Record<string, unknown> | null }));
+const afFeedbackOf = (over: Record<string, unknown> = {}) => ({
+  confirmed: mockProps.afLevel, target: null, requestedTarget: null,
+  phase: 'idle' as const, busy: false, availability: 'available' as const,
+  outcome: null, lifecycleId: null, transitionId: null,
+  providerGeneration: 1, sessionEpoch: 1,
+  scope: { control: 'af-level', receiver: 0 as const },
+  repeatPolicy: 'latest-target-wins' as const, ...over,
+});
+vi.mock('$lib/runtime/frontend-runtime', () => ({ runtime: {
+  get state() { return null; },
+  get caps() { return null; },
+  get controlSession() { return { state: 'disconnected' as const, epoch: -1 }; },
+} }));
+vi.mock('$lib/runtime/adapters/panel-adapters', () => ({
+  getAfLevelControlFeedback: () => afFeedback.value,
+}));
+
+// ---------------------------------------------------------------------------
+// buildMonitorOptions
+// ---------------------------------------------------------------------------
+
+describe('buildMonitorOptions', () => {
+  
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+it('always includes RADIO as first option', () => {
+    const options = buildMonitorOptions(false);
+    expect(options[0]).toEqual({ value: 'local', label: 'RADIO' });
+  });
+
+  it('always includes MUTE as last option when hasLive=false', () => {
+    const options = buildMonitorOptions(false);
+    expect(options[options.length - 1]).toEqual({ value: 'mute', label: 'MUTE' });
+  });
+
+  it('always includes MUTE as last option when hasLive=true', () => {
+    const options = buildMonitorOptions(true);
+    expect(options[options.length - 1]).toEqual({ value: 'mute', label: 'MUTE' });
+  });
+
+  it('excludes LIVE when hasLive=false', () => {
+    const options = buildMonitorOptions(false);
+    expect(options.find((o) => o.value === 'live')).toBeUndefined();
+  });
+
+  it('includes LIVE when hasLive=true', () => {
+    const options = buildMonitorOptions(true);
+    expect(options.find((o) => o.value === 'live')).toEqual({ value: 'live', label: 'LIVE' });
+  });
+
+  it('returns 2 options when hasLive=false', () => {
+    expect(buildMonitorOptions(false)).toHaveLength(2);
+  });
+
+  it('returns 3 options when hasLive=true', () => {
+    expect(buildMonitorOptions(true)).toHaveLength(3);
+  });
+
+  it('LIVE appears between RADIO and MUTE when hasLive=true', () => {
+    const options = buildMonitorOptions(true);
+    expect(options.map((o) => o.value)).toEqual(['local', 'live', 'mute']);
+  });
+
+  it('all option values are strings', () => {
+    const options = buildMonitorOptions(true);
+    options.forEach((o) => expect(typeof o.value).toBe('string'));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// formatMonitorStatus
+// ---------------------------------------------------------------------------
+
+describe('formatMonitorStatus', () => {
+  it('returns "Radio speaker output" for local', () => {
+    expect(formatMonitorStatus('local')).toBe('Radio speaker output');
+  });
+
+  it('returns "Browser audio stream" for live', () => {
+    expect(formatMonitorStatus('live')).toBe('Browser audio stream');
+  });
+
+  it('returns "Audio muted" for mute', () => {
+    expect(formatMonitorStatus('mute')).toBe('Audio muted');
+  });
+
+  it('returns empty string for unknown mode', () => {
+    expect(formatMonitorStatus('unknown')).toBe('');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// RxAudioPanel component
+// ---------------------------------------------------------------------------
+
+let components: ReturnType<typeof mount>[] = [];
+
+// The mocked AF accessor is a plain (non-reactive) snapshot, so lifecycle
+// cases stage their full feedback shape via `feedbackOver` BEFORE mounting
+// — a post-mount reassignment would never re-render.
+function mountPanel(overrides?: Partial<typeof mockProps>, feedbackOver?: Record<string, unknown>) {
+  if (overrides) Object.assign(mockProps, overrides);
+  afFeedback.value = afFeedbackOf(feedbackOver ?? {});
+  const t = document.createElement('div');
+  document.body.appendChild(t);
+  const component = mount(RxAudioPanel, { target: t });
+  flushSync();
+  components.push(component);
+  return t;
+}
+
+beforeEach(() => {
+  components = [];
+  mockProps.monitorMode = 'local';
+  mockProps.afLevel = 128;
+  mockProps.hasAfLevel = true;
+  mockProps.hasLiveAudio = false;
+  mockProps.isAudioConnected = true;
+  mockProps.hasDualReceiver = false;
+  mockProps.hasAudioRouting = false;
+  routingMounts.count = 0;
+  mockHandlers.onMonitorModeChange = vi.fn();
+  mockHandlers.onAfLevelChange = vi.fn();
+});
+
+afterEach(() => {
+  components.forEach((c) => unmount(c));
+  document.body.innerHTML = '';
+});
+
+describe('panel visibility', () => {
+  it('renders the panel when only radio AF level is available', () => {
+    const t = mountPanel({ hasAfLevel: true, hasLiveAudio: false });
+    expect(t.querySelector('.panel-body')).not.toBeNull();
+  });
+
+  it('renders the panel when hasLiveAudio is true', () => {
+    const t = mountPanel({ hasAfLevel: true, hasLiveAudio: true });
+    expect(t.querySelector('.panel-body')).not.toBeNull();
+  });
+
+  it('does not render the panel when neither AF level nor live audio is available', () => {
+    const t = mountPanel({ hasAfLevel: false, hasLiveAudio: false });
+    expect(t.querySelector('.panel-body')).toBeNull();
+  });
+});
+
+// MOR-2527: dual-receiver audio ROUTING is gated on its own capability
+// (`lan_dual_rx_audio_routing`), not on `dual_rx` — the FTX-1 declares
+// `dual_rx` but no routing, and must not mount a control whose values the
+// server refuses. The second case fails on origin/main, where the gate was
+// `hasDualReceiver`.
+describe('AudioRoutingControl mount gate (MOR-2527)', () => {
+  it('mounts the routing control when the routing capability is present', () => {
+    mountPanel({ hasAudioRouting: true });
+    expect(routingMounts.count).toBe(1);
+  });
+
+  it('does not mount it for dual_rx without the routing capability (FTX-1 shape)', () => {
+    mountPanel({ hasDualReceiver: true, hasAudioRouting: false });
+    expect(routingMounts.count).toBe(0);
+  });
+});
+
+describe('panel structure', () => {
+  it('renders the AF Level slider', () => {
+    const t = mountPanel({ hasAfLevel: true, hasLiveAudio: false });
+    const labels = Array.from(t.querySelectorAll('.vc-label'));
+    expect(labels.some((el) => el.textContent === 'AF Level')).toBe(true);
+  });
+
+  it('renders the output indicator element', () => {
+    const t = mountPanel({ hasLiveAudio: true });
+    expect(t.querySelector('.output-indicator')).not.toBeNull();
+  });
+
+  it('output indicator shows correct status for local mode', () => {
+    const t = mountPanel({ hasLiveAudio: true, monitorMode: 'local' });
+    expect(t.querySelector('.output-indicator')?.textContent?.trim()).toBe('Radio speaker output');
+  });
+
+  it('output indicator shows correct status for mute mode', () => {
+    const t = mountPanel({ hasLiveAudio: true, monitorMode: 'mute' });
+    expect(t.querySelector('.output-indicator')?.textContent?.trim()).toBe('Audio muted');
+  });
+
+  it('output indicator shows correct status for live mode', () => {
+    const t = mountPanel({ hasLiveAudio: true, monitorMode: 'live' });
+    expect(t.querySelector('.output-indicator')?.textContent?.trim()).toBe('Browser audio stream');
+  });
+});
+
+describe('monitor mode options', () => {
+  it('does not show LIVE button when hasLiveAudio=false', () => {
+    const t = mountPanel({hasLiveAudio: false });
+    const buttons = Array.from(t.querySelectorAll('button'));
+    expect(buttons.some((b) => b.textContent?.trim() === 'LIVE')).toBe(false);
+  });
+
+  it('shows LIVE button when hasLiveAudio=true', () => {
+    const t = mountPanel({hasLiveAudio: true });
+    const buttons = Array.from(t.querySelectorAll('button'));
+    expect(buttons.some((b) => b.textContent?.trim() === 'LIVE')).toBe(true);
+  });
+});
+
+describe('callbacks', () => {
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('calls onAfLevelChange when AF Level slider changes', () => {
+    const t = mountPanel({ hasLiveAudio: true });
+    const slider = t.querySelector<HTMLElement>('[role="slider"]');
+    slider!.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
+    vi.advanceTimersByTime(60);
+
+    expect(mockHandlers.onAfLevelChange).toHaveBeenCalled();
+  });
+
+  it('calls onMonitorModeChange when a mode button is clicked', () => {
+    const t = mountPanel({ hasLiveAudio: true });
+    const buttons = Array.from(t.querySelectorAll('button'));
+    const muteBtn = buttons.find((b) => b.textContent?.trim() === 'MUTE');
+    muteBtn!.click();
+    expect(mockHandlers.onMonitorModeChange).toHaveBeenCalledWith('mute');
+  });
+});
+
+function vcValueEl(t: HTMLElement, label: string): HTMLElement {
+  const headers = Array.from(t.querySelectorAll('.vc-header'));
+  const header = headers.find(
+    (h) => h.querySelector('.vc-label')?.textContent === label,
+  );
+  if (!header) throw new Error(`ValueControl labeled "${label}" not found`);
+  const el = header.querySelector('.vc-value');
+  if (!el) throw new Error(`Value box for "${label}" not found`);
+  return el as HTMLElement;
+}
+
+function vcValueFor(t: HTMLElement, label: string): string {
+  return vcValueEl(t, label).textContent ?? '';
+}
+
+/**
+ * A12 (MOR-1409, Core #2317, coordinator adjudication comment 5246487510)
+ * — a connected receiver that has never reported `afLevel` (optional
+ * field, local-monitor path) passes the `hasAfLevel`/`hasLiveAudio`
+ * capability gate with `props.afLevel === NaN` (panel-props.ts no longer
+ * fabricates `?? 0.5`). Unguarded, `normalizedPercentDisplay(NaN)` renders
+ * the literal "NaN%" (verifier-executed probe on the unguarded candidate).
+ * MOR-2668: the local `formatAfLevelDisplay` guard renders an unobserved
+ * level as '' (unlit LCD segment) in HBarRenderer's reserved `.vc-value`
+ * box (MOR-2657) — never a dash, never "NaN".
+ */
+describe('RxAudioPanel — no "NaN" leak for an unobserved AF level (MOR-1409 A12, MOR-2668)', () => {
+  it('does not render a "NaN" substring for AF Level when afLevel is non-finite', () => {
+    const t = mountPanel({ afLevel: Number.NaN, hasAfLevel: true, hasLiveAudio: false });
+    expect(vcValueFor(t, 'AF Level')).not.toMatch(/NaN/);
+  });
+
+  it('renders an empty unread AF Level in its reserved box, never a dash', () => {
+    const t = mountPanel({ afLevel: Number.NaN, hasAfLevel: true, hasLiveAudio: false });
+    expect(vcValueEl(t, 'AF Level')).not.toBeNull();
+    expect(vcValueFor(t, 'AF Level')).toBe('');
+  });
+
+  it('exposes no placeholder in the AF slider accessible name when unread', () => {
+    const t = mountPanel({ afLevel: Number.NaN, hasAfLevel: true, hasLiveAudio: false });
+    const slider = t.querySelector('[role="slider"]');
+    expect(slider?.getAttribute('aria-label')).toBe('AF Level');
+    expect(slider?.getAttribute('aria-valuetext')).toBeNull();
+  });
+
+  it('still renders the real formatted percentage for a finite AF level', () => {
+    const t = mountPanel({ afLevel: 0.42, hasAfLevel: true, hasLiveAudio: false });
+    expect(vcValueFor(t, 'AF Level')).toBe('42%');
+  });
+
+  it('renders the widest AF level reading exactly', () => {
+    const t = mountPanel({ afLevel: 1, hasAfLevel: true, hasLiveAudio: false });
+    expect(vcValueFor(t, 'AF Level')).toBe('100%');
+  });
+
+  it('reserves the AF value box for the widest reading (HBarRenderer .vc-value)', () => {
+    // Widest text this panel's displayFn can produce: normalized percent
+    // clamps to 0..100, so '100%'. The reservation lives in the shared
+    // HBarRenderer (MOR-2657) — pinned here structurally off its source.
+    const widest = '100%'.length;
+    const source = readFileSync(
+      'src/components-v2/controls/value-control/HBarRenderer.svelte', 'utf8',
+    ).replace(/\/\*[\s\S]*?\*\//g, '');
+    const rule = source.match(/\.vc-value \{([^}]*)\}/);
+    expect(rule).not.toBeNull();
+    const minWidth = Number(rule![1].match(/min-width: (\d+)ch/)?.[1]);
+    expect(Number.isFinite(minWidth)).toBe(true);
+    expect(minWidth).toBeGreaterThanOrEqual(widest);
+    expect(rule![1]).toContain('tabular-nums');
+    expect(source).toMatch(/\.vc-value:empty::before \{ content: '\\200b'; \}/);
+  });
+});
+
+// MOR-2910 — the AF level control consumes the shared command-feedback scalar
+// (`getAfLevelControlFeedback`): requested/confirmed/error through the
+// binding, aria-busy while a request is pending, dispatch through the shared
+// policy instead of a raw onChange debounce.
+describe('RxAudioPanel AF level command-feedback wiring (MOR-2910)', () => {
+  function afSlider(t: HTMLElement): HTMLElement {
+    return t.querySelector<HTMLElement>('[aria-label="AF Level"]')!;
+  }
+
+  it('projects the requested target with busy state over confirmed truth', () => {
+    const t = mountPanel({ hasAfLevel: true, hasLiveAudio: false, afLevel: 0.5 }, {
+      phase: 'awaiting-confirmation', busy: true, target: 0.75, requestedTarget: 0.75,
+    });
+
+    const slider = afSlider(t);
+    expect(slider.dataset.commandPhase).toBe('awaiting-confirmation');
+    expect(slider.getAttribute('aria-busy')).toBe('true');
+    expect(slider.getAttribute('aria-valuenow')).toBe('0.5');
+    expect(vcValueFor(t, 'AF Level')).toBe('50%');
+    const descriptionId = slider.getAttribute('aria-describedby')!;
+    expect(t.querySelector(`#${descriptionId}`)?.textContent).toContain('75%');
+  });
+
+  it('exposes a terminal error without replacing the confirmed reading', () => {
+    // `transitionId` carries the terminal transition the status span
+    // announces; without it the renderer has nothing to say.
+    const t = mountPanel({ hasAfLevel: true, hasLiveAudio: false, afLevel: 0.5 }, {
+      phase: 'failed', transitionId: 'mor-2910-af-failed',
+      outcome: { phase: 'failed', error: 'radio refused' },
+    });
+
+    const slider = afSlider(t);
+    expect(slider.dataset.commandPhase).toBe('failed');
+    expect(slider.getAttribute('aria-busy')).toBe('false');
+    expect(slider.getAttribute('aria-valuenow')).toBe('0.5');
+    expect(vcValueFor(t, 'AF Level')).toBe('50%');
+    expect(t.querySelector('[data-control-feedback-status]')?.textContent)
+      .toContain('radio refused');
+  });
+
+  it('dispatches through the shared policy into the existing handler', () => {
+    vi.useFakeTimers();
+    const t = mountPanel({ hasAfLevel: true, hasLiveAudio: false, afLevel: 0.5 });
+    afSlider(t).dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
+    vi.advanceTimersByTime(50);
+    expect(mockHandlers.onAfLevelChange).toHaveBeenCalledExactlyOnceWith(0.51);
+    vi.useRealTimers();
+  });
+
+  it('fails closed when the feedback lane is unavailable', () => {
+    const t = mountPanel({ hasAfLevel: true, hasLiveAudio: false, afLevel: 0.5 }, {
+      phase: 'unavailable', availability: 'unavailable', confirmed: null, busy: false,
+    });
+    expect(afSlider(t).getAttribute('aria-disabled')).toBe('true');
+  });
+});
+
+// MOR-4210: in LIVE the AF slider is the browser volume, which runs past
+// 100% into makeup gain. The radio AF lane (confirmed at 50% here) must
+// neither cap nor replace it; outside LIVE the radio's 0..1 range stays.
+describe('RxAudioPanel LIVE browser volume above 100% (MOR-4210)', () => {
+  function afSlider(t: HTMLElement): HTMLElement {
+    return t.querySelector<HTMLElement>('[aria-label="AF Level"]')!;
+  }
+  const live = (afLevel: number) =>
+    mountPanel({ hasLiveAudio: true, monitorMode: 'live', afLevel }, { confirmed: 0.5 });
+
+  it('reads back the browser volume above 100% on a 0..2 range', () => {
+    const t = live(1.5);
+    expect(afSlider(t).getAttribute('aria-valuemax')).toBe('2');
+    expect(afSlider(t).getAttribute('aria-valuenow')).toBe('1.5');
+    expect(vcValueFor(t, 'AF Level')).toBe('150%');
+  });
+
+  it('reads back the top of the browser range as 200%', () => {
+    expect(vcValueFor(live(2), 'AF Level')).toBe('200%');
+  });
+
+  it('adjusts the browser volume above 100%', () => {
+    vi.useFakeTimers();
+    const t = live(1.5);
+    afSlider(t).dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
+    vi.advanceTimersByTime(50);
+    expect(mockHandlers.onAfLevelChange).toHaveBeenCalledTimes(1);
+    expect(mockHandlers.onAfLevelChange.mock.calls[0][0]).toBeCloseTo(1.51, 12);
+    vi.useRealTimers();
+  });
+
+  it('keeps the radio 0..1 range outside LIVE', () => {
+    const t = mountPanel({ hasLiveAudio: true, monitorMode: 'local', afLevel: 0.5 });
+    expect(afSlider(t).getAttribute('aria-valuemax')).toBe('1');
+  });
+});

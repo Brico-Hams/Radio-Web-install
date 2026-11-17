@@ -1,0 +1,133 @@
+name: Doc citation gate
+
+# Fails any PR that adds a `path:line` (or `path#Lline`) code
+# citation to docs/** that is not already grandfathered in
+# .github/scripts/doc-citation-baseline.txt. Documentation cites file plus
+# symbol name, never a line number — line numbers rot. See
+# .github/scripts/check-doc-citations.sh for the full rationale.
+#
+# A second, independent gate in the same job (the two "Doc link gate" steps
+# below, MOR-2053) checks a different kind of doc rot with the same script
+# and the same shrink-only-baseline mechanism: that a relative markdown
+# link from one document to another resolves to a real, tracked file.
+# Scoped to every tracked *.md file repo-wide, not just docs/** -- see the
+# DOC-LINK EXTENSION comment in check-doc-citations.sh for why that scope
+# differs from the citation gate's, what counts as a checked link, and the
+# one deliberate behavioural difference from the citation baseline (a
+# link baseline entry disappearing is not itself a failure).
+#
+# Six independent checks run in this one job:
+#   1. docs/** vs the committed citation baseline (new citation / stale entry).
+#   2. the committed citation baseline vs the baseline at the MERGE BASE
+#      (baseline growth). This second check is the one that actually makes
+#      "the baseline may only shrink" true: it is derived from git history
+#      that this workflow controls, not from anything a contributor's local
+#      `--regenerate` did, so it cannot be defeated by hand-editing the
+#      baseline file to match a hand-added citation.
+#   3. every tracked *.md file vs the committed link baseline (new dead link).
+#   4. the committed link baseline vs the baseline at the MERGE BASE (growth
+#      only -- shrinkage is never required here, see point above).
+#   5. every pair already in the committed citation baseline vs the
+#      committed dangling-citation baseline (MOR-2065 floor): a citation
+#      whose file is missing or whose line is past that file's current
+#      end, and that is not yet grandfathered in the dangling baseline, is
+#      new rot and fails. An entry in the dangling baseline that is no
+#      longer dangling, or no longer a citation-baseline pair at all, fails
+#      too (self-liquidation) -- see DANGLING-CITATION FLOOR in
+#      check-doc-citations.sh. This step checks path/line existence only,
+#      not whether a symbol name still exists at that position; symbol
+#      verification is a separate, still-open half of MOR-2065.
+#   6. the committed dangling-citation baseline vs the baseline at the
+#      MERGE BASE (growth only, same mechanism and rename handling as
+#      point 2).
+#
+# Growth is compared against the MERGE BASE, not the base branch's current
+# tip: comparing against the tip would make the first PR that legitimately
+# shrinks the baseline report "grew" on every other open, unrebased branch,
+# for pairs those branches never touched. The "Determine merge base" step
+# below computes it explicitly (and skips the growth check outright, with
+# its own message, for the one case that has no prior commit to compare
+# against at all: the very first push on a brand-new ref) rather than
+# handing the growth-check script an ambiguous or sentinel ref.
+#
+# On a pull_request event, the merge base is computed from
+# pull_request.head.sha, NOT github.sha. github.sha on pull_request is the
+# SHA of the ephemeral refs/pull/N/merge commit GitHub synthesizes to test
+# the merge, whose first parent IS pull_request.base.sha -- so
+# `git merge-base base.sha github.sha` always collapses back to base.sha,
+# silently computing the exact tip comparison this step exists to replace.
+# head.sha is the PR branch's real tip; merge-base against that is the
+# actual fork point.
+#
+# Documentation diffs are accepted by independent review without automated
+# citation/link checks. This workflow now runs only when its executable checker
+# changes, so the checker remains self-validating without taxing docs-only PRs.
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/scripts/check-doc-citations.sh"
+      - ".github/workflows/doc-citation-gate.yml"
+  # Also called by full.yml for the scheduled run on main (MOR-3878): the merge
+  # queue does not run this informational gate, so the merged tree gets its
+  # signal from there with this same job definition.
+  workflow_call:
+
+concurrency:
+  group: doc-citation-gate-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  citation-gate:
+    # Grep + bash, no toolchain needed. It runs on the light runners, off the
+    # build pool, so protected-branch merges are not blocked when the
+    # self-hosted build runners are offline or occupied.
+    runs-on: [self-hosted, Linux, ARM64, light]
+    timeout-minutes: 3
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Doc citation gate (docs vs baseline)
+        run: .github/scripts/check-doc-citations.sh
+
+      - name: Doc link gate (repo-wide vs baseline)
+        run: .github/scripts/check-doc-citations.sh --check-links
+
+      - name: Doc-citation dangling-floor gate (new dangling rot)
+        run: .github/scripts/check-doc-citations.sh --check-dangling
+
+      - name: Determine merge base for growth check
+        id: mergebase
+        env:
+          BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+        run: |
+          if [ -z "${BASE_SHA}" ] || [ "${BASE_SHA}" = "0000000000000000000000000000000000000000" ]; then
+            echo "base_ref=" >> "$GITHUB_OUTPUT"
+            echo "No prior commit on this ref (first push on a new branch) -- nothing to compare growth against."
+            exit 0
+          fi
+          MERGE_BASE="$(git merge-base "${BASE_SHA}" "${HEAD_SHA}")"
+          echo "base_ref=${MERGE_BASE}" >> "$GITHUB_OUTPUT"
+
+      - name: Doc citation gate (baseline may only shrink)
+        if: steps.mergebase.outputs.base_ref != ''
+        env:
+          BASE_REF: ${{ steps.mergebase.outputs.base_ref }}
+        run: .github/scripts/check-doc-citations.sh --check-growth "${BASE_REF}"
+
+      - name: Doc link gate (baseline may only shrink)
+        if: steps.mergebase.outputs.base_ref != ''
+        env:
+          BASE_REF: ${{ steps.mergebase.outputs.base_ref }}
+        run: .github/scripts/check-doc-citations.sh --check-links --check-growth "${BASE_REF}"
+
+      - name: Doc-citation dangling-floor gate (baseline may only shrink)
+        if: steps.mergebase.outputs.base_ref != ''
+        env:
+          BASE_REF: ${{ steps.mergebase.outputs.base_ref }}
+        run: .github/scripts/check-doc-citations.sh --check-dangling --check-growth "${BASE_REF}"

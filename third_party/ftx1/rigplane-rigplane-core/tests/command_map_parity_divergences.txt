@@ -1,0 +1,6 @@
+# Known cmd_map/fallback disagreements, tab separated:
+#   <profile>  <module>:<builder>  <arguments>  <observed frames>
+# tests/test_command_map_parity.py fails on a disagreement missing
+# here, and on a row here that no longer disagrees -- delete that
+# row, never keep it. Regenerating can still add rows, so read any
+# addition as a new divergence someone has to justify.

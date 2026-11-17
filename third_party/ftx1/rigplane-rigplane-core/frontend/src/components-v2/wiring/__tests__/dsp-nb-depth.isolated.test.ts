@@ -1,0 +1,121 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+
+// MOR-498: the NB-depth slider is 1-10 (front-panel scale) but the CI-V wire
+// value is 0-9.  The DSP handler must convert display -> wire before sending.
+// MOR-1409 A09b removed the store's optimistic patch path entirely — the WS
+// B2/C reducer is the sole writer, so there is no local overlay to flicker.
+
+vi.mock('$lib/transport/ws-client', () => ({
+  sendCommand: vi.fn(),
+}));
+vi.mock('$lib/runtime/commands/radio-intents', async () => {
+  const { sendCommand } = await import('$lib/transport/ws-client');
+  return { dispatchRadioIntent: ({ name, params }: { name: string; params: Record<string, unknown> }) => sendCommand(name, params) };
+});
+
+vi.mock('$lib/stores/radio.svelte', () => ({
+  getActiveReceiver: vi.fn(() => ({ nb: false, nbLevel: 0 })),
+  getRadioState: vi.fn(() => ({
+    active: 'MAIN', main: { nb: false, nbLevel: 0 }, sub: { nb: false, nbLevel: 0 },
+    nbDepth: 4, nbWidth: 2,
+  })),
+}));
+
+vi.mock('$lib/stores/capabilities.svelte', () => ({
+  // The published domain the handler encodes through (MOR-2475): the same
+  // raw 0-9 / display 1-10 shape `rigs/ic7610.toml`'s `[controls.nb_depth]`
+  // declares. An empty `nb_depth: {}` entry carries no scale and the
+  // contract refuses to encode against it.
+  getCapabilities: vi.fn(() => ({
+    capabilities: ['nb'], receivers: 2, vfoScheme: 'main_sub',
+    controls: { nb_depth: { raw_min: 0, raw_max: 9, display_min: 1, display_max: 10 } },
+  })),
+  getControlRange: vi.fn(() => null),
+}));
+
+vi.mock('$lib/audio/audio-manager', () => ({
+  audioManager: {
+    setAudioConfig: vi.fn(),
+    setOperatorNotifier: vi.fn(),
+    startRx: vi.fn(),
+    stopRx: vi.fn(),
+    setRxVolume: vi.fn(),
+    rxEnabled: false,
+  },
+}));
+
+import { sendCommand } from '$lib/transport/ws-client';
+import * as radioStore from '$lib/stores/radio.svelte';
+import { makeDspHandlers as makeRuntimeDspHandlers } from '$lib/runtime/commands/panel-commands';
+import { toDspProps as toRuntimeDspProps } from '$lib/runtime/props/panel-props';
+
+beforeEach(() => {
+  vi.mocked(sendCommand).mockClear();
+});
+
+describe.each([
+  ['runtime panel-commands', makeRuntimeDspHandlers],
+])('onNbDepthChange (%s)', (_name, makeHandlers) => {
+  it('converts the 1-10 slider value to the 0-9 wire value before sending', () => {
+    makeHandlers().onNbDepthChange(6);
+    expect(sendCommand).toHaveBeenCalledWith('set_nb_depth', { level: 5 });
+  });
+
+  it('maps slider minimum 1 to wire 0', () => {
+    makeHandlers().onNbDepthChange(1);
+    expect(sendCommand).toHaveBeenCalledWith('set_nb_depth', { level: 0 });
+  });
+
+  it('maps slider maximum 10 to wire 9', () => {
+    makeHandlers().onNbDepthChange(10);
+    expect(sendCommand).toHaveBeenCalledWith('set_nb_depth', { level: 9 });
+  });
+
+  it('has no optimistic store path left to write through (MOR-1409 A09b)', () => {
+    makeHandlers().onNbDepthChange(6);
+    expect(Object.keys(radioStore)).not.toContain('patchRadioState');
+  });
+});
+
+// MOR-502: both prop adapters must gate NB depth/width on the nb_depth control
+// range and derive the NB-level scale from the nb_level control range, so the
+// FTX-1 (native 0-10 NB, no depth/width) and X6200 (nb_level only) render
+// correctly without phantom controls.
+describe.each([
+  ['runtime panel-props', toRuntimeDspProps],
+])('toDspProps NB capability gating (%s)', (_name, toDspProps) => {
+  const state = { active: 'MAIN', main: {} } as any;
+
+  it('shows NB depth/width only when an nb_depth control range exists (IC-7610)', () => {
+    const props = toDspProps(
+      state,
+      { capabilities: ['nb'], controls: { nb_depth: { raw_min: 0, raw_max: 9 } } } as any,
+    );
+    expect(props.hasNbDepth).toBe(true);
+    expect(props.hasNbWidth).toBe(true);
+  });
+
+  it('hides NB depth/width when no nb_depth control range exists (FTX-1, X6200)', () => {
+    const props = toDspProps(
+      state,
+      { capabilities: ['nb'], controls: { nb_level: { raw_min: 0, raw_max: 10 } } } as any,
+    );
+    expect(props.hasNbDepth).toBe(false);
+    expect(props.hasNbWidth).toBe(false);
+  });
+
+  it('uses the nb_level raw_max with percent display when a 0-255 range exists (IC-7610)', () => {
+    const props = toDspProps(
+      state,
+      { capabilities: ['nb'], controls: { nb_level: { raw_min: 0, raw_max: 255 } } } as any,
+    );
+    expect(props.nbLevelMax).toBe(255);
+    expect(props.nbLevelPercent).toBe(true);
+  });
+
+  it('falls back to the native 0-10 raw scale without an nb_level range (FTX-1)', () => {
+    const props = toDspProps(state, { capabilities: ['nb'], controls: {} } as any);
+    expect(props.nbLevelMax).toBe(10);
+    expect(props.nbLevelPercent).toBe(false);
+  });
+});

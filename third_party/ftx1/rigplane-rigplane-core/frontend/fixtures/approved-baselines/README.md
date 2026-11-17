@@ -1,0 +1,452 @@
+# Approved pixel-diff baselines (MOR-1090)
+
+Tracked, reviewed screenshots compared by `npm run test:e2e:visual` (`playwright.visual.config.ts`, whose `testDir` runs every `*.spec.ts` under `tests/e2e/visual/`): `visual-baselines.spec.ts` for a representative slice of the MOR-1070/1085 fixture matrix, `gallery-baselines.spec.ts` (MOR-2219) for the `gallery-*` rows below, which preserve individual instrument looks rendered on the `?demo=control-buttons` page, and `spectrum-baselines.spec.ts` for the `spectrum-panel--managed-frame` row. Distinct from `frontend/fixtures-baselines/` (gitignored capture OUTPUT from `capture.mjs`/`capture-ptt.mjs`) — this directory is the APPROVED, committed comparison target.
+
+## Linux re-pin provenance — 2026-11-12 MOR-4383 spectrum smoothing (current)
+
+Intentional re-pin of the spectrum witness for MOR-4383 (#4562). The smoothed
+trace, the new `SMTH` toolbar key and the denser first waterfall row change
+the `spectrum-panel--managed-frame` capture by 5,779 pixels (about 2% of the
+image); the axes, tune line, passband and toolbar layout otherwise stay in
+place.
+
+`spectrum-panel--managed-frame.png` and `manifest.json` come from the Linux
+regeneration run 43128758898 (`visual.yml` with `regenerate=true`) on branch
+`codex/mor-4383-waterfall-smoothing` at
+`3464261c46ff5b9ec7e07092d0f1a09740805e1f`. That run re-pins every capture
+(`--update-snapshots=all`); only this PNG and the manifest were copied, and the
+other captures' same-tree antialiasing noise was left out. No other approved
+PNG was regenerated.
+
+## Linux re-pin provenance — 2026-11-08 MOR-4270 CI capture correction (superseded)
+
+The spectrum witness and `manifest.json` were regenerated from
+`86795aeb50e856ff11e906adb386180a363d289c` in the Core CI runner image
+`rigplane-ci-build-core-arm64-runner:aead399d2a31`: Ubuntu 22.04 ARM64,
+Node v20.20.2, Playwright 1.58.2, Chromium revision 1208, and DejaVu Sans Mono.
+This environment reproduced PR #4508's exact 1,059-pixel failure against the
+previous Noble capture. Inspection of the Playwright expected/actual/diff
+images showed font-metric differences; the trace, axes, tune line and passband
+geometry stayed in place. The R1 preset and zoom controls remain intentional.
+No other approved PNG was regenerated.
+
+Command: `npm run test:e2e:visual -- spectrum-baselines.spec.ts --grep 'spectrum-panel--managed-frame$' --update-snapshots=all`.
+The selected regeneration passed 1/1; verification without snapshot updates
+passed 3/3 spectrum tests. `npm run test:e2e:i18n -- i18n-visual.spec.ts` passed
+45/45 in the same image; the production design-language PNGs remain unchanged.
+
+## Linux re-pin provenance — 2026-11-08 MOR-4270 first scope toolbar capture (superseded)
+
+Only `spectrum-panel--managed-frame.png` and `manifest.json` were regenerated
+from source `339c9c681dc30ca2d4843ca00fc8705a02011a0e` using Linux ARM64,
+Playwright 1.58.2 and Node v24.13.0 in `mcr.microsoft.com/playwright:v1.58.2-noble`
+(`sha256:6446946a1d9fd62d9ae501312a2d76a43ee688542b21622056a372959b65d63d`).
+These are native Linux container captures. `spectrum-baselines.spec.ts`
+(`spectrum-panel--managed-frame`) and `fixtures/spectrum-witness.ts` supply
+the witness; regeneration with `--update-snapshots=all` passed 3/3 tests,
+and verification without snapshot updates passed 3/3. Expected and actual
+images were visually inspected: the new preset and zoom controls reuse
+`SpectrumToolbar.svelte`'s `toolbar-select` and `toolbar-btn`; the graph,
+axes, tune line and passband remain visible.
+
+## Linux re-pin provenance — 2026-11-05 MOR-4223 BUSY lamp removed (previous)
+
+The BUSY lamp (MOR-3630) is gone; the SQL tag that replaces it is an empty
+reserved slot at the end of the lamp row (and the end of the phone chips)
+while the squelch level is 0, so nothing else moves. Twelve PNGs and
+`manifest.json` come from the Linux regeneration run
+[42100695625](https://github.com/rigplane/rigplane-core/actions/runs/42100695625)
+(`visual.yml` with `regenerate=true`) on branch `codex/sql-tag-instead-of-busy`
+at `dc88c963a8e343a8a273908add9d216ed7512ee7`. A second regeneration run on
+`main` at `e277db52267ffb62e1a8094dbe84dd04e2e1e04f`, the exact base the branch
+merged
+([42100700854](https://github.com/rigplane/rigplane-core/actions/runs/42100700854)),
+was the control: only scenes whose pixels differ by more than 8/255 between
+the two regenerations were copied (same-tree antialiasing noise elsewhere was
+left as committed). In each of the twelve the difference is one 8 px text row
+(the fact or lamp row): the BUSY label is gone and the neighbouring labels in
+that row shift left by its slot width; nothing above or below it moves.
+
+Copied: `dual-main-sub--desktop`, `dual-main-sub--desktop--fieldline`,
+`dual-main-sub--desktop--studioline`, `dual-main-sub--desktop--studioline--light`,
+`dual-main-sub--phone-portrait`, `mobile-portrait--phone`,
+`topology-2-ab-shared--desktop`, `tx-phase-fault--desktop`,
+`tx-phase-fault--desktop--fieldline`, `tx-phase-rx--desktop`,
+`tx-phase-tx--desktop`, `tx-phase-tx--desktop--studioline`.
+
+## Linux re-pin provenance — 2026-10-29 MOR-3630 BUSY lamp (superseded)
+
+The BUSY squelch lamp is a new reserved lamp slot in the standard receiver
+annunciator row and a leading fact in the mobile chips. Twelve PNGs and
+`manifest.json` come from the Linux regeneration run
+[40962882233](https://github.com/rigplane/rigplane-core/actions/runs/40962882233)
+(`visual.yml` with `regenerate=true`) on branch `codex/mor-3630-busy-lamp` at
+`560a3aff8f3cb7eb8ff9bd9df0524a4783db02b1`. A second regeneration run on `main`
+([40963353388](https://github.com/rigplane/rigplane-core/actions/runs/40963353388))
+was used as the control: only scenes whose pixels differ by more than 8/255
+between the two regenerations were copied (same-tree antialiasing noise elsewhere
+was left as committed). The copied scenes show the BUSY lamp in the lamp row;
+in the desktop scenes the receiver panels also grow in height (everything
+below the lamp row moves down), which needs visual acceptance.
+
+Copied: `dual-main-sub--desktop`, `dual-main-sub--desktop--fieldline`,
+`dual-main-sub--desktop--studioline`, `dual-main-sub--desktop--studioline--light`,
+`dual-main-sub--phone-portrait`, `mobile-portrait--phone`,
+`topology-2-ab-shared--desktop`, `tx-phase-fault--desktop`,
+`tx-phase-fault--desktop--fieldline`, `tx-phase-rx--desktop`,
+`tx-phase-tx--desktop`, `tx-phase-tx--desktop--studioline`.
+
+## Linux re-pin provenance — 2026-09-29 MOR-3008 S-meter ladder numerals (superseded)
+
+MOR-2790 (#3831, commit `a2da350f`): the IC-7300 S-meter draws the S-unit
+numerals its linear calibration places. The radio declares three knots (S0,
+S9, S9+60), so the scale showed only `9` and `+60`; it now draws
+`1 3 5 7 9 +20 +40 +60`, with the existing width thinning kept.
+
+The eleven PNGs below and `manifest.json` come from the Linux regeneration
+run
+[36571054059](https://github.com/rigplane/rigplane-core/actions/runs/36571054059)
+(`visual.yml` with `regenerate=true`) at source head
+`3653da0880d1f39b027e12898401a048f0049431` (`manifest.json` `commit`); the
+artifact `regenerated-baselines` was downloaded with `gh run download`. Of the
+32 PNGs in the artifact, 17 were byte-identical to the committed files, 4
+differed in bytes only with no pixel above 8/255
+(`gallery-valuecontrol-hbar.png`, `mobile-portrait--phone.png`,
+`ptt-idle--mobile.png`, `spectrum-panel--managed-frame.png`), and 11 differed
+by more than 8/255 in some pixel. All 11 were copied; the rest were left as
+committed. Every differing scene was inspected as an old-above-new crop
+(Pillow `ImageChops.difference`, changed region plus a 10 px margin): the only
+differing pixels are S-meter tick-label glyphs — the sparse `9` / `+60` row
+becomes the full `1 3 5 7 9 +20 +40 +60` row. In the two `--studioline`
+scenes the change spans three label strips (per-50px bands: y50–100, y100–150
+and y750–800 hold all 1098 changed pixels); in the other nine it is a single
+15 px strip. The CW break-in change (#3821) contributes no pixels here: every
+changed pixel sits in an S-meter label strip. Per copied scene: pixels
+differing by more than 8/255 in any channel against the previously committed
+PNG (Pillow `ImageChops.difference`, whole image), and the SHA-256 prefix of
+the copied file:
+
+| Scene | changed px | share | new SHA-256 (16) |
+|---|---:|---:|---|
+| `dual-main-sub--desktop--fieldline.png` | 772 | 0.08% | `3f282affade9e4da` |
+| `dual-main-sub--desktop--studioline--light.png` | 1098 | 0.11% | `ca60dde5effba39a` |
+| `dual-main-sub--desktop--studioline.png` | 1098 | 0.11% | `3167f86e3d436bc1` |
+| `dual-main-sub--desktop.png` | 772 | 0.08% | `8885ba1327bc12fe` |
+| `dual-main-sub--phone-portrait.png` | 772 | 0.25% | `cfff009335b38d02` |
+| `topology-1-single--desktop.png` | 386 | 0.04% | `c2c912020c397d75` |
+| `tx-phase-fault--desktop--fieldline.png` | 772 | 0.08% | `f4604a6c1148f1c0` |
+| `tx-phase-fault--desktop.png` | 772 | 0.08% | `1af75fdbaf651715` |
+| `tx-phase-rx--desktop.png` | 772 | 0.08% | `8885ba1327bc12fe` |
+| `tx-phase-tx--desktop--studioline.png` | 772 | 0.08% | `da8920579433e9b5` |
+| `tx-phase-tx--desktop.png` | 772 | 0.08% | `2e595ff154b80692` |
+
+## Linux re-pin provenance — 2026-09-28 MOR-2978 choice keys disabled while unread (superseded)
+
+Superseded by the 3653da08 pin above; its four scenes are byte-identical in
+run 36571054059 and were left as committed.
+
+MOR-2978 (part 1 of MOR-2912): the legacy mode, filter and antenna keys render
+`disabled` while their reading is unread. In the `panadapter-first` and
+`unified-instrument` scenes the MODE and FIL keys are dimmed (checked by
+cropping the previously committed and the regenerated PNGs side by side). The
+pixel-diff gate failed on the two `--1100x800` scenes in run
+[36511311657](https://github.com/rigplane/rigplane-core/actions/runs/36511311657)
+(969 px each, against a `maxDiffPixelRatio` budget of 880 px at 1100×800); the
+two `--desktop` variants show the same change and passed in that run.
+
+The four PNGs below and `manifest.json` come from the Linux regeneration run
+[36513777126](https://github.com/rigplane/rigplane-core/actions/runs/36513777126)
+(`visual.yml` with `regenerate=true`) at source head
+`04641e48e56770612e43b212411cac807db3fb28` (`manifest.json` `commit`); the
+artifact `regenerated-baselines` was downloaded with `gh run download`. Of the
+32 PNGs in the artifact, 12 were byte-identical to the committed files, 5
+differed in bytes only with no pixel above 8/255, and 15 differed by more than
+8/255 in some pixel. Only the four scenes below were copied; the other 11 were
+left as committed and passed the gate in run 36511311657. Per copied scene:
+pixels differing by more than 8/255 in any channel against the previously
+committed PNG (Pillow `ImageChops.difference`, whole image), and the SHA-256
+prefix of the committed file:
+
+| Scene | changed px | share | new SHA-256 (16) |
+|---|---:|---:|---|
+| `panadapter-first--1100x800.png` | 19201 | 2.18% | `73eab919c7653b4e` |
+| `panadapter-first--desktop.png` | 19198 | 1.87% | `688281d8cfa398a9` |
+| `unified-instrument--1100x800.png` | 19201 | 2.18% | `c3ca40242da8515c` |
+| `unified-instrument--desktop.png` | 19198 | 1.87% | `699deb1bbbc9f345` |
+
+## Linux re-pin provenance — 2026-09-22 MOR-2509 round-2 deck, bridge < 1280 px and S-meter thinning (superseded)
+
+Superseded by the 04641e48 pin above, which re-pinned all four of its scenes.
+
+MOR-2509 round 2, later commits (owner ruling 15:00 EDT: the bridge narrows to
+150 px below a 1280 px window; the S-meter thins its tick labels to what the
+track width can hold; the narrow under-frequency row trims its amber chips).
+Only the LCD faces that embed the deck's S-meter strip move, by a few dozen
+pixels in the label row.
+
+The committed PNGs and `manifest.json` came from the Linux regeneration run
+[35776203135](https://github.com/rigplane/rigplane-core/actions/runs/35776203135)
+(`visual.yml` with `regenerate=true`) at source head
+`26c6798237f614e91f3d6b438b6be1d27d43a13a` (`manifest.json` `commit`); the
+artifact `regenerated-baselines` was downloaded with `gh run download`. Of the
+30 PNGs in the artifact, 4 were copied over this directory — each differed by
+more than 8/255 in some pixel from the previously committed file — 24 were
+byte-identical, and 2 (`peer-split-chassis--1100x800.png`, `peer-split-chassis--desktop.png`) differed in bytes only with no pixel above the
+threshold and were intentionally left as committed. Per copied scene: pixels
+differing by more than 8/255 in any channel against the previously committed
+PNG (Pillow `ImageChops.difference`, whole image), and the SHA-256 prefix of
+the committed file:
+
+| Scene | changed px | share | new SHA-256 (16) |
+|---|---:|---:|---|
+| `panadapter-first--1100x800.png` | 60 | 0.01% | `be6d6e3cf89153e8` |
+| `panadapter-first--desktop.png` | 14 | 0.00% | `41541df3567133d1` |
+| `unified-instrument--1100x800.png` | 60 | 0.01% | `3b886c9beb1c35cc` |
+| `unified-instrument--desktop.png` | 56 | 0.01% | `36e12477fb4c4236` |
+
+A subsequent exact-head `visual` run must confirm these comparisons pass.
+
+## Linux re-pin provenance — 2026-09-22 MOR-2509 round-2 deck (superseded)
+
+Superseded by the 26c67982 pin above for `panadapter-first`/`unified-instrument`;
+the other eleven rows still describe the committed files.
+
+MOR-2509 round 2 (on `codex/mor-2509-r2-batch`): the bridge rows filled the
+deck block and the inactive receiver was dimmed; the `panadapter-first` and
+`unified-instrument` LCD faces picked up one 12-px strip inside the deck (the
+S-meter label row).
+
+The committed PNGs and `manifest.json` came from the Linux regeneration run
+[35764235628](https://github.com/rigplane/rigplane-core/actions/runs/35764235628)
+(`visual.yml` with `regenerate=true`) at source head
+`22e670519cd223a61711b5208a87c0a74680ae6b` (`manifest.json` `commit`); the
+artifact `regenerated-baselines` was downloaded with `gh run download`. Of the
+30 PNGs in the artifact, 15 were copied over this directory — each differed by
+more than 8/255 in some pixel from the previously committed file — 13 were
+byte-identical, and 2 (`peer-split-chassis--1100x800.png`,
+`peer-split-chassis--desktop.png`) differed in bytes only with no pixel above
+the threshold and were intentionally left as committed. Per copied scene:
+pixels differing by more than 8/255 in any channel against the previously
+committed PNG (Pillow `ImageChops.difference`, whole image), and the SHA-256
+prefix of the committed file:
+
+| Scene | changed px | share | new SHA-256 (16) |
+|---|---:|---:|---|
+| `dual-main-sub--desktop--fieldline.png` | 139254 | 13.60% | `55ba47a0881a0032` |
+| `dual-main-sub--desktop--studioline--light.png` | 146799 | 14.34% | `4928e64b2022b171` |
+| `dual-main-sub--desktop--studioline.png` | 109532 | 10.70% | `4459a3395e21eaa5` |
+| `dual-main-sub--desktop.png` | 136865 | 13.37% | `05f394a320390fcc` |
+| `dual-main-sub--phone-portrait.png` | 77715 | 25.52% | `19d072992f8f7faf` |
+| `panadapter-first--1100x800.png` | 48 | 0.01% | `2ef9ddb1a8adb3d5` |
+| `panadapter-first--desktop.png` | 42 | 0.00% | `fb8fcfba5e02adc1` |
+| `topology-1-single--desktop.png` | 211716 | 20.68% | `4e04663683b2ec7e` |
+| `tx-phase-fault--desktop--fieldline.png` | 198873 | 19.42% | `3f390c121fe585c1` |
+| `tx-phase-fault--desktop.png` | 110742 | 10.81% | `927d871f0b9566df` |
+| `tx-phase-rx--desktop.png` | 136865 | 13.37% | `05f394a320390fcc` |
+| `tx-phase-tx--desktop--studioline.png` | 114557 | 11.19% | `2b928311d3686d8b` |
+| `tx-phase-tx--desktop.png` | 111047 | 10.84% | `502f7d99154d86fc` |
+| `unified-instrument--1100x800.png` | 48 | 0.01% | `a3db6f72b7954375` |
+| `unified-instrument--desktop.png` | 56 | 0.01% | `c6b4b4b7921afb54` |
+
+The four `panadapter-first`/`unified-instrument` rows (≤ 0.01 %) were the LCD
+faces: the 12-px S-meter label strip inside the deck was the only change.
+`topology-1-single--desktop` and `dual-main-sub--phone-portrait` changed the
+most because the deck spanned their full width.
+
+## Linux re-pin provenance — 2026-09-22 MOR-2509 VFO deck batch (superseded)
+
+Superseded by the round-2 re-pin above (run 35764235628); kept as the record
+of the round-1 deck batch. Its table below compares against the pre-batch
+files, not against the currently committed ones.
+
+MOR-2509 (packages A–E on `codex/mor-2509-vfo-batch`): the v7 S-meter face
+(`LinearSMeter` `vfo` variant — dash segments, declared-only scale numerals,
+Po lower row on the TX-target receiver only, ballistics), the bridge as
+hardware keys, the receiver-panel screen, the alive finish. The scenes here
+render the `semantic` appearance, so what changes in them is the meter face
+and the retired `'—'` slot-tag placeholder; the standard deck itself is
+covered by the production-root scenes
+(`frontend/tests/e2e/i18n/__screenshots__/production-design-language/`).
+
+The committed PNGs and `manifest.json` come from the Linux regeneration run
+[35688566728](https://github.com/rigplane/rigplane-core/actions/runs/35688566728)
+(`visual.yml` with `regenerate=true`) at source head
+`f1b0cedc60a47a516a934f7a64c50556c4c44d39` (`manifest.json` `commit`); the
+artifact `regenerated-baselines` was downloaded with `gh run download` and
+copied over this directory unchanged. Seventeen captures changed, thirteen are
+byte-identical. Per scene: pixels differing by more than 8/255 in any channel
+against the previously committed PNG (Pillow `ImageChops.difference`, whole
+image), and the SHA-256 prefix of the committed file:
+
+| Scene | changed px | share | new SHA-256 (16) |
+|---|---:|---:|---|
+| `dual-main-sub--desktop--fieldline.png` | 153870 | 15.03% | `1c6f769fcaf0538f` |
+| `dual-main-sub--desktop--studioline--light.png` | 161086 | 15.73% | `f00d375e83d35919` |
+| `dual-main-sub--desktop--studioline.png` | 136060 | 13.29% | `12cc36bcbd7a9cd7` |
+| `dual-main-sub--desktop.png` | 146129 | 14.27% | `2d2de1ec45a767a4` |
+| `dual-main-sub--phone-portrait.png` | 86026 | 28.25% | `218de5d136102663` |
+| `gallery-dotbutton.png` | 0 | 0.00% | `664ed6653e960660` |
+| `gallery-fillbutton.png` | 0 | 0.00% | `fb75c1a89a8e292f` |
+| `gallery-hardwarebutton.png` | 0 | 0.00% | `082ba0b5c18af61b` |
+| `gallery-hardwareplainbutton.png` | 0 | 0.00% | `b72a13bc46490b36` |
+| `gallery-professionalknob.png` | 0 | 0.00% | `1f92224adc656e5f` |
+| `gallery-statusindicator.png` | 0 | 0.00% | `0029a895e3f51376` |
+| `gallery-valuecontrol-bipolar.png` | 0 | 0.00% | `1f753829abf6e546` |
+| `gallery-valuecontrol-hbar.png` | 0 | 0.00% | `3c4755ada7de5e8e` |
+| `gallery-valuecontrol-knob.png` | 0 | 0.00% | `66cee896832437c5` |
+| `panadapter-first--1100x800.png` | 60 | 0.01% | `5164310e180a06a7` |
+| `panadapter-first--desktop.png` | 98 | 0.01% | `a8d9a0d9270ddf9a` |
+| `peer-split-chassis--1100x800.png` | 593 | 0.07% | `292250e39bcb077c` |
+| `peer-split-chassis--desktop.png` | 684 | 0.07% | `8d3d38818a90ae97` |
+| `ptt-held--mobile.png` | 0 | 0.00% | `7fd1098d8b45b0b8` |
+| `ptt-idle--mobile.png` | 0 | 0.00% | `83d1d3d84e978352` |
+| `spectrum-panel--managed-frame.png` | 0 | 0.00% | `5558f65f56b31619` |
+| `topology-1-single--desktop.png` | 261983 | 25.58% | `ad9f8a6448324f7f` |
+| `topology-2-ab-shared--desktop.png` | 0 | 0.00% | `9369dbe4dd50f46c` |
+| `tx-phase-fault--desktop--fieldline.png` | 200474 | 19.58% | `451265fd641899bd` |
+| `tx-phase-fault--desktop.png` | 130060 | 12.70% | `04f3d36c128d6807` |
+| `tx-phase-rx--desktop.png` | 146129 | 14.27% | `2d2de1ec45a767a4` |
+| `tx-phase-tx--desktop--studioline.png` | 134212 | 13.11% | `560c058a2203dfc6` |
+| `tx-phase-tx--desktop.png` | 129451 | 12.64% | `e9ed4e138e78f0eb` |
+| `unified-instrument--1100x800.png` | 84 | 0.01% | `3ae439e860c2659c` |
+| `unified-instrument--desktop.png` | 98 | 0.01% | `f6611c9c887afd16` |
+
+The six `panadapter-first`/`peer-split-chassis`/`unified-instrument` rows
+(≤ 0.07 %) are the LCD faces: a one-segment difference in the classic S-meter
+band (the same band differed by 84–168 px between the two regeneration runs
+of 2026-09-21, before this batch existed — capture noise the comparator's
+threshold already tolerates) and, in `peer-split-chassis`, the removed `'—'`
+slot-tag chip. `topology-1-single--desktop` and `dual-main-sub--phone-portrait`
+change the most because the meter face spans their full width.
+
+## Linux re-pin provenance — 2026-09-21 MOR-2509 VFO panel skeleton
+
+MOR-2509 rebuilds the VFO panel as three rows: identity, frequency beside the
+meter, indicator chips. Eleven captures changed:
+`dual-main-sub--desktop`, `dual-main-sub--desktop--studioline`, `dual-main-sub--desktop--fieldline`, `dual-main-sub--desktop--studioline--light`, `dual-main-sub--phone-portrait`, `topology-2-ab-shared--desktop`, `tx-phase-rx--desktop`, `tx-phase-tx--desktop`, `tx-phase-fault--desktop`, `tx-phase-tx--desktop--studioline`, `tx-phase-fault--desktop--fieldline`.
+
+The committed PNGs and `manifest.json` come from the Linux regeneration run
+[35655644308](https://github.com/rigplane/rigplane-core/actions/runs/35655644308)
+(`visual.yml` with `regenerate=true`) at source head
+`40a01126239559421ff80e9388152ba76e022faa`. The same eleven are the captures
+that failed the comparison in
+[visual run 35654800077](https://github.com/rigplane/rigplane-core/actions/runs/35654800077)
+at that head (11 failed, 28 passed). Six further files whose regenerated bytes
+differed were not copied: `panadapter-first--desktop`,
+`panadapter-first--1100x800`, `unified-instrument--desktop`,
+`unified-instrument--1100x800`, `peer-split-chassis--desktop` and
+`peer-split-chassis--1100x800`, each of which passed that comparison.
+
+## Linux re-pin provenance — 2026-09-14 MOR-2467 MAIN/SUB topology
+
+MOR-2467 replaces the incorrect four-tile MAIN-A/B/SUB-A/B presentation with
+the IC-7610's two real receiver-level records, MAIN and SUB. The following ten
+captures intentionally changed because they render the `2/main_sub` fixture:
+`dual-main-sub--desktop`, `tx-phase-rx--desktop`, `tx-phase-tx--desktop`,
+`tx-phase-fault--desktop`, `dual-main-sub--desktop--studioline`,
+`dual-main-sub--desktop--fieldline`, `tx-phase-tx--desktop--studioline`,
+`dual-main-sub--phone-portrait`,
+`dual-main-sub--desktop--studioline--light`, and
+`tx-phase-fault--desktop--fieldline`.
+
+The committed PNGs and `manifest.json` come from the Linux ARM64 regeneration
+run [34909866883](https://github.com/rigplane/rigplane-core/actions/runs/34909866883)
+at source head `2776ffdcad0549308c12973265216a10635233d7`. The regeneration step rendered
+the complete set and then reported failure only because that source head still
+contained the pre-change structural assertion `tiles === 4`; MOR-2467 updates
+it to `2` in the same PR. Six unrelated files whose regenerated bytes differed
+only through same-tree rendering noise were deliberately not copied. The ten
+accepted images were visually inspected: the changed region is the VFO deck,
+which now contains one MAIN record and one SUB record; receiver meters and the
+remaining cockpit surfaces retain their intended composition.
+
+## Why a slice, not the full 60+13 matrix
+
+`capture.mjs`/`capture-ptt.mjs` already run the deterministic manifest/assertion layer on every invocation — that is the correctness floor and needs no pixels to be meaningful. Pixel-diffing is a second, purely visual floor on top, so it only needs the combinations a token/CSS regression could plausibly hit differently: topology shape, RX/TX/fault state, design language, and light/dark mode. The first 14 captures below (the `dual-*`/`topology-*`/`tx-phase-*`/`ptt-*` rows) span all four plus the MOR-1088 mobile PTT pair; the rest of that matrix is viewport/media/focus permutations of the same render paths. The 9 `gallery-*` rows are a separate axis — MOR-2219's per-component "looks gallery" for the Button family (PR A) and the ValueControl renderer / ProfessionalKnob families (PR B), pinning each instrument's visual identity on the demo gallery page rather than a cockpit-state permutation. The 2 `peer-split-chassis` rows (MOR-2243) are a third axis again — the segmentline chassis, which is neither a cockpit-state permutation nor a gallery instrument — captured at two frame sizes because its stage scale is the identity at 1280×800 and drops below 1 only at a frame narrower than its 1280px canvas or shorter than its 540px one. The remaining 5 of the 30 rows are the MOR-2325 pair of segmentline LCD compositions, each captured at 1280×800 and at 1100×800, plus `spectrum-panel--managed-frame` (MOR-2425) — one panel component captured as its own 960×540 element rather than as a page.
+
+| Capture | Spans |
+|---|---|
+| `dual-main-sub--desktop` | reference dual topology |
+| `topology-1-single--desktop` | topology shape |
+| `topology-2-ab-shared--desktop` | topology shape |
+| `tx-phase-rx--desktop` | RX state |
+| `tx-phase-tx--desktop` | TX state |
+| `tx-phase-fault--desktop` | fault state |
+| `dual-main-sub--desktop--studioline` | design language |
+| `dual-main-sub--desktop--fieldline` | design language |
+| `tx-phase-tx--desktop--studioline` | TX state × language |
+| `dual-main-sub--phone-portrait` | viewport |
+| `dual-main-sub--desktop--studioline--light` | light mode (a separate token resolution from dark — MOR-1073/1074; no other capture here exercises it) |
+| `tx-phase-fault--desktop--fieldline` | fault state × language (fault previously only appeared in the default language) |
+| `ptt-idle--mobile` | mobile PTT, idle |
+| `ptt-held--mobile` | mobile PTT, held (real pointerdown) |
+| `gallery-dotbutton` | MOR-2219 looks gallery — preserves DotButton's look, carried by `lib/Button/ControlButton.svelte` + `components-v2/controls/control-button.css` (DotButton itself has no `<style>`/SVG) |
+| `gallery-fillbutton` | MOR-2219 looks gallery — same carriers, FillButton's `indicatorStyle="fill"` variant |
+| `gallery-hardwarebutton` | MOR-2219 looks gallery — same carriers, HardwareButton's hardware-surface variant |
+| `gallery-hardwareplainbutton` | MOR-2219 looks gallery — same carriers, HardwarePlainButton's plain+warm-glow variant |
+| `gallery-statusindicator` | MOR-2219 looks gallery — preserves StatusIndicator's look, carried by the `.v2-status-indicator` rule set in `control-button.css` |
+| `gallery-valuecontrol-hbar` | MOR-2219 looks gallery — preserves the HBar renderer's look; carried by `components-v2/controls/value-control/HBarRenderer.svelte` (owns its own track/thumb div geometry — no SVG) |
+| `gallery-valuecontrol-bipolar` | MOR-2219 looks gallery — preserves the Bipolar renderer's look; carried by `BipolarRenderer.svelte` |
+| `gallery-valuecontrol-knob` | MOR-2219 looks gallery — preserves the Knob renderer's look; carried by `KnobRenderer.svelte` (builds its own `<svg>` arc geometry via `primitives/scalar/value-control-core.ts` helpers) |
+| `gallery-professionalknob` | MOR-2219 looks gallery — preserves the ProfessionalKnob skin's look; carried by `value-control/skins/ProfessionalKnob.svelte` itself — its arc/indicator/tick geometry comes from the same shared `primitives/scalar/value-control-core.ts` helpers (`calculateArcPath`, `calculateIndicatorPosition`, `generateTickPositions`) that `KnobRenderer.svelte` uses, but its SVG markup (radial gradients, glow filter, element structure) and `.pro-*` styles are local to this file, not shared with any other renderer or skin |
+| `peer-split-chassis--desktop` | MOR-2243 — the segmentline peer-split glass chassis (`PeerSplitLayout.svelte`, the only production file that mounts `ScaledStage`); at this frame size its stage scale resolves to exactly 1, the identity transform |
+| `peer-split-chassis--1100x800` | MOR-2243 — the same chassis at the only frame size in this set where `computeStageScale` resolves below 1 (1100/1280 ≈ 0.859), so the stage transform is exercised rather than skipped |
+| `unified-instrument--desktop` | MOR-2325 B/D — segmentline LCD unified-instrument composition at the standard 1280×800 desktop viewport |
+| `panadapter-first--desktop` | MOR-2325 B/D — segmentline LCD panadapter-first composition at the standard 1280×800 desktop viewport |
+| `unified-instrument--1100x800` | MOR-2325 B/D — unified-instrument composition at the narrower 1100×800 desktop viewport |
+| `panadapter-first--1100x800` | MOR-2325 B/D — panadapter-first composition at the narrower 1100×800 desktop viewport |
+| `spectrum-panel--managed-frame` | MOR-2425 — `components/spectrum/SpectrumPanel.svelte`, which no other row in this table mounts: the spectrum trace, the waterfall and the tune-line/passband overlay, over the constant frame in `fixtures/spectrum-witness.ts`. Captured as the panel element (960×540), not the page |
+
+The `dual-main-sub--desktop--studioline--light` and `tx-phase-fault--desktop--fieldline` captures came from `verify-mor-1090.md`'s representative-set adequacy ranking (§4): of the gaps it found against the MOR-1085 axis matrix, these were the two ranked highest by "what a token/CSS regression could plausibly hit differently" that a 2-capture budget could close. Media variants (reduced-motion / forced-colors / contrast-more) stay out on purpose — animations are already disabled for every screenshot, and forced-colors is an OS-level render mode the assertion layer already pins.
+
+## Comparator, threshold, calibration
+
+`toHaveScreenshot()` uses Playwright's own bundled pixelmatch comparator — already a transitive dependency of `@playwright/test`, no new npm package. Two knobs in `playwright.visual.config.ts`: `threshold: 0.2` (pixelmatch's default per-pixel YIQ distance) and `maxDiffPixelRatio: 0.001` (0.1% of the frame allowed to differ). MOR-1087/1088/1282 found raw PNG bytes are not a valid identity check on this host — repeat runs of an unchanged tree differ by antialiasing noise on text/icon edges.
+
+**Calibration data.** At `threshold: 0.2` with zero tolerance, three same-tree reruns measured a noise ceiling of 3-123 differing pixels per capture (≤0.012% of a 1280×800 frame, less on the smaller phone viewport) — never zero, but always small. `maxDiffPixelRatio: 0.001` (0.1%) sits ~8x above that ceiling. Three consecutive full runs at the shipped threshold came back green (0 failing captures each, `manifest.json` regenerated identically bar `generatedAt`). A deliberate sabotage — a 60×60px (0.35%-of-frame) opaque overlay injected into one capture — came back red (3185 differing pixels) with an `-actual`/`-expected`/`-diff` artifact trio in `test-results/`, then was reverted.
+
+**Sensitivity floor (required reading before trusting a green run).** `maxDiffPixelRatio: 0.001` over a 1280×800 desktop capture (1,024,000 px) is a hard floor of **~1024 differing pixels, roughly 32×32 px**, before a change turns the comparator red — and roughly **304 px, ~17×17**, on the smaller 375×812 phone capture, a 3.4x tighter absolute floor nobody had stated before this. MOR-2243 and MOR-2325 add three 1100×800 captures (880,000 px → **880 px, ~30×30**: `peer-split-chassis--1100x800`, `unified-instrument--1100x800`, `panadapter-first--1100x800`), and MOR-2425 a 960×540 one (518,400 px → **518 px, ~23×23**: `spectrum-panel--managed-frame`). The floor is 0.1% of that capture's own frame, so the `gallery-*` rows (1232×93 to 1232×198) are tighter still. Measured directly (`verify-mor-1090.md` §3, a 9-case injected-regression probe against the real committed baselines):
+
+- A 32×32px overlay (1027 px) is caught; 24×24px (under budget) and a 16×16px indicator dot (under budget) are not.
+- **A whole-frame low-amplitude colour shift is NOT caught, and this is the more surprising miss.** A 3% brightness lift across the entire frame — a plausible design-token regression — produced fewer than 1024 differing pixels, because `threshold: 0.2` (pixelmatch's per-pixel YIQ distance) filters the delta away *before* the `maxDiffPixelRatio` ratio budget is ever consulted. **This comparator cannot police whole-frame contrast/brightness drift at all**, regardless of how the ratio knob is tuned.
+- Small localized changes below the pixel floor (status LEDs, badges, single-glyph text swaps) are likewise invisible to this layer.
+
+**None of this is evidence tooling has a gap** — it is a coarse net with a stated mesh size. `capture.mjs`'s own assertion layer (`tx-readout`, `fault-affordance`, and the rest) already pins exactly these classes of change on every capture, every invocation, independent of pixels. **Do not treat a green pixel job as evidence that nothing visual changed** — treat it as evidence that nothing changed ABOVE ~1024 px / ~32×32 (desktop), ~304 px / ~17×17 (phone), ~880 px / ~30×30 (each 1100×800 capture), or ~518 px / ~23×23 (the 960×540 `spectrum-panel--managed-frame` capture), with the assertion layer covering the finer mesh below that for the first 14 captures, including all contrast/brightness drift this layer structurally cannot see. The `gallery-*` rows have no such assertion layer — `?demo=control-buttons` is never loaded by `capture.mjs` or `capture-ptt.mjs` — so for those rows the pixel floor is the only floor. The two `peer-split-chassis` rows are in neither bucket: `capture.mjs` does capture that fixture, but it declares no `expect`, so its recorded assertion cell holds only a hardcoded pass plus the harness-appended `meter-ballistics-honor-reduced-motion` — nothing that pins the composition. For those rows too, the pixel floor is the only floor on composition. `spectrum-panel--managed-frame` carries its own non-pixel floor inside `spectrum-baselines.spec.ts` instead: the tune-line and passband overlay elements must be visible, and the three `--scope-*` overlay custom properties must equal the values `resolveSpectrumColorRoles` returns for a mount that passes no `colorRoles`, spelled out as literals in that spec. That assertion was added because the pixel layer measurably does not see a colour-role change — recolouring `passbandFill` from `rgba(59,130,246,0.15)` to `rgba(59,246,130,0.15)` left the comparison green even with `maxDiffPixelRatio` set to 0, while recolouring `trace` to `rgba(255,64,64,0.85)` turned it red at 2736 differing pixels (both measured on macOS at 960×540 against a locally captured baseline, not on the Linux runner).
+
+## Platform note
+
+MOR-1396 re-pinned this set on the Linux ARM64 Core runner. The provisioning run was `31180561550` at branch head `ad37689d`; its `visual-diff-report` artifact contains real Linux `*-actual.png` outputs for the 12 captures whose macOS baseline exceeded the comparator tolerance. The remaining two captures, `ptt-idle--mobile` and `ptt-held--mobile`, passed the same Linux comparison and therefore emitted no failure-only actual file. `manifest.json` records the exact Linux regeneration environment. `.github/workflows/visual.yml` is now blocking.
+
+**Regenerating from Linux (required for a future platform re-pin — do NOT do this on macOS):** use the explicit `regenerate=true` route in `visual.yml`. It runs `--update-snapshots=all` on Linux and exports `frontend/fixtures/approved-baselines/` as `regenerated-baselines`; automatic failure-diff uploads are disabled. To re-pin from Linux:
+
+```bash
+# 1. Explicitly dispatch regeneration at the intended source revision.
+gh workflow run visual.yml --ref <branch-or-tag> -f regenerate=true
+# 2. Download the baseline export from that exact run.
+gh run download <run-id> -n regenerated-baselines -D /tmp/regenerated-baselines
+
+# 3. Copy the exported PNGs and their provenance manifest.
+cp /tmp/regenerated-baselines/*.png frontend/fixtures/approved-baselines/
+cp /tmp/regenerated-baselines/manifest.json frontend/fixtures/approved-baselines/
+
+# 4. Confirm the Linux comparator result and review every changed PNG
+#    against the intended visual change before committing.
+git status frontend/fixtures/approved-baselines/
+git add frontend/fixtures/approved-baselines/
+```
+
+Do not regenerate this set on macOS for the pre-blocking re-pin — that reproduces the exact platform mismatch the Platform note warns about, just with a fresher timestamp.
+
+**Batching (do not regenerate per rework slice).** S6a/S7/S8/MOR-1355 and future S-slices each change what the cockpit renders on `desktop-v2`. If every slice regenerated this set, reviewers would rubber-stamp the image diff within two rounds and each pass burns ~700KB of unreclaimable binary into git history (PNGs do not delta-compress). Regenerate only for an intentional, reviewed visual change, using Linux output so the blocking gate keeps one platform provenance.
+
+## Updating baselines (intentional change)
+
+```bash
+cd frontend
+npm run test:e2e:visual -- --update-snapshots=all
+git status fixtures/approved-baselines/
+# Open each changed PNG — confirm the diff is the change you intended.
+git add fixtures/approved-baselines/
+```
+
+`manifest.json` regenerates every run (`tests/e2e/visual/global-teardown.ts`), recording the commit, platform, and tool versions behind the committed set — commit it with the PNGs. Its `commit`/`commitShort` fields are read at run time, so when the regeneration is part of the commit being made, they necessarily record that commit's PARENT (the manifest can't know its own future commit hash) — this is documented, honest behaviour, not a bug. A PR that intentionally changes cockpit/PTT visuals MUST include regenerated baselines + `manifest.json`, reviewed as an image diff, not waved through — and when the change is a **regeneration** (as opposed to a from-scratch capture), the PR description must state which captures are expected to change and why, so the reviewer is confirming a named expectation rather than rubber-stamping N changed PNGs.

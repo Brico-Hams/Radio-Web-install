@@ -1,0 +1,372 @@
+/**
+ * MOR-1312 — the semantic scope-display surface (vocabulary slice 12B, the
+ * LAST slice of the vocabulary program). MOR-2545 PR2 — the surface is ONE
+ * compact in-row indicator whose visible readout span, tooltip (`title`)
+ * and accessible name (`aria-label` on the `role="status"` section) carry
+ * the old status line's text, unread parts OMITTED (never `—`/`?`
+ * placeholders). Only the toolbar host hides the readout span (compact
+ * form) — pinned in `SpectrumToolbar.component.test.ts`.
+ *
+ * Presentation-only (v3 ADR invariant 11 / R9): this surface renders no
+ * control of any kind. Block 1 pins that with a source scan for
+ * `button`/`input`/`onclick`-shaped syntax AND a rendered-DOM query, so a
+ * behavioural mutation (adding a control) and a source-level one (adding
+ * a handler prop) both die — the same double instrument
+ * `MetersSurface.isolated.test.ts` block 1/5 uses.
+ *
+ * Two carry-forward mutation probes this file exists to satisfy:
+ *   (1) flip the `health`-state -> tone/text branch mapping and a test dies
+ *       (block 3, `healthTone` exhaustive-mapping tests).
+ *   (2) flip source-selection rendering and a test dies (block 2, the
+ *       hardware/audio_fft accessible-text tests).
+ */
+import { readFileSync } from 'node:fs';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { flushSync, mount, unmount } from 'svelte';
+import ScopeDisplaySurface, { healthTone, indicatorText } from '../ScopeDisplaySurface.svelte';
+import { topologyFixtures, withScopeDisplay } from '../fixtures/topologies';
+import type {
+  Availability, ScopeDisplayField, ScopeHealthState, ScopeDisplayViewModel, RadioViewModel,
+} from '../radio-view-model';
+
+const SOURCE = readFileSync('src/semantic/ScopeDisplaySurface.svelte', 'utf8')
+  .replace(/<!--[\s\S]*?-->/g, '')
+  .replace(/\/\*[\s\S]*?\*\//g, '')
+  .replace(/^\s*\/\/.*$/gm, '');
+
+const AVAIL: Availability = { structural: true, operational: true };
+const UNOBSERVED: Availability = { structural: true, operational: false };
+const ABSENT: Availability = { structural: false, operational: false };
+
+/** Re-shape ONE leaf of an otherwise fully-observed `scopeDisplay` group. */
+function withField(
+  view: RadioViewModel, field: keyof ScopeDisplayViewModel,
+  over: { availability?: Availability; unknown?: boolean; value?: unknown },
+): RadioViewModel {
+  const sd = view.scopeDisplay!;
+  const current: ScopeDisplayField<unknown> = sd[field];
+  return {
+    ...view,
+    scopeDisplay: {
+      ...sd,
+      [field]: {
+        reading: over.unknown
+          ? { status: 'unknown' }
+          : over.value !== undefined ? { status: 'known', value: over.value } : current.reading,
+        availability: over.availability ?? current.availability,
+      } satisfies ScopeDisplayField<unknown>,
+    } as ScopeDisplayViewModel,
+  };
+}
+
+let target: HTMLDivElement;
+beforeEach(() => { target = document.createElement('div'); document.body.appendChild(target); });
+afterEach(() => { target.remove(); });
+
+function render(view: RadioViewModel) {
+  const component = mount(ScopeDisplaySurface, { target, props: { view } });
+  flushSync();
+  const q = <T extends HTMLElement>(sel: string) => target.querySelector(sel) as T | null;
+  return {
+    dispose: () => unmount(component),
+    root: () => q('[data-testid="scope-display-surface"]'),
+    indicator: () => q('[data-testid="scope-display-indicator"]'),
+    /** The accessible name / tooltip text — the old status line's content. */
+    text: () => q('[data-testid="scope-display-surface"]')?.getAttribute('aria-label') ?? null,
+    title: () => q('[data-testid="scope-display-surface"]')?.getAttribute('title') ?? null,
+  };
+}
+
+function withSurface(view: RadioViewModel, fn: (s: ReturnType<typeof render>) => void): void {
+  const s = render(view);
+  try { fn(s); } finally { s.dispose(); }
+}
+
+const base = () => withScopeDisplay(topologyFixtures['1/single']);
+
+// ── 1. Display only (R9) + optional-group self-gating (risk R3) ────────────
+
+describe('the scope-display surface is display-only and self-gates on group presence', () => {
+  it('renders NOTHING at all when the view model carries no scopeDisplay group', () => {
+    const bare = topologyFixtures['1/single'];
+    expect(bare.scopeDisplay).toBeUndefined();
+    withSurface(bare, (s) => {
+      expect(s.root()).toBeNull();
+      expect(target.innerHTML).not.toContain('scope-display');
+    });
+  });
+
+  it('renders the surface when the group is present', () => {
+    withSurface(base(), (s) => {
+      expect(s.root()).not.toBeNull();
+      expect(s.indicator()).not.toBeNull();
+      expect(target.querySelectorAll('[data-testid="scope-display-surface"]')).toHaveLength(1);
+    });
+  });
+
+  // MUTATION PROBE (1 of 2 required by the ticket): grows a button/input of
+  // any kind. Zero focusable elements is what lets `SemanticRadioSurfaces`
+  // mount this surface in BOTH compositions (the `meters` shape, not
+  // `rxAudio`'s single-only shape), bare included wherever `zoneOwning()`
+  // finds no zone carrying `scopeDisplay` — see `ScopeDisplaySurface.svelte`'s doc
+  // comment and `semantic-scope-display-wiring.component.test.ts`.
+  it('contributes no focusable control of any kind', () => {
+    withSurface(base(), () => {
+      expect(target.querySelectorAll(
+        'button, input, select, textarea, a[href], [tabindex], [role="button"], [role="switch"]',
+      )).toHaveLength(0);
+    });
+  });
+
+  // Source-level companion to the behavioural probe above: proves the
+  // ABSENCE of a handler prop, which a rendered-DOM query alone cannot.
+  it('takes no intent callback prop and has exactly one prop', () => {
+    expect(SOURCE).toMatch(/interface Props\s*\{\s*view:\s*RadioViewModel\s*\}/);
+    expect(SOURCE).not.toMatch(/on[A-Z]\w*\?:/);
+  });
+
+  it('binds no zone id of its own', () => {
+    withSurface(base(), () => {
+      expect(target.querySelectorAll('[data-zone-id]')).toHaveLength(0);
+    });
+  });
+});
+
+// ── 2. MUTATION PROBE (2 of 2): source-selection rendering ─────────────────
+
+describe('the accessible text reflects the facts, never a default', () => {
+  it('composes the fully-observed status line into the tooltip text', () => {
+    withSurface(base(), (s) => {
+      expect(s.text()).toBe('SRC hardware · connected · HW on');
+      expect(s.title()).toBe('SRC hardware · connected · HW on');
+    });
+  });
+
+  // The discriminating case: hardware and audio_fft must render DIFFERENT
+  // text. A mutation that hardcodes 'hardware' or drops the source read
+  // entirely produces the SAME text for both and this test dies.
+  it('renders the known audio_fft source, distinctly from hardware', () => {
+    withSurface(withField(base(), 'source', { value: 'audio_fft' }), (s) => {
+      expect(s.text()).toContain('SRC audio_fft');
+      expect(s.text()).not.toContain('hardware');
+    });
+  });
+
+  it('omits an unread source part entirely — never a placeholder, never a guess', () => {
+    withSurface(withField(base(), 'source', { unknown: true, availability: UNOBSERVED }), (s) => {
+      expect(s.text()).not.toMatch(/SRC|—|\?/);
+      expect(s.text()).toBe('connected · HW on');
+      expect(s.indicator()!.dataset.observed).toBe('false');
+    });
+  });
+});
+
+// ── 3. MUTATION PROBE (1 of 2): the health-state branch mapping ────────────
+
+describe('healthTone maps every ScopeHealthState to its own tone (exhaustive)', () => {
+  const EXPECTED: Record<ScopeHealthState, string> = {
+    connected: 'green',
+    connecting: 'yellow', starting: 'yellow', waiting: 'yellow', reconnecting: 'yellow',
+    disconnected: 'red', failed: 'red',
+    inactive: 'neutral',
+  };
+
+  it.each(Object.entries(EXPECTED) as Array<[ScopeHealthState, string]>)(
+    'health=%s -> tone=%s',
+    (state, tone) => {
+      expect(healthTone(state)).toBe(tone);
+    },
+  );
+
+  // MUTATION KILLED: swapping any two branches (e.g. 'failed' -> yellow, or
+  // 'connected' -> neutral) — every state maps to exactly the tone above, and
+  // no two adjacent branches collapse onto each other by accident.
+  it('keeps green/red/neutral each reachable by exactly the states above', () => {
+    const byTone = new Map<string, ScopeHealthState[]>();
+    for (const [state, tone] of Object.entries(EXPECTED)) {
+      byTone.set(tone, [...(byTone.get(tone) ?? []), state as ScopeHealthState]);
+    }
+    expect(byTone.get('green')).toEqual(['connected']);
+    expect(byTone.get('red')!.sort()).toEqual(['disconnected', 'failed']);
+    expect(byTone.get('neutral')).toEqual(['inactive']);
+  });
+
+  it.each(Object.entries(EXPECTED) as Array<[ScopeHealthState, string]>)(
+    'renders data-tone=%s for the rendered health field',
+    (state, tone) => {
+      withSurface(withField(base(), 'health', { value: state }), (s) => {
+        expect(s.indicator()!.dataset.tone).toBe(tone);
+        expect(s.text()).toContain(String(state));
+      });
+    },
+  );
+});
+
+// ── 4. hardwareConnected (MOR-1312, MOR-1352 finding) ───────────────────────
+
+describe('hardwareConnected renders independent of source/health', () => {
+  it('renders "HW on" when the hardware channel is connected', () => {
+    withSurface(withField(base(), 'hardwareConnected', { value: true }), (s) => {
+      expect(s.text()).toContain('HW on');
+      expect(s.text()).not.toContain('HW off');
+    });
+  });
+
+  it('renders "HW off" when the hardware channel is not connected', () => {
+    withSurface(withField(base(), 'hardwareConnected', { value: false }), (s) => {
+      expect(s.text()).toContain('HW off');
+    });
+  });
+
+  it('omits an unobserved hardware part entirely, never a guessed boolean', () => {
+    withSurface(
+      withField(base(), 'hardwareConnected', { unknown: true, availability: UNOBSERVED }),
+      (s) => {
+        expect(s.text()).not.toMatch(/HW/);
+        expect(s.text()).toBe('SRC hardware · connected');
+      },
+    );
+  });
+
+  // The MOR-1352 case itself: audio_fft selected AND healthy, hardware still
+  // reported separately as connected. Proves the leaf is not derived from
+  // `health`/`source` — see the adapter-level probe of the same name.
+  it('stays on while source=audio_fft and health=connected', () => {
+    let view = withField(base(), 'source', { value: 'audio_fft' });
+    view = withField(view, 'health', { value: 'connected' });
+    view = withField(view, 'hardwareConnected', { value: true });
+    withSurface(view, (s) => {
+      expect(s.text()).toBe('SRC audio_fft · connected · HW on');
+    });
+  });
+});
+
+// ── 5. Two-level availability (MOR-977/1256) + the MOR-2545 no-placeholder
+//         contract on the accessible text ────────────────────────────────────
+
+describe('structural availability never renders as a guessed value', () => {
+  it('keeps an operationally-unavailable field PRESENT and marked unobserved', () => {
+    withSurface(withField(base(), 'source', { unknown: true, availability: UNOBSERVED }), (s) => {
+      expect(s.indicator()).not.toBeNull();
+      expect(s.indicator()!.dataset.observed).toBe('false');
+    });
+  });
+
+  // Every leaf the 12A/12B adapter emits is structurally present whenever the
+  // group itself is present (`deriveScopeDisplay` always passes `structural:
+  // true`) — this is a closed-shape sanity check, not a live adapter test.
+  it('never encodes state by colour alone in its own stylesheet', () => {
+    const styles = SOURCE.slice(SOURCE.indexOf('<style>'));
+    expect(styles).not.toMatch(/#[0-9a-f]{3,8}\b|\brgb\(|\bhsl\(/i);
+  });
+
+  it('does not gate its own render on structural absence (no case exercises it live)', () => {
+    // Documents intent: `ABSENT` is unreachable from the real adapter today
+    // (both leaves are always structural:true), but the surface's `usable()`
+    // helper still degrades correctly if that ever changes.
+    withSurface(withField(base(), 'source', { availability: ABSENT, unknown: true }), (s) => {
+      expect(s.indicator()!.dataset.observed).toBe('false');
+    });
+  });
+});
+
+describe('MOR-2545: the indicator text carries no placeholder in ANY unread mix', () => {
+  it('falls back to the section label with no tooltip when every part is unread', () => {
+    let view = withField(base(), 'source', { unknown: true, availability: UNOBSERVED });
+    view = withField(view, 'health', { unknown: true, availability: UNOBSERVED });
+    view = withField(view, 'hardwareConnected', { unknown: true, availability: UNOBSERVED });
+    withSurface(view, (s) => {
+      expect(s.text()).toBe('Scope status');
+      expect(s.title()).toBeNull();
+    });
+  });
+
+  const UNREAD_MIXES: Array<Array<keyof ScopeDisplayViewModel>> = [
+    ['source'], ['health'], ['hardwareConnected'],
+    ['source', 'health'], ['source', 'hardwareConnected'], ['health', 'hardwareConnected'],
+  ];
+  it.each(UNREAD_MIXES.map((fields) => [fields]))(
+    'unread parts: accessible text never contains a placeholder',
+    (fields: Array<keyof ScopeDisplayViewModel>) => {
+      let view = base();
+      for (const field of fields) {
+        view = withField(view, field, { unknown: true, availability: UNOBSERVED });
+      }
+      withSurface(view, (s) => {
+        expect(s.text()).not.toMatch(/—|\?|UNKNOWN|: (true|false)/i);
+        expect(s.title() ?? '').not.toMatch(/—|\?|UNKNOWN|: (true|false)/i);
+      });
+    },
+  );
+
+  it('indicatorText is the one composer: parts joined, unread dropped', () => {
+    const group = withScopeDisplay(topologyFixtures['1/single']).scopeDisplay!;
+    expect(indicatorText(group)).toBe('SRC hardware · connected · HW on');
+    expect(indicatorText({
+      source: { ...group.source, reading: { status: 'unknown' } },
+      health: group.health,
+      hardwareConnected: { ...group.hardwareConnected, reading: { status: 'unknown' } },
+    })).toBe('connected');
+    expect(indicatorText({
+      source: { ...group.source, reading: { status: 'unknown' } },
+      health: { ...group.health, reading: { status: 'unknown' } },
+      hardwareConnected: { ...group.hardwareConnected, reading: { status: 'unknown' } },
+    })).toBe('');
+  });
+});
+
+// ── 5b. MOR-2704 G1: the KNOWN-reading, not-operational half of the gate,
+//         pinned against the imported `usable` (a mutation that drops its
+//         `operational` check flips data-observed to "true" and dies here).
+
+describe('MOR-2704 G1: a read but not-operational source stays marked unobserved', () => {
+  it('keeps data-observed "false" for a known source reading under operational:false', () => {
+    withSurface(withField(base(), 'source', { availability: UNOBSERVED }), (s) => {
+      expect(s.indicator()!.dataset.observed).toBe('false');
+    });
+  });
+});
+
+// ── 6. MOR-2545 PR2 review fix: the text readout is VISIBLE by default ─────
+//    (only the toolbar host hides it — see SpectrumToolbar.component.test.ts)
+
+describe('the text readout renders beside the chip by default', () => {
+  it('renders the readout span with the full status text after the SRC chip', () => {
+    withSurface(base(), (s) => {
+      const span = s.root()!.querySelector('.scope-display-text');
+      expect(span).not.toBeNull();
+      // The chip prints the SRC label; the span carries the rest, composing
+      // with the chip into exactly the indicatorText string.
+      expect(span!.textContent).toBe('hardware · connected · HW on');
+      expect(`${s.indicator()!.textContent}${span!.textContent}`)
+        .toBe('SRChardware · connected · HW on');
+      expect(s.text()).toBe('SRC hardware · connected · HW on');
+    });
+  });
+
+  it('omits unread parts from the visible readout too — never a placeholder', () => {
+    withSurface(withField(base(), 'source', { unknown: true, availability: UNOBSERVED }), (s) => {
+      const span = s.root()!.querySelector('.scope-display-text');
+      expect(span!.textContent).toBe('connected · HW on');
+      expect(span!.textContent).not.toMatch(/—|\?|UNKNOWN/);
+    });
+  });
+
+  it('renders no readout span when every part is unread', () => {
+    let view = withField(base(), 'source', { unknown: true, availability: UNOBSERVED });
+    view = withField(view, 'health', { unknown: true, availability: UNOBSERVED });
+    view = withField(view, 'hardwareConnected', { unknown: true, availability: UNOBSERVED });
+    withSurface(view, (s) => {
+      expect(s.root()!.querySelector('.scope-display-text')).toBeNull();
+      expect(s.indicator()).not.toBeNull();
+      expect(s.text()).toBe('Scope status');
+    });
+  });
+
+  it('keeps the readout on the audio_fft source, distinctly from hardware', () => {
+    withSurface(withField(base(), 'source', { value: 'audio_fft' }), (s) => {
+      expect(s.root()!.querySelector('.scope-display-text')!.textContent)
+        .toBe('audio_fft · connected · HW on');
+    });
+  });
+});

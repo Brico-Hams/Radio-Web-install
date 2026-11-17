@@ -1,0 +1,799 @@
+# Rig TOML Schema Specification
+
+This document describes the format of `.toml` rig configuration files used by
+`rigplane` to define radio profiles in a data-driven way.
+
+Adding a new radio = writing one TOML file, zero Python changes.
+
+---
+
+## `[radio]` — Model Identity
+
+| Field            | Type   | Required | Description                                     |
+|------------------|--------|----------|-------------------------------------------------|
+| `id`             | string | yes      | Unique profile identifier (e.g. `"icom_ic7610"`) |
+| `model`          | string | yes      | Human-readable model name (e.g. `"IC-7610"`)    |
+| `civ_addr`       | int    | no       | Default CI-V address (0x00–0xFF). Required for `civ` protocol, default 0 for others. |
+| `receiver_count` | int    | yes      | Number of independent receivers (1 or 2)        |
+| `has_lan`        | bool   | yes      | Whether the radio has a LAN (Ethernet) port     |
+| `has_wifi`       | bool   | yes      | Whether the radio has built-in WiFi             |
+| `default_baud`   | int    | no       | Default serial baud rate (e.g. `115200`). Used by CLI `--model` auto-config. |
+
+## `[protocol]` — Communication Protocol
+
+Optional section. Defaults to `type = "civ"` if omitted.
+
+| Field     | Type   | Required | Description                                       |
+|-----------|--------|----------|---------------------------------------------------|
+| `type`    | string | no       | Protocol type: `"civ"`, `"kenwood_cat"`, or `"yaesu_cat"` |
+| `address` | int    | no       | Protocol-specific address (e.g. CI-V addr)        |
+| `baud`    | int    | no       | Override baud rate for this protocol              |
+
+Protocol types:
+- **`civ`** — Icom CI-V binary protocol (IC-7610, IC-7300, Xiegu X6100/X6200)
+- **`kenwood_cat`** — Kenwood text-based CAT (Lab599 TX-500, TS-890S). Commands: `"FA14200000;"`, `"MD2;"`
+- **`yaesu_cat`** — Yaesu text-based CAT (FTX-1, FT-710, FT-DX101)
+
+## `[audio]` — LAN Audio Policy
+
+Optional section. Defines radio-native LAN audio defaults and browser consumer
+transport policy. These fields are used by the LAN audio stream resolver when
+the caller did not explicitly override codec or sample rate.
+
+| Field                         | Type              | Required | Description |
+|-------------------------------|-------------------|----------|-------------|
+| `codec_preference`            | string[]          | no       | Ordered RX codec preference. Values must match `AudioCodec` names. The first supported codec is used unless the caller passed an explicit codec. |
+| `tx_codec`                    | string            | no       | Radio-native TX codec name from `AudioCodec`. Direct LAN TX profiles should prefer mono PCM unless hardware evidence proves otherwise. |
+| `default_sample_rate_hz`      | int               | no       | Profile default sample rate when `sample_rate_by_codec` has no entry for the selected codec. |
+| `supported_sample_rates_hz`   | int[]             | no       | Evidence-backed sample rates accepted by the radio profile. |
+| `sample_rate_by_codec`        | table string→int  | no       | Per-codec default sample rate used by the resolver for RX and TX. Keys must be `AudioCodec` names. |
+| `browser_rx_transport`        | string            | no       | Browser consumer transport policy: `"auto"`, `"pcm"`, or `"opus"`. |
+| `browser_rx_transcode_to_opus`| bool              | no       | Whether browser RX may transcode radio-native audio to Opus. This is not a radio-native codec setting. |
+
+Example:
+
+```toml
+[audio]
+codec_preference = ["PCM_2CH_16BIT", "PCM_1CH_16BIT", "ULAW_2CH", "ULAW_1CH"]
+tx_codec = "PCM_1CH_16BIT"
+default_sample_rate_hz = 48000
+sample_rate_by_codec = { PCM_2CH_16BIT = 48000, PCM_1CH_16BIT = 48000 }
+browser_rx_transport = "auto"
+browser_rx_transcode_to_opus = true
+```
+
+Profile defaults must be backed by radio evidence, not copied from generic
+codec lists. Prefer pass-only artifacts from `rigplane audio probe`; for radios
+with LAN session cooldown behavior, include a conservative candidate cooldown in
+the validation command. Opus must not be used as a stock radio LAN default unless
+the endpoint or protocol explicitly proves native Opus support. Browser Opus is
+only a server-to-browser transport policy after radio-native audio is received.
+
+## `[usb]` — Optional USB Audio Identity
+
+`audio_codec` and `serial_functions` are optional lists of
+`{ vid = "XXXX", pid = "YYYY" }` tables. Both identifiers must be strings of
+four uppercase hexadecimal digits. Unknown keys in `[usb]` or its function
+entries are rejected; duplicate `audio_codec` entries are deduplicated while
+duplicate `serial_functions` entries are kept — each list entry is one serial
+function, so the same VID:PID may appear more than once. See
+`src/rigplane/profiles/rig_loader.py: load_rig` and
+`src/rigplane/core/usb_identity.py: UsbFunctionId`.
+
+```toml
+[usb]
+# Record the capture that establishes these identifiers beside the data.
+audio_codec = [{ vid = "0D8C", pid = "0016" }]
+serial_functions = [{ vid = "10C4", pid = "EA70" }, { vid = "26AA", pid = "0030" }]
+```
+
+Populate these lists only from our own USB recordings; the example matches
+`rigs/ftx1.toml`. `audio_codec` constrains the codec chosen by the shared pairing
+rule; it does not establish containment by itself. `serial_functions` identifies
+the radio's own serial USB functions: declared VID:PID devices directly
+under the requested serial device's hub may count as one radio. Each declared
+entry covers one observed device, so the serial devices under the hub are
+accepted when the multiset of their VID:PID is contained in the declared
+multiset (observed count per VID:PID at most the declared count). An undeclared
+serial device, a repeated serial VID:PID beyond the declared count, or an
+additional serial device under a nested hub still refuses with
+`serial_ambiguous`.
+
+An omitted `[usb]` gives `usb_identity = None`. Omitted or empty lists default
+to empty (an empty set for `audio_codec`, an empty tuple for `serial_functions`):
+no codec filter for `audio_codec`, and the strict single-serial
+rule for `serial_functions`. Either list may be supplied alone.
+`RigConfig.to_profile` copies the identity to `RadioProfile`.
+See `docs/internals/usb-audio-pairing.md` for the complete rule.
+
+## `[capabilities]` — Feature Flags
+
+| Field      | Type     | Required | Description                    |
+|------------|----------|----------|--------------------------------|
+| `features` | string[] | yes      | List of supported capabilities |
+
+Known capability strings (grouped by area):
+
+**Receiver:** `audio`, `dual_rx`, `dual_watch`, `af_level`, `rf_gain`, `squelch`, `af_mute`
+
+**RF Front End:** `attenuator`, `preamp`, `digisel`, `ip_plus`
+
+**Antenna:** `antenna`, `rx_antenna`
+
+**DSP / Noise:** `nb`, `nr`, `notch`, `apf`, `twin_peak`
+
+**Filter:** `pbt`, `filter_width`, `filter_shape`
+
+**TX:** `tx`, `split`, `vox`, `compressor`, `monitor`, `drive_gain`, `ssb_tx_bw`, `tx_inhibit`, `dpd`
+
+**CW:** `cw`, `break_in`
+
+**RIT / XIT:** `rit`, `xit`
+
+**Tuner:** `tuner`
+
+**Metering:** `meters`
+
+**Scope:** `scope`
+
+**Tone:** `repeater_tone`, `tsql`, `sql_type`
+
+**Data:** `data_mode`
+
+**System:** `power_control`, `dial_lock`, `scan`, `bsr`, `main_sub_tracking`, `lcd_backlight`
+
+## `[ctcss]` — Named CTCSS Frequency Domain
+
+Profiles declaring `repeater_tone`, `tsql`, or `sql_type` must reference a
+named table from the versioned sibling catalog `_ctcss_tables_v1.toml`.
+
+| Field   | Type   | Required | Description |
+|---------|--------|----------|-------------|
+| `table` | string | yes for CTCSS-capable profiles | Table name under `[tables]` in `_ctcss_tables_v1.toml`. |
+
+Example:
+
+```toml
+[ctcss]
+table = "standard_50"
+```
+
+The loader resolves the selected `values_centihz` array to an immutable,
+ordered tuple on `RigConfig` and `RadioProfile`. Values are exact integer
+centiHz (`8850` = 88.5 Hz). The order is the provider's table-index mapping;
+the public/backend-neutral value is always the centiHz value, never the index.
+
+Catalog tables must be non-empty, strictly ascending, duplicate-free, within
+6700..25410 centiHz, and exactly representable in 0.1 Hz increments. Missing,
+unknown, or malformed references fail profile loading. A table reference only
+defines a legal domain and index mapping: it does not add a capability or grant
+a read or write command.
+
+## `[state_acquisition]` — State Capability And Policy Metadata
+
+Optional section. Defines provider-specific state acquisition behavior as data
+for future scheduler/adapters. Web and rigctld delivery code must not branch on
+these fields directly.
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `provider` | string | no | Lowercase provider identifier such as `"icom_civ"`, `"yaesu_cat"`, `"xiegu_civ"`, or `"external_rigctld"`. Defaults to `"profile"`. |
+| `default_cadence_seconds` | float or `"never"` | no | Conservative default polling cadence for supported fields. Defaults to `5.0`. `"never"` resolves to no cadence. |
+| `default_freshness_ttl_seconds` | float or `"never"` | no | TTL before a value should be considered stale. Must be greater than or equal to cadence. Defaults to `15.0`. `"never"` resolves to no expiry. |
+| `default_reconciliation_priority` | string | no | `"unsolicited"`, `"command_response"`, `"poll"`, or `"last_observation"`. Defaults to `"poll"`. |
+| `adaptive_decay` | bool | no | Whether a scheduler may widen cadence while idle. Defaults to `false`. |
+| `adaptive_decay_idle_multiplier` | float | no | Multiplier for idle cadence when adaptive decay is enabled. Must be greater than `1.0` when enabled. |
+| `adaptive_decay_max_cadence_seconds` | float | no | Maximum widened cadence. |
+| `external_cat_pause` | string | no | `"pause_polling"`, `"coalesce_meters_only"`, or `"continue"`. Defaults to `"pause_polling"`. |
+| `meter_coalescing_window_seconds` | float | no | Default short coalescing window for stream-like meter observations. |
+
+### `[state_acquisition.capabilities]`
+
+Each field path uses the canonical `FieldPath` strings from
+`rigplane.core.state_pipeline_contracts`.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `unsolicited_push` | string[] | Fields the provider may push without an explicit poll. |
+| `polling_only` | string[] | Fields acquired by explicit polling. |
+| `stream_like_meters` | string[] | Meter fields whose observations may arrive frequently and be coalesced. Each path must use the `meters` family. |
+| `command_response_observable` | string[] | Fields where command responses can confirm state after a write. |
+| `supported_controls` | string[] | Writable/control fields supported by the provider profile. |
+| `unsupported` | string[] | Known-unavailable fields. These must not also appear in acquisition lists. |
+| `unknown` | string[] | Fields without enough evidence. Schedulers should diagnose them as unknown instead of polling forever. |
+
+### `[state_acquisition.field_policies."<field-path>"]`
+
+Optional per-field policy overrides. Supported keys are `cadence_seconds`,
+`freshness_ttl_seconds`, `reconciliation_priority`, `external_cat_pause`,
+`adaptive_decay`, `adaptive_decay_idle_multiplier`,
+`adaptive_decay_max_cadence_seconds`, `meter_coalescing_window_seconds`,
+`tx_only`, `available_when`, and `reason` (the set the loader accepts is
+`_ACQUISITION_POLICY_KEYS` in `rig_loader.py`; anything else is rejected).
+Field-specific `meter_coalescing_window_seconds` is valid only for meter paths.
+
+`reason` is a string that says why the entry exists. The loader rejects a
+non-string `reason` and does not otherwise use it. Every IC-7610 and
+IC-7300 entry must have a non-empty one
+(`tests/test_state_acquisition_policy.py:
+test_every_field_policy_override_states_its_reason`).
+
+A pollable field path with **no** `field_policies` entry of its own does
+not inherit the section defaults: it resolves to its shared acquisition
+class (MOR-2574) — the class's nominal cadence, its freshness TTL,
+`tx_only` when the class polls only during transmit, and adaptive decay
+off. Paths that cannot be polled keep inheriting the section defaults.
+
+`available_when` declares the conditions under which the field exists on the
+radio at all — a mode, band or state in which the rig has no such function.
+It is a list of clauses, all of which must hold. Each clause names a `field`
+(a canonical `FieldPath` string) and exactly one comparison against that
+field's value, in one of three shapes:
+
+| Shape | Spelling | Holds when the source field's value |
+|-------|----------|-------------------------------------|
+| membership | `in = [...]`, `not_in = [...]` | is (is not) one of the listed values |
+| bound | `min = <number>`, `max = <number>` | is at or above (at or below) the bound |
+| equality | `equals = <value>` | equals this value |
+
+An unknown key, no comparison, more than one comparison, a `field` that does
+not parse, a non-list `in`/`not_in`, or a non-numeric `min`/`max` is a load
+error naming the policy path and the clause
+(`rig_loader.py: _parse_available_when`).
+
+```toml
+[state_acquisition.field_policies."receiver.main.operator_controls.manual_notch_freq"]
+available_when = [
+    { field = "receiver.main.active.freq_mode.mode", not_in = ["FM", "FM-N", "DATA-FM", "DATA-FM-N"] },
+]
+```
+
+An omitted key inherits the profile-level default rather than clearing it, so
+`freshness_ttl_seconds` also accepts the string `"never"` to mean "this field
+has no expiry". Use it only for a path whose loaded capability cannot be
+polled — in neither `polling_only` nor `stream_like_meters` (either one makes
+`can_poll` true, and the loader does not reject that combination). The
+section-level `default_freshness_ttl_seconds` and both `cadence_seconds` keys
+accept the same token.
+
+Example:
+
+```toml
+[state_acquisition]
+provider = "xiegu_civ"
+default_cadence_seconds = 2.0
+default_freshness_ttl_seconds = 8.0
+default_reconciliation_priority = "poll"
+external_cat_pause = "pause_polling"
+
+[state_acquisition.capabilities]
+polling_only = [
+    "receiver.main.active.freq_mode.freq_hz",
+    "receiver.main.active.freq_mode.mode",
+]
+command_response_observable = ["receiver.main.active.freq_mode.mode"]
+unsupported = ["global.tx_state.power_on"]
+
+[state_acquisition.field_policies."receiver.main.active.freq_mode.mode"]
+cadence_seconds = 1.0
+freshness_ttl_seconds = 4.0
+reconciliation_priority = "command_response"
+```
+
+## `[scope]` — Panoramic Scope Settings
+
+Optional section. Reference-level range and span presets for the panoramic
+scope, where the radio supports one.
+
+| Field             | Type    | Required | Description                                              |
+|-------------------|---------|----------|-----------------------------------------------------------|
+| `ref_min_db`      | float   | no       | Minimum scope reference level, dB.                         |
+| `ref_max_db`      | float   | no       | Maximum scope reference level, dB.                         |
+| `ref_step_db`     | float   | no       | Scope reference level step size, dB.                       |
+| `span_presets_hz` | int[]   | no       | Scope span presets in Hz, index-ordered (index 0-7 matches the CI-V `0x27 0x15` span code the radio itself uses). Must be non-empty and strictly ascending. |
+| `span_preset_semantics` | string | with `span_presets_hz` | What one preset entry means on the radio's own wire: `half_width` (the preset is a ±half-width — the CI-V span and the center-mode waveform field) or `full_width` (the preset is the full display width). Required whenever `span_presets_hz` is declared; a load without it is rejected. |
+
+`span_presets_hz` is the only place these values live. The
+waveform-stream span derivation (`runtime/_civ_rx.py:
+CivRuntime._publish_scope_span_observation`) resolves a frame's displayed
+width to a span index against it, and the 0x15 reply-path decoder/encoder
+(`commands/scope.py: parse_scope_span_response`/`scope_set_span`) take it
+as an argument — `commands/` may not import `profiles/`, so the runtime
+reads the resolved profile and passes the list in. A profile that omits
+this key therefore decodes and encodes no span at all.
+
+`span_preset_semantics` (MOR-4385) says what those numbers mean. Every
+shipped profile with presets is Icom CI-V and declares `half_width`:
+the `0x27 0x15` value is the ±half-width the display spans either side
+of center, and the center-mode waveform payload carries that same value
+(IC-7610 CI-V Reference Guide p.14, "Scope waveform data"). The runtime
+consumes it through one conversion
+(`RadioProfile.scope_span_view_widths_hz`): capabilities publish real
+view widths (twice a `half_width` preset), `RadioScopeSource.coverage_for`
+picks the smallest preset whose coverage contains the requested view,
+and the radio receives that preset's own index — so a UI step and the
+radio's own span table agree. A radio whose presets are full display
+widths would declare `full_width` and keep the width-as-preset reading.
+
+The `ref_*_db` triple is the 0x19 reference level's adjustable range
+(MOR-3694). Every shipped profile that declares the `scope` capability and
+binds the 0x19 command declares all three (a conformance test enforces
+it); `ref_step_db` is the radio's own resolution (0.5 dB on the Icom
+rigs), not the UI stepping grid. The web server publishes the triple on
+both capability endpoints under these same names; the frontend steps REF
+on a 5 dB grid clamped to this range and the `set_scope_ref` handler
+refuses values outside it. A profile that omits the triple gets REF
+stepping that fails closed on both ends — disabled keys, refused writes —
+never a fallback range.
+
+## `[attenuator]` — Attenuator Steps
+
+Optional section. Defines available attenuator values for the radio.
+
+| Field    | Type  | Required | Description                                         |
+|----------|-------|----------|-----------------------------------------------------|
+| `values` | int[] | yes      | Available ATT values in dB (e.g. `[0, 3, 6, 9, ...]`) |
+
+`0` = OFF, other values = attenuation in dB. The frontend cycles through these
+values in order. Different radios have very different step sizes:
+- IC-7610: 16 steps × 3 dB = `[0, 3, 6, 9, 12, 15, 18, 21, 24, 27, 30, 33, 36, 39, 42, 45]`
+- IC-7300: binary toggle = `[0, 20]`
+- FTX-1: 4 discrete levels = `[0, 1, 2, 3]`
+
+## `[preamp]` — Preamplifier Steps
+
+Optional section. Defines available preamp settings.
+
+| Field    | Type  | Required | Description                                       |
+|----------|-------|----------|---------------------------------------------------|
+| `values` | int[] | yes      | Available preamp settings (e.g. `[0, 1, 2]`)     |
+
+`0` = OFF, `1` = PREAMP 1, `2` = PREAMP 2. The frontend cycles through these.
+
+## `[agc]` — AGC Modes
+
+Optional section. Defines available AGC modes and their display labels.
+
+| Field    | Type                | Required | Description                                     |
+|----------|---------------------|----------|-------------------------------------------------|
+| `modes`  | int[]               | yes      | Available AGC mode values (e.g. `[1, 2, 3]`)   |
+| `labels` | table (string→string) | yes    | Map of mode value to display label              |
+
+Example:
+
+```toml
+[agc]
+modes = [1, 2, 3]
+labels = { "1" = "FAST", "2" = "MID", "3" = "SLOW" }
+```
+
+## `[controls]` — Control Styles
+
+Optional section. Defines how UI controls render for each feature.
+Each sub-table is named after a feature (e.g. `[controls.attenuator]`).
+
+| Field       | Type   | Required | Description                                    |
+|-------------|--------|----------|------------------------------------------------|
+| `style`     | string | no       | Control rendering style (see below)            |
+| `range_min` | int    | no       | Minimum value (for level controls)             |
+| `range_max` | int    | no       | Maximum value (for level controls)             |
+
+Valid styles:
+- **`toggle`** — Simple ON/OFF (IC-7300 ATT, X6100 ATT)
+- **`stepped`** — Discrete steps with +/- buttons and dropdown (IC-7610 ATT)
+- **`selector`** — Named discrete levels (FTX-1 ATT: 0/1/2/3)
+- **`toggle_and_level`** — Separate ON/OFF toggle + level slider (IC-7610 NB/NR)
+- **`level_is_toggle`** — Level=0 is OFF, level>0 is ON+level (FTX-1 NB/NR)
+
+Example:
+
+```toml
+[controls.attenuator]
+style = "stepped"
+
+[controls.nb]
+style = "level_is_toggle"
+range_min = 0
+range_max = 10
+```
+
+## `[meters]` — Meter Calibration
+
+Optional section. Defines non-linear calibration tables for meters.
+Each sub-table is named after a meter source (e.g. `[meters.s_meter]`).
+
+| Field         | Type  | Required | Description                                  |
+|---------------|-------|----------|----------------------------------------------|
+| `redline_raw` | int   | no       | Raw value where meter enters "danger" zone   |
+| `calibration` | array | no       | Array of calibration points (see below)      |
+
+### `[[meters.<name>.calibration]]` — Calibration Points
+
+| Field    | Type   | Required | Description                          |
+|----------|--------|----------|--------------------------------------|
+| `raw`    | int    | yes      | Raw meter value (0–255)              |
+| `actual` | float  | yes      | Actual value (dBm, watts, etc.)      |
+| `label`  | string | yes      | Display label (e.g. `"S9"`, `"S9+20"`) |
+
+Example:
+
+```toml
+[meters.s_meter]
+redline_raw = 130
+
+[[meters.s_meter.calibration]]
+raw = 0
+actual = -54.0
+label = "S0"
+
+[[meters.s_meter.calibration]]
+raw = 130
+actual = 0.0
+label = "S9"
+```
+
+The frontend interpolates between calibration points for values not exactly matching.
+This handles both linear (Icom) and non-linear (Yaesu) meter scales.
+
+## `[[rules]]` — Constraint Rules
+
+Optional top-level array of tables. Defines interaction constraints between features.
+The rule engine evaluates these to enable/disable controls in the UI and prevent
+invalid hardware states.
+
+| Field         | Type     | Required | Description                              |
+|---------------|----------|----------|------------------------------------------|
+| `kind`        | string   | yes      | Rule type (see below)                    |
+| `fields`      | string[] | varies   | Affected feature fields                  |
+| `when_active` | string   | varies   | Triggering feature                       |
+| `disables`    | string[] | varies   | Features to disable                      |
+| `requires`    | string   | varies   | Required feature                         |
+| `reason`      | string   | no       | Human-readable explanation               |
+
+Valid rule kinds:
+- **`mutex`** — Mutual exclusion. Only one of `fields` can be active. Example: ATT + PREAMP on IC-7610.
+- **`disables`** — When `when_active` is on, `disables` features become unavailable. Example: DIGI-SEL disables PREAMP.
+- **`requires`** — Feature requires another to be active first.
+- **`value_limit`** — Limits values of a feature based on another feature's state.
+
+Example:
+
+```toml
+[[rules]]
+kind = "mutex"
+fields = ["attenuator", "preamp"]
+
+[[rules]]
+kind = "disables"
+when_active = "digisel"
+disables = ["preamp"]
+reason = "DIGI-SEL overrides preamp"
+```
+
+## `[spectrum]` — Scope Parameters
+
+Optional section for radios that support the spectrum scope.
+
+| Field          | Type | Required | Description                                  |
+|----------------|------|----------|----------------------------------------------|
+| `seq_max`      | int  | yes      | Maximum scope sequence number                |
+| `amp_max`      | int  | yes      | Maximum amplitude value in scope data        |
+| `data_len_max` | int  | yes      | Maximum number of data points per scope frame |
+
+## `[modes]` — Operating Modes
+
+| Field  | Type     | Required | Description                                        |
+|--------|----------|----------|----------------------------------------------------|
+| `list` | string[] | yes      | Supported operating modes (e.g. `"USB"`, `"CW"`)  |
+| `codes` | string[] | no | One single-character code per mode, parallel to `list` (validated: same length, one character each, unique). Yaesu CAT `MD` P2 codes. |
+| `families` | table | no | Family name -> non-empty list of mode names from `list`, e.g. `families = { cw = ["CW-U", "CW-L"] }`. The only family name is `cw` (MOR-3679); the loader rejects any other name, a mode that is not in `list` (names compare exactly as written in `list`), and a mode listed twice. Published as `modeFamilies` by `/api/v1/info` and `/api/v1/capabilities`; `{}` when absent. |
+
+## `[filters]` — IF Filters
+
+| Field  | Type     | Required | Description                                      |
+|--------|----------|----------|--------------------------------------------------|
+| `list` | string[] | yes      | Available IF filter names (e.g. `"FIL1"`)        |
+
+Additional optional fields:
+
+| Field            | Type   | Required | Description                                      |
+|------------------|--------|----------|--------------------------------------------------|
+| `encoding`       | string | no       | `"segmented_bcd_index"` (default, Icom BCD index), `"raw_byte_index"` (raw byte index), or `"table_index"` (Yaesu) |
+| `first_code`     | int    | no       | First wire code carrying a width value (default `0`). Codes below it carry no Hz value (e.g. the FTX-1 code-00 "(Default)"). The loader reads it as `filter_width_first_code` (`rig_loader.py: load_rig`, first_code default 0; `radio_default_code` must sit below it) and Yaesu width lookups index the per-mode table as `code - first_code`. |
+| `radio_default_code` | int | no     | Writeable code returning the width to the radio's own mode-dependent default. Must sit below `first_code`. Read side (MOR-3677): a width answer equal to this code carries no Hz value; the Yaesu read reports it as a null width plus the `filter_width_radio_default` observation flag. |
+| `width_min_hz`   | int    | no       | Minimum IF filter width in Hz                    |
+| `width_max_hz`   | int    | no       | Maximum IF filter width in Hz                    |
+
+Profile-specific width contracts can be described under `[filters.width.<MODE>]`.
+
+```toml
+[filters]
+list = ["FIL1", "FIL2", "FIL3"]
+encoding = "segmented_bcd_index"
+
+[filters.width.USB]
+defaults = [3000, 2400, 1800]
+segments = [
+	{ hz_min = 50, hz_max = 500, step_hz = 50, index_min = 0 },
+	{ hz_min = 600, hz_max = 3600, step_hz = 100, index_min = 10 },
+]
+
+[filters.width.FM]
+fixed = true
+defaults = [15000, 10000, 7000]
+```
+
+A `table_index` mode rule may carry a narrow-state variant (MOR-4428): while
+the radio's NARROW is on, the same SH code maps through `narrow_table`
+instead of `table`. The backend reads the narrow state before mapping SH
+in both the width read and the width write, but only for modes whose rule
+declares the variant — modes without one issue no extra narrow query.
+
+```toml
+[filters.width.SSB]
+defaults = [2400, 1800, 500]
+table = [2400, 2600, 3000, 3200, 4000]
+narrow_table = [1500, 1800, 2000]
+```
+
+Loader rules (`rig_loader.py: _validate_filter_narrow_variant`): a narrow
+variant is rejected unless `[filters].encoding` is `"table_index"`, the rule
+is not `fixed`, the rule has a non-empty `table`, `narrow_table` is
+non-empty and strictly increasing, and the profile
+declares the narrow read (`[commands].get_narrow`, plus `get_narrow_sub` on
+a multi-receiver profile). Absent narrow data keeps today's behavior.
+
+A rule whose narrow and wide tables sit at DIFFERENT code ranges of one
+code space (MOR-4433; FT-991A SH table: SSB narrow codes 01-09 but wide
+codes 09-21) declares each table's base: `first_code` for the wide
+`table`, `narrow_first_code` for the `narrow_table`. An absent field falls
+back to the profile-level `[filters] first_code`. The backend uses the
+active table's base in both the width read and the width write. Loader
+rules (`rig_loader.py: _validate_filter_table_first_codes`): both fields
+need `[filters].encoding` `"table_index"`, are rejected on a `fixed`
+rule, `first_code` needs a `table`, `narrow_first_code` needs a
+`narrow_table`, each present value must be a non-negative integer, and
+each present base must sit above `[filters].radio_default_code`.
+
+## `[vfo]` — VFO Configuration
+
+| Field             | Type   | Required    | Description                                                  |
+|-------------------|--------|-------------|--------------------------------------------------------------|
+| `scheme`          | string | yes         | VFO scheme (see below)                                       |
+| `main_select`     | int[]  | if main_sub | Wire bytes to select Main VFO (e.g. `[0xD0]`)                |
+| `sub_select`      | int[]  | if main_sub | Wire bytes to select Sub VFO (e.g. `[0xD1]`)                 |
+| `swap_ab`         | int[]  | no          | A↔B swap within the selected receiver (e.g. `[0x07, 0xB0]`)  |
+| `equal_ab`        | int[]  | no          | A=B equalize within the selected receiver                    |
+| `swap_main_sub`   | int[]  | no          | MAIN↔SUB swap across receivers (dual-RX rigs, e.g. `[0xB0]`) |
+| `equal_main_sub`  | int[]  | no          | MAIN=SUB equalize across receivers                           |
+| `swap` *(legacy)* | int[]  | no          | **Deprecated.** Maps to `swap_main_sub` if `scheme = "main_sub"`, else `swap_ab`. Emits a `DeprecationWarning` per load. |
+| `equal` *(legacy)*| int[]  | no          | **Deprecated.** Same mapping as `swap`.                      |
+
+The A↔B vs MAIN↔SUB split was introduced in issue #710: on dual-receiver rigs
+(IC-7610) `0x07 0xB0` swaps MAIN/SUB, while on single-receiver rigs (IC-7300)
+the same nibble swaps VFO A/B. The legacy `swap`/`equal` keys overloaded both
+meanings; prefer the explicit fields for new rig files.
+
+Valid VFO schemes:
+- **`ab`** — 2 VFOs (A/B), 1 receiver (IC-7300, X6100, TX-500)
+- **`main_sub`** — 2 VFOs + 2 receivers (IC-7610, IC-R8600)
+- **`ab_shared`** — 1 VFO shared between 2 receivers (FTX-1)
+- **`single`** — 1 VFO, 1 receiver (simple QRP rigs)
+
+## `[[freq_ranges.ranges]]` — Frequency Ranges
+
+Array of tables, each defining a frequency coverage range.
+
+| Field      | Type   | Required | Description                                  |
+|------------|--------|----------|----------------------------------------------|
+| `label`    | string | yes      | Range label (e.g. `"HF"`, `"6m"`, `"2m"`)   |
+| `start_hz` | int    | yes      | Start frequency in Hz                        |
+| `end_hz`   | int    | yes      | End frequency in Hz (must be > `start_hz`)   |
+| `bands`    | array  | no       | Amateur band definitions within this range   |
+| `repeater` | bool   | no       | This range is a VHF/UHF repeater band (e.g. 2 m / 70 cm). Optional, default `false`; a non-boolean value is a load error. Drives the per-receiver repeater-strip gate (MOR-2111). |
+
+### `[[freq_ranges.ranges.bands]]` — Band Definitions
+
+| Field          | Type   | Required | Description                                                          |
+|----------------|--------|----------|----------------------------------------------------------------------|
+| `name`         | string | yes      | Band name (e.g. `"20m"`, `"70cm"`)                                   |
+| `start_hz`     | int    | yes      | Band start frequency in Hz                                           |
+| `end_hz`       | int    | yes      | Band end frequency in Hz                                             |
+| `default_hz`   | int    | yes      | Default tuning frequency in Hz (within band)                         |
+| `bsr_code`     | int    | no       | Band Stack Register code for CI-V 0x1A 0x01                          |
+| `default_mode` | string | no       | Mode tuned with `default_hz` when a band change has no band-stack readback (MOR-3631). Must name a mode from `[modes].list` exactly. Omitted = freq-only fallback, unchanged. Read only by the Icom band-stack fallback; a backend that recalls bands natively (Yaesu `BS`) never consumes it, so do not set it there. |
+| `rx_only`    | bool   | no       | This band row is receive-only (MOR-3632): tunable in the band selector but excluded from the capabilities `txBands` payload, so it never grants transmit permission. Optional, default `false`; a non-boolean value is a load error naming the band. |
+| `max_power_w` | int  | no       | Rated maximum TX power of this band in watts (MOR-3634), from the manuals (IC-9700: 2 m 100, 70 cm 75, 23 cm 10; tier B-, not hardware-verified). Published as `txBands[].maxPowerW`. It drives the power slider's scale for the band the radio is on, depending on how the radio scales its level (capabilities `powerUnit`, the backend's `native_power_unit`): a `raw_255` radio (Icom) already reports a percentage of the current band's maximum, so the slider keeps its full range and the label shows watts (level x band maximum); a `watts` radio (Yaesu CAT) reports a fraction of the flat `[power].max_watts`, so the slider range is the band maximum over `max_watts`. Data for the slider's scale and label only: nothing clamps, rescales or refuses a power value that is written. Optional; a band without it uses the flat `max_watts`. A positive integer no larger than `[power].max_watts`, which must be declared; otherwise a load error naming the band. |
+
+## `[cmd29]` — Command 29 Routes
+
+Optional section for dual-receiver radios that use Command 29 prefix for
+receiver targeting. Single-receiver radios omit this section entirely.
+
+| Field    | Type       | Required | Description                                        |
+|----------|------------|----------|----------------------------------------------------|
+| `routes` | int[][]    | yes      | List of `[cmd, sub]` or `[cmd]` (sub=None) entries |
+
+Each entry is a 1- or 2-element integer array:
+- `[0x11]` — command-only route (sub = None, e.g. ATT)
+- `[0x14, 0x01]` — command + sub-command route (e.g. AF Gain)
+
+## `[commands]` — Command Definitions
+
+Optional section. Required for `civ` protocol radios, optional for others.
+Each key maps a command name to its specification. The format depends on the
+protocol type.
+
+### Format 1: CI-V Wire Bytes (Icom)
+
+For `civ` protocol radios, commands are arrays of bytes:
+
+```toml
+get_freq = [0x03]           # Single command byte
+get_af_level = [0x14, 0x01] # Command + sub-command
+```
+
+All byte values must be integers in the range `0x00`–`0xFF`.
+
+When one semantic value selects a complete model-specific wire tuple, use the
+additive `bytes` + `value_variants` descriptor under that same command name:
+
+```toml
+set_data_mode = { bytes = [0x1A, 0x06], value_variants = { "0" = [0x1A, 0x06, 0x00, 0x00], "1" = [0x1A, 0x06, 0x01, 0x01] } }
+```
+
+`bytes` is the non-empty base tuple. `value_variants` is a non-empty table
+whose keys are canonical decimal integers and whose values are unique,
+non-empty byte arrays. Every variant must strictly extend and start with the
+base tuple. The descriptor accepts exactly these two keys. The loader retains
+the variants behind the one command-map entry, so command discovery, map
+iteration, and reverse lookup continue to see only the base command name and
+tuple. Builders that opt into semantic-value selection reject values absent
+from the table; profiles using the original byte-array form are unchanged.
+
+### Format 2: CAT Command Spec (Yaesu/Kenwood)
+
+For `yaesu_cat` and `kenwood_cat` protocols, commands are inline tables with a
+`cat` key containing template strings:
+
+```toml
+# Read-only command (query + parse response)
+get_freq = { cat = { read = "FA;", parse = "FA{freq:09d};" } }
+
+# Write-only command (set value)
+set_freq = { cat = { write = "FA{freq:09d};" } }
+
+# Read + write command (both query and set)
+get_ptt = { cat = { read = "TX;", write = "TX{state};", parse = "TX{state};" } }
+```
+
+CAT spec fields:
+
+| Field   | Type   | Required | Description                                      |
+|---------|--------|----------|--------------------------------------------------|
+| `read`  | string | no*      | Template for READ query (e.g. `"FA;"`)           |
+| `write` | string | no*      | Template for WRITE/SET (e.g. `"FA{freq:09d};"`) |
+| `parse` | string | no       | Template for parsing response (defaults to `read`) |
+
+\* At least one of `read` or `write` must be present.
+
+Template placeholders use Python-style format specs: `{name:format}`.
+
+### Mixed Protocols
+
+A single rig file uses only one format (CI-V or CAT), matching its `[protocol].type`.
+The loader validates both formats uniformly.
+
+### Naming Convention
+
+The command name follows the pattern `get_<param>` / `set_<param>` for
+read/write commands, or a verb like `ptt_on`, `scope_on`, `send_cw`.
+
+### `[commands.overrides]` — Model-Specific Overrides
+
+Commands in this sub-table override the defaults for a specific radio model.
+Same format as `[commands]`: CI-V byte arrays, CI-V value-variant descriptors,
+or CAT inline tables.
+
+## Additional Parameterized Sections
+
+These optional sections provide detailed configuration for specific capabilities:
+
+| Section        | Description                                    |
+|----------------|------------------------------------------------|
+| `[antenna]`    | TX antenna count, RX antenna, antenna modes    |
+| `[apf]`        | Audio Peak Filter values and labels            |
+| `[notch]`      | Manual notch width values and labels           |
+| `[ssb_tx_bw]`  | SSB TX bandwidth values and labels             |
+| `[break_in]`   | CW break-in mode values and labels             |
+| `[rit]`        | RIT range in Hz                                |
+| `[cw]`         | CW pitch, speed, dash ratio ranges             |
+| `[nb]`         | Noise blanker depth and width ranges            |
+| `[power]`      | Maximum TX power in watts                      |
+| `[memory]`     | How stored memory channels are addressed       |
+| `[iq_lan]`     | Radio-owned LAN IQ wire protocol and rates     |
+
+### `[iq_lan]`
+
+Optional measured radio-LAN IQ facts: `protocol` (currently `"xiegu_udp"`), UDP ports, sample rate/datagram size, centre offset, usable bandwidth, and tune bounds. All nine keys are required; the host is server configuration, not profile data. `samples_per_datagram` must be positive and at most 16376, keeping its four-byte I/Q payload within the 65,507-byte IPv4 UDP limit.
+Unknown keys/protocols, wrong types, and invalid ranges name the key. See `profiles/rig_loader.py: _parse_iq_lan` and `sdr/types.py: UdpIqSourceSpec`.
+
+### `[memory]`
+
+Optional: how stored memory channels are addressed, for the read-only listing
+(capability `memory_read`). CI-V profiles read with their `get_memory_contents`;
+the FTX-1 declares the CAT pair `get_memory_channel` (MR) and `get_memory_tag` (MT).
+`addressing` is `"group_channel"` (IC-705), `"band_channel"` (IC-9700) or
+`"channel"` (FTX-1, one numbered list, group 0 only); the first two also pick the
+`1A 00` record layout; `first_group`/`last_group` bound the
+group number or band code, `first_channel`/`last_channel` the channel;
+`recall = true` marks profiles whose select commands recall a channel: the
+group (`08 A0`, `group_channel` only), the channel (`08` + channel), then the
+Memory mode (bare `08`); allowed for `group_channel` and `channel` addressing
+(MOR-4219).
+`dd_groups` lists groups/bands where mode byte `0x22` is DD;
+`offset_10mhz_groups` lists groups/bands with the offset's 10 MHz digit.
+Both default to `[]` and accept only lists of unique integers within
+`first_group..last_group`; booleans are rejected.
+`frequency_ranges` optionally lists `{group, min_hz, max_hz}` tables for
+memory writes. Bounds are inclusive positive integer Hz, at most 9999999999;
+groups must be within the memory bounds and ranges in one group cannot overlap.
+A nonempty list admits only matching group/frequency pairs; an absent or empty
+list adds no frequency restriction. See `rig_loader.py: _parse_memory` and
+`commands/memory.py: _encode_record_frequency`.
+`write_layout` (default absent) declares the write-side record layout
+accepted for the profile, as a field table (MOR-3644): `clear` names the
+channel-clear wire form (`"1a00_ff"` = the manuals' `1A 00` + the radio's
+own address form + `FF`, `"0b_channel"` = the legacy `0x0B` + 2-byte BCD
+channel the IC-7610 keeps), `record_length` the bytes after the memory
+address in ONE copy of the record, `copies` (default 1, at most 2) how
+many times the channel-data block — the fields between a leading
+`select` byte and the name field — appears on the wire (the sourced
+Icom manuals print the block's position labels twice: the TX/split copy,
+which a non-split entry fills with the RX values, so the IC-705, IC-9700,
+IC-7300 and IC-7300MK2 profiles
+declare `copies = 2` and the name lands after the last copy),
+`default_tone_centihz` the tone a `tone`/`tsql` field carries when the
+caller leaves it unset (a zero field is not a valid CTCSS value; required
+exactly when the table declares such a field, and checked against the
+profile's CTCSS domain), and
+`fields` an array of `{field, offset, length, encoding}`
+rows (plus `max_hz` on a frequency field and `value`, the hex byte
+string, on a `fixed` field) that must tile the record
+exactly, with no gap or overlap. The encodings come from one shared
+vocabulary (`core/types.py: MEMORY_WRITE_ENCODINGS`) — the raw mode code,
+the filter byte, the centi-Hz-exact CTCSS encoding of `1B 00`, ASCII
+names space- or NUL-padded, and `fixed` byte runs declared as hex — so
+the per-radio
+facts (offsets, name width, copy count) are data, and one table-driven
+encoder in `commands/memory.py` builds every radio's record. Absent means NOT
+verified: memory contents writes and clears are refused with the stable
+error `memory_write_unverified` before any byte reaches the wire, at the
+dispatch handler and in the backend. Declaring the read-side fields
+alone proves nothing about the write layout; the `memory_read`
+capability is still what turns on the read-only listing.
+
+## `[cw_text]` — Typed CW Text (MOR-3678)
+
+Whether `send_cw_text` works on this radio, published as `cwText`. Separate
+from the `cw` capability tag (decoder, console, keyer controls).
+
+| Key              | Type   | Default | Description |
+|------------------|--------|---------|-------------|
+| `supported`      | bool   | CI-V: whether `[commands]` has `send_cw` as CI-V bytes; Yaesu CAT and Kenwood CAT: `false` | `false` refuses `send_cw_text`. `true` is a load error without a `send_cw` the protocol can write (CI-V bytes on CI-V, a CAT write template on Yaesu CAT); on Yaesu CAT also without `memory_channel` 1-5 or a `write_keyer_memory` CAT write template; on Kenwood CAT always (no backend sends CW text) |
+| `max_length`     | int    | `512`   | Longest text one request may carry (positive); longer text is refused, never truncated. Yaesu CAT: at most `50` (one KM write, printed p.17), and required when `supported = true` |
+| `memory_channel` | int    | absent  | Keyer memory channel the text is written to (positive; 1-5 on Yaesu CAT, KM printed p.17); for radios that send text by writing a memory and playing it |
+| `memory_type`    | string | absent  | `"text"` or `"message"`: which keyer memory kind is played |
+
+```toml
+[cw_text]
+supported = false
+max_length = 50
+memory_channel = 5
+memory_type = "text"
+```
+
+## Wire Byte Format
+
+All wire bytes are specified as arrays of integers in the range `0x00`–`0xFF`.
+TOML supports hex integer literals natively: `0x14` is the same as `20`.

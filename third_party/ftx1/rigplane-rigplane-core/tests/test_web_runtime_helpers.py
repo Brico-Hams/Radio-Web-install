@@ -1,0 +1,1908 @@
+from __future__ import annotations
+
+import json
+from collections.abc import Callable
+from dataclasses import replace
+from itertools import permutations
+from types import SimpleNamespace
+from typing import Any, cast
+
+import pytest
+from unittest.mock import MagicMock
+
+from rigplane.web.runtime_helpers import (
+    build_public_state_payload,
+    build_public_state_payload_from_snapshot,
+    classify_radio_health,
+    radio_ready,
+    runtime_capabilities,
+    snapshot_field_status_inputs,
+)
+from rigplane.web.server import WebServer
+from rigplane.core.acquisition_scheduler import (
+    AcquisitionScheduler,
+    StateFreshnessService,
+)
+from rigplane.core.state_pipeline_contracts import (
+    FieldPath,
+    Observation,
+    SourceMetadata,
+)
+from rigplane.core.state_store import (
+    FieldSnapshot,
+    FreshnessClock,
+    FreshnessState,
+    StateSnapshot,
+    StateStore,
+)
+from rigplane.profiles import get_radio_profile
+from rigplane.core.tx_target import KnownTxTarget, TxTarget, UnknownTxTarget
+from rigplane.core.types import ScopeFixedEdge
+from rigplane.radio_state import RadioState
+
+
+class _FakeWriter:
+    """Minimal writer for capturing HTTP response (buffer, write, close, wait_closed)."""
+
+    def __init__(self) -> None:
+        self.buffer = bytearray()
+        self.closed = False
+        self.wait_closed_called = False
+
+    def write(self, data: bytes) -> None:
+        self.buffer.extend(data)
+
+    async def drain(self) -> None:
+        return None
+
+    def close(self) -> None:
+        self.closed = True
+
+    async def wait_closed(self) -> None:
+        self.wait_closed_called = True
+
+
+class _FakeRadio:
+    conn_state: str | None
+    _last_civ_data_received: float | None
+    _civ_ready_idle_timeout: float | None
+    _has_connected_once: bool
+    civ_stats: Callable[[], dict[str, int]] | None
+
+    def __init__(
+        self,
+        *,
+        caps: set[str] | None = None,
+        connected: bool | None = True,
+        radio_ready_flag: bool | None = True,
+    ) -> None:
+        self.capabilities = caps  # may be None or a set
+        self.connected = connected
+        self.radio_ready = radio_ready_flag
+        self.control_connected = False
+        # X6100: resolves (must not raise) but contributes zero VFO tags
+        # (swap/equal codes all None), so it doesn't perturb capability
+        # comparisons keyed off the fake's own declared .capabilities.
+        self.model = "X6100"
+        self.conn_state = None
+        self._last_civ_data_received = None
+        self._civ_ready_idle_timeout = None
+        self._has_connected_once = False
+        self.civ_stats = None
+        self.remote_control_unreachable = False
+
+
+def _source(*, provider: str = "test") -> SourceMetadata:
+    return SourceMetadata(
+        source="poll_response",
+        provider=provider,
+        transport="fake",
+        native_id="test",
+    )
+
+
+def _observation(
+    path: FieldPath,
+    value: Any,
+    *,
+    at: float,
+    max_age: float | None = None,
+    quality: tuple[str, ...] = ("confirmed",),
+    provider: str = "test",
+) -> Observation:
+    return Observation(
+        path=path,
+        value=value,
+        source=_source(provider=provider),
+        timestamp_monotonic=at,
+        max_age=max_age,
+        quality=quality,
+    )
+
+
+def test_relative_unselected_vfo_projects_only_as_complete_public_object() -> None:
+    values = {
+        "freq_hz": 7_100_000,
+        "mode": "LSB",
+        "filter_num": 2,
+        "data_mode": 0,
+    }
+    for order in permutations(values):
+        store = StateStore()
+        for index, name in enumerate(order):
+            store.apply(
+                _observation(
+                    FieldPath.unselected("0", "freq_mode", name),
+                    values[name],
+                    at=10.0 + index,
+                )
+            )
+            payload = build_public_state_payload_from_snapshot(
+                store.snapshot(), radio=None, receiver_count=1
+            )
+            if index < len(values) - 1:
+                assert "unselectedVfo" not in payload["main"]
+                public_leaf = {
+                    "freq_hz": "freqHz",
+                    "mode": "mode",
+                    "filter_num": "filterNum",
+                    "data_mode": "dataMode",
+                }[name]
+                assert (
+                    payload["fieldStatus"][f"main.unselectedVfo.{public_leaf}"][
+                        "observed"
+                    ]
+                    is True
+                )
+            else:
+                assert payload["main"]["unselectedVfo"] == {
+                    "freqHz": 7_100_000,
+                    "mode": "LSB",
+                    "filterNum": 2,
+                    "dataMode": 0,
+                }
+
+
+def test_relative_unselected_vfo_reset_removes_complete_public_object() -> None:
+    store = StateStore()
+    paths = [
+        FieldPath.unselected("0", "freq_mode", name)
+        for name in ("freq_hz", "mode", "filter_num", "data_mode")
+    ]
+    for path, value in zip(paths, (7_100_000, "LSB", 2, 0), strict=True):
+        store.apply(_observation(path, value, at=10.0))
+
+    before = build_public_state_payload_from_snapshot(
+        store.snapshot(), radio=None, receiver_count=1
+    )
+    assert before["main"]["unselectedVfo"]["freqHz"] == 7_100_000
+
+    store.discard(paths)
+    after = build_public_state_payload_from_snapshot(
+        store.snapshot(), radio=None, receiver_count=1
+    )
+    assert "unselectedVfo" not in after["main"]
+    assert all(
+        after["fieldStatus"][f"main.unselectedVfo.{leaf}"]["observed"] is False
+        for leaf in ("freqHz", "mode", "filterNum", "dataMode")
+    )
+
+
+def test_relative_vfo_public_payload_does_not_flap_at_leaf_ttl() -> None:
+    clock = FreshnessClock(start=902_507.0)
+    store = StateStore(freshness_clock=clock)
+    store.configure_relative_vfo_retention(
+        generation=1,
+        max_age=31.0,
+        coherence_window=5.0,
+    )
+    values = {
+        FieldPath.active("0", "freq_mode", "freq_hz"): 14_284_000,
+        FieldPath.active("0", "freq_mode", "mode"): "USB",
+        FieldPath.active("0", "freq_mode", "filter_num"): 1,
+        FieldPath.active("0", "freq_mode", "data_mode"): 0,
+        FieldPath.unselected("0", "freq_mode", "freq_hz"): 14_075_000,
+        FieldPath.unselected("0", "freq_mode", "mode"): "USB",
+        FieldPath.unselected("0", "freq_mode", "filter_num"): 1,
+        FieldPath.unselected("0", "freq_mode", "data_mode"): 0,
+    }
+    store.apply_relative_vfo_observations(
+        tuple(
+            _observation(path, value, at=clock.now(), max_age=5.0)
+            for path, value in values.items()
+        ),
+        generation=1,
+    )
+
+    clock.advance(5.1)
+    assert store.mark_stale_due().freshness == ()
+    retained = build_public_state_payload_from_snapshot(
+        store.snapshot(), radio=None, receiver_count=1
+    )
+    assert retained["main"]["freqHz"] == 14_284_000
+    assert retained["main"]["unselectedVfo"]["freqHz"] == 14_075_000
+    assert all(
+        retained["fieldStatus"][path]["freshness"] == "fresh"
+        for path in (
+            "main.freqHz",
+            "main.mode",
+            "main.unselectedVfo.freqHz",
+            "main.unselectedVfo.mode",
+        )
+    )
+
+    store.apply_relative_vfo_observations(
+        (
+            _observation(
+                FieldPath.active("0", "freq_mode", "freq_hz"),
+                14_285_000,
+                at=clock.now(),
+                max_age=5.0,
+            ),
+        ),
+        generation=1,
+    )
+    patched = build_public_state_payload_from_snapshot(
+        store.snapshot(), radio=None, receiver_count=1
+    )
+    assert patched["main"]["freqHz"] == 14_285_000
+    assert patched["main"]["unselectedVfo"] == retained["main"]["unselectedVfo"]
+
+
+def test_bound_vfo_public_projection_tracks_live_selected_and_retains_sibling() -> None:
+    store = StateStore()
+    store.configure_relative_vfo_retention(
+        generation=1,
+        max_age=31.0,
+        coherence_window=5.0,
+    )
+    base = {
+        FieldPath.active("0", "freq_mode", "freq_hz"): 14_164_000,
+        FieldPath.active("0", "freq_mode", "mode"): "USB",
+        FieldPath.active("0", "freq_mode", "filter_num"): 1,
+        FieldPath.active("0", "freq_mode", "data_mode"): 0,
+        FieldPath.unselected("0", "freq_mode", "freq_hz"): 14_076_000,
+        FieldPath.unselected("0", "freq_mode", "mode"): "USB",
+        FieldPath.unselected("0", "freq_mode", "filter_num"): 1,
+        FieldPath.unselected("0", "freq_mode", "data_mode"): 0,
+    }
+    store.apply_relative_vfo_observations(
+        tuple(_observation(path, value, at=10.0) for path, value in base.items()),
+        generation=1,
+    )
+    store.apply(_observation(FieldPath.active_slot("0"), "A", at=10.1))
+    store.apply_relative_vfo_observations(
+        tuple(_observation(path, value, at=10.2) for path, value in base.items()),
+        generation=1,
+    )
+
+    for revision_freq in (14_130_000, 14_123_000):
+        store.apply_relative_vfo_observations(
+            (
+                Observation(
+                    path=FieldPath.active("0", "freq_mode", "freq_hz"),
+                    value=revision_freq,
+                    source=SourceMetadata(
+                        source="civ_unsolicited",
+                        provider="icom_civ",
+                        native_id="civ:00",
+                    ),
+                    timestamp_monotonic=11.0,
+                ),
+            ),
+            generation=1,
+        )
+        payload = build_public_state_payload_from_snapshot(
+            store.snapshot(), radio=None, receiver_count=1
+        )
+        assert payload["main"]["freqHz"] == revision_freq
+        assert payload["main"]["vfoA"]["freqHz"] == revision_freq
+        assert payload["main"]["vfoB"]["freqHz"] == 14_076_000
+        assert (
+            payload["fieldStatus"]["main.freqHz"]["source"]
+            == payload["fieldStatus"]["main.vfoA.freqHz"]["source"]
+        )
+
+
+@pytest.mark.parametrize("active_slot", ["A", "B"])
+def test_bound_vfo_public_projection_expires_together_at_exact_deadline(
+    active_slot: str,
+) -> None:
+    clock = FreshnessClock(start=10.0)
+    store = StateStore(freshness_clock=clock)
+    store.configure_relative_vfo_retention(
+        generation=1,
+        max_age=20.0,
+        coherence_window=5.0,
+    )
+    values = {
+        FieldPath.active("0", "freq_mode", "freq_hz"): 14_164_000,
+        FieldPath.active("0", "freq_mode", "mode"): "USB",
+        FieldPath.active("0", "freq_mode", "filter_num"): 1,
+        FieldPath.active("0", "freq_mode", "data_mode"): 0,
+        FieldPath.unselected("0", "freq_mode", "freq_hz"): 14_076_000,
+        FieldPath.unselected("0", "freq_mode", "mode"): "USB",
+        FieldPath.unselected("0", "freq_mode", "filter_num"): 1,
+        FieldPath.unselected("0", "freq_mode", "data_mode"): 0,
+    }
+    pair = tuple(_observation(path, value, at=10.0) for path, value in values.items())
+    store.apply_relative_vfo_observations(pair, generation=1)
+    store.apply(_observation(FieldPath.active_slot("0"), active_slot, at=10.7))
+    store.apply_relative_vfo_observations(
+        tuple(
+            Observation(
+                path=item.path,
+                value=item.value,
+                source=item.source,
+                timestamp_monotonic=10.7,
+                max_age=item.max_age,
+            )
+            for item in pair
+        ),
+        generation=1,
+    )
+    deadline = max(
+        field.last_observed_monotonic + field.max_age
+        for field in store.snapshot().fields
+        if field.max_age is not None
+    )
+    public_paths = (
+        "main.freqHz",
+        "main.mode",
+        "main.filter",
+        "main.dataMode",
+        "main.unselectedVfo.freqHz",
+        "main.unselectedVfo.mode",
+        "main.unselectedVfo.filterNum",
+        "main.unselectedVfo.dataMode",
+        "main.vfoA.freqHz",
+        "main.vfoA.mode",
+        "main.vfoA.filterNum",
+        "main.vfoA.dataMode",
+        "main.vfoB.freqHz",
+        "main.vfoB.mode",
+        "main.vfoB.filterNum",
+        "main.vfoB.dataMode",
+    )
+
+    store.mark_stale_due(now=deadline - 0.001)
+    before = build_public_state_payload_from_snapshot(
+        store.snapshot(), radio=None, receiver_count=1
+    )
+    assert all(
+        before["fieldStatus"][path]["freshness"] == "fresh"
+        and before["fieldStatus"][path]["availability"] == "available"
+        for path in public_paths
+    )
+
+    store.mark_stale_due(now=deadline)
+    exact = build_public_state_payload_from_snapshot(
+        store.snapshot(), radio=None, receiver_count=1
+    )
+    assert all(
+        exact["fieldStatus"][path]["freshness"] == "stale"
+        and exact["fieldStatus"][path]["availability"] == "stale"
+        for path in public_paths
+    )
+
+
+def test_web_server_publishes_single_receiver_main_from_topology_only() -> None:
+    from rigplane.profiles import resolve_radio_profile
+
+    store = StateStore()
+    radio = MagicMock()
+    radio.model = "IC-7300"
+    radio.profile = resolve_radio_profile(model="IC-7300")
+    radio.state_store = store
+    radio.capabilities = set(radio.profile.capabilities)
+    radio.managed_tx = None
+
+    WebServer(radio)
+
+    snapshot = store.snapshot()
+    assert snapshot.field("global.slow_state.active").value == "MAIN"
+    assert "global.tx_state.ptt" not in snapshot.as_dict()
+    assert "receiver.0.vfo.active_slot" not in snapshot.as_dict()
+
+
+def test_production_radio_poller_resets_vfo_identity_on_reconnect() -> None:
+    from rigplane.profiles import resolve_radio_profile
+    from rigplane.web.radio_poller import CommandQueue, RadioPoller
+
+    store = StateStore()
+    radio = MagicMock()
+    radio.model = "IC-7300"
+    radio.profile = resolve_radio_profile(model="IC-7300")
+    radio.state_store = store
+    radio.capabilities = set(radio.profile.capabilities)
+    radio.managed_tx = None
+    server = WebServer(radio)
+    poller = RadioPoller(radio, CommandQueue(), state_store=store)
+    server._radio_poller = poller  # noqa: SLF001
+    store.apply(_observation(FieldPath.active_slot("0"), "B", at=10.0))
+
+    def close_spawned(coro: Any) -> None:
+        coro.close()
+
+    server._spawn = close_spawned  # type: ignore[method-assign]  # noqa: SLF001
+    server._on_radio_reconnect()  # noqa: SLF001
+
+    assert "receiver.0.vfo.active_slot" not in store.snapshot().as_dict()
+
+
+def test_radio_disconnect_immediately_clears_retained_relative_vfo() -> None:
+    from rigplane.profiles import resolve_radio_profile
+    from rigplane.web.radio_poller import CommandQueue, RadioPoller
+
+    store = StateStore()
+    radio = MagicMock()
+    radio.model = "IC-7300"
+    radio.profile = resolve_radio_profile(model="IC-7300")
+    radio.capabilities = set(radio.profile.capabilities)
+    radio.managed_tx = None
+    server = WebServer(radio)
+    server._radio_poller = RadioPoller(  # noqa: SLF001
+        radio, CommandQueue(), state_store=store
+    )
+    store.apply_relative_vfo_observations(
+        (
+            _observation(FieldPath.active("0", "freq_mode", "freq_hz"), 1, at=1.0),
+            _observation(FieldPath.active("0", "freq_mode", "mode"), "USB", at=1.0),
+            _observation(FieldPath.unselected("0", "freq_mode", "freq_hz"), 2, at=1.0),
+            _observation(FieldPath.unselected("0", "freq_mode", "mode"), "USB", at=1.0),
+        ),
+        generation=0,
+    )
+
+    server._on_radio_state_change(  # noqa: SLF001
+        "connection_state", {"connected": False}
+    )
+
+    assert not {
+        path
+        for path in store.snapshot().as_dict()
+        if ".active.freq_mode." in path or ".unselected.freq_mode." in path
+    }
+
+
+def _tx_target_field(
+    value: Any, *, at: float, freshness: FreshnessState = FreshnessState.FRESH
+) -> FieldSnapshot:
+    path = FieldPath.global_("tx_state", "tx_target")
+    return FieldSnapshot(path, value, freshness, at, 1.0, _source())
+
+
+def test_runtime_capabilities_none_radio_returns_empty() -> None:
+    assert runtime_capabilities(None) == set()
+
+
+def test_runtime_capabilities_uses_explicit_caps_without_protocol_fallback() -> None:
+    radio = _FakeRadio(caps=set())
+    caps = runtime_capabilities(radio)
+    assert caps == set()
+
+
+def test_runtime_capabilities_falls_back_to_protocols_when_caps_missing() -> None:
+    from rigplane.radio_protocol import (
+        AudioCapable,
+        DualReceiverCapable,
+        RepeaterShiftCapable,
+        ScopeCapable,
+    )
+
+    class _ProtoRadio(  # type: ignore[misc]
+        ScopeCapable, AudioCapable, DualReceiverCapable, RepeaterShiftCapable
+    ):
+        def __init__(self) -> None:
+            self.capabilities = None
+
+        async def enable_scope(self, **kwargs: Any) -> None:  # noqa: ARG002
+            ...
+
+        async def disable_scope(self) -> None: ...
+
+        def on_scope_data(self, callback: Any | None) -> None:  # noqa: ARG002
+            ...
+
+        @property
+        def audio_bus(self) -> Any:
+            return MagicMock()
+
+        async def start_audio_rx_opus(self, callback: Any) -> None:  # noqa: ARG002
+            ...
+
+        async def stop_audio_rx_opus(self) -> None: ...
+
+        async def push_audio_tx_opus(self, data: bytes) -> None:  # noqa: ARG002
+            ...
+
+        async def swap_main_sub(self) -> None: ...
+
+        async def equalize_main_sub(self) -> None: ...
+
+        async def set_main_sub_tracking(self, on: bool) -> None: ...  # noqa: ARG002
+
+        async def get_main_sub_tracking(self) -> bool:
+            return False
+
+        async def get_repeater_shift(self, receiver: int = 0) -> int:
+            return 0
+
+        async def set_repeater_shift(self, direction: int, receiver: int = 0) -> None:
+            pass
+
+    radio = _ProtoRadio()
+    caps = runtime_capabilities(radio)
+    assert caps == {"scope", "audio", "dual_rx", "repeater_shift"}
+
+
+def test_runtime_capabilities_fallback_recognises_usb_audio_only() -> None:
+    """Fallback path (no `capabilities` set) must recognise USB-audio backends.
+
+    Regression for #1356: Yaesu CAT radios that satisfy only ``UsbAudioCapable``
+    (and not in-band ``AudioCapable``) must still get the ``"audio"`` tag when
+    capabilities are derived purely from Protocol checks.
+    """
+    from rigplane.radio_protocol import UsbAudioCapable
+
+    class _UsbOnlyRadio(UsbAudioCapable):  # type: ignore[misc]
+        has_usb_audio: bool = True
+
+    radio = _UsbOnlyRadio()
+    # Sanity: no `capabilities` attribute → fallback path is used.
+    assert not hasattr(radio, "capabilities")
+    caps = runtime_capabilities(radio)
+    assert caps == {"audio"}
+
+
+def test_runtime_capabilities_filters_incompatible_tags() -> None:
+    radio = _FakeRadio(caps={"scope", "audio", "dual_rx", "repeater_shift", "tx"})
+    caps = runtime_capabilities(radio)
+    # No Protocols implemented -> scope/audio/repeater_shift dropped; tx and
+    # dual_rx preserved. ``dual_rx`` is not gated on ``DualReceiverCapable``
+    # (owner ruling, 2026-09-08): the second receiver's structural existence
+    # follows the rig profile, not the swap-and-equalize protocol.
+    assert caps == {"tx", "dual_rx"}
+
+
+def test_runtime_capabilities_drops_repeater_shift_without_both_methods() -> None:
+    """MOR-2111: a declared ``repeater_shift`` tag the backend cannot honour must
+    be dropped, not passed through silently (the ``dual_rx``/15-gates-dark
+    failure shape this guard exists to avoid).
+    """
+    from rigplane.radio_protocol import RepeaterShiftCapable
+
+    class _GetOnlyRadio:
+        def __init__(self) -> None:
+            self.capabilities = {"repeater_shift"}
+
+        async def get_repeater_shift(self, receiver: int = 0) -> int:
+            return 0
+
+        # deliberately no set_repeater_shift
+
+    radio = _GetOnlyRadio()
+    assert not isinstance(radio, RepeaterShiftCapable)
+    assert "repeater_shift" not in runtime_capabilities(radio)
+
+
+def test_runtime_capabilities_keeps_repeater_shift_with_both_methods() -> None:
+    """MOR-2111: a radio implementing both halves keeps the declared tag."""
+    from rigplane.radio_protocol import RepeaterShiftCapable
+
+    class _FullShiftRadio:
+        def __init__(self) -> None:
+            self.capabilities = {"repeater_shift"}
+
+        async def get_repeater_shift(self, receiver: int = 0) -> int:
+            return 0
+
+        async def set_repeater_shift(self, direction: int, receiver: int = 0) -> None:
+            pass
+
+    radio = _FullShiftRadio()
+    assert isinstance(radio, RepeaterShiftCapable)
+    assert "repeater_shift" in runtime_capabilities(radio)
+
+
+def test_radio_ready_prefers_radio_ready_flag() -> None:
+    radio = _FakeRadio(connected=False, radio_ready_flag=True)
+    assert radio_ready(radio) is True
+
+
+def test_radio_ready_falls_back_to_connected() -> None:
+    radio = _FakeRadio(connected=True, radio_ready_flag=None)
+    assert radio_ready(radio) is True
+
+
+def test_radio_ready_handles_missing_or_non_bool_attributes() -> None:
+    radio = _FakeRadio(connected="yes", radio_ready_flag="maybe")  # type: ignore[arg-type]
+    assert radio_ready(radio) is False
+    assert radio_ready(None) is False
+
+
+def test_radio_health_classifies_ready_radio() -> None:
+    radio = _FakeRadio(connected=True, radio_ready_flag=True)
+    health = classify_radio_health(radio, server_reachable=True, now_monotonic=100.0)
+
+    assert health["serverReachable"] is True
+    assert health["radioLink"] == "connected"
+    assert health["readiness"] == "ready"
+    assert health["likelyCause"] == "unknown"
+
+
+def test_radio_health_classifies_network_loss_separately_from_server_loss() -> None:
+    radio = _FakeRadio(connected=False, radio_ready_flag=False)
+    radio.conn_state = "reconnecting"
+
+    health = classify_radio_health(radio, server_reachable=True, now_monotonic=100.0)
+
+    assert health["serverReachable"] is True
+    assert health["radioLink"] == "reconnecting"
+    assert health["readiness"] == "recovering"
+    assert health["likelyCause"] == "radio_network_lost"
+
+
+def test_radio_health_classifies_remote_control_unreachable_when_host_reachable() -> (
+    None
+):
+    """Host reachable but the radio's CI-V/remote-control server not listening
+    (EPIPE / ICMP port-unreachable, no Are-You-There answer) → distinct
+    actionable cause, not a generic network loss (#1217 diagnosis B).
+    """
+    radio = _FakeRadio(connected=False, radio_ready_flag=False)
+    radio.conn_state = "reconnecting"
+    radio.remote_control_unreachable = True
+
+    health = classify_radio_health(radio, server_reachable=True, now_monotonic=100.0)
+
+    assert health["serverReachable"] is True
+    assert health["radioLink"] == "reconnecting"
+    assert health["readiness"] == "recovering"
+    assert health["likelyCause"] == "radio_remote_control_unreachable"
+
+
+def test_radio_health_keeps_network_lost_when_host_unreachable() -> None:
+    """Without the remote-control-unreachable signal a reconnecting radio is a
+    plain network loss (host truly unreachable)."""
+    radio = _FakeRadio(connected=False, radio_ready_flag=False)
+    radio.conn_state = "reconnecting"
+    radio.remote_control_unreachable = False
+
+    health = classify_radio_health(radio, server_reachable=True, now_monotonic=100.0)
+
+    assert health["likelyCause"] == "radio_network_lost"
+
+
+def test_radio_health_keeps_unknown_when_radio_has_no_runtime_evidence() -> None:
+    radio = _FakeRadio(connected=False, radio_ready_flag=False)
+
+    health = classify_radio_health(radio, server_reachable=True, now_monotonic=100.0)
+
+    assert health["serverReachable"] is True
+    assert health["radioLink"] == "unknown"
+    assert health["readiness"] == "stalled"
+    assert health["likelyCause"] == "unknown"
+
+
+def test_radio_health_classifies_delayed_then_stalled_radio_response() -> None:
+    radio = _FakeRadio(connected=True, radio_ready_flag=False)
+    radio._last_civ_data_received = 98.5
+    radio._civ_ready_idle_timeout = 1.0
+
+    delayed = classify_radio_health(radio, server_reachable=True, now_monotonic=100.0)
+    assert delayed["radioLink"] == "connected"
+    assert delayed["readiness"] == "delayed"
+    assert delayed["likelyCause"] == "radio_not_responding"
+
+    radio._last_civ_data_received = 94.0
+    stalled = classify_radio_health(radio, server_reachable=True, now_monotonic=100.0)
+    assert stalled["readiness"] == "stalled"
+    assert stalled["likelyCause"] == "radio_not_responding"
+
+
+def test_radio_health_promotes_repeated_probe_failures_to_powered_off_likely() -> None:
+    radio = _FakeRadio(connected=True, radio_ready_flag=False)
+    radio._last_civ_data_received = 80.0
+    radio._civ_ready_idle_timeout = 2.0
+    radio._has_connected_once = True
+
+    def _stats() -> dict[str, int]:
+        return {"timeouts": 3, "active_waiters": 0}
+
+    radio.civ_stats = _stats
+
+    health = classify_radio_health(radio, server_reachable=True, now_monotonic=100.0)
+
+    assert health["readiness"] == "stalled"
+    assert health["likelyCause"] == "radio_powered_off_likely"
+
+
+def test_radio_health_reports_server_unreachable_without_radio_guess() -> None:
+    health = classify_radio_health(None, server_reachable=False, now_monotonic=100.0)
+
+    assert health["serverReachable"] is False
+    assert health["radioLink"] == "unknown"
+    assert health["readiness"] == "stalled"
+    assert health["likelyCause"] == "server_unreachable"
+
+
+@pytest.mark.asyncio
+async def test_webserver_and_control_handler_use_same_capabilities_and_ready() -> None:
+    """HTTP /api/v1/info and WS hello share the same runtime helpers."""
+    from rigplane.web.handlers import ControlHandler
+    from rigplane.ws import WebSocketConnection
+
+    caps = {"audio", "scope", "dual_rx", "tx"}
+    radio = _FakeRadio(caps=caps, connected=True, radio_ready_flag=True)
+
+    server = WebServer(radio)
+
+    # HTTP: capture /api/v1/info JSON body
+    writer = _FakeWriter()
+    await server._serve_info(writer)  # type: ignore[arg-type]  # noqa: SLF001
+    text = writer.buffer.decode("ascii", errors="replace")
+    body_start = text.index("\r\n\r\n") + 4
+    info = json.loads(text[body_start:])
+
+    # WS: capture hello message emitted by ControlHandler
+    ws = MagicMock(spec=WebSocketConnection)
+
+    async def _send_text(payload: str) -> None:
+        setattr(ws, "_last_payload", payload)
+
+    ws.send_text = _send_text
+
+    handler = ControlHandler(ws, radio, "0.0.0-test", radio.model, server=server)
+    await handler._send_hello()
+
+    hello = json.loads(getattr(ws, "_last_payload"))
+
+    # Capabilities: tags and hello list must match runtime_capabilities(radio)
+    expected_caps = sorted(runtime_capabilities(radio))
+    assert sorted(info["capabilities"]["tags"]) == expected_caps
+    assert sorted(hello["capabilities"]) == expected_caps
+
+    # Readiness: both must reflect radio_ready(radio)
+    expected_ready = radio_ready(radio)
+    assert info["connection"]["radioReady"] is expected_ready
+    assert hello["radio_ready"] is expected_ready
+
+
+@pytest.mark.asyncio
+async def test_websocket_hello_projects_only_trusted_vfo_primitives() -> None:
+    """WS hello cannot expose injected VFO primitive capability tags."""
+    from rigplane.profiles import resolve_radio_profile
+    from rigplane.web.handlers import ControlHandler
+    from rigplane.ws import WebSocketConnection
+
+    reserved = {"vfo_swap", "vfo_equalize"}
+    ic7300 = resolve_radio_profile(model="IC-7300")
+    partial_ic7300 = replace(ic7300, equal_ab_code=None)
+    cases = [
+        (SimpleNamespace(model="X6100", capabilities=reserved), "X6100", set()),
+        (SimpleNamespace(model="UNKNOWN", capabilities=reserved), "UNKNOWN", set()),
+        (SimpleNamespace(capabilities=reserved), "UNKNOWN", set()),
+        (None, "IC-7610", set()),
+        (
+            SimpleNamespace(model="IC-7300", capabilities=reserved),
+            "IC-7300",
+            reserved,
+        ),
+        (
+            SimpleNamespace(model="X6100", profile=ic7300, capabilities=reserved),
+            "X6100",
+            reserved,
+        ),
+        (
+            SimpleNamespace(
+                model="X6100", profile=partial_ic7300, capabilities=reserved
+            ),
+            "X6100",
+            {"vfo_swap"},
+        ),
+        (
+            SimpleNamespace(model="IC-7610", capabilities=reserved),
+            "IC-7610",
+            reserved,
+        ),
+    ]
+
+    for radio, radio_model, expected in cases:
+        ws = MagicMock(spec=WebSocketConnection)
+        sent: list[str] = []
+
+        async def _send_text(payload: str) -> None:
+            sent.append(payload)
+
+        ws.send_text = _send_text
+        handler = ControlHandler(ws, radio, "0.0.0-test", radio_model)
+        await handler._send_hello()  # noqa: SLF001
+
+        hello = json.loads(sent.pop())
+        assert hello["capabilities"] == sorted(expected)
+
+
+def test_public_state_projection_uses_snapshot_revisions_and_meter_values() -> None:
+    clock = FreshnessClock(start=10.0)
+    store = StateStore(freshness_clock=clock)
+    store.apply(
+        _observation(
+            FieldPath.active("0", "freq_mode", "freq_hz"),
+            14_074_000,
+            at=clock.now(),
+            max_age=10.0,
+        )
+    )
+    store.apply(
+        _observation(
+            FieldPath.receiver("0", "meters", "s_meter"),
+            42,
+            at=clock.now(),
+            max_age=0.5,
+        )
+    )
+
+    payload = build_public_state_payload_from_snapshot(
+        store.snapshot(),
+        radio=None,
+        receiver_count=1,
+    )
+
+    assert payload["revision"] == 2
+    assert payload["stateRevision"] == 2
+    assert payload["freshnessRevision"] == 2
+    assert payload["main"]["freqHz"] == 14_074_000
+    assert payload["main"]["sMeter"] == 42
+
+
+def test_tx_target_missing_is_explicit_in_both_public_producers() -> None:
+    expected = {"status": "unknown", "reason": "not-observed"}
+    dataclass_payload = build_public_state_payload(
+        RadioState(), radio=None, revision=0, receiver_count=1
+    )
+    snapshot_payload = build_public_state_payload_from_snapshot(
+        StateSnapshot.empty(), radio=None, receiver_count=1
+    )
+    status = snapshot_payload["fieldStatus"]["txTarget"]
+    assert dataclass_payload["txTarget"] == expected
+    assert snapshot_payload["txTarget"] == expected
+    assert status == {
+        "storePath": "global.tx_state.tx_target",
+        "observed": False,
+        "freshness": "unknown",
+        "availability": "missing",
+    }
+
+
+@pytest.mark.parametrize(
+    "target",
+    [
+        KnownTxTarget(receiver="SUB", slot="B", frequency_hz=14_074_000),
+        UnknownTxTarget(reason="unsupported"),
+        UnknownTxTarget(reason="contradiction"),
+    ],
+)
+def test_tx_target_fresh_projection_is_lossless_and_available(
+    target: TxTarget,
+) -> None:
+    clock = FreshnessClock(start=10.0)
+    store = StateStore(freshness_clock=clock)
+    store.apply(
+        _observation(
+            FieldPath.global_("tx_state", "tx_target"),
+            target,
+            at=clock.now(),
+            max_age=1.0,
+        )
+    )
+    payload = build_public_state_payload_from_snapshot(
+        store.snapshot(), radio=None, receiver_count=2
+    )
+    assert payload["txTarget"] == target.to_dict()
+    status = payload["fieldStatus"]["txTarget"]
+    assert status["storePath"] == "global.tx_state.tx_target"
+    assert status["observed"] is True
+    assert status["freshness"] == "fresh"
+    assert status["availability"] == "available"
+
+
+def test_tx_target_stale_projection_never_leaks_known_identity() -> None:
+    clock = FreshnessClock(start=10.0)
+    store = StateStore(freshness_clock=clock)
+    store.apply(
+        _observation(
+            FieldPath.global_("tx_state", "tx_target"),
+            KnownTxTarget(receiver="SUB", slot="A", frequency_hz=7_074_000),
+            at=clock.now(),
+            max_age=0.5,
+        )
+    )
+    fresh = build_public_state_payload_from_snapshot(
+        store.snapshot(), radio=None, receiver_count=2
+    )
+    assert fresh["txTarget"]["receiver"] == "SUB"
+    clock.advance(0.6)
+    store.mark_stale_due()
+    stale = build_public_state_payload_from_snapshot(
+        store.snapshot(), radio=None, receiver_count=2
+    )
+    status = stale["fieldStatus"]["txTarget"]
+    assert stale["txTarget"] == {"status": "unknown", "reason": "stale"}
+    assert not {"receiver", "slot", "frequencyHz"} & stale["txTarget"].keys()
+    assert (status["freshness"], status["availability"]) == ("stale", "stale")
+
+
+def test_tx_target_malformed_impossible_snapshot_fails_closed() -> None:
+    snapshot = StateSnapshot(
+        1,
+        1,
+        1,
+        10.0,
+        (
+            _tx_target_field(
+                {
+                    "status": "known",
+                    "receiver": "MAIN",
+                    "slot": "A",
+                    "frequencyHz": 7_074_000,
+                    "backend": "icom",
+                },
+                at=10.0,
+            ),
+        ),
+    )
+    payload = build_public_state_payload_from_snapshot(
+        snapshot, radio=None, receiver_count=1
+    )
+    status = payload["fieldStatus"]["txTarget"]
+    assert payload["txTarget"] == {"status": "unknown", "reason": "contradiction"}
+    assert (status["freshness"], status["availability"]) == ("fresh", "available")
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        (20.0, FreshnessState.STALE, {"malformed": True}, "stale"),
+        (
+            10.0,
+            FreshnessState.FRESH,
+            KnownTxTarget("SUB", None, None),
+            "contradiction",
+        ),
+        (10.0, FreshnessState.STALE, KnownTxTarget("SUB", None, None), "stale"),
+    ],
+)
+@pytest.mark.parametrize("reverse", [False, True])
+def test_tx_target_duplicate_path_selection_is_order_safe_and_consistent(
+    case: tuple[float, FreshnessState, Any, str],
+    reverse: bool,
+) -> None:
+    at, freshness, value, reason = case
+    older = _tx_target_field(
+        KnownTxTarget(receiver="MAIN", slot="B", frequency_hz=14_074_000), at=10.0
+    )
+    contender = _tx_target_field(value, at=at, freshness=freshness)
+    fields = (contender, older) if reverse else (older, contender)
+    payload = build_public_state_payload_from_snapshot(
+        StateSnapshot(1, 1, 2, max(10.0, at), fields),
+        radio=None,
+        receiver_count=2,
+    )
+    assert payload["txTarget"] == {"status": "unknown", "reason": reason}
+    s = payload["fieldStatus"]["txTarget"]
+    availability = "available" if freshness is FreshnessState.FRESH else "stale"
+    assert (s["freshness"], s["availability"]) == (freshness.value, availability)
+
+
+def test_public_field_status_exposes_quality_flags() -> None:
+    clock = FreshnessClock(start=10.0)
+    store = StateStore(freshness_clock=clock)
+    store.apply(
+        _observation(
+            FieldPath.receiver("0", "meters", "s_meter"),
+            42,
+            at=clock.now(),
+            max_age=0.5,
+            quality=("confirmed", "uncalibrated"),
+        )
+    )
+
+    payload = build_public_state_payload_from_snapshot(
+        store.snapshot(),
+        radio=None,
+        receiver_count=1,
+    )
+
+    assert payload["fieldStatus"]["main.sMeter"]["quality"] == [
+        "confirmed",
+        "uncalibrated",
+    ]
+
+
+def test_public_state_projection_normalizes_raw_level_control_snapshots() -> None:
+    clock = FreshnessClock(start=10.0)
+    store = StateStore(freshness_clock=clock)
+    for path, value in (
+        (FieldPath.receiver("0", "operator_controls", "af_level"), 128),
+        (FieldPath.receiver("0", "operator_controls", "rf_gain"), 64),
+        (FieldPath.receiver("1", "operator_controls", "squelch"), 32),
+        (FieldPath.global_("operator_controls", "power_level"), 255),
+    ):
+        store.apply(_observation(path, value, at=clock.now()))
+
+    payload = build_public_state_payload_from_snapshot(
+        store.snapshot(),
+        radio=None,
+        receiver_count=2,
+    )
+
+    assert payload["main"]["afLevel"] == 128 / 255
+    assert payload["main"]["rfGain"] == 64 / 255
+    assert payload["sub"]["squelch"] == 32 / 255
+    assert payload["powerLevel"] == 1.0
+
+
+def test_public_state_projection_passes_through_normalized_level_controls() -> None:
+    clock = FreshnessClock(start=10.0)
+    store = StateStore(freshness_clock=clock)
+    for path, value in (
+        (FieldPath.receiver("0", "operator_controls", "af_level"), 0.5),
+        (FieldPath.receiver("0", "operator_controls", "rf_gain"), 0.25),
+        (FieldPath.receiver("1", "operator_controls", "squelch"), 0.75),
+        (FieldPath.global_("operator_controls", "power_level"), 0.8),
+    ):
+        store.apply(_observation(path, value, at=clock.now()))
+
+    payload = build_public_state_payload_from_snapshot(
+        store.snapshot(),
+        radio=None,
+        receiver_count=2,
+    )
+
+    assert payload["main"]["afLevel"] == 0.5
+    assert payload["main"]["rfGain"] == 0.25
+    assert payload["sub"]["squelch"] == 0.75
+    assert payload["powerLevel"] == 0.8
+
+
+def test_public_power_level_projection_keeps_icom_raw_byte_scale_with_profile() -> None:
+    class _Profile:
+        max_watts = 100
+
+    class _Radio:
+        profile = _Profile()
+
+    clock = FreshnessClock(start=10.0)
+    store = StateStore(freshness_clock=clock)
+    store.apply(
+        _observation(
+            FieldPath.global_("operator_controls", "power_level"),
+            128,
+            at=clock.now(),
+            provider="icom_civ",
+        )
+    )
+
+    payload = build_public_state_payload_from_snapshot(
+        store.snapshot(),
+        radio=_Radio(),  # type: ignore[arg-type]
+        receiver_count=1,
+    )
+
+    assert payload["powerLevel"] == 128 / 255
+
+
+def test_public_state_projection_keeps_unrelated_operator_controls_raw() -> None:
+    clock = FreshnessClock(start=10.0)
+    store = StateStore(freshness_clock=clock)
+    for path, value in (
+        (FieldPath.receiver("0", "operator_controls", "mic_gain"), 180),
+        (FieldPath.receiver("1", "operator_controls", "compressor_level"), 150),
+        (FieldPath.global_("operator_controls", "monitor_gain"), 90),
+    ):
+        store.apply(_observation(path, value, at=clock.now()))
+
+    payload = build_public_state_payload_from_snapshot(
+        store.snapshot(),
+        radio=None,
+        receiver_count=2,
+    )
+
+    assert payload["main"]["micGain"] == 180
+    assert payload["sub"]["compressorLevel"] == 150
+    assert payload["monitorGain"] == 90
+
+
+def test_public_state_projection_covers_all_scope_control_leaves() -> None:
+    """MOR-557: every scope_controls.global.display leaf must project.
+
+    The v2 scope toolbar gates each control on
+    ``fieldStatus["scopeControls.<leaf>"]``; before MOR-557 only ``span`` and
+    ``receiver`` were mapped, so observed mode/edge/speed/hold/ref_db/dual
+    stayed ``missing`` and the toolbar rendered dead.
+    """
+    clock = FreshnessClock(start=10.0)
+    store = StateStore(freshness_clock=clock)
+    leaves: dict[str, Any] = {
+        "receiver": 1,
+        "dual": True,
+        "mode": 3,
+        "span": 6,
+        "edge": 4,
+        "hold": True,
+        "ref_db": -10.5,
+        "speed": 2,
+    }
+    for name, value in leaves.items():
+        store.apply(
+            _observation(
+                FieldPath.scope_control("display", name),
+                value,
+                at=clock.now(),
+            )
+        )
+
+    payload = build_public_state_payload_from_snapshot(
+        store.snapshot(),
+        radio=None,
+        receiver_count=2,
+    )
+
+    sc = payload["scopeControls"]
+    assert sc["receiver"] == 1
+    assert sc["dual"] is True
+    assert sc["mode"] == 3
+    assert sc["span"] == 6
+    assert sc["edge"] == 4
+    assert sc["hold"] is True
+    assert sc["refDb"] == -10.5
+    assert sc["speed"] == 2
+
+    suffixes = ("receiver", "dual", "mode", "span", "edge", "hold", "refDb", "speed")
+    for suffix in suffixes:
+        status = payload["fieldStatus"][f"scopeControls.{suffix}"]
+        assert status["observed"] is True, suffix
+        assert status["availability"] == "available", suffix
+
+
+_SCOPE_TOOLBAR_SUFFIXES = (
+    "mode",
+    "edge",
+    "span",
+    "speed",
+    "hold",
+    "refDb",
+    "dual",
+    "receiver",
+)
+_VFO_GROUP_PATHS = ("main.vfoA", "main.vfoB", "sub.vfoA", "sub.vfoB")
+_VFO_LEAF_PATHS = (
+    "main.vfoA.freqHz",
+    "main.vfoB.mode",
+    "sub.vfoA.freqHz",
+    "sub.vfoB.mode",
+)
+
+
+def _frontend_availability(field_status: dict[str, dict[str, Any]], path: str) -> str:
+    """Frontend MOR-429 resolver: nearest missing/stale ancestor vetoes a leaf."""
+    ancestors = (path[:i] for i in range(len(path) - 1, 0, -1) if path[i] == ".")
+    parent = next((field_status[p] for p in ancestors if p in field_status), None)
+    own = field_status.get(path)
+    if own is None:
+        return parent["availability"] if parent else "available"
+    if (
+        own["availability"] == "available"
+        and parent
+        and parent["availability"] != "available"
+    ):
+        return parent["availability"]
+    return own["availability"]
+
+
+def test_default_field_status_has_no_scope_controls_group_entry() -> None:
+    """MOR-557 fix 2: a bare ``scopeControls`` group entry, keyed to the
+    never-written ``global.slow_state.scope_controls`` path, stays ``missing``
+    forever and the frontend parent-veto disables every observed leaf. Only
+    the eight per-leaf entries may be seeded."""
+    payload = build_public_state_payload_from_snapshot(
+        StateSnapshot.empty(), radio=None, receiver_count=2
+    )
+    field_status = payload["fieldStatus"]
+    assert "scopeControls" not in field_status
+    for suffix in _SCOPE_TOOLBAR_SUFFIXES:
+        status = field_status[f"scopeControls.{suffix}"]
+        assert status["availability"] == "missing", suffix
+        assert status["observed"] is False, suffix
+
+
+def test_default_field_status_has_no_vfo_group_entries() -> None:
+    """MOR-558: slow-state ``vfo_a``/``vfo_b`` group entries are never written.
+
+    Keep the real per-leaf VFO status entries seeded missing, but do not seed
+    bare ``main/sub.vfoA/vfoB`` parents that would veto observed leaves.
+    """
+    payload = build_public_state_payload_from_snapshot(
+        StateSnapshot.empty(), radio=None, receiver_count=2
+    )
+    field_status = payload["fieldStatus"]
+    for path in _VFO_GROUP_PATHS:
+        assert path not in field_status
+    for path in _VFO_LEAF_PATHS:
+        status = field_status[path]
+        assert status["availability"] == "missing", path
+        assert status["observed"] is False, path
+
+
+def test_observed_vfo_slot_leaf_survives_frontend_parent_veto() -> None:
+    """MOR-558: an observed slot leaf must not be hidden by a missing parent."""
+    clock = FreshnessClock(start=10.0)
+    store = StateStore(freshness_clock=clock)
+    store.apply(
+        _observation(
+            FieldPath.vfo_slot("0", "A", "freq_mode", "freq_hz"),
+            14_074_000,
+            at=clock.now(),
+        )
+    )
+
+    payload = build_public_state_payload_from_snapshot(
+        store.snapshot(), radio=None, receiver_count=2
+    )
+    field_status = payload["fieldStatus"]
+    assert payload["main"]["vfoA"]["freqHz"] == 14_074_000
+    assert _frontend_availability(field_status, "main.vfoA.freqHz") == "available"
+
+
+def test_observed_scope_control_leaves_survive_frontend_parent_veto() -> None:
+    """MOR-557 fix 2: once scope-control observations land, every toolbar leaf
+    resolves ``available`` through the frontend parent-availability walk —
+    no never-observed ancestor entry may veto it."""
+    clock = FreshnessClock(start=10.0)
+    store = StateStore(freshness_clock=clock)
+    leaves: dict[str, Any] = {
+        "receiver": 0, "dual": False, "mode": 0, "span": 0,
+        "edge": 1, "hold": False, "ref_db": 0.0, "speed": 1,
+    }  # fmt: skip
+    for name, value in leaves.items():
+        store.apply(
+            _observation(
+                FieldPath.scope_control("display", name), value, at=clock.now()
+            )
+        )
+    payload = build_public_state_payload_from_snapshot(
+        store.snapshot(), radio=None, receiver_count=2
+    )
+    field_status = payload["fieldStatus"]
+    for suffix in _SCOPE_TOOLBAR_SUFFIXES:
+        path = f"scopeControls.{suffix}"
+        assert _frontend_availability(field_status, path) == "available", suffix
+
+
+_SCOPE_SETTINGS_POPOVER_SUFFIXES = (
+    "duringTx",
+    "centerType",
+    "vbwNarrow",
+    "rbw",
+    "fixedEdge",
+)
+
+
+def test_public_state_projection_covers_scope_settings_popover_leaves() -> None:
+    """MOR-1302: the five ScopeSettingsPopover leaves must project and seed
+    field status exactly like the eight MOR-557 toolbar leaves."""
+    clock = FreshnessClock(start=10.0)
+    store = StateStore(freshness_clock=clock)
+    fixed_edge = ScopeFixedEdge(
+        range_index=1, edge=0, start_hz=7_000_000, end_hz=7_300_000
+    )
+    leaves: dict[str, Any] = {
+        "during_tx": True,
+        "center_type": 2,
+        "vbw_narrow": True,
+        "rbw": 1,
+        "fixed_edge": fixed_edge,
+    }
+    for name, value in leaves.items():
+        store.apply(
+            _observation(
+                FieldPath.scope_control("display", name), value, at=clock.now()
+            )
+        )
+
+    payload = build_public_state_payload_from_snapshot(
+        store.snapshot(), radio=None, receiver_count=2
+    )
+
+    sc = payload["scopeControls"]
+    assert sc["duringTx"] is True
+    assert sc["centerType"] == 2
+    assert sc["vbwNarrow"] is True
+    assert sc["rbw"] == 1
+    assert sc["fixedEdge"] == {
+        "rangeIndex": 1,
+        "edge": 0,
+        "startHz": 7_000_000,
+        "endHz": 7_300_000,
+    }
+
+    for suffix in _SCOPE_SETTINGS_POPOVER_SUFFIXES:
+        status = payload["fieldStatus"][f"scopeControls.{suffix}"]
+        assert status["observed"] is True, suffix
+        assert status["availability"] == "available", suffix
+
+
+def test_default_field_status_seeds_scope_settings_popover_leaves_missing() -> None:
+    """MOR-1302: the five popover leaves are seeded ``missing`` by default,
+    same as the eight existing scope-control toolbar leaves (MOR-429)."""
+    payload = build_public_state_payload_from_snapshot(
+        StateSnapshot.empty(), radio=None, receiver_count=2
+    )
+    field_status = payload["fieldStatus"]
+    for suffix in _SCOPE_SETTINGS_POPOVER_SUFFIXES:
+        status = field_status[f"scopeControls.{suffix}"]
+        assert status["availability"] == "missing", suffix
+        assert status["observed"] is False, suffix
+
+
+def test_observed_scope_settings_popover_leaves_survive_frontend_parent_veto() -> None:
+    """MOR-1302: observed popover leaves resolve ``available`` through the
+    frontend parent-availability walk, same as the MOR-557 toolbar leaves."""
+    clock = FreshnessClock(start=10.0)
+    store = StateStore(freshness_clock=clock)
+    fixed_edge = ScopeFixedEdge(range_index=0, edge=0, start_hz=0, end_hz=0)
+    leaves: dict[str, Any] = {
+        "during_tx": False,
+        "center_type": 0,
+        "vbw_narrow": False,
+        "rbw": 0,
+        "fixed_edge": fixed_edge,
+    }
+    for name, value in leaves.items():
+        store.apply(
+            _observation(
+                FieldPath.scope_control("display", name), value, at=clock.now()
+            )
+        )
+    payload = build_public_state_payload_from_snapshot(
+        store.snapshot(), radio=None, receiver_count=2
+    )
+    field_status = payload["fieldStatus"]
+    for suffix in _SCOPE_SETTINGS_POPOVER_SUFFIXES:
+        path = f"scopeControls.{suffix}"
+        assert _frontend_availability(field_status, path) == "available", suffix
+
+
+def _profile_payload(
+    model: str,
+    snapshot: StateSnapshot,
+    *,
+    receiver_count: int = 1,
+) -> dict[str, Any]:
+    """Project ``snapshot`` the way ``WebServer`` projects it for ``model``.
+
+    ``WebServer._build_public_state_from_snapshot`` derives the two
+    arguments through the same ``snapshot_field_status_inputs`` call, so a
+    change to what counts as declared fails here too.
+    """
+
+    profile = get_radio_profile(model)
+    acquisition = profile.state_acquisition
+    availability = None
+    declared = None
+    if acquisition is not None:
+        availability, declared = snapshot_field_status_inputs(acquisition, snapshot)
+    return build_public_state_payload_from_snapshot(
+        snapshot,
+        radio=None,
+        receiver_count=receiver_count,
+        availability=availability,
+        declared=declared,
+    )
+
+
+def _profile_field_status(
+    model: str,
+    snapshot: StateSnapshot,
+    *,
+    receiver_count: int = 1,
+) -> dict[str, dict[str, Any]]:
+    return cast(
+        dict[str, dict[str, Any]],
+        _profile_payload(model, snapshot, receiver_count=receiver_count)["fieldStatus"],
+    )
+
+
+def _ic7300_store(**observed: Any) -> tuple[StateStore, FreshnessClock]:
+    clock = FreshnessClock()
+    store = StateStore(freshness_clock=clock)
+    if "ptt" in observed:
+        store.apply(
+            _observation(
+                FieldPath.global_("tx_state", "ptt"), observed["ptt"], at=clock.now()
+            )
+        )
+    if "power" in observed:
+        store.apply(
+            _observation(
+                FieldPath.global_("meters", "power"), observed["power"], at=clock.now()
+            )
+        )
+    return store, clock
+
+
+def test_transmit_meter_is_unavailable_while_ptt_reads_false() -> None:
+    """R42/R52 absence (2): declared, and this state contradicts its clause.
+
+    ``rigs/ic7300.toml`` gates ``global.meters.power`` on
+    ``global.tx_state.ptt`` reading true.
+    """
+
+    store, _ = _ic7300_store(ptt=False)
+    field_status = _profile_field_status("IC-7300", store.snapshot())
+    assert field_status["powerMeter"]["observed"] is False
+    assert field_status["powerMeter"]["availability"] == "unavailable"
+
+
+def test_transmit_meter_is_unavailable_while_ptt_is_unobserved() -> None:
+    """``resolve_available_when`` reads an unobserved clause source as ``None``.
+
+    Nothing has established the meter is there, so it is not ``missing``
+    (which promises a reading is merely late).
+    """
+
+    field_status = _profile_field_status("IC-7300", StateSnapshot.empty())
+    assert field_status["powerMeter"]["availability"] == "unavailable"
+
+
+def test_transmit_meter_is_available_once_observed_under_ptt() -> None:
+    """An observed, fresh meter reads ``available`` with its clause holding."""
+
+    store, _ = _ic7300_store(ptt=True, power=42)
+    field_status = _profile_field_status("IC-7300", store.snapshot())
+    assert field_status["powerMeter"]["observed"] is True
+    assert field_status["powerMeter"]["availability"] == "available"
+
+
+def test_ic705_fm_absent_controls_are_unavailable_in_fm() -> None:
+    """R42/R52 absence (2): declared, and FM contradicts each clause (MOR-3630).
+
+    ``rigs/ic705.toml`` gates the PBT, notch-width and filter-shape reads
+    on MAIN's mode reading anything but FM; the bench probe NAKed them in
+    FM (tests/fixtures/ic705/README.md).
+    """
+
+    clock = FreshnessClock()
+    store = StateStore(freshness_clock=clock)
+    store.apply(
+        _observation(
+            FieldPath.active("main", "freq_mode", "mode"), "FM", at=clock.now()
+        )
+    )
+    field_status = _profile_field_status("IC-705", store.snapshot())
+    for leaf in (
+        "main.pbtInner",
+        "main.pbtOuter",
+        "main.manualNotchWidth",
+        "main.filterShape",
+    ):
+        assert field_status[leaf]["observed"] is False
+        assert field_status[leaf]["availability"] == "unavailable", leaf
+
+
+def test_ic705_fm_absent_controls_are_missing_in_usb_until_observed() -> None:
+    """R42/R52 absence (3): declared, admitted in USB, not yet observed (MOR-3630)."""
+
+    clock = FreshnessClock()
+    store = StateStore(freshness_clock=clock)
+    store.apply(
+        _observation(
+            FieldPath.active("main", "freq_mode", "mode"), "USB", at=clock.now()
+        )
+    )
+    field_status = _profile_field_status("IC-705", store.snapshot())
+    for leaf in (
+        "main.pbtInner",
+        "main.pbtOuter",
+        "main.manualNotchWidth",
+        "main.filterShape",
+    ):
+        assert field_status[leaf]["availability"] == "missing", leaf
+
+
+def test_observed_meter_stays_available_while_its_clause_reads_false() -> None:
+    """The projection does not pre-empt the freshness tick's discard.
+
+    ``StateFreshnessService._discard_declared_absent`` is what removes a
+    field its clause now contradicts; until that runs the stored reading is
+    still what the radio last said.
+    """
+
+    store, clock = _ic7300_store(ptt=True, power=42)
+    store.apply(
+        _observation(FieldPath.global_("tx_state", "ptt"), False, at=clock.now())
+    )
+    field_status = _profile_field_status("IC-7300", store.snapshot())
+    assert field_status["powerMeter"]["observed"] is True
+    assert field_status["powerMeter"]["availability"] == "available"
+
+
+def test_unconditional_declared_meter_is_missing_until_observed() -> None:
+    """R42/R52 absence (3): declared, admitted here, not yet observed.
+
+    ``rigs/ic7300.toml`` declares ``global.meters.vd`` with no
+    ``available_when``.
+    """
+
+    store, _ = _ic7300_store(ptt=False)
+    field_status = _profile_field_status("IC-7300", store.snapshot())
+    assert field_status["vdMeter"]["availability"] == "missing"
+
+
+def test_ic7300_ipplus_is_missing_until_a_canonical_observation_arrives() -> None:
+    """MOR-2449: declared IP+ stays non-operational until CI-V observes it."""
+    clock = FreshnessClock(start=10.0)
+    store = StateStore(freshness_clock=clock)
+    ipplus = FieldPath.receiver("main", "operator_toggles", "ipplus")
+
+    before = _profile_field_status("IC-7300", store.snapshot())
+    assert before["main.ipplus"] == {
+        "storePath": "receiver.main.operator_toggles.ipplus",
+        "observed": False,
+        "freshness": "unknown",
+        "availability": "missing",
+    }
+
+    # 0x16/0x65 is decoded into this canonical StateStore observation by the
+    # CI-V runtime; the profile's 10-second TTL is stamped on that ingress.
+    store.apply(
+        _observation(ipplus, True, at=clock.now(), max_age=10.0, provider="icom_civ")
+    )
+
+    after = _profile_field_status("IC-7300", store.snapshot())
+    assert after["main.ipplus"]["observed"] is True
+    assert after["main.ipplus"]["freshness"] == "fresh"
+    assert after["main.ipplus"]["availability"] == "available"
+
+
+def test_meter_the_profile_never_declares_is_undeclared() -> None:
+    """R42/R52 absence (1): the radio does not carry the field at all.
+
+    ``rigs/x6200.toml`` names ``global.meters.comp`` in neither
+    ``[state_acquisition.capabilities]`` nor
+    ``[state_acquisition.field_policies]``.
+    """
+
+    field_status = _profile_field_status("X6200", StateSnapshot.empty())
+    assert field_status["compMeter"]["availability"] == "undeclared"
+    assert field_status["powerMeter"]["availability"] == "missing"
+
+
+def test_profile_without_acquisition_metadata_keeps_every_entry_missing() -> None:
+    """``rigs/tx500.toml`` has no ``[state_acquisition]``: nothing changes."""
+
+    assert get_radio_profile("TX-500").state_acquisition is None
+    field_status = _profile_field_status("TX-500", StateSnapshot.empty())
+    assert {status["availability"] for status in field_status.values()} == {"missing"}
+
+
+def test_web_server_publishes_the_profile_gated_field_status() -> None:
+    """``WebServer`` passes both arguments to the projection.
+
+    Without the wiring the projection has no profile to read and every
+    entry below would be ``missing``.
+    """
+
+    from rigplane.profiles import resolve_radio_profile
+
+    store = StateStore()
+    radio = MagicMock()
+    radio.model = "IC-7300"
+    radio.profile = resolve_radio_profile(model="IC-7300")
+    radio.state_store = store
+    radio.capabilities = set(radio.profile.capabilities)
+    radio.managed_tx = None
+    server = WebServer(radio)
+
+    payload = server._build_public_state_from_snapshot(store.snapshot())  # noqa: SLF001
+    field_status = payload["fieldStatus"]
+    assert field_status["powerMeter"]["availability"] == "unavailable"
+    assert field_status["driveGain"]["availability"] == "undeclared"
+    assert field_status["vdMeter"]["availability"] == "missing"
+
+
+def test_field_status_reports_unavailable_after_the_freshness_tick_discards() -> None:
+    """A discarded path is published as unobserved and ``unavailable``.
+
+    The tick discards it precisely because the profile now declares it
+    absent, which is what ``unavailable`` says (it read ``missing`` before
+    MOR-2425/T201, when the projection had no third answer).
+    """
+
+    acquisition = get_radio_profile("FTX-1").state_acquisition
+    assert acquisition is not None
+    notch = FieldPath.receiver("main", "operator_controls", "manual_notch_freq")
+    mode = FieldPath.active("main", "freq_mode", "mode")
+    store = StateStore()
+    service = StateFreshnessService(
+        store=store,
+        scheduler=AcquisitionScheduler(profile=acquisition),
+    )
+    store.apply(_observation(mode, "USB", at=1.0))
+    store.apply(_observation(notch, 1500, at=1.0))
+    service.tick(now=1.0)
+    before = _profile_field_status("FTX-1", store.snapshot())
+    assert before["main.manualNotchFreq"]["observed"] is True
+
+    store.apply(_observation(mode, "FM", at=2.0))
+    service.tick(now=2.0)
+
+    after = _profile_field_status("FTX-1", store.snapshot())
+    status = after["main.manualNotchFreq"]
+    assert status["observed"] is False
+    assert status["availability"] == "unavailable"
+
+
+def test_unobserved_leaves_publish_null_with_keys_present() -> None:
+    """MOR-2513: a leaf the store never observed publishes ``null``.
+
+    Every absence reason maps to null — ``missing``, ``undeclared`` and
+    ``unavailable`` alike; the reason stays in ``fieldStatus``.
+    """
+
+    payload = _profile_payload("IC-7300", StateStore().snapshot())
+
+    assert payload["main"]["freqHz"] is None
+    assert payload["main"]["mode"] is None
+    assert payload["powerOn"] is None
+    assert payload["scopeControls"]["mode"] is None
+    assert payload["main"]["pbtInner"] is None
+    assert payload["fieldStatus"]["main.freqHz"]["observed"] is False
+    assert payload["fieldStatus"]["powerOn"]["observed"] is False
+    # ``txTarget`` encodes absence fail-closed in-band (an unknown-status
+    # object), not as a dataclass default; it is not nulled.
+    assert payload["txTarget"] == {"status": "unknown", "reason": "not-observed"}
+
+
+def test_ftx1_empty_store_nulls_every_unobserved_status_leaf() -> None:
+    """FTX-1 unobserved: each leaf whose status says unobserved is null;
+    txTarget (in-band unknown object) and paths without an entry keep
+    their delivered values; all three absence reasons occur.
+    """
+
+    payload = _profile_payload("FTX-1", StateStore().snapshot(), receiver_count=2)
+    field_status = payload["fieldStatus"]
+
+    absence_reasons = {entry["availability"] for entry in field_status.values()}
+    assert absence_reasons == {"missing", "undeclared", "unavailable"}
+
+    for public_path, status in field_status.items():
+        if status["observed"] is not False or public_path == "txTarget":
+            continue
+        parts = public_path.split(".")
+        holder: Any = payload
+        for part in parts[:-1]:
+            if not isinstance(holder, dict) or part not in holder:
+                holder = None
+                break
+            holder = holder[part]
+        if holder is None or parts[-1] not in holder:
+            # Either the group is popped wholesale (an incomplete
+            # ``unselectedVfo``) or the seeded store path has no public key
+            # in the payload's RadioState superset (receiver-scoped seeds
+            # like ``keySpeed``); no leaf is published either way.
+            continue
+        assert holder[parts[-1]] is None, public_path
+
+    # Leaves without a field-status entry are not radio observations and
+    # keep their delivered values.
+    assert payload["connection"] == {
+        "rigConnected": False,
+        "radioReady": False,
+        "controlConnected": False,
+        # MOR-3845: additive liveness — null without a radio that answered.
+        "liveness": None,
+    }
+    assert payload["radioDetail"] == {"status": "disconnected"}
+    assert payload["wsClients"] == {"scope": 0, "control": 0, "audio": 0}
+    assert isinstance(payload["revision"], int)
+
+
+def test_ftx1_filter_width_radio_default_publishes_null_then_true() -> None:
+    """MOR-3677: the flag leaf is null with an unobserved fieldStatus row
+    until the SH read publishes it, then true and available."""
+
+    store = StateStore()
+    payload = _profile_payload("FTX-1", store.snapshot(), receiver_count=2)
+
+    assert payload["main"]["filterWidthRadioDefault"] is None
+    assert payload["sub"]["filterWidthRadioDefault"] is None
+    assert payload["fieldStatus"]["main.filterWidthRadioDefault"]["observed"] is False
+    assert payload["fieldStatus"]["sub.filterWidthRadioDefault"]["observed"] is False
+
+    store.apply(
+        _observation(
+            FieldPath.active("main", "freq_mode", "filter_width_radio_default"),
+            True,
+            at=1.0,
+            max_age=2.0,
+        )
+    )
+    payload = _profile_payload("FTX-1", store.snapshot(), receiver_count=2)
+
+    assert payload["main"]["filterWidthRadioDefault"] is True
+    assert payload["fieldStatus"]["main.filterWidthRadioDefault"]["observed"] is True
+    assert (
+        payload["fieldStatus"]["main.filterWidthRadioDefault"]["availability"]
+        == "available"
+    )
+    assert payload["sub"]["filterWidthRadioDefault"] is None
+
+
+def test_observed_value_stays_published_after_the_freshness_tick_marks_it_stale() -> (
+    None
+):
+    """Ruling 3: staleness after a first observation never re-nulls the leaf."""
+
+    clock = FreshnessClock()
+    store = StateStore(freshness_clock=clock)
+    store.apply(
+        _observation(
+            FieldPath.active("0", "freq_mode", "freq_hz"),
+            14_074_000,
+            at=clock.now(),
+            max_age=10.0,
+        )
+    )
+    clock.advance(60.0)
+    store.mark_stale_due()
+
+    payload = _profile_payload("IC-7610", store.snapshot(), receiver_count=2)
+
+    assert payload["main"]["freqHz"] == 14_074_000
+    assert payload["fieldStatus"]["main.freqHz"]["freshness"] == "stale"
+    assert payload["fieldStatus"]["main.freqHz"]["observed"] is True
+
+
+def test_observed_values_match_the_prewire_contract_byte_for_byte() -> None:
+    """Observed leaves and their fieldStatus entries equal the literals the
+    pre-MOR-2513 projection emitted for this exact store (pinned from the
+    base projection on the merge base of this branch); only unobserved
+    leaves change.
+    """
+
+    store = StateStore()
+    store.apply(
+        _observation(
+            FieldPath.active("0", "freq_mode", "freq_hz"),
+            14_074_000,
+            at=1.0,
+            max_age=10.0,
+            provider="parity",
+        )
+    )
+    store.apply(
+        _observation(
+            FieldPath.active("0", "freq_mode", "mode"),
+            "USB",
+            at=1.1,
+            max_age=10.0,
+            provider="parity",
+        )
+    )
+    store.apply(
+        _observation(
+            FieldPath.global_("tx_state", "power_on"),
+            True,
+            at=1.2,
+            max_age=10.0,
+            provider="parity",
+        )
+    )
+
+    payload = _profile_payload("IC-7610", store.snapshot(), receiver_count=2)
+
+    def expected_status(store_path: str, at: float) -> dict[str, Any]:
+        return {
+            "storePath": store_path,
+            "observed": True,
+            "freshness": "fresh",
+            "availability": "available",
+            "lastObservedMonotonic": at,
+            "maxAge": 10.0,
+            "source": {
+                "source": "poll_response",
+                "provider": "parity",
+                "transport": "fake",
+                "nativeId": "test",
+                "capabilityId": None,
+                "commandSource": None,
+                "sessionId": None,
+            },
+            "quality": ["confirmed"],
+        }
+
+    assert payload["main"]["freqHz"] == 14_074_000
+    assert payload["fieldStatus"]["main.freqHz"] == expected_status(
+        "receiver.0.active.freq_mode.freq_hz", 1.0
+    )
+    assert payload["main"]["mode"] == "USB"
+    assert payload["fieldStatus"]["main.mode"] == expected_status(
+        "receiver.0.active.freq_mode.mode", 1.1
+    )
+    assert payload["powerOn"] is True
+    assert payload["fieldStatus"]["powerOn"] == expected_status(
+        "global.tx_state.power_on", 1.2
+    )
+    assert payload["stateRevision"] == 3
+    assert payload["observationSeq"] == 3
+    assert payload["txTarget"] == {"status": "unknown", "reason": "not-observed"}
+    assert payload["connection"] == {
+        "rigConnected": False,
+        "radioReady": False,
+        "controlConnected": False,
+        # MOR-3845: additive liveness — null without a radio that answered.
+        "liveness": None,
+    }
+    assert payload["radioDetail"] == {"status": "disconnected"}
+    assert payload["radioHealth"] == {
+        "serverReachable": True,
+        "radioLink": "unknown",
+        "readiness": "stalled",
+        "likelyCause": "unknown",
+        "sinceMs": 0,
+        "lastError": None,
+    }
+    # The same store's base projection showed the ``pbtInner`` dataclass
+    # default (128); the unobserved leaf now publishes null instead.
+    assert payload["main"]["pbtInner"] is None
+
+
+def _liveness_radio(model: str, *, last_commanded: bool | None) -> _FakeRadio:
+    """Fake radio carrying the MOR-2544 retained last-commanded power state."""
+    from rigplane.profiles import resolve_radio_profile
+
+    radio = _FakeRadio(connected=True, radio_ready_flag=False)
+    radio._profile = resolve_radio_profile(model=model)
+    radio._last_commanded_powerstat = last_commanded
+    return radio
+
+
+def test_last_commanded_power_off_publishes_false_while_store_unobserved() -> None:
+    """MOR-2544 (Option B): an ACKed power-off survives store generation clears.
+
+    The store's ``power_on`` is unobserved (a watchdog/soft-reconnect
+    ``advance_generation`` cleared it), but the radio retains the power-off
+    command the radio ACKed (0xFB) — the payload publishes ``powerOn:
+    false`` with a ``fieldStatus.powerOn`` entry the frontend accepts
+    (``isFieldAvailable`` resolves ``available``), so the powered-off
+    overlay and the Power-ON button stay live for the whole outage. RED at
+    3b4473cc: nothing reads ``_last_commanded_powerstat``, so ``powerOn``
+    stays ``None``.
+    """
+    radio = _liveness_radio("IC-7610", last_commanded=False)
+
+    payload = build_public_state_payload_from_snapshot(
+        StateStore().snapshot(), radio=radio, receiver_count=2
+    )
+
+    assert payload["powerOn"] is False
+    status = payload["fieldStatus"]["powerOn"]
+    assert status["observed"] is True
+    assert status["availability"] == "available"
+
+
+def test_last_commanded_power_off_is_never_published_for_ftx1() -> None:
+    """MOR-2544: FTX-1 (no ``power_control``) gets nothing fabricated, even
+    with a retained command present — the profile-data predicate gates the
+    publish. RED at origin/main: ``infers_power_on_from_liveness`` does not
+    exist yet (AttributeError)."""
+    radio = _liveness_radio("FTX-1", last_commanded=False)
+    assert radio._profile.infers_power_on_from_liveness is False
+
+    payload = build_public_state_payload_from_snapshot(
+        StateStore().snapshot(), radio=radio, receiver_count=2
+    )
+
+    assert payload["powerOn"] is None

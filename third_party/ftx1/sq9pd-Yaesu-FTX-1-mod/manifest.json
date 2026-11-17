@@ -1,0 +1,27 @@
+{
+  "format": 1,
+  "release": "FTX-1 MAIN V40 + DISPLAY V35",
+  "crc_suffix_hex": "8f93c635",
+  "components": [
+    {
+      "component": "MAIN",
+      "version": "V40",
+      "filename": "FTX-1_MAIN_V0113.SFL",
+      "size": 3243706,
+      "input_sha256": "de02ce415b37ca6621ed0bac2f8e7bd63d45f3022a62868598950502ed033f5c",
+      "output_sha256": "a66308b8efefb868899bf015d685ceedc46767e2866baee404ec85a3e5edb2f8",
+      "decoded_input_sha256": "66ae62ac55858e86454f7dac18e4a7e0eaad812b269fda6421d72cac83c3d597",
+      "decoded_output_sha256": "1b7bd915959c420805d5faedfdc940795c04c9a5fce5b2c20a6633a1442b2196"
+    },
+    {
+      "component": "DISPLAY",
+      "version": "V35",
+      "filename": "FTX-1_DISPLAY_V0110.SFL",
+      "size": 2896380,
+      "input_sha256": "962fda27ae2f0a0deedb039b868a545ef0f6736b686c266e19f231dbe3973bba",
+      "output_sha256": "82bee0eb41937819ec03be5a7528c595365850dad9cdf0582c9df7473849be7c",
+      "decoded_input_sha256": "ba4a2fb2b1e7b00f3dd7353efd1548629caa339b77eab0900bed92204d57ceeb",
+      "decoded_output_sha256": "8e5f624db48bc693d2c32c2288af0d7d0e267ef843cfb922e6c382f61d06fd9c"
+    }
+  ]
+}

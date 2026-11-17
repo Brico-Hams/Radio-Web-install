@@ -1,0 +1,327 @@
+/**
+ * MOR-1556 — completeness ledger: CLAIMED intent registry.
+ *
+ * An intent name is "claimed" when a conformance case asserts the exact WS
+ * frame `panel-commands.ts` dispatches for it (an `expectFrames(...)` call
+ * in a `*-conformance.isolated.test.ts` file, per `./harness.ts`). This
+ * file is that registry — the completeness meta-test
+ * (`../../../commands/__tests__/panel-commands-completeness.test.ts`) unions
+ * it with `./waived.ts` and asserts every LITERAL-NAMED intent
+ * `panel-commands.ts` dispatches (i.e. every `dispatchRadioIntent({ name:
+ * '<literal>', ... })` call site) falls in exactly one of the two sets.
+ * The 4 `modInputCommand(...)`-derived names are real emissions outside
+ * this 85-name literal universe — see `./waived.ts`'s header and the
+ * meta-test's "dynamic mod-input call site" block for how those are
+ * tracked instead.
+ *
+ * Convention for future family walks (C6-C13, MOR-1560..1567): when a walk
+ * adds real `expectFrames` assertions for a previously-waived intent, add
+ * its name here (one line) and DELETE the matching entry from
+ * `WAIVED_INTENTS` in `./waived.ts` — the completeness test enforces both
+ * (an intent claimed AND waived at once fails, same as one claimed nowhere).
+ *
+ * CLAIMED_INTENTS below are exactly the 20 distinct `sendCommand` frame
+ * names asserted by `expectFrames` calls in
+ * `../mor1428-ic7300-conformance.isolated.test.ts` (MOR-1428) as of this
+ * writing — read off that file's `describe('... handler dispatch ...')`
+ * block, not guessed.
+ */
+
+/**
+ * Intent names claimed by MOR-1428's IC-7300 fixture conformance suite,
+ * plus MOR-1560's (C6) DSP family walk
+ * (`../mor1560-dsp-family-conformance.isolated.test.ts`) — 9 intents:
+ * `set_nr_level`, `set_nb_level`, `set_nb_depth`, `set_nb_width`,
+ * `set_auto_notch`, `set_manual_notch`, `set_manual_notch_width`,
+ * `set_notch_filter`, `set_agc_time_constant`. Every one of the 9 is
+ * claimed via `expectRefusal` (not `expectFrames`) — the real IC-7300
+ * fixture never observed any of these DSP sub-parameter leaves, so honest
+ * fail-closed refusal IS the conformant behavior on this profile (see that
+ * file's header for the fixture-derived evidence per intent).
+ *
+ * Plus MOR-1561's (C7) filter/PBT family walk
+ * (`../mor1561-filter-pbt-family-conformance.isolated.test.ts`) — 5 intents:
+ * `set_filter_width`, `set_filter_shape`, `set_if_shift`, `set_pbt_inner`,
+ * `set_pbt_outer`. NOT uniform like C6: `set_filter_shape`/`set_if_shift`/
+ * `set_pbt_inner`/`set_pbt_outer` are claimed via `expectRefusal` (each
+ * genuinely unobserved/undeclared on this fixture), but `set_filter_width`
+ * is claimed via a real `expectFrames` — `onFilterPresetChange` dispatches
+ * it on this fixture through a gate (`main.filter`, observed) that is
+ * DIFFERENT from the field the intent itself writes (`main.filterWidth`,
+ * unobserved) — see that file's header for the full finding and red-first
+ * evidence.
+ *
+ * Plus 2 intents claimed by MOR-1563's (C9) keyboard action fan-out walk
+ * (`../mor1563-keyboard-fanout-conformance.isolated.test.ts`) — per
+ * `./waived.ts`'s own convention (a landed `expectFrames` moves the intent
+ * here even when the claiming test isn't that intent's OWN family walk):
+ * `set_data_mode` (`cycle_data_mode` keyboard case) and `set_scope_hold`
+ * (`scope_toggle_hold` keyboard case). C9's `vfo_swap` and
+ * `vfo_equalize` rows now correctly refuse because this byte-faithful
+ * captured profile lacks their exact declared tags; refusals do not make an
+ * intent claimed. The C12 synthetic declared-tag probes below own the two
+ * corresponding positive frame claims.
+ *
+ * Plus MOR-1564's (C10) TX-chain family walk
+ * (`../mor1564-tx-family-conformance.isolated.test.ts`) — 8 intents:
+ * `set_rf_power`, `set_mic_gain`, `set_compressor`, `set_compressor_level`,
+ * `set_monitor`, `set_monitor_gain`, `set_drive_gain`, `set_tuner_status`.
+ * NOT uniform: `set_rf_power`/`set_compressor`/`set_compressor_level`/
+ * `set_tuner_status` genuinely DISPATCH on the real IC-7300 fixture
+ * (`powerLevel`/`compressorOn`/`compressorLevel`/`tunerStatus` are all
+ * observed); `set_mic_gain`/`set_monitor`/`set_monitor_gain`/
+ * `set_drive_gain` REFUSE (unobserved field status, or for `drive_gain`,
+ * a capability this profile never declares at all). Two findings pinned,
+ * not fixed, in that file's header — both Low severity, verified against
+ * the real backend chain, not live safety issues: (1) `onRfPowerChange`/
+ * `onCompLevelChange` dispatch their `level` param verbatim with no bound
+ * check beyond `Number.isFinite`/`Number.isSafeInteger` at the FRONTEND
+ * handler layer — a defense-in-depth/UI-hygiene gap only, since the
+ * backend's BCD encoder hard-rejects true out-of-0-255 values; the actual
+ * TX-power semantic hazard (a normalized-vs-raw domain switch with a
+ * boundary trap at the value `1`) is filed separately as MOR-1579
+ * (Medium); (2) `set_monitor_gain` has two call sites
+ * (`makeTxHandlers().onMonLevelChange` and
+ * `makeCwPanelHandlers().onSidetoneLevelChange`) gated on DIFFERENT
+ * capability sets for the identical wire intent — a MOR-1576-class
+ * inconsistency, demonstrated via a capability-withdrawal discrimination
+ * case in that file, but LATENT: `onSidetoneLevelChange` has no UI caller
+ * in this codebase today, and the backend independently re-gates the same
+ * capability for `set_monitor_gain` regardless of call site.
+ *
+ * Plus MOR-1565's (C11) VOX/CW family walk
+ * (`../mor1565-vox-cw-family-conformance.isolated.test.ts`) — 12 intents:
+ * `set_vox`, `set_vox_gain`, `set_anti_vox_gain`, `set_vox_delay`,
+ * `set_cw_pitch`, `set_key_speed`, `set_break_in`, `set_break_in_delay`,
+ * `set_apf`, `set_twin_peak`, `cw_auto_tune`, `set_dash_ratio`. Even more
+ * skewed than MOR-1564's TX-chain split: 11 of the 12 are claimed via
+ * `expectRefusal` (every field this family reads — `voxOn`, `voxGain`,
+ * `antiVoxGain`, `voxDelay`, `cwPitch`, `keySpeed`, `breakIn`,
+ * `breakInDelay`, `main.apfTypeLevel`, `main.twinPeakFilter`, `dashRatio` —
+ * is unobserved on the real IC-7300 fixture. The applicable base capabilities
+ * are declared, while IC-7300 intentionally does not declare `apf`; the APF
+ * handler remains fail-closed. Only `cw_auto_tune` genuinely DISPATCHES —
+ * its gate (`hasCapability('cw') && knownActiveReceiver() !== null`) does
+ * read one field-status leaf (`active`, via `knownActiveReceiver`'s own
+ * `isFieldAvailable(state, 'active')` check), which IS unobserved on this
+ * fixture same as every sibling's leaf — but MOR-1418's single-receiver
+ * carve-out (`caps.receivers === 1`) neutralizes that check on THIS
+ * profile, falling through to a hardcoded `'MAIN'` instead of blocking; on
+ * a dual-RX profile with `active` unobserved the same gate would refuse
+ * (pinned in that walk's own file, not re-derived here). This is a
+ * profile-specific dispatch, not evidence the gate skips field-status
+ * checks — see the walk's own file header for the full correction and the
+ * MOR-1578 leg 4 transmit-causing-action risk finding (`onAutoTune` wired
+ * on `CwPanel.svelte` with no MOR-1244-style guard, unlike
+ * `SemanticRadioSurfaces.svelte`, which deliberately leaves it unwired).
+ * Three gate-consistency checks (`set_vox`'s shared `toggleVox` reference,
+ * `set_cw_pitch`'s and `set_key_speed`'s two byte-identical call sites,
+ * BOTH pinned via `String(...)` source-identity, not refusal-behavior
+ * alone) are pinned as POSITIVE findings — MOR-1576 class asymmetry
+ * checked for and NOT found, unlike `set_monitor_gain` above (that
+ * finding's own CW-sidetone leg, `onSidetoneLevelChange`, is a different
+ * intent and stays claimed via C10, not this walk).
+ *
+ * Plus MOR-1566's (C12) scope-remainder/VFO-topology family walk
+ * (`../mor1566-scope-vfo-family-conformance.isolated.test.ts`) — 10 intents:
+ * `set_scope_mode`, `set_scope_edge`, `set_scope_dual`, `set_scope_during_tx`,
+ * `set_scope_center_type`, `set_scope_vbw`, `set_scope_rbw`,
+ * `switch_scope_receiver`, `set_dual_watch`, `set_main_sub_tracking`. UNLIKE
+ * C6/C7/C10/C11, NOT skewed toward refusal: 6 of the 10 genuinely DISPATCH
+ * on the real IC-7300 fixture (every
+ * `scopeControls.*` leaf this family reads is observed except `rbw`, and the
+ * fixture's own current values fall inside every handler's declared domain).
+ * The 4 refusals are all STRUCTURAL gates (`hasPhysicalSub` failing on this
+ * single-receiver, no-`dual_rx` profile, or `caps.receivers < 2`
+ * short-circuiting before any field check) except `set_scope_rbw`, the one
+ * genuinely-unobserved field-status leaf in this family (discrimination-case
+ * verified in that file). Mode/edge/centerType domains are walked against
+ * the exact tables the production UI itself uses (`MODE_BUTTONS`, `CHOICES`)
+ * and BEHAVIORALLY pinned via a full boundary-value dispatch walk — a
+ * MOR-1576-class check performed and NOT found; `rbw`/`receiver`'s upper
+ * bound are pinned against those same tables STRUCTURALLY only (both refuse
+ * on a different gate before their domain's max value would ever dispatch —
+ * see that file's own header for the split). Also extends conformance
+ * coverage of `vfo_swap`/`vfo_equalize`/`set_scope_hold` at their real
+ * non-keyboard UI call sites (`VfoControlPanel.svelte`'s swap/equalize
+ * buttons and `SemanticRadioSurfaces.svelte`'s
+ * `SCOPE_TOGGLE_INTENT['hold']`). C12's synthetic capability probes own the
+ * positive VFO primitive claims: each adds only its exact declared tag to a
+ * copy of the byte-faithful capture, then asserts the matching frame. C9
+ * owns the captured missing-tag refusals; `set_scope_hold` remains a C9
+ * claim and C12 extension coverage.
+ *
+ * Plus MOR-1567's (C13) remainder-sweeper family walk — the CLOSING walk of
+ * the MOR-1426 Tier-2 program, `WAIVED_INTENTS` now empty — 16 intents:
+ * `scan_start`/`scan_stop`/`scan_set_df_span`/`scan_set_resume`,
+ * `set_dial_lock`/`set_powerstat`,
+ * `set_antenna_1`/`set_antenna_2`/`set_rx_antenna_ant1`/`set_rx_antenna_ant2`,
+ * `set_digisel`/`set_ip_plus`, `memory_clear`, and the 3 orphaned RIT/XIT
+ * intents `waived.ts`'s history documents as a genuine gap in MOR-1426's
+ * per-family prose — `set_rit_status`/`set_rit_tx_status`/
+ * `set_rit_frequency`. Six dispatch: the 4 scan intents, `set_powerstat` on its
+ * `power_control` capability gate, and `memory_clear` through its resolved
+ * snapshot. The other 10 refuse: 6 on an unobserved field this fixture never
+ * confirmed, and the 4 antenna intents
+ * refuse on a STRUCTURAL gate (`caps.antennas===1<2`, fires before the
+ * also-unobserved field check — `set_rx_antenna_ant1`/`set_rx_antenna_ant2`
+ * additionally share ONE call site, `onToggleRxAnt`).
+ * MOR-1574 is cited (not re-derived) as CONTRAST, now historical: the
+ * READ-path `toRitXitProps` (MOR-1562/C8) HAD no fieldStatus gate on
+ * `ritOn`/`ritFreq`/`ritTx` at all — closed by MOR-1574/PR #2488, which
+ * brought it in line with the WRITE-path handlers walked here, which
+ * always DID gate on those same three unobserved leaves. Also adds
+ * ADDITIVE (uncounted, outside the 85-name universe) coverage of the
+ * dynamic mod-input dispatch across all 4 DATA groups on this fixture —
+ * see that file's own header.
+ */
+export const CLAIMED_INTENTS: ReadonlySet<string> = new Set([
+  'set_mode',
+  'set_filter',
+  'set_band',
+  'set_attenuator',
+  'set_preamp',
+  'set_rf_gain',
+  'set_squelch',
+  'set_agc',
+  'set_nb',
+  'set_nr',
+  'set_af_level',
+  'set_memory_mode',
+  'memory_to_vfo',
+  'memory_write',
+  'set_split',
+  'set_vfo',
+  'set_freq',
+  'set_scope_speed',
+  'set_scope_ref',
+  // MOR-1560 (C6) — DSP family walk
+  'set_nr_level',
+  'set_nb_level',
+  'set_nb_depth',
+  'set_nb_width',
+  'set_auto_notch',
+  'set_manual_notch',
+  'set_manual_notch_width',
+  'set_notch_filter',
+  'set_agc_time_constant',
+  // MOR-1561 (C7) — Filter, PBT and IF-shift family walk
+  'set_filter_width',
+  'set_filter_shape',
+  'set_if_shift',
+  'set_pbt_inner',
+  'set_pbt_outer',
+  // MOR-1563 (C9) — keyboard action fan-out walk (see comment above)
+  'set_data_mode',
+  'set_scope_hold',
+  // MOR-1564 (C10) — TX-chain family walk
+  'set_rf_power',
+  'set_mic_gain',
+  'set_compressor',
+  'set_compressor_level',
+  'set_monitor',
+  'set_monitor_gain',
+  'set_drive_gain',
+  'set_tuner_status',
+  // MOR-1565 (C11) — VOX/CW family walk
+  'set_vox',
+  'set_vox_gain',
+  'set_anti_vox_gain',
+  'set_vox_delay',
+  'set_cw_pitch',
+  'set_key_speed',
+  'set_break_in',
+  'set_break_in_delay',
+  'set_apf',
+  'set_twin_peak',
+  'cw_auto_tune',
+  'set_dash_ratio',
+  // MOR-1566 (C12) — scope-remainder/VFO-topology family walk
+  'set_scope_mode',
+  'set_scope_edge',
+  'set_scope_dual',
+  'set_scope_during_tx',
+  'set_scope_center_type',
+  'set_scope_vbw',
+  'set_scope_rbw',
+  'switch_scope_receiver',
+  'set_dual_watch',
+  'set_main_sub_tracking',
+  // C12 synthetic declared-tag probes own these positive claims.
+  'vfo_swap',
+  'vfo_equalize',
+  // MOR-1567 (C13) — remainder-sweeper family walk (closing walk)
+  'scan_start',
+  'scan_stop',
+  'scan_set_df_span',
+  'scan_set_resume',
+  'set_dial_lock',
+  'set_powerstat',
+  'set_antenna_1',
+  'set_antenna_2',
+  'set_rx_antenna_ant1',
+  'set_rx_antenna_ant2',
+  'set_digisel',
+  'set_ip_plus',
+  'memory_clear',
+  'set_rit_status',
+  'set_rit_tx_status',
+  'set_rit_frequency',
+  // MOR-2535 follow-up — the width row's radio-default reset. Claimed via
+  // `expectRefusal` in the C7 file
+  // (`../mor1561-filter-pbt-family-conformance.isolated.test.ts`): the
+  // IC-7300 fixture never declares the derived `filter_width_radio_default`
+  // capability, so `onFilterWidthReset` (the only dispatch site) refuses.
+  'reset_filter_width',
+  // MOR-2640 — the NARROW toggle for the active receiver. Claimed via
+  // `expectRefusal` in the C7 file
+  // (`../mor1561-filter-pbt-family-conformance.isolated.test.ts`): the
+  // IC-7300 fixture never declares the `narrow` capability and never
+  // observes `main.narrow`, so `onNarrowToggle` (the only dispatch site)
+  // refuses on the structural gate before any field check.
+  'set_narrow',
+  // MOR-2111 — the repeater panel family walk. All five are claimed via
+  // `expectFrames` in `../mor2111-repeater-conformance.isolated.test.ts`:
+  // the panel's handlers take the mode/shift/frequency as explicit arguments,
+  // so the dispatch is pure and needs no fixture field-status gate — see that file's
+  // header for the selector-transition table it pins.
+  'set_repeater_tone',
+  'set_repeater_tsql',
+  'set_repeater_shift',
+  'set_tone_freq',
+  'set_tsql_freq',
+  // MOR-2583 — the server-owned monitor MUTE. Claimed in
+  // `panel-commands.intent.isolated.test.ts` ("mutes through the server
+  // monitor MUTE ...", "unmutes through the server monitor MUTE ...").
+  'set_monitor_mute',
+]);
+
+/** Pinned so a removal (or an undocumented addition) shows up in review. */
+export const CLAIMED_INTENTS_COUNT = 91;
+
+/**
+ * `dispatchKeyboardRadioAction` case labels claimed by a conformance case.
+ * `toggle_split` was claimed by MOR-1428's "keyboard context" case (over
+ * `dispatchKeyboardRadioAction({ action: 'toggle_split' })`). MOR-1563 (C9)
+ * walked the remaining 28 in
+ * `../mor1563-keyboard-fanout-conformance.isolated.test.ts` — 17 genuinely
+ * DISPATCH on this fixture, 11 REFUSE (each case names its firing gate; see
+ * that file's header for the full per-action table, the MOR-1577 finding
+ * on adjust_af_level/adjust_rf_gain, and the MOR-1454/MOR-1578-related
+ * notes elsewhere in the table). `WAIVED_KEYBOARD_ACTIONS` in `./waived.ts`
+ * is now empty — this ledger's keyboard half is closed.
+ */
+export const CLAIMED_KEYBOARD_ACTIONS: ReadonlySet<string> = new Set([
+  'toggle_split',
+  // MOR-1563 (C9) — keyboard action fan-out walk, 28 actions
+  'tune', 'band_select', 'mode_select', 'cycle_data_mode', 'cycle_filter',
+  'cycle_preamp', 'cycle_att', 'cycle_agc', 'toggle_nr', 'toggle_nb',
+  'toggle_auto_notch', 'toggle_ip_plus', 'toggle_rit', 'toggle_xit',
+  'clear_rit_xit', 'adjust_af_level', 'adjust_rf_gain', 'toggle_monitor',
+  'vfo_swap', 'vfo_equalize', 'switch_active_vfo', 'set_active_vfo',
+  'toggle_dial_lock', 'scope_span_step', 'scope_ref_step',
+  'scope_toggle_hold', 'scope_toggle_dual', 'scope_toggle_fst',
+]);
+
+/** Pinned so a removal (or an undocumented addition) shows up in review. */
+export const CLAIMED_KEYBOARD_ACTIONS_COUNT = 29;

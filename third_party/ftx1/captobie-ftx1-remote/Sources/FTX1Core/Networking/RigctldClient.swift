@@ -1,0 +1,1239 @@
+import Foundation
+import Network
+import os
+
+/// Talks to rigctld over its plain-text TCP protocol on localhost:4532.
+///
+/// This is only ever instantiated by the Mac hub app — mobile apps go
+/// through `RigWebSocketClient` instead and never see this type in practice
+/// (it lives here rather than in a Mac-only target so the Mac app doesn't
+/// need a second local package just for this one file).
+public actor RigctldClient {
+    /// Debug-level, off by default in Console.app — enable "Include Debug
+    /// Messages" and filter category "rawcat" to see every raw CAT command
+    /// sent and its reply. Added while chasing a VM0/MC0 mode-switch bug
+    /// where nothing in the app's own state logic explained the symptom;
+    /// kept since this class of real-hardware CAT quirk (see CLAUDE.md) is
+    /// exactly what this project keeps needing wire-level visibility into.
+    private static let catLogger = Logger(subsystem: "com.ftx1remote.mac", category: "rawcat")
+    private var connection: NWConnection?
+    private var readBuffer = Data()
+    private let host: NWEndpoint.Host
+    private let port: NWEndpoint.Port
+
+    /// Guards every write+read round trip so two of them can never
+    /// interleave on the wire. Actor isolation alone doesn't provide this:
+    /// `write()`/`readLine()` each suspend at an `await`, and at every
+    /// suspension point the actor is free to start running a *different*
+    /// queued caller. `HubService`'s poll loop calls this client's get
+    /// methods directly (not through `CommandQueue`), so without this lock
+    /// a command from `CommandQueue` (e.g. a button's set command) could
+    /// write its own request in the middle of a poll-loop request that's
+    /// still waiting on its reply — and since both share one `readBuffer`,
+    /// either call's `readLine()` can end up consuming the *other* call's
+    /// reply. That surfaced as: set commands reaching the radio fine (the
+    /// write itself doesn't need the lock to "work"), but get commands
+    /// intermittently reading back garbage that fails to parse, making
+    /// `RigState.breakIn`/`keyerEnabled` look permanently nil.
+    private var roundTripBusy = false
+    private var roundTripWaiters: [CheckedContinuation<Void, Never>] = []
+
+    /// Round trips started since connect-or-launch — read by `HubService`'s
+    /// "poll-timing" log to count how many CAT reads each poll pass costs.
+    public private(set) var roundTripCount = 0
+
+    private func acquireRoundTrip() async {
+        roundTripCount += 1
+        if !roundTripBusy {
+            roundTripBusy = true
+            return
+        }
+        await withCheckedContinuation { roundTripWaiters.append($0) }
+    }
+
+    private func releaseRoundTrip() {
+        if roundTripWaiters.isEmpty {
+            roundTripBusy = false
+        } else {
+            roundTripWaiters.removeFirst().resume()
+        }
+    }
+
+    public init(host: String = "127.0.0.1", port: UInt16 = 4532) {
+        self.host = NWEndpoint.Host(host)
+        self.port = NWEndpoint.Port(rawValue: port)!
+    }
+
+    public func connect(timeout: Duration = .seconds(5)) async throws {
+        let tcpOptions = NWProtocolTCP.Options()
+        tcpOptions.noDelay = true
+        let params = NWParameters(tls: nil, tcp: tcpOptions)
+
+        let conn = NWConnection(host: host, port: port, using: params)
+        self.connection = conn
+        readBuffer.removeAll()
+
+        let readyGuard = ContinuationGuard()
+        // Without the cancellation handler, cancelling the calling Task
+        // (e.g. the user switching rigctld off mid-attempt) wouldn't abort
+        // this connection attempt — it'd sit here until `timeout` elapses
+        // regardless, since the stateUpdateHandler continuation below
+        // doesn't check for cancellation on its own.
+        try await withTaskCancellationHandler {
+            try await withThrowingTaskGroup(of: Void.self) { group in
+                group.addTask {
+                    try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                        conn.stateUpdateHandler = { state in
+                            switch state {
+                            case .ready:
+                                readyGuard.resumeOnce(continuation, with: .success(()))
+                            case .failed(let error):
+                                readyGuard.resumeOnce(continuation, with: .failure(Self.connectError(for: error) ?? error))
+                            case .waiting(let error):
+                                // A refused port or a name that doesn't
+                                // resolve doesn't fail an NWConnection, it
+                                // waits (checked 2026-11-12: both arrive at
+                                // once). Both are definite answers, so give
+                                // up now rather than at `timeout`. Anything
+                                // else (no route, network down) keeps
+                                // waiting: it may still come up.
+                                if let classified = Self.connectError(for: error) {
+                                    readyGuard.resumeOnce(continuation, with: .failure(classified))
+                                }
+                            case .cancelled:
+                                readyGuard.resumeOnce(continuation, with: .failure(RigctldError.notConnected))
+                            default:
+                                break
+                            }
+                        }
+                        conn.start(queue: .global(qos: .userInitiated))
+                    }
+                }
+                group.addTask {
+                    try await Task.sleep(for: timeout)
+                    throw RigctldError.connectTimedOut
+                }
+                do {
+                    try await group.next()
+                    group.cancelAll()
+                } catch {
+                    // Whichever branch threw, explicitly cancel the
+                    // connection so the *other* (losing) branch's
+                    // stateUpdateHandler fires `.cancelled` and its
+                    // continuation actually resumes — group.cancelAll()
+                    // alone only marks it cancelled, it doesn't force a
+                    // continuation waiting on an NWConnection callback to
+                    // resume, which would otherwise hang this whole call
+                    // forever (structured concurrency won't let this
+                    // closure return until every child task finishes).
+                    conn.cancel()
+                    group.cancelAll()
+                    // Don't leave a dead connection for the next write to
+                    // find: with none, callers get `.notConnected` at once.
+                    if self.connection === conn { self.connection = nil }
+                    throw error
+                }
+            }
+        } onCancel: {
+            conn.cancel()
+        }
+    }
+
+    /// The connect failures that say *where* the problem is: the name
+    /// didn't resolve (`.hostNotFound` — with a MagicDNS name, usually
+    /// Tailscale being off on this Mac), or the computer answered but
+    /// nothing listens on the port (`.connectionRefused` — rigctld isn't
+    /// running there). nil for anything else. A host that doesn't answer
+    /// at all never gets here; it runs into `connect`'s timeout
+    /// (`.connectTimedOut`).
+    nonisolated static func connectError(for error: NWError) -> RigctldError? {
+        switch error {
+        case .posix(.ECONNREFUSED):
+            return .connectionRefused
+        case .dns:
+            return .hostNotFound
+        default:
+            return nil
+        }
+    }
+
+    /// Sends a raw rigctld command (e.g. "F 14250000") and returns the
+    /// single-line response (e.g. "RPRT 0"). rigctld's protocol is
+    /// request/response — `acquireRoundTrip()`/`releaseRoundTrip()` ensure
+    /// this write+read pair completes atomically with respect to every
+    /// other round trip on this client, regardless of which caller
+    /// (CommandQueue, HubService's poll loop, ...) issued it.
+    ///
+    /// The reply wait is bounded by `hamlibReplyTimeout` — see there.
+    public func send(_ command: String) async throws -> String {
+        await acquireRoundTrip()
+        defer { releaseRoundTrip() }
+        Self.catLogger.debug("-> \(command, privacy: .public)")
+        try await write(command)
+        let result = try await withReplyTimeout(command, hamlibReplyTimeout, error: .replyTimedOut) {
+            try await self.readLine()
+        }
+        Self.catLogger.debug("<- \(command, privacy: .public) : \(result, privacy: .public)")
+        return result
+    }
+
+    /// Hamlib verbs (`send`/`queryOrError`) had no reply timeout at all,
+    /// only raw CAT did: a reply that never came (rigctld wedged, or the
+    /// Pi dropping off Tailscale without closing the TCP connection) held
+    /// the round-trip lock forever, queueing every later command (V/M,
+    /// swap, PTT) behind it. That happened on the Windows app (2026-09-29)
+    /// with a 2-line read that got a 1-line "RPRT -8"; `queryOrError`
+    /// already covers that shape here, this covers silence. 5 s rather
+    /// than raw CAT's 1 s: the Pi's rigctld may run hamlib's default
+    /// serial timeout/retry (1000 ms × 3), which can take ~4 s to answer a
+    /// failing verb, and timing out on a reply that's still coming costs a
+    /// reconnect. Local mode's rigctld runs `timeout=300,retry=0`, so the
+    /// slack is free there.
+    private let hamlibReplyTimeout: Duration = .seconds(5)
+
+    /// For commands that reply with a known number of lines (e.g. "m" for
+    /// get_mode: mode + passband). rigctld's get commands never prepend
+    /// "RPRT" on success — only a failure replaces the whole expected
+    /// multi-line reply with a single "RPRT -N" line — so checking for
+    /// that prefix on each line tells us not to block waiting for lines
+    /// that will never arrive. Every multi-line read must go through this;
+    /// there's deliberately no variant without the check.
+    private func queryOrError(_ command: String, lines: Int) async throws -> [String] {
+        await acquireRoundTrip()
+        defer { releaseRoundTrip() }
+        Self.catLogger.debug("-> \(command, privacy: .public)")
+        try await write(command)
+        let result = try await withReplyTimeout(command, hamlibReplyTimeout, error: .replyTimedOut) {
+            var result: [String] = []
+            for _ in 0..<lines {
+                let line = try await self.readLine()
+                if line.hasPrefix("RPRT") {
+                    Self.catLogger.debug("<- \(command, privacy: .public) : \(line, privacy: .public) (error)")
+                    throw RigctldError.badResponse
+                }
+                result.append(line)
+            }
+            return result
+        }
+        Self.catLogger.debug("<- \(command, privacy: .public) : \(result.joined(separator: "|"), privacy: .public)")
+        return result
+    }
+
+    /// Runs `read` (the reply half of a round trip, called with the
+    /// round-trip lock already held) with a time limit. On expiry, or any
+    /// other failure of `read`, cancels the connection so the pending
+    /// `readLine()` resolves instead of leaking, then reconnects right
+    /// away, so one unanswered command costs only its own field rather
+    /// than a full disconnect — see `sendRawCommand` for why that matters
+    /// ("GT0" goes unanswered every poll in C4FM). A late reply can't leak
+    /// into a later read: it would arrive on the old, cancelled connection.
+    /// If the rig or network is really gone, the reconnect fails too and
+    /// the next call surfaces that normally.
+    private func withReplyTimeout<T: Sendable>(
+        _ command: String,
+        _ timeout: Duration,
+        error timeoutError: RigctldError,
+        _ read: @escaping @Sendable () async throws -> T
+    ) async throws -> T {
+        try await withThrowingTaskGroup(of: T.self) { group in
+            group.addTask { try await read() }
+            group.addTask {
+                try await Task.sleep(for: timeout)
+                throw timeoutError
+            }
+            do {
+                let result = try await group.next()!
+                group.cancelAll()
+                return result
+            } catch let error as RigctldError where error == timeoutError {
+                // See connect()'s comment: cancelling the connection before
+                // this closure returns is what actually unsticks the losing
+                // readLine() — group.cancelAll() alone only marks it
+                // cancelled.
+                // Raw CAT stays at debug: some commands go unanswered every
+                // poll in normal use (see `sendRawCommand`). A silent
+                // hamlib verb isn't routine, so it's visible by default.
+                if timeoutError == .rawCommandTimedOut {
+                    Self.catLogger.debug("<- \(command, privacy: .public) : (no reply in \(String(describing: timeout), privacy: .public)) — reconnecting")
+                } else {
+                    Self.catLogger.notice("<- \(command, privacy: .public) : (no reply in \(String(describing: timeout), privacy: .public)) — reconnecting")
+                }
+                disconnect()
+                do {
+                    try await connect()
+                } catch {
+                    // The far end is gone, not just this one command:
+                    // say so, so the hub reconnects and reports why
+                    // instead of counting it as the rig not answering.
+                    group.cancelAll()
+                    throw RigctldError.connectionLost
+                }
+                group.cancelAll()
+                throw error
+            } catch let error as RigctldError {
+                // `read` itself failed, so it's finished: an error reply
+                // ("RPRT -N" where lines were expected) leaves the
+                // connection fine, and `.connectionLost`/`.notConnected`
+                // are the hub's to recover from — reconnecting here would
+                // reopen a link the hub just closed on purpose.
+                group.cancelAll()
+                throw error
+            } catch {
+                // Task cancellation: `read` may still be waiting, and the
+                // group can't return until it finishes.
+                disconnect()
+                group.cancelAll()
+                throw error
+            }
+        }
+    }
+
+    /// rigctld is launched with `-o` (see `RigctldProcessController`), which
+    /// makes every get/set command require an explicit VFO argument rather
+    /// than silently defaulting to (and, if given an argument anyway,
+    /// ignoring it in favor of) the currently active VFO. "currVFO" is
+    /// rigctld's own keyword for "whichever VFO is active" — passing it
+    /// keeps these calls' behavior the same as before -o was added.
+    private static let currentVFOArg = "currVFO"
+
+    /// Deliberately raw CAT ("FA;") rather than hamlib's native "f currVFO" —
+    /// confirmed via direct `nc`-based probing (2026-09-07) that hamlib's own
+    /// frequency answer goes stale after a `VM0`/`MC0` transition even though
+    /// a bare "FA;" read at the exact same moment already reports the correct,
+    /// restored value. hamlib's *core* (not the FTX-1 backend itself, which
+    /// has no cache of its own) caches the last successful get_freq result
+    /// and only invalidates it on a hamlib-native set_freq/set_vfo call —
+    /// this app's `VM0`/`MC0` writes go through raw passthrough exclusively,
+    /// completely invisible to that cache, so the cached value just keeps
+    /// being served regardless of what the radio has actually done since.
+    /// "FA" always addresses the Main-side register directly regardless of
+    /// `RIG_VFO_CURR` resolution (confirmed by reading the FTX-1 hamlib
+    /// backend source: `RIG_VFO_A`/`.MAIN`/`.CURR` all map to the same "FA"
+    /// command), so this is a like-for-like replacement, not a behavior
+    /// change in what's being read — only in bypassing the stale cache.
+    public func getFrequency() async throws -> Int {
+        guard let hz = try await getRawInt("FA") else { throw RigctldError.badResponse }
+        return hz
+    }
+
+    // `query()` unconditionally reads 2 lines, but a failure reply is only
+    // ever 1 line ("RPRT -N") — this rig's hamlib backend returns exactly
+    // that for "get mode" while the active VFO is in C4FM. `query()`'s
+    // second `readLine()` would then block forever waiting for a line that
+    // rigctld will never send, wedging this actor's round-trip lock (see
+    // `roundTripBusy` above) and hanging every subsequent call on this
+    // client. `queryOrError` (below) exists for exactly this failure shape.
+    public func getMode() async throws -> (mode: String, passband: Int) {
+        let lines = try await queryOrError("m \(Self.currentVFOArg)", lines: 2)
+        guard lines.count == 2, let passband = Int(lines[1]) else {
+            throw RigctldError.badResponse
+        }
+        return (lines[0], passband)
+    }
+
+    /// Fallback for `getMode()`'s known gap, not a replacement for it:
+    /// this rig's hamlib backend has no mapping for the raw "MD" mode
+    /// codes "H"/"I" (C4FM-DN / C4FM-VW per the CAT manual's OPERATING
+    /// MODE table) and returns a protocol error instead of any mode
+    /// string — confirmed against real hardware (`W MD0; ;` while the
+    /// active VFO is in C4FM answers "MD0H;", which `getMode()` can't
+    /// parse into anything). Reads the raw CAT mode directly via
+    /// passthrough and reports whether it's one of those two codes;
+    /// every other code returns nil rather than guessing, since ordinary
+    /// modes already come back fine through `getMode()` — this exists
+    /// purely to fill the C4FM gap, not to duplicate that path. `v`
+    /// determines whether the currently-active VFO is Main or Sub, same
+    /// technique as `getSecondaryFrequency()`/`getSecondaryMode()` above.
+    public func isActiveModeC4FM() async throws -> Bool {
+        let currentVFO = try await send("v")
+        return try await isC4FM(p1: currentVFO == "Sub" ? "1" : "0")
+    }
+
+    /// Same gap as `isActiveModeC4FM()`, for whichever VFO isn't currently
+    /// active — the fallback counterpart to `getSecondaryMode()`.
+    public func isSecondaryModeC4FM() async throws -> Bool {
+        let currentVFO = try await send("v")
+        return try await isC4FM(p1: currentVFO == "Sub" ? "0" : "1")
+    }
+
+    /// The active VFO as hamlib names it on this rig — "Main" or "Sub".
+    /// Lets a caller that needs it for several reads (the poll's fast
+    /// tier) ask once instead of once per read, the way
+    /// `getSecondaryFrequency()`/`isActiveModeC4FM()` etc. each do.
+    public func getActiveVFO() async throws -> String {
+        try await send("v")
+    }
+
+    /// `f <vfo>` for a VFO the caller already resolved ("Main"/"Sub") —
+    /// the body of `getSecondaryFrequency()` without its own `v` read.
+    public func getFrequency(ofVFO vfo: String) async throws -> Int {
+        let freqLine = try await send("f \(vfo)")
+        guard let hz = Int(freqLine) else { throw RigctldError.badResponse }
+        return hz
+    }
+
+    /// Raw CAT "MD<p1>" (0 MAIN, 1 SUB): the P2 mode character, or nil if
+    /// the reply doesn't have the expected shape. One round trip that
+    /// covers what hamlib's "m" plus the C4FM fallback above take two or
+    /// three for — see `RigMode(catModeCode:)` for the decoding, and
+    /// `isActiveModeC4FM()` for why hamlib's own mode read can't be relied
+    /// on for C4FM or after a swap.
+    public func getModeCode(p1: Int) async throws -> Character? {
+        let prefix = "MD\(p1)"
+        let reply = try await sendRawCommand(prefix)
+        guard reply.hasPrefix(prefix) else { return nil }
+        return reply.dropFirst(prefix.count).first
+    }
+
+    private func isC4FM(p1: String) async throws -> Bool {
+        let reply = try await sendRawCommand("MD\(p1)")
+        let prefix = "MD\(p1)"
+        guard reply.hasPrefix(prefix) else { return false }
+        let modeChar = reply.dropFirst(prefix.count).first
+        return modeChar == "H" || modeChar == "I"
+    }
+
+    /// Sets the active VFO's mode to real C4FM via direct CAT passthrough
+    /// — same gap as `isActiveModeC4FM()`, but for the set side: hamlib's
+    /// generic "M" set-mode verb has no bit for either raw C4FM code on
+    /// this rig's backend, and its "FM-D" mode string actually programs
+    /// the unrelated raw "A" (DATA-FM) code instead (confirmed against
+    /// real hardware — see `RigMode.dataFM`/`RigMode.c4fm`). Sends the raw
+    /// "MD" mnemonic directly instead.
+    ///
+    /// Defaults to "H" (C4FM-DN) rather than "I" (C4FM-VW) — the CAT
+    /// manual documents both codes but not what distinguishes them
+    /// operationally, so this is a best guess (DN reads as the plain/
+    /// default digital-voice variant) pending hardware confirmation, not
+    /// a confirmed mapping like the rest of this file's raw commands.
+    public func setActiveModeC4FM() async throws {
+        let currentVFO = try await send("v")
+        let p1 = currentVFO == "Sub" ? "1" : "0"
+        try await sendRawFireAndForget("MD\(p1)H")
+    }
+
+    /// hamlib's PTT values are 0 off, 1 on, 2 on (mic), 3 on (data) — any
+    /// nonzero value is transmitting. The FTX-1 reports its "TX2" state as
+    /// 3 (hardware-confirmed 2026-09-26, keying from the front panel), so
+    /// comparing against "1" alone never saw TX. A non-numeric reply throws
+    /// so callers keep the last known state rather than reading it as RX.
+    public func getPTT() async throws -> Bool {
+        let line = try await send("t \(Self.currentVFOArg)")
+        guard let value = Int(line) else { throw RigctldError.badResponse }
+        return value != 0
+    }
+
+    /// Reads a rigctld level (e.g. "SWR", "RFPOWER_METER_WATTS"). Returns
+    /// nil rather than throwing when the rig/backend doesn't support the
+    /// requested level — rigctld reports that as an "RPRT -N" line, which
+    /// isn't parseable as a number.
+    public func getLevel(_ name: String) async throws -> Double? {
+        let line = try await send("l \(Self.currentVFOArg) \(name)")
+        return Double(line)
+    }
+
+    /// Sends a raw CAT command straight to the rig via rigctld's passthrough
+    /// (`W`/send_cmd_rx), for settings hamlib doesn't expose as a named
+    /// func/level/parm — most of the FTX-1's menu items, per its CAT
+    /// Operation Reference Manual, which documents dedicated two/three-
+    /// letter commands (e.g. "BI" for break-in, "KR" for the keyer) rather
+    /// than routing everything through a generic numbered menu command.
+    ///
+    /// `cmd` should not include the trailing `;` — this method appends it.
+    /// It has to be part of the outgoing command text itself (not left to
+    /// rigctld to append): hamlib's `send_cmd` (tests/rigctl_parse.c)
+    /// special-cases Kenwood/Yaesu backends to *disable* its own automatic
+    /// terminator append (`send_cmd_term = 0`), on the assumption the
+    /// caller already writes `;`-terminated command text — verified by
+    /// reading that source directly. Skipping it means the bytes hitting
+    /// the rig's serial port are e.g. "BI1" with no terminator at all,
+    /// which the radio never recognizes as a complete command; testing
+    /// against a backend-agnostic dummy rigctld (which isn't Yaesu/Kenwood
+    /// and doesn't hit that code path) won't catch this.
+    ///
+    /// That same source also has a quirk this works around: it picks the
+    /// reply's trailing byte based on an internal `cmdcount` that counts
+    /// `;` occurrences in the outgoing command text. Because our own
+    /// command is itself `;`-terminated, `cmdcount` comes out as 2 (not 1)
+    /// for what's really a single command, which makes it terminate the
+    /// reply with `\0` instead of the `\n` every other rigctld reply uses —
+    /// confirmed by reading the source and reproducing it against a local
+    /// dummy rigctld. `readLine(terminators:)` accepts both so this doesn't
+    /// hang waiting for a `\n` that will never come.
+    /// The manual doesn't promise every command gets an Answer — Set
+    /// commands in particular may not. If the real rig simply never
+    /// replies, `readLine()` would otherwise wait forever: there's no
+    /// timeout anywhere in the read path. Since `acquireRoundTrip()`
+    /// serializes every round trip on this client, one hung read would
+    /// permanently jam every future call behind it (this is what actually
+    /// happened: the very first raw command after a fresh connection
+    /// worked, then everything else silently queued forever). `timeout`
+    /// bounds the wait, and on expiry — following the same technique
+    /// `connect()` above uses — explicitly cancels the connection so the
+    /// still-pending `readLine()` continuation is forced to resolve rather
+    /// than leak, and lets the poll loop's existing reconnect logic notice
+    /// and recover the connection instead of leaving it wedged.
+    ///
+    /// A genuinely-unanswered command isn't just slow to reply — reading
+    /// hamlib's own `send_cmd` (tests/rigctl_parse.c), when its internal
+    /// serial read errors out it `break`s out before ever writing *any*
+    /// reply back to us, not even an error line, so there's nothing this
+    /// client could wait longer to catch. 1s is a generous margin over
+    /// rigctld's own per-command timeout (300ms, tuned down from hamlib's
+    /// default 1000ms×3 retries in `RigctldProcessController` — that
+    /// default meant a single unanswered raw command held rigctld's global
+    /// per-client lock for up to ~4s, blocking every other pending
+    /// command too, which was most of the multi-second delay users saw
+    /// after clicking a menu button).
+    public func sendRawCommand(_ cmd: String, timeout: Duration = .seconds(1)) async throws -> String {
+        await acquireRoundTrip()
+        defer { releaseRoundTrip() }
+        Self.catLogger.debug("-> \(cmd, privacy: .public)")
+        try await write("W \(cmd); ;")
+        // On timeout, `withReplyTimeout` reconnects right away, because a
+        // single unanswered raw command isn't always the rare
+        // "genuinely wedged" case this was written for — confirmed
+        // against real hardware that "GT0" (AGC), which this rig
+        // answers fine in SSB/CW, gets no reply at all while the
+        // active VFO is in C4FM (AGC doesn't apply to digital
+        // voice). That makes it a routine, every-poll-cycle
+        // occurrence in C4FM, not a one-off: disconnecting and
+        // leaving this actor connectionless made every cycle force
+        // a full reconnect (visible disconnect + audio-engine
+        // restart) roughly every 5s. Reconnecting immediately here
+        // — instead of just disconnecting and letting a later,
+        // unrelated call discover `notConnected` — keeps that
+        // routine failure confined to this one best-effort field;
+        // its caller already treats a thrown error here as
+        // optional (see e.g. `getRawInt`/`getRawBool`'s `try?`
+        // callers). If the rig is genuinely gone rather than just
+        // not answering this one command, this reconnect attempt
+        // fails too and the next hard read (e.g. `getFrequency()`)
+        // surfaces that normally.
+        let result = try await withReplyTimeout(cmd, timeout, error: .rawCommandTimedOut) {
+            try await self.readLine(terminators: [0, UInt8(ascii: "\n")])
+        }
+        Self.catLogger.debug("<- \(cmd, privacy: .public) : \(result, privacy: .public)")
+        return result
+    }
+
+    /// Reads a boolean on/off CAT setting of the form the FTX-1 manual
+    /// documents for e.g. "BI" (break-in) and "KR" (keyer): querying
+    /// "<CMD>;" answers "<CMD><P1>;" where P1 is "0" or "1". Tolerates the
+    /// reply either including or omitting its own trailing ";" — observed
+    /// both ways against a local dummy rigctld, and the real rig's exact
+    /// behavior here isn't confirmed yet. Returns nil if the reply doesn't
+    /// match that shape at all.
+    public func getRawBool(_ cmd: String) async throws -> Bool? {
+        let reply = try await sendRawCommand(cmd)
+        guard reply.hasPrefix(cmd) else { return nil }
+        let value = reply.dropFirst(cmd.count)
+        if value.hasPrefix("1") { return true }
+        if value.hasPrefix("0") { return false }
+        return nil
+    }
+
+    /// Sets a boolean on/off CAT setting of the form "<CMD><0|1>;" — see
+    /// `getRawBool(_:)`.
+    public func setRawBool(_ cmd: String, _ on: Bool) async throws {
+        try await sendRawCommandFireAndForget("\(cmd)\(on ? 1 : 0)")
+    }
+
+    /// Reads a fixed-width numeric CAT setting of the form the FTX-1 manual
+    /// documents for e.g. "KS" (keyer speed, 3 digits) and "KP" (key pitch,
+    /// 2 digits): querying "<CMD>;" answers "<CMD><digits>;". Takes only the
+    /// leading run of digits after the command prefix, tolerating the reply
+    /// either including or omitting its own trailing ";" (see
+    /// `getRawBool(_:)` for the same reasoning). Returns nil if the reply
+    /// doesn't match that shape at all.
+    public func getRawInt(_ cmd: String) async throws -> Int? {
+        let reply = try await sendRawCommand(cmd)
+        guard reply.hasPrefix(cmd) else { return nil }
+        let digits = reply.dropFirst(cmd.count).prefix { $0.isNumber }
+        return Int(digits)
+    }
+
+    /// Reads one meter via CAT "RM" (READ METER): "RM<P1>;" answers
+    /// "RM<P1><P2 x3><P3 x3>;" — P2 (000-255) is the value. P1: 3 COMP,
+    /// 4 ALC, 5 PO, 6 SWR, 7 IDD, 8 VDD. `getRawInt` can't be used since
+    /// P2 and P3 run together as one digit string.
+    public func getMeterReading(_ p1: Int) async throws -> Int? {
+        let cmd = "RM\(p1)"
+        let reply = try await sendRawCommand(cmd)
+        guard reply.hasPrefix(cmd) else { return nil }
+        return Int(reply.dropFirst(cmd.count).prefix(3))
+    }
+
+    /// Sets a fixed-width, zero-padded numeric CAT setting of the form
+    /// "<CMD><digits>;" — see `getRawInt(_:)`. `digits` is the field width
+    /// (e.g. 3 for "KS004;", 2 for "KP00;"), per the manual.
+    public func setRawInt(_ cmd: String, _ value: Int, digits: Int) async throws {
+        let padded = String(format: "%0\(digits)d", value)
+        try await sendRawCommandFireAndForget("\(cmd)\(padded)")
+    }
+
+    /// Reads a single-digit sub-field addressed by a full-width raw CAT
+    /// prefix (P1/P2 baked into `cmd`, matching the "PA0"/"RA0"/"ML1"-style
+    /// fixed-sub-selector pattern other raw commands use), where the
+    /// reply's remaining digits are themselves a multi-field packed value
+    /// and only the first one is wanted — e.g. the FTX-1's raw "SS"
+    /// (SPECTRUM SCOPE) command answers with P1 P2 P3 P4 P5 P6 P7 packed
+    /// together with no separators, so `getRawInt`'s "take the whole
+    /// trailing digit run as one number" parsing would misread e.g. PEAK
+    /// LV5's "20000" reply as 20000 instead of 2.
+    public func getRawDigit(_ cmd: String) async throws -> Int? {
+        let reply = try await sendRawCommand(cmd)
+        guard reply.hasPrefix(cmd) else { return nil }
+        return reply.dropFirst(cmd.count).first?.wholeNumberValue
+    }
+
+    /// Sets a single-digit sub-field the same shape `getRawDigit(_:)` reads,
+    /// where the manual documents the remaining fields after it as fixed
+    /// "0" — e.g. "SS"'s PEAK (P3, followed by P4-P7 all "0") and MARKER
+    /// (P3, followed by P4-P7 all "0") sub-functions. Unlike `setRawInt`,
+    /// which zero-*pads* a single value to a field width, this writes one
+    /// real digit followed by a fixed run of literal zero digits for the
+    /// unused trailing fields the manual documents as always "0" — sending
+    /// a short command (e.g. just "SS021" instead of the full 7-digit
+    /// "SS0210000") doesn't match the command's documented digit width and
+    /// hasn't been tested against the real rig.
+    public func setRawPackedDigit(_ cmd: String, _ digit: Int, trailingZeros: Int) async throws {
+        try await sendRawCommandFireAndForget("\(cmd)\(digit)\(String(repeating: "0", count: trailingZeros))")
+    }
+
+    /// Reads the FTX-1's raw "SS" (SPECTRUM SCOPE) command's LEVEL
+    /// sub-function (P2=4) — unlike PEAK/MARKER above, LEVEL's P3-P7 aren't
+    /// separate fixed/variable fields at all: the manual documents them
+    /// together as one 5-character signed decimal ("-30.0" to "+30.0" in
+    /// 0.5dB steps, e.g. "+15.0"). Takes only the leading run of
+    /// digit/"."/"+"/"-" characters before parsing (same reasoning as
+    /// `getRawInt`'s digit-only prefix) rather than handing `Double.init`
+    /// the whole remainder: the reply's trailing ";" is the CAT protocol's
+    /// own terminator character, part of the payload bytes and not stripped
+    /// by `readLine()` (which only strips rigctld's own `\0`/`\n` framing) —
+    /// passing that ";" straight into `Double.init` made it fail to parse
+    /// every reply, always returning nil regardless of the radio's actual
+    /// setting.
+    public func getSpectrumScopeLevel() async throws -> Double? {
+        let reply = try await sendRawCommand("SS04")
+        guard reply.hasPrefix("SS04") else { return nil }
+        let value = reply.dropFirst(4).prefix { $0.isNumber || $0 == "." || $0 == "+" || $0 == "-" }
+        return Double(value)
+    }
+
+    /// Sets "SS"'s LEVEL sub-function — see `getSpectrumScopeLevel()`. `%04.1f`
+    /// zero-pads the magnitude to the manual's fixed "XX.X" width (e.g. 8.5
+    /// -> "08.5", 15.0 -> "15.0") to match the 5-byte-total shape with the
+    /// leading sign character.
+    public func setSpectrumScopeLevel(_ dB: Double) async throws {
+        let sign = dB < 0 ? "-" : "+"
+        let formatted = String(format: "%04.1f", abs(dB))
+        try await sendRawCommandFireAndForget("SS04\(sign)\(formatted)")
+    }
+
+    /// Reads the FTX-1's raw "IS" (IF-SHIFT) command for the MAIN side:
+    /// the Read is "IS0;" (P1 only) but the Answer is "IS0" + P2 (fixed
+    /// "0") + P3 (sign) + P4 (4-digit Hz) + ";", e.g. "IS00-0240;". The
+    /// generic `getRawInt` can't be used here — its digit-only prefix
+    /// scan stops at the sign and would return the fixed P2 "0" as the
+    /// value every time — so this checks for the "IS00" prefix (P1 and
+    /// the fixed P2 together, same trick as "SH0"'s baked-in P2) and
+    /// parses the signed run after it; `Int("+0240")` handles the
+    /// explicit "+" fine. Same leading-run parse as
+    /// `getSpectrumScopeLevel()` to keep the trailing ";" out of `Int.init`.
+    public func getIFShiftHz(side: FilterSide = .main) async throws -> Int? {
+        let reply = try await sendRawCommand("IS\(side.p1)")
+        guard reply.hasPrefix("IS\(side.p1)0") else { return nil }
+        let value = reply.dropFirst(4).prefix { $0.isNumber || $0 == "+" || $0 == "-" }
+        return Int(value)
+    }
+
+    /// Sets "IS" for the MAIN side — see `getIFShiftHz()`. Always writes an
+    /// explicit sign (the manual's P3 is "+ / -", never absent) and a
+    /// zero-padded 4-digit magnitude: "IS00+0240;", "IS00-1200;",
+    /// "IS00+0000;". Callers should pass a value already on the 20 Hz grid
+    /// within ±1200 (`IFShift.snapped`); nothing is validated here.
+    public func setIFShiftHz(_ hz: Int, side: FilterSide = .main) async throws {
+        let sign = hz < 0 ? "-" : "+"
+        let magnitude = String(format: "%04d", abs(hz))
+        try await sendRawCommandFireAndForget("IS\(side.p1)0\(sign)\(magnitude)")
+    }
+
+    /// Reads P3 of the FTX-1's raw "RI" (RADIO INFORMATION) status command —
+    /// 0 = stopped, 1 = recording, 2 = playing (CW MESSAGE record/playback
+    /// state — see `RigState.cwMessageStatus`). RI's answer packs 8
+    /// single-digit fields ("RI" + P1..P8 + ";") rather than one trailing
+    /// run of digits, so `getRawInt` isn't usable here — it would
+    /// concatenate all 8 into one number instead of isolating P3. RI also
+    /// reports several other fields (Hi-SWR, TX state, tuner, scan,
+    /// squelch) this app doesn't use yet. Read-only per the manual (no
+    /// Set), queried as "RI0" (P1 fixed to 0).
+    public func getCWMessageStatus() async throws -> Int? {
+        let reply = try await sendRawCommand("RI0")
+        guard reply.hasPrefix("RI") else { return nil }
+        let fields = Array(reply.dropFirst(2))
+        guard fields.count >= 3 else { return nil }
+        return fields[2].wholeNumberValue
+    }
+
+    /// Reads whether the FTX-1's antenna tuner is engaged — P3 of the raw
+    /// "AC" (ANTENNA TUNER CONTROL) command's Answer (see `CommandQueue`'s
+    /// `.setTuner` case for the P1/P2 addressing the Set side uses — the
+    /// Read side doesn't need to match it, see below). "AC"'s Read command
+    /// takes no parameters at all ("AC;", unlike most raw commands this app
+    /// wires, which repeat a fixed sub-selector prefix on both Read and
+    /// Set), and its Answer packs three single-digit fields ("AC" + P1 + P2
+    /// + P3 + ";") reporting whichever tuner is actually active, so neither
+    /// `getRawBool` nor `getRawInt` is usable here — same reasoning as
+    /// `getCWMessageStatus()` above.
+    public func getTunerEnabled() async throws -> Bool? {
+        let reply = try await sendRawCommand("AC")
+        guard reply.hasPrefix("AC") else { return nil }
+        let fields = Array(reply.dropFirst(2))
+        guard fields.count >= 3 else { return nil }
+        return fields[2] == "1"
+    }
+
+    /// Reads the FTX-1's raw "DA" (DIMMER) command — its Answer packs three
+    /// independently-adjustable 2-digit fields behind a fixed 2-digit P1
+    /// ("DA" + P1(00, fixed) + P2(contrast) + P3(TFT brightness) +
+    /// P4(LED brightness) + ";"), so neither `getRawInt` (which assumes one
+    /// trailing run of digits is one value) nor `getRawBool` fit — same
+    /// reasoning as `getTunerEnabled()`/`getCWMessageStatus()` above, just
+    /// with 2-digit fields instead of 1-digit ones.
+    public func getDisplaySettings() async throws -> (contrast: Int, brightness: Int, ledBrightness: Int)? {
+        let reply = try await sendRawCommand("DA")
+        guard reply.hasPrefix("DA") else { return nil }
+        let digits = Array(reply.dropFirst(2).prefix { $0.isNumber })
+        guard digits.count >= 8,
+              let contrast = Int(String(digits[2...3])),
+              let brightness = Int(String(digits[4...5])),
+              let ledBrightness = Int(String(digits[6...7]))
+        else { return nil }
+        return (contrast, brightness, ledBrightness)
+    }
+
+    /// Sets all three of "DA"'s fields at once — per the manual, Set always
+    /// writes P2/P3/P4 together in one command, there's no way to address
+    /// just one field. Callers that only want to change one value (e.g. a
+    /// D-CONTRAST stepper) must read the current triple via
+    /// `getDisplaySettings()` first and pass the other two through
+    /// unchanged, the same read-modify-write shape `CommandQueue` already
+    /// uses.
+    public func setDisplaySettings(contrast: Int, brightness: Int, ledBrightness: Int) async throws {
+        let p2 = String(format: "%02d", contrast)
+        let p3 = String(format: "%02d", brightness)
+        let p4 = String(format: "%02d", ledBrightness)
+        try await sendRawCommandFireAndForget("DA00\(p2)\(p3)\(p4)")
+    }
+
+    /// Reads one item from the FTX-1's "EX" (MENU) command — the deep
+    /// SET-mode settings (Radio/CW/Operation/Display/Extension/APRS
+    /// Setting on the real rig, "Table 3" in the CAT manual), addressed by
+    /// `P1` (category), `P2` (tab), `P3` (item) rather than each having its
+    /// own mnemonic like "BI"/"KR"/etc. Read command is "EX" + 2-digit P1 +
+    /// 2-digit P2 + 2-digit P3 + ";"; Answer echoes that same 6-digit
+    /// address back before the value (P4), whose width/shape (plain digits,
+    /// signed digits, or ASCII text) varies per item — so this returns the
+    /// raw P4 substring rather than attempting to parse it, leaving typed
+    /// decoding to `DeepSettingItem` (see DeepSettingsCatalog.swift), the
+    /// same "raw CAT layer stays dumb" split `getRawInt`/`getRawBool` use.
+    public func getMenuItem(p1: Int, p2: Int, p3: Int) async throws -> String? {
+        let prefix = "EX" + String(format: "%02d%02d%02d", p1, p2, p3)
+        let reply = try await sendRawCommand(prefix)
+        guard reply.hasPrefix(prefix) else { return nil }
+        var value = String(reply.dropFirst(prefix.count))
+        if value.hasSuffix(";") { value.removeLast() }
+        return value
+    }
+
+    /// Writes one "EX" menu item — see `getMenuItem(p1:p2:p3:)`. `rawValue`
+    /// is P4 already encoded to the item's expected shape (caller's
+    /// responsibility, via `DeepSettingItem.encode(_:)`). Fire-and-forget
+    /// like `setRawBool`/`setRawInt`, since Set commands on this rig don't
+    /// get a reply.
+    public func setMenuItem(p1: Int, p2: Int, p3: Int, rawValue: String) async throws {
+        let prefix = "EX" + String(format: "%02d%02d%02d", p1, p2, p3)
+        try await sendRawFireAndForget(prefix + rawValue)
+    }
+
+    /// Reads a memory channel's TAG (its user-assigned name, up to 12 ASCII
+    /// characters) via the FTX-1's raw "MT" (MEMORY CHANNEL TAG WRITE)
+    /// command's Read side — despite the "WRITE" name, it documents Read/
+    /// Answer too, addressed by the 5-digit channel number itself (like
+    /// "MC"/"MR") rather than a fixed sub-selector prefix like "VM0"/"MC0"
+    /// above, so `getRawInt`/`getMenuItem`'s fixed-prefix shape doesn't fit
+    /// — same "raw CAT layer stays dumb" split as `getMenuItem`. The rig
+    /// pads the field with trailing spaces up to its 12-character width;
+    /// trimmed here since an empty/whitespace-only tag isn't meaningful to
+    /// show. See `RigState.memoryChannelTag`.
+    public func getMemoryChannelTag(channel: Int) async throws -> String? {
+        let prefix = "MT" + String(format: "%05d", channel)
+        let reply = try await sendRawCommand(prefix)
+        guard reply.hasPrefix(prefix) else { return nil }
+        var value = String(reply.dropFirst(prefix.count))
+        if value.hasSuffix(";") { value.removeLast() }
+        let trimmed = value.trimmingCharacters(in: .whitespaces)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    /// Reads one memory channel's contents with raw "MR" plus its tag with
+    /// "MT" — see `MemoryChannelEntry`. Nil for a blank channel, which
+    /// answers "MR" with "?;" right away; the tag is only read for a
+    /// programmed one. A tag read that fails leaves the tag nil rather than
+    /// dropping the channel.
+    public func readMemoryChannel(_ channel: Int) async throws -> MemoryChannelEntry? {
+        let reply = try await sendRawCommand("MR" + String(format: "%05d", channel))
+        guard var entry = MemoryChannelEntry(mrReply: reply), entry.channel == channel else { return nil }
+        entry.tag = try? await getMemoryChannelTag(channel: channel)
+        return entry
+    }
+
+    /// Like `sendRawCommand`, but for Set-style commands, which this rig
+    /// never acknowledges (the CAT manual documents an Answer only for
+    /// Read commands; confirmed by direct testing). `sendRawCommand` used
+    /// to be used for these too, but waiting out its timeout on every
+    /// click (there being no reply to catch) is what made menu buttons
+    /// take several seconds to visibly update.
+    ///
+    /// Sends `W <cmd>; 0` — "expect 0 reply bytes" — rather than
+    /// `sendRawCommand`'s `; ;` ("read up to a ';'"). With `; ;`, rigctld
+    /// itself waits out its serial read timeout for the answer a set
+    /// never gets, and holds every later command behind it: measured
+    /// against the Pi's rigctld (2026-10-06), a read queued right behind
+    /// an accepted set answered only after ~2.1 s, so every raw set
+    /// stalled the poll loop that long (~300 ms in local mode, see
+    /// `RigctldProcessController`'s `timeout=300`). With `; 0` rigctld
+    /// writes the command and answers at once with an empty reply, a bare
+    /// "\0" (~55 ms over the Pi), and the set is still applied. A set
+    /// the rig *rejects* ("?;") behaves the same: rigctld answers the
+    /// empty reply and flushes the rig's "?;" before the next command, so
+    /// it never shows up as a later read's answer (checked 15× back to
+    /// back, also with three sets queued ahead of a read).
+    ///
+    /// That empty reply line is read here, inside the round-trip lock, so
+    /// it can't be taken for the next command's answer. An error reply
+    /// ("RPRT -N") is logged, not thrown, as before when nothing was read
+    /// at all. A missing reply times out like `sendRawCommand`'s.
+    /// Sends a raw CAT command that isn't shaped like a boolean or
+    /// fixed-width-int setting (see `setRawBool`/`setRawInt`) — for
+    /// momentary/action commands such as "ZI0" (CW auto zero-in), which
+    /// take a fixed literal parameter rather than a value derived from
+    /// app state, and (per the manual) get no reply. Not `private` since,
+    /// unlike `setRawBool`/`setRawInt`, there's no per-setting wrapper in
+    /// this file for `CommandQueue` to call instead.
+    func sendRawFireAndForget(_ cmd: String) async throws {
+        try await sendRawCommandFireAndForget(cmd)
+    }
+
+    private func sendRawCommandFireAndForget(_ cmd: String) async throws {
+        await acquireRoundTrip()
+        defer { releaseRoundTrip() }
+        Self.catLogger.debug("-> \(cmd, privacy: .public) (set)")
+        try await write("W \(cmd); 0")
+        let reply = try await withReplyTimeout(cmd, .seconds(1), error: .rawCommandTimedOut) {
+            try await self.readLine(terminators: [0, UInt8(ascii: "\n")])
+        }
+        if reply.hasPrefix("RPRT") {
+            Self.catLogger.notice("<- \(cmd, privacy: .public) : \(reply, privacy: .public) (set failed)")
+        }
+    }
+
+    /// The raw "RI0" (RADIO INFORMATION) answer, parsed — see
+    /// `RadioInformation`. nil for an answer of the wrong shape.
+    public func getRadioInformation() async throws -> RadioInformation? {
+        RadioInformation(reply: try await sendRawCommand("RI0"))
+    }
+
+    /// Writes CW TEXT keyer memory `slot` (1-5) with the FTX-1's "KM" and
+    /// returns what the rig stored (without its "}" end marker, which it
+    /// appends itself). Probed on the real rig, 2026-10-02:
+    ///  - rigctld's `W` splits its arguments on whitespace, so a message
+    ///    with spaces has to go through lowercase `w` (`send_cmd`), which
+    ///    passes the rest of the line through whole.
+    ///  - An accepted write gets no reply, and `w` waits out rigctld's own
+    ///    timeout for one (~2 s against the Pi) before taking the next
+    ///    command. A rejected one (over 50 characters) answers "?;" at once
+    ///    and leaves the memory unchanged.
+    /// So the write is followed by a "KM<slot>;" read in the same `write()`
+    /// (one call, so `write()`'s stale-byte clearing can't eat a fast
+    /// "?;"), and its answer — which arrives only once the write is done —
+    /// both ends the wait and confirms what was stored. `text` must not
+    /// contain ";" or a newline.
+    public func writeKeyerMemory(slot: Int, text: String) async throws -> String {
+        await acquireRoundTrip()
+        defer { releaseRoundTrip() }
+        let read = "KM\(slot)"
+        Self.catLogger.debug("-> \(read, privacy: .public)\(text, privacy: .public) (keyer memory write)")
+        try await write("w \(read)\(text);\nW \(read); ;")
+        let (rejected, reply) = try await withReplyTimeout(read, .seconds(6), error: .rawCommandTimedOut) {
+            var rejected = false
+            while true {
+                let line = try await self.readLine(terminators: [0, UInt8(ascii: "\n")])
+                if line.hasPrefix(read) { return (rejected, line) }
+                if line.hasPrefix("?") { rejected = true }
+            }
+        }
+        Self.catLogger.debug("<- \(read, privacy: .public) : \(reply, privacy: .public)\(rejected ? " (write rejected)" : "", privacy: .public)")
+        if rejected { throw RigctldError.keyerMemoryRejected }
+        var stored = reply.dropFirst(read.count)
+        if stored.hasSuffix(";") { stored.removeLast() }
+        if stored.hasSuffix("}") { stored.removeLast() }
+        return String(stored)
+    }
+
+    /// Reads the frequency of whichever VFO isn't currently active, without
+    /// switching the rig to it. Two things were tried and rejected before
+    /// this:
+    ///  - Physically switching VFOs to read the other one (`V`/`v`) audibly
+    ///    clicks a relay on the real rig every ~5s while polling.
+    ///  - The extended `\get_freq <VFO>` command *looks* like a targeted
+    ///    read but silently ignores the VFO argument and just returns the
+    ///    active VFO's frequency unless rigctld is running with `-o` — this
+    ///    was the cause of the primary/secondary frequency display showing
+    ///    identical values.
+    /// With `-o` enabled, the plain short-form `f <VFO>` reliably targets
+    /// the requested VFO without switching the rig to it (verified against
+    /// real hardware: consistent, distinct values across repeated calls,
+    /// `v` unchanged before/after).
+    ///
+    /// This rig reports its VFOs as "Main"/"Sub" (not the generic
+    /// "VFOA"/"VFOB" hamlib aliases some other rigs use), confirmed via `v`
+    /// and `\get_vfo_list`.
+    public func getSecondaryFrequency() async throws -> Int {
+        let currentVFO = try await send("v")
+        let otherVFO = currentVFO == "Sub" ? "Main" : "Sub"
+        let freqLine = try await send("f \(otherVFO)")
+        guard let hz = Int(freqLine) else { throw RigctldError.badResponse }
+        return hz
+    }
+
+    /// Reads the mode of whichever VFO isn't currently active. Unlike
+    /// `getSecondaryFrequency()`, this isn't reliable on every rig/backend —
+    /// on the FTX-1's hamlib backend (as of Hamlib 4.7.2), querying the Sub
+    /// receiver's mode consistently fails ("RPRT -8", protocol error), even
+    /// though `\dump_caps` lists MODE as a targetable feature. Throws in
+    /// that case rather than guessing; callers should treat this the same
+    /// as `getSecondaryFrequency()` — best-effort, fine to swallow with
+    /// `try?`.
+    public func getSecondaryMode() async throws -> String {
+        let currentVFO = try await send("v")
+        let otherVFO = currentVFO == "Sub" ? "Main" : "Sub"
+        let lines = try await queryOrError("m \(otherVFO)", lines: 2)
+        guard lines.count == 2 else { throw RigctldError.badResponse }
+        return lines[0]
+    }
+
+    /// Writes the frequency of whichever VFO isn't currently active — the
+    /// set-side counterpart to `getSecondaryFrequency()`, same "ask `v` for
+    /// the active VFO, target the other one explicitly" shape.
+    ///
+    /// Unlike the get side, it's *not confirmed against real hardware*
+    /// whether the short-form set command (`F <VFO> <hz>`) targets the named
+    /// VFO cleanly the way `f <VFO>` does on read, or whether writing a
+    /// non-active VFO requires rigctld/hamlib to switch to it internally
+    /// first. To not depend on that assumption either way, this checks the
+    /// active VFO again after the write and switches back if it moved —
+    /// so VFO A stays put and stays active from the app's perspective
+    /// regardless of what happened underneath.
+    public func setSecondaryFrequency(_ hz: Int) async throws {
+        let currentVFO = try await send("v")
+        let otherVFO = currentVFO == "Sub" ? "Main" : "Sub"
+        _ = try await send("F \(otherVFO) \(hz)")
+        let vfoAfterSet = try await send("v")
+        if vfoAfterSet != currentVFO {
+            _ = try await send("V \(currentVFO)")
+        }
+    }
+
+    /// Swaps the MAIN-side and SUB-side VFO contents — the rigctld
+    /// counterpart of the rig's own physical A/B swap button.
+    ///
+    /// Was built on hamlib's generic "v"/"V <VFO>" (rig_get_vfo/set_vfo),
+    /// on the assumption that "which VFO is active" and "swap the two
+    /// VFOs' contents" were the same operation on this rig. Confirmed
+    /// wrong on real hardware 2026-09-17: pressing the physical front-
+    /// panel swap button exchanges Main/Sub frequency+mode but leaves
+    /// RX/TXRX (which side is active) untouched, while "V <other>" — this
+    /// rig's hamlib backend maps it to the CAT manual's "VS" (VFO
+    /// SELECT) — both changes which VFO is active *and* was the source of
+    /// two separate races/staleness bugs on the "v"/"V" read-then-write
+    /// dance (see git history). The CAT manual has a dedicated, unrelated
+    /// command for the real thing: "SV" (SWAP VFO), Set-only with no
+    /// parameters ("SV;"), documented simply as "Changes the MAIN-side
+    /// and SUB-side" — a raw CAT passthrough, not a hamlib verb, so no
+    /// "v" read is involved at all and none of the previous races apply.
+    public func swapActiveVFO() async throws {
+        try await sendRawFireAndForget("SV")
+    }
+
+    private func write(_ command: String) async throws {
+        guard let connection else {
+            throw RigctldError.notConnected
+        }
+        // Every round trip fully drains its own reply via readLine()
+        // before releasing acquireRoundTrip()'s lock, so any bytes still
+        // sitting here at the start of a *new* round trip can only be
+        // stale leftovers. Discarding them is a defensive backstop that
+        // keeps a late, unsolicited byte from being misread as part of
+        // this new exchange.
+        readBuffer.removeAll()
+        let data = (command + "\n").data(using: .utf8)!
+        do {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                connection.send(content: data, completion: .contentProcessed { error in
+                    if let error {
+                        continuation.resume(throwing: error)
+                    } else {
+                        continuation.resume()
+                    }
+                })
+            }
+        } catch {
+            // A send failure (e.g. the OS reporting "Socket is not
+            // connected" after the peer RST'd the connection) means this
+            // NWConnection is dead at the transport level, not just slow to
+            // answer — leaving `connection` set would otherwise let every
+            // subsequent command in this poll cycle (and every cycle after
+            // it) keep trying to write to the same dead socket forever,
+            // which is what actually happened: hundreds of failed writes a
+            // second with no reconnect, confirmed via a real Pi network
+            // drop. Tearing it down here makes every other in-flight/queued
+            // call on this actor fail fast via `.notConnected` instead of
+            // re-attempting the network, and `.connectionLost` (distinct
+            // from `.badResponse`/`.rawCommandTimedOut`) is what lets
+            // `HubService.refreshFastTier()` tell "the rig gave one bad CAT
+            // reply" apart from "the connection itself is gone" — see that
+            // function's doc comments.
+            disconnect()
+            throw RigctldError.connectionLost
+        }
+    }
+
+    /// `terminators` defaults to just `\n` — every normal rigctld reply
+    /// (get/set commands, RPRT lines) ends that way. Raw passthrough
+    /// (`sendRawCommand`) needs `\0` accepted too: hamlib's `send_cmd`
+    /// (tests/rigctl_parse.c) picks the reply's trailing byte based on an
+    /// internal `cmdcount` that counts `;` occurrences in the outgoing
+    /// command — since Yaesu/Kenwood raw commands are themselves
+    /// `;`-terminated, that count comes out as 2 (not 1) for an ordinary
+    /// single command, which selects `\0` instead of `\n`. Confirmed by
+    /// reading that source directly and reproducing it against a local
+    /// dummy rigctld.
+    private func readLine(terminators: Set<UInt8> = [UInt8(ascii: "\n")]) async throws -> String {
+        while true {
+            if let terminatorIndex = readBuffer.firstIndex(where: { terminators.contains($0) }) {
+                let lineData = readBuffer[readBuffer.startIndex..<terminatorIndex]
+                let line = String(data: lineData, encoding: .utf8) ?? ""
+                readBuffer.removeSubrange(readBuffer.startIndex...terminatorIndex)
+                return line.trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+            guard let connection else {
+                throw RigctldError.notConnected
+            }
+            let chunk: Data
+            do {
+                chunk = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Data, Error>) in
+                    connection.receive(minimumIncompleteLength: 1, maximumLength: 1024) { data, _, _, error in
+                        if let error {
+                            continuation.resume(throwing: error)
+                        } else if let data {
+                            continuation.resume(returning: data)
+                        } else {
+                            continuation.resume(throwing: RigctldError.badResponse)
+                        }
+                    }
+                }
+            } catch let error as RigctldError {
+                throw error
+            } catch {
+                // Same transport-level-failure reasoning as write()'s catch
+                // above: an OS-level receive error (not RigctldClient's own
+                // `.badResponse`, which means "read fine, just an empty
+                // frame") means this connection is gone, not just slow.
+                // Only if it's still the current one: after a reply
+                // timeout, `withReplyTimeout` cancels this connection and
+                // reconnects, and this read's cancellation error can land
+                // after the new connection is up.
+                if self.connection === connection { disconnect() }
+                throw RigctldError.connectionLost
+            }
+            readBuffer.append(chunk)
+        }
+    }
+
+    /// The running rigctld's own Hamlib version string (e.g. "Hamlib 4.7.2
+    /// 2026-06-21T13:07:37Z SHA=40f63488f 32-bit"), from the "Hamlib
+    /// version:" line near the top of `\dump_caps` — rigctld's protocol has
+    /// no version verb, and this is the one place it reports which build is
+    /// actually answering (on the Pi, a stale hamlib on `PATH` can differ
+    /// from the one `rigctld.service` runs). `\dump_caps` is ~2300 lines,
+    /// so this reads only up to that line and then disconnects rather than
+    /// draining the rest — meant for a short-lived client of its own (the
+    /// Settings tab's version box), never the hub's shared one.
+    public func readHamlibVersion() async throws -> String? {
+        defer { disconnect() }
+        await acquireRoundTrip()
+        defer { releaseRoundTrip() }
+        try await write("\\dump_caps")
+        return try await withReplyTimeout("\\dump_caps", hamlibReplyTimeout, error: .replyTimedOut) {
+            for _ in 0..<20 {
+                let line = try await self.readLine()
+                if line.hasPrefix("RPRT") { throw RigctldError.badResponse }
+                if line.hasPrefix("Hamlib version:") {
+                    return line.dropFirst("Hamlib version:".count).trimmingCharacters(in: .whitespaces)
+                }
+            }
+            return nil
+        }
+    }
+
+    /// Which rig a running rigctld was started for, from the first lines of
+    /// `\dump_caps`: "Caps dump for model: 1051", "Model name:\tFTX-1",
+    /// "Mfg name:\tYaesu" (checked against Hamlib 4.7.2's rigctld; works
+    /// with and without `-o`). Like `readHamlibVersion`, reads only those
+    /// lines and then disconnects — for a short-lived client of its own.
+    /// nil if the reply doesn't start that way.
+    public func readRigModel() async throws -> RigctldRigModel? {
+        defer { disconnect() }
+        await acquireRoundTrip()
+        defer { releaseRoundTrip() }
+        try await write("\\dump_caps")
+        return try await withReplyTimeout("\\dump_caps", hamlibReplyTimeout, error: .replyTimedOut) {
+            var number: Int?
+            var name = ""
+            var manufacturer = ""
+            for _ in 0..<3 {
+                let line = try await self.readLine()
+                if line.hasPrefix("RPRT") { throw RigctldError.badResponse }
+                func value(_ prefix: String) -> String? {
+                    line.hasPrefix(prefix) ? line.dropFirst(prefix.count).trimmingCharacters(in: .whitespaces) : nil
+                }
+                if let model = value("Caps dump for model:") { number = Int(model) }
+                if let model = value("Model name:") { name = model }
+                if let mfg = value("Mfg name:") { manufacturer = mfg }
+            }
+            return number.map { RigctldRigModel(number: $0, manufacturer: manufacturer, name: name) }
+        }
+    }
+
+    public func disconnect() {
+        connection?.cancel()
+        connection = nil
+        readBuffer.removeAll()
+    }
+}
+
+/// Guards a `CheckedContinuation` against being resumed more than once —
+/// `NWConnection.stateUpdateHandler` can fire `.ready` and then later
+/// `.failed` on the same connection, and resuming twice is a crash.
+private final class ContinuationGuard: @unchecked Sendable {
+    private let lock = NSLock()
+    private var didResume = false
+
+    func resumeOnce(_ continuation: CheckedContinuation<Void, Error>, with result: Result<Void, Error>) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !didResume else { return }
+        didResume = true
+        continuation.resume(with: result)
+    }
+}
+
+public enum RigctldError: Error, Equatable {
+    case notConnected
+    case badResponse
+    /// No answer from the host at all within the connect timeout — the
+    /// computer is off, or not on this network/tailnet.
+    case connectTimedOut
+    /// The host answered, but nothing listens on the port: rigctld isn't
+    /// running there.
+    case connectionRefused
+    /// The host name doesn't resolve.
+    case hostNotFound
+    case rawCommandTimedOut
+    /// A hamlib verb (`send`/`queryOrError`) got no reply within
+    /// `hamlibReplyTimeout`; the client has already reconnected.
+    case replyTimedOut
+    /// The underlying transport failed (e.g. the peer reset the TCP
+    /// connection) — distinct from `.badResponse`/`.rawCommandTimedOut`,
+    /// which mean the connection is fine but the rig gave a bad or slow
+    /// CAT reply. Callers that otherwise treat a field read as best-effort
+    /// (see `HubService.refreshFastTier()`/`refreshSlowTier()`) should treat
+    /// this one specifically as fatal, since no amount of retrying a dead
+    /// connection will help.
+    case connectionLost
+    /// The rig refused a CW keyer memory write ("?;" — over 50 characters,
+    /// or a character it doesn't take); the memory is unchanged. See
+    /// `writeKeyerMemory`.
+    case keyerMemoryRejected
+}
+
+/// Without this, Swift shows these as "The operation couldn't be
+/// completed. (FTX1Core.RigctldError error 3.)" — what the CW send pane
+/// displayed when the Pi lost the rig's USB (2026-10-02). Shown by the CW
+/// send pane; also what `HubService.connectionState`'s `.failed` carries.
+extension RigctldError: LocalizedError {
+    public var errorDescription: String? {
+        switch self {
+        case .notConnected:
+            String(localized: "rigctldError.notConnected", bundle: .module)
+        case .badResponse:
+            String(localized: "rigctldError.badResponse", bundle: .module)
+        case .connectTimedOut:
+            String(localized: "rigctldError.connectTimedOut", bundle: .module)
+        case .connectionRefused:
+            String(localized: "rigctldError.connectionRefused", bundle: .module)
+        case .hostNotFound:
+            String(localized: "rigctldError.hostNotFound", bundle: .module)
+        case .rawCommandTimedOut, .replyTimedOut:
+            String(localized: "rigctldError.timedOut", bundle: .module)
+        case .connectionLost:
+            String(localized: "rigctldError.connectionLost", bundle: .module)
+        case .keyerMemoryRejected:
+            String(localized: "rigctldError.keyerMemoryRejected", bundle: .module)
+        }
+    }
+
+    /// Always English: what the hub puts in a `CWKeyerReply`'s `error` for
+    /// clients without the codes.
+    public var wireText: String {
+        switch self {
+        case .notConnected:
+            "Not connected to rigctld."
+        case .badResponse:
+            "rigctld sent a reply the app didn't expect."
+        case .connectTimedOut:
+            "Couldn't reach rigctld (the connection timed out)."
+        case .connectionRefused:
+            "Nothing is listening on rigctld's port: rigctld isn't running."
+        case .hostNotFound:
+            "rigctld's host name couldn't be found."
+        case .rawCommandTimedOut, .replyTimedOut:
+            "rigctld didn't answer in time. If this keeps happening, the rig may be off or its USB connection to the computer running rigctld may have dropped."
+        case .connectionLost:
+            "The connection to rigctld was lost."
+        case .keyerMemoryRejected:
+            "The rig rejected the keyer memory write."
+        }
+    }
+}
+
+/// The rig a running rigctld was started for (`RigctldClient.readRigModel`).
+public struct RigctldRigModel: Equatable, Sendable {
+    public var number: Int
+    public var manufacturer: String
+    public var name: String
+
+    public init(number: Int, manufacturer: String, name: String) {
+        self.number = number
+        self.manufacturer = manufacturer
+        self.name = name
+    }
+
+    /// e.g. "Yaesu FT-991 (model 1035)".
+    public var displayName: String {
+        let label = [manufacturer, name].filter { !$0.isEmpty }.joined(separator: " ")
+        return label.isEmpty ? String(localized: "rigctldClient.model \(number)", bundle: .module) : String(localized: "rigctldClient.xModelX \(label) \(number)", bundle: .module)
+    }
+}

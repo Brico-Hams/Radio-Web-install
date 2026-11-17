@@ -74,7 +74,10 @@
 <h2 id="estructura">Aufbau</h2>
 <ul>
 <li>Feste obere Leiste: Verbindungsstatus (Kopie von <code>#radio-status</code>), Moduskennzeichen (<code>#mode-badge</code>) und Schaltfläche „⌁ Verbinden“, die die Schaltfläche im Abschnitt auslöst und zusammen mit ihr deaktiviert wird.</li>
-<li>Seitenleiste: Logo, Navigation und auf Funkgeräteseiten nummerierte Schritte (0 Sicherungen und Verbindung … 4 Firmware), die zum jeweiligen Abschnitt führen.</li>
+<li>Seitenleiste: Logo und eine nach Aufgaben geordnete Navigation: „Inicio“, „Satelites“, „Radios“ (mit eingerückter Unterliste der Modelle: OpenGD77, Quansheng, AnyTone Beta, Yaesu FTX-1) und „Ayuda“. Die aktuelle Seite trägt <code>aria-current=&quot;page&quot;</code>; auf einer Modellseite ist „Radios“ mit der Klasse <code>nav-ancestor</code> markiert. Auf Mobilgeräten (≤760 px) wird die Unterliste in die scrollbare Zeile eingereiht.</li>
+<li>Nummerierte „PASOS“-Schritte auf Funkgeräteseiten, nach Aufgaben gruppiert (Sicherungen und Verbindung, Kanäle/Codeplug, Satelliten, Firmware, Werkzeuge).</li>
+<li>Startseite: Bereich „Próximo pase“ (Countdown in Tabellenziffern) und Bereich „Tu radio“ (merkt sich das letzte Funkgerät in <code>bricohams.lastRadio</code>). <code>radios.html</code> fasst die Familien und ihre Aufgabengruppen zusammen.</li>
+<li>Operationsarten auf Funkgeräteseiten (<code>data-op</code>, ohne den Text zu ändern): rot mit linkem Rand und ⚠ = schreibt ins Funkgerät; blau = bereitet lokale Daten vor; gestrichelt = bearbeitet lokale Daten; ohne Markierung = nur Abfrage. Eine Legende unter der Kopfzeile erklärt dies.</li>
 <li>Beschriftung über dem Titel: <code>RADIOAFICIÓN · HAZLO TÚ MISMO</code>.</li>
 </ul>
 <h2 id="tipografia">Typografie</h2>

@@ -1,0 +1,1200 @@
+---
+description: Full RigPlane CLI reference — connect, scan, tune, serve the Web UI, run rigctld, and stream audio from the terminal on macOS, Linux, and Windows.
+---
+
+# CLI Reference
+
+The `rigplane` CLI provides quick access to radio control from the terminal.
+It can connect through native LAN/serial providers or through an external
+Hamlib `rigctld` process.
+
+## Global Options
+
+All commands accept these options:
+
+| Option | Env Var | Default | Description |
+|--------|---------|---------|-------------|
+| `--host` | `ICOM_HOST` | auto-discover | Radio IP address (LAN backend). If omitted, discovers radio via UDP broadcast. |
+| `--control-port` | `ICOM_PORT` | `50001` | Radio UDP control port (`--port` is a deprecated alias) |
+| `--user` | `ICOM_USER` | `""` | Username (LAN backend) |
+| `--pass` | `ICOM_PASS` | `""` | Password (LAN backend). Deprecated, as is its alias `--password`: the value shows in the process list and shell history. Use `ICOM_PASS` or `--pass-file`. |
+| `--pass-file` | — | — | Read the password from the first line of a file |
+| `--timeout` | — | `5.0` | Timeout in seconds |
+| `--json` | — | `false` | Emit JSON when supported by the selected command |
+| `--backend` | — | from the model | Backend type: `lan`, `serial`, `yaesu-cat`, or `rigctld`. When omitted it follows the model's profile: a CI-V radio uses `serial` with `--serial-port`, `lan` with `--host` or when its profile has a LAN interface, and `serial` (USB scan) otherwise, e.g. IC-7300 and X6200; the FTX-1 uses `yaesu-cat`; a profile with another protocol is refused. Without `--model`: `serial` with `--serial-port`, else `lan`. `rigctld` must be named. |
+| `--serial-port` | `ICOM_SERIAL_DEVICE` | auto-discover | Serial device path. If omitted with the `serial` or `yaesu-cat` backend, discovers via USB scan. |
+| `--serial-baud` | `ICOM_SERIAL_BAUDRATE` | env or backend default | Serial baud. When the env var is unset, a port found by the USB scan keeps the rate the scan found; with `--serial-port`, `serial` uses the model profile's `default_baud` (`115200` without a model) and `yaesu-cat` uses `38400` |
+| `--serial-ptt-mode` | `ICOM_SERIAL_PTT_MODE` | `civ` | Serial PTT mode (`civ` currently supported) |
+| `--rx-device` | `ICOM_USB_RX_DEVICE` | auto | USB audio RX device name (serial/CAT profiles with audio support) |
+| `--tx-device` | `ICOM_USB_TX_DEVICE` | auto | USB audio TX device name (serial/CAT profiles with audio support) |
+| `--usb-capture-mode` | `ICOM_USB_CAPTURE_MODE` | `shared` | Windows capture mode of the radio's USB audio codec: `shared` or `exclusive-preferred` (see [Windows capture mode](configuration.md#windows-capture-mode)) |
+| — | `ICOM_AUDIO_SAMPLE_RATE` | profile/default | LAN audio sample-rate override (`8000`, `16000`, `24000`, or `48000`) |
+| `--model` | — | — | Radio model (e.g. `IC-7610`), resolved from `rigs/*.toml`. The `lan` and `serial` backends refuse to start without it; on `lan`, a `--radio-addr` that matches a profile also works. |
+| `--radio-addr` | — | from the profile | CI-V address override (hex or decimal) |
+| `--list-audio-devices` | — | — | List USB audio devices and exit |
+| `--version` | — | — | Print version and exit |
+
+!!! tip "Which `--model` value is mine?"
+    Run `rigplane models` for the supported radios with the exact `--model` value for each (`rigplane models --json` for the machine-readable form). Matching is case-insensitive and the profile id works too.
+
+!!! tip "Zero-config startup"
+    If you have a single radio on the network, run `rigplane --model IC-7610 web` (with your radio's model) — it auto-discovers the radio via LAN broadcast. No `--host` needed.
+
+    Without `--model` (and without a matching `--radio-addr`), commands
+    that connect to a radio stop with `Specify the radio model with
+    --model. Supported: ...`, listing the supported models — rigplane
+    never picks a model for you. `--backend rigctld` and
+    `--backend yaesu-cat` are exempt from the requirement and work
+    without `--model`; on the `lan` backend, a `--radio-addr` that
+    matches a profile also identifies the radio (the `serial` backend
+    always needs `--model`).
+
+    For permanent setups, set environment variables in your shell profile:
+
+    ```bash
+    # ~/.bashrc or ~/.zshrc
+    export ICOM_HOST=192.168.1.50
+    export ICOM_USER=myuser
+    export ICOM_PASS=mypass
+    ```
+
+## Auto-discovery
+
+When `--host` is omitted (LAN backend), rigplane sends a UDP broadcast to find radios:
+
+- **1 radio found** → uses it automatically, prints the IP
+- **Multiple radios** → lists them, asks you to specify `--host`
+- **No radios** → error with troubleshooting hints
+
+LAN discovery finds the radio's IP address but not its model, so name the model as well, for example `rigplane --model IC-7610 status`.
+
+Similarly, when `--backend serial` is set without `--serial-port`, serial ports are scanned automatically.
+
+When `--backend` is omitted, it is inferred. A serial port counts as given
+when `--serial-port` or `ICOM_SERIAL_DEVICE` is set.
+
+- With `--model`, from the model's profile: a CI-V radio gets `serial` when a
+  serial port is given, `lan` when `--host` is given or its profile has a LAN
+  interface, and `serial` otherwise (IC-7300, X6200: USB scan); the FTX-1 gets `yaesu-cat`; a
+  profile with another protocol is refused.
+- Without `--model`: `serial` when a serial port is given, `lan` otherwise.
+- `rigctld` is never inferred.
+
+## Presets
+
+Use `--preset` with `web` or `serve` commands for common scenarios:
+
+| Preset | What it enables |
+|--------|----------------|
+| `hamradio` | Audio bridge + rigctld |
+| `digimode` | Audio bridge + rigctld + WSJT-X compatibility |
+| `serial` | Serial backend (auto-detect port) |
+
+```bash
+rigplane --model IC-7610 web --preset digimode          # Full digital mode setup
+rigplane --model IC-7610 web --preset hamradio          # General ham radio setup
+```
+
+User-provided flags override preset values: `--preset digimode --bridge "MyDevice"` uses your device name.
+
+## Backend Selection
+
+rigplane supports four backends: **LAN**, **serial** (USB CI-V),
+**yaesu-cat** (text CAT over serial), and **rigctld** (external Hamlib
+`rigctld` over TCP).
+
+Without `--backend`, the backend follows the model's profile, as the
+`--backend` option above describes; for a CI-V radio without `--serial-port`
+or `--host` that is LAN only if the profile has a LAN interface (IC-7610,
+IC-705), otherwise serial.
+
+### LAN backend
+
+```bash
+# Auto-discover radio on LAN
+rigplane --model IC-7610 status
+
+# Explicit IP
+rigplane --model IC-7610 --host 192.168.1.50 status
+rigplane --model IC-7610 --backend lan status
+```
+
+### Serial backend
+
+```bash
+# Auto-discover serial port
+rigplane --backend serial --model IC-7610 status
+
+# Explicit port (--backend serial is inferred)
+rigplane --serial-port /dev/tty.usbmodem-IC7610 --model IC-7610 status
+```
+
+Set via environment variable to avoid repeating:
+
+```bash
+export ICOM_SERIAL_DEVICE=/dev/tty.usbmodem-IC7610
+rigplane --model IC-7610 status    # auto-infers --backend serial
+```
+
+### Yaesu CAT backend
+
+```bash
+# The FTX-1 profile selects the Yaesu CAT backend (--backend yaesu-cat does the same)
+rigplane --model FTX-1 --serial-port /dev/tty.usbserial-FTX1 status
+rigplane --model FTX-1 --serial-port /dev/tty.usbserial-FTX1 freq
+```
+
+### External rigctld backend
+
+Use this backend when Hamlib controls the radio through an external `rigctld`
+process and RigPlane should consume that endpoint:
+
+```bash
+# Start Hamlib separately, then point RigPlane at it
+rigplane --backend rigctld --host 127.0.0.1 --control-port 4532 status
+rigplane --backend rigctld --host 127.0.0.1 --control-port 4532 web
+```
+
+This provider-facing endpoint is separate from RigPlane's own client-facing
+`rigctld` server for WSJT-X and other applications. See the
+[Hamlib / external rigctld provider guide](hamlib-rigctld-provider.md).
+
+### Serial baud defaults by backend
+
+If `--serial-baud` and `ICOM_SERIAL_BAUDRATE` are both unset, a port found by
+the USB scan keeps the rate the scan found. With `--serial-port`:
+
+- `serial` uses the model profile's `default_baud`, or `115200` without a model
+- `yaesu-cat` uses `38400`
+
+### Audio device selection (serial backend)
+
+The serial backend uses USB audio devices exported by the radio. By default, devices are auto-detected.
+When display names are duplicated, pass a PortAudio device index or a unique
+hardware identifier such as `hw:3,0` instead of the shared display name.
+
+```bash
+# List all available audio devices
+rigplane --list-audio-devices
+rigplane --list-audio-devices --json
+
+# Specify explicit devices
+rigplane --backend serial --model IC-7610 --serial-port /dev/tty.usbmodem-IC7610 \
+    --rx-device "IC-7610 USB Audio" \
+    --tx-device "IC-7610 USB Audio" \
+    audio rx --out rx.wav --seconds 10
+
+# Specify an ALSA hardware id from --list-audio-devices --json
+rigplane --backend serial --model IC-7610 --serial-port /dev/ttyACM0 \
+    --rx-device "hw:3,0" \
+    --tx-device "hw:3,0" \
+    audio rx --out rx.wav --seconds 10
+```
+
+### `discover` command — LAN + serial
+
+The `discover` command scans both LAN (UDP broadcast) and USB serial ports concurrently:
+
+```bash
+rigplane discover                      # LAN + serial (default)
+rigplane discover --lan-only           # UDP broadcast only
+rigplane discover --serial-only        # USB serial ports only
+rigplane discover --serial             # Alias for --serial-only
+rigplane --json discover --serial --hamlib-candidates
+rigplane --json discover --hamlib-validate --rigctld-host 127.0.0.1
+rigplane discover --timeout 5          # Longer LAN listen window
+rigplane --json discover               # Stable setup-wizard JSON
+```
+
+After each connection line, human output prints a ready-to-copy command
+for that radio:
+
+```text
+IC-7300:
+  • Serial: /dev/ttyUSB0 (115200 baud)
+    rigplane --model IC-7300 --serial-port /dev/ttyUSB0 --serial-baud 115200 --radio-addr 0x94 status
+192.168.1.60:
+  • LAN: 192.168.1.60
+    rigplane --model <MODEL> --backend lan --host 192.168.1.60 status
+Not sure of the model? Run `rigplane models` for the exact --model values.
+```
+
+LAN discovery finds the IP address but cannot tell the model, so those
+commands use a `<MODEL>` placeholder — replace it with the exact
+`--model` value from `rigplane models`. The printed commands repeat the
+detected baud, CI-V address and the LAN backend, so they work regardless
+of environment variables. (`--json` output is unchanged.)
+
+## Commands
+
+### `status`
+
+Show radio status (frequency, mode, S-meter, power).
+
+```bash
+rigplane --model IC-7610 status
+rigplane --model IC-7610 status --json
+```
+
+```
+Frequency:   14,074,000 Hz  (14.074000 MHz)
+Mode:      USB
+S-meter:   42
+Power:     50
+```
+
+JSON output:
+
+```json
+{
+  "frequency_hz": 14074000,
+  "frequency_mhz": 14.074,
+  "mode": "USB",
+  "s_meter": 42,
+  "power": 50
+}
+```
+
+### `freq`
+
+Get or set the operating frequency.
+
+```bash
+# Get current frequency
+rigplane --model IC-7610 freq
+
+# Set frequency (multiple formats)
+rigplane --model IC-7610 freq 14074000      # Hz
+rigplane --model IC-7610 freq 14074k        # kHz
+rigplane --model IC-7610 freq 14.074m       # MHz
+```
+
+### `mode`
+
+Get or set the operating mode.
+
+```bash
+# Get current mode
+rigplane --model IC-7610 mode
+
+# Set mode
+rigplane --model IC-7610 mode USB
+rigplane --model IC-7610 mode CW
+rigplane --model IC-7610 mode LSB
+```
+
+Available modes: `LSB`, `USB`, `AM`, `CW`, `RTTY`, `FM`, `WFM`, `CW_R`, `RTTY_R`, `PSK`, `PSK_R`, `DV`
+
+### `power`
+
+Get or set the RF power level (0–255).
+
+```bash
+# Get current power
+rigplane --model IC-7610 power
+
+# Set power level
+rigplane --model IC-7610 power 128
+```
+
+!!! note "Power Scale"
+    The 0–255 value is the radio's internal representation. The mapping to actual watts depends on your radio model and mode.
+
+### `meter`
+
+Read all available meters.
+
+```bash
+rigplane --model IC-7610 meter
+rigplane --model IC-7610 meter --json
+```
+
+```
+S-METER  42
+POWER    50
+SWR      n/a
+ALC      n/a
+```
+
+!!! info
+    SWR and ALC are only available during TX. They show `n/a` when receiving.
+
+### `audio caps`
+
+Show rigplane audio capability metadata and deterministic defaults.
+
+```bash
+rigplane audio caps
+rigplane audio caps --json
+rigplane --model IC-7610 audio caps --stats
+rigplane --model IC-7610 audio caps --json --stats
+```
+
+Text output includes:
+
+- supported codecs
+- supported sample rates
+- supported channels
+- default codec/rate/channels
+- deterministic selection rules used for defaults
+- with `--stats`: a 1-second RX probe and runtime audio quality stats snapshot
+
+JSON output example:
+
+```json
+{
+  "supported_codecs": [
+    {"name": "ULAW_1CH", "value": 1},
+    {"name": "PCM_1CH_8BIT", "value": 2}
+  ],
+  "supported_sample_rates_hz": [8000, 16000, 24000, 48000],
+  "supported_channels": [1, 2],
+  "default_codec": {"name": "PCM_1CH_16BIT", "value": 4},
+  "default_sample_rate_hz": 48000,
+  "default_channels": 1,
+  "runtime_stats": {
+    "active": false,
+    "state": "idle",
+    "packet_loss_percent": 0.0,
+    "reorder_depth_ema_ms": 0.0
+  }
+}
+```
+
+### `audio rx`
+
+Capture RX audio to a 16-bit PCM WAV file.
+
+```bash
+rigplane --model IC-7610 audio rx --out rx.wav --seconds 10
+rigplane --model IC-7610 audio rx --out rx.wav --seconds 10 --sample-rate 48000 --channels 1
+rigplane --model IC-7610 audio rx --out rx.wav --json
+```
+
+### `audio tx`
+
+Transmit a WAV file (`16-bit PCM`, matching sample rate/channels).
+
+```bash
+rigplane --model IC-7610 audio tx --in tx.wav
+rigplane --model IC-7610 audio tx --in tx.wav --sample-rate 48000 --channels 1
+rigplane --model IC-7610 audio tx --in tx.wav --json
+```
+
+### `audio loopback`
+
+Run a quick RX-to-TX PCM loopback window.
+
+```bash
+rigplane --model IC-7610 audio loopback --seconds 10
+rigplane --model IC-7610 audio loopback --seconds 10 --sample-rate 48000 --channels 1
+rigplane --model IC-7610 audio loopback --json
+```
+
+### Shared audio flags (`rx`/`tx`/`loopback`)
+
+- `--sample-rate` — PCM sample rate in Hz (must be supported by `rigplane`)
+- `--channels` — PCM channel count (must be supported by `rigplane`)
+- `--json` — machine-readable JSON output
+- `--stats` — print transfer counters/metrics (human-readable mode)
+
+### `att`
+
+Get or set the attenuator level.
+
+```bash
+# Get current attenuation
+rigplane --model IC-7610 att
+rigplane --model IC-7610 att --json
+
+# Set level in dB (0–45, 3 dB steps)
+rigplane --model IC-7610 att 18
+rigplane --model IC-7610 att 0
+
+# Toggle shortcuts
+rigplane --model IC-7300 att on     # The profile's only non-zero step (20 dB on the IC-7300)
+rigplane --model IC-7610 att off    # Sets 0 dB
+```
+
+`att on` needs a profile with exactly one non-zero attenuator step; on a radio
+with several steps, such as the IC-7610, it is refused, so set a dB value.
+
+```
+Attenuator: 18 dB
+```
+
+JSON output:
+
+```json
+{
+  "attenuator_db": 18,
+  "attenuator_on": true
+}
+```
+
+!!! note "IC-7610 Levels"
+    The IC-7610 supports 0, 3, 6, 9, 12, 15, 18, 21, 24, 27, 30, 33, 36, 39, 42, 45 dB.
+    Values not on 3 dB boundaries will be rejected.
+
+### `preamp`
+
+Get or set the preamplifier level.
+
+```bash
+# Get current preamp level
+rigplane --model IC-7610 preamp
+rigplane --model IC-7610 preamp --json
+
+# Set level
+rigplane --model IC-7610 preamp 0     # Off
+rigplane --model IC-7610 preamp 1     # PREAMP 1
+rigplane --model IC-7610 preamp 2     # PREAMP 2
+rigplane --model IC-7610 preamp off   # Same as 0
+```
+
+```
+Preamp: PRE1
+```
+
+JSON output:
+
+```json
+{
+  "preamp_level": 1,
+  "preamp_name": "PRE1"
+}
+```
+
+### `antenna`
+
+Get or set antenna selection.
+
+```bash
+# Get current antenna state
+rigplane --model IC-7610 antenna
+
+# Set antenna
+rigplane --model IC-7610 antenna --ant1 on
+rigplane --model IC-7610 antenna --ant2 on
+rigplane --model IC-7610 antenna --rx-ant1 on
+rigplane --model IC-7610 antenna --rx-ant2 off
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--ant1` | — | Set ANT1 (`on`/`off`) |
+| `--ant2` | — | Set ANT2 (`on`/`off`) |
+| `--rx-ant1` | — | Set RX antenna on ANT1 (`on`/`off`) |
+| `--rx-ant2` | — | Set RX antenna on ANT2 (`on`/`off`) |
+
+### `date`
+
+Get or set the radio's internal date.
+
+```bash
+rigplane --model IC-7610 date
+```
+
+### `time`
+
+Get or set the radio's internal time.
+
+```bash
+rigplane --model IC-7610 time
+```
+
+### `dualwatch`
+
+Get or set dual watch mode.
+
+```bash
+rigplane --model IC-7610 dualwatch
+```
+
+### `tuner`
+
+Control the antenna tuner.
+
+```bash
+rigplane --model IC-7610 tuner
+```
+
+### `levels`
+
+Get or set DSP and audio levels, each 0–255: noise reduction (`--nr`), noise
+blanker (`--nb`), microphone gain (`--mic-gain`), drive gain (`--drive-gain`)
+and speech compressor (`--comp-level`). `--receiver 1` selects the sub
+receiver.
+
+```bash
+rigplane --model IC-7610 levels
+```
+
+### `ptt`
+
+Key or unkey the transmitter.
+
+```bash
+rigplane --model IC-7610 ptt on
+```
+
+`ptt on` keys the rig and **blocks**, holding the key for as long as the command runs. Press Ctrl-C to unkey and exit; SIGTERM and SIGHUP do the same. The exit code says which one ended the hold — `130` (Ctrl-C / SIGINT), `143` (SIGTERM), `129` (SIGHUP) — while a signal arriving before the key completes skips the key entirely, so the rig never transmits.
+
+For a timed or scripted transmission, use `--for` instead of waiting on a signal:
+
+```bash
+rigplane --model IC-7610 ptt --for 10
+```
+
+This keys the rig, holds for 10 seconds, then unkeys on its own and exits `0` — `on` is implied by `--for`, so it doesn't need to be written out.
+
+Either way, the unkey on the way out is bounded to 5 seconds. If it fails or hangs past that, the command exits `1` and warns that the radio may still be transmitting.
+
+```bash
+rigplane --model IC-7610 ptt off
+```
+
+`ptt off` unkeys immediately and returns promptly — it never holds the key the way `ptt on` does, and a forced unkey is bounded at 5 seconds, so it always gets the chance to run. Use it to recover a rig left keyed by a crash, a killed process, or an older rigplane build: when no TX lease of this invocation's own matches — the normal case for a rig some *other* process keyed — it escalates to an operator-forced unkey instead of giving up, and says so on stderr.
+
+Its exit code answers one question: did an unkey reach the radio?
+
+| Code | Meaning |
+|---|---|
+| `0` | An unkey reached the wire, or one was already in flight. |
+| `1` | rigplane did not get an unkey out — **the rig may still be transmitting.** |
+
+The refusal worth calling out is a busy radio. If another TX session holds a *live* lease on this rig, `ptt off` exits `1` and refuses rather than cutting that transmission off: recovering a stranded key is not the same thing as preempting somebody who is talking. Stop that session and retry. On a managed rig (the LAN Icom path) you can also wait for its max-key-down watchdog. Legacy serial/USB Icom, Yaesu CAT, and rigctld-client rigs arm no supervisor (pending MOR-1219/MOR-1190), so there is no cross-session lease to wait on, and what bounds a key there depends on which seat issued it. A key from the Web UI carries the poller's 180-second backstop (MOR-1220), which fires on its deadline whatever the rig is doing: it is cancelled by that poller's own unkey, by a re-key, or by the poller stopping — **not** by the rig being seen back in receive. A key from a `rigctld` client carries rigctld's own 180 seconds (MOR-1904), cancelled by any `rigctld` PTT write of either polarity, by the server stopping, **and** — unlike the poller's — by an observed return to receive after that key. A `ptt on --for` hold is bounded by the command, not by a watchdog: it unkeys when the hold ends or on Ctrl-C, so a hard-killed process leaves the rig keyed. And a key rigplane did not issue at all — the front panel, or another CAT application — has no bound of any kind. Nothing will time the rig out in either of those last two cases, which is exactly what `ptt off` is for.
+
+!!! danger "Caution"
+    Activating PTT will key your transmitter. Ensure your antenna is connected and you are authorized to transmit on the current frequency.
+
+### `cw`
+
+Send CW text via the radio's built-in keyer.
+
+```bash
+rigplane --model IC-7610 cw "CQ CQ DE KN4KYD K"
+```
+
+### `power-on` / `power-off`
+
+Remote power control.
+
+```bash
+rigplane --model IC-7610 power-on
+rigplane --model IC-7610 power-off
+```
+
+!!! warning
+    `power-on` only works if the radio supports wake-on-LAN and the network connection is maintained in standby mode.
+
+### `discover`
+
+Discover Icom radios on the LAN, and CI-V and Yaesu CAT radios on USB serial ports. Results are grouped by model and address: the CI-V address, or the model ID a Yaesu radio reports. A LAN result has neither, so it is listed under its IP address, apart from the same radio's USB entry. Optional Hamlib flags add assisted discovery and read-only validation for external `rigctld` provider setup.
+
+```bash
+rigplane discover                   # LAN + serial
+rigplane discover --lan-only        # UDP broadcast only
+rigplane discover --serial-only     # USB serial ports only
+rigplane discover --serial          # Alias for --serial-only
+rigplane discover --timeout 5       # Longer LAN listen window (default: 3s)
+rigplane --json discover            # Stable setup-wizard JSON
+rigplane --json discover --serial --hamlib-candidates
+rigplane discover --hamlib-validate --rigctld-host 127.0.0.1
+```
+
+For an IC-7610 connected by both LAN and USB, and an IC-705 on USB:
+
+```
+Scanning for radios (3s LAN + serial)...
+
+Found 3 radios with 3 connection methods:
+
+192.168.1.50:
+  • LAN: 192.168.1.50
+IC-7610:
+  • Serial: /dev/cu.usbserial-11320 (19200 baud)
+IC-705:
+  • Serial: /dev/cu.usbserial-54321 (115200 baud)
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--lan-only` | off | Only scan via UDP broadcast |
+| `--serial-only`, `--serial` | off | Only scan USB serial ports |
+| `--timeout SECONDS` | `3.0` | LAN broadcast listen timeout |
+| `--hamlib-candidates` | off | Add explicit Hamlib setup candidates to human and JSON output |
+| `--hamlib-validate` | off | Run read-only validation against an external `rigctld` endpoint |
+| `--rigctld-host HOST` | `127.0.0.1` | Target host for `--hamlib-validate` |
+| `--rigctld-port PORT` | `4532` | Target TCP port for `--hamlib-validate` |
+| `--hamlib-model-id ID` | unset | Optional Hamlib model ID hint for validation ranking |
+
+With global `--json`, `discover` emits `schema: rigplane.discovery.v1` for
+first-run setup wizards. Each radio has stable `connections` entries for LAN
+and USB serial candidates. LAN entries include `host`, `remoteId`, and
+`requiresCredentials: true`; serial entries include `port`, `protocol`,
+`profileId`, `baudrate`, CI-V/CAT `address`, OS `description`, and `hwid` when
+available. Credentials are never included in discovery output.
+
+Hamlib assisted discovery is fully opt-in. `rigplane discover` does not load
+the Hamlib model catalog and does not probe `rigctld` unless
+`--hamlib-candidates` or `--hamlib-validate` is present.
+
+When Hamlib output is requested with global `--json`, the existing top-level
+`schema: rigplane.discovery.v1` payload remains in place and a top-level
+`hamlib` object is added:
+
+```json
+{
+  "schema": "rigplane.discovery.v1",
+  "radios": [],
+  "hamlib": {
+    "schema": "rigplane.discovery.hamlib.v1",
+    "catalog": {
+      "available": true,
+      "sourceTool": "rigctld",
+      "modelCount": 314,
+      "degradedReason": null
+    },
+    "candidates": [
+      {
+        "id": "hamlib-validation-1-1",
+        "transport": "rigctld",
+        "address": "rigctld:1a2b3c4d5e6f",
+        "observedIdentity": {
+          "targetModelId": 3073,
+          "rigctldInfo": "available",
+          "frequency": "readable",
+          "mode": "readable"
+        },
+        "suggestedBackend": "hamlib",
+        "suggestedModel": "3073 Icom IC-7610",
+        "confidence": "high",
+        "evidence": [
+          {
+            "source": "rigctld_probe",
+            "kind": "frequency",
+            "status": "readable"
+          }
+        ],
+        "safeNextAction": "read_only_probe_confirmed",
+        "autoSelectable": true
+      }
+    ],
+    "summary": {
+      "candidateCount": 1,
+      "highConfidenceCount": 1,
+      "autoSelectableCount": 1
+    }
+  }
+}
+```
+
+Candidate fields use stable camelCase for Pro and other setup tools:
+
+| Field | Meaning |
+|-------|---------|
+| `id` | Stable ID within the current discovery response |
+| `transport` | Observed path, such as `serial` or `rigctld` |
+| `address` | Serial device path or redacted `rigctld:<hash>` target reference |
+| `observedIdentity` | Read-only facts such as protocol, model hint, frequency-readable, and mode-readable |
+| `suggestedBackend` | Suggested RigPlane backend, currently `hamlib` for Hamlib candidates |
+| `suggestedModel` | Best model hint, or `null` when manual selection is required |
+| `confidence` | `high`, `medium`, or `low` |
+| `evidence` | Structured observations explaining the ranking |
+| `safeNextAction` | Next safe action, such as `run_read_only_validation`, `confirm_model`, or `manual_configuration_required` |
+| `autoSelectable` | `true` only when exactly one candidate is high confidence |
+
+Degraded cases are reported in `hamlib.messages`. Missing Hamlib tools produce
+`hamlibCatalogUnavailable`; an empty serial scan produces `noSerialCandidates`;
+ambiguous read-only validation returns multiple medium-confidence candidates
+with `safeNextAction: confirm_model` and `autoSelectable: false`.
+
+`--hamlib-validate` is read-only. It sends only the safe `rigctld` read
+operations used by the backend probe layer: identity evidence, frequency read,
+and mode read. It does not set frequency or mode, toggle PTT, transmit audio,
+send CW, write memories, issue raw CI-V, or call `\dump_state`. Validation JSON
+includes:
+
+| Field | Meaning |
+|-------|---------|
+| `status` | `confirmed`, `partial`, or `unconfirmed` |
+| `readOnly` | Always `true` |
+| `safeOperations` | Semantic operations attempted: `read_info`, `read_frequency`, `read_mode` |
+| `frequencyReadable` | Whether the current frequency was read successfully |
+| `modeReadable` | Whether the current mode was read successfully |
+| `identityEvidence` | Whether safe identity evidence was available |
+| `audit` | Redacted per-operation status and duration |
+
+The JSON payload also reports current platform limitations:
+
+| Field | Meaning |
+|-------|---------|
+| `macosUsbAudio` | CoreAudio device selection is supported, but users may still need to grant microphone/input permission |
+| `windowsUsbAudio` | USB audio topology may require explicit/manual device selection |
+| `linuxUsbAudio` | PipeWire/PulseAudio device naming varies by distribution/session |
+
+### Listing supported models
+
+`rigplane models` lists every profile from `rigs/*.toml` with the exact
+`--model` value to pass, the transports it offers, and the backends it can
+use. Rows marked `profile only, no backend yet` are known profiles
+without a backend implementation. Matching is case-insensitive and the
+profile id works too, so `--model IC-7300` and `--model icom_ic7300` resolve
+to the same radio.
+
+```bash
+rigplane models            # plain table of supported models
+rigplane models --json     # machine-readable form for setup tools
+```
+
+The `Backends` column lists the backends the radio can use: `lan` (use `--host`, or let rigplane look for the radio on the LAN), `serial` or `yaesu-cat` (use `--serial-port`).
+
+```text
+--model     Radio            Transports     Backends                      Also accepted
+IC-705      Icom IC-705      LAN, USB CI-V  lan, serial                   icom_ic705
+IC-7300     Icom IC-7300     USB CI-V       serial                        icom_ic7300
+IC-7300MK2  Icom IC-7300MK2  LAN, USB CI-V  lan, serial                   icom_ic7300mk2
+IC-7610     Icom IC-7610     LAN, USB CI-V  lan, serial                   icom_ic7610
+IC-9700     Icom IC-9700     LAN, USB CI-V  lan, serial                   icom_ic9700
+TX-500      Lab599 TX-500    USB CAT        profile only, no backend yet  lab599_tx500
+X6100       Xiegu X6100      USB CI-V       profile only, no backend yet  xiegu_x6100
+X6200       Xiegu X6200      USB CI-V       serial                        xiegu_x6200
+FTX-1       Yaesu FTX-1      USB CAT        yaesu-cat                     yaesu_ftx1
+Matching is case-insensitive; the profile id (last column) also works.
+```
+
+### `serve`
+
+Start a client-facing `rigctld`-compatible TCP server so that logging and
+contesting software (WSJT-X, JS8Call, Ham Radio Deluxe, etc.) can control the
+radio through RigPlane's active provider path. This endpoint is distinct from a
+Hamlib-backed provider that RigPlane may use underneath for long-tail CAT
+coverage.
+
+```bash
+# Basic rigctld server on default port 4532
+rigplane --model IC-7610 serve
+
+# Custom port, read-only, max 5 clients
+rigplane --model IC-7610 serve --port 4533 --read-only --max-clients 5
+
+# Write every command to an audit log
+rigplane --model IC-7610 serve --audit-log /var/log/icom-audit.jsonl
+
+# Rate-limit to 10 commands/sec per client, verbose debug logs
+rigplane --model IC-7610 serve --rate-limit 10 --log-level DEBUG
+
+# WSJT-X preset (enables DATA mode automatically on first connect)
+rigplane --model IC-7610 serve --wsjtx-compat
+```
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--listen` | `0.0.0.0` | Server listen address |
+| `--port` | `4532` | Server TCP port |
+| `--read-only` | off | Reject all set commands and all raw `w` / `send_raw` frames (including reads) with `RPRT -22`; allow structured reads |
+| `--max-clients` | `10` | Maximum concurrent TCP clients |
+| `--cache-ttl` | `0.2` | How long (seconds) to cache radio state before re-querying |
+| `--wsjtx-compat` | off | Pre-warm for WSJT-X: auto-enable DATA mode on first client connect |
+| `--log-level` | `INFO` | Log verbosity (`DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`) |
+| `--audit-log PATH` | — | Append one JSON line per command to `PATH` (disabled by default) |
+| `--rate-limit N` | — | Max commands per second per client; excess commands are dropped (unlimited by default) |
+
+!!! note "rigctld compatibility"
+    The server speaks a subset of the Hamlib rigctld protocol over plain TCP. Tested with WSJT-X, JS8Call, and `rigctl` CLI.
+
+### `proxy`
+
+Transparent UDP relay that forwards all radio traffic between a remote client and the physical radio. Useful for accessing a shack radio over a VPN without exposing the radio's IP directly.
+
+```bash
+# Forward radio at 192.168.1.50 to all VPN clients
+rigplane proxy --radio 192.168.1.50
+
+# Listen only on VPN interface, custom base port
+rigplane proxy --radio 192.168.1.50 --listen 10.8.0.1 --port 50010
+```
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--radio` | *(required)* | Radio IP address to forward to |
+| `--listen` | `0.0.0.0` | Local address to listen on |
+| `--port` | `50001` | Base UDP port (proxy binds `port`, `port+1`, `port+2` for control/audio/data) |
+
+### `web`
+
+Start the all-in-one server: Web UI + optional audio bridge + rigctld.
+
+```bash
+# Web UI only (auto-discovers radio)
+rigplane --model IC-7610 web
+
+# Use a preset for common scenarios
+rigplane --model IC-7610 web --preset digimode          # Bridge + rigctld + WSJT-X compat
+rigplane --model IC-7610 web --preset hamradio          # Bridge + rigctld
+
+# Web UI + audio bridge + rigctld (recommended for WSJT-X)
+rigplane --model IC-7610 web --bridge "RigPlane Virtual Cable Output"
+
+# Web UI + WSJT-X compatibility on embedded rigctld
+rigplane --model IC-7610 web --bridge --wsjtx-compat
+
+# Web UI + bridge (RX only, no TX from virtual device)
+rigplane --model IC-7610 web --bridge "RigPlane Virtual Cable Output" --bridge-rx-only
+
+# Disable rigctld (enabled by default on :4532)
+rigplane --model IC-7610 web --no-rigctld
+
+# Custom ports
+rigplane --model IC-7610 web --port 9090 --rigctld-port 4533
+
+# Managed local runtime for a supervising desktop app
+rigplane --model IC-7610 station --port 0
+```
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--listen` | `0.0.0.0` | Web server bind address |
+| `--port` | `8080` | Web server port |
+| `--managed` | off | Use managed local defaults: loopback bind, embedded rigctld on loopback |
+| `--static-dir PATH` | — | Serve static files from a custom directory (default: built-in assets) |
+| `--bridge DEVICE` | — | Start audio bridge with named virtual device |
+| `--bridge-tx-device DEVICE` | — | Separate TX-only device for bidirectional bridge (e.g. `RigPlane Virtual Cable Input`) |
+| `--bridge-rx-only` | — | Bridge receives only (no TX from virtual device) |
+| `--no-rigctld` | — | Disable built-in rigctld server |
+| `--rigctld-port` | `4532` | Rigctld listen port |
+| `--dx-cluster HOST:PORT` | — | Connect to DX cluster server for real-time spot overlays (opt-in) |
+| `--callsign CALL` | — | Your callsign for DX cluster login (required with `--dx-cluster`) |
+
+On `web`, `serve` and `station`, `--host` after the subcommand is a deprecated
+alias for `--listen`. It still works, but prints a warning; when both are
+given, `--listen` wins. `--host` before the subcommand is the radio's address.
+
+Core clients that can reach the web listener need no application credential.
+Remove the retired `--auth-token` and `--auth-token-file` flags from existing
+`web` and `station` launch commands: either flag now fails during argument
+parsing, before radio startup, without reading a token file
+(`src/rigplane/cli/__init__.py: _reject_retired_auth_option`). The environment
+variable `RIGPLANE_AUTH_TOKEN`, which 2.11 read, is no longer read anywhere in
+`src/`. For Python callers,
+`WebConfig.auth_token` must be omitted or empty; nonempty values raise
+`ValueError` (`src/rigplane/web/server.py: WebConfig.__post_init__`).
+
+### `station`
+
+Start the managed local station runtime. This is a convenience command for
+supervisors such as desktop shells: it runs the web/API server on loopback
+and enables embedded rigctld on loopback for local
+clients such as RigPlane Pro.
+
+```bash
+rigplane --model IC-7610 station --port 0
+```
+
+`station` shares the radio connection flags from the top-level CLI, including
+`--host`, `--user`, `--pass-file`, `--backend`, `--serial-port`, and model/CI-V
+options. Radio login credentials, bind selection and TLS options are unchanged
+by application-auth removal (`src/rigplane/cli/__init__.py: _build_parser`,
+`_apply_managed_runtime_defaults`, `_cmd_web`).
+
+After the web listener binds, `station` writes one JSON startup event to stdout:
+
+```json
+{"type":"rigplane.runtime.started","pid":12345,"baseUrl":"http://127.0.0.1:58421","healthUrl":"http://127.0.0.1:58421/healthz","runtimeUrl":"http://127.0.0.1:58421/api/v1/runtime","logPath":"/Users/me/Library/Logs/rigplane.log"}
+```
+
+Use this event for supervisor discovery when `--port 0` asks the OS to allocate
+the actual port.
+
+When UDP discovery is enabled, `rigplane station` and `rigplane web` answer
+`RIGPLANE_DISCOVER\n` broadcasts with a `rigplane.station.discovery.v1` JSON
+payload. The payload includes the base URL, `/healthz`, `/readyz`,
+`/api/v1/runtime`, `/api/v1/station`, version, display name, radio model,
+backend, `authRequired: false`, and a readiness value such as
+`ready_with_radio`, `no_usb_radio_connected`, or
+`radio_powered_off_or_unreachable`.
+
+Fleet-aware station supervisors may also advertise multiple child radios in an
+additive `radios[]` array. Each entry includes `id`, `model`, `url`, `status`,
+and `connected`. Existing clients can keep using the top-level single-radio
+fields; clients that understand fleets should prefer `radios[]` when present.
+
+### `audio bridge`
+
+Route radio audio to/from a virtual audio device (RigPlane Virtual Cable, Loopback, VB-Audio).
+
+```bash
+# List available audio devices
+rigplane --model IC-7610 audio bridge --list-devices
+
+# Start bridge
+rigplane --model IC-7610 audio bridge --device "RigPlane Virtual Cable Output"
+
+# RX only (no TX from virtual device)
+rigplane --model IC-7610 audio bridge --device "RigPlane Virtual Cable Output" --rx-only
+```
+
+The TX capture path preserves real-time latency by dropping the oldest queued
+capture frame when its bounded queue fills, then keeping the newest live frame.
+On callback-based PortAudio hosts, including Windows, capture uses the native
+callback period and re-chunks the continuous stream into fixed PCM frames
+before transmit. For 48 kHz mono 16-bit audio and `frame_ms=20`, each TX frame
+is 1920 bytes.
+
+!!! tip "macOS Setup"
+    On macOS the bridge uses the RigPlane Virtual Audio Driver, installed by
+    RigPlane Pro. After install, `RigPlane Virtual Cable Output` (RX playback)
+    and `RigPlane Virtual Cable Input` (TX capture) appear as audio devices.
+
+!!! note "Dependencies"
+    Audio-bridge dependencies (`opuslib`, `sounddevice`, `numpy`) ship with
+    the core install since v0.19 — `pip install rigplane` is sufficient.
+    On macOS with Homebrew, you may also need:
+    ```bash
+    export DYLD_LIBRARY_PATH=/opt/homebrew/lib
+    ```
+
+## Scope / Waterfall
+
+Capture spectrum and waterfall data from the radio's scope display and render as PNG.
+
+Requires optional dependency: `pip install rigplane[scope]`
+
+```bash
+# Combined spectrum + waterfall (50 frames, ~3 seconds)
+rigplane --model IC-7610 scope
+
+# Spectrum only (1 frame, fast)
+rigplane --model IC-7610 scope --spectrum-only
+
+# Custom output and frame count
+rigplane --model IC-7610 scope --output waterfall.png --frames 100
+
+# Grayscale theme
+rigplane --model IC-7610 scope --theme grayscale
+
+# Wider image
+rigplane --model IC-7610 scope --width 1200
+
+# Raw JSON data (no Pillow needed)
+rigplane --model IC-7610 scope --json
+rigplane --model IC-7610 scope --spectrum-only --json
+
+# Custom capture timeout
+rigplane --model IC-7610 scope --capture-timeout 20
+```
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--output`, `-o` | `scope.png` | Output file path |
+| `--frames`, `-n` | `50` | Number of frames for waterfall |
+| `--theme` | `classic` | Color theme (`classic` or `grayscale`) |
+| `--spectrum-only` | — | Capture 1 frame, render spectrum only |
+| `--width` | `800` | Image width in pixels |
+| `--json` | — | Output raw frame data as JSON |
+| `--capture-timeout` | `10`/`15` | Capture timeout in seconds |
+
+## PID File (optional)
+
+For daemon-like commands (`web`, `serve`), you can opt in to writing a PID file by setting the **`ICOM_PID_FILE`** environment variable to the desired path. The file is created only when starting `web` or `serve` and is removed automatically on clean exit or SIGTERM.
+
+```bash
+# Enable PID file for web/serve (e.g. in systemd or a wrapper script)
+export ICOM_PID_FILE=/var/run/rigplane.pid
+rigplane --model IC-7610 web
+
+# Graceful shutdown
+kill $(cat /var/run/rigplane.pid)
+
+# Check if rigplane is running
+test -f /var/run/rigplane.pid && ps -p $(cat /var/run/rigplane.pid)
+```
+
+If `ICOM_PID_FILE` is unset or empty, no PID file is written. This avoids PID-file conflicts between instances or in tests.
+
+!!! warning "One RigPlane server per radio"
+    Run exactly one RigPlane server per radio. An Icom radio accepts a single LAN remote-control session. Measured on an IC-7610: while one server holds the session, a second server started on the same computer is refused with `error=0xFFFFFFFF`, and about 90 seconds after that login the radio also drops the first server's session; a second server started on another computer is refused with `error=0xFDFFFFFF`, and the first session keeps running. With systemd, enable one unit per radio.
+
+    On an IC-7610, a server that starts on a computer where another client already holds the radio's session is refused with `error=0xFFFFFFFF`. It keeps retrying, and stops with `radio busy: another client holds the session` (followed by a hint) and exit code 3, when its first attempt that starts at or after 90 s from the start of its first refused attempt is refused again (`runtime/_control_phase.py`: `ControlPhaseRuntime.STARTUP_BUSY_LIVE_HOLDER_AFTER_S`; the exit code comes from `RadioSessionHeldError` in `cli/__init__.py`: `_run`). The radio drops the existing session about 90 s after the starting server's first login, so in the IC-7610 measurement that last attempt landed within about a second of the drop. If the attempt falls between the drop and the existing client's reconnect, the starting server takes the session; on an IC-7610 on 2026-10-12 the existing client reconnected about 1 s before the starting server's attempt. Only a same-computer client outside RigPlane's single-instance lock is exposed to this: another LAN remote-control program, a RigPlane server under a different user account (the lock lives in the per-user cache directory: `cli/_instance_guard.py`: `lock_file_for_identity`), or a RigPlane server that names the radio by a different host or control port, since the lock matches on host and port. A second server under the same user account that names the radio the same way is refused before it logs in (finding the radio by discovery sends only a discovery broadcast, not a login). In the measurement across computers the first session kept running, so this window did not arise.
+
+    On an IC-9700 with two enabled units, the two servers produced CI-V data stalls, repeated OpenClose from the watchdog (`civ-data-watchdog: no CI-V data`), the radio's LAN indicator dropping, and `error=0xFFFFFFFF` rejections (`Radio rejected session allocation (civ_port=0, error=0xFFFFFFFF). A previous session may still be active. Wait 30-60s and retry.`).
+
+    Find the duplicate with `systemctl list-unit-files --state=enabled`, then disable one unit.
+
+## Daemon Logging and Rotation (`web` / `serve` / `station`)
+
+`web`, `serve` and `station` are long-running commands, so the CLI enables file logging by default
+to preserve diagnostics across reconnects/restarts.
+
+- Default file path: `rigplane.log` (`rigplane-managed.log` under `--managed`) in
+  the `logs` folder of the per-user cache directory: `~/Library/Caches/rigplane/logs/`
+  on macOS, `~/.cache/rigplane/logs/` on Linux. `RIGPLANE_LOG_DIR` replaces that folder.
+- Handler type: Python `RotatingFileHandler`
+- Rotation defaults: `50_000_000` bytes per file, `5` backups
+- One writer per file: when the CLI writes `rigplane.log` itself, the always-on
+  diagnostic handler (attached at `import rigplane`) steps aside, so each record
+  appears once. Short commands that open no CLI log file leave `rigplane.log` to the
+  diagnostic handler (5 MiB × 2 backups), which `rigplane diagnose` bundles. With a
+  custom `ICOM_LOG_FILE` or `--managed`, the CLI writes that file and the diagnostic
+  handler keeps writing `rigplane.log`.
+
+You can tune this behavior with environment variables:
+
+| Variable | Default | Meaning |
+|---|---:|---|
+| `ICOM_LOG_FILE` | `rigplane.log` in the folder above (for `web`/`serve`/`station`) | Log file path. Set to `off`, `none`, or `-` to disable file logging entirely, including the diagnostic `rigplane.log`. |
+| `ICOM_LOG_MAX_BYTES` | `50000000` | Rotate when file reaches this size (bytes). |
+| `ICOM_LOG_BACKUP_COUNT` | `5` | Number of rotated files to keep. Set `0` to disable rotation. |
+| `ICOM_DEBUG` | unset | Enables debug-level logging and also enables file logging if `ICOM_LOG_FILE` is not disabled. |
+
+```bash
+# Custom log location (systemd/container-friendly)
+export ICOM_LOG_FILE=/var/log/rigplane/daemon.log
+rigplane --model IC-7610 web
+
+# Smaller files with more backups
+export ICOM_LOG_MAX_BYTES=10000000
+export ICOM_LOG_BACKUP_COUNT=10
+rigplane --model IC-7610 serve
+
+# Explicitly disable file logs (stdout/stderr only)
+export ICOM_LOG_FILE=off
+rigplane --model IC-7610 web
+```
+
+## Flag Reference
+
+Compact per-flag reference for all notable options, including which subcommand accepts them, the default value, and a minimal working example.
+
+### Global flags
+
+These flags apply to **every** command and must come before the subcommand name.
+
+| Flag | Command | Default | Description |
+|------|---------|---------|-------------|
+| `--version` | *(global)* | — | Print version and exit |
+| `--control-port PORT` | *(global)* | `50001` (`$ICOM_PORT`) | Radio UDP control port; `--port` is a deprecated alias |
+| `--model MODEL` | *(global)* | — | Radio model (e.g. `IC-7300`); resolves from `rigs/*.toml`. Run `rigplane models` for the exact values. |
+| `--radio-addr ADDR` | *(global)* | — | CI-V address override (hex or decimal) |
+
+```bash
+# Print installed version
+rigplane --version
+
+# Connect to a radio on a non-default port
+rigplane --model IC-7610 --control-port 50002 status
+
+# Specify radio model explicitly
+rigplane --model IC-7300 --backend serial --serial-port /dev/cu.usbserial-XXX status
+```
+
+### `serve` flags
+
+| Flag | Command | Default | Description |
+|------|---------|---------|-------------|
+| `--audit-log PATH` | `serve` | *(disabled)* | Append one JSON line per command to `PATH` |
+| `--cache-ttl N` | `serve` | `0.2` | Seconds to cache radio state before re-querying |
+| `--log-level LEVEL` | `serve` | `INFO` | Log verbosity: `DEBUG` `INFO` `WARNING` `ERROR` `CRITICAL` |
+| `--max-clients N` | `serve` | `10` | Maximum concurrent TCP clients |
+| `--rate-limit N` | `serve` | *(unlimited)* | Max commands per second per client; excess are dropped |
+| `--read-only` | `serve` | off | Reject all set commands and all raw `w` / `send_raw` frames (including reads) with `RPRT -22`; allow structured reads |
+| `--wsjtx-compat` | `serve` | off | Auto-enable DATA mode on first client connect (WSJT-X pre-warm) |
+| `--preset NAME` | `serve` | *(none)* | Apply a named preset: `hamradio`, `digimode`, `serial`, `headless` |
+
+```bash
+# Log every command to a JSONL audit trail
+rigplane --model IC-7610 serve --audit-log /var/log/icom-audit.jsonl
+
+# Tighten cache for faster state sync
+rigplane --model IC-7610 serve --cache-ttl 0.05
+
+# Verbose debug logging
+rigplane --model IC-7610 serve --log-level DEBUG
+
+# Limit to 3 simultaneous clients
+rigplane --model IC-7610 serve --max-clients 3
+
+# Drop commands faster than 10/sec per client
+rigplane --model IC-7610 serve --rate-limit 10
+
+# Prevent accidental frequency/mode changes
+rigplane --model IC-7610 serve --read-only
+
+# Enable WSJT-X compatibility preset
+rigplane --model IC-7610 serve --wsjtx-compat
+```
+
+### `proxy` flags
+
+| Flag | Command | Default | Description |
+|------|---------|---------|-------------|
+| `--radio IP` | `proxy` | *(required)* | Radio IP address to forward all UDP traffic to |
+| `--listen ADDR` | `proxy` | `0.0.0.0` | Local interface address to bind on |
+
+```bash
+# Forward traffic to radio at 192.168.1.100 (listen on all interfaces)
+rigplane proxy --radio 192.168.1.100
+
+# Bind only on the VPN interface
+rigplane proxy --radio 192.168.1.100 --listen 10.8.0.1
+```
+
+### `web` flags
+
+| Flag | Command | Default | Description |
+|------|---------|---------|-------------|
+| `--listen ADDR` | `web` | `0.0.0.0` | Bind Web UI server to a specific interface |
+| `--bridge-tx-device DEVICE` | `web` | *(none)* | Separate TX-only audio device for bidirectional bridge |
+| `--static-dir PATH` | `web` | *(built-in)* | Serve static web assets from a custom directory instead of the built-in UI |
+| `--dx-cluster HOST:PORT` | `web` | *(none)* | Connect to a DX cluster server for real-time spot overlays |
+| `--callsign CALL` | `web` | *(none)* | Your callsign for DX cluster login (required with `--dx-cluster`) |
+| `--tls` | `web` | off | Enable HTTPS with auto-generated self-signed certificate |
+| `--tls-cert PATH` | `web` | *(none)* | Path to TLS certificate PEM file |
+| `--tls-key PATH` | `web` | *(none)* | Path to TLS private key PEM file |
+| `--bridge-label LABEL` | `web` | *(none)* | Descriptive label for audio bridge log messages |
+| `--no-rigctld` | `web` | off | Disable built-in rigctld server |
+| `--rigctld-port PORT` | `web` | `4532` | Rigctld listen port |
+| `--wsjtx-compat` | `web` | off | Enable WSJT-X compatibility pre-warm on embedded rigctld |
+| `--preset NAME` | `web` | *(none)* | Apply a named preset: `hamradio`, `digimode`, `serial`, `headless` |
+
+```bash
+# Bidirectional bridge: RX into the cable Output end, TX captured from the Input end
+rigplane --model IC-7610 web --bridge "RigPlane Virtual Cable Output" --bridge-tx-device "RigPlane Virtual Cable Input"
+
+# Serve a custom-built web UI from a local directory
+rigplane --model IC-7610 web --static-dir /opt/icom-ui/dist
+
+# Connect to a DX cluster and show spot overlays on the waterfall
+rigplane --model IC-7610 web --dx-cluster dxc.nc7j.com:7373 --callsign KN4KYD
+```
+
+## Exit Codes
+
+The table below applies to `web`, `station`, `serve` and the radio commands.
+
+| Code | Meaning |
+|------|---------|
+| `0` | Success |
+| `1` | Runtime error (connection, auth, command failure) |
+| `2` | Usage error (argument parsing) |
+| `3` | Radio session held by a live owner — a deliberate stop, not a crash |
+
+`validate`, `radio-validate`, `convert` and `diagnose` use their own exit codes.
+
+## Examples
+
+```bash
+# Monitor frequency in a loop
+watch -n 1 rigplane --model IC-7610 freq --json
+
+# Quick band change
+rigplane --model IC-7610 freq 7.074m && rigplane --model IC-7610 mode USB
+
+# Check RF chain setup
+rigplane --model IC-7610 att && rigplane --model IC-7610 preamp
+
+# Script-friendly JSON output
+FREQ=$(rigplane --model IC-7610 freq --json | jq -r '.frequency_hz')
+echo "Currently on $FREQ Hz"
+```

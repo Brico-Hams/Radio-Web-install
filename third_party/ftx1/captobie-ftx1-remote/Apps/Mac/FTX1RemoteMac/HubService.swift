@@ -1,0 +1,2973 @@
+import AppKit
+import Combine
+import CoreGraphics
+import FT8Kit
+import FTX1CW
+import FTX1Core
+import FTX1Digi
+import Foundation
+import os
+
+/// The Mac hub: owns the `RigctldClient` connection and the `CommandQueue`
+/// that serializes commands into it, and polls rigctld for state changes
+/// (rigctld has no server-push of its own — this is the only way to notice
+/// e.g. a PTT toggled from the radio's own front panel). Also owns the
+/// `RigWebSocketServer` that re-broadcasts this state to mobile clients and
+/// forwards their commands into the same `CommandQueue`, and the
+/// `RigctldProcessController` that actually starts/stops the `rigctld`
+/// daemon itself.
+///
+/// Two independent lifecycles live here:
+///  - The WebSocket server (`start()`/`stop()`) runs for as long as the app
+///    does, regardless of window state — mobile clients shouldn't lose
+///    their connection just because the rig link is toggled off.
+///  - The rigctld process + polling loop (`startRigctld()`/`stopRigctld()`)
+///    is what the on/off switch controls.
+@MainActor
+final class HubService: ObservableObject {
+    /// `.connected` means the rig itself is answering, not just that the
+    /// TCP connection to rigctld is up: a rig that stops answering (its USB
+    /// dropped behind a still-running rigctld) is `.failed(.rigNotResponding)`
+    /// while the poll loop keeps trying, and `.connected` again once it
+    /// answers. See `RigLinkProblem` for the other failures.
+    enum ConnectionState: Equatable {
+        case disconnected
+        case connecting
+        case connected
+        case failed(RigLinkProblem)
+    }
+
+    @Published private(set) var rigState = RigState(transmitEnabled: RigctldSettings.transmitEnabled) {
+        didSet { enforcePrivilegesWhileKeyed() }
+    }
+    @Published private(set) var connectionState: ConnectionState = .disconnected
+    private var wakeObserver: NSObjectProtocol?
+    @Published private(set) var rigctldProcessState: RigctldProcessController.State = .stopped
+    /// Which rigctld the last Local-mode start launched and why (nil
+    /// before the first start, or when an already-running one was
+    /// adopted). Shown in Settings' version box.
+    @Published private(set) var rigctldBinaryInUse: RigctldBinary.Resolution?
+    /// Whether the on/off toggle has been switched on — true from
+    /// `startRigctld()` until `stopRigctld()`. A mode-independent stand-in
+    /// for `rigctldProcessState == .running/.starting`: that reflects
+    /// `RigctldProcessController`'s local-process lifecycle, which has
+    /// nothing to report in `RigctldSettings.ConnectionMode.remote` (see
+    /// `startRigctld()` below) since nothing is ever spawned there.
+    @Published private(set) var isActive = false
+    /// Mirrors `audioRecorder.isRecording`, same "reflect a subsystem's own
+    /// state into a `@Published` property" shape as `rigctldProcessState`
+    /// mirroring `RigctldProcessController` — lets `MenuPageView`'s RECORD
+    /// button (observing `HubService` via the `RigController` protocol)
+    /// react to a toggle without `AudioRecorder` itself being an
+    /// `ObservableObject` every view would need to import separately.
+    @Published private(set) var isRecordingAudio = false
+    /// The live waterfall/oscilloscope frames — deliberately NOT
+    /// `@Published` on this object. `AudioCaptureEngine` delivers a new
+    /// frame ~21 times a second (44100 Hz / 2048-sample chunks), and when
+    /// these were `@Published` here, every frame invalidated everything
+    /// observing `HubService` — i.e. all of `ContentView`, including the
+    /// 28-button `MenuPageView` grid and two `.segmented` pickers, whose
+    /// `NSSegmentedControl` relayout was measured (2026-09-09, `sample` on
+    /// a Release build) at ~50% of a core, continuously, with the rest of
+    /// the app near idle. A separate store lets only `ScopeDisplayView`
+    /// subscribe, so the 21 Hz churn stops at that one leaf view.
+    let scopeFrames = ScopeFrameStore()
+    @Published private(set) var waterfallZoom: Float = 1
+    @Published private(set) var oscilloscopeZoom: Float = 1
+    /// Whether the Mac itself plays the captured Main-channel radio audio
+    /// out loud — independent of the waterfall/oscilloscope display and of
+    /// the Mac→iPad relay, both of which keep running regardless. Persisted
+    /// via `AudioPlaybackSettings.isMuted` (shared with iPad, though iPad
+    /// has no UI for it yet) so the choice survives a relaunch. Renamed
+    /// from `isAudioMuted` (2026-09-18) when Sub got its own independent
+    /// mute — see `isSubAudioMuted` below and repo CLAUDE.md, "Dual
+    /// Main/Sub audio channels."
+    @Published private(set) var isMainAudioMuted = AudioPlaybackSettings.isMuted
+    /// The windows whose receiver is audible right now (WebSDR, Local
+    /// SDR) — while any is, the rig's Main Mac playback is muted so the two
+    /// don't play over each other (`setMainAudioOverride`).
+    private var mainAudioOverrides: Set<MainAudioOverride> = []
+    /// True while Main is muted *because* of `mainAudioOverrides`, not by
+    /// the user. Only such a mute is ever undone by them (once the last one
+    /// goes), and pressing Main's own Mute button hands the choice back to
+    /// the user. Persisted so a quit mid-session can't leave Main stuck
+    /// muted: both windows open disconnected, so `init` lifts a leftover
+    /// mute. The key is the WebSDR-only flag's, so an old one is lifted too.
+    private var mainMutedByOverride = UserDefaults.standard.bool(forKey: HubService.mainMutedByOverrideKey) {
+        didSet { UserDefaults.standard.set(mainMutedByOverride, forKey: Self.mainMutedByOverrideKey) }
+    }
+    private static let mainMutedByOverrideKey = "webSDR.mutedMainAudio"
+    /// Sub-channel counterpart to `isMainAudioMuted` — works in both
+    /// `.local` and `.remote` now (2026-09-18: `AudioCaptureEngine`'s local
+    /// `AVAudioEngine` tap reads a genuine second channel too, when the
+    /// selected input device is stereo). If the current device is mono,
+    /// `onSubChannelSamples` simply never fires and this has nothing to
+    /// gate — harmless, not worth its own "is Sub actually available" flag.
+    /// Not persisted-shared with iPad — iPad's audio relay is still
+    /// Main-only.
+    @Published private(set) var isSubAudioMuted = AudioPlaybackSettings.subIsMuted
+    /// Whether the rig's physical left/right USB audio channels are swapped
+    /// relative to the app's Main/Sub roles. Hardware finding, 2026-09-19:
+    /// when Main/Sub swap (the `SV` command this app sends, or the rig's
+    /// front-panel swap button), the frequencies/modes follow the swap but
+    /// the rig's L/R audio stays with the physical receiver — so a swap
+    /// leaves the Main-role audio (and everything hung off it: waterfall,
+    /// playback controls, the APRS gate, FT8's dial frequency, the iPad
+    /// relay) playing the *other* VFO's signal. The fix is tracking that
+    /// parity here and telling `AudioCaptureEngine` to exchange the two
+    /// channels before anything downstream sees them (see its
+    /// `channelsSwapped`). Flipped by (1) `applyOptimistically`'s
+    /// `.swapActiveVFO`, (2) `trackExternalSwap` noticing the polled
+    /// frequencies exchange with no app command involved (a front-panel
+    /// swap), and (3) the manual override button in `ContentView` — the
+    /// rig exposes no readout of the true mapping, so (2) is a heuristic
+    /// and the app can't know the state of a swap made while it wasn't
+    /// running. Persisted across launches for the same reason.
+    @Published private(set) var audioChannelsSwapped = AudioPlaybackSettings.channelsSwapped
+    /// Both bound directly by the Mac's Main squelch/volume sliders
+    /// (`ContentView`) — plain read-write `@Published`, not `private(set)`,
+    /// since SwiftUI needs a two-way `Binding` to a slider's value. `didSet`
+    /// pushes the live change straight into `mainAudioPlayback` and
+    /// persists it via `AudioPlaybackSettings` (shared with iPad, same as
+    /// `isMainAudioMuted`) in one place rather than needing a separate
+    /// setter method per property. Initial squelch default (0.02) is what
+    /// left audio gated silent on the Mac before this UI existed to raise
+    /// or lower it — see the "Audio-over-Pi" section of repo root
+    /// CLAUDE.md. Renamed from `audioVolume` (2026-09-18) — see
+    /// `subAudioVolume` below.
+    @Published var mainAudioVolume: Float = Float(AudioPlaybackSettings.volume) {
+        didSet {
+            mainAudioPlayback.volume = mainAudioVolume
+            AudioPlaybackSettings.volume = Double(mainAudioVolume)
+        }
+    }
+    /// See `SquelchGate`'s doc comment — this is now a "how close to true
+    /// silence counts as quieting" cutoff, not a loudness gate. `ContentView`
+    /// inverts the slider's displayed direction so raising it still reads as
+    /// "tighter," matching a normal squelch knob, even though a *smaller*
+    /// stored value is what's actually stricter here. Renamed from
+    /// `squelchThreshold` (2026-09-18) — see `subSquelchThreshold` below.
+    @Published var mainSquelchThreshold: Float = Float(AudioPlaybackSettings.squelchThreshold) {
+        didSet {
+            mainAudioPlayback.squelchThreshold = mainSquelchThreshold
+            AudioPlaybackSettings.squelchThreshold = Double(mainSquelchThreshold)
+        }
+    }
+    /// Sub-channel counterparts to `mainAudioVolume`/`mainSquelchThreshold`
+    /// — both `.local` and `.remote` now (see `isSubAudioMuted`). Not
+    /// shared with iPad; new, Sub-only `AudioPlaybackSettings` keys.
+    @Published var subAudioVolume: Float = Float(AudioPlaybackSettings.subVolume) {
+        didSet {
+            subAudioPlayback.volume = subAudioVolume
+            AudioPlaybackSettings.subVolume = Double(subAudioVolume)
+        }
+    }
+    @Published var subSquelchThreshold: Float = Float(AudioPlaybackSettings.subSquelchThreshold) {
+        didSet {
+            subAudioPlayback.squelchThreshold = subSquelchThreshold
+            AudioPlaybackSettings.subSquelchThreshold = Double(subSquelchThreshold)
+        }
+    }
+    /// Squelch tail (Settings → Audio), shared by the Main and Sub players —
+    /// see `AudioPlaybackSettings.squelchHangTime`.
+    @Published var squelchHangTime: Double = AudioPlaybackSettings.squelchHangTime {
+        didSet {
+            mainAudioPlayback.squelchHangTime = squelchHangTime
+            subAudioPlayback.squelchHangTime = squelchHangTime
+            AudioPlaybackSettings.squelchHangTime = squelchHangTime
+        }
+    }
+    /// Bound live by `SettingsView`'s "Enable Transmit" toggle — unlike the
+    /// rest of the rigctld tab, this applies immediately rather than
+    /// waiting for "Done", since it's a safety cutoff, not a connection
+    /// parameter. `didSet` persists it, mirrors it into `rigState` (so
+    /// remote clients see the same disabled state — see `MenuPageView`'s
+    /// MOX/ANT TUNE buttons and each app target's PTT button), broadcasts
+    /// the change, and — if switched off mid-transmission — force-unkeys
+    /// the rig immediately rather than just blocking future attempts.
+    @Published var transmitEnabled: Bool = RigctldSettings.transmitEnabled {
+        didSet {
+            RigctldSettings.transmitEnabled = transmitEnabled
+            rigState.transmitEnabled = transmitEnabled
+            if !transmitEnabled {
+                cwSender.stop()
+                aprsTransmitter.stopAll(reason: TransmitGate.blockReason(transmitEnabled: false, state: rigState) ?? "")
+                if rigState.ptt { send(.setPTT(false)) }
+                if rigState.moxEnabled == true { send(.setMox(false)) }
+            }
+            let state = rigState
+            Task { await server.broadcast(state) }
+        }
+    }
+
+    /// Settings → License: the privileges the transmit gate applies on
+    /// top of the amateur bands (`TransmitGate`), applied at once like
+    /// Enable Transmit. `activePrivileges` is what they resolve to (nil =
+    /// off), published so `StraightKeyController` follows it.
+    @Published var privilegeChoice: PrivilegeChoice = LicensePrivilegeSettings.choice {
+        didSet {
+            LicensePrivilegeSettings.choice = privilegeChoice
+            privilegesChanged()
+        }
+    }
+    @Published var customPrivileges: PrivilegeProfile = LicensePrivilegeSettings.customProfile {
+        didSet {
+            LicensePrivilegeSettings.customProfile = customPrivileges
+            privilegesChanged()
+        }
+    }
+    @Published private(set) var activePrivileges: PrivilegeProfile? =
+        LicensePrivilegeSettings.profile(for: LicensePrivilegeSettings.choice, custom: LicensePrivilegeSettings.customProfile)
+    /// Set once a transmission has been cut off for leaving the
+    /// privileges, so the rig state's next changes don't send the unkey
+    /// again; cleared when the rig is back on receive.
+    private var privilegeUnkeySent = false
+
+    /// Why a transmit-capable command would be refused right now (nil:
+    /// it goes through) — Enable Transmit, the amateur bands and, when
+    /// chosen, the license privileges, all on the transmitting side.
+    var transmitBlockReason: String? {
+        TransmitGate.blockReason(transmitEnabled: transmitEnabled, state: rigState, privileges: activePrivileges)
+    }
+
+    private let rigctld: RigctldClient
+    private let commandQueue: CommandQueue
+    private let server: RigWebSocketServer
+    private let rigctldProcess = RigctldProcessController()
+    private let audioCapture = AudioCaptureEngine()
+    private let mainAudioStreamEncoder = AudioStreamEncoder()
+    /// Backs the CW page's RECORD/PLAY buttons (`MenuPageView`) — see
+    /// `AudioRecorder`'s doc comment. Fed unconditionally from the same
+    /// `audioCapture.onAudioSamples` tap as `ft8Coordinator`/`aprsDecoder`
+    /// below; it's a no-op internally whenever not recording. Not
+    /// `private` — `HubService+RigController.swift`'s `toggleAudioRecording()`
+    /// calls into it directly, same visibility as `aprsStore`/`ft8Store`.
+    let audioRecorder = AudioRecorder()
+    /// Plays the same captured Main-channel audio locally on the Mac that
+    /// `mainAudioStreamEncoder` sends to iPad clients — reuses
+    /// `AudioPlaybackEngine` as-is (already cross-platform, see its own doc
+    /// comment) rather than a second implementation. Started/stopped
+    /// alongside `audioCapture`, fed the exact same encoded PCM chunk
+    /// `broadcastAudio` sends, in `onAudioSamples` below. Renamed from
+    /// `audioPlayback` (2026-09-18) — see `subAudioPlayback` below.
+    private let mainAudioPlayback = AudioPlaybackEngine()
+    /// Transmit audio from a remote client (the iPad's PTT): frames from
+    /// the PTT holder arrive through `RigWebSocketServer` into this stream
+    /// and are handled in order on the main actor (`handleTXAudio`).
+    private let txAudioInbound: AsyncStream<Data>
+    private let txAudioInboundContinuation: AsyncStream<Data>.Continuation
+    private var txAudioTask: Task<Void, Never>?
+    /// `.local`: plays the client's microphone into the rig's USB audio
+    /// input, the "Transmit audio output" device in Settings → Audio
+    /// (`TXAudioOutputSettings`). Pass-through: no squelch, full volume.
+    /// Started on a transmission's first frame, stopped at unkey, so each
+    /// transmission gets a fresh prebuffer.
+    private let txAudioPlayback = AudioPlaybackEngine(squelchEnabled: false)
+    private var txAudioPlaybackRunning = false
+    /// `.remote`: forwards it to the Pi's TX audio service instead
+    /// (`Pi/ftx1-txaudio.py`), one connection per transmission.
+    private var txAudioRemote: RemoteTXAudioClient?
+    /// Unkeys if a remote client keyed and then its audio stopped coming
+    /// for `txAudioSilenceLimit` (an app suspended mid-transmission keeps
+    /// its WebSocket open, so the holder-disconnect unkey wouldn't fire).
+    private var txAudioWatchdog: Task<Void, Never>?
+    private static let txAudioSilenceLimit: Duration = .milliseconds(1500)
+    private static let txAudioLogger = Logger(subsystem: "com.ftx1remote.mac", category: "tx-audio")
+    /// Sub-channel counterparts to `mainAudioStreamEncoder`/
+    /// `mainAudioPlayback` — fed from `AudioCaptureEngine.
+    /// onSubChannelSamples`, which fires in both `.local` and `.remote` now
+    /// (2026-09-18), whenever the active capture source is genuinely
+    /// stereo. Relayed to iPad now too (`RigWebSocketServer.
+    /// broadcastSubAudio`), same as Main, but still not fed to FT8/
+    /// `audioRecorder` — those stay Main-only (see repo CLAUDE.md, "Dual
+    /// Main/Sub audio channels"). APRS *is* decoded from this channel too,
+    /// via the separate `aprsDecoderSub` below.
+    private let subAudioStreamEncoder = AudioStreamEncoder()
+    private let subAudioPlayback = AudioPlaybackEngine()
+    private let wpsdMonitor = WPSDCallsignMonitor(
+        callerInterval: { PollingSettings.wpsdCallerInterval },
+        reflectorInterval: { PollingSettings.wpsdReflectorInterval }
+    )
+    private let aprsDecoder = APRSDecoder(logSubsystem: "com.ftx1remote.mac")
+    /// Independent decoder instance for the Sub channel, fed from
+    /// `onSubChannelSamples` below (both `.local` and `.remote`), gated on
+    /// `rigState.secondaryFrequencyHz` rather than the Main gate's
+    /// `rigState.frequencyHz`. Safe to run alongside `aprsDecoder`: both
+    /// wrap value-type `AFSKDemodulator`/`AX25FrameDecoder` state on their
+    /// own private serial queue, with nothing shared between instances.
+    private let aprsDecoderSub = APRSDecoder(logSubsystem: "com.ftx1remote.mac")
+    let aprsStore = APRSStore()
+    /// Unlike `aprsDecoder`, not wired into `audioCapture.onAudioSamples`
+    /// unconditionally — `ingest(samples:sampleRate:)` drops audio on its
+    /// own whenever `isRunning` is false, and `isRunning` only becomes true
+    /// between `startDigitalDecoding(_:)`/`stopDigitalDecoding(_:)`, called
+    /// from the Tools/FT8 or FT4 window's lifecycle, not from `start()`/
+    /// `init` here. See `FT8DecodeCoordinator`'s doc comment for why FT8
+    /// can't reuse APRS's always-on frequency-gate pattern. FT8 and FT4 are
+    /// fully independent pairs (own coordinator, queue and store), so both
+    /// windows can decode the same audio at once.
+    private let ft8Coordinator = FT8DecodeCoordinator(mode: .ft8)
+    let ft8Store = FT8Store(mode: .ft8)
+    private let ft4Coordinator = FT8DecodeCoordinator(mode: .ft4)
+    let ft4Store = FT8Store(mode: .ft4)
+    /// The FT8/FT4 windows' "Upload to PSK Reporter" — fed every decode
+    /// cycle, runs while either decodes. `lazy` so it can watch `$rigState` (PTT).
+    lazy var pskReporter = PSKReporterUploader(rigState: $rigState)
+
+    /// Tools → CW's decoder. Fed both audio taps unconditionally below; it
+    /// picks the selected receiver itself and drops everything while the
+    /// CW window is closed (`CWWindowView` calls `start()`/`stop()`). Its
+    /// own object, like `ft8Store`, so decoded text never re-renders the
+    /// main window (`lazy` so it can register with `webSDRSource`, the
+    /// Mac-only WebSDR source).
+    lazy var cwReceiver: CWReceiver = {
+        let receiver = CWReceiver(logSubsystem: "com.ftx1remote.mac")
+        webSDRSource.addConsumer(
+            id: "cw",
+            isWanted: { [unowned receiver] in receiver.isRunning && receiver.channel == .webSDR },
+            onSamples: { [unowned receiver] samples, sampleRate in
+                receiver.ingest(samples: samples, sampleRate: sampleRate, channel: .webSDR)
+            }
+        )
+        localSDRSource.addConsumer(
+            id: "cw",
+            isWanted: { [unowned receiver] in receiver.isRunning && receiver.channel == .myKiwiSDR },
+            onSamples: { [unowned receiver] samples, sampleRate in
+                receiver.ingest(samples: samples, sampleRate: sampleRate, channel: .myKiwiSDR)
+            }
+        )
+        receiver.onSourceChanged = { [weak self] in
+            self?.webSDRSource.update()
+            self?.localSDRSource.update()
+        }
+        cwKiwiModeCancellable = localSDRSource.$mode
+            .removeDuplicates()
+            .sink { [unowned receiver] mode in receiver.setMyKiwiSDRMode(mode) }
+        return receiver
+    }()
+    /// Tools → RTTY/PSK's sender (live typeahead, AFSK/PSK audio through
+    /// `routeTXAudio`). `lazy` so it can be handed `self`.
+    lazy var digiSender: DigiSender = {
+        let sender = DigiSender(link: self, receiver: digiReceiver, logSubsystem: "com.ftx1remote.mac")
+        sender.onEcho = { [weak self] text in self?.digiReceiver.appendTransmitted(text) }
+        sender.onStateChanged = { [weak self] state in self?.digiReceiver.setSenderActive(state != .idle) }
+        return sender
+    }()
+    /// The main window's TUNE button: a keyed tone for an external auto-tuner.
+    lazy var tuneTone = TuneTone(hub: self)
+    /// APRS packets out: beacons, messages, acks (`HubService+APRSTransmitLink`).
+    lazy var aprsTransmitter: APRSTransmitter = {
+        let transmitter = APRSTransmitter(link: self, logSubsystem: "com.ftx1remote.mac")
+        transmitter.onOutcome = { [weak self] packet, outcome in self?.aprsMessaging.handle(packet, outcome) }
+        return transmitter
+    }()
+    /// Beacon schedule, own messages and their retries, auto-acks. Its own
+    /// object (the M.LIST/S.LIST windows observe it), not `@Published` here.
+    lazy var aprsMessaging = APRSMessaging(store: aprsStore, transmitter: aprsTransmitter,
+                                           logSubsystem: "com.ftx1remote.mac")
+    /// Tools → RTTY/PSK's decoder, fed like `cwReceiver` (both taps
+    /// unconditionally; it keeps the selected channel and drops everything
+    /// while its window is closed). `lazy` to register with `webSDRSource`.
+    lazy var digiReceiver: DigiReceiver = {
+        let receiver = DigiReceiver(logSubsystem: "com.ftx1remote.mac")
+        webSDRSource.addConsumer(
+            id: "digi",
+            isWanted: { [unowned receiver] in receiver.isRunning && receiver.channel == .webSDR },
+            onSamples: { [unowned receiver] samples, sampleRate in
+                receiver.ingest(samples: samples, sampleRate: sampleRate, channel: .webSDR)
+            }
+        )
+        localSDRSource.addConsumer(
+            id: "digi",
+            isWanted: { [unowned receiver] in receiver.isRunning && receiver.channel == .myKiwiSDR },
+            onSamples: { [unowned receiver] samples, sampleRate in
+                receiver.ingest(samples: samples, sampleRate: sampleRate, channel: .myKiwiSDR)
+            }
+        )
+        receiver.onSourceChanged = { [weak self] in
+            self?.webSDRSource.update()
+            self?.localSDRSource.update()
+        }
+        digiKiwiModeCancellable = localSDRSource.$mode
+            .removeDuplicates()
+            .sink { [unowned receiver] mode in receiver.setMyKiwiSDRMode(mode) }
+        return receiver
+    }()
+    /// The decoders' WebSDR source (one tap for the CW and RTTY/PSK
+    /// windows).
+    lazy var webSDRSource = WebSDRAudioSource(routing: webSDRAudioRouting)
+    /// The decoders' MyKiwiSDR source: the MyKiwiSDR window's model hands
+    /// its Kiwi audio here, and the CW and RTTY/PSK receivers read it.
+    let localSDRSource = LocalSDRAudioSource()
+    private var cwKiwiModeCancellable: AnyCancellable?
+    private var digiKiwiModeCancellable: AnyCancellable?
+    /// Where the WebSDR window's Mute goes while a decoder captures its
+    /// audio — see `WebSDRAudioRouting`.
+    let webSDRAudioRouting = WebSDRAudioRouting()
+    /// The WebSocket server's listening state and connected clients, for
+    /// Settings → Mobile — its own object, so a client connecting doesn't
+    /// re-render `ContentView`.
+    let hubServerStatus: HubServerStatus
+    /// Tools → CW's send pane (keys the rig's CW TEXT keyer memory) — see
+    /// `CWSender`. `lazy` so it can be handed `self`.
+    lazy var cwSender = CWSender(link: self, logSubsystem: "com.ftx1remote.mac")
+    /// The CW window's Monitor: a local sidetone for what `cwSender` keys.
+    let cwMonitor = CWMonitor(logSubsystem: "com.ftx1remote.mac")
+    /// Tools → CW Key: the Arduino key interface keying the rig over
+    /// RTS/DTR — see `StraightKeyController`. Started in `start()`, so the
+    /// key interface connects at launch (disarmed).
+    lazy var straightKey = StraightKeyController(rigState: $rigState, connection: $connectionState,
+                                                 privileges: $activePrivileges)
+    /// Wavelog CAT: the rig's frequency/mode reported to Wavelog — see
+    /// `WavelogRadioReporter`. Started in `start()`.
+    lazy var wavelogRadio = WavelogRadioReporter(rigState: $rigState, connection: $connectionState)
+    /// Wavelog → rig: spots clicked in Wavelog tune the rig — see
+    /// `WavelogTuneListener`. Started in `start()` when turned on.
+    lazy var wavelogTuner = WavelogTuneListener { [unowned self] request in
+        self.tuneFromWavelog(request)
+    }
+    /// Worked-before for the CW window — see `WorkedStationsStore`.
+    /// `lazy` so it can be handed `$rigState`.
+    lazy var workedStations = WorkedStationsStore(rigState: $rigState)
+    /// The memory list window's channels — see `MemoryListStore`. `lazy`
+    /// so it can be handed `rigctld`.
+    lazy var memoryList = MemoryListStore(rigctld: rigctld)
+    /// Feeds `cwReceiver` the TX state and the rig's CW pitch/modes.
+    private var cwRigCancellable: AnyCancellable?
+    private var digiRigCancellable: AnyCancellable?
+    /// Pushes `memoryList` to WebSocket clients (the iPad's channel list).
+    private var memoryListCancellable: AnyCancellable?
+    /// Pushes `aprsStore` to WebSocket clients (the iPad's S.LIST/M.LIST).
+    private var aprsListCancellable: AnyCancellable?
+    private let webSocketPort: UInt16
+    private let rigctldHost: String
+    private let rigctldPort: UInt16
+    private var runLoopTask: Task<Void, Never>?
+    private var webSocketServerTask: Task<Void, Never>?
+    /// Holds off App Nap for as long as `audioCapture` is running — see
+    /// `beginBackgroundActivity()`'s doc comment.
+    private var backgroundActivityToken: NSObjectProtocol?
+    /// Diagnostic-only — logs only on a state transition, not per-buffer.
+    /// See `APRSDecoder`'s heartbeat logging for the matching "is audio
+    /// still reaching the decoder" question on the other side of the gate.
+    private var aprsGateWasActive = false
+    /// Same edge-logging as `aprsGateWasActive`, for the independent Sub
+    /// channel gate (`rigState.secondaryFrequencyHz`-based) below.
+    private var aprsGateWasActiveSub = false
+    private static let aprsGateLogger = Logger(subsystem: "com.ftx1remote.mac", category: "aprs-gate")
+    /// Diagnostic-only — surfaces exactly what `runConnectionLoop` caught,
+    /// since `connectionState`'s `.failed(String)` case (backed by
+    /// `error.localizedDescription`) is not shown anywhere in the UI today
+    /// (`RigctldError` has readable descriptions since 2026-10-02; an
+    /// `NWError` still reads generically).
+    /// Check via Console.app (subsystem "com.ftx1remote.mac", category
+    /// "connection") regardless of how the app was launched.
+    private static let connectionLogger = Logger(subsystem: "com.ftx1remote.mac", category: "connection")
+    /// Most recently APRS-decoded station + when it was heard, on Main.
+    /// `refreshFastTier` (the ~500ms poll/broadcast cycle) surfaces this as
+    /// `RigState.aprsLastCallsign` for up to 5 seconds past `at`, then lets
+    /// it read back as `nil` — no separate expiry `Timer` needed since that
+    /// cycle runs often enough on its own to notice the 5-second mark
+    /// passing.
+    private var aprsLastCallsignHeard: (callsign: String, at: Date)?
+    /// Sub-channel counterpart to `aprsLastCallsignHeard`, surfaced the
+    /// same way as `RigState.aprsSubLastCallsign`.
+    private var aprsLastCallsignHeardSub: (callsign: String, at: Date)?
+    /// Baseline for `trackExternalSwap`: the most recent polled Main/Sub
+    /// frequency pair where the two differed (a swap of equal frequencies is
+    /// unobservable, and a transient equal pair mid-poll shouldn't erase the
+    /// baseline). Reset by any app-issued tuning command or a Memory-mode
+    /// poll, since those legitimately produce pairs that could otherwise
+    /// look like an exchange.
+    private var lastDistinctFrequencies: (main: Int, sub: Int)?
+    private static let audioRoutingLogger = Logger(subsystem: "com.ftx1remote.mac", category: "audio-routing")
+    /// Debug-level: per-pass duration and CAT read count of the poll loop,
+    /// plus the gap between VFO publishes — the numbers to compare when
+    /// tuning poll responsiveness (`/usr/bin/log stream --level debug
+    /// --predicate 'category == "poll-timing"'`).
+    private static let pollTimingLogger = Logger(subsystem: "com.ftx1remote.mac", category: "poll-timing")
+    private var lastFastPublish: ContinuousClock.Instant?
+
+    /// Bumped by `applyOptimistically` every time a command lands.
+    /// `refreshFastTier` and each slow-tier step (`runSlowTierSteps`) check
+    /// this before and after their own sequential reads to detect whether a
+    /// command was optimistically applied mid-read — see their use below
+    /// for why that matters.
+    private var commandGeneration = 0
+
+    /// Where `runSlowTierSteps` resumes: the slow tier is spread over the
+    /// fast ticks a few reads at a time instead of running as one block
+    /// (see `pollLoop()`).
+    private var slowTierCursor = 0
+    /// Direction of the last memory scan the app started, reused by Skip.
+    private var lastMemoryScanDirection: MemoryScanDirection = .up
+    /// The TX side to put back when the app stops the memory scan it
+    /// started (user decision, 2026-10-06): starting a scan moves the rig's
+    /// TX/RX side to the scanning side. nil when there's nothing to undo,
+    /// or once the operator picks a TX side themselves.
+    private var txSideBeforeMemoryScan: FilterSide?
+    /// When the app last started a memory scan — see `memoryScanTick`.
+    /// Bumped by every scan start and Skip, so a pause or stop read that a
+    /// Skip has overtaken isn't published — see `publishMemoryScanStop`.
+    private var memoryScanStarts = 0
+    private var memoryScanStartedAt: ContinuousClock.Instant?
+    /// See `memoryScanTick`. ~4 "RI0" reads a second at ~55–110 ms each.
+    private let memoryScanTickInterval: Duration = .milliseconds(250)
+    /// User-adjustable (Settings → Polling), default 6: the slow-tier
+    /// reads each fast tick adds, so a full slow cycle (~50 reads) takes
+    /// ~8 ticks. The slow tier only needs to catch external (front-panel)
+    /// menu changes or correct a mispredicted optimistic value — changes
+    /// made through the app already show up instantly via
+    /// `applyOptimistically` — so a few seconds of staleness there is an
+    /// acceptable price for never delaying the VFO display.
+    private var slowTierReadsPerTick: Int { PollingSettings.slowReadsPerTick.value }
+    /// Least idle time between poll ticks when a tick overruns
+    /// `pollInterval` (it does, over the Pi link): leaves rigctld a gap for
+    /// other clients (WSJT-X) instead of polling back to back.
+    private let minimumPollGap: Duration = .milliseconds(50)
+    /// Least idle time between `frequencyLane` reads.
+    private let frequencyLaneInterval: Duration = .milliseconds(50)
+    /// Numbers every MAIN "FA" read by when it started, so the fast tier
+    /// can't publish a value older than one `frequencyLane` already has.
+    private var frequencyReadSerial = 0
+    private var publishedFrequencyRead = 0
+
+    /// The Main-side frequency/mode most recently polled while the rig was
+    /// in VFO (not Memory) mode — refreshed every poll tick in VFO mode,
+    /// frozen the moment Memory mode is entered, so it always holds "what
+    /// the VFO was showing right before the memory channel took over".
+    /// `send(_:)` replays it after `.setVFOMemoryMode(memory: false)`.
+    ///
+    /// Why: driven over CAT from this app, "VM000" flips the rig's VFO/
+    /// Memory flag but leaves the Main-side frequency/mode parked on the
+    /// memory channel's values; the front-panel V/M button restores the
+    /// VFO correctly, so the rig does keep a parked VFO — it just doesn't
+    /// expose it: `MR00000;` (the manual's "read VFO" channel) answers
+    /// with the *active memory channel's* contents while in Memory mode,
+    /// confirmed on real hardware 2026-09-08. Three attempts at giving the
+    /// CAT link quiet time around the exit write (poll-snapshot discard,
+    /// poll-loop pause, lock-held pause) all failed on hardware — see git
+    /// log — so rather than keep hunting for a way to make the rig restore
+    /// the VFO itself, the hub remembers the VFO and puts it back
+    /// explicitly. `nil` until the first VFO-mode poll completes (e.g. the
+    /// app launched with the rig already in Memory mode), in which case
+    /// the exit falls back to a bare "VM000". Also reset to `nil` by a
+    /// Main/Sub swap (the app's `SV` or a detected front-panel one): the
+    /// remembered VFO then belongs to the receiver that's now Sub, and
+    /// replaying it would put the other receiver's frequency on Main
+    /// (found on the Windows app, 2026-09-29).
+    private var lastVFOState: (hz: Int, mode: RigMode)?
+
+    /// Both read live from `PollingSettings` (Settings → Polling), so an
+    /// edit applies at the next tick without reconnecting.
+    private var pollInterval: Duration { PollingSettings.fastPollInterval }
+    private var reconnectDelay: Duration { PollingSettings.reconnectDelay }
+    /// The WebSocket server's bind-retry interval. Fixed rather than
+    /// user-adjustable — it's not a rig poll, and only matters in the rare
+    /// case the port is held by a just-killed previous instance.
+    private let webSocketRebindDelay: Duration = .seconds(3)
+    private let startupRetryInterval: Duration
+    private let startupGracePeriod: Duration
+
+    init(
+        rigctldHost: String = "127.0.0.1",
+        rigctldPort: UInt16 = 4532,
+        webSocketPort: UInt16 = 8765,
+        startupRetryInterval: Duration = .milliseconds(250),
+        startupGracePeriod: Duration = .seconds(10)
+    ) {
+        let client = RigctldClient(host: rigctldHost, port: rigctldPort)
+        self.rigctld = client
+        self.commandQueue = CommandQueue(rigctld: client)
+        self.server = RigWebSocketServer()
+        self.webSocketPort = webSocketPort
+        self.hubServerStatus = HubServerStatus(port: webSocketPort)
+        self.rigctldHost = rigctldHost
+        self.rigctldPort = rigctldPort
+        self.startupRetryInterval = startupRetryInterval
+        self.startupGracePeriod = startupGracePeriod
+        (txAudioInbound, txAudioInboundContinuation) = AsyncStream<Data>.makeStream(bufferingPolicy: .bufferingNewest(50))
+
+        // The app quit (or crashed) while the WebSDR or Local SDR window
+        // had Main muted. (`didSet` doesn't run inside `init`, so persist
+        // explicitly.)
+        if mainMutedByOverride {
+            mainMutedByOverride = false
+            UserDefaults.standard.set(false, forKey: Self.mainMutedByOverrideKey)
+            isMainAudioMuted = false
+            AudioPlaybackSettings.isMuted = false
+        }
+
+        rigctldProcess.onBinaryResolved = { [weak self] resolution in
+            self?.rigctldBinaryInUse = resolution
+        }
+        rigctldProcess.onStateChange = { [weak self] state in
+            self?.rigctldProcessState = state
+        }
+        audioRecorder.onRecordingStateChanged = { [weak self] isRecording in
+            self?.isRecordingAudio = isRecording
+        }
+        audioCapture.onNewFrame = { [weak self] frame in
+            self?.scopeFrames.update(frame)
+        }
+        // The Filter Function Display's Sub-channel spectrum (only computed
+        // while SUB is the selected filter side — see updateSubSpectrumCapture).
+        audioCapture.onSubSpectrum = { [weak self] spectrum in
+            self?.scopeFrames.updateSub(spectrum: spectrum)
+        }
+        audioCapture.setDisplayEnabled(ScopeDisplayMode.persisted != .off)
+        audioCapture.setChannelsSwapped(audioChannelsSwapped)
+        rigState.audioChannelsSwapped = audioChannelsSwapped
+        audioCapture.onAudioSamples = { [weak self] samples, sampleRate in
+            guard let self else { return }
+
+            // Relay to mobile clients for the iPad's audio-playback panel
+            // (see AudioStreamEncoder/RigWebSocketServer.broadcastAudio) —
+            // unconditional, unlike the APRS gate below: this isn't tied to
+            // frequency, and `broadcastAudio` itself is a cheap no-op when
+            // no client is connected, so there's no need to check that here
+            // before paying the (also cheap) conversion cost.
+            if let pcm = self.mainAudioStreamEncoder.encode(samples: samples, sampleRate: sampleRate) {
+                Task { await self.server.broadcastAudio(pcm) }
+                if !self.isMainAudioMuted {
+                    self.mainAudioPlayback.push(pcm: pcm)
+                }
+            }
+
+            // Unconditional (no frequency gate) — deliberately BEFORE the
+            // APRS gate below returns early. ft8Coordinator drops this
+            // itself when not running (see its doc comment); it must not be
+            // downstream of `guard isActive else { return }`, which gates
+            // on the APRS calling frequency specifically and would
+            // otherwise silently starve FT8 of audio on every other band.
+            self.ft8Coordinator.ingest(samples: samples, sampleRate: sampleRate, channel: .main)
+            self.ft4Coordinator.ingest(samples: samples, sampleRate: sampleRate, channel: .main)
+            self.ft8Store.noteAudio(from: .main)
+            self.ft4Store.noteAudio(from: .main)
+
+            // Same reasoning as ft8Coordinator above — recording isn't tied
+            // to any calling frequency either, and `audioRecorder` itself
+            // drops this when not recording.
+            self.audioRecorder.ingest(samples: samples, sampleRate: sampleRate)
+
+            // Same reasoning again: CW isn't tied to a calling frequency.
+            self.cwReceiver.ingest(samples: samples, sampleRate: sampleRate, channel: .main)
+            self.digiReceiver.ingest(samples: samples, sampleRate: sampleRate, channel: .main)
+
+            let isActive = APRSSettings.isActive(atFrequencyHz: self.rigState.frequencyHz)
+            if isActive != self.aprsGateWasActive {
+                self.aprsGateWasActive = isActive
+                Self.aprsGateLogger.debug("APRS gate \(isActive ? "opened" : "closed", privacy: .public) at \(self.rigState.frequencyHz) Hz")
+            }
+            guard isActive else { return }
+            self.aprsDecoder.process(samples: samples, sampleRate: sampleRate)
+        }
+        // Sub channel — fires whenever the active capture source is
+        // genuinely stereo, in both `.local` and `.remote` (see
+        // `AudioCaptureEngine.onSubChannelSamples`; simply never fires
+        // against a mono input device). Same shape as the Main tap above
+        // now (2026-09-18): relay to mobile clients unconditionally
+        // (`broadcastSubAudio` is a cheap no-op with no connections, same
+        // as `broadcastAudio`), local playback gated by mute. Still no
+        // recorder on Sub. (CW, RTTY/PSK and FT8/FT4 decode either.)
+        audioCapture.onSubChannelSamples = { [weak self] samples, sampleRate in
+            guard let self else { return }
+            if let pcm = self.subAudioStreamEncoder.encode(samples: samples, sampleRate: sampleRate) {
+                Task { await self.server.broadcastSubAudio(pcm) }
+                if !self.isSubAudioMuted {
+                    self.subAudioPlayback.push(pcm: pcm)
+                }
+            }
+
+            // Before the APRS gate, like the Main tap's.
+            self.ft8Coordinator.ingest(samples: samples, sampleRate: sampleRate, channel: .sub)
+            self.ft4Coordinator.ingest(samples: samples, sampleRate: sampleRate, channel: .sub)
+            self.ft8Store.noteAudio(from: .sub)
+            self.ft4Store.noteAudio(from: .sub)
+            self.cwReceiver.ingest(samples: samples, sampleRate: sampleRate, channel: .sub)
+            self.digiReceiver.ingest(samples: samples, sampleRate: sampleRate, channel: .sub)
+
+            // Same shape as the Main gate above, but against the Sub
+            // VFO's frequency (`secondaryFrequencyHz`, `nil`-safe — treated
+            // as inactive whenever it hasn't been read yet).
+            let subIsActive = self.rigState.secondaryFrequencyHz.map { APRSSettings.isActive(atFrequencyHz: $0) } ?? false
+            if subIsActive != self.aprsGateWasActiveSub {
+                self.aprsGateWasActiveSub = subIsActive
+                Self.aprsGateLogger.debug("APRS Sub gate \(subIsActive ? "opened" : "closed", privacy: .public) at \(self.rigState.secondaryFrequencyHz.map(String.init) ?? "unknown", privacy: .public) Hz")
+            }
+            guard subIsActive else { return }
+            self.aprsDecoderSub.process(samples: samples, sampleRate: sampleRate)
+        }
+        aprsDecoder.onStation = { [weak self] callsign, latitude, longitude, symbolTable, symbolCode, comment in
+            self?.aprsLastCallsignHeard = (callsign, Date())
+            self?.aprsStore.recordStation(callsign: callsign, latitude: latitude, longitude: longitude, symbolTable: symbolTable, symbolCode: symbolCode, comment: comment, heardAt: Date(), source: .main)
+        }
+        aprsDecoder.onMessage = { [weak self] from, to, text, messageID in
+            self?.receivedAPRSMessage(from: from, to: to, text: text, messageID: messageID, source: .main)
+        }
+        aprsDecoderSub.onStation = { [weak self] callsign, latitude, longitude, symbolTable, symbolCode, comment in
+            self?.aprsLastCallsignHeardSub = (callsign, Date())
+            self?.aprsStore.recordStation(callsign: callsign, latitude: latitude, longitude: longitude, symbolTable: symbolTable, symbolCode: symbolCode, comment: comment, heardAt: Date(), source: .sub)
+        }
+        aprsDecoderSub.onMessage = { [weak self] from, to, text, messageID in
+            self?.receivedAPRSMessage(from: from, to: to, text: text, messageID: messageID, source: .sub)
+        }
+        for (coordinator, store) in [(ft8Coordinator, ft8Store), (ft4Coordinator, ft4Store)] {
+            coordinator.dialFrequencyProvider = { [weak self] channel in
+                guard let self else { return 0 }
+                switch channel {
+                case .main, .webSDR: return self.rigState.frequencyHz
+                case .sub: return self.rigState.secondaryFrequencyHz ?? 0
+                case .myKiwiSDR: return self.localSDRSource.frequencyHz ?? 0
+                }
+            }
+            coordinator.setChannel(store.channel)
+            store.onChannelChanged = { [weak self, weak coordinator] channel in
+                coordinator?.setChannel(channel)
+                self?.localSDRSource.update()
+            }
+            let tag = store.mode.name.lowercased()
+            localSDRSource.addConsumer(
+                id: tag,
+                isWanted: { [weak store] in store.map { $0.isRunning && $0.channel == .myKiwiSDR } ?? false },
+                onSamples: { [weak coordinator] samples, sampleRate in
+                    coordinator?.ingest(samples: samples, sampleRate: sampleRate, channel: .myKiwiSDR)
+                }
+            )
+            coordinator.onSpotsDecoded = { [weak self, weak store] coordinatorSpots in
+                guard let self, let store else { return }
+                let spots = coordinatorSpots.map { FT8Spot(coordinatorSpot: $0, mode: store.mode.name) }
+                store.record(spots)
+                self.pskReporter.enqueue(spots)
+            }
+            coordinator.onCycleStatusChanged = { [weak store] status in
+                store?.updateCycleStatus(status)
+            }
+        }
+        wpsdMonitor.onCallsignUpdate = { [weak self] callsign in
+            self?.rigState.c4fmCallsign = callsign
+        }
+        wpsdMonitor.onReflectorUpdate = { [weak self] reflector in
+            self?.rigState.c4fmReflector = reflector
+        }
+        cwSender.onActiveChanged = { [weak self] active in
+            self?.cwReceiver.setSenderActive(active)
+        }
+        cwMonitor.outputDeviceID = { AudioOutputDeviceLister.deviceID(forUID: AudioOutputSettings.deviceUID) }
+        cwSender.onKeying = { [weak self] chunk in
+            self?.cwMonitor.handle(chunk)
+        }
+        // Modes only while connected: before the first read, `rigState`
+        // holds placeholder values (`mode` is USB).
+        cwRigCancellable = $rigState.combineLatest($connectionState)
+            .map { rig, connection in CWRigInfo(state: rig, connected: connection == .connected) }
+            .removeDuplicates()
+            .sink { [weak self] info in self?.cwReceiver.rigInfoChanged(info) }
+        digiRigCancellable = $rigState.combineLatest($connectionState)
+            .map { rig, connection in DigiRigInfo(state: rig, connected: connection == .connected) }
+            .removeDuplicates()
+            .sink { [weak self] info in self?.digiReceiver.rigInfoChanged(info) }
+        // Throttled: a scan publishes once per channel. `latest: true` keeps
+        // the final state (scan finished) from being dropped.
+        memoryListCancellable = memoryList.$entries
+            .combineLatest(memoryList.$scanningChannel, memoryList.$lastScanned)
+            .map { MemoryListSnapshot(entries: $0, scanned: $2, scanningChannel: $1) }
+            .removeDuplicates()
+            .throttle(for: .seconds(1), scheduler: DispatchQueue.main, latest: true)
+            .sink { [weak self] list in
+                guard let self else { return }
+                Task { await self.server.broadcastMemoryList(list) }
+            }
+        // Throttled: a burst of packets (a digipeated beacon heard several
+        // times) would otherwise resend the whole history for each.
+        aprsListCancellable = aprsStore.$stations
+            .combineLatest(aprsStore.$messages)
+            .map { APRSListPush(stations: $0, messages: $1) }
+            .removeDuplicates()
+            .throttle(for: .seconds(2), scheduler: DispatchQueue.main, latest: true)
+            .sink { [weak self] push in
+                guard let self else { return }
+                Task { await self.server.broadcastAPRSList(push) }
+            }
+    }
+
+    /// App-launch lifecycle: starts the WebSocket server. Independent of
+    /// the rigctld link — mobile/local clients can connect immediately and
+    /// see "rig offline" rather than being unable to reach the Mac at all.
+    func start() {
+        if wakeObserver == nil {
+            wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
+                forName: NSWorkspace.didWakeNotification, object: nil, queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated { self?.restartAudioAfterWake() }
+            }
+        }
+        straightKey.start()
+        aprsMessaging.start()
+        wavelogRadio.start()
+        wavelogTuner.applySettings()
+        Task { [weak self, commandQueue] in
+            await commandQueue.setOnCommandApplied { command, appliedSide in
+                Task { @MainActor in
+                    guard let self else { return }
+                    self.applyOptimistically(command, appliedSide: appliedSide)
+                    // Broadcasts the same optimistic value the Mac's own
+                    // `rigState` binding already shows instantly — without
+                    // this, a remote (iPad) client only saw an app-triggered
+                    // change once the next poll tick republished it (up to
+                    // ~3s later for a slow-tier field). See
+                    // `applyOptimistically`'s doc comment for why predicting
+                    // the outcome here is safe.
+                    await self.server.broadcast(self.rigState)
+                }
+            }
+        }
+        startWebSocketServer()
+    }
+
+    /// Retries the bind indefinitely (every `webSocketRebindDelay`)
+    /// whenever `RigWebSocketServer.isListening()` reports false — covers
+    /// both the initial bind failing (e.g. the port still held by a
+    /// just-killed previous instance) and a later failure it clears itself
+    /// (see that type's `stateUpdateHandler`). Without this, a one-time
+    /// bind failure would silently and permanently disable the WebSocket
+    /// server for the rest of the app's life: the Mac's own local UI calls
+    /// `HubService` directly and never touches this server, so nothing
+    /// else would ever notice or recover it.
+    private func startWebSocketServer() {
+        guard webSocketServerTask == nil else { return }
+        if txAudioTask == nil {
+            let inbound = txAudioInbound
+            txAudioTask = Task { [weak self] in
+                for await pcm in inbound {
+                    self?.handleTXAudio(pcm)
+                }
+            }
+        }
+        let port = webSocketPort
+        webSocketServerTask = Task { [weak self, server, webSocketRebindDelay] in
+            // Seed what a client gets on connect: until the rig is polled
+            // nothing is broadcast, and a client would show `RigState()`'s
+            // defaults — Enable Transmit on, whatever it really is here.
+            if let state = self?.rigState { await server.broadcast(state) }
+            let status = self?.hubServerStatus
+            await server.setOnClientsChanged { clients in
+                Task { @MainActor in status?.clients = clients }
+            }
+            while !Task.isCancelled {
+                let listening = await server.isListening()
+                if status?.isListening != listening { status?.isListening = listening }
+                if listening {
+                    try? await Task.sleep(for: webSocketRebindDelay)
+                    continue
+                }
+                try? await server.start(
+                    port: port,
+                    onCommand: { command in
+                        Task { @MainActor in self?.send(command) }
+                    },
+                    onTXAudio: { pcm in
+                        self?.txAudioInboundContinuation.yield(pcm)
+                    },
+                    onMenuItemRead: { p1, p2, p3 in
+                        await self?.readMenuItem(p1: p1, p2: p2, p3: p3)
+                    },
+                    onCWKeyer: { slot, text in
+                        try await self?.remoteCWKeyer(slot: slot, text: text)
+                    }
+                )
+                try? await Task.sleep(for: webSocketRebindDelay)
+            }
+        }
+    }
+
+    /// A decoded message from either receiver: acks/auto-acks via
+    /// `aprsMessaging`, then listed — except our own (digipeated copies of
+    /// what we sent; M.LIST already has them) and acks/rejects addressed to
+    /// us (shown as the sent message's delivery state instead).
+    private func receivedAPRSMessage(from: String, to: String, text: String, messageID: String?, source: APRSSource) {
+        aprsMessaging.handleIncoming(from: from, to: to, text: text, messageID: messageID)
+        if let myCall = APRSTransmitSettings.sourceCall {
+            if from.uppercased() == myCall { return }
+            if to.uppercased() == myCall, messageID == nil, APRSOutgoing.reply(text: text, messageID: nil) != nil { return }
+        }
+        aprsStore.recordMessage(from: from, to: to, text: text, messageID: messageID, receivedAt: Date(), source: source)
+    }
+
+    /// Keys for an APRS packet, the TX side first when it must move. One
+    /// task, so the queue gets them in this order; not through `send(_:)`,
+    /// whose gate would judge the side the rig is still on —
+    /// `APRSTransmitPlanner` already judged the side it's moving to.
+    func keyForAPRS(switchTo side: FilterSide?) {
+        var commands: [RigCommand] = []
+        if let side { commands.append(.setTXSide(side)) }
+        commands.append(.setPTT(true))
+        enqueueAPRSKeying(commands)
+    }
+
+    /// Unkeys, then the TX side back. "Off" needs no gate.
+    func unkeyForAPRS(restoreSide: FilterSide?) {
+        var commands: [RigCommand] = [.setPTT(false)]
+        if let restoreSide { commands.append(.setTXSide(restoreSide)) }
+        enqueueAPRSKeying(commands)
+    }
+
+    /// Every APRS key/unkey batch reaches the queue whole and in call order:
+    /// each waits for the one before. Two independent tasks interleaved
+    /// (seen 2026-11-11: "FT1", "TX0", "FT0", then "TX1" — keyed on MAIN's
+    /// HF frequency until the License guard unkeyed it).
+    private func enqueueAPRSKeying(_ commands: [RigCommand]) {
+        let previous = aprsKeyingChain
+        aprsKeyingChain = Task { [commandQueue] in
+            await previous?.value
+            for command in commands { await commandQueue.enqueue(command) }
+        }
+    }
+
+    /// See `enqueueAPRSKeying`.
+    private var aprsKeyingChain: Task<Void, Never>?
+
+    /// The APRS transmitter's carrier detect: packet audio heard on that
+    /// receiver's decoder (only fed while APRS decoding is on and the
+    /// receiver is on the APRS frequency).
+    func aprsDecoderHeardActivity(side: FilterSide, within seconds: TimeInterval) -> Bool {
+        (side == .main ? aprsDecoder : aprsDecoderSub).heardActivity(within: seconds)
+    }
+
+    /// One frame of a remote client's microphone, already checked to come
+    /// from the PTT holder. Dropped unless the rig is keyed by the app —
+    /// a press the transmit gate refused keys nothing, so there's nothing
+    /// to send audio to — and while the RTTY/PSK window is sending (the
+    /// two would mix).
+    private func handleTXAudio(_ pcm: Data) {
+        guard !digiSender.isTransmitting, !tuneTone.isTuning, !aprsTransmitter.isTransmitting else { return }
+        guard rigState.ptt else {
+            // Unkeyed some other way (front panel, a poll): drop the sink.
+            if txAudioRemote != nil || txAudioPlaybackRunning { endTXAudio() }
+            return
+        }
+        routeTXAudio(pcm)
+    }
+
+    /// Sends 8 kHz transmit audio to the rig: the Transmit audio output
+    /// device in Local mode, the Pi's TX audio service in Remote mode.
+    /// Starts the sink on the first frame; `endTXAudio` (at unkey) stops
+    /// it. Unlike `handleTXAudio`, doesn't look at `rigState.ptt`: the
+    /// RTTY/PSK sender keys first and watches PTT itself, and a single
+    /// stray "not keyed" poll mustn't restart the sink mid-transmission.
+    func routeTXAudio(_ pcm: Data) {
+        armTXAudioWatchdog()
+        switch RigctldSettings.activeConnectionMode {
+        case .local:
+            if !txAudioPlaybackRunning {
+                guard let deviceID = AudioOutputDeviceLister.deviceID(forUID: TXAudioOutputSettings.deviceUID) else {
+                    Self.txAudioLogger.error("transmit audio dropped: no Transmit audio output device set (Settings → Audio)")
+                    return
+                }
+                txAudioPlayback.setOutputDevice(deviceID)
+                txAudioPlayback.start()
+                txAudioPlaybackRunning = true
+                Self.txAudioLogger.notice("transmit audio → local device \(TXAudioOutputSettings.deviceUID, privacy: .public)")
+            }
+            txAudioPlayback.push(pcm: pcm)
+        case .remote:
+            if txAudioRemote == nil {
+                let client = RemoteTXAudioClient(host: RigctldSettings.activeRemoteHost, logSubsystem: "com.ftx1remote.mac")
+                txAudioRemote = client
+                Task { await client.start() }
+                Self.txAudioLogger.notice("transmit audio → Pi \(RigctldSettings.activeRemoteHost, privacy: .public)")
+            }
+            let client = txAudioRemote
+            Task { await client?.send(pcm) }
+        }
+    }
+
+    private func armTXAudioWatchdog() {
+        txAudioWatchdog?.cancel()
+        txAudioWatchdog = Task { [weak self] in
+            try? await Task.sleep(for: Self.txAudioSilenceLimit)
+            guard let self, !Task.isCancelled, self.rigState.ptt else { return }
+            Self.txAudioLogger.notice("transmit audio stopped while keyed — unkeying")
+            self.send(.setPTT(false))
+        }
+    }
+
+    /// Unkey: let the last of the audio play out, then release the sink.
+    private func endTXAudio() {
+        txAudioWatchdog?.cancel()
+        txAudioWatchdog = nil
+        if let client = txAudioRemote {
+            txAudioRemote = nil
+            Task { await client.finish() }
+        }
+        if txAudioPlaybackRunning {
+            txAudioPlaybackRunning = false
+            Task { [weak self] in
+                // The client unkeys ~300 ms after release; this is the
+                // local prebuffer's tail.
+                try? await Task.sleep(for: .milliseconds(300))
+                guard let self, !self.txAudioPlaybackRunning else { return }
+                self.txAudioPlayback.stop()
+            }
+        }
+    }
+
+    /// App-termination lifecycle: stops the WebSocket server and ensures
+    /// rigctld isn't left running as an orphaned child process.
+    func stop() {
+        // First: unkeys and closes the keying port before anything else.
+        straightKey.shutdown()
+        // Unkeys while the rigctld link is still up.
+        digiSender.stop()
+        tuneTone.stop()
+        aprsMessaging.stop()
+        aprsTransmitter.stopAll(reason: "app quitting")
+        wavelogRadio.stop()
+        wavelogTuner.stop()
+        stopRigctld()
+        stopDigitalDecoding(.ft8)
+        stopDigitalDecoding(.ft4)
+        cwReceiver.stop()
+        digiReceiver.stop()
+        cwMonitor.stop()
+        webSocketServerTask?.cancel()
+        webSocketServerTask = nil
+        hubServerStatus.isListening = false
+        Task { [server] in await server.stop() }
+    }
+
+    /// CW send pane: writes CW TEXT keyer memory `slot` and returns what
+    /// the rig stored — see `RigctldClient.writeKeyerMemory`. Direct rather
+    /// than through `CommandQueue` because the caller needs the result;
+    /// `RigctldClient` serializes it with every other round trip anyway.
+    func writeCWKeyerMemory(slot: Int, text: String) async throws -> String {
+        try await rigctld.writeKeyerMemory(slot: slot, text: text)
+    }
+
+    /// A hub client's `CWKeyerRequest` (the iPad's CW send section on the
+    /// hub route): writes keyer memory `slot` and returns what the rig
+    /// stored, or, with no `text`, makes sure the slot is a TEXT memory.
+    /// Neither transmits; the client plays it with `.playCWTextMemory`,
+    /// which `send(_:)` gates.
+    func remoteCWKeyer(slot: Int, text: String?) async throws -> String? {
+        guard connectionState == .connected else { throw RigctldError.notConnected }
+        guard (1...5).contains(slot) else { throw RemoteCWKeyerError.badSlot(slot) }
+        if let text {
+            // Network input: only what the keyer can key, at most 50
+            // characters. Anything else (";" above all, which would end the
+            // CAT command and start another) never reaches the rig.
+            guard !text.isEmpty, text.count <= CWText.memoryLength, text.allSatisfy(CWText.allowed.contains) else {
+                throw RemoteCWKeyerError.badText
+            }
+            return try await writeCWKeyerMemory(slot: slot, text: text)
+        }
+        try await ensureCWTextMemory(slot: slot)
+        return nil
+    }
+
+    /// The CW keyer lease for this Mac's own CW window — the server is the
+    /// coordinator, since it also sees every hub client's (see
+    /// `RigWebSocketServer.acquireKeyer`). nil = granted.
+    func acquireCWKeyerLease() async -> CWKeyerBusy? {
+        await server.acquireKeyer(.mac).map(CWKeyerBusy.holder)
+    }
+
+    func releaseCWKeyerLease() {
+        Task { await server.releaseKeyer(.mac) }
+    }
+
+    /// CW send pane: makes sure keyer memory `slot` is a TEXT memory (CW
+    /// SETTING → KEYER → CW MEMORY 1-5, "EX" 02 02 06-10: 0 TEXT, 1
+    /// MESSAGE); a MESSAGE slot would play recorded audio instead.
+    func ensureCWTextMemory(slot: Int) async throws {
+        let value = try await rigctld.getMenuItem(p1: 2, p2: 2, p3: 5 + slot)
+        if value != "0" {
+            Self.connectionLogger.notice("CW MEMORY \(slot) was \(value ?? "unreadable", privacy: .public); setting it to TEXT")
+            try await rigctld.setMenuItem(p1: 2, p2: 2, p3: 5 + slot, rawValue: "0")
+        }
+    }
+
+    /// Called from the Tools/FT8 or FT4 window's `.onAppear` — decoding
+    /// runs only while that window is open (see `FT8DecodeCoordinator`'s
+    /// doc comment for why FT8 can't reuse APRS's always-on gate).
+    func startDigitalDecoding(_ mode: FT8Kit.Mode) {
+        coordinator(for: mode).start()
+        digitalStore(for: mode).isRunning = true
+        localSDRSource.update()
+        pskReporter.start(mode)
+    }
+
+    /// Called from the Tools/FT8 or FT4 window's `.onDisappear`, and as a
+    /// safety net from `stop()` in case the app quits with it still open.
+    func stopDigitalDecoding(_ mode: FT8Kit.Mode) {
+        coordinator(for: mode).stop()
+        digitalStore(for: mode).isRunning = false
+        localSDRSource.update()
+        pskReporter.stop(mode)
+    }
+
+    private func digitalStore(for mode: FT8Kit.Mode) -> FT8Store {
+        switch mode {
+        case .ft8: return ft8Store
+        case .ft4: return ft4Store
+        }
+    }
+
+    private func coordinator(for mode: FT8Kit.Mode) -> FT8DecodeCoordinator {
+        switch mode {
+        case .ft8: return ft8Coordinator
+        case .ft4: return ft4Coordinator
+        }
+    }
+
+    /// What the on/off switch calls: launches rigctld (clearing out any
+    /// stale rigctld left over from a previous run first — see
+    /// `RigctldProcessController`), then starts the polling loop. rigctld
+    /// still takes a moment after spawning to open the serial device and
+    /// bind its TCP listener, so the very first connection attempt races
+    /// it and reliably fails — `connectRigctld(isFreshStart:)` suppresses
+    /// surfacing that as a `.failed` connectionState for a short grace
+    /// window, retrying quickly instead, so the UI doesn't flash an error
+    /// on every normal startup.
+    func startRigctld() {
+        isActive = true
+        guard RigctldSettings.activeConnectionMode == .local else {
+            // Remote mode: rigctld already runs on the configured host (e.g.
+            // a Raspberry Pi over Tailscale) — this Mac only ever connects
+            // to it as a network client, never spawns or owns the process.
+            // `isFreshStart: false` is deliberate too: that grace period
+            // exists for a rigctld this app just spawned and is still
+            // opening its serial device/binding its port, which doesn't
+            // apply to one that was already running before this app
+            // launched.
+            connectRigctld(isFreshStart: false)
+            return
+        }
+        let config = RigctldProcessController.Configuration(
+            binary: RigctldBinary.choice,
+            modelNumber: RigctldSettings.modelNumber,
+            devicePath: RigctldSettings.devicePath,
+            baudRate: RigctldSettings.baudRate,
+            host: rigctldHost,
+            port: rigctldPort,
+            pttPort: RigctldSettings.pttPort
+        )
+        Task { [weak self, rigctldProcess] in
+            await rigctldProcess.start(with: config)
+            // A failed start includes refusing a rigctld that's running
+            // for another rig — connecting would control the wrong radio.
+            // Not active either, so one click on Connect retries.
+            if case .failed = rigctldProcess.state {
+                self?.isActive = false
+                return
+            }
+            self?.connectRigctld(isFreshStart: true)
+        }
+    }
+
+    func stopRigctld() {
+        isActive = false
+        disconnectRigctld()
+        guard RigctldSettings.activeConnectionMode == .local else { return }
+        rigctldProcess.stop()
+    }
+
+    /// `.setBand` is resolved here rather than in `CommandQueue` — rigctld
+    /// has no "set band" verb, so band selection really means "jump to a
+    /// frequency", and knowing *which* frequency (the last one used on that
+    /// band, or a sensible default the first time) is app-level band-plan
+    /// knowledge, not something the low-level command serializer should
+    /// own. This is the only path commands take (local UI and WebSocket-
+    /// forwarded mobile commands both call this), so it covers both.
+    func send(_ command: RigCommand) {
+        send(command, memoryScanStopped: false)
+    }
+
+    /// A spot clicked in Wavelog (`WavelogTuneListener`): MAIN's frequency
+    /// and, when Wavelog named one, its mode — the WebSDR window's
+    /// click-to-tune rules (not while transmitting, not in Memory mode).
+    /// Returns why it didn't tune, in words Wavelog's page and Settings
+    /// show.
+    func tuneFromWavelog(_ request: WavelogTuneRequest) -> String? {
+        guard connectionState == .connected else { return String(localized: "hubService.theRigIsntConnected") }
+        guard !rigState.ptt else { return String(localized: "hubService.theRigIsTransmitting") }
+        guard rigState.vfoMemoryMode != .memory else { return String(localized: "hubService.mainIsInMemory") }
+        if request.frequencyHz != rigState.frequencyHz { send(.setFrequency(hz: request.frequencyHz)) }
+        if let mode = request.mode, mode != rigState.mode { send(.setMode(mode)) }
+        return nil
+    }
+
+    /// Quick split: SPLIT on, then the split TX VFO to MAIN's frequency
+    /// plus `offsetHz` (e.g. +1 kHz, "up 1"). In that order: only in split
+    /// does "FB" address the TX VFO — before, it's the SUB receiver (see
+    /// `RigState.splitEnabled`). No mode to set: the TX VFO follows MAIN's.
+    /// Queued as one task so the two can't swap places.
+    func quickSplit(offsetHz: Int) {
+        guard canQuickSplit else {
+            Self.connectionLogger.notice("Ignored quick split (offset \(offsetHz) Hz)")
+            return
+        }
+        let target = rigState.frequencyHz + offsetHz
+        guard target > 0 else { return }
+        Self.connectionLogger.notice("Quick split: split on, TX VFO to \(target) Hz")
+        txSideBeforeMemoryScan = nil
+        Task {
+            await commandQueue.enqueue(.setSplit(true))
+            await commandQueue.enqueue(.setSecondaryFrequency(hz: target))
+            await refreshAfterSplit()
+        }
+    }
+
+    /// Whether `quickSplit` can run: connected and `RigState.canQuickSplit`.
+    var canQuickSplit: Bool {
+        connectionState == .connected && rigState.canQuickSplit
+    }
+
+    /// Whether SPLIT can be switched now: connected and
+    /// `RigState.canChangeSplit`.
+    var canChangeSplit: Bool {
+        connectionState == .connected && rigState.canChangeSplit
+    }
+
+    /// Skip on a paused memory scan: the same scan command again, which the
+    /// rig takes as "resume past this channel" (rig-confirmed 2026-10-06).
+    /// A scan started from the front panel resumes upward.
+    func skipMemoryScanChannel() {
+        send(.setMemoryScan(lastMemoryScanDirection, side: activeMemoryScanSide))
+    }
+
+    private var isMemoryScanActive: Bool {
+        rigState.memoryScan == .scanning || rigState.memoryScan == .paused
+    }
+
+    private var activeMemoryScanSide: FilterSide {
+        rigState.memoryScanSide ?? .main
+    }
+
+    /// What an app-sent scan stop does with `txSideBeforeMemoryScan`.
+    private enum MemoryScanStopTXSide {
+        /// Put it back (Stop, or a tune/recall that stops the scan).
+        case restore
+        /// Drop it: something is about to transmit on the side shown now.
+        case keep
+        /// Leave it for the scan about to start on the other side.
+        case carryOver
+    }
+
+    /// Queues "SC…0" (which stops both sides' scans) and, for `.restore`,
+    /// the TX side the scan moved — see `txSideBeforeMemoryScan`. Queued
+    /// in this order, ahead of whatever the caller sends next, so e.g. a
+    /// mode change after it reaches MAIN again rather than the SUB side a
+    /// SUB scan made active.
+    private func enqueueMemoryScanStop(_ txSide: MemoryScanStopTXSide) async {
+        await commandQueue.enqueue(.setMemoryScan(.off, side: activeMemoryScanSide))
+        guard txSide != .carryOver else { return }
+        let previous = txSideBeforeMemoryScan
+        txSideBeforeMemoryScan = nil
+        if txSide == .restore, let previous {
+            await commandQueue.enqueue(.setTXSide(previous))
+        }
+    }
+
+    /// `memoryScanStopped`: the scan-stop for this command has already been
+    /// queued (see below), so don't queue another.
+    private func send(_ command: RigCommand, memoryScanStopped: Bool) {
+        // The transmitting side's frequency (TX:SUB or split = SUB's), not
+        // MAIN's — until 2026-10-25 this checked MAIN's alone.
+        if Self.isTransmitCapable(command), let reason = transmitBlockReason {
+            Self.connectionLogger.notice("Blocked transmit-capable command (\(reason, privacy: .public)): \(String(describing: command), privacy: .public)")
+            return
+        }
+        if case .setTransmitEnabled(let enabled) = command {
+            // From a client (the iPad hub screen's lock button): the same
+            // as this Mac's Settings → rigctld → Enable Transmit, including
+            // the unkey and CW stop when it's turned off.
+            Self.connectionLogger.notice("Enable Transmit set \(enabled ? "on" : "off", privacy: .public) by a client")
+            transmitEnabled = enabled
+            return
+        }
+        if case .setAudioChannelsSwapped(let swapped) = command {
+            // From a client (the iPad hub screen's speaker button): same as
+            // this window's audio-channel override.
+            setAudioChannelsSwapped(swapped, reason: "manual toggle from a client")
+            return
+        }
+        if case .refreshMemoryList = command {
+            // From a client (the iPad's channel list): same as the memory
+            // list window's Refresh. Nothing to send to the rig as such.
+            memoryList.refresh()
+            return
+        }
+        switch command {
+        case .setTXSide, .setSplit:
+            // Chosen by the operator: not undone when a scan stops.
+            txSideBeforeMemoryScan = nil
+        default:
+            break
+        }
+        if case .setMemoryScan(let direction, let side) = command {
+            if direction == .off {
+                Task { await enqueueMemoryScanStop(.restore) }
+                return
+            }
+            // "SC" in VFO mode runs the rig's VFO scan instead (seen in the
+            // 2026-10-06 probes), which this app doesn't model.
+            let sideMode = side == .sub ? rigState.subVfoMemoryMode : rigState.vfoMemoryMode
+            guard sideMode == .memory else {
+                Self.connectionLogger.notice("Ignored memory scan start outside Memory mode (\(side.displayName, privacy: .public))")
+                return
+            }
+            if side == .sub, rigState.singleReceive == true {
+                Self.connectionLogger.notice("Ignored SUB memory scan in single-receive display")
+                return
+            }
+            // One side at a time: the rig would scan both, but "RI0"
+            // reports one state for the whole radio, so the app couldn't
+            // tell which side paused (and any stop stops both anyway).
+            if !memoryScanStopped, isMemoryScanActive, activeMemoryScanSide != side {
+                Task {
+                    await enqueueMemoryScanStop(.carryOver)
+                    self.send(command, memoryScanStopped: true)
+                }
+                return
+            }
+            // Starting a scan makes its side the rig's TX/RX side ("VS",
+            // which is the same setting as "FT" — rig-confirmed
+            // 2026-10-06). Remember the side to go back to when the app
+            // stops the scan (user decision). One already remembered —
+            // carried over from the other side's scan — is the original
+            // and stays. Not keyed on `isMemoryScanActive`: that's still
+            // true until a just-sent stop lands, which made a quick
+            // Stop-then-Scan look like a side switch and remember nothing.
+            if txSideBeforeMemoryScan == nil {
+                let current = rigState.txSide ?? .main
+                if current != side { txSideBeforeMemoryScan = current }
+            }
+        }
+        // Tuning, recalling a channel or transmitting while the rig scans
+        // would be fighting it, so the scan is stopped first. Enqueued
+        // before re-sending, so `CommandQueue`'s FIFO order puts the stop
+        // ahead of the command whichever branch below handles it.
+        if !memoryScanStopped, isMemoryScanActive,
+           let restoreTXSide = Self.memoryScanStop(for: command, scanSide: activeMemoryScanSide) {
+            Task {
+                await enqueueMemoryScanStop(restoreTXSide ? .restore : .keep)
+                self.send(command, memoryScanStopped: true)
+            }
+            return
+        }
+        if case .setBand(let name) = command {
+            // Captured synchronously, before the Task below does anything
+            // async, so it reflects the band being left at the moment this
+            // command was issued — not whatever `rigState.frequencyHz`/
+            // `.band` have drifted to once the Task actually runs.
+            let departingBand = BandPlan.band(containing: rigState.frequencyHz)
+            if let band = BandPlan.band(named: name) {
+                let targetHz = BandMemory.lastFrequencyHz(forBand: band.name) ?? band.defaultFrequencyHz
+                let targetMode = BandMemory.lastMode(forBand: band.name)
+                let targetFilterWidth = BandMemory.lastFilterWidthIndex(forBand: band.name)
+                Task {
+                    await Self.captureFilterWidth(leaving: departingBand, rigctld: self.rigctld)
+                    await commandQueue.enqueue(.setFrequency(hz: targetHz))
+                    if let targetMode {
+                        await commandQueue.enqueue(.setMode(targetMode))
+                    }
+                    // Width must go out after mode, not before — "SH"'s P3
+                    // index is interpreted against the *current* mode (see
+                    // RigState.filterWidthIndex), so applying it before the
+                    // mode restore above would apply the saved index against
+                    // whatever mode a mode-forcing segment left the rig in.
+                    if let targetFilterWidth {
+                        // Band changes tune MAIN, so pin the width replay to
+                        // MAIN even while the filter controls are on SUB.
+                        await commandQueue.enqueue(.setFilterWidth(targetFilterWidth), filterSide: .main)
+                    }
+                }
+            } else if let segment = GeneralCoverageSegments.segment(named: name) {
+                let targetHz = BandMemory.lastFrequencyHz(forBand: segment.name) ?? segment.defaultFrequencyHz
+                Task {
+                    await Self.captureFilterWidth(leaving: departingBand, rigctld: self.rigctld)
+                    await commandQueue.enqueue(.setFrequency(hz: targetHz))
+                    await commandQueue.enqueue(.setMode(segment.defaultMode))
+                }
+            }
+            return
+        }
+        // General-coverage segments (SW broadcast, aircraft, etc.) get a
+        // conventional receive mode auto-selected the moment the primary
+        // VFO crosses into them — edge-triggered against the *previous*
+        // frequency's segment so stepping around inside one segment (the
+        // ±10Hz/100Hz/1kHz/10kHz steppers in `FrequencyEntryView`) doesn't
+        // resend the same mode change on every step. `generalCoverageSegment`
+        // treats an overlapping amateur allocation as taking precedence
+        // (see its doc comment), so normal ham-band tuning never matches
+        // here at all.
+        if case .setFrequency(let hz) = command,
+           let newSegment = generalCoverageSegment(at: hz),
+           newSegment != generalCoverageSegment(at: rigState.frequencyHz) {
+            Task {
+                await commandQueue.enqueue(command)
+                await commandQueue.enqueue(.setMode(newSegment.defaultMode))
+            }
+            return
+        }
+        // Same "app-level knowledge lives here, not in the serializer"
+        // reasoning as `.setBand`: restoring the VFO after leaving Memory
+        // mode needs `lastVFOState`, which only the hub tracks. Order
+        // matters — the rig rejects an "FA" set with "?;" while still in
+        // Memory mode (per hamlib's FTX-1 backend source), so the mode
+        // flip must go out first; `CommandQueue` is FIFO, so enqueueing in
+        // sequence guarantees that.
+        if case .setVFOMemoryMode(memory: false) = command, let last = lastVFOState {
+            Task {
+                await commandQueue.enqueue(command)
+                await commandQueue.enqueue(.setFrequency(hz: last.hz))
+                await commandQueue.enqueue(.setMode(last.mode))
+            }
+            return
+        }
+        if case .setFilterSide(let side) = command {
+            // The Sub receiver isn't shown in single-receive display, so a
+            // Sub filter selection there would be invisible (the UI
+            // disables the button; this covers remote clients too).
+            if side == .sub, rigState.singleReceive == true {
+                Self.connectionLogger.notice("Ignored SUB filter selection in single-receive display")
+                return
+            }
+            Task {
+                await commandQueue.enqueue(command)
+                // The side is passed explicitly rather than read from
+                // `rigState` inside the refresh: the queue applies the
+                // command (and `applyOptimistically` updates `filterSide`)
+                // concurrently with this task, so reading it there would
+                // race.
+                await refreshFilterState(side: side)
+            }
+            return
+        }
+        if case .setSplit(let on) = command {
+            guard canChangeSplit else {
+                Self.connectionLogger.notice("Ignored split \(on ? "on" : "off", privacy: .public): not connected or transmitting")
+                return
+            }
+            // How "ST" moves "FT"/"VS" (one setting, see `RigState.txSide`)
+            // isn't documented, so both are read back rather than guessed.
+            Task {
+                await commandQueue.enqueue(command)
+                await refreshAfterSplit()
+            }
+            return
+        }
+        if case .setNarrow = command {
+            // NAR moves the passband to the mode's narrow preset, so the
+            // width the slow tier last read is stale the moment this
+            // lands — re-read it right behind the write rather than
+            // leaving the Width readout wrong for up to a slow-tier
+            // interval (~10s).
+            Task {
+                await commandQueue.enqueue(command)
+                await refreshWidthAfterNarrow()
+            }
+            return
+        }
+        Task { await commandQueue.enqueue(command) }
+    }
+
+    /// Freshly reads the current "SH" WIDTH index directly (bypassing the
+    /// poll cycle entirely) and records it for `band`, if leaving one.
+    ///
+    /// This exists because relying on the slow tier's periodic read to
+    /// have already captured the right value — the way frequency/mode are
+    /// captured on every fast-tier tick (~500ms) — doesn't work for width:
+    /// the slow tier only comes round every several seconds, so a
+    /// band switch that follows a manual width change within that window
+    /// left `BandMemory` holding nothing (or a stale value) for the band
+    /// being left, and `.setBand`'s restore had no correct width to replay.
+    /// A one-off direct read at the exact moment of departure has no such
+    /// gap — confirmed against real hardware that a live "w SH0;"/"w
+    /// SH00XX;" round trip correctly reads/sets the width, so the bug was
+    /// this timing gap, not the raw CAT encoding itself.
+    private static func captureFilterWidth(leaving band: Band?, rigctld: RigctldClient) async {
+        guard let band, let width = try? await rigctld.getRawInt("SH0") else { return }
+        BandMemory.recordFilterWidthIndex(width, forBand: band.name)
+    }
+
+    /// The general-coverage segment (SW broadcast, aircraft, marine, etc.)
+    /// a frequency falls in, if any — `nil` whenever the frequency is
+    /// inside an amateur allocation, even one that geometrically overlaps a
+    /// segment (e.g. SW 41m vs. ham 40m), so normal ham-band operation
+    /// never gets reinterpreted as tuning into a broadcast segment.
+    private func generalCoverageSegment(at hz: Int) -> GeneralCoverageSegment? {
+        guard BandPlan.band(containing: hz) == nil else { return nil }
+        return GeneralCoverageSegments.segment(containing: hz)
+    }
+
+    private func privilegesChanged() {
+        let profile = LicensePrivilegeSettings.profile(for: privilegeChoice, custom: customPrivileges)
+        if profile != activePrivileges {
+            Self.connectionLogger.notice("License privileges: \(profile?.name ?? "off", privacy: .public)")
+            activePrivileges = profile
+        }
+        enforcePrivilegesWhileKeyed()
+    }
+
+    /// With license privileges on, the gate is checked again whenever the
+    /// rig state changes while the rig transmits, so tuning or switching
+    /// mode out of them (on the rig or in the app) mid-transmission
+    /// unkeys at once — like Enable Transmit going off. Only the license
+    /// guardrail does this; with it off, nothing changes from before.
+    /// The CW key (`StraightKeyController`) gets the same reason through
+    /// its own gate and disarms itself.
+    private func enforcePrivilegesWhileKeyed() {
+        let keyed = rigState.ptt || rigState.moxEnabled == true
+        guard keyed else {
+            privilegeUnkeySent = false
+            return
+        }
+        guard activePrivileges != nil, !privilegeUnkeySent,
+              let reason = TransmitGate.blockReason(transmitEnabled: true, state: rigState, privileges: activePrivileges)
+        else { return }
+        privilegeUnkeySent = true
+        Self.connectionLogger.notice("Unkeying: \(reason, privacy: .public)")
+        cwSender.stop()
+        send(.playCWTextMemory(slot: 0))
+        if rigState.moxEnabled == true { send(.setMox(false)) }
+        send(.setPTT(false))
+    }
+
+    /// Whether a command actually keys the transmitter (or, for
+    /// `.setPTT`/`.setMox`, keys it *on* — the "off" direction is always
+    /// safe and must never be blocked, including the force-unkey in
+    /// `transmitEnabled`'s `didSet` above). Deliberately an exhaustive
+    /// switch with no `default:`, same convention as `applyOptimistically`/
+    /// `CommandQueue.apply`'s `RigCommand` switches — so a future new
+    /// transmit-capable command forces a compile error here rather than
+    /// silently slipping past the `transmitEnabled` gate in `send(_:)`.
+    private static func isTransmitCapable(_ command: RigCommand) -> Bool {
+        switch command {
+        case .setPTT(let on): return on
+        case .setMox(let on): return on
+        case .playCWMessage, .triggerAntennaTune: return true
+        case .playCWTextMemory(let slot): return slot != 0
+        case .setFrequency, .setSecondaryFrequency, .swapActiveVFO, .setMode, .setSecondaryMode, .setBand,
+             .setPowerLevel, .setBreakIn, .setKeyer, .setCWSpeed, .setCWPitch, .setBreakInDelay,
+             .setCWSpot, .triggerZeroIn, .setMoniLevel, .selectCWMessageChannel,
+             .setCWMessageRecording, .setAtt, .setPreamp, .setTuner, .setDisplayContrast,
+             .setDisplayDimmer, .setDisplayLevel, .setDisplayPeak, .setDisplayMarker, .setMicGain,
+             .setAMCLevel, .setVox, .setVoxGain, .setVoxDelay, .setDNF, .setAGC, .setMicEQ,
+             .setProcLevel, .setNBLevel, .setDNRLevel, .setFilterWidth, .setIFShift, .setNotch, .setNotchFrequency, .setContour, .setContourFrequency, .setAPF, .setAPFOffset, .setNarrow, .setFilterSide, .setAntSelect, .setTXW, .setTXSide, .setSplit, .setSquelchType,
+             .setToneFreq, .setDCSCode, .setRepeaterShift, .setAPRSBeaconType, .setFMChannelStep,
+             .setMenuItem, .setVFOMemoryMode, .setMemoryChannel, .stepMemoryChannel,
+             .setSubMemoryChannel, .stepSubMemoryChannel, .recallMemoryChannel, .setMemoryScan,
+             .refreshMemoryList, .setAudioChannelsSwapped, .setTransmitEnabled:
+            return false
+        }
+    }
+
+    /// Whether a command stops a running memory scan first (see
+    /// `send(_:memoryScanStopped:)`), and if so whether the TX side the
+    /// scan moved is put back. nil: leave the scan running (settings, the
+    /// other side's own controls). `true`: stop and restore. `false`: stop
+    /// but keep the TX side — anything that transmits keys the side the
+    /// display shows as TX right now, never one switched behind the
+    /// operator's back. "F currVFO" (`.setFrequency`), "M currVFO"
+    /// (`.setMode`) and "CH" (`.stepMemoryChannel`) follow the rig's
+    /// active side, which a SUB scan made SUB, so they stop either side's
+    /// scan; restoring first lands them on MAIN as meant.
+    private static func memoryScanStop(for command: RigCommand, scanSide: FilterSide) -> Bool? {
+        if isTransmitCapable(command) { return false }
+        switch command {
+        case .setFrequency, .setMode, .setBand, .swapActiveVFO, .stepMemoryChannel:
+            return true
+        case .setVFOMemoryMode, .setMemoryChannel:
+            return scanSide == .main ? true : nil
+        case .setSecondaryFrequency, .setSecondaryMode, .setSubMemoryChannel, .stepSubMemoryChannel:
+            return scanSide == .sub ? true : nil
+        case .recallMemoryChannel(_, let sub):
+            return (sub ? FilterSide.sub : .main) == scanSide ? true : nil
+        default:
+            return nil
+        }
+    }
+
+    /// Mirrors a just-applied `RigCommand` straight into `rigState`, called
+    /// once `CommandQueue` confirms the write reached rigctld (see
+    /// `start()`'s `onCommandApplied` wiring, which also broadcasts the
+    /// result to WebSocket clients right after this returns — added
+    /// 2026-09-13, since until then only the regular poll tiers and
+    /// `refreshAfterEnteringMemory()` ever called `server.broadcast`, so an
+    /// iPad/remote client saw an app-triggered change only once the next
+    /// poll tick republished it, up to a full slow cycle later for a
+    /// slow-tier field). Without this function at all, the UI has no way to
+    /// reflect a change until that poll pickup — during which a control
+    /// bound straight to `rigState` would visibly snap back to the
+    /// pre-change value before "catching up". This only predicts the
+    /// outcome of a command that's already succeeded on the rig — a genuine
+    /// mismatch (e.g. the rig clamping an out-of-range value) self-corrects
+    /// at the next poll tick, same as any other externally-driven change
+    /// (e.g. the front panel).
+    private func applyOptimistically(_ command: RigCommand, appliedSide: FilterSide) {
+        commandGeneration += 1
+        // The filter fields hold the *selected* side's values. A filter
+        // command that was applied to the other receiver (e.g. the
+        // band-memory width replay always retunes MAIN, even while SUB is
+        // selected) must not overwrite them.
+        if command.isFilterSideCommand, appliedSide != rigState.activeFilterSide { return }
+        switch command {
+        case .setFrequency(let hz):
+            rigState.frequencyHz = hz
+            lastDistinctFrequencies = nil
+        case .setSecondaryFrequency(let hz):
+            rigState.secondaryFrequencyHz = hz
+            lastDistinctFrequencies = nil
+        case .swapActiveVFO:
+            // Whether a receiver's filter settings travel with the VFO
+            // contents or stay with the receiver, re-reading the selected
+            // side afterwards shows whatever the rig now has there.
+            let selectedSide = rigState.activeFilterSide
+            Task { await refreshFilterState(side: selectedSide, afterDelay: .milliseconds(400)) }
+            let freq = rigState.frequencyHz
+            rigState.frequencyHz = rigState.secondaryFrequencyHz ?? freq
+            rigState.secondaryFrequencyHz = freq
+            // In split both VFOs are MAIN's and share its mode, and
+            // `secondaryMode` is still the SUB receiver's — leave both.
+            if rigState.splitEnabled != true, let newMode = rigState.secondaryMode {
+                rigState.secondaryMode = rigState.mode
+                rigState.mode = newMode
+            }
+            // Hardware finding (2026-09-19): in single-receive display the
+            // app's `SV` doesn't move the rig's L/R audio (a front-panel swap
+            // does, and is caught by `trackExternalSwap`), so flipping here
+            // would put the audio under the wrong VFO. `nil` (FR not read
+            // yet) is treated as dual, the common case.
+            if rigState.singleReceive == true {
+                Self.audioRoutingLogger.notice("app swap command in single-receive display — audio channels left as is (swapped=\(self.audioChannelsSwapped, privacy: .public))")
+            } else {
+                setAudioChannelsSwapped(!audioChannelsSwapped, reason: "app swap command")
+            }
+            // The frequencies just exchanged on purpose — re-baseline so the
+            // next poll (which reads the already-swapped values) isn't
+            // mistaken for a second, front-panel swap.
+            if let sub = rigState.secondaryFrequencyHz, sub != rigState.frequencyHz {
+                lastDistinctFrequencies = (rigState.frequencyHz, sub)
+            } else {
+                lastDistinctFrequencies = nil
+            }
+            // Main now holds the other receiver's contents, so the
+            // remembered VFO is the wrong one to restore — even in
+            // single-receive display, where the audio isn't flipped above
+            // but `SV` still exchanges the VFOs. See `lastVFOState`.
+            lastVFOState = nil
+        case .setMode(let mode): rigState.mode = mode
+        case .setSecondaryMode(let mode): rigState.secondaryMode = mode
+        case .setPTT(let on):
+            rigState.ptt = on
+            if !on { endTXAudio() }
+        case .setBand: break // resolved into .setFrequency before reaching CommandQueue — see send(_:)
+        case .setPowerLevel(let level): rigState.powerLevel = level
+        case .setBreakIn(let on): rigState.breakIn = on
+        case .setKeyer(let on): rigState.keyerEnabled = on
+        case .setCWSpeed(let wpm): rigState.cwSpeedWpm = wpm
+        case .setCWPitch(let hz): rigState.cwPitchHz = hz
+        case .setBreakInDelay(let ms): rigState.bkDelayMs = ms
+        case .setCWSpot(let on): rigState.cwSpot = on
+        case .setMoniLevel(let level): rigState.moniLevel = level
+        case .setMox(let on): rigState.moxEnabled = on
+        case .setAtt(let on): rigState.attEnabled = on
+        case .setPreamp(let mode): rigState.preampMode = mode
+        case .setTuner(let on): rigState.tunerEnabled = on
+        case .setDisplayContrast(let value): rigState.displayContrast = value
+        case .setDisplayDimmer(let value): rigState.displayDimmer = value
+        case .setDisplayLevel(let dB): rigState.displayLevel = dB
+        case .setDisplayPeak(let level): rigState.displayPeak = level
+        case .setDisplayMarker(let on): rigState.displayMarker = on
+        case .setMicGain(let value): rigState.micGain = value
+        case .setAMCLevel(let value): rigState.amcLevel = value
+        case .setVox(let on): rigState.voxEnabled = on
+        case .setVoxGain(let value): rigState.voxGain = value
+        case .setVoxDelay(let ms): rigState.voxDelayMs = ms
+        case .setDNF(let on): rigState.dnfEnabled = on
+        case .setAGC(let mode): rigState.agcMode = mode
+        case .setMicEQ(let on): rigState.micEQEnabled = on
+        case .setProcLevel(let level): rigState.procLevel = level
+        case .setNBLevel(let level): rigState.nbLevel = level
+        case .setDNRLevel(let level): rigState.dnrLevel = level
+        case .setFilterWidth, .setIFShift, .setNotch, .setNotchFrequency, .setContour,
+             .setContourFrequency, .setAPF, .setAPFOffset, .setNarrow:
+            rigState.applyFilterCommand(command)
+        case .setFilterSide(let side):
+            // The filter fields hold the *selected* side's values, so drop
+            // the other side's until `refreshFilterState()` (kicked off by
+            // send(_:)) reads this one — never show them as this side's.
+            rigState.filterSide = side
+            rigState.clearFilterFields()
+            updateSubSpectrumCapture()
+        case .setAntSelect(let mode): rigState.antSelect = mode
+        case .setTXW(let on): rigState.txwEnabled = on
+        case .setTXSide(let side): rigState.txSide = side
+        case .setSplit(let on): rigState.splitEnabled = on
+        case .setSquelchType(let mode): rigState.squelchType = mode
+        case .setToneFreq(let index): rigState.ctcssToneIndex = index
+        case .setDCSCode(let index): rigState.dcsCodeIndex = index
+        case .setRepeaterShift(let mode): rigState.repeaterShiftMode = mode
+        case .setAPRSBeaconType(let mode): rigState.aprsBeaconType = mode
+        case .setFMChannelStep(let step): rigState.fmChannelStep = step
+        case .setVFOMemoryMode(let memory):
+            rigState.vfoMemoryMode = memory ? .memory : .vfo
+            if memory { Task { await refreshAfterEnteringMemory() } }
+        case .setMemoryChannel, .stepMemoryChannel:
+            // No optimistic value: the rig ignores a blank channel (and
+            // "CH" skips them), so the requested/±1 number would show a
+            // channel the rig never went to. The command has already been
+            // applied by the time this runs, so read back what it did.
+            Task { await refreshMemoryChannel(sub: false) }
+        case .setSubMemoryChannel, .stepSubMemoryChannel:
+            Task { await refreshMemoryChannel(sub: true) }
+        case .setMemoryScan(let direction, let side):
+            if direction == .off {
+                let stoppedSide = activeMemoryScanSide
+                rigState.memoryScan = .stopped
+                Task { await publishMemoryScanStop(.stopped, side: stoppedSide) }
+            } else {
+                lastMemoryScanDirection = direction
+                memoryScanStartedAt = .now
+                memoryScanStarts += 1
+                rigState.memoryScan = .scanning
+                rigState.memoryScanSide = side
+                // The rig moves its TX/RX side to the scanning side — see
+                // `send(_:memoryScanStopped:)`.
+                rigState.txSide = side
+            }
+        case .recallMemoryChannel(_, let sub):
+            // Like the channel commands: read back what the rig did rather
+            // than guess (a blank channel is ignored). For MAIN that's
+            // `refreshAfterEnteringMemory`, which also reads the recalled
+            // frequency/mode and leaves `lastVFOState` alone, so V/M still
+            // returns to the VFO.
+            if sub {
+                rigState.subVfoMemoryMode = .memory
+                Task { await refreshMemoryChannel(sub: true) }
+            } else {
+                rigState.vfoMemoryMode = .memory
+                Task { await refreshAfterEnteringMemory() }
+            }
+        // Momentary triggers, and CW MESSAGE record/select/play (whose
+        // `cwMessageStatus` doesn't map 1:1 from any single command — see
+        // RigState.cwMessageStatus) have no direct optimistic value; left
+        // to the next poll, same as before.
+        case .triggerZeroIn, .triggerAntennaTune, .selectCWMessageChannel,
+             .setCWMessageRecording, .playCWMessage, .playCWTextMemory, .setMenuItem,
+             .refreshMemoryList, .setAudioChannelsSwapped, .setTransmitEnabled:
+            break
+        }
+    }
+
+    /// One poll tick while the rig's memory scan runs, in place of the fast
+    /// and slow tiers: "RI0", every `memoryScanTickInterval`. The rig
+    /// steps ~10 channels a second (measured 2026-10-06), so the regular
+    /// tiers' frequency/channel reads would only catch a random channel
+    /// each; what matters is noticing the moment it pauses on a busy
+    /// channel (or stops), then `publishMemoryScanStop` reads that channel.
+    /// The side that isn't scanning is kept live too: during a SUB scan,
+    /// MAIN's frequency and mode ("FA"/"MD0", explicitly MAIN — the scan
+    /// made SUB the active side); during a MAIN scan, SUB's memory channel
+    /// ("MC1", then that channel's "MR" entry when it changed — `f Sub`
+    /// read wrong frequencies while MAIN sat on 6 m channels in the
+    /// 2026-10-06 probes). The latter also catches up a SUB box whose
+    /// `publishMemoryScanStop` was dropped because this MAIN scan's start
+    /// landed mid-read.
+    private func memoryScanTick() async throws {
+        let side = activeMemoryScanSide
+        let info: RadioInformation?
+        do {
+            info = try await rigctld.getRadioInformation()
+        } catch let error as RigctldError where error == .connectionLost || error == .notConnected {
+            throw error
+        } catch {
+            info = nil
+        }
+        guard let info, rigState.memoryScan == .scanning else { return }
+        if info.scan == .scanning {
+            var changed = rigState.ptt != info.isTransmitting
+            rigState.ptt = info.isTransmitting
+            if side == .sub {
+                let generationAtStart = commandGeneration
+                let hz = try? await rigctld.getFrequency()
+                let mode = (try? await rigctld.getModeCode(p1: 0))
+                    .flatMap { $0 }
+                    .flatMap(RigMode.init(catModeCode:))
+                if commandGeneration == generationAtStart, rigState.memoryScan == .scanning {
+                    if let hz, hz != rigState.frequencyHz {
+                        rigState.frequencyHz = hz
+                        changed = true
+                    }
+                    if let mode, mode != rigState.mode {
+                        rigState.mode = mode
+                        changed = true
+                    }
+                }
+            }
+            if side == .main, rigState.subVfoMemoryMode == .memory {
+                let generationAtStart = commandGeneration
+                if let channel = try? await rigctld.getRawInt("MC1"), channel != rigState.subMemoryChannel,
+                   let entry = try? await rigctld.readMemoryChannel(channel),
+                   commandGeneration == generationAtStart {
+                    rigState.subMemoryChannel = channel
+                    rigState.subMemoryChannelTag = entry.tag
+                    rigState.secondaryFrequencyHz = entry.frequencyHz
+                    rigState.secondaryMode = entry.modeCode.first.flatMap(RigMode.init(catModeCode:)) ?? rigState.secondaryMode
+                    changed = true
+                }
+            }
+            if changed { await server.broadcast(rigState) }
+            return
+        }
+        // Right after the app starts a scan, a "stopped" read may predate
+        // the rig acting on "SC" — don't take it as the scan ending.
+        if info.scan == .stopped, let memoryScanStartedAt, ContinuousClock.now - memoryScanStartedAt < .seconds(1) {
+            return
+        }
+        if info.scan == .stopped {
+            // Stopped without the app (front panel): leave the TX side as
+            // the rig has it, like a front-panel scan does.
+            txSideBeforeMemoryScan = nil
+        }
+        await publishMemoryScanStop(info.scan, side: side)
+    }
+
+    /// Reads and publishes the channel a memory scan paused or stopped on,
+    /// straight away rather than at the next fast tick. The channel number
+    /// is read again after the rest and the set retried if it changed: the
+    /// scan may have moved on between the reads (a scan can resume from a
+    /// pause at any time), as they are when a command lands mid-read. If
+    /// nothing consistent comes back, `rigState.memoryScan` is left as it was, so the scan tick (or the
+    /// next fast tick) tries again. SUB's frequency/mode come from the
+    /// channel's own "MR" entry rather than "FB"/`f Sub`, which read 0 or a
+    /// wrong frequency in the 2026-10-06 probes (with SUB active, or MAIN on
+    /// a 6 m channel).
+    private func publishMemoryScanStop(_ state: MemoryScanState, side: FilterSide) async {
+        var generationAtStart = commandGeneration
+        let startsAtStart = memoryScanStarts
+        for _ in 0..<4 {
+            // A Skip (or a new scan) since: this pause is over.
+            guard memoryScanStarts == startsAtStart else { return }
+            if side == .sub {
+                guard let channel = try? await rigctld.getRawInt("MC1"),
+                      let entry = try? await rigctld.readMemoryChannel(channel) else { continue }
+                guard (try? await rigctld.getRawInt("MC1")) == channel else { continue }
+                // A command landed mid-read (e.g. the TX-side restore right
+                // behind the app's own stop): read again rather than give
+                // up, or the box keeps the channel/tag from before the scan
+                // until the slow tier's next pass (~10 s).
+                guard commandGeneration == generationAtStart else {
+                    generationAtStart = commandGeneration
+                    continue
+                }
+                commandGeneration += 1
+                rigState.memoryScan = state
+                rigState.secondaryFrequencyHz = entry.frequencyHz
+                rigState.secondaryMode = entry.modeCode.first.flatMap(RigMode.init(catModeCode:)) ?? rigState.secondaryMode
+                rigState.subMemoryChannel = channel
+                rigState.subMemoryChannelTag = entry.tag
+                await server.broadcast(rigState)
+                return
+            }
+            guard let channel = try? await rigctld.getRawInt("MC0"),
+                  let hz = try? await rigctld.getFrequency() else { continue }
+            let mode = (try? await rigctld.getModeCode(p1: 0))
+                .flatMap { $0 }
+                .flatMap(RigMode.init(catModeCode:))
+            guard (try? await rigctld.getRawInt("MC0")) == channel else { continue }
+            let tag = try? await rigctld.getMemoryChannelTag(channel: channel)
+            guard commandGeneration == generationAtStart else {
+                generationAtStart = commandGeneration
+                continue
+            }
+            commandGeneration += 1
+            rigState.memoryScan = state
+            rigState.frequencyHz = hz
+            rigState.mode = mode ?? rigState.mode
+            rigState.memoryChannel = channel
+            rigState.memoryChannelTag = tag
+            await server.broadcast(rigState)
+            return
+        }
+    }
+
+    /// Fast path for the one transition the hub can't predict optimistically:
+    /// entering Memory mode recalls a channel whose contents the app doesn't
+    /// know until it reads them. Leaving that to the regular poll took ~10s
+    /// on real hardware (2026-09-08): the cycle in flight when the command
+    /// lands is discarded whole (`commandGeneration` guard), the next one
+    /// only publishes at the end of its ~30 reads, and in C4FM every cycle
+    /// also eats `GT0`/`PR1`'s 1s timeouts. Leaving Memory mode has no such
+    /// lag because `send(_:)` replays `lastVFOState` optimistically.
+    ///
+    /// Reads just the fields the recall changes, retrying briefly until the
+    /// rig has actually switched (frequency differs from the parked VFO's —
+    /// the recall isn't instant), then publishes them directly. Bumps
+    /// `commandGeneration` so a poll cycle that captured its frequency
+    /// before the recall can't overwrite these with stale values at its end.
+    private func refreshAfterEnteringMemory() async {
+        let parkedHz = lastVFOState?.hz
+        let maxAttempts = 10
+        for attempt in 0..<maxAttempts {
+            if attempt > 0 { try? await Task.sleep(for: .milliseconds(300)) }
+            guard rigState.vfoMemoryMode == .memory else { return }
+            guard let hz = try? await rigctld.getFrequency() else { continue }
+            // A channel programmed to the parked frequency is legitimate —
+            // accept it on the last attempt rather than spinning forever.
+            if hz == parkedHz && attempt < maxAttempts - 1 { continue }
+            let modeName = try? await rigctld.getMode().mode
+            // Always checked, not just when `modeName` came back nil — see
+            // `refreshFastTier()`'s `isC4FM` doc comment for why a
+            // successful hamlib mode string can't be trusted on its own.
+            let isC4FM = (try? await rigctld.isActiveModeC4FM()) ?? false
+            let channel = try? await rigctld.getRawInt("MC0")
+            var tag: String?
+            if let channel { tag = try? await rigctld.getMemoryChannelTag(channel: channel) }
+            guard rigState.vfoMemoryMode == .memory else { return }
+            commandGeneration += 1
+            rigState.frequencyHz = hz
+            rigState.mode = isC4FM ? .c4fm : (modeName.flatMap(RigMode.init(rawValue:)) ?? rigState.mode)
+            rigState.memoryChannel = channel
+            rigState.memoryChannelTag = tag
+            await server.broadcast(rigState)
+            return
+        }
+    }
+
+    /// Reads one side's memory channel and tag right after a channel
+    /// command lands, instead of guessing — see `applyOptimistically`.
+    /// Also the only prompt update SUB gets, whose "MC1" is otherwise read
+    /// only in the slow tier.
+    private func refreshMemoryChannel(sub: Bool) async {
+        guard let channel = try? await rigctld.getRawInt(sub ? "MC1" : "MC0") else { return }
+        let tag = try? await rigctld.getMemoryChannelTag(channel: channel)
+        guard (sub ? rigState.subVfoMemoryMode : rigState.vfoMemoryMode) == .memory else { return }
+        commandGeneration += 1
+        if sub {
+            rigState.subMemoryChannel = channel
+            rigState.subMemoryChannelTag = tag
+        } else {
+            rigState.memoryChannel = channel
+            rigState.memoryChannelTag = tag
+        }
+        await server.broadcast(rigState)
+    }
+
+    /// Reads what a split write changes right away instead of waiting for
+    /// the slow tier: SPLIT, the TX side, the display mode ("ST1" turns the
+    /// dual display off, "ST0" back on) and "FB", which switches between
+    /// the TX VFO and the SUB receiver (see `RigState.splitEnabled`) — so
+    /// the left box, the tags and the TX gate follow at once.
+    private func refreshAfterSplit() async {
+        try? await Task.sleep(for: .milliseconds(300))
+        let split = try? await rigctld.getRawBool("ST")
+        let txSide = (try? await rigctld.getRawDigit("FT")).flatMap(FilterSide.init(rawValue:))
+        let single = (try? await rigctld.getRawInt("FR")).map { $0 == 1 }
+        let sub = try? await rigctld.getRawInt("FB")
+        Self.connectionLogger.notice("After split write: ST=\(split.map { $0 ? "1" : "0" } ?? "?", privacy: .public) FT=\(txSide.map { "\($0.rawValue)" } ?? "?", privacy: .public) FR single=\(single.map { "\($0)" } ?? "?", privacy: .public) FB=\(sub.map { "\($0)" } ?? "?", privacy: .public)")
+        guard split != nil || txSide != nil || single != nil || sub != nil else { return }
+        commandGeneration += 1
+        if let split { rigState.splitEnabled = split }
+        if let txSide { rigState.txSide = txSide }
+        if let single { rigState.singleReceive = single }
+        if let sub, sub > 0 {
+            rigState.secondaryFrequencyHz = sub
+            lastDistinctFrequencies = nil
+        }
+        await server.broadcast(rigState)
+        // As in the slow tier's "FR" read: no SUB filter side without the
+        // dual display.
+        if single == true, rigState.activeFilterSide == .sub { send(.setFilterSide(.main)) }
+    }
+
+    /// Fast path after a NARROW write: the rig re-filters to the mode's
+    /// preset narrow width (or back), changing "SH0"'s answer, and the
+    /// Width readout would otherwise sit on the old value until the slow
+    /// tier's next pass (~10s). Same shape as `refreshAfterEnteringMemory`:
+    /// give the rig a moment, read just the field that changed, bump
+    /// `commandGeneration` so a poll cycle that captured the pre-NAR width
+    /// is discarded rather than overwriting this at its end, publish.
+    private func refreshWidthAfterNarrow() async {
+        let side = rigState.activeFilterSide
+        let mode = rigState.filterMode
+        for attempt in 0..<2 {
+            try? await Task.sleep(for: .milliseconds(300))
+            guard let width = try? await rigctld.getRawInt("SH\(side.p1)") else {
+                if attempt == 0 { continue } else { return }
+            }
+            // In SSB/CW/RTTY/DATA "SH0" doesn't move with NARROW — the
+            // narrowed bandwidth is the mode's NAR WIDTH preset — so refresh
+            // that too, for the Filter Function Display (see
+            // NarrowWidthPreset / RigState.narrowWidthHz).
+            var presetHz: Int?
+            if let item = NarrowWidthPreset.item(for: mode),
+               let raw = try? await rigctld.getMenuItem(p1: item.p1, p2: item.p2, p3: item.p3) {
+                presetHz = NarrowWidthPreset.hz(forRawValue: raw, mode: mode)
+            }
+            // The user may have switched sides while the reads were in
+            // flight — don't publish another side's width as this one's.
+            guard rigState.activeFilterSide == side else { return }
+            commandGeneration += 1
+            rigState.filterWidthIndex = width
+            if let presetHz { rigState.narrowWidthHz = presetHz }
+            await server.broadcast(rigState)
+            return
+        }
+    }
+
+    /// Fast path: re-reads the selected receiver's filter state right after
+    /// something changed which side's values are showing (a MAIN/SUB
+    /// switch, or a VFO swap) instead of waiting for the next slow tier
+    /// (~10s). Same shape as `refreshAfterEnteringMemory`: give the queue a
+    /// moment, read, bump `commandGeneration` so a poll cycle that captured
+    /// the old values is discarded rather than overwriting these, publish.
+    /// If the user switched sides again while the reads were in flight, the
+    /// result is dropped — that switch has its own refresh.
+    private func refreshFilterState(side: FilterSide, afterDelay delay: Duration = .milliseconds(200)) async {
+        try? await Task.sleep(for: delay)
+        // The mode is read after the delay: for a swap it has just changed
+        // (optimistically), and the NAR WIDTH preset lookup wants the
+        // receiver's *current* mode.
+        let mode = rigState.filterMode(for: side)
+        let snapshot = await rigctld.readFilterState(side: side, mode: mode)
+        guard rigState.activeFilterSide == side, rigState.filterMode(for: side) == mode else { return }
+        commandGeneration += 1
+        rigState.applyFilterSnapshot(snapshot, mode: mode)
+        await server.broadcast(rigState)
+    }
+
+    /// The Sub-channel spectrum (the Filter Function Display's overlay while
+    /// SUB is selected) is only computed while it can actually be shown:
+    /// SUB selected and the scope column not Off.
+    private func updateSubSpectrumCapture() {
+        audioCapture.setSubSpectrumEnabled(rigState.activeFilterSide == .sub && ScopeDisplayMode.persisted != .off)
+    }
+
+    /// On-demand read for one Deep Settings item (see DeepSettingsCatalog),
+    /// called only while a Deep Settings tab is open, here or on a remote
+    /// client (`MenuItemReadRequest`, answered by `RigWebSocketServer`) —
+    /// bypasses
+    /// `CommandQueue` directly, the same way the poll loop's getters do.
+    /// These ~300 rarely-changed settings deliberately aren't part of the
+    /// 500ms poll/broadcast cycle alongside VFO/SWR/PTT; they're fetched
+    /// straight into the settings screen's own state instead of `rigState`.
+    func readMenuItem(p1: Int, p2: Int, p3: Int) async -> String? {
+        try? await rigctld.getMenuItem(p1: p1, p2: p2, p3: p3)
+    }
+
+    private static let zoomRange: ClosedRange<Float> = 0.25...4
+    private static let zoomStepFactor: Float = 1.25
+
+    /// Drives the up/down arrows next to the waterfall/oscilloscope
+    /// display — `@Published` here so `ContentView` can show the current
+    /// level, and mirrored into `audioCapture` (which can't read
+    /// `@Published` state directly — see `AudioCaptureEngine`'s
+    /// `waterfallZoom` doc comment) so `process()` picks it up on the next
+    /// buffer.
+    func stepWaterfallZoom(up: Bool) {
+        waterfallZoom = Self.steppedZoom(waterfallZoom, up: up)
+        audioCapture.setWaterfallZoom(waterfallZoom)
+    }
+
+    func stepOscilloscopeZoom(up: Bool) {
+        oscilloscopeZoom = Self.steppedZoom(oscilloscopeZoom, up: up)
+        audioCapture.setOscilloscopeZoom(oscilloscopeZoom)
+    }
+
+    private static func steppedZoom(_ current: Float, up: Bool) -> Float {
+        let factor = up ? zoomStepFactor : 1 / zoomStepFactor
+        return min(zoomRange.upperBound, max(zoomRange.lowerBound, current * factor))
+    }
+
+    /// Called by `ContentView` whenever the Waterfall/Oscilloscope/Off
+    /// selection changes: "Off" tells `AudioCaptureEngine` to skip FFT and
+    /// frame rendering entirely (see its `displayEnabled`), not merely to
+    /// hide the result. Raw audio keeps flowing to APRS/playback/relay.
+    func setScopeDisplayMode(_ mode: ScopeDisplayMode) {
+        audioCapture.setDisplayEnabled(mode != .off)
+        audioCapture.setSubSpectrumEnabled(rigState.activeFilterSide == .sub && mode != .off)
+    }
+
+    /// Doesn't stop/start `mainAudioPlayback` itself — muting just gates
+    /// whether `onAudioSamples` feeds it (see above), so un-muting resumes
+    /// instantly with whatever's currently playing rather than needing the
+    /// engine to spin back up. Renamed from `toggleAudioMuted()`
+    /// (2026-09-18) — see `toggleSubAudioMuted()` below.
+    func toggleMainAudioMuted() {
+        mainMutedByOverride = false  // the user's call from here on
+        isMainAudioMuted.toggle()
+        AudioPlaybackSettings.isMuted = isMainAudioMuted
+    }
+
+    /// Called by the WebSDR and Local SDR windows whenever their receiver
+    /// becomes audible (connected and not muted there) or stops being so,
+    /// so the rig's Main audio and the receiver's don't play over each
+    /// other. Each window is its own holder, so both can hold it at once.
+    /// An `active` call mutes Main if it isn't muted already (as the
+    /// WebSDR-only version did on every call); Main is unmuted only once no
+    /// window holds it, and only if this is what muted it (see
+    /// `mainMutedByOverride`). Gates Mac playback only, like the Mute
+    /// button — the iPad relay, APRS, FT8 and recording are unaffected.
+    func setMainAudioOverride(_ holder: MainAudioOverride, active: Bool) {
+        if active {
+            mainAudioOverrides.insert(holder)
+            guard !isMainAudioMuted else { return }
+            isMainAudioMuted = true
+            mainMutedByOverride = true
+        } else {
+            mainAudioOverrides.remove(holder)
+            guard mainAudioOverrides.isEmpty, mainMutedByOverride else { return }
+            mainMutedByOverride = false
+            isMainAudioMuted = false
+        }
+        AudioPlaybackSettings.isMuted = isMainAudioMuted
+    }
+
+    /// Sub-channel counterpart — same "gate the feed, don't stop/start the
+    /// engine" shape as `toggleMainAudioMuted()`.
+    func toggleSubAudioMuted() {
+        isSubAudioMuted.toggle()
+        AudioPlaybackSettings.subIsMuted = isSubAudioMuted
+    }
+
+    /// The manual override for `audioChannelsSwapped` — for when the tracked
+    /// state has drifted from the rig's real one (e.g. a swap made on the
+    /// front panel while the app wasn't running, or one the heuristic in
+    /// `trackExternalSwap` couldn't see).
+    func toggleAudioChannelsSwapped() {
+        setAudioChannelsSwapped(!audioChannelsSwapped, reason: "manual toggle")
+    }
+
+    private func setAudioChannelsSwapped(_ swapped: Bool, reason: String) {
+        guard swapped != audioChannelsSwapped else { return }
+        audioChannelsSwapped = swapped
+        AudioPlaybackSettings.channelsSwapped = swapped
+        audioCapture.setChannelsSwapped(swapped)
+        rigState.audioChannelsSwapped = swapped
+        let state = rigState
+        Task { await server.broadcast(state) }
+        Self.audioRoutingLogger.notice("audio channels swapped=\(swapped, privacy: .public) (\(reason, privacy: .public)) — main \(self.rigState.frequencyHz, privacy: .public) Hz, sub \(self.rigState.secondaryFrequencyHz.map(String.init) ?? "unknown", privacy: .public) Hz")
+    }
+
+    /// Notices a swap nobody told the app about (the rig's front-panel swap
+    /// button): both polled frequencies exchange at once, relative to the
+    /// last pair where they differed. Called from `refreshFastTier` with the
+    /// freshly-read values, before they're published. `sub` is `nil` when
+    /// that read failed — then there's nothing to compare, and the baseline
+    /// is left alone. Runs in Memory mode too: a swap between a VFO and a
+    /// memory channel keeps the L/R audio with the physical receiver just
+    /// like a VFO↔VFO one (hardware-confirmed 2026-09-28), and it used to
+    /// be skipped here, leaving Main playing the other side's audio.
+    /// Stepping memory channels changes only Main, so it can't look like
+    /// an exchange of both values.
+    private func trackExternalSwap(main: Int, sub: Int?) {
+        // In split "FB" is MAIN's TX VFO, not the SUB receiver, so an
+        // exchange there is MAIN's A/B swap and the L/R audio stays put.
+        guard rigState.splitEnabled != true else {
+            lastDistinctFrequencies = nil
+            return
+        }
+        guard let sub, sub != main else { return }
+        if let last = lastDistinctFrequencies, main == last.sub, sub == last.main {
+            setAudioChannelsSwapped(!audioChannelsSwapped, reason: "front-panel swap detected (\(last.main)/\(last.sub) → \(main)/\(sub) Hz)")
+            let selectedSide = rigState.activeFilterSide
+            Task { await refreshFilterState(side: selectedSide, afterDelay: .milliseconds(400)) }
+            // Same as the app swap in `applyOptimistically`. If the new
+            // Main is in VFO mode, this same poll relearns it right after.
+            lastVFOState = nil
+        }
+        lastDistinctFrequencies = (main, sub)
+    }
+
+    /// macOS App Nap throttles background GCD/dispatch scheduling for a
+    /// process with no visible, non-occluded window — which the APRS
+    /// pipeline leans on at every stage (`AudioCaptureEngine`'s per-buffer
+    /// main-actor hop, `APRSDecoder`'s own serial queue, the final hop
+    /// back to `APRSStore`). Under App Nap, none of that stops outright,
+    /// but it can be delayed long enough to look like decoding "isn't
+    /// running" — and opening a new window (e.g. S.LIST) is exactly the
+    /// kind of thing that pulls a process out of App Nap, which would
+    /// explain decoding appearing to depend on a window being open.
+    /// `ProcessInfo.beginActivity` opts out for as long as the token is
+    /// held, matching `audioCapture`'s own start/stop lifecycle — this
+    /// isn't APRS-specific (the waterfall/scope hop the same way), but
+    /// APRS is the first feature in this app where a multi-second delay
+    /// is actually noticeable rather than just a dropped animation frame.
+    private func startAudio() {
+        audioCapture.start(deviceUID: AudioInputSettings.deviceUID)
+        let outputDeviceID = AudioOutputDeviceLister.deviceID(forUID: AudioOutputSettings.deviceUID)
+        mainAudioPlayback.setOutputDevice(outputDeviceID)
+        mainAudioPlayback.start()
+        // Unconditional in both modes now (2026-09-18) — Local
+        // capture can deliver a genuine Sub channel too, when the
+        // selected input device is stereo (see
+        // `AudioCaptureEngine.process(buffer:bitmap:gain:)`). If
+        // it isn't, `onSubChannelSamples` simply never fires and
+        // this sits idle — harmless, and simpler than tracking
+        // "is the current device actually stereo" as its own piece
+        // of state just to decide whether to start it.
+        subAudioPlayback.setOutputDevice(outputDeviceID)
+        subAudioPlayback.start()
+    }
+
+    /// After a full wake, rebuilds the audio engines if the rig is
+    /// connected. A reconnect during a lid-closed DarkWake starts them
+    /// with no audio hardware, so they stay stopped (see
+    /// `AudioPlaybackEngine.start()`) until something starts them again.
+    private func restartAudioAfterWake() {
+        guard connectionState == .connected else { return }
+        Self.connectionLogger.notice("wake: restarting audio")
+        audioCapture.stop()
+        mainAudioPlayback.stop()
+        subAudioPlayback.stop()
+        scopeFrames.clear()
+        startAudio()
+    }
+
+    private func beginBackgroundActivity() {
+        guard backgroundActivityToken == nil else { return }
+        backgroundActivityToken = ProcessInfo.processInfo.beginActivity(
+            options: [.userInitiated, .idleSystemSleepDisabled],
+            reason: "Live rig audio capture and APRS decoding"
+        )
+    }
+
+    private func endBackgroundActivity() {
+        guard let token = backgroundActivityToken else { return }
+        ProcessInfo.processInfo.endActivity(token)
+        backgroundActivityToken = nil
+    }
+
+    private func connectRigctld(isFreshStart: Bool = false) {
+        guard runLoopTask == nil else { return }
+        runLoopTask = Task { await runConnectionLoop(isFreshStart: isFreshStart) }
+    }
+
+    private func disconnectRigctld() {
+        runLoopTask?.cancel()
+        runLoopTask = nil
+        connectionState = .disconnected
+        audioCapture.stop()
+        mainAudioPlayback.stop()
+        subAudioPlayback.stop()
+        endBackgroundActivity()
+        scopeFrames.clear()
+        wpsdMonitor.stop()
+        rigState.c4fmCallsign = nil
+        rigState.c4fmReflector = nil
+        Task { await rigctld.disconnect() }
+    }
+
+    /// `isFreshStart` covers just-spawned rigctld's real startup race
+    /// (opening the serial device + binding its TCP listener takes longer
+    /// than the instant `Process.run()` returns in) — while it's true and
+    /// still within `startupGracePeriod`, a failed attempt retries quickly
+    /// via `startupRetryInterval` without ever setting `connectionState` to
+    /// `.failed`, so a normal startup never visibly flashes an error. Once
+    /// the grace period elapses (or this is a later reconnect, e.g. the rig
+    /// was unplugged or rigctld crashed after connecting fine once), a
+    /// failure surfaces immediately and retries revert to the slower
+    /// `reconnectDelay`, exactly as before this fix.
+    private func runConnectionLoop(isFreshStart: Bool) async {
+        var isFreshStart = isFreshStart
+        let startupDeadline = ContinuousClock.now + startupGracePeriod
+        while !Task.isCancelled {
+            // A retry keeps showing why the last attempt failed, rather
+            // than flashing "connecting" every few seconds over it.
+            if case .failed = connectionState {} else { connectionState = .connecting }
+            do {
+                try await rigctld.connect()
+                // rigctld is up; `.connected` waits for the rig to answer
+                // (`pollLoop`). A rig already reported silent stays so.
+                if connectionState != .failed(.rigNotResponding) { connectionState = .connecting }
+                startAudio()
+                beginBackgroundActivity()
+                try await pollLoop()
+            } catch {
+                // A cancelled attempt (e.g. the user switched rigctld off
+                // mid-connect) still throws here even with the cancellation
+                // handler in RigctldClient.connect() — don't let its error
+                // clobber the .disconnected state disconnectRigctld() already set.
+                if !Task.isCancelled {
+                    if isFreshStart && ContinuousClock.now < startupDeadline {
+                        // Still within the post-spawn grace window — treat
+                        // this as rigctld not being ready yet, not a real
+                        // failure worth surfacing.
+                    } else {
+                        isFreshStart = false
+                        audioCapture.stop()
+                        mainAudioPlayback.stop()
+                        subAudioPlayback.stop()
+                        endBackgroundActivity()
+                        scopeFrames.clear()
+                        let problem = RigLinkProblem(error: error)
+                        Self.connectionLogger.error("rigctld connection loop failed: \(String(describing: error), privacy: .public) (\(String(describing: problem), privacy: .public))")
+                        connectionState = .failed(problem)
+                    }
+                }
+            }
+            guard !Task.isCancelled else { return }
+            try? await Task.sleep(for: isFreshStart ? startupRetryInterval : reconnectDelay)
+        }
+    }
+
+    /// One tick = the fast tier, then the next `slowTierReadsPerTick`
+    /// slow-tier reads, then whatever is left of `pollInterval` (at least
+    /// `minimumPollGap`). Until 2026-09-29 the whole slow tier (~48 reads,
+    /// ~2.8s over the Pi link) ran as one block every 6th tick and the
+    /// full `pollInterval` was slept *after* each tick: measured on the rig
+    /// that meant a VFO update every ~1.9s, and a ~4.7s freeze whenever the
+    /// slow tier ran. Spreading it keeps each tick short and even.
+    private func pollLoop() async throws {
+        // Run one complete slow cycle right after the first fast tick of
+        // every (re)connection instead of waiting for it to trickle in.
+        // Without this every menu/settings field (filter width, NB, DNR,
+        // AGC, VOX...) sits at "—" for a full slow cycle, which reads as the
+        // app not reading them at all. Also right on a reconnect: anything
+        // could have changed while the link was down.
+        var primeSlowTier = true
+        var rigResponse = RigResponseMonitor()
+        let lane = Task { await frequencyLane() }
+        defer { lane.cancel() }
+        while !Task.isCancelled {
+            if rigState.memoryScan == .scanning {
+                try await timed("scan") { try await memoryScanTick() }
+                try await Task.sleep(for: memoryScanTickInterval)
+                continue
+            }
+            let tickStart = ContinuousClock.now
+            let answered = try await timed("fast") { try await refreshFastTier() }
+            switch rigResponse.record(answered: answered) {
+            case .answering:
+                if connectionState == .failed(.rigNotResponding) {
+                    Self.connectionLogger.notice("the rig is answering again")
+                    // Anything could have changed while it was gone.
+                    primeSlowTier = true
+                }
+                connectionState = .connected
+            case .notResponding:
+                Self.connectionLogger.error("rigctld is up, but the rig hasn't answered \(rigResponse.threshold) main-frequency reads in a row")
+                connectionState = .failed(.rigNotResponding)
+            case nil:
+                break
+            }
+            guard answered else {
+                // Every other read would wait out its own timeout too; just
+                // keep asking for the frequency until the rig is back.
+                try await Task.sleep(for: pollInterval)
+                continue
+            }
+            if primeSlowTier {
+                primeSlowTier = false
+                slowTierCursor = 0
+                await timed("slow prime") { await runSlowTierSteps(readBudget: nil) }
+            } else {
+                await timed("slow") { await runSlowTierSteps(readBudget: slowTierReadsPerTick) }
+            }
+            let elapsed = ContinuousClock.now - tickStart
+            try await Task.sleep(for: max(pollInterval - elapsed, minimumPollGap))
+        }
+    }
+
+    /// Reads MAIN's frequency on its own, several times a second, so a turn
+    /// of the rig's dial shows at once instead of waiting for the fast tier
+    /// to come round again. Runs beside `pollLoop`: `RigctldClient`'s
+    /// round-trip lock is first come, first served, so these reads slot in
+    /// between the tiers' reads. Publishes only a change, since every
+    /// `rigState` write re-renders the Mac's whole window. Failures are
+    /// ignored: the fast tier's own "FA" read is what notices a lost link.
+    ///
+    /// VFO mode only, and not around a memory scan: a memory channel's
+    /// frequency has to appear together with its channel number and tag,
+    /// which the fast tier and `publishMemoryScanStop` read as a set.
+    ///
+    /// Sleeps at least twice as long as a read took, so a rigctld still on
+    /// hamlib's 50 ms post_write_delay (an adopted one, or a Pi that hasn't
+    /// got `-C post_write_delay=10`) gives up a third of its time at most.
+    private func frequencyLane() async {
+        while !Task.isCancelled {
+            let start = ContinuousClock.now
+            if connectionState == .connected, rigState.vfoMemoryMode != .memory, !isMemoryScanActive {
+                let generation = commandGeneration
+                frequencyReadSerial += 1
+                let read = frequencyReadSerial
+                // Same guard as the fast tier's: a command that landed during
+                // the read has already published something newer.
+                if let hz = try? await rigctld.getFrequency(),
+                   commandGeneration == generation,
+                   rigState.vfoMemoryMode != .memory, !isMemoryScanActive,
+                   read > publishedFrequencyRead {
+                    publishedFrequencyRead = read
+                    if hz != rigState.frequencyHz {
+                        rigState.frequencyHz = hz
+                        await server.broadcast(rigState)
+                        Self.pollTimingLogger.debug("frequency lane published \(hz, privacy: .public)")
+                    }
+                }
+            }
+            // Capped: one read can take seconds (the first after connecting,
+            // or a timeout), and that says nothing about the next one.
+            let readTime = ContinuousClock.now - start
+            try? await Task.sleep(for: min(max(frequencyLaneInterval, readTime * 2), .milliseconds(500)))
+        }
+    }
+
+    @discardableResult
+    private func timed<T>(_ label: String, _ body: () async throws -> T) async rethrows -> T {
+        let start = ContinuousClock.now
+        let readsBefore = await rigctld.roundTripCount
+        let result = try await body()
+        let ms = (ContinuousClock.now - start).milliseconds
+        let reads = await rigctld.roundTripCount - readsBefore
+        Self.pollTimingLogger.debug("\(label, privacy: .public) \(ms, privacy: .public) ms, \(reads, privacy: .public) reads")
+        return result
+    }
+
+    /// Fast, VFO-critical half of the poll cycle — runs every `pollInterval`
+    /// tick. Split from the old single ~30-read `refreshState()`
+    /// (2026-09-13, see project memory project-ftx1remote-responsiveness-
+    /// ideas) because that cycle published only at its very end: a frequency
+    /// change made on the rig's own front panel was captured in this
+    /// function's very first read, but sat unpublished behind ~two dozen
+    /// menu/settings reads (now `slowTierSteps()`) that only change on a
+    /// button press — routinely adding a second or more of visible lag, far
+    /// worse in C4FM where two of those reads (`"GT0"`/`"PR1"`) time out and
+    /// force a reconnect every cycle. This tier covers just what changes
+    /// moment to moment (frequency, mode, PTT, meters, secondary VFO, and
+    /// VFO/Memory mode itself — the last one kept here rather than in the
+    /// slow tier specifically so `lastVFOState` tracking below never races a
+    /// stale `vfoMemoryMode`), at roughly a dozen round trips instead of
+    /// ~30, and broadcasts on its own rather than waiting for the slow tier.
+    /// Returns false, publishing nothing, when the rig didn't answer MAIN's
+    /// frequency read ("FA") — `pollLoop` counts those to tell a silent rig
+    /// apart from one dropped reply.
+    @discardableResult
+    private func refreshFastTier() async throws -> Bool {
+        // This tier's reads are captured one at a time across its sequential
+        // round trips (below), so a command can land via `applyOptimistically`
+        // partway through — see the `commandGeneration` guard right before this
+        // tier's values are published, below.
+        let generationAtStart = commandGeneration
+        // Best-effort for an ordinary bad/empty CAT reply (`.badResponse`)
+        // — that shouldn't tear down and reconnect the whole session, just
+        // fall back to the last known frequency and let the next poll cycle
+        // (500ms later) try again. This used to be a hard `try`, which over
+        // a real network hop meant an occasional `.badResponse` was
+        // repeatedly tearing down and reconnecting the entire session (the
+        // connect/disconnect cycling seen during initial Pi validation).
+        //
+        // `.connectionLost` is deliberately NOT swallowed the same way: it
+        // means `RigctldClient` itself already determined the transport is
+        // dead (e.g. the Pi TCP-reset the connection), not that the rig
+        // gave one bad reply. Catching it here too silently — as every
+        // field in this function used to, until that fix — meant a real
+        // disconnect was never detected: every read below would also fail
+        // the same way, this tier would never throw, and
+        // `runConnectionLoop()` never got the chance to reconnect. The
+        // symptom was hundreds of failed writes a second forever with no
+        // reconnect, confirmed via a real Pi network drop. Rethrowing here
+        // propagates through `pollLoop()` into `runConnectionLoop()`'s
+        // catch block, which does the normal disconnect/backoff/reconnect
+        // dance.
+        let frequencyHz: Int
+        frequencyReadSerial += 1
+        let frequencyRead = frequencyReadSerial
+        do {
+            frequencyHz = try await rigctld.getFrequency()
+        } catch let error as RigctldError where error == .connectionLost || error == .notConnected {
+            // `.notConnected` reaches here on the poll tick *after* the one
+            // that actually detected the drop and tore the connection down
+            // (see RigctldClient.write()/readLine()) — that tick's own
+            // failure could have been on any field in either tier, not
+            // necessarily this one, so this is the first chance this
+            // specific read gets to notice. Treating it the same as
+            // `.connectionLost` (rather than falling through to the
+            // best-effort fallback) is what actually breaks the "never
+            // reconnects" loop, not just the initial detection.
+            throw error
+        } catch {
+            // No answer, or not a frequency. Until 2026-11-12 this fell
+            // back to the last frequency and read the rest of the tier,
+            // which with the rig's USB gone meant ~12 more reads each
+            // waiting out its timeout, every tick, while the window kept
+            // showing "Connected" and the last values.
+            return false
+        }
+        // Each box is read by side — MAIN with P1 0, SUB with P1 1 / `f Sub`
+        // — not by hamlib's active VFO (`v`). Until 2026-10-06 the mode and
+        // SUB reads followed `v`, which answers "Sub" whenever the rig's
+        // "VS"/"FT" is SUB (TX:SUB, or a SUB memory scan): the MAIN box then
+        // showed SUB's mode and the SUB box MAIN's frequency, while the
+        // frequency here ("FA") was always MAIN's. Also one round trip less.
+        //
+        // Raw "MD" rather than hamlib's "m": one round trip instead of the
+        // three ("m", `v`, "MD") this took while hamlib's read needed the
+        // raw C4FM fallback. That fallback ran every tick, not just on
+        // error, because hamlib's mode answer goes stale after a swap (a
+        // raw "SV" hamlib never sees) — confirmed on real hardware
+        // 2026-09-17, see `RigctldClient.isActiveModeC4FM()`. Reading "MD"
+        // alone has neither problem. Codes `RigMode(catModeCode:)` doesn't
+        // map (CW-L, DATA-L, FM-N, ...) keep the last known mode, as the
+        // unmapped hamlib names did before; so does a failed read.
+        let mainMode = (try? await rigctld.getModeCode(p1: 0))
+            .flatMap { $0 }
+            .flatMap(RigMode.init(catModeCode:))
+        // Best-effort, same reasoning as the mode read above: a single
+        // dropped byte on the USB-serial link (real, occasional occurrence
+        // on actual RF hardware, and rigctld is tuned with retry=0 to fail
+        // such a hiccup fast rather than retry it — see
+        // RigctldProcessController) shouldn't tear down the whole
+        // connection and force a reconnect any more than a raw-CAT field
+        // hiccuping should. Falls back to the last known state, like the
+        // raw-CAT fields in `slowTierSteps()`.
+        let ptt = try? await rigctld.getPTT()
+        // Best-effort like the raw CAT reads in `slowTierSteps()`, but
+        // deliberately NOT carried forward from the previous poll on
+        // failure: a live meter should fall to rest, not freeze on a stale
+        // reading (e.g. during TX, when the rig has no RX strength to
+        // report).
+        let swr = try? await rigctld.getLevel("SWR")
+        let smeterDb = try? await rigctld.getLevel("STRENGTH")
+        let powerWatts = try? await rigctld.getLevel("RFPOWER_METER_WATTS")
+        let powerLevel = try? await rigctld.getLevel("RFPOWER")
+        // COMP/ALC/ID/VDD have no hamlib level, so they come from raw CAT
+        // "RM". Only meaningful while transmitting, so only read then —
+        // 4 extra round trips per tick aren't worth paying in RX.
+        var txMeters: TXMeterReadings?
+        if ptt == true {
+            txMeters = TXMeterReadings(
+                comp: try? await rigctld.getMeterReading(3),
+                alc: try? await rigctld.getMeterReading(4),
+                idd: try? await rigctld.getMeterReading(7),
+                vdd: try? await rigctld.getMeterReading(8)
+            )
+        }
+        let subSmeterDb = (try? await rigctld.getMeterReading(2)).flatMap { $0 }.map(SMeterScale.strengthDb(forRaw:))
+        // SUB (see `RigctldClient.getSecondaryFrequency()` for why `f <VFO>`).
+        var secondaryFrequencyHz = try? await rigctld.getFrequency(ofVFO: "Sub")
+        var secondaryMode = (try? await rigctld.getModeCode(p1: 1))
+            .flatMap { $0 }
+            .flatMap(RigMode.init(catModeCode:))
+        // "VM0" reads VFO-vs-memory mode with its fixed MAIN-side P1 baked
+        // in — see RigState.vfoMemoryMode. Only bother reading the memory
+        // channel itself while actually in Memory mode, to avoid a wasted
+        // extra round trip on every poll tick otherwise.
+        let vfoMemoryModeRaw = try? await rigctld.getRawInt("VM0")
+        let memoryChannel = (vfoMemoryModeRaw == 11) ? (try? await rigctld.getRawInt("MC0")) : nil
+        // "MT" is addressed by the channel number itself, not a fixed
+        // prefix, so this can only run once memoryChannel's own read above
+        // has resolved — one more round trip, same "only while relevant"
+        // reasoning as memoryChannel itself.
+        var memoryChannelTag: String?
+        if let memoryChannel {
+            memoryChannelTag = try? await rigctld.getMemoryChannelTag(channel: memoryChannel)
+        }
+        // The rig's memory scan, read last so it covers the reads above:
+        // only in Memory mode (one more raw read per tick there), or while a
+        // scan was last seen running, to see it end after leaving Memory
+        // mode from the front panel.
+        var radioInfo: RadioInformation?
+        if vfoMemoryModeRaw == 11 || rigState.subVfoMemoryMode == .memory || isMemoryScanActive {
+            radioInfo = try? await rigctld.getRadioInformation()
+        }
+        // A scan the app didn't start (front panel): "SC;" reads back the
+        // side last told to scan, e.g. "SC11;".
+        var scanSide = activeMemoryScanSide
+        if let radioInfo, radioInfo.scan != .stopped, !isMemoryScanActive,
+           let digit = try? await rigctld.getRawDigit("SC"), let side = FilterSide(rawValue: digit) {
+            scanSide = side
+        }
+
+        // Every field above has an optimistic-set counterpart in
+        // applyOptimistically (frequency, mode, PTT, power level). If a
+        // command landed while this tier's reads were still in flight,
+        // every value captured after that point is racing the optimistic
+        // update. Bail out of the whole tier rather than publish a
+        // partially-stale snapshot; the next poll tick starts only after
+        // the command has already landed, so it reads the true value
+        // without racing.
+        guard commandGeneration == generationAtStart else { return true }
+
+        // Scanning: the rig moved channels while the reads above ran, so
+        // the frequency/channel/mode they caught are a random sample that
+        // may not even belong together. Publish only the scan state; the
+        // poll loop switches to `memoryScanTick` next.
+        // A SUB scan only spoils the SUB reads; MAIN's are published as usual.
+        if let radioInfo, radioInfo.scan == .scanning {
+            rigState.memoryScan = .scanning
+            rigState.memoryScanSide = scanSide
+            rigState.ptt = radioInfo.isTransmitting
+            if scanSide == .main {
+                await server.broadcast(rigState)
+                return true
+            }
+            secondaryFrequencyHz = nil
+            secondaryMode = nil
+        }
+
+        // Amateur allocation wins on overlap (see `generalCoverageSegment`).
+        let band = BandPlan.band(containing: frequencyHz)
+        let segment = band == nil ? GeneralCoverageSegments.segment(containing: frequencyHz) : nil
+        if let band {
+            BandMemory.recordFrequencyHz(frequencyHz, forBand: band.name)
+            // Segments (NOAA WX, SW broadcast, etc.) always force their own
+            // `defaultMode` on selection by design (see `.setBand` above),
+            // so there's no "last mode" worth remembering there — only ham
+            // bands, where the operator's mode choice should persist.
+            // C4FM excluded: hamlib's mode read (which this used to come
+            // from) never reported it, so it was never remembered per band.
+            if let mode = mainMode, mode != .c4fm {
+                BandMemory.recordMode(mode, forBand: band.name)
+            }
+        } else if let segment {
+            BandMemory.recordFrequencyHz(frequencyHz, forBand: segment.name)
+        }
+
+        // Must run before the new values are published: compares them to the
+        // baseline from previous polls (see `trackExternalSwap`).
+        trackExternalSwap(main: frequencyHz, sub: secondaryFrequencyHz)
+
+        let aprsActive = APRSSettings.isActive(atFrequencyHz: frequencyHz)
+        // Read back as `nil` once 5 seconds have passed since the last
+        // decode — see `aprsLastCallsignHeard`'s doc comment for why this
+        // doesn't need its own expiry `Timer`.
+        let aprsLastCallsign: String? = aprsLastCallsignHeard.flatMap { heard in
+            Date().timeIntervalSince(heard.at) < 5 ? heard.callsign : nil
+        }
+        // Same shape, gated on the Sub VFO's frequency — the same value
+        // about to be written to `rigState.secondaryFrequencyHz` below.
+        let subFrequencyHz = secondaryFrequencyHz ?? rigState.secondaryFrequencyHz
+        let aprsSubActive = subFrequencyHz.map { APRSSettings.isActive(atFrequencyHz: $0) } ?? false
+        let aprsSubLastCallsign: String? = aprsLastCallsignHeardSub.flatMap { heard in
+            Date().timeIntervalSince(heard.at) < 5 ? heard.callsign : nil
+        }
+
+        // `frequencyLane` may have read and published a newer frequency
+        // during this tier's reads; going back to this one would make the
+        // display jump backwards while the dial turns.
+        if frequencyRead > publishedFrequencyRead {
+            publishedFrequencyRead = frequencyRead
+            rigState.frequencyHz = frequencyHz
+        }
+        rigState.mode = mainMode ?? rigState.mode
+        rigState.powerWatts = powerWatts
+        rigState.swr = swr
+        rigState.ptt = ptt ?? rigState.ptt
+        rigState.lastUpdated = Date()
+        rigState.secondaryFrequencyHz = secondaryFrequencyHz ?? rigState.secondaryFrequencyHz
+        rigState.secondaryMode = secondaryMode ?? rigState.secondaryMode
+        rigState.powerLevel = powerLevel
+        rigState.smeterDb = smeterDb
+        rigState.txMeters = txMeters
+        rigState.subSmeterDb = subSmeterDb
+        rigState.aprsActive = aprsActive
+        rigState.aprsLastCallsign = aprsLastCallsign
+        rigState.aprsSubActive = aprsSubActive
+        rigState.aprsSubLastCallsign = aprsSubLastCallsign
+        rigState.vfoMemoryMode = vfoMemoryModeRaw.map(VFOMemoryMode.init(rawP2:)) ?? rigState.vfoMemoryMode
+        // No `?? rigState.memoryChannel`/`memoryChannelTag` fallback: these
+        // should go back to nil when out of Memory mode, not hold onto a
+        // stale channel number from the last time it was active.
+        rigState.memoryChannel = memoryChannel
+        rigState.memoryChannelTag = memoryChannelTag
+        if let radioInfo {
+            // Same as in `memoryScanTick`: a stop the app didn't send.
+            if radioInfo.scan == .stopped, isMemoryScanActive { txSideBeforeMemoryScan = nil }
+            rigState.memoryScan = radioInfo.scan
+            if radioInfo.scan != .stopped { rigState.memoryScanSide = scanSide }
+        } else if rigState.vfoMemoryMode != .memory, rigState.subVfoMemoryMode != .memory {
+            rigState.memoryScan = nil
+        }
+
+        // Only while genuinely in VFO mode — never from a Memory-mode
+        // snapshot, whose frequency/mode are the channel's, not the VFO's.
+        // `frequencyHz`, read before "VM0", so it can't be a memory channel's
+        // that `frequencyLane` caught just after a front-panel V/M.
+        if rigState.vfoMemoryMode == .vfo {
+            lastVFOState = (frequencyHz, rigState.mode)
+        }
+        updateWPSDMonitorState()
+        let now = ContinuousClock.now
+        if let lastFastPublish {
+            Self.pollTimingLogger.debug("vfo publish gap \((now - lastFastPublish).milliseconds, privacy: .public) ms")
+        }
+        lastFastPublish = now
+        await server.broadcast(rigState)
+        return true
+    }
+
+    /// One slow-tier read: performs its CAT read(s) and returns what
+    /// publishes the result into `rigState`. Split this way so the runner
+    /// can guard each read on its own (see `runSlowTierSteps`).
+    private typealias SlowTierStep = () async -> () -> Void
+
+    /// A step for the common shape: a best-effort read whose value, when
+    /// there is one, is written to one field. A failed read (nil) keeps
+    /// the last known value.
+    private func slowStep<T>(_ read: @escaping () async -> T?, _ apply: @escaping (T) -> Void) -> SlowTierStep {
+        {
+            let value = await read()
+            return { if let value { apply(value) } }
+        }
+    }
+
+    /// Slow, menu/settings half of the poll cycle: the roughly two dozen
+    /// raw-CAT/menu fields that only change on a button press (front panel
+    /// or app), plus the SUB side's memory channel. See `refreshFastTier`'s
+    /// doc comment for why the cycle is split this way, and `pollLoop()`
+    /// for how these steps are spread over the fast ticks.
+    ///
+    /// Best-effort throughout: these go through rigctld's raw CAT
+    /// passthrough (see RigctldClient.sendRawCommand), not hamlib's own
+    /// func/level abstraction, so a hiccup (e.g. hamlib's internal serial
+    /// read timing out before the rig replies) shouldn't take down the poll
+    /// loop any more than a secondary-VFO read failing should.
+    private func slowTierSteps() -> [SlowTierStep] {
+        [
+            slowStep({ try? await self.rigctld.getRawBool("BI") }) { self.rigState.breakIn = $0 },
+            slowStep({ try? await self.rigctld.getRawBool("KR") }) { self.rigState.keyerEnabled = $0 },
+            slowStep({ try? await self.rigctld.getRawInt("KS") }) { self.rigState.cwSpeedWpm = $0 },
+            // "KP" reports pitch as 00-75 steps above a 300Hz floor, not Hz
+            // directly — see RigState.cwPitchHz.
+            slowStep({ try? await self.rigctld.getRawInt("KP") }) { self.rigState.cwPitchHz = 300 + $0 * 10 },
+            // "SD" reports delay as a non-linear 00-33 code, not
+            // milliseconds directly — see RigDelayCode.
+            slowStep({ (try? await self.rigctld.getRawInt("SD")).flatMap(RigDelayCode.milliseconds(forCode:)) }) { self.rigState.bkDelayMs = $0 },
+            slowStep({ try? await self.rigctld.getRawBool("CS") }) { self.rigState.cwSpot = $0 },
+            // "ML1" reads MONI level specifically — "ML0" would read MONI
+            // on/off instead, since both share the "ML" mnemonic under a P1
+            // sub-selector. See RigState.moniLevel.
+            slowStep({ try? await self.rigctld.getRawInt("ML1") }) { self.rigState.moniLevel = $0 },
+            slowStep({ (try? await self.rigctld.getCWMessageStatus()).flatMap(CWMessageStatus.init(rawValue:)) }) { self.rigState.cwMessageStatus = $0 },
+            slowStep({ try? await self.rigctld.getRawBool("MX") }) { self.rigState.moxEnabled = $0 },
+            // "FR" (FUNCTION RX): 00 dual receive, 01 single — see
+            // RigState.singleReceive.
+            slowStep({ try? await self.rigctld.getRawInt("FR") }) { receiveModeRaw in
+                let single = receiveModeRaw == 1
+                if single != self.rigState.singleReceive {
+                    Self.audioRoutingLogger.notice("FR reply \(receiveModeRaw, privacy: .public) — \(single ? "single" : "dual", privacy: .public) receive")
+                }
+                self.rigState.singleReceive = single
+                // The Sub receiver isn't shown in single-receive display: if
+                // the rig went there while SUB was selected, fall back to
+                // MAIN through the normal path (queue, field clear, re-read).
+                if single, self.rigState.activeFilterSide == .sub {
+                    Self.audioRoutingLogger.notice("single-receive display while SUB filter selected — falling back to MAIN")
+                    self.send(.setFilterSide(.main))
+                }
+            },
+            slowStep({ try? await self.rigctld.getRawBool("RA0") }) { self.rigState.attEnabled = $0 },
+            slowStep({ try? await self.rigctld.getRawInt("PA0") }) { self.rigState.preampMode = $0 },
+            slowStep({ try? await self.rigctld.getTunerEnabled() }) { self.rigState.tunerEnabled = $0 },
+            slowStep({ try? await self.rigctld.getDisplaySettings() }) {
+                self.rigState.displayContrast = $0.contrast
+                self.rigState.displayDimmer = $0.brightness
+            },
+            slowStep({ try? await self.rigctld.getSpectrumScopeLevel() }) { self.rigState.displayLevel = $0 },
+            // "SS01"/"SS02" address PEAK/MARKER's fixed P1/P2 prefix — see
+            // RigctldClient.getRawDigit() for why a plain getRawInt/
+            // getRawBool wouldn't parse these correctly.
+            slowStep({ try? await self.rigctld.getRawDigit("SS01") }) { self.rigState.displayPeak = $0 },
+            slowStep({ try? await self.rigctld.getRawBool("SS02") }) { self.rigState.displayMarker = $0 },
+            slowStep({ try? await self.rigctld.getRawInt("MG") }) { self.rigState.micGain = $0 },
+            slowStep({ try? await self.rigctld.getRawInt("AO") }) { self.rigState.amcLevel = $0 },
+            slowStep({ try? await self.rigctld.getRawBool("VX") }) { self.rigState.voxEnabled = $0 },
+            slowStep({ try? await self.rigctld.getRawInt("VG") }) { self.rigState.voxGain = $0 },
+            // "VD" reports delay as the same non-linear 00-33 code as "SD" —
+            // see RigDelayCode.
+            slowStep({ (try? await self.rigctld.getRawInt("VD")).flatMap(RigDelayCode.milliseconds(forCode:)) }) { self.rigState.voxDelayMs = $0 },
+            // "BC0" reads AUTO NOTCH (DNF) with its fixed MAIN-side P1 baked
+            // in, same shape as "RA0"/"MX" above.
+            slowStep({ try? await self.rigctld.getRawBool("BC0") }) { self.rigState.dnfEnabled = $0 },
+            // "GT0"/"PR1" get no reply at all while the active VFO is in
+            // C4FM (AGC/mic EQ don't apply to digital voice), confirmed on
+            // real hardware — each attempt costs `sendRawCommand`'s full 1s
+            // timeout plus a reconnect (see its catch path), so both are
+            // skipped outright then (the field keeps its last value).
+            // `rigState.mode` is fresh from the fast tier.
+            //
+            // "GT0" reads AGC with its fixed MAIN-side P1 baked in — unlike
+            // the Set side (0-4 only), the Answer's value digit can come
+            // back 0-6; see RigState.agcMode for why that's still fine to
+            // store as-is.
+            slowStep({ self.rigState.mode == .c4fm ? nil : try? await self.rigctld.getRawInt("GT0") }) { self.rigState.agcMode = $0 },
+            // "PR1" reads MIC EQ with its fixed P1=1 (Parametric Microphone
+            // Equalizer) baked in — plain getRawBool now that its P2 is
+            // confirmed to be an ordinary 0/1, not the manual's claimed 1/2
+            // (see CommandQueue's .setMicEQ case for how that was confirmed).
+            slowStep({ self.rigState.mode == .c4fm ? nil : try? await self.rigctld.getRawBool("PR1") }) { self.rigState.micEQEnabled = $0 },
+            slowStep({ try? await self.rigctld.getRawInt("PL") }) { self.rigState.procLevel = $0 },
+            // "NL0"/"RL0" read NOISE BLANKER LEVEL/NOISE REDUCTION LEVEL
+            // (DNR) with their fixed MAIN-side P1 baked in, same shape as
+            // "PA0"/"GT0" above.
+            slowStep({ try? await self.rigctld.getRawInt("NL0") }) { self.rigState.nbLevel = $0 },
+            slowStep({ try? await self.rigctld.getRawInt("RL0") }) { self.rigState.dnrLevel = $0 },
+            // The filter fields, for the receiver selected when the read
+            // starts (~10 reads in one step). A side switch bumps
+            // `commandGeneration`, so a switch mid-read discards the result.
+            {
+                let side = self.rigState.activeFilterSide
+                let mode = self.rigState.filterMode
+                let snapshot = await self.rigctld.readFilterState(side: side, mode: mode)
+                return { self.rigState.applyFilterSnapshot(snapshot, mode: mode) }
+            },
+            // No dedicated mnemonic for HF ANT SELECT — reads through the
+            // same generic "EX" passthrough Deep Settings uses, just at this
+            // one fixed address (see RigState.antSelect/RigCommand.
+            // setAntSelect).
+            slowStep({ (try? await self.rigctld.getMenuItem(p1: 3, p2: 7, p3: 4)).flatMap(Int.init) }) { self.rigState.antSelect = $0 },
+            slowStep({ try? await self.rigctld.getRawBool("TS") }) { self.rigState.txwEnabled = $0 },
+            // "ST" reads SPLIT with no P1 selector at all, same bare-boolean
+            // shape as "TS" above — see RigState.splitEnabled.
+            slowStep({ try? await self.rigctld.getRawBool("ST") }) { self.rigState.splitEnabled = $0 },
+            // "FT" reads the TX side (0 MAIN, 1 SUB), a bare digit like "ST".
+            slowStep({ (try? await self.rigctld.getRawDigit("FT")).flatMap(FilterSide.init(rawValue:)) }) { self.rigState.txSide = $0 },
+            // "CT0" reads SQL TYPE with its fixed MAIN-side P1 baked in, same
+            // shape as "GT0"/"BC0" above.
+            slowStep({ try? await self.rigctld.getRawDigit("CT0") }) { self.rigState.squelchType = $0 },
+            // "CN00"/"CN01" read the current CTCSS tone index / DCS code
+            // index with their fixed MAIN-side P1 and CTCSS-vs-DCS P2 baked
+            // in — these are indices into RigCTCSSTone/RigDCSCode's fixed
+            // tables, not Hz/codes directly, same non-linear-code reasoning
+            // as "SD"/"VD" above.
+            slowStep({ try? await self.rigctld.getRawInt("CN00") }) { self.rigState.ctcssToneIndex = $0 },
+            slowStep({ try? await self.rigctld.getRawInt("CN01") }) { self.rigState.dcsCodeIndex = $0 },
+            // "OS0" reads OFFSET/REPEATER SHIFT with its fixed MAIN-side P1
+            // baked in, same shape as "CT0" above. The manual notes "OS" only
+            // activates in an FM mode — best-effort like every other raw
+            // field.
+            slowStep({ try? await self.rigctld.getRawDigit("OS0") }) { self.rigState.repeaterShiftMode = $0 },
+            // No dedicated mnemonic for BEACON TYPE — reads through the same
+            // generic "EX" passthrough Deep Settings uses, just at this one
+            // fixed address (see RigState.aprsBeaconType/RigCommand.
+            // setAPRSBeaconType).
+            slowStep({ (try? await self.rigctld.getMenuItem(p1: 7, p2: 1, p3: 1)).flatMap(Int.init) }) { self.rigState.aprsBeaconType = $0 },
+            // No dedicated mnemonic for FM CH STEP either — same generic
+            // "EX" passthrough reasoning as aprsBeaconType above.
+            slowStep({ (try? await self.rigctld.getMenuItem(p1: 3, p2: 6, p3: 6)).flatMap(Int.init) }) { self.rigState.fmChannelStep = $0 },
+            // SUB side's VFO/Memory mode and memory channel ("VM1"/"MC1",
+            // display-only), moved here from the fast tier 2026-09-29 to
+            // keep that tier short. MAIN's "VM0" stays in the fast tier —
+            // see its comment there.
+            {
+                let modeRaw = try? await self.rigctld.getRawInt("VM1")
+                let channel = (modeRaw == 11) ? (try? await self.rigctld.getRawInt("MC1")) : nil
+                var tag: String?
+                if let channel {
+                    tag = try? await self.rigctld.getMemoryChannelTag(channel: channel)
+                }
+                return {
+                    self.rigState.subVfoMemoryMode = modeRaw.map(VFOMemoryMode.init(rawP2:)) ?? self.rigState.subVfoMemoryMode
+                    // Mid-scan these are a random sample (see
+                    // `RigState.memoryScan`); the scan's pause/stop reads them.
+                    guard !(self.rigState.memoryScan == .scanning && self.rigState.memoryScanSide == .sub) else { return }
+                    // No fallback for these two: they go back to nil out of
+                    // Memory mode rather than hold a stale channel.
+                    self.rigState.subMemoryChannel = channel
+                    self.rigState.subMemoryChannelTag = tag
+                }
+            },
+        ]
+    }
+
+    /// Runs slow-tier steps from `slowTierCursor` until at least
+    /// `readBudget` CAT round trips have been spent (one step can take
+    /// several), or — with a nil budget — one complete cycle. Broadcasts
+    /// once afterwards if anything was published.
+    ///
+    /// Each step's result is published only if no command landed via
+    /// `applyOptimistically` while *that step's* read was in flight: every
+    /// field here has an optimistic-set counterpart, and the `?? last`
+    /// fallback only guards a *failed* read, not a stale-but-successful
+    /// one. A discarded step is simply re-read next cycle. (The old
+    /// single-block slow tier discarded its whole ~3s snapshot on any
+    /// command, which kept settings from refreshing at all while, say, a
+    /// slider was being dragged.)
+    private func runSlowTierSteps(readBudget: Int?) async {
+        let steps = slowTierSteps()
+        let readsAtStart = await rigctld.roundTripCount
+        var published = false
+        for _ in 0..<steps.count {
+            let generation = commandGeneration
+            let publish = await steps[slowTierCursor % steps.count]()
+            if commandGeneration == generation {
+                publish()
+                published = true
+            }
+            slowTierCursor = (slowTierCursor + 1) % steps.count
+            if let readBudget, await rigctld.roundTripCount - readsAtStart >= readBudget {
+                break
+            }
+        }
+        if published {
+            await server.broadcast(rigState)
+        }
+    }
+
+    /// Starts/stops `wpsdMonitor` to match current settings + rig mode —
+    /// checked every poll tick (~500ms) rather than only on
+    /// connect/disconnect, so toggling the C4FM Settings tab or changing
+    /// mode takes effect quickly with no reconnect needed. `start(host:)`/
+    /// `stop()` are both no-ops when already in the target state. Gated on
+    /// either VFO being in C4FM mode, not just Main — `ContentView`'s SUB
+    /// `VFODisplayBox` shows `c4fmCallsign`/`c4fmReflector` too now,
+    /// whenever `rigState.secondaryMode == .c4fm` (see its call site). There's
+    /// still only one `wpsdMonitor`/one configured host: it scrapes whichever
+    /// single physical hotspot the rig's C4FM audio is actually coming from,
+    /// regardless of which VFO that happens to be tuned on right now.
+    private func updateWPSDMonitorState() {
+        guard WPSDSettings.enabled, !WPSDSettings.host.isEmpty, rigState.mode == .c4fm || rigState.secondaryMode == .c4fm else {
+            wpsdMonitor.stop()
+            rigState.c4fmCallsign = nil
+            rigState.c4fmReflector = nil
+            return
+        }
+        wpsdMonitor.start(host: WPSDSettings.host)
+    }
+}
+
+private extension Duration {
+    var milliseconds: Int {
+        let (seconds, attoseconds) = components
+        return Int(seconds) * 1000 + Int(attoseconds / 1_000_000_000_000_000)
+    }
+}
+
+/// Why the hub refused a client's `CWKeyerRequest` before it reached the
+/// rig (`HubService.remoteCWKeyer`).
+/// A window whose receiver mutes the rig's Main Mac playback while it's
+/// audible (`HubService.setMainAudioOverride`).
+enum MainAudioOverride: Hashable {
+    case webSDR
+    case localSDR
+}
+
+enum RemoteCWKeyerError: LocalizedError {
+    case badSlot(Int)
+    case badText
+
+    var code: CWKeyerReply.ErrorCode {
+        switch self {
+        case .badSlot: .badSlot
+        case .badText: .badText
+        }
+    }
+
+    /// The reply's English `error`, for clients without the codes.
+    var wireText: String {
+        switch self {
+        case .badSlot(let slot): "Keyer memory \(slot) doesn't exist (1–5)"
+        case .badText: "The Mac refused the text: up to 50 characters the keyer can send"
+        }
+    }
+
+    var errorDescription: String? {
+        switch self {
+        case .badSlot(let slot): String(localized: "remoteCWKeyerError.badSlot \(slot)")
+        case .badText: String(localized: "remoteCWKeyerError.badText")
+        }
+    }
+}

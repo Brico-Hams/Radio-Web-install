@@ -1,0 +1,583 @@
+/**
+ * S-meter scale mapping utilities.
+ *
+ * Calibration loaded from /api/v1/capabilities → meterCalibrations.s_meter,
+ * itself sourced from the active radio's `rigs/<rig>.toml` `[meters.s_meter]`
+ * table. Every function below is a GENERIC piecewise-linear reader over
+ * whatever anchor table the profile supplies — there is no vendor branch and
+ * no hardcoded per-radio curve here (MOR-1451).
+ *
+ * A radio whose profile has not declared a curve is UNCALIBRATED:
+ * `isSmeterCalibrated()` is false, and no S-unit or dBm text is drawn
+ * (MOR-2705 part 4a, MOR-2720) — the bar or needle still moves on the raw
+ * fraction, but a number would be borrowed from a curve the radio does
+ * not have. This holds for every S-meter: the projections here
+ * (`projectSignalMeter`), `LinearSMeter`, the phone layout, `AmberSmeter`,
+ * the dock panels (MOR-2705 part 4a), the segmentline LCD S-meter and the
+ * dual-SDR needle meter, which draw no S-unit/dBm text, no S label, no
+ * S9 line and no scale marks without a calibration (MOR-2720).
+ * Mirrors the backend's own `(value, calibrated)` convention
+ * (`runtime/meter_cal.py interpolate_meter`) on the display side.
+ */
+
+import { getSmeterCalibration } from '$lib/stores/capabilities.svelte';
+import {
+  calibratedToDbm as calibratedToDbmForCalibration,
+  calibratedToRaw as calibratedToRawForCalibration,
+  calibratedToSegments as calibratedToSegmentsForCalibration,
+  calibratedToSUnit as calibratedToSUnitForCalibration,
+  formatDbm as formatDbmForCalibration,
+  getS9Raw as getS9RawForCalibration,
+  getScaleMaxRaw as getScaleMaxRawForCalibration,
+  interpolateRaw,
+  isSmeterCalibrated as isSmeterCalibratedForCalibration,
+  rawToDbm as rawToDbmForCalibration,
+  rawToSFloat,
+  rawToSegments as rawToSegmentsForCalibration,
+  rawToSUnit as rawToSUnitForCalibration,
+  type SmeterCalibrationPoint,
+} from '../../primitives/meters/s-meter-scale';
+import type { MeterValueDomain } from '../../semantic/radio-view-model';
+
+export interface SmeterMark {
+  raw: number;
+  actual: number;
+  text: string;
+  color: string;
+}
+
+/**
+ * One knot of the piecewise-linear transfer from the calibrated motion
+ * fraction (the `motionFraction` ballistics run on) to the evenly spaced
+ * 1..9 / +20..+60 display scale (MOR-2509 mock-up v7): `at` is a position
+ * on the calibrated fraction axis, `to` the matching position on the
+ * evenly spaced axis. Knots are monotone in both columns.
+ */
+export interface SignalScaleKnot {
+  readonly at: number;
+  readonly to: number;
+}
+
+/**
+ * MOR-2509: one numeral the evenly spaced face may draw, and the slot
+ * fraction it sits at. Only what the radio's own calibration places can
+ * be labelled: an odd S-unit numeral requires declared S-labelled knots
+ * bracketing it (MOR-2790 — S0 counts as unit 0), and a +dB numeral
+ * requires an S9 knot and a declared `S9+<N>` knot with N >= that dB. A
+ * numeral the calibration cannot place is simply absent — its slot stays
+ * empty, so nothing shifts between radios.
+ */
+export interface SignalScaleMark {
+  readonly slot: number;
+  readonly text: string;
+  readonly overS9: boolean;
+}
+
+export interface SignalMeterProjectionMark {
+  readonly actual: number;
+  readonly fraction: number;
+  readonly text: string;
+  readonly color: string;
+}
+
+export interface SignalMeterProjectionTick {
+  readonly fraction: number;
+  readonly kind: 'major' | 'mid' | 'minor';
+  readonly color: string;
+}
+
+export interface SignalMeterProjection {
+  readonly scaleMode: 's' | 'raw' | 'none';
+  readonly motionFraction: number | null;
+  readonly primaryText: string;
+  readonly secondaryText: string;
+  readonly accessibleDescription: string;
+  /** S9 crossover for calibrated S or omitted-domain compatibility only. */
+  readonly crossoverFraction: number | null;
+  /** MOR-2509: calibrated-fraction → evenly-spaced-scale transfer knots. */
+  readonly uniformScaleKnots: readonly SignalScaleKnot[];
+  /** MOR-2509: the numerals the calibration itself can place on that scale. */
+  readonly uniformScaleMarks: readonly SignalScaleMark[];
+  readonly marks: readonly SignalMeterProjectionMark[];
+  readonly ticks: readonly SignalMeterProjectionTick[];
+}
+
+const SEGMENT_DOMAIN = 20;
+const S9_UNIFORM_FRACTION = 4 / 7;
+const OVER_S9_SPAN_FRACTION = 3 / 7;
+const IDENTITY_SCALE_KNOTS: readonly SignalScaleKnot[] = [
+  { at: 0, to: 0 },
+  { at: 1, to: 1 },
+];
+
+function getCal(): SmeterCalibrationPoint[] {
+  return getSmeterCalibration() ?? [];
+}
+
+/** True when the active radio profile declared an s_meter calibration table
+ *  with at least two knots. Interpolation needs two points to define a
+ *  line; a single knot cannot support a calibrated reading, so it counts
+ *  as uncalibrated the same as zero knots (MOR-2024) rather than resolving
+ *  every input to that one knot's value. False means no S-unit or dBm text
+ *  may be drawn at all — a reading would be fabricated against a borrowed
+ *  curve (MOR-1451, MOR-2705 part 4a); the bar still moves. */
+export function isSmeterCalibrated(): boolean {
+  return isSmeterCalibratedForCalibration(getCal());
+}
+
+/** Find S9 raw value from calibration; the raw-scale midpoint when
+ *  uncalibrated — a neutral bar-geometry anchor, not a claimed threshold. */
+export function getS9Raw(): number {
+  return getS9RawForCalibration(getCal());
+}
+
+/** Last calibration raw knot, used as the right edge of visual S-meter scales. */
+export function getScaleMaxRaw(): number {
+  return getScaleMaxRawForCalibration(getCal());
+}
+
+/** Map raw 0-255 to fractional segment count 0-20. */
+export function rawToSegments(raw: number): number {
+  return rawToSegmentsForCalibration(raw, getCal());
+}
+
+/** Map raw 0-255 to S-unit string, e.g. "S7", "S9+20". Falls back to the
+ *  plain raw number (no "S" claim) when the radio has no calibration table
+ *  (MOR-1451) — never a reading borrowed from a different radio's curve. */
+export function rawToSUnit(raw: number): string {
+  return rawToSUnitForCalibration(raw, getCal());
+}
+
+/** Map raw 0-255 to dBm value (linear interpolation between calibration
+ *  points). Passes the raw value straight through when uncalibrated — the
+ *  honest-fallback text functions below detect that state themselves and
+ *  never present the passthrough as a real dBm reading (MOR-1451). */
+export function rawToDbm(raw: number): number {
+  return rawToDbmForCalibration(raw, getCal());
+}
+
+/** Map calibrated dB-rel-S9 from backend state to the raw axis used by the
+ *  UI scale. Identity passthrough when uncalibrated, matching `rawToDbm`. */
+export function calibratedToRaw(actual: number): number {
+  return calibratedToRawForCalibration(actual, getCal());
+}
+
+/** Map calibrated dB-rel-S9 to fractional segment count 0-20 for the top S-meter. */
+export function calibratedToSegments(actual: number): number {
+  return calibratedToSegmentsForCalibration(actual, getCal());
+}
+
+/** Map calibrated dB-rel-S9 to an S-unit label, e.g. "S7", "S9+20". */
+export function calibratedToSUnit(actual: number): string {
+  return calibratedToSUnitForCalibration(actual, getCal());
+}
+
+/** Map calibrated dB-rel-S9 to user-facing dBm referenced to S9=-73 dBm.
+ *  `null` when uncalibrated — a dBm figure with no calibration behind it
+ *  would be a fabricated physical unit, not a passthrough (MOR-1451);
+ *  MOR-2705: `formatDbm(null)` renders NOTHING — never a word. */
+export function calibratedToDbm(actual: number): number | null {
+  return calibratedToDbmForCalibration(actual, getCal());
+}
+
+function colorForActual(actual: number): string {
+  if (actual <= 0) return 'var(--v2-text-bright)';
+  if (actual <= 20) return 'var(--v2-accent-yellow)';
+  if (actual <= 40) return 'var(--v2-accent-orange-alt)';
+  return 'var(--v2-accent-red-alt)';
+}
+
+function markText(label: string): string {
+  if (label.startsWith('S9+')) return `+${label.slice(3)}`;
+  return label;
+}
+
+function scaleMarks(calibration: readonly SmeterCalibrationPoint[]): SmeterMark[] {
+  return calibration
+    .filter((p) => /^S[13579]$/.test(p.label) || /^S9\+/.test(p.label))
+    .map((p) => ({
+      raw: p.raw,
+      actual: p.actual,
+      text: markText(p.label),
+      color: colorForActual(p.actual),
+    }));
+}
+
+/** Dense subdivisions projected from the same complete calibration snapshot
+ * as the labels and reading. Hidden calibration knots still shape every
+ * intermediate raw position even though they are not themselves labeled. */
+function scaleTicks(
+  marks: readonly SmeterMark[],
+  calibration: readonly SmeterCalibrationPoint[],
+): SignalMeterProjectionTick[] {
+  const ticks: SignalMeterProjectionTick[] = [];
+  const anchors = marks.map(({ raw, actual }) => ({ raw, actual }));
+  const first = anchors[0];
+
+  if (!first || first.raw > 0) {
+    anchors.unshift({ raw: 0, actual: -54 });
+  }
+
+  function tick(raw: number, actual: number, kind: SignalMeterProjectionTick['kind']) {
+    ticks.push({
+      fraction: rawToSegmentsForCalibration(raw, calibration) / SEGMENT_DOMAIN,
+      kind,
+      color: colorForActual(actual),
+    });
+  }
+
+  function addSubdivisions(
+    startRaw: number,
+    endRaw: number,
+    startActual: number,
+    endActual: number,
+  ) {
+    tick(startRaw, startActual, 'major');
+    const rawStep = (endRaw - startRaw) / 10;
+    const actualStep = (endActual - startActual) / 10;
+    for (let j = 1; j <= 9; j++) {
+      tick(
+        startRaw + rawStep * j,
+        startActual + actualStep * j,
+        j === 5 ? 'mid' : 'minor',
+      );
+    }
+  }
+
+  for (let i = 0; i < anchors.length - 1; i++) {
+    addSubdivisions(
+      anchors[i].raw,
+      anchors[i + 1].raw,
+      anchors[i].actual,
+      anchors[i + 1].actual,
+    );
+  }
+
+  const last = anchors[anchors.length - 1];
+  tick(last.raw, last.actual, 'major');
+  return ticks;
+}
+
+/** The dB-rel-S9 level at which the table's own S-unit interpolation
+ *  reaches `unit`, or null when the table cannot bracket it. */
+function sUnitLevel(unit: number, calibration: readonly SmeterCalibrationPoint[]): number | null {
+  const sPoints = calibration.filter((point) => /^S\d$/.test(point.label));
+  for (let index = 0; index < sPoints.length - 1; index += 1) {
+    const startUnit = Number.parseInt(sPoints[index].label.slice(1), 10);
+    const endUnit = Number.parseInt(sPoints[index + 1].label.slice(1), 10);
+    if (unit >= startUnit && unit <= endUnit) {
+      const t = (unit - startUnit) / (endUnit - startUnit);
+      const raw = sPoints[index].raw + t * (sPoints[index + 1].raw - sPoints[index].raw);
+      return interpolateRaw(raw, calibration);
+    }
+  }
+  return null;
+}
+
+/** A level's position on the evenly spaced 1..9 / +20..+60 scale: S-units
+ *  linear between S1 and S9 over 0..4/7 (the S-unit number comes from the
+ *  radio's own table, so non-uniform tables stay truthful), dB-over-S9
+ *  linear over 4/7..1, clamped at both ends. */
+function uniformFraction(level: number, calibration: readonly SmeterCalibrationPoint[]): number {
+  if (level > 0) {
+    return S9_UNIFORM_FRACTION
+      + Math.min(1, Math.max(0, level / 60)) * OVER_S9_SPAN_FRACTION;
+  }
+  const sFloat = rawToSFloat(
+    calibratedToRawForCalibration(level, calibration), calibration,
+  );
+  return Math.min(1, Math.max(0, (sFloat - 1) / 8)) * S9_UNIFORM_FRACTION;
+}
+
+/**
+ * MOR-2509: the knots of the piecewise-linear transfer from the calibrated
+ * motion fraction to the evenly spaced display scale, over the same table
+ * every other position in the projection uses. The knot levels are the
+ * table's own kinks (its knot levels above S9, the S1 level, the domain
+ * ends) plus the v7 scale's own kinks (S9 at 0 dB, the +60 dB clamp).
+ */
+function uniformScaleKnotsFor(
+  calibration: readonly SmeterCalibrationPoint[],
+): readonly SignalScaleKnot[] {
+  if (!isSmeterCalibratedForCalibration(calibration)) return IDENTITY_SCALE_KNOTS;
+  const calMin = calibration[0].actual;
+  const calMax = calibration[calibration.length - 1].actual;
+  const s1Level = sUnitLevel(1, calibration);
+  const levels = new Set<number>([calMin, 0, Math.min(calMax, 60)]);
+  if (calMax > 60) levels.add(calMax);
+  if (s1Level !== null && s1Level > calMin) levels.add(s1Level);
+  for (const point of calibration) {
+    if (point.actual > 0 && point.actual < calMax) levels.add(point.actual);
+  }
+  const knots: SignalScaleKnot[] = [];
+  for (const level of [...levels].sort((left, right) => left - right)) {
+    const at = calibratedToSegmentsForCalibration(level, calibration) / SEGMENT_DOMAIN;
+    const to = uniformFraction(level, calibration);
+    const previous = knots[knots.length - 1];
+    if (previous && at <= previous.at) continue;
+    knots.push({ at, to });
+  }
+  return knots.length >= 2 ? knots : IDENTITY_SCALE_KNOTS;
+}
+
+/** Map a calibrated motion fraction onto the evenly spaced scale through
+ *  the projection's knots; monotone, so ballistics over the calibrated
+ *  fraction transfer without overshoot. */
+export function lerpScaleKnots(
+  knots: readonly SignalScaleKnot[], fraction: number,
+): number {
+  const value = Math.min(1, Math.max(0, fraction));
+  if (knots.length === 0) return value;
+  if (value <= knots[0].at) return knots[0].to;
+  for (let index = 0; index < knots.length - 1; index += 1) {
+    const start = knots[index];
+    const end = knots[index + 1];
+    if (value <= end.at) {
+      const span = end.at - start.at;
+      return span <= 0 ? end.to : start.to + ((value - start.at) / span) * (end.to - start.to);
+    }
+  }
+  return knots[knots.length - 1].to;
+}
+
+// The deck's narrowest meter track: the mock-up v8 deck is laid out for a
+// panel from 560px, which leaves the meter's track ≈160px. A "+NN" numeral
+// is 3 mono glyphs of ink (≈0.6em each at the face's 12px label size =
+// 21.6px); two adjacent numerals collide when their slot gap is narrower
+// than that ink at this floor.
+const MIN_TRACK_WIDTH_PX = 160;
+const PLUS_NUMERAL_INK_PX = 21.6;
+const MIN_PLUS_MARK_SLOT_GAP = PLUS_NUMERAL_INK_PX / MIN_TRACK_WIDTH_PX;
+export const MIN_SIGNAL_SCALE_LABEL_GAP_PX = 1;
+
+/**
+ * MOR-2509: the numerals the evenly spaced face draws for this
+ * calibration, per mock-up v8. MOR-2790: a numeral the table's own
+ * interpolation places is not invented — an odd S-unit numeral (1 3 5 7 9)
+ * is drawn when the declared S-labelled knots bracket it (one knot at or
+ * below that unit, S0 counting as unit 0, and one at or above it), so a
+ * sparse S0/S9/S9+60 table still places every odd unit its linear
+ * interpolation passes through. A '+dB' numeral (+20/+40/+60) is drawn
+ * when an S9 knot and a declared `S9+<N>` knot with N >= that dB bracket
+ * it, thinned left-to-right so no numeral's slot sits closer to the
+ * previously kept one than a "+NN" numeral's ink width at the deck's
+ * minimum track width — the S9 slot seeds that walk, so a dense +10/+20
+ * ladder keeps only +20.
+ */
+function uniformScaleMarksFor(
+  calibration: readonly SmeterCalibrationPoint[],
+): readonly SignalScaleMark[] {
+  if (!isSmeterCalibratedForCalibration(calibration)) return [];
+  const marks: SignalScaleMark[] = [];
+  const units = calibration
+    .map((point) => /^S(\d)$/.exec(point.label))
+    .filter((match): match is RegExpExecArray => match !== null)
+    .map((match) => Number.parseInt(match[1], 10));
+  for (const unit of [1, 3, 5, 7, 9]) {
+    const bracketed = units.some((value) => value <= unit)
+      && units.some((value) => value >= unit);
+    if (bracketed) {
+      marks.push({ slot: (unit - 1) / 14, text: String(unit), overS9: false });
+    }
+  }
+  const hasS9 = units.includes(9);
+  const maxPlusDb = calibration
+    .map((point) => /^S9\+([0-9]+)$/.exec(point.label))
+    .filter((match): match is RegExpExecArray => match !== null)
+    .map((match) => Number.parseInt(match[1], 10))
+    .reduce((max, db) => Math.max(max, db), 0);
+  let lastKeptSlot = S9_UNIFORM_FRACTION;
+  for (const db of [20, 40, 60]) {
+    if (!hasS9 || maxPlusDb < db) continue;
+    const slot = S9_UNIFORM_FRACTION + (db / 60) * OVER_S9_SPAN_FRACTION;
+    if (slot - lastKeptSlot < MIN_PLUS_MARK_SLOT_GAP) continue;
+    marks.push({ slot, text: `+${db}`, overS9: true });
+    lastKeptSlot = slot;
+  }
+  return marks;
+}
+
+/**
+ * Thin the calibration-derived numeral ladder for the rendered track while
+ * preserving the mock-up's label priorities. The named tests "keeps the
+ * FTX-1 548px label array unchanged", "keeps the dense 548px label array
+ * unchanged", "keeps the sparse 548px label array unchanged", "keeps every
+ * 140px FTX-1 label at least its rendered width plus the fixed gap apart",
+ * and "never shows fewer FTX-1 labels when the track becomes wider" pin it.
+ */
+export function thinUniformScaleMarksForWidth(
+  marks: readonly SignalScaleMark[],
+  trackWidthPx: number,
+  labelWidthPx: (mark: SignalScaleMark) => number,
+): readonly SignalScaleMark[] {
+  if (!Number.isFinite(trackWidthPx) || trackWidthPx <= 0 || marks.length < 2) return marks;
+
+  function fits(candidates: readonly SignalScaleMark[]): boolean {
+    for (let index = 1; index < candidates.length; index += 1) {
+      const previous = candidates[index - 1];
+      const current = candidates[index];
+      const distancePx = (current.slot - previous.slot) * trackWidthPx;
+      if (distancePx < Math.max(0, labelWidthPx(current)) + MIN_SIGNAL_SCALE_LABEL_GAP_PX) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  if (fits(marks)) return marks;
+
+  const plusMarks = marks.filter((mark) => mark.overS9);
+  const topPlusMark = plusMarks.at(-1);
+  const removalOrder = [
+    marks.find((mark) => mark.text === '7'),
+    marks.find((mark) => mark.text === '3'),
+    ...plusMarks.filter((mark) => mark !== topPlusMark),
+  ].filter((mark): mark is SignalScaleMark => mark !== undefined);
+
+  let kept = [...marks];
+  for (const removable of removalOrder) {
+    kept = kept.filter((mark) => mark !== removable);
+    if (fits(kept)) return kept;
+  }
+  return kept;
+}
+
+/**
+ * Resolve every display-facing S-meter value from one capability snapshot.
+ * The facade remains the only store reader; the pure primitives above own all
+ * calibration, interpolation, labeling, and raw fallback behavior.
+ */
+export function projectSignalMeter(
+  value: number | null, domain?: MeterValueDomain,
+): SignalMeterProjection {
+  const calibration = getCal();
+  // Omission is a compatibility path for pre-MOR-2425 internal callers. Live
+  // adapter-produced facts always pass an explicit domain, including unknown.
+  const calibrated = isSmeterCalibratedForCalibration(calibration);
+  const scaleMode: SignalMeterProjection['scaleMode'] = domain === undefined
+    ? (calibrated ? 's' : 'raw')
+    : domain.kind === 'raw' ? 'raw'
+      : domain.kind === 'engineering' && domain.unit === 'db' && calibrated ? 's' : 'none';
+  const projectionCalibration = scaleMode === 's' ? calibration : [];
+  const scale = scaleMode === 's' ? scaleMarks(calibration) : [];
+  const marks = scale.map((mark) => ({
+    actual: mark.actual,
+    fraction: rawToSegmentsForCalibration(mark.raw, projectionCalibration) / SEGMENT_DOMAIN,
+    text: mark.text,
+    color: mark.color,
+  }));
+  const ticks = scaleMode === 's' ? scaleTicks(scale, projectionCalibration) : [];
+  const crossoverFraction = scaleMode === 's' || domain === undefined
+    ? rawToSegmentsForCalibration(
+        getS9RawForCalibration(projectionCalibration), projectionCalibration,
+      ) / SEGMENT_DOMAIN
+    : null;
+  const uniformScaleKnots = scaleMode === 's'
+    ? uniformScaleKnotsFor(projectionCalibration) : IDENTITY_SCALE_KNOTS;
+  const uniformScaleMarks = scaleMode === 's'
+    ? uniformScaleMarksFor(projectionCalibration) : [];
+
+  if (value === null || domain?.kind === 'unknown') {
+    // No usable reading: an unread meter is an empty bar with no caption —
+    // never a '?', a dash, or an invented zero (owner rulings MOR-2520,
+    // repeated in MOR-2649). A known reading whose unit is unknown funnels
+    // here too (MOR-2651): the tile's label already implies a unit, so a
+    // bare number would invent one — for the operator it is no reading.
+    // The accessible name is the bare meter name with no placeholder word;
+    // the calibrated / raw / engineering scale distinctions are known-value
+    // facts and stay in the branches below.
+    return {
+      scaleMode,
+      motionFraction: null,
+      primaryText: '',
+      secondaryText: '',
+      accessibleDescription: 'S meter',
+      crossoverFraction,
+      uniformScaleKnots,
+      uniformScaleMarks,
+      marks,
+      ticks,
+    };
+  }
+
+  if (scaleMode === 'raw') {
+    // MOR-2705 part 4a: an uncalibrated S-meter shows its bar and nothing
+    // it cannot know. The raw count is not an operator reading — it means
+    // nothing to an operator, and a calibrated-looking number would be
+    // invented (MOR-1451) — so no number, no word, and the bare meter name.
+    return {
+      scaleMode,
+      motionFraction: calibratedToSegmentsForCalibration(value, projectionCalibration) / SEGMENT_DOMAIN,
+      primaryText: '',
+      secondaryText: '',
+      accessibleDescription: 'S meter',
+      crossoverFraction,
+      uniformScaleKnots,
+      uniformScaleMarks,
+      marks,
+      ticks,
+    };
+  }
+
+  if (scaleMode === 'none') {
+    // Engineering domains (MOR-2705 part 4a): a reading renders its value
+    // with its own unit when the unit is known — dB relative to S9 needs no
+    // S-scale to be truthful — and never a state word. A unit the signal
+    // meter cannot carry renders exactly like an unread sample (MOR-2651).
+    const engineeringDb = domain?.kind === 'engineering' && domain.unit === 'db';
+    if (!engineeringDb) {
+      return {
+        scaleMode,
+        motionFraction: null,
+        primaryText: '',
+        secondaryText: '',
+        accessibleDescription: 'S meter',
+        crossoverFraction,
+        uniformScaleKnots,
+        uniformScaleMarks,
+        marks,
+        ticks,
+      };
+    }
+    const signedValue = `${value < 0 ? '\u2212' : value > 0 ? '+' : ''}${Math.abs(value)}`;
+    return {
+      scaleMode,
+      motionFraction: null,
+      primaryText: `${signedValue} dB rel S9`,
+      secondaryText: '',
+      accessibleDescription: `S meter ${signedValue} decibels relative to S9`,
+      crossoverFraction,
+      uniformScaleKnots,
+      uniformScaleMarks,
+      marks,
+      ticks,
+    };
+  }
+
+  const primaryText = calibratedToSUnitForCalibration(value, projectionCalibration);
+  const secondaryText = formatDbmForCalibration(
+    calibratedToDbmForCalibration(value, projectionCalibration),
+  );
+  return {
+    scaleMode,
+    motionFraction: calibratedToSegmentsForCalibration(value, projectionCalibration) / SEGMENT_DOMAIN,
+    primaryText,
+    secondaryText,
+    accessibleDescription: `S meter ${primaryText}, ${secondaryText}`,
+    crossoverFraction,
+    uniformScaleKnots,
+    uniformScaleMarks,
+    marks,
+    ticks,
+  };
+}
+
+/** Format dBm value as display string, e.g. "−67 dBm". Uses Unicode minus. */
+export function formatDbm(dbm: number | null): string {
+  return formatDbmForCalibration(dbm);
+}
+
+/** Get full calibration table for rendering scale ticks. */
+export function getCalibrationPoints(): SmeterCalibrationPoint[] {
+  return getCal();
+}

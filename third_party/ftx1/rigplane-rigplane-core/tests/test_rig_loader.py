@@ -1,0 +1,4763 @@
+"""Tests for rig_loader and command_map modules.
+
+TDD: these tests were written FIRST, then the implementation.
+"""
+
+from __future__ import annotations
+
+import json
+import re
+import textwrap
+import tomllib
+from dataclasses import astuple
+from decimal import Decimal
+from hashlib import sha256
+from pathlib import Path
+
+import pytest
+
+from rigplane.command_map import CommandMap
+from rigplane.core.capabilities import CAP_SPEECH, KNOWN_CAPABILITIES
+from rigplane.core.state_pipeline_contracts import FieldPath
+from rigplane.profiles import (
+    BandInfo,
+    ControlSpec,
+    FreqRangeInfo,
+    RadioProfile,
+    TxPolicy,
+    get_radio_profile,
+)
+from rigplane.rig_loader import RigConfig, RigLoadError, discover_rigs, load_rig
+
+RIGS_DIR = Path(__file__).resolve().parent.parent / "rigs"
+TEMPLATE_PATH = RIGS_DIR / "ic7610.toml"
+_STANDARD_CTCSS_50_CENTIHZ = (
+    6700,
+    6930,
+    7190,
+    7440,
+    7700,
+    7970,
+    8250,
+    8540,
+    8850,
+    9150,
+    9480,
+    9740,
+    10000,
+    10350,
+    10720,
+    11090,
+    11480,
+    11880,
+    12300,
+    12730,
+    13180,
+    13650,
+    14130,
+    14620,
+    15140,
+    15670,
+    15980,
+    16220,
+    16550,
+    16790,
+    17130,
+    17380,
+    17730,
+    17990,
+    18350,
+    18620,
+    18990,
+    19280,
+    19660,
+    19950,
+    20350,
+    20650,
+    21070,
+    21810,
+    22570,
+    22910,
+    23360,
+    24180,
+    25030,
+    25410,
+)
+
+
+# ── Helpers ──────────────────────────────────────────────────────
+
+
+def _write_toml(tmp_path: Path, content: str, name: str = "test.toml") -> Path:
+    """Write a TOML string to a temp file and return the path."""
+    p = tmp_path / name
+    p.write_text(textwrap.dedent(content))
+    return p
+
+
+def _write_ctcss_catalog(tmp_path: Path, tables: str) -> Path:
+    return _write_toml(
+        tmp_path,
+        f"schema_version = 1\n\n[tables]\n{tables}",
+        "_ctcss_tables_v1.toml",
+    )
+
+
+_MINIMAL_TOML = """\
+[radio]
+id = "icom_ic7300"
+model = "IC-7300"
+civ_addr = 0x94
+receiver_count = 1
+has_lan = true
+has_wifi = false
+
+[spectrum]
+seq_max = 11
+amp_max = 160
+data_len_max = 475
+
+[capabilities]
+features = ["audio", "scope", "meters", "tx"]
+
+[modes]
+list = ["USB", "LSB", "CW"]
+
+[filters]
+list = ["FIL1", "FIL2"]
+
+[vfo]
+scheme = "ab"
+
+[[freq_ranges.ranges]]
+label = "HF"
+start_hz = 30000
+end_hz = 60000000
+
+[commands]
+get_freq = [0x03]
+set_freq = [0x05]
+
+[commands.overrides]
+"""
+
+
+_IQ_LAN_TOML = """\
+[iq_lan]
+protocol = "xiegu_udp"
+radio_port = 50002
+receive_port = 50001
+sample_rate_hz = 48000
+samples_per_datagram = 192
+center_offset_hz = 8000
+usable_bandwidth_hz = 40000
+tune_min_hz = 100000
+tune_max_hz = 54000000
+"""
+
+
+# ── RigConfig loading ────────────────────────────────────────────
+
+
+class TestLoadRig:
+    """load_rig() parsing and validation."""
+
+    def test_load_template(self):
+        rig = load_rig(TEMPLATE_PATH)
+        assert isinstance(rig, RigConfig)
+        assert rig.model == "IC-7610"
+        assert rig.id == "icom_ic7610"
+        assert rig.civ_addr == 0x98
+        assert rig.receiver_count == 2
+
+    def test_load_minimal(self, tmp_path):
+        p = _write_toml(tmp_path, _MINIMAL_TOML)
+        rig = load_rig(p)
+        assert rig.model == "IC-7300"
+
+    def test_iq_lan_loads_as_optional_typed_profile_data(self, tmp_path):
+        rig = load_rig(_write_toml(tmp_path, _MINIMAL_TOML + _IQ_LAN_TOML))
+
+        expected = ("xiegu_udp", 50002, 50001, 48000, 192)
+        expected += (8000, 40000, 100000, 54000000)
+        assert astuple(rig.iq_lan) == expected
+        assert rig.to_profile().iq_lan == rig.iq_lan
+
+    def test_iq_lan_accepts_largest_ipv4_datagram(self, tmp_path):
+        section = _IQ_LAN_TOML.replace(
+            "samples_per_datagram = 192", "samples_per_datagram = 16376"
+        )
+
+        rig = load_rig(_write_toml(tmp_path, _MINIMAL_TOML + section))
+
+        assert rig.iq_lan.samples_per_datagram == 16_376
+
+    def test_profile_without_iq_lan_has_none(self, tmp_path):
+        rig = load_rig(_write_toml(tmp_path, _MINIMAL_TOML))
+
+        assert rig.iq_lan is None
+        assert rig.to_profile().iq_lan is None
+
+    def test_iq_lan_accepts_zero_tune_min(self, tmp_path):
+        section = _IQ_LAN_TOML.replace("tune_min_hz = 100000", "tune_min_hz = 0")
+        rig = load_rig(_write_toml(tmp_path, _MINIMAL_TOML + section))
+        assert rig.iq_lan.tune_min_hz == 0
+
+    @pytest.mark.parametrize(
+        ("old", "new", "key"),
+        [
+            (
+                'protocol = "xiegu_udp"',
+                'protocol = "xiegu_udp"\nunexpected = 1',
+                "unexpected",
+            ),
+            ("receive_port = 50001\n", "", "receive_port"),
+            ("receive_port = 50001", "receive_port = 0", "receive_port"),
+            ('protocol = "xiegu_udp"', 'protocol = "other"', "protocol"),
+            ("sample_rate_hz = 48000", 'sample_rate_hz = "48000"', "sample_rate_hz"),
+            ("tune_min_hz = 100000", "tune_min_hz = -1", "tune_min_hz"),
+            (
+                "tune_max_hz = 54000000",
+                "tune_max_hz = 18446744073709551616",
+                "tune_max_hz",
+            ),
+            (
+                "samples_per_datagram = 192",
+                "samples_per_datagram = 16377",
+                "samples_per_datagram",
+            ),
+        ],
+    )
+    def test_iq_lan_rejects_invalid_sections_naming_the_key(
+        self, tmp_path, old, new, key
+    ):
+        section = _IQ_LAN_TOML.replace(old, new)
+
+        with pytest.raises(RigLoadError, match=key):
+            load_rig(_write_toml(tmp_path, _MINIMAL_TOML + section))
+
+    @pytest.mark.parametrize("model", ["IC-7300", "IC-7610", "X6200"])
+    def test_other_shipped_profiles_have_no_iq_lan(self, model):
+        assert get_radio_profile(model).iq_lan is None
+
+    def test_modes_codes_load_parallel_to_list(self, tmp_path):
+        """MOR-2518: [modes].codes loads as a parallel single-character code
+        list (Yaesu CAT MD P2 codes)."""
+        p = _write_toml(
+            tmp_path,
+            _MINIMAL_TOML.replace(
+                'list = ["USB", "LSB", "CW"]',
+                'list = ["USB", "LSB", "CW"]\ncodes = ["2", "1", "3"]',
+            ),
+        )
+        rig = load_rig(p)
+        assert rig.mode_codes == ("2", "1", "3")
+
+    def test_modes_codes_absent_by_default(self, tmp_path):
+        p = _write_toml(tmp_path, _MINIMAL_TOML)
+        rig = load_rig(p)
+        assert rig.mode_codes is None
+
+    def test_modes_codes_length_mismatch_rejected(self, tmp_path):
+        p = _write_toml(
+            tmp_path,
+            _MINIMAL_TOML.replace(
+                'list = ["USB", "LSB", "CW"]',
+                'list = ["USB", "LSB", "CW"]\ncodes = ["2", "1"]',
+            ),
+        )
+        with pytest.raises(RigLoadError, match=r"\[modes\]\.codes"):
+            load_rig(p)
+
+    def test_modes_codes_non_string_entry_rejected(self, tmp_path):
+        p = _write_toml(
+            tmp_path,
+            _MINIMAL_TOML.replace(
+                'list = ["USB", "LSB", "CW"]',
+                'list = ["USB", "LSB", "CW"]\ncodes = [2, 1, 3]',
+            ),
+        )
+        with pytest.raises(RigLoadError, match=r"\[modes\]\.codes"):
+            load_rig(p)
+
+    def test_modes_codes_multi_character_entry_rejected(self, tmp_path):
+        p = _write_toml(
+            tmp_path,
+            _MINIMAL_TOML.replace(
+                'list = ["USB", "LSB", "CW"]',
+                'list = ["USB", "LSB", "CW"]\ncodes = ["10", "1", "2"]',
+            ),
+        )
+        with pytest.raises(RigLoadError, match=r"\[modes\]\.codes"):
+            load_rig(p)
+
+    def test_modes_codes_duplicate_entry_rejected(self, tmp_path):
+        p = _write_toml(
+            tmp_path,
+            _MINIMAL_TOML.replace(
+                'list = ["USB", "LSB", "CW"]',
+                'list = ["USB", "LSB", "CW"]\ncodes = ["1", "1", "2"]',
+            ),
+        )
+        with pytest.raises(RigLoadError, match=r"\[modes\]\.codes"):
+            load_rig(p)
+
+    def test_shipped_ctcss_profiles_resolve_standard_table(self):
+        for name in ("ic705.toml", "ic7300.toml", "ic9700.toml", "ftx1.toml"):
+            rig = load_rig(RIGS_DIR / name)
+            assert rig.ctcss_tones_centihz == _STANDARD_CTCSS_50_CENTIHZ
+            assert rig.to_profile().ctcss_tones_centihz == rig.ctcss_tones_centihz
+
+    def test_ic7610_does_not_reference_ctcss_table(self):
+        source = tomllib.loads((RIGS_DIR / "ic7610.toml").read_text())
+
+        assert "ctcss" not in source
+        assert load_rig(RIGS_DIR / "ic7610.toml").ctcss_tones_centihz is None
+
+    def test_ctcss_capability_requires_table_reference(self, tmp_path):
+        toml = _MINIMAL_TOML.replace(
+            'features = ["audio", "scope", "meters", "tx"]',
+            'features = ["audio", "scope", "meters", "tx", "repeater_tone"]',
+        )
+
+        with pytest.raises(RigLoadError, match=r"missing required \[ctcss\]\.table"):
+            load_rig(_write_toml(tmp_path, toml))
+
+    def test_ctcss_reference_requires_catalog_file(self, tmp_path):
+        toml = _MINIMAL_TOML.replace(
+            "[modes]", '[ctcss]\ntable = "standard_50"\n\n[modes]'
+        )
+
+        with pytest.raises(RigLoadError, match="CTCSS table catalog file not found"):
+            load_rig(_write_toml(tmp_path, toml))
+
+    def test_ctcss_reference_rejects_unknown_table(self, tmp_path):
+        toml = _MINIMAL_TOML.replace("[modes]", '[ctcss]\ntable = "unknown"\n\n[modes]')
+        _write_ctcss_catalog(
+            tmp_path,
+            "standard_50 = { values_centihz = [6700, 6930] }\n",
+        )
+
+        with pytest.raises(RigLoadError, match="unknown CTCSS table 'unknown'"):
+            load_rig(_write_toml(tmp_path, toml))
+
+    @pytest.mark.parametrize(
+        ("section", "message"),
+        [
+            ("ctcss = []", r"\[ctcss\] must be a table"),
+            ("[ctcss]\ntable = 1", r"\[ctcss\]\.table must be a non-empty string"),
+            ('[ctcss]\ntable = ""', r"\[ctcss\]\.table must be a non-empty string"),
+            (
+                '[ctcss]\ntable = "standard_50"\nextra = true',
+                r"\[ctcss\] must contain exactly table",
+            ),
+        ],
+    )
+    def test_ctcss_reference_rejects_malformed_section(
+        self, tmp_path, section, message
+    ):
+        toml = f"{section}\n\n{_MINIMAL_TOML}"
+
+        with pytest.raises(RigLoadError, match=message):
+            load_rig(_write_toml(tmp_path, toml))
+
+    @pytest.mark.parametrize(
+        ("catalog", "message"),
+        [
+            (
+                "schema_version = 2\n[tables.standard_50]\nvalues_centihz = [6700]",
+                "schema_version must be 1",
+            ),
+            (
+                "schema_version = 1.0\n[tables.standard_50]\nvalues_centihz = [6700]",
+                "schema_version must be 1",
+            ),
+            (
+                "schema_version = 1\ntables = []",
+                r"\[tables\] must be a non-empty table",
+            ),
+            (
+                "schema_version = 1\n[tables.standard_50]\nvalues_centihz = []",
+                "must be a non-empty integer array",
+            ),
+            (
+                "schema_version = 1\n[tables.standard_50]\nvalues_centihz = [6700, true]",
+                "must be a non-empty integer array",
+            ),
+            (
+                "schema_version = 1\n[tables.standard_50]\nvalues_centihz = [6700, 6700]",
+                "must not contain duplicates",
+            ),
+            (
+                "schema_version = 1\n[tables.standard_50]\nvalues_centihz = [6930, 6700]",
+                "must be strictly ascending",
+            ),
+            (
+                "schema_version = 1\n[tables.standard_50]\nvalues_centihz = [6600]",
+                "must be within 6700..25410 centiHz",
+            ),
+            (
+                "schema_version = 1\n[tables.standard_50]\nvalues_centihz = [6701]",
+                "must use exact 0.1 Hz steps",
+            ),
+        ],
+    )
+    def test_ctcss_catalog_rejects_malformed_tables(self, tmp_path, catalog, message):
+        toml = _MINIMAL_TOML.replace(
+            "[modes]", '[ctcss]\ntable = "standard_50"\n\n[modes]'
+        )
+        _write_toml(tmp_path, catalog, "_ctcss_tables_v1.toml")
+
+        with pytest.raises(RigLoadError, match=message):
+            load_rig(_write_toml(tmp_path, toml))
+
+    def test_synthetic_ctcss_table_resolves_without_model_branch(self, tmp_path):
+        toml = _MINIMAL_TOML.replace(
+            "[modes]", '[ctcss]\ntable = "regional"\n\n[modes]'
+        )
+        _write_ctcss_catalog(
+            tmp_path,
+            "\n".join(
+                (
+                    "standard_50 = { values_centihz = [6700, 6930] }",
+                    "regional = { values_centihz = [8850, 10000] }",
+                )
+            ),
+        )
+
+        rig = load_rig(_write_toml(tmp_path, toml))
+
+        assert rig.ctcss_tones_centihz == (8850, 10000)
+        assert rig.to_profile().ctcss_tones_centihz == (8850, 10000)
+        assert rig.capabilities == ("audio", "scope", "meters", "tx")
+        assert "set_tone_freq" not in rig.commands
+
+    def test_command_override_reuses_value_variant_parser(self, tmp_path):
+        toml = _MINIMAL_TOML.replace(
+            "[commands.overrides]\n",
+            '[commands.overrides]\nset_freq = { bytes = [0x05], value_variants = { "7" = [0x05, 0x07] } }\n',
+        )
+
+        rig = load_rig(_write_toml(tmp_path, toml, "override.toml"))
+        command_map = rig.to_command_map()
+
+        assert command_map.get("set_freq") == (0x05,)
+        assert command_map._get_value_variant("set_freq", 7) == (0x05, 0x07)
+        assert set(command_map) == {"get_freq", "set_freq"}
+        assert len(command_map) == 2
+
+    def test_load_minimal_power_max_watts(self, tmp_path):
+        p = _write_toml(
+            tmp_path,
+            _MINIMAL_TOML
+            + """
+
+[power]
+max_watts = 100
+""",
+        )
+
+        rig = load_rig(p)
+        profile = rig.to_profile()
+
+        assert rig.max_watts == 100
+        assert profile.max_watts == 100
+
+    def test_state_acquisition_provider_must_be_string(self, tmp_path):
+        p = _write_toml(
+            tmp_path,
+            _MINIMAL_TOML
+            + """
+
+[state_acquisition]
+provider = 123
+""",
+        )
+        with pytest.raises(
+            RigLoadError,
+            match=r"\[state_acquisition\].*provider must be a string",
+        ):
+            load_rig(p)
+
+    def test_missing_radio_section(self, tmp_path):
+        p = _write_toml(
+            tmp_path,
+            """\
+            [spectrum]
+            seq_max = 1
+            amp_max = 1
+            data_len_max = 1
+        """,
+        )
+        with pytest.raises(RigLoadError, match="radio"):
+            load_rig(p)
+
+    def test_missing_required_field(self, tmp_path):
+        toml = _MINIMAL_TOML.replace('id = "icom_ic7300"\n', "")
+        p = _write_toml(tmp_path, toml)
+        with pytest.raises(RigLoadError, match="id"):
+            load_rig(p)
+
+    def test_civ_addr_out_of_range(self, tmp_path):
+        toml = _MINIMAL_TOML.replace("civ_addr = 0x94", "civ_addr = 256")
+        p = _write_toml(tmp_path, toml)
+        with pytest.raises(RigLoadError, match="civ_addr"):
+            load_rig(p)
+
+    def test_empty_capabilities(self, tmp_path):
+        toml = _MINIMAL_TOML.replace(
+            'features = ["audio", "scope", "meters", "tx"]',
+            "features = []",
+        )
+        p = _write_toml(tmp_path, toml)
+        with pytest.raises(RigLoadError, match="capabilities"):
+            load_rig(p)
+
+    def test_unknown_capability(self, tmp_path):
+        toml = _MINIMAL_TOML.replace(
+            'features = ["audio", "scope", "meters", "tx"]',
+            'features = ["audio", "teleportation"]',
+        )
+        p = _write_toml(tmp_path, toml)
+        with pytest.raises(RigLoadError, match="teleportation"):
+            load_rig(p)
+
+    def test_speech_capability_loads(self, tmp_path):
+        toml = _MINIMAL_TOML.replace(
+            'features = ["audio", "scope", "meters", "tx"]',
+            'features = ["audio", "speech"]',
+        )
+        rig = load_rig(_write_toml(tmp_path, toml))
+        assert "speech" in rig.capabilities
+
+    def test_speech_capability_is_exported_and_known(self):
+        assert CAP_SPEECH == "speech"
+        assert CAP_SPEECH in KNOWN_CAPABILITIES
+
+    def test_invalid_vfo_scheme(self, tmp_path):
+        toml = _MINIMAL_TOML.replace('scheme = "ab"', 'scheme = "xyz"')
+        p = _write_toml(tmp_path, toml)
+        with pytest.raises(RigLoadError, match="vfo.*scheme"):
+            load_rig(p)
+
+    # ── [agc] domain declaration (MOR-1522) ─────────────────────────
+
+    def test_agc_modes_and_labels_load(self, tmp_path):
+        p = _write_toml(
+            tmp_path,
+            _MINIMAL_TOML
+            + """
+
+[agc]
+modes = [1, 2, 3]
+labels = { "1" = "FAST", "2" = "MID", "3" = "SLOW" }
+""",
+        )
+        rig = load_rig(p)
+        assert rig.agc_modes == (1, 2, 3)
+        assert rig.agc_labels == {"1": "FAST", "2": "MID", "3": "SLOW"}
+
+    def test_agc_readback_projection_loads(self, tmp_path):
+        p = _write_toml(
+            tmp_path,
+            _MINIMAL_TOML
+            + """
+
+[agc]
+modes = [0, 1, 2, 3, 4]
+readback_modes = [0, 1, 2, 3, 4, 5, 6]
+auto_mode = 4
+auto_speed_labels = { "4" = "FAST", "5" = "MID", "6" = "SLOW" }
+labels = { "0" = "OFF", "1" = "FAST", "2" = "MID", "3" = "SLOW", "4" = "AUTO" }
+""",
+        )
+        rig = load_rig(p)
+        assert rig.agc_modes == (0, 1, 2, 3, 4)
+        assert rig.agc_readback_modes == (0, 1, 2, 3, 4, 5, 6)
+        assert rig.agc_auto_mode == 4
+        assert rig.agc_auto_speed_labels == {"4": "FAST", "5": "MID", "6": "SLOW"}
+
+    @pytest.mark.parametrize(
+        ("declaration", "error"),
+        [
+            (
+                "readback_modes = [0, 1, 2, 3]",
+                r"\[agc\]\.readback_modes must include every settable mode from "
+                r"\[agc\]\.modes",
+            ),
+            (
+                "readback_modes = [0, 1, 2, 3, 4, 5, 6]\n"
+                "auto_mode = 4\n"
+                'auto_speed_labels = { "7" = "FAST" }',
+                r"auto_speed_labels.*7.*readback_modes",
+            ),
+        ],
+    )
+    def test_agc_readback_projection_rejects_inconsistent_catalogs(
+        self, tmp_path, declaration, error
+    ):
+        p = _write_toml(
+            tmp_path,
+            _MINIMAL_TOML
+            + f"""
+
+[agc]
+modes = [0, 1, 2, 3, 4]
+{declaration}
+""",
+        )
+        with pytest.raises(RigLoadError, match=error):
+            load_rig(p)
+
+    def test_agc_auto_speed_labels_reject_settable_non_auto_code(self, tmp_path):
+        p = _write_toml(
+            tmp_path,
+            _MINIMAL_TOML
+            + """
+
+[agc]
+modes = [0, 1, 2, 3, 4]
+readback_modes = [0, 1, 2, 3, 4, 5, 6]
+auto_mode = 4
+auto_speed_labels = { "1" = "FAST", "4" = "FAST", "5" = "MID", "6" = "SLOW" }
+""",
+        )
+        with pytest.raises(
+            RigLoadError,
+            match=r"\[agc\]\.auto_speed_labels key '1'.*settable non-auto mode",
+        ):
+            load_rig(p)
+
+    def test_agc_auto_speed_labels_require_every_readback_only_code(self, tmp_path):
+        p = _write_toml(
+            tmp_path,
+            _MINIMAL_TOML
+            + """
+
+[agc]
+modes = [0, 1, 2, 3, 4]
+readback_modes = [0, 1, 2, 3, 4, 5, 6]
+auto_mode = 4
+auto_speed_labels = { "4" = "FAST", "5" = "MID" }
+""",
+        )
+        with pytest.raises(
+            RigLoadError,
+            match=r"\[agc\]\.auto_speed_labels missing readback-only code '6'",
+        ):
+            load_rig(p)
+
+    def test_agc_readback_auto_mode_requires_auto_speed_labels(self, tmp_path):
+        p = _write_toml(
+            tmp_path,
+            _MINIMAL_TOML
+            + """
+
+[agc]
+modes = [0, 1, 2, 3, 4]
+readback_modes = [0, 1, 2, 3, 4, 5, 6]
+auto_mode = 4
+labels = { "0" = "OFF", "1" = "FAST", "2" = "MID", "3" = "SLOW", "4" = "AUTO" }
+""",
+        )
+        with pytest.raises(
+            RigLoadError,
+            match=r"\[agc\]\.readback_modes with auto_mode requires auto_speed_labels",
+        ):
+            load_rig(p)
+
+    def test_agc_section_rejects_unknown_key(self, tmp_path):
+        p = _write_toml(
+            tmp_path,
+            _MINIMAL_TOML
+            + """
+
+[agc]
+mode = [1, 2, 3]
+""",
+        )
+        with pytest.raises(RigLoadError, match=r"\[agc\].*unknown key"):
+            load_rig(p)
+
+    def test_agc_modes_rejects_empty_list(self, tmp_path):
+        p = _write_toml(
+            tmp_path,
+            _MINIMAL_TOML
+            + """
+
+[agc]
+modes = []
+""",
+        )
+        with pytest.raises(RigLoadError, match=r"\[agc\]\.modes"):
+            load_rig(p)
+
+    def test_agc_modes_rejects_non_integer_entries(self, tmp_path):
+        p = _write_toml(
+            tmp_path,
+            _MINIMAL_TOML
+            + """
+
+[agc]
+modes = [1, "FAST", 3]
+""",
+        )
+        with pytest.raises(RigLoadError, match=r"\[agc\]\.modes"):
+            load_rig(p)
+
+    def test_agc_labels_rejects_orphan_key_not_in_modes(self, tmp_path):
+        p = _write_toml(
+            tmp_path,
+            _MINIMAL_TOML
+            + """
+
+[agc]
+modes = [1, 2, 3]
+labels = { "1" = "FAST", "2" = "MID", "3" = "SLOW", "9" = "PHANTOM" }
+""",
+        )
+        with pytest.raises(RigLoadError, match=r"\[agc\]\.labels.*9"):
+            load_rig(p)
+
+    def test_agc_labels_require_every_settable_mode(self, tmp_path):
+        p = _write_toml(
+            tmp_path,
+            _MINIMAL_TOML
+            + """
+
+[agc]
+modes = [1, 2, 3]
+labels = { "1" = "FAST", "2" = "MID" }
+""",
+        )
+        with pytest.raises(
+            RigLoadError, match=r"\[agc\]\.labels missing settable mode '3'"
+        ):
+            load_rig(p)
+
+    def test_agc_labels_reject_blank_value(self, tmp_path):
+        p = _write_toml(
+            tmp_path,
+            _MINIMAL_TOML
+            + """
+
+[agc]
+modes = [1, 2, 3]
+labels = { "1" = "FAST", "2" = " ", "3" = "SLOW" }
+""",
+        )
+        with pytest.raises(
+            RigLoadError,
+            match=r"\[agc\]\.labels values must be non-empty strings",
+        ):
+            load_rig(p)
+
+    def test_agc_labels_rejects_declared_without_modes(self, tmp_path):
+        """MOR-1522 R1 (B2): [agc].labels with no [agc].modes must not load
+        silently — that would yield a capability-present radio with an
+        empty domain, short-circuiting both runtime validation seats
+        (``agc_modes is not None`` in ``IcomRadio.set_agc`` /
+        ``YaesuCatRadio.set_agc``)."""
+        p = _write_toml(
+            tmp_path,
+            _MINIMAL_TOML
+            + """
+
+[agc]
+labels = { "1" = "FAST", "2" = "MID", "3" = "SLOW" }
+""",
+        )
+        with pytest.raises(
+            RigLoadError, match=r"\[agc\]\.labels declared without \[agc\]\.modes"
+        ):
+            load_rig(p)
+
+    def test_agc_capability_absent_declares_no_domain(self, tmp_path):
+        """A radio that never mentions AGC at all — no capability, no
+        [agc] section — is valid: capability-absent hides the selector
+        (MOR-1494 pattern), it is not a malformed declaration."""
+        p = _write_toml(tmp_path, _MINIMAL_TOML)
+        rig = load_rig(p)
+        assert rig.agc_modes is None
+        assert rig.agc_labels is None
+        assert rig.agc_readback_modes is None
+        assert rig.agc_auto_mode is None
+        assert rig.agc_auto_speed_labels is None
+
+    def test_rf_sql_control_model_defaults_to_separate(self, tmp_path):
+        p = _write_toml(tmp_path, _MINIMAL_TOML)
+        rig = load_rig(p)
+        assert rig.rf_sql_control_model == "separate"
+        assert rig.to_profile().rf_sql_control_model == "separate"
+
+    def test_rf_sql_control_model_combined(self, tmp_path):
+        toml = _MINIMAL_TOML.replace(
+            'features = ["audio", "scope", "meters", "tx"]',
+            'features = ["audio", "scope", "meters", "tx"]\n'
+            'rf_sql_control_model = "combined"',
+        )
+        p = _write_toml(tmp_path, toml)
+        rig = load_rig(p)
+        assert rig.rf_sql_control_model == "combined"
+        assert rig.to_profile().rf_sql_control_model == "combined"
+
+    def test_rf_sql_control_model_invalid(self, tmp_path):
+        toml = _MINIMAL_TOML.replace(
+            'features = ["audio", "scope", "meters", "tx"]',
+            'features = ["audio", "scope", "meters", "tx"]\n'
+            'rf_sql_control_model = "concentric"',
+        )
+        p = _write_toml(tmp_path, toml)
+        with pytest.raises(RigLoadError, match="rf_sql_control_model"):
+            load_rig(p)
+
+    def test_ic7300_declares_combined_rf_sql_control_model(self):
+        rig = load_rig(RIGS_DIR / "ic7300.toml")
+        assert rig.rf_sql_control_model == "combined"
+
+    def test_ic7610_declares_combined_rf_sql_control_model(self):
+        """MOR-2467: the IC-7610's concentric RF/SQL knob is declared combined."""
+        rig = load_rig(RIGS_DIR / "ic7610.toml")
+        assert rig.rf_sql_control_model == "combined"
+
+    @pytest.mark.parametrize(
+        ("name", "expected"),
+        [
+            # MOR-3694: every shipped scope-REF rig declares its 27 19
+            # adjustable range. IC-705/IC-7300/IC-9700 are -20.0..+20.0 in
+            # 0.5 dB steps (owner-confirmed on the IC-705 bench radio; the
+            # IC-7300MK2 CI-V guide p.25 documents the same range for that
+            # radio, and ic7300mk2.toml already declared it); the IC-7610 is
+            # -30.0..+10.0 (IC-7610 CI-V Reference p.15).
+            ("ic705.toml", (-20.0, 20.0, 0.5)),
+            ("ic7300.toml", (-20.0, 20.0, 0.5)),
+            ("ic7300mk2.toml", (-20.0, 20.0, 0.5)),
+            ("ic9700.toml", (-20.0, 20.0, 0.5)),
+            ("ic7610.toml", (-30.0, 10.0, 0.5)),
+        ],
+    )
+    def test_scope_ref_range_parsed_from_shipped_scope_rigs(self, name, expected):
+        """MOR-3694: the loader parses `[scope]` REF range fields."""
+        profile = load_rig(RIGS_DIR / name).to_profile()
+        assert profile.scope_ref_min_db == expected[0], name
+        assert profile.scope_ref_max_db == expected[1], name
+        assert profile.scope_ref_step_db == expected[2], name
+
+    def test_every_scope_ref_capable_profile_declares_a_ref_range(self):
+        """MOR-3694 conformance: a rig that can set the scope REF level must
+        declare its adjustable range, or every REF control fails closed.
+
+        Scope-REF-capable means the profile both declares the ``scope``
+        capability and binds the 27 19 REF command — the two facts the UI
+        and the web handler gate on.
+        """
+        checked = 0
+        for path in sorted(
+            path for path in RIGS_DIR.glob("*.toml") if not path.name.startswith("_")
+        ):
+            profile = load_rig(path).to_profile()
+            if "scope" not in profile.capabilities:
+                continue
+            if not profile.supports_command("get_scope_ref"):
+                continue
+            assert profile.scope_ref_min_db is not None, path.name
+            assert profile.scope_ref_max_db is not None, path.name
+            assert profile.scope_ref_step_db is not None, path.name
+            assert profile.scope_ref_min_db < profile.scope_ref_max_db, path.name
+            assert profile.scope_ref_step_db > 0, path.name
+            checked += 1
+        assert checked >= 5, "expected the five shipped Icom scope rigs"
+
+    def test_ic7610_marks_scope_controls_and_filter_shape_startup_optional(self):
+        rig = load_rig(RIGS_DIR / "ic7610.toml")
+        acquisition = rig.to_profile().state_acquisition
+        assert acquisition is not None
+        expected = {
+            FieldPath.parse(f"scope_controls.global.display.{name}")
+            for name in (
+                "receiver",
+                "dual",
+                "mode",
+                "span",
+                "edge",
+                "hold",
+                "ref_db",
+                "speed",
+                "during_tx",
+                "center_type",
+                "vbw_narrow",
+                "fixed_edge",
+                "rbw",
+            )
+        } | {
+            FieldPath.parse(f"receiver.{receiver}.operator_controls.filter_shape")
+            for receiver in ("main", "sub")
+        }
+        actual = {
+            capability.path
+            for capability in acquisition.capabilities
+            if not capability.startup_required
+        }
+
+        assert actual == expected
+        assert all(acquisition.capability_for(path).can_poll for path in expected)
+
+    @pytest.mark.parametrize(
+        ("name", "expected"),
+        [
+            (
+                "ic7300.toml",
+                ((0, "MIC"), (1, "ACC"), (2, "MIC+ACC"), (3, "USB"), (4, "MIC+USB")),
+            ),
+            (
+                "ic7610.toml",
+                (
+                    (0, "MIC"),
+                    (1, "ACC"),
+                    (3, "USB"),
+                    (5, "LAN"),
+                    (2, "MIC+ACC"),
+                    (4, "MIC+USB"),
+                ),
+            ),
+        ],
+    )
+    def test_data_mode_inputs_reach_runtime_profile(self, name, expected):
+        rig = load_rig(RIGS_DIR / name)
+        assert rig.data_mode_inputs == expected
+        assert rig.to_profile().data_mode_inputs == expected
+
+    @pytest.mark.parametrize(
+        ("name", "expected"),
+        [
+            # MOR-4036: [data_mode].modes — the modes that can carry DATA.
+            # IC-705: DATA exists in SSB, AM, FM (instruction manual /
+            # Hamlib); bench-verified 2026-11-02 that CW+DATA is NAKed.
+            ("ic705.toml", ("USB", "LSB", "AM", "FM")),
+            # X6200: PDF page 10 Table 3 documents LSB-D and USB-D only.
+            ("x6200.toml", ("USB", "LSB")),
+        ],
+    )
+    def test_data_mode_modes_reach_runtime_profile(self, name, expected):
+        rig = load_rig(RIGS_DIR / name)
+        assert rig.data_mode_modes == expected, name
+        assert rig.to_profile().data_mode_modes == expected, name
+
+    def test_data_mode_modes_undeclared_is_none_for_shipped_rigs(self):
+        # MOR-4036: rigs without a sourced fact (X6100 among them) stay
+        # undeclared — None keeps the runtime's old preserve-the-flag path.
+        for name in ("x6100.toml", "ic7610.toml", "ic7300.toml"):
+            profile = load_rig(RIGS_DIR / name).to_profile()
+            assert profile.data_mode_modes is None, name
+
+    @pytest.mark.parametrize(
+        ("modes", "message"),
+        [
+            ('["USB", "NOPE"]', r"names mode 'NOPE' that is not in \[modes\].list"),
+            ("[]", "modes must be a non-empty array"),
+            ('["USB", "USB"]', "repeats mode 'USB'"),
+            ('["USB", 3]', r"modes\[1\] must be a string"),
+            ('"USB"', "modes must be a non-empty array"),
+        ],
+    )
+    def test_data_mode_modes_reject_invalid_metadata(self, tmp_path, modes, message):
+        text = re.sub(
+            r"\[data_mode\]\n",
+            f"[data_mode]\nmodes = {modes}\n",
+            TEMPLATE_PATH.read_text(),
+            count=1,
+        )
+        path = tmp_path / "invalid-data-mode-modes.toml"
+        path.write_text(text)
+        with pytest.raises(RigLoadError, match=message):
+            load_rig(path)
+
+    @pytest.mark.parametrize(
+        ("inputs", "message"),
+        [
+            (
+                '[{ value = 0, name = "MIC" }, { value = 0, name = "ACC" }]',
+                "inputs values must be unique",
+            ),
+            ("[]", "inputs must be a non-empty array"),
+        ],
+    )
+    def test_data_mode_inputs_reject_invalid_metadata(self, tmp_path, inputs, message):
+        text = re.sub(
+            r"inputs = \[.*?\]",
+            f"inputs = {inputs}",
+            TEMPLATE_PATH.read_text(),
+            count=1,
+            flags=re.DOTALL,
+        )
+        path = tmp_path / "invalid-input.toml"
+        path.write_text(text)
+        with pytest.raises(RigLoadError, match=message):
+            load_rig(path)
+
+    @pytest.mark.parametrize(
+        ("scheme", "receiver_count"),
+        [
+            ("single", 1),
+            ("ab", 1),
+            ("ab_shared", 2),
+            ("main_sub", 2),
+        ],
+    )
+    def test_valid_receiver_count_vfo_scheme_pairs(
+        self,
+        tmp_path,
+        scheme,
+        receiver_count,
+    ):
+        toml = _MINIMAL_TOML.replace(
+            "receiver_count = 1",
+            f"receiver_count = {receiver_count}",
+        ).replace('scheme = "ab"', f'scheme = "{scheme}"')
+        rig = load_rig(_write_toml(tmp_path, toml))
+
+        assert rig.receiver_count == receiver_count
+        assert rig.vfo_scheme == scheme
+
+    @pytest.mark.parametrize(
+        ("scheme", "receiver_count", "expected_count"),
+        [
+            ("single", 2, 1),
+            ("ab", 2, 1),
+            ("ab_shared", 1, 2),
+            ("main_sub", 1, 2),
+            *[
+                (scheme, receiver_count, expected_count)
+                for scheme, expected_count in [
+                    ("single", 1),
+                    ("ab", 1),
+                    ("ab_shared", 2),
+                    ("main_sub", 2),
+                ]
+                for receiver_count in (0, -1, 3)
+            ],
+        ],
+    )
+    def test_invalid_receiver_count_vfo_scheme_pairs(
+        self,
+        tmp_path,
+        scheme,
+        receiver_count,
+        expected_count,
+    ):
+        toml = _MINIMAL_TOML.replace(
+            "receiver_count = 1",
+            f"receiver_count = {receiver_count}",
+        ).replace('scheme = "ab"', f'scheme = "{scheme}"')
+
+        with pytest.raises(
+            RigLoadError,
+            match=(
+                rf"\[radio\]\.receiver_count = {receiver_count} is incompatible "
+                rf"with \[vfo\]\.scheme = '{scheme}'; expected {expected_count}"
+            ),
+        ):
+            load_rig(_write_toml(tmp_path, toml))
+
+    def test_file_not_found(self, tmp_path):
+        with pytest.raises(RigLoadError, match="not found"):
+            load_rig(tmp_path / "nonexistent.toml")
+
+    def test_invalid_toml_syntax(self, tmp_path):
+        p = _write_toml(tmp_path, "this is not [valid toml")
+        with pytest.raises(RigLoadError):
+            load_rig(p)
+
+    def test_merges_ui_keyboard_overrides_with_default_profile(self, tmp_path):
+        p = _write_toml(
+            tmp_path,
+            _MINIMAL_TOML
+            + """
+
+[ui.keyboard]
+help_title = "Custom Keyboard"
+leader_timeout_ms = 900
+alt_hints = true
+
+[[ui.keyboard.bindings]]
+id = "tune-up"
+section = "Tuning"
+label = "Tune up"
+key = "ArrowUp"
+action = "tune"
+repeatable = true
+[ui.keyboard.bindings.params]
+direction = "up"
+fine = false
+""",
+        )
+
+        rig = load_rig(p)
+
+        assert rig.keyboard is not None
+        assert rig.keyboard.help_title == "Custom Keyboard"
+        assert rig.keyboard.leader_timeout_ms == 900
+        assert rig.keyboard.alt_hints is True
+        # Without _keyboard-default.toml in tmp_path, only the override binding is present
+        binding = next(
+            binding for binding in rig.keyboard.bindings if binding.id == "tune-up"
+        )
+        assert binding.id == "tune-up"
+        assert binding.sequence == ("ArrowUp",)
+        assert binding.action == "tune"
+        assert binding.params == {"direction": "up", "fine": False}
+
+    def test_loads_default_keyboard_profile_without_ui_section(self, tmp_path):
+        rig = load_rig(_write_toml(tmp_path, _MINIMAL_TOML))
+
+        # Without _keyboard-default.toml in tmp_path, keyboard is None
+        assert rig.keyboard is None
+
+    def test_loads_default_keyboard_profile_with_file(self, tmp_path):
+        import shutil
+
+        default_kb = (
+            Path(__file__).resolve().parent.parent / "rigs" / "_keyboard-default.toml"
+        )
+        if default_kb.exists():
+            shutil.copy(default_kb, tmp_path / "_keyboard-default.toml")
+            rig = load_rig(_write_toml(tmp_path, _MINIMAL_TOML))
+            assert rig.keyboard is not None
+            assert rig.keyboard.help_title == "Radio Keyboard"
+            assert any(
+                binding.action == "toggle_help" for binding in rig.keyboard.bindings
+            )
+
+    def test_default_mode_bindings_follow_loaded_profile_modes(self):
+        no_psk = load_rig(RIGS_DIR / "ic7300.toml")
+        assert no_psk.keyboard is not None
+        no_psk_ids = {binding.id for binding in no_psk.keyboard.bindings}
+        assert {"mode-lsb", "mode-usb"} <= no_psk_ids
+        assert {"mode-psk", "mode-pskr"}.isdisjoint(no_psk_ids)
+
+        psk_capable = load_rig(RIGS_DIR / "ic7610.toml")
+        assert psk_capable.keyboard is not None
+        psk_capable_ids = {binding.id for binding in psk_capable.keyboard.bindings}
+        assert {"mode-psk", "mode-pskr"} <= psk_capable_ids
+
+    def test_mode_select_with_non_string_mode_preserves_parser_behavior(self, tmp_path):
+        p = _write_toml(
+            tmp_path,
+            _MINIMAL_TOML
+            + """
+
+[ui.keyboard]
+[[ui.keyboard.bindings]]
+id = "non-string-mode"
+key = "F1"
+action = "mode_select"
+[ui.keyboard.bindings.params]
+mode = 42
+""",
+        )
+
+        rig = load_rig(p)
+
+        assert rig.keyboard is not None
+        assert rig.keyboard.bindings[0].params == {"mode": 42}
+
+
+class TestPublishedRxCoverage:
+    """MOR-3782: shipped freq_ranges match the manufacturer's published
+    receiver coverage, and the tune/receive-only additions declare no
+    transmit band."""
+
+    # (min_hz, max_hz) segments read from the manufacturer manuals:
+    # IC-7300MK2_ENG_IM_Basic_1 "11 SPECIFICATIONS / General", receiver
+    # 0.030000 ~ 74.800000*; IC-705_ENG_Basic_9, same section, receiver
+    # 0.030000 ~ 199.999999* and 400.000000 ~ 470.000000*; FTX-1_OM_ENG_
+    # EH084M201_2506E-DS "Specifications / General", "Rx Frequency Range:
+    # 30kHz - 174MHz, 400MHz - 470MHz (operating)".
+    PUBLISHED_RX_SEGMENTS = {
+        "ic7300mk2.toml": ((30_000, 74_800_000),),
+        "ic705.toml": ((30_000, 199_999_999), (400_000_000, 470_000_000)),
+        "ftx1.toml": ((30_000, 174_000_000), (400_000_000, 470_000_000)),
+    }
+
+    @staticmethod
+    def _merged(intervals):
+        ordered = sorted(intervals)
+        merged = []
+        for start, end in ordered:
+            if merged and start <= merged[-1][1]:
+                merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+            else:
+                merged.append((start, end))
+        return merged
+
+    @pytest.mark.parametrize("filename", sorted(PUBLISHED_RX_SEGMENTS))
+    def test_ranges_match_published_receiver_coverage(self, filename):
+        profile = load_rig(RIGS_DIR / filename).to_profile()
+        published = self.PUBLISHED_RX_SEGMENTS[filename]
+        union = self._merged((r.start, r.end) for r in profile.freq_ranges)
+        for lo, hi in published:
+            assert any(s <= lo and hi <= e for s, e in union), (filename, lo, hi)
+        for rng in profile.freq_ranges:
+            inside = any(s <= rng.start and rng.end <= e for s, e in published)
+            assert inside, (filename, rng.label, rng.start, rng.end)
+            if rng.label in ("VHF RX", "UHF RX"):
+                assert rng.bands == (), (filename, rng.label)
+
+
+class TestTxPolicy:
+    """[tx_policy] parsing and validation (MOR-1912, ADR row 3a).
+
+    Parsed and carried on the profile; nothing consumes it in this row.
+    """
+
+    def test_absent_section_defaults_to_empty_policy(self, tmp_path):
+        rig = load_rig(_write_toml(tmp_path, _MINIMAL_TOML))
+
+        assert rig.tx_policy == TxPolicy()
+        assert rig.to_profile().tx_policy == TxPolicy()
+
+    def test_parses_families_and_state_map(self, tmp_path):
+        p = _write_toml(
+            tmp_path,
+            _MINIMAL_TOML
+            + """
+
+[tx_policy]
+refused_during_tx = ["mode", "vfo-topology"]
+tx_state_map = { "0" = "rx", "1" = "tx_cat", "2" = "tx_other" }
+""",
+        )
+
+        rig = load_rig(p)
+        expected = TxPolicy(
+            refused_during_tx=frozenset({"mode", "vfo-topology"}),
+            tx_state_map={"0": "rx", "1": "tx_cat", "2": "tx_other"},
+        )
+
+        assert rig.tx_policy == expected
+        assert rig.to_profile().tx_policy == expected
+
+    def test_refused_during_tx_entries_are_opaque(self, tmp_path):
+        """No membership check against any family vocabulary (deliberate,
+        see the loader's `_parse_tx_policy` docstring): the parser owns only
+        shape and uniqueness, so entries remain opaque profile metadata.
+        """
+        p = _write_toml(
+            tmp_path,
+            _MINIMAL_TOML
+            + """
+
+[tx_policy]
+refused_during_tx = ["not-a-real-family", "another-nonsense-name"]
+""",
+        )
+
+        rig = load_rig(p)
+
+        assert rig.tx_policy.refused_during_tx == {
+            "not-a-real-family",
+            "another-nonsense-name",
+        }
+
+    def test_non_table_section_is_rejected(self, tmp_path):
+        # Prepended (not appended): _MINIMAL_TOML ends inside
+        # [commands.overrides], so a bare `tx_policy = true` appended after
+        # it would be parsed as a key of that table, not the root section.
+        p = _write_toml(tmp_path, "tx_policy = true\n" + _MINIMAL_TOML)
+
+        with pytest.raises(RigLoadError, match=r"\[tx_policy\] must be a table"):
+            load_rig(p)
+
+    @pytest.mark.parametrize(
+        ("declaration", "message"),
+        [
+            (
+                "[tx_policy]\nunexpected = true",
+                r"\[tx_policy\] unknown key",
+            ),
+            (
+                '[tx_policy]\nrefused_during_tx = "mode"',
+                r"\[tx_policy\]\.refused_during_tx must be a list",
+            ),
+            (
+                "[tx_policy]\nrefused_during_tx = [1, 2]",
+                r"\[tx_policy\]\.refused_during_tx entries must be non-empty strings",
+            ),
+            (
+                '[tx_policy]\nrefused_during_tx = [""]',
+                r"\[tx_policy\]\.refused_during_tx entries must be non-empty strings",
+            ),
+            (
+                '[tx_policy]\nrefused_during_tx = ["mode", "mode"]',
+                r"\[tx_policy\]\.refused_during_tx must not contain duplicates",
+            ),
+            (
+                '[tx_policy]\ntx_state_map = ["0", "rx"]',
+                r"\[tx_policy\]\.tx_state_map must be a table",
+            ),
+            (
+                '[tx_policy]\ntx_state_map = { "0" = 1 }',
+                r"\[tx_policy\]\.tx_state_map must map strings to strings",
+            ),
+        ],
+    )
+    def test_rejects_invalid_schema(self, tmp_path, declaration, message):
+        p = _write_toml(tmp_path, _MINIMAL_TOML + f"\n{declaration}\n")
+
+        with pytest.raises(RigLoadError, match=message):
+            load_rig(p)
+
+    def test_positive_rx_rule_unmapped_value_is_not_receiving(self, tmp_path):
+        """§3.7 fail-direction pin: only an explicit "rx" entry counts as
+        receiving. An unmapped value — even one that looks plausible, and
+        even the empty map itself — must never be read as receiving.
+        """
+        p = _write_toml(
+            tmp_path,
+            _MINIMAL_TOML
+            + """
+
+[tx_policy]
+tx_state_map = { "0" = "rx", "1" = "tx_cat" }
+""",
+        )
+
+        policy = load_rig(p).tx_policy
+
+        assert policy.is_receiving("0") is True
+        assert policy.is_receiving("1") is False
+        assert policy.is_receiving("2") is False
+        assert policy.is_receiving("unrecognised") is False
+        assert TxPolicy().is_receiving("0") is False
+
+    def test_attribution_returns_the_mapped_label_or_none(self, tmp_path):
+        """MOR-1941, §3.7: attribution is a per-vendor capability, carried
+        not discarded. ``attribution`` surfaces the raw ``tx_state_map``
+        label (e.g. Yaesu's "tx_cat" vs "tx_other") for display; unlike
+        ``is_receiving`` it carries no fail-closed safety rule of its own
+        -- an unmapped value is simply ``None``, not a hazard answer.
+        """
+        p = _write_toml(
+            tmp_path,
+            _MINIMAL_TOML
+            + """
+
+[tx_policy]
+tx_state_map = { "0" = "rx", "1" = "tx_cat", "2" = "tx_other" }
+""",
+        )
+
+        policy = load_rig(p).tx_policy
+
+        assert policy.attribution("0") == "rx"
+        assert policy.attribution("1") == "tx_cat"
+        assert policy.attribution("2") == "tx_other"
+        assert policy.attribution("unrecognised") is None
+        assert TxPolicy().attribution("0") is None
+
+
+class TestControlDomainSchema:
+    _LINEAR = """\
+raw_min = 0
+raw_max = 10
+raw_step = 2
+raw_origin = 0
+display_min = 0.0
+display_max = 1.0
+display_step = 0.2
+display_origin = 0.0
+display_unit = "ratio"
+mapping = "linear"
+quantization = "nearest_ties_up"
+restoration = "exact"
+"""
+    _LARGE_DECIMAL = _LINEAR.replace(
+        "display_max = 1.0", "display_max = 1000000000000"
+    ).replace("display_step = 0.2", "display_step = 1e-20")
+    _LOOKUP_POINTS = """\
+lookup = [
+  { raw = 0, display = 0.0 },
+  { raw = 2, display = 0.2 },
+  { raw = 4, display = 0.4 },
+  { raw = 6, display = 0.6 },
+  { raw = 8, display = 0.8 },
+  { raw = 10, display = 1.0 },
+]
+"""
+    _LOOKUP = (
+        _LINEAR.replace('mapping = "linear"', 'mapping = "lookup"') + _LOOKUP_POINTS
+    )
+
+    def _load(self, tmp_path, declaration: str):
+        text = _MINIMAL_TOML + "\n[controls.test_control]\n" + declaration
+        return load_rig(_write_toml(tmp_path, text))
+
+    @pytest.mark.parametrize(
+        ("mapping", "declaration"),
+        [
+            (
+                "identity",
+                _LINEAR.replace("display_max = 1.0", "display_max = 10")
+                .replace("display_step = 0.2", "display_step = 2")
+                .replace('display_unit = "ratio"', 'display_unit = "dimensionless"')
+                .replace('mapping = "linear"', 'mapping = "identity"'),
+            ),
+            ("linear", _LINEAR),
+            (
+                "centered",
+                _LINEAR.replace("raw_min = 0", "raw_min = -10")
+                .replace("display_min = 0.0", "display_min = -1.0")
+                .replace('mapping = "linear"', 'mapping = "centered"')
+                + "raw_center = 0\ndisplay_center = 0.0\n",
+            ),
+        ],
+    )
+    def test_scalar_domain_is_published_with_exact_normalized_shape(
+        self, tmp_path, mapping, declaration
+    ):
+        rig = self._load(tmp_path, declaration)
+
+        assert rig._control_domains["test_control"]["mapping"] == mapping
+        assert rig.controls is None
+        public = rig.to_profile().controls
+        assert public == {
+            "test_control": {
+                "mapping": mapping,
+                "raw_min": -10 if mapping == "centered" else 0,
+                "raw_max": 10,
+                "raw_step": 2,
+                "raw_origin": 0,
+                "display_min": "-1" if mapping == "centered" else "0",
+                "display_max": "10" if mapping == "identity" else "1",
+                "display_step": "2" if mapping == "identity" else "0.2",
+                "display_origin": "0",
+                "display_unit": "dimensionless" if mapping == "identity" else "ratio",
+                "quantization": "nearest_ties_up",
+                "restoration": "exact",
+                **(
+                    {"raw_center": 0, "display_center": "0"}
+                    if mapping == "centered"
+                    else {}
+                ),
+            }
+        }
+        assert "lookup" not in public["test_control"]
+        assert ("raw_center" in public["test_control"]) is (mapping == "centered")
+        assert ("display_center" in public["test_control"]) is (mapping == "centered")
+        assert json.loads(json.dumps(public)) == public
+        second = rig.to_profile().controls
+        assert second is not public
+        assert second is not None
+        assert second["test_control"] is not public["test_control"]
+
+    @pytest.mark.parametrize(
+        ("old", "new", "message"),
+        [
+            ("raw_min = 0", "raw_min = 1", "raw_min must lie"),
+            ("raw_max = 10", "raw_max = 9", "raw_max must lie"),
+            ("raw_max = 10", "raw_max = 9007199254740991", "raw_max must lie"),
+            ("display_min = 0.0", "display_min = 0.05", "display_min must lie"),
+        ],
+    )
+    def test_rejects_off_lattice_endpoints(self, tmp_path, old, new, message):
+        with pytest.raises(RigLoadError, match=message):
+            self._load(tmp_path, self._LINEAR.replace(old, new))
+
+    def test_accepts_large_exact_decimal_lattice_independent_of_context(self, tmp_path):
+        assert self._load(tmp_path, self._LARGE_DECIMAL)._control_domains is not None
+
+    def test_large_off_lattice_raises_rig_load_error(self, tmp_path):
+        declaration = self._LARGE_DECIMAL.replace(
+            "display_min = 0.0", "display_min = 1e-21"
+        ).replace("display_origin = 0.0", "display_origin = 1e-21")
+        with pytest.raises(RigLoadError, match="display_max must lie"):
+            self._load(tmp_path, declaration)
+
+    @pytest.mark.parametrize(
+        ("centers", "message"),
+        [
+            ("raw_center = 3\ndisplay_center = 0.0\n", "raw_center must lie"),
+            ("raw_center = 0\ndisplay_center = 0.1\n", "display_center must lie"),
+        ],
+    )
+    def test_rejects_off_lattice_centers(self, tmp_path, centers, message):
+        declaration = self._LINEAR.replace('mapping = "linear"', 'mapping = "centered"')
+        with pytest.raises(RigLoadError, match=message):
+            self._load(tmp_path, declaration + centers)
+
+    @pytest.mark.parametrize(
+        ("extra", "accepted"),
+        [
+            ("range_min = 0\nrange_max = 10\n", True),
+            ("range_min = 0\nrange_max = 11\n", False),
+        ],
+    )
+    def test_legacy_range_must_be_formally_equivalent(self, tmp_path, extra, accepted):
+        declaration = self._LINEAR + extra
+        if accepted:
+            assert self._load(tmp_path, declaration)._control_domains is not None
+        else:
+            with pytest.raises(RigLoadError, match="legacy range.*raw bounds"):
+                self._load(tmp_path, declaration)
+
+    @pytest.mark.parametrize("unit", [None, "", "   "])
+    def test_explicit_domain_requires_non_empty_display_unit(self, tmp_path, unit):
+        replacement = "" if unit is None else f'display_unit = "{unit}"\n'
+        declaration = self._LINEAR.replace('display_unit = "ratio"\n', replacement)
+        with pytest.raises(RigLoadError, match="display_unit.*non-empty"):
+            self._load(tmp_path, declaration)
+
+    def test_exact_lookup_is_published_as_json_safe_objects(self, tmp_path):
+        rig = self._load(tmp_path, 'style = "stepped"\n' + self._LOOKUP)
+
+        assert rig._control_domains["test_control"]["lookup"] == (
+            (0, Decimal("0.0")),
+            (2, Decimal("0.2")),
+            (4, Decimal("0.4")),
+            (6, Decimal("0.6")),
+            (8, Decimal("0.8")),
+            (10, Decimal("1.0")),
+        )
+        public = {
+            "test_control": {
+                "style": "stepped",
+                "mapping": "lookup",
+                "raw_min": 0,
+                "raw_max": 10,
+                "raw_step": 2,
+                "raw_origin": 0,
+                "display_min": "0",
+                "display_max": "1",
+                "display_step": "0.2",
+                "display_origin": "0",
+                "display_unit": "ratio",
+                "quantization": "nearest_ties_up",
+                "restoration": "exact",
+                "lookup": [
+                    {"raw": 0, "display": "0"},
+                    {"raw": 2, "display": "0.2"},
+                    {"raw": 4, "display": "0.4"},
+                    {"raw": 6, "display": "0.6"},
+                    {"raw": 8, "display": "0.8"},
+                    {"raw": 10, "display": "1"},
+                ],
+            }
+        }
+        assert rig.controls == {"test_control": {"style": "stepped"}}
+        assert rig.to_profile().controls == public
+        assert json.loads(json.dumps(public, allow_nan=False)) == public
+        assert "raw_center" not in public["test_control"]
+        assert "display_center" not in public["test_control"]
+
+    def test_encoded_domain_publishes_default_and_exact_numeric_choices(self, tmp_path):
+        declaration = """\
+mapping = "encoded"
+choices = [
+  { raw = 0, label = "Default" },
+  { raw = 1, display = 250 },
+  { raw = 4, display = 1250.5 },
+]
+"""
+
+        rig = self._load(tmp_path, declaration)
+
+        assert rig._control_domains["test_control"]["choices"] == (
+            (0, "Default"),
+            (1, Decimal("250")),
+            (4, Decimal("1250.5")),
+        )
+        public = rig.to_profile().controls
+        assert public == {
+            "test_control": {
+                "mapping": "encoded",
+                "choices": [
+                    {"raw": 0, "label": "Default"},
+                    {"raw": 1, "display": "250"},
+                    {"raw": 4, "display": "1250.5"},
+                ],
+            }
+        }
+        assert json.loads(json.dumps(public, allow_nan=False)) == public
+
+    @pytest.mark.parametrize(
+        ("choices", "message"),
+        [
+            (
+                '[{ raw = 0, label = "Default" }, { raw = 0, display = 250 }]',
+                "raw values.*unique",
+            ),
+            (
+                '[{ raw = 0, label = "Default" }, { raw = 1, display = 250 }, { raw = 2, display = 250 }]',
+                "display values.*unique",
+            ),
+            ('[{ raw = 0, label = "" }]', "label.*non-empty"),
+            ('[{ raw = true, label = "Default" }]', "raw.*integer"),
+            ("[{ raw = 0, display = 250 }]", "exactly one.*default"),
+            (
+                "[{ raw = 0, display = 250 }, { raw = 1, display = 500 }]",
+                "exactly one.*default",
+            ),
+            (
+                '[{ raw = 0, display = 250 }, { raw = 1, label = "Default" }]',
+                "default.*raw code 0",
+            ),
+            (
+                '[{ raw = 0, label = "Default" }, { raw = 1, label = "Default" }]',
+                "exactly one.*default",
+            ),
+            ('[{ raw = 0, label = "default" }]', 'label must be exactly "Default"'),
+            ('[{ raw = 0, label = "Default " }]', 'label must be exactly "Default"'),
+            (
+                '[{ raw = 0, label = "Default", display = 250 }]',
+                "exactly raw and one of label or display",
+            ),
+            (
+                '[{ raw = 0, label = "Default", extra = 1 }]',
+                "exactly raw and one of label or display",
+            ),
+            (
+                '[{ raw = 0, label = "Default" }, { raw = 1, display = nan }]',
+                "display.*finite",
+            ),
+        ],
+    )
+    def test_encoded_domain_rejects_ambiguous_or_malformed_choices(
+        self, tmp_path, choices, message
+    ):
+        declaration = 'mapping = "encoded"\nchoices = ' + choices + "\n"
+
+        with pytest.raises(RigLoadError, match=message):
+            self._load(tmp_path, declaration)
+
+    @pytest.mark.parametrize(
+        ("mapping", "declaration"),
+        [
+            (
+                "identity",
+                _LINEAR.replace("display_max = 1.0", "display_max = 10")
+                .replace("display_step = 0.2", "display_step = 2")
+                .replace('display_unit = "ratio"', 'display_unit = "dimensionless"')
+                .replace('mapping = "linear"', 'mapping = "identity"'),
+            ),
+            ("linear", _LINEAR),
+            (
+                "centered",
+                _LINEAR.replace("raw_min = 0", "raw_min = -10")
+                .replace("display_min = 0.0", "display_min = -1.0")
+                .replace('mapping = "linear"', 'mapping = "centered"')
+                + "raw_center = 0\ndisplay_center = 0.0\n",
+            ),
+            ("lookup", _LOOKUP),
+        ],
+    )
+    def test_non_encoded_domains_reject_choices(self, tmp_path, mapping, declaration):
+        with pytest.raises(RigLoadError, match="choices requires encoded mapping"):
+            self._load(
+                tmp_path,
+                declaration + 'choices = [{ raw = 0, label = "Default" }]\n',
+            )
+
+    def test_exact_lookup_requires_every_raw_lattice_point(self, tmp_path):
+        partial = self._LOOKUP.replace("  { raw = 4, display = 0.4 },\n", "")
+        with pytest.raises(RigLoadError, match="exact.*complete raw lattice"):
+            self._load(tmp_path, partial)
+
+    def test_unavailable_lookup_permits_truthful_partial_table(self, tmp_path):
+        partial = self._LOOKUP.replace(
+            'restoration = "exact"', 'restoration = "unavailable"'
+        )
+        partial = partial.replace("  { raw = 4, display = 0.4 },\n", "")
+        assert (
+            len(
+                self._load(tmp_path, partial)._control_domains["test_control"]["lookup"]
+            )
+            == 5
+        )
+
+    def test_lookup_accepts_strictly_decreasing_axes(self, tmp_path):
+        lines = self._LOOKUP_POINTS.splitlines()
+        descending = "\n".join(lines[:1] + list(reversed(lines[1:-1])) + lines[-1:])
+        declaration = self._LINEAR.replace('mapping = "linear"', 'mapping = "lookup"')
+        assert (
+            self._load(tmp_path, declaration + descending)._control_domains is not None
+        )
+
+    @pytest.mark.parametrize(
+        ("old", "new", "message"),
+        [
+            ("raw = 4, display = 0.4", "raw = 2, display = 0.4", "raw values.*unique"),
+            (
+                "raw = 4, display = 0.4",
+                "raw = 4, display = 0.2",
+                "display values.*unique",
+            ),
+            (
+                "{ raw = 4, display = 0.4 },\n  { raw = 6, display = 0.6 }",
+                "{ raw = 6, display = 0.4 },\n  { raw = 4, display = 0.6 }",
+                "raw values.*strictly monotonic",
+            ),
+            (
+                "{ raw = 4, display = 0.4 },\n  { raw = 6, display = 0.6 }",
+                "{ raw = 4, display = 0.6 },\n  { raw = 6, display = 0.4 }",
+                "display values.*strictly monotonic",
+            ),
+        ],
+    )
+    def test_lookup_rejects_duplicate_and_non_monotonic_axes(
+        self, tmp_path, old, new, message
+    ):
+        with pytest.raises(RigLoadError, match=message):
+            self._load(tmp_path, self._LOOKUP.replace(old, new))
+
+    @pytest.mark.parametrize(
+        ("old", "new", "message"),
+        [
+            ("raw = 4, display = 0.4", "raw = 3, display = 0.4", "raw.*lattice"),
+            ("raw = 4, display = 0.4", "raw = 12, display = 0.4", "raw.*range"),
+            ("raw = 4, display = 0.4", "raw = 4, display = 0.45", "display.*lattice"),
+            ("raw = 4, display = 0.4", "raw = 4, display = 1.2", "display.*range"),
+        ],
+    )
+    def test_lookup_rejects_out_of_range_and_off_lattice_points(
+        self, tmp_path, old, new, message
+    ):
+        with pytest.raises(RigLoadError, match=message):
+            self._load(tmp_path, self._LOOKUP.replace(old, new))
+
+    def test_lookup_rejects_large_index_tolerance_bypass(self, tmp_path):
+        declaration = self._LOOKUP.replace(
+            "display_max = 1.0", "display_max = 1000000000000.2"
+        )
+        declaration = declaration.replace(
+            "{ raw = 10, display = 1.0 }",
+            "{ raw = 10, display = 1000000000000.05 }",
+        )
+        with pytest.raises(RigLoadError, match="display.*lattice"):
+            self._load(tmp_path, declaration)
+
+        declaration = self._LOOKUP.replace("raw_max = 10", "raw_max = 9007199254740992")
+        declaration = declaration.replace(
+            'restoration = "exact"', 'restoration = "unavailable"'
+        )
+        declaration = declaration.replace(
+            "{ raw = 10, display = 1.0 }", "{ raw = 9007199254740991, display = 1.0 }"
+        )
+        with pytest.raises(RigLoadError, match="raw.*lattice"):
+            self._load(tmp_path, declaration)
+
+    def test_unavailable_lookup_still_rejects_ambiguous_display(self, tmp_path):
+        declaration = self._LOOKUP.replace(
+            'restoration = "exact"', 'restoration = "unavailable"'
+        ).replace("raw = 4, display = 0.4", "raw = 4, display = 0.2")
+        with pytest.raises(RigLoadError, match="display values.*unique"):
+            self._load(tmp_path, declaration)
+
+    @pytest.mark.parametrize(
+        "lookup",
+        [
+            "",
+            "lookup = []\n",
+            'lookup = "invalid"\n',
+            "lookup = [0]\n",
+            "lookup = [{ raw = 0 }]\n",
+            "lookup = [{ raw = 0, display = 0.0, extra = 1 }]\n",
+            "lookup = [{ raw = 0.0, display = 0.0 }]\n",
+            "lookup = [{ raw = true, display = 0.0 }]\n",
+            'lookup = [{ raw = 0, display = "zero" }]\n',
+            "lookup = [{ raw = 0, display = nan }]\n",
+        ],
+    )
+    def test_lookup_rejects_empty_and_malformed_tables(self, tmp_path, lookup):
+        declaration = self._LINEAR.replace('mapping = "linear"', 'mapping = "lookup"')
+        with pytest.raises(RigLoadError, match="lookup"):
+            self._load(tmp_path, declaration + lookup)
+
+    def test_lookup_key_requires_lookup_mapping(self, tmp_path):
+        with pytest.raises(RigLoadError, match="lookup.*mapping"):
+            self._load(tmp_path, self._LINEAR + self._LOOKUP_POINTS)
+
+    # MOR-1883: every profile that declares controls.rit now declares the
+    # exact validated form (the legacy raw_center shape fail-closes the
+    # RIT/XIT control in the MOR-1730 frontend contract).
+    _EXACT_DOMAIN_REGISTER = {
+        # MOR-4433: FT-991A declares three exact domains; unlike the FTX-1
+        # it has no [controls.rit] table (RIT/XIT ride the RT/XT/RU/RD/RC
+        # commands with no exact domain), so "rit" is absent here, and
+        # NB/NR are omitted from v1 (no [controls.nb*]/[controls.nr*]).
+        "ft991a.toml": {
+            "manual_notch_freq",
+            "if_shift",
+            "cw_pitch",
+        },
+        "ftx1.toml": {
+            "rit",
+            "nr_level",
+            "nb_level",
+            "manual_notch_freq",
+            "if_shift",
+            "cw_pitch",
+        },
+        "ic705.toml": {"rit"},
+        "ic7300.toml": {"rit"},
+        "ic7300mk2.toml": {"rit"},
+        "ic905.toml": {"rit"},
+        "ic7610.toml": {"rit"},
+        "ic9700.toml": {"rit"},
+        "x6100.toml": {"rit"},
+        "x6200.toml": {"rit"},
+    }
+
+    def test_shipped_profiles_declare_only_validated_exact_domains(self):
+        for path in sorted(
+            path for path in RIGS_DIR.glob("*.toml") if not path.name.startswith("_")
+        ):
+            rig = load_rig(path)
+            expected = self._EXACT_DOMAIN_REGISTER.get(path.name)
+            if expected is None:
+                assert rig._control_domains is None, path.name
+                assert rig.to_profile().controls == rig.controls, path.name
+                continue
+            assert rig._control_domains is not None, path.name
+            assert set(rig._control_domains) == expected, path.name
+            assert rig.to_profile().controls is not rig.controls, path.name
+
+    def test_legacy_control_spec_remains_runtime_callable_with_its_exact_shape(self):
+        legacy = ControlSpec(
+            style="stepped",
+            raw_min=0,
+            raw_max=10,
+            raw_center=5,
+            display_min=0,
+            display_max=10,
+            display_unit="dimensionless",
+        )
+
+        assert legacy == {
+            "style": "stepped",
+            "raw_min": 0,
+            "raw_max": 10,
+            "raw_center": 5,
+            "display_min": 0,
+            "display_max": 10,
+            "display_unit": "dimensionless",
+        }
+
+    def test_malformed_domain_rejects_before_profile_production(self, tmp_path):
+        malformed = self._LINEAR.replace("raw_step = 2", "raw_step = 0")
+
+        with pytest.raises(RigLoadError, match="raw_step"):
+            self._load(tmp_path, malformed)
+
+    _LEGACY_PITCH = (
+        "raw_min = 0\nraw_max = 255\ndisplay_min = 300\ndisplay_max = 900\n"
+        'display_unit = "Hz"\n'
+    )
+
+    def test_decode_quantum_is_published_on_the_legacy_control(self, tmp_path):
+        rig = self._load(tmp_path, self._LEGACY_PITCH + "decode_quantum = 5\n")
+
+        assert rig.controls == {
+            "test_control": {
+                "raw_min": 0,
+                "raw_max": 255,
+                "display_min": 300,
+                "display_max": 900,
+                "display_unit": "Hz",
+                "decode_quantum": 5,
+            }
+        }
+        assert rig.to_profile().controls == rig.controls
+
+    @pytest.mark.parametrize(
+        "quantum",
+        [
+            "decode_quantum = 0",
+            "decode_quantum = -5",
+            "decode_quantum = 1.5",
+            'decode_quantum = "5"',
+            "decode_quantum = true",
+        ],
+        ids=["zero", "negative", "fractional", "string", "boolean"],
+    )
+    def test_decode_quantum_must_be_a_positive_integer(self, tmp_path, quantum):
+        with pytest.raises(RigLoadError, match="decode_quantum.*positive integer"):
+            self._load(tmp_path, self._LEGACY_PITCH + quantum + "\n")
+
+    def test_decode_quantum_requires_the_full_legacy_band(self, tmp_path):
+        partial = (
+            'raw_min = 0\nraw_max = 255\ndisplay_unit = "Hz"\ndecode_quantum = 5\n'
+        )
+        with pytest.raises(
+            RigLoadError, match="decode_quantum.*display_min.*display_max"
+        ):
+            self._load(tmp_path, partial)
+
+    def test_decode_quantum_is_rejected_on_explicit_domains(self, tmp_path):
+        with pytest.raises(RigLoadError, match="decode_quantum.*explicit"):
+            self._load(tmp_path, self._LINEAR + "decode_quantum = 5\n")
+
+    def test_decode_quantum_rejects_a_domain_with_an_exact_half_tie(self, tmp_path):
+        tie = (
+            "raw_min = 0\nraw_max = 2\ndisplay_min = 0\ndisplay_max = 1\n"
+            'display_unit = "Hz"\ndecode_quantum = 1\n'
+        )
+        with pytest.raises(RigLoadError, match="exact half-step tie"):
+            self._load(tmp_path, tie)
+
+    def test_every_civ_profile_with_cw_commands_declares_decode_quantum(self):
+        for path in sorted(
+            path for path in RIGS_DIR.glob("*.toml") if not path.name.startswith("_")
+        ):
+            rig = load_rig(path)
+            controls = rig.to_profile().controls
+            for ctl, command in (
+                ("cw_pitch", "get_cw_pitch"),
+                ("key_speed", "get_key_speed"),
+            ):
+                if command not in rig.commands:
+                    continue
+                assert controls is not None, (path.name, ctl)
+                entry = controls.get(ctl)
+                assert isinstance(entry, dict), (path.name, ctl)
+                assert isinstance(entry.get("decode_quantum"), int), (path.name, ctl)
+                assert entry["decode_quantum"] > 0, (path.name, ctl)
+
+    def test_every_civ_profile_with_cw_commands_declares_encode_rounding(self):
+        for path in sorted(
+            path for path in RIGS_DIR.glob("*.toml") if not path.name.startswith("_")
+        ):
+            rig = load_rig(path)
+            controls = rig.to_profile().controls
+            for ctl, command in (
+                ("cw_pitch", "set_cw_pitch"),
+                ("key_speed", "set_key_speed"),
+            ):
+                if command not in rig.commands:
+                    continue
+                assert controls is not None, (path.name, ctl)
+                entry = controls.get(ctl)
+                assert isinstance(entry, dict), (path.name, ctl)
+                assert entry.get("encode_rounding") in (
+                    "ceil",
+                    "nearest_half_down",
+                ), (path.name, ctl)
+
+    def test_encode_rounding_is_published_on_the_legacy_control(self, tmp_path):
+        rig = self._load(tmp_path, self._LEGACY_PITCH + 'encode_rounding = "ceil"\n')
+
+        assert rig.controls == {
+            "test_control": {
+                "raw_min": 0,
+                "raw_max": 255,
+                "display_min": 300,
+                "display_max": 900,
+                "display_unit": "Hz",
+                "encode_rounding": "ceil",
+            }
+        }
+        assert rig.to_profile().controls == rig.controls
+
+    @pytest.mark.parametrize(
+        "rounding",
+        [
+            'encode_rounding = "floor"',
+            'encode_rounding = "nearest_half_up"',
+            'encode_rounding = ""',
+            "encode_rounding = 5",
+            "encode_rounding = true",
+        ],
+        ids=["floor", "half_up", "empty", "integer", "boolean"],
+    )
+    def test_encode_rounding_must_be_a_declared_mode(self, tmp_path, rounding):
+        with pytest.raises(
+            RigLoadError, match=r"encode_rounding.*ceil.*nearest_half_down"
+        ):
+            self._load(tmp_path, self._LEGACY_PITCH + rounding + "\n")
+
+    def test_encode_rounding_requires_the_full_legacy_band(self, tmp_path):
+        partial = (
+            'raw_min = 0\nraw_max = 255\ndisplay_unit = "Hz"\n'
+            'encode_rounding = "ceil"\n'
+        )
+        with pytest.raises(
+            RigLoadError, match="encode_rounding.*display_min.*display_max"
+        ):
+            self._load(tmp_path, partial)
+
+    def test_encode_rounding_is_rejected_on_explicit_domains(self, tmp_path):
+        with pytest.raises(RigLoadError, match="encode_rounding.*explicit"):
+            self._load(tmp_path, self._LINEAR + 'encode_rounding = "ceil"\n')
+
+    @pytest.mark.parametrize(
+        "maximum",
+        [
+            "9" * 400,
+            "9007199254740993",
+            "0.00000000000000000000000000000000000000000000000001",
+            "-0.00000000000000000000000000000000000000000000000001",
+        ],
+    )
+    def test_public_domain_displays_are_lossless_canonical_fixed_point(
+        self, tmp_path, maximum
+    ):
+        if maximum.startswith("-"):
+            magnitude = maximum.removeprefix("-")
+            declaration = self._LINEAR.replace(
+                "display_min = 0.0", f"display_min = {maximum}"
+            )
+            declaration = declaration.replace(
+                "display_step = 0.2", f"display_step = {magnitude}"
+            )
+            declaration = declaration.replace("display_max = 1.0", "display_max = 0")
+            expected_field = "display_min"
+        else:
+            declaration = self._LINEAR.replace(
+                "display_max = 1.0", f"display_max = {maximum}"
+            )
+            declaration = declaration.replace(
+                "display_step = 0.2", f"display_step = {maximum}"
+            )
+            expected_field = "display_max"
+        declaration = declaration.replace("display_origin = 0.0", "display_origin = 0")
+        public = self._load(tmp_path, declaration).to_profile().controls
+        assert public is not None
+        control = public["test_control"]
+        assert json.loads(json.dumps(control, allow_nan=False)) == control
+        assert control[expected_field] == maximum
+
+
+# ── RadioProfile building ───────────────────────────────────────
+
+
+class TestToProfile:
+    """RigConfig.to_profile() produces correct RadioProfile."""
+
+    def test_returns_radio_profile(self):
+        rig = load_rig(TEMPLATE_PATH)
+        profile = rig.to_profile()
+        assert isinstance(profile, RadioProfile)
+
+    def test_civ_addr(self):
+        profile = load_rig(TEMPLATE_PATH).to_profile()
+        assert profile.civ_addr == 0x98
+
+    def test_receiver_count(self):
+        profile = load_rig(TEMPLATE_PATH).to_profile()
+        assert profile.receiver_count == 2
+
+    def test_transceiver_count_default(self):
+        """IC-7610 has no [radio].transceiver_count → defaults to 1."""
+        profile = load_rig(TEMPLATE_PATH).to_profile()
+        assert profile.transceiver_count == 1
+
+    def test_transceiver_count_ftx1(self):
+        """FTX-1 declares transceiver_count = 2 → must propagate to profile."""
+        ftx1_path = RIGS_DIR / "ftx1.toml"
+        profile = load_rig(ftx1_path).to_profile()
+        assert profile.transceiver_count == 2
+
+    def test_ftx1_empty_filter_selector_preserves_width_tables(self):
+        profile = load_rig(RIGS_DIR / "ftx1.toml").to_profile()
+
+        assert profile.filters == ()
+        assert profile.filter_config is not None
+        assert profile.filter_config["SSB"].table[0] == 300
+        assert profile.filter_config["SSB"].table[-1] == 4000
+        assert profile.filter_width_encoding == "table_index"
+        assert profile.filter_width_first_code == 1
+
+    def test_ic7300_antenna_topology_without_control_capability(self):
+        """MOR-2118: topology metadata must not imply antenna selection."""
+        rig = load_rig(RIGS_DIR / "ic7300.toml")
+        profile = rig.to_profile()
+
+        assert "antenna" not in profile.capabilities
+        assert profile.antenna_tx_count == 1
+        assert rig.antenna_has_rx_ant is False
+        assert profile.supports_command("get_antenna") is False
+        assert profile.supports_command("set_antenna") is False
+
+    @pytest.mark.parametrize(
+        ("filename", "tx_count", "has_rx_antenna"),
+        [
+            ("ic705.toml", 1, False),
+            ("ic7610.toml", 2, True),
+            ("ic7300.toml", 1, False),
+            ("ic9700.toml", 1, False),
+        ],
+    )
+    def test_antenna_topology_propagates_to_profile(
+        self, filename: str, tx_count: int, has_rx_antenna: bool
+    ):
+        profile = load_rig(RIGS_DIR / filename).to_profile()
+
+        assert profile.antenna_tx_count == tx_count
+        assert profile.antenna_has_rx_ant is has_rx_antenna
+
+    def test_capabilities_frozenset(self):
+        profile = load_rig(TEMPLATE_PATH).to_profile()
+        assert isinstance(profile.capabilities, frozenset)
+        assert "audio" in profile.capabilities
+        assert "dual_rx" in profile.capabilities
+
+    def test_vfo_main_sub_codes(self):
+        profile = load_rig(TEMPLATE_PATH).to_profile()
+        assert profile.vfo_main_code == 0xD0
+        assert profile.vfo_sub_code == 0xD1
+        # IC-7610 template uses legacy [vfo].swap with scheme=main_sub
+        assert profile.swap_main_sub_code == 0xB0
+        assert profile.swap_ab_code is None
+
+    def test_vfo_ab_codes(self, tmp_path):
+        p = _write_toml(tmp_path, _MINIMAL_TOML)
+        profile = load_rig(p).to_profile()
+        # ab scheme with no explicit codes → None
+        assert profile.vfo_main_code is None
+        assert profile.vfo_sub_code is None
+
+    def test_freq_ranges(self):
+        profile = load_rig(TEMPLATE_PATH).to_profile()
+        assert isinstance(profile.freq_ranges, tuple)
+        assert len(profile.freq_ranges) == 2
+        hf = profile.freq_ranges[0]
+        assert isinstance(hf, FreqRangeInfo)
+        assert hf.start == 30_000
+        assert hf.end == 60_000_000
+        assert hf.label == "HF"
+
+    def test_freq_range_bands(self):
+        profile = load_rig(TEMPLATE_PATH).to_profile()
+        hf = profile.freq_ranges[0]
+        assert len(hf.bands) == 10
+        band_160 = hf.bands[0]
+        assert isinstance(band_160, BandInfo)
+        assert band_160.name == "160m"
+        assert band_160.start == 1_800_000
+        assert band_160.end == 2_000_000
+        assert band_160.default == 1_825_000
+
+    def test_freq_range_repeater_defaults_false(self):
+        profile = load_rig(TEMPLATE_PATH).to_profile()
+        assert all(fr.repeater is False for fr in profile.freq_ranges)
+
+    @pytest.mark.parametrize(
+        ("filename", "expected"),
+        [
+            (
+                "ftx1.toml",
+                [("2m", 144_000_000, 148_000_000), ("70cm", 430_000_000, 450_000_000)],
+            ),
+            (
+                "ic705.toml",
+                [("2m", 144_000_000, 148_000_000), ("70cm", 430_000_000, 450_000_000)],
+            ),
+            # MOR-2567: USA coverage per IC-9700 Basic Manual, Specifications,
+            # "Frequency coverage (unit: MHz)" - VHF/UHF/SHF only, no HF, no 6 m.
+            (
+                "ic9700.toml",
+                [
+                    ("2m", 144_000_000, 148_000_000),
+                    ("70cm", 430_000_000, 450_000_000),
+                    ("23cm", 1_240_000_000, 1_300_000_000),
+                ],
+            ),
+        ],
+    )
+    def test_shipped_profiles_flag_repeater_ranges(self, filename, expected):
+        profile = load_rig(RIGS_DIR / filename).to_profile()
+        flagged = [
+            (fr.label, fr.start, fr.end) for fr in profile.freq_ranges if fr.repeater
+        ]
+        assert flagged == expected
+
+    def test_freq_range_repeater_rejects_non_boolean(self, tmp_path):
+        p = _write_toml(
+            tmp_path,
+            _MINIMAL_TOML.replace(
+                'label = "HF"\nstart_hz = 30000\nend_hz = 60000000',
+                'label = "HF"\nstart_hz = 30000\nend_hz = 60000000\nrepeater = 1',
+            ),
+        )
+        with pytest.raises(
+            RigLoadError, match=r"freq_ranges\.ranges\[0\]\.repeater must be a boolean"
+        ):
+            load_rig(p)
+
+    def test_freq_range_repeater_true_loads(self, tmp_path):
+        p = _write_toml(
+            tmp_path,
+            _MINIMAL_TOML.replace(
+                'label = "HF"\nstart_hz = 30000\nend_hz = 60000000',
+                'label = "HF"\nstart_hz = 30000\nend_hz = 60000000\nrepeater = true',
+            ),
+        )
+        profile = load_rig(p).to_profile()
+        assert profile.freq_ranges[0].repeater is True
+
+    def test_freq_band_rx_only_defaults_false(self):
+        profile = load_rig(TEMPLATE_PATH).to_profile()
+        assert all(
+            band.rx_only is False
+            for freq_range in profile.freq_ranges
+            for band in freq_range.bands
+        )
+
+    def test_freq_band_rx_only_rejects_non_boolean(self, tmp_path):
+        p = _write_toml(
+            tmp_path,
+            _MINIMAL_TOML.replace(
+                'label = "HF"\nstart_hz = 30000\nend_hz = 60000000',
+                'label = "HF"\nstart_hz = 30000\nend_hz = 60000000\n\n'
+                "[[freq_ranges.ranges.bands]]\n"
+                'name = "160m"\n'
+                "start_hz = 1800000\n"
+                "end_hz = 2000000\n"
+                "default_hz = 1825000\n"
+                "rx_only = 1",
+            ),
+        )
+        with pytest.raises(
+            RigLoadError,
+            match=(
+                r"freq_ranges\.ranges\[0\]\.bands\[0\]\.rx_only must be a boolean "
+                r"\(band '160m'\)"
+            ),
+        ):
+            load_rig(p)
+
+    def test_freq_band_rx_only_true_loads(self, tmp_path):
+        p = _write_toml(
+            tmp_path,
+            _MINIMAL_TOML.replace(
+                'label = "HF"\nstart_hz = 30000\nend_hz = 60000000',
+                'label = "HF"\nstart_hz = 30000\nend_hz = 60000000\n\n'
+                "[[freq_ranges.ranges.bands]]\n"
+                'name = "160m"\n'
+                "start_hz = 1800000\n"
+                "end_hz = 2000000\n"
+                "default_hz = 1825000\n"
+                "rx_only = true",
+            ),
+        )
+        profile = load_rig(p).to_profile()
+        assert profile.freq_ranges[0].bands[0].rx_only is True
+
+    # ── per-band rated maximum power (MOR-3634) ──────────────────────────
+
+    @staticmethod
+    def _toml_with_band_power(band_power: str, power: str = "[power]\nmax_watts = 100"):
+        """Minimal rig with one HF band row carrying ``band_power`` and a power section."""
+        return (
+            _MINIMAL_TOML.replace(
+                'label = "HF"\nstart_hz = 30000\nend_hz = 60000000',
+                'label = "HF"\nstart_hz = 30000\nend_hz = 60000000\n\n'
+                "[[freq_ranges.ranges.bands]]\n"
+                'name = "160m"\n'
+                "start_hz = 1800000\n"
+                "end_hz = 2000000\n"
+                "default_hz = 1825000\n" + band_power,
+            )
+            + "\n"
+            + power
+            + "\n"
+        )
+
+    def test_band_max_power_w_defaults_none(self):
+        profile = load_rig(TEMPLATE_PATH).to_profile()
+        assert all(
+            band.max_power_w is None
+            for freq_range in profile.freq_ranges
+            for band in freq_range.bands
+        )
+
+    def test_band_max_power_w_loads(self, tmp_path):
+        p = _write_toml(tmp_path, self._toml_with_band_power("max_power_w = 75"))
+        profile = load_rig(p).to_profile()
+        assert profile.freq_ranges[0].bands[0].max_power_w == 75
+
+    def test_band_max_power_w_may_equal_flat_maximum(self, tmp_path):
+        p = _write_toml(tmp_path, self._toml_with_band_power("max_power_w = 100"))
+        profile = load_rig(p).to_profile()
+        assert profile.freq_ranges[0].bands[0].max_power_w == 100
+
+    @pytest.mark.parametrize(
+        "bad",
+        [
+            "max_power_w = 0",
+            "max_power_w = -5",
+            "max_power_w = 7.5",
+            "max_power_w = true",
+        ],
+    )
+    def test_band_max_power_w_rejects_non_positive_or_non_integer(self, tmp_path, bad):
+        p = _write_toml(tmp_path, self._toml_with_band_power(bad))
+        with pytest.raises(
+            RigLoadError,
+            match=(
+                r"freq_ranges\.ranges\[0\]\.bands\[0\]\.max_power_w must be a "
+                r"positive integer \(band '160m'\)"
+            ),
+        ):
+            load_rig(p)
+
+    def test_band_max_power_w_rejects_value_above_flat_maximum(self, tmp_path):
+        p = _write_toml(tmp_path, self._toml_with_band_power("max_power_w = 101"))
+        with pytest.raises(
+            RigLoadError,
+            match=(
+                r"bands\[0\]\.max_power_w must not exceed \[power\]\.max_watts "
+                r"\(100\) \(band '160m'\)"
+            ),
+        ):
+            load_rig(p)
+
+    @pytest.mark.parametrize("power", ["", "[power]\nmin_watts = 5"])
+    def test_band_max_power_w_requires_flat_maximum(self, tmp_path, power):
+        p = _write_toml(tmp_path, self._toml_with_band_power("max_power_w = 50", power))
+        with pytest.raises(
+            RigLoadError, match=r"max_power_w requires \[power\]\.max_watts"
+        ):
+            load_rig(p)
+
+    @pytest.mark.parametrize(
+        ("filename", "expected"),
+        [
+            # IC-9700 manuals: 144 MHz 100 W, 430 MHz 75 W, 1.2 GHz 10 W.
+            ("ic9700.toml", {"2m": 100, "70cm": 75, "23cm": 10}),
+            # MOR-4300: IC-7300 Advanced Manual (11a) §16, "70 MHz band*2
+            # SSB/CW/RTTY/FM 2~50 W" (same 50 W row on the MK2, its own
+            # manual 11 SPECIFICATIONS).
+            ("ic7300.toml", {"4m": 50}),
+            ("ic7300mk2.toml", {"4m": 50}),
+            # MOR-4352 follow-up: G7250 preliminary vendor spec — 100 W
+            # HF, 90 W 50 MHz (not bench-proven; the audit never keyed).
+            (
+                "g7250.toml",
+                {
+                    "160m": 100,
+                    "80m": 100,
+                    "40m": 100,
+                    "30m": 100,
+                    "20m": 100,
+                    "17m": 100,
+                    "15m": 100,
+                    "12m": 100,
+                    "10m": 100,
+                    "6m": 90,
+                },
+            ),
+            # Flat-maximum radios declare no per-band row.
+            ("ic705.toml", {}),
+            ("ftx1.toml", {}),
+        ],
+    )
+    def test_shipped_profiles_band_max_power_w(self, filename, expected):
+        profile = load_rig(RIGS_DIR / filename).to_profile()
+        declared = {
+            band.name: band.max_power_w
+            for freq_range in profile.freq_ranges
+            for band in freq_range.bands
+            if band.max_power_w is not None
+        }
+        assert declared == expected
+        if expected:
+            assert profile.max_watts is not None
+            assert max(expected.values()) <= profile.max_watts
+
+    def test_modes(self):
+        profile = load_rig(TEMPLATE_PATH).to_profile()
+        assert profile.modes == (
+            "USB",
+            "LSB",
+            "CW",
+            "CW-R",
+            "AM",
+            "FM",
+            "RTTY",
+            "RTTY-R",
+            "PSK",
+            "PSK-R",
+        )
+
+    def test_filters(self):
+        profile = load_rig(TEMPLATE_PATH).to_profile()
+        assert profile.filters == ("FIL1", "FIL2", "FIL3")
+
+    def test_filter_config(self):
+        profile = load_rig(TEMPLATE_PATH).to_profile()
+        assert profile.filter_config is not None
+        assert profile.filter_config["USB"].defaults == (3000, 2400, 1800)
+        assert profile.filter_config["USB-D"].defaults == (3000, 1200, 500)
+        assert profile.filter_config["FM"].fixed is True
+
+    def test_pbt_step_is_declared_per_mode_and_absent_where_there_is_no_pbt(self):
+        """Twin PBT step per IC-7300 Advanced Manual p.40.
+
+        Its heading names the modes that have twin PBT -- "SSB, CW, RTTY and AM
+        modes" -- and its text gives the steps: 50 Hz in SSB, CW and RTTY,
+        200 Hz in AM. FM is absent from that list, so the profile declares no
+        step for it and a consumer must read that absence as "no PBT in this
+        mode" rather than substituting a default.
+        """
+        profile = load_rig(TEMPLATE_PATH).to_profile()
+        assert profile.filter_config is not None
+        config = profile.filter_config
+        for mode in ("USB", "LSB", "USB-D", "LSB-D", "CW", "CW-R", "RTTY", "RTTY-R"):
+            assert config[mode].pbt_step_hz == 50, mode
+        assert config["AM"].pbt_step_hz == 200
+        assert config["FM"].pbt_step_hz is None
+
+    def test_psk_filter_config_mirrors_cw(self):
+        """PSK/PSK-R share the CW IF-filter table and declare the PBT step.
+
+        Table (FIL defaults 1200/500/250, selectable 50-500 Hz in 50 Hz steps
+        and 600-3600 Hz in 100 Hz steps): IC-7610 Basic Manual, PDF p.34
+        "Selecting the IF filter", where CW and PSK share one row. The 50 Hz
+        PBT step was measured on a real IC-7610 over LAN on 2026-09-17 in PSK
+        at FIL2 (500 Hz): sweeping PBT Inner raw 0..255 read back 11
+        positions, raw 11..244. PSK-R is declared by inference from PSK --
+        the manual's Twin PBT heading (PDF p.33) names PSK without
+        distinguishing the reversed variant, and PSK-R was not separately
+        measured.
+        """
+        profile = load_rig(TEMPLATE_PATH).to_profile()
+        config = profile.filter_config
+        assert config is not None
+        for mode in ("PSK", "PSK-R"):
+            rule = config[mode]
+            assert rule.defaults == (1200, 500, 250), mode
+            assert rule.segments == config["CW"].segments, mode
+            assert rule.min_hz == 50 and rule.max_hz == 3600, mode
+            assert rule.pbt_step_hz == 50, mode
+
+    def test_pbt_step_declared_by_every_shipped_pbt_capable_profile(self):
+        """The absence of a step must mean "this mode has no twin PBT".
+
+        Two ways that reading can be wrong, and both are checked here over
+        every shipped rig rather than over a chosen few, so adding a radio
+        cannot reintroduce either silently.
+
+        A profile can be merely unmigrated -- declaring the capability and no
+        step anywhere -- and a consumer obeying the rule would take PBT away
+        from a radio that has it.
+
+        A profile can also be migrated in part, declaring a step for some modes
+        and not others, which reads as "this radio has no PBT in CW" when it
+        means "nobody filled CW in". So the modes left without a step must be
+        exactly the ones with no twin PBT: the IC-7300 Advanced Manual p.40
+        heads its section "SSB, CW, RTTY and AM modes", which leaves FM, and
+        the FM variants WFM and DV that the IC-705 adds.
+        """
+        no_twin_pbt = {"FM", "WFM", "DV"}
+        checked = 0
+        for name, config in sorted(discover_rigs(RIGS_DIR).items()):
+            profile = config.to_profile()
+            if "pbt" not in (profile.capabilities or ()):
+                continue
+            checked += 1
+            rules = profile.filter_config or {}
+            declared = {
+                mode for mode, rule in rules.items() if rule.pbt_step_hz is not None
+            }
+            missing = set(rules) - declared
+            assert declared, f"{name} declares the pbt capability but no pbt_step_hz"
+            assert missing <= no_twin_pbt, (
+                f"{name}: modes with no pbt_step_hz must be modes with no twin "
+                f"PBT, but {sorted(missing - no_twin_pbt)} are not"
+            )
+            assert not (declared & no_twin_pbt), (
+                f"{name}: {sorted(declared & no_twin_pbt)} have no twin PBT and "
+                f"must declare no step"
+            )
+            assert {rules[mode].pbt_step_hz for mode in declared} <= {50, 200}, (
+                f"{name}: unexpected step value"
+            )
+        assert checked >= 4, f"expected the four Icom profiles, checked {checked}"
+
+    def test_pbt_step_values_of_every_shipped_profile(self):
+        """The values themselves, per profile, so a wrong one cannot hide.
+
+        ic7610 and ic7300 were measured on the bench in SSB and their AM figure
+        comes from the manual; ic705 and ic9700 are inference from those two and
+        say so in their own provenance note. Either way the numbers are pinned
+        here rather than in one representative profile.
+        """
+        expected = {
+            "ic7610": {
+                "USB": 50,
+                "LSB": 50,
+                "USB-D": 50,
+                "LSB-D": 50,
+                "CW": 50,
+                "CW-R": 50,
+                "RTTY": 50,
+                "RTTY-R": 50,
+                "PSK": 50,
+                "PSK-R": 50,
+                "AM": 200,
+                "FM": None,
+            },
+            "ic7300": {
+                "USB": 50,
+                "LSB": 50,
+                "CW": 50,
+                "RTTY": 50,
+                "AM": 200,
+                "FM": None,
+            },
+            "ic705": {
+                "USB": 50,
+                "LSB": 50,
+                "CW": 50,
+                "CW-R": 50,
+                "RTTY": 50,
+                "RTTY-R": 50,
+                "AM": 200,
+                "FM": None,
+                "WFM": None,
+                "DV": None,
+            },
+            "ic9700": {
+                "USB": 50,
+                "LSB": 50,
+                "CW": 50,
+                "CW-R": 50,
+                "RTTY": 50,
+                "RTTY-R": 50,
+                "AM": 200,
+                "FM": None,
+                # MOR-3623: DV is a fixed-width digital mode with no twin PBT,
+                # like the IC-705's.
+                "DV": None,
+            },
+        }
+        for name, per_mode in expected.items():
+            rules = load_rig(RIGS_DIR / f"{name}.toml").to_profile().filter_config
+            assert rules is not None, name
+            got = {mode: rule.pbt_step_hz for mode, rule in rules.items()}
+            assert got == per_mode, name
+
+    def test_pbt_step_is_not_the_filter_width_step(self):
+        """The two per-mode steps are different quantities that collide in AM.
+
+        `step_hz` quantises the filter WIDTH; `pbt_step_hz` quantises the
+        passband offset. In AM both happen to be 200, which is exactly why a
+        reader might treat one as the other -- so this pins a mode where they
+        differ: USB declares no width step at all (its widths come from
+        segments) while its PBT step is 50.
+        """
+        config = load_rig(TEMPLATE_PATH).to_profile().filter_config
+        assert config is not None
+        assert config["AM"].step_hz == 200 and config["AM"].pbt_step_hz == 200
+        assert config["USB"].step_hz is None and config["USB"].pbt_step_hz == 50
+
+    def test_model_and_id(self):
+        profile = load_rig(TEMPLATE_PATH).to_profile()
+        assert profile.model == "IC-7610"
+        assert profile.id == "icom_ic7610"
+
+    def test_keyboard_config(self):
+        profile = load_rig(TEMPLATE_PATH).to_profile()
+        assert profile.keyboard is not None
+        assert profile.keyboard.leader_timeout_ms == 1000
+        assert profile.keyboard.alt_hints is True
+        assert any(
+            binding.action == "toggle_help" for binding in profile.keyboard.bindings
+        )
+
+
+class TestBandDefaultMode:
+    """Optional per-band ``default_mode`` validated through load_rig().
+
+    Failing-first: deleting either rejection branch in
+    ``src/rigplane/profiles/rig_loader.py`` (non-string values, unknown
+    mode names) must turn the matching rejection test red. The valid and
+    omitted cases below pin the behaviour that must keep loading.
+    """
+
+    _BAND = """
+[[freq_ranges.ranges.bands]]
+name = "20m"
+start_hz = 14000000
+end_hz = 14350000
+default_hz = 14200000
+bsr_code = 5
+default_mode = "USB"
+"""
+
+    def _with_mode_line(self, tmp_path, declaration: str):
+        body = _MINIMAL_TOML + self._BAND.replace('default_mode = "USB"', declaration)
+        return _write_toml(tmp_path, body)
+
+    def test_default_mode_non_string_rejected(self, tmp_path):
+        """Red mutation: accept ``default_mode = 42`` (drop the isinstance
+        check) and this passes a non-string into the profile."""
+        p = self._with_mode_line(tmp_path, "default_mode = 42")
+        with pytest.raises(RigLoadError, match=r"default_mode must be a string"):
+            load_rig(p)
+
+    def test_default_mode_unknown_name_rejected(self, tmp_path):
+        """Red mutation: accept ``default_mode = "FM"`` although "FM" is
+        not in this file's [modes].list (drop the membership check)."""
+        p = self._with_mode_line(tmp_path, 'default_mode = "FM"')
+        with pytest.raises(RigLoadError, match=r"must name a mode"):
+            load_rig(p)
+
+    def test_default_mode_valid_value_loads(self, tmp_path):
+        """A shipped mode name keeps loading and reaches the profile."""
+        p = self._with_mode_line(tmp_path, 'default_mode = "USB"')
+        profile = load_rig(p).to_profile()
+        assert profile.freq_ranges[0].bands[0].default_mode == "USB"
+
+    def test_default_mode_omitted_is_none(self, tmp_path):
+        """Bands without the key (e.g. IC-7300 HF) carry None, unchanged."""
+        body = _MINIMAL_TOML + self._BAND.replace('default_mode = "USB"\n', "")
+        profile = load_rig(_write_toml(tmp_path, body)).to_profile()
+        assert profile.freq_ranges[0].bands[0].default_mode is None
+
+
+# ── VFO scheme split (issue #710) ────────────────────────────────
+
+
+class TestVfoSchemeSplit:
+    """Explicit ``swap_ab`` / ``swap_main_sub`` fields + legacy mapping."""
+
+    _MAIN_SUB_SPLIT = """\
+    [radio]
+    id = "icom_ic7610_test"
+    model = "TEST-MAIN-SUB"
+    civ_addr = 0x98
+    receiver_count = 2
+    has_lan = true
+    has_wifi = false
+
+    [capabilities]
+    features = ["audio", "dual_rx"]
+
+    [modes]
+    list = ["USB"]
+
+    [filters]
+    list = ["FIL1"]
+
+    [vfo]
+    scheme = "main_sub"
+    main_select = [0xD0]
+    sub_select = [0xD1]
+    swap_main_sub = [0xB0]
+    equal_main_sub = [0xB1]
+    swap_ab = [0x07, 0xB0]
+    equal_ab = [0x07, 0xA0]
+
+    [[freq_ranges.ranges]]
+    label = "HF"
+    start_hz = 30000
+    end_hz = 60000000
+
+    [commands]
+    get_freq = [0x03]
+    """
+
+    def test_new_fields_loaded_into_profile(self, tmp_path):
+        p = _write_toml(tmp_path, self._MAIN_SUB_SPLIT)
+        profile = load_rig(p).to_profile()
+        assert profile.swap_main_sub_code == 0xB0
+        assert profile.equal_main_sub_code == 0xB1
+        assert profile.swap_ab_code == 0x07
+        assert profile.equal_ab_code == 0x07
+
+    def test_legacy_swap_maps_to_main_sub_on_dual_scheme(self, tmp_path):
+        toml = """\
+        [radio]
+        id = "legacy_dual"
+        model = "LEGACY-DUAL"
+        civ_addr = 0x98
+        receiver_count = 2
+        has_lan = true
+        has_wifi = false
+
+        [capabilities]
+        features = ["audio", "dual_rx"]
+
+        [modes]
+        list = ["USB"]
+
+        [filters]
+        list = ["FIL1"]
+
+        [vfo]
+        scheme = "main_sub"
+        main_select = [0xD0]
+        sub_select = [0xD1]
+        swap = [0xB0]
+        equal = [0xB1]
+
+        [[freq_ranges.ranges]]
+        label = "HF"
+        start_hz = 30000
+        end_hz = 60000000
+        """
+        p = _write_toml(tmp_path, toml, name="legacy_dual.toml")
+        with pytest.warns(DeprecationWarning, match="issue #710"):
+            profile = load_rig(p).to_profile()
+        assert profile.swap_main_sub_code == 0xB0
+        assert profile.equal_main_sub_code == 0xB1
+        assert profile.swap_ab_code is None
+        assert profile.equal_ab_code is None
+
+    def test_legacy_swap_maps_to_ab_on_single_rx_scheme(self, tmp_path):
+        toml = """\
+        [radio]
+        id = "legacy_ab"
+        model = "LEGACY-AB"
+        civ_addr = 0x94
+        receiver_count = 1
+        has_lan = true
+        has_wifi = false
+
+        [capabilities]
+        features = ["audio"]
+
+        [modes]
+        list = ["USB"]
+
+        [filters]
+        list = ["FIL1"]
+
+        [vfo]
+        scheme = "ab"
+        swap = [0xB0]
+        equal = [0xA0]
+
+        [[freq_ranges.ranges]]
+        label = "HF"
+        start_hz = 30000
+        end_hz = 60000000
+        """
+        p = _write_toml(tmp_path, toml, name="legacy_ab.toml")
+        with pytest.warns(DeprecationWarning, match="issue #710"):
+            profile = load_rig(p).to_profile()
+        assert profile.swap_ab_code == 0xB0
+        assert profile.equal_ab_code == 0xA0
+        assert profile.swap_main_sub_code is None
+        assert profile.equal_main_sub_code is None
+
+    def test_no_deprecation_when_only_new_keys(self, tmp_path, recwarn):
+        p = _write_toml(tmp_path, self._MAIN_SUB_SPLIT, name="new_only.toml")
+        load_rig(p)
+        assert not [
+            w for w in recwarn.list if issubclass(w.category, DeprecationWarning)
+        ]
+
+
+# ── CommandMap ───────────────────────────────────────────────────
+
+
+class TestCommandMap:
+    """CommandMap basic API."""
+
+    def test_get_returns_wire_bytes(self):
+        cm = CommandMap({"af_gain": (0x14, 0x01)})
+        assert cm.get("af_gain") == (0x14, 0x01)
+
+    def test_get_missing_raises_key_error(self):
+        cm = CommandMap({"af_gain": (0x14, 0x01)})
+        with pytest.raises(KeyError, match="nonexistent"):
+            cm.get("nonexistent")
+
+    def test_has_existing(self):
+        cm = CommandMap({"af_gain": (0x14, 0x01)})
+        assert cm.has("af_gain") is True
+
+    def test_has_missing(self):
+        cm = CommandMap({"af_gain": (0x14, 0x01)})
+        assert cm.has("nonexistent") is False
+
+    def test_len(self):
+        cm = CommandMap({"a": (0x01,), "b": (0x02,)})
+        assert len(cm) == 2
+
+    def test_iter(self):
+        cm = CommandMap({"a": (0x01,), "b": (0x02,)})
+        assert sorted(cm) == ["a", "b"]
+
+    def test_repr(self):
+        cm = CommandMap({"a": (0x01,)})
+        assert "CommandMap" in repr(cm)
+        assert "1" in repr(cm)
+
+
+class TestToCommandMap:
+    """RigConfig.to_command_map() integration."""
+
+    def test_returns_command_map(self):
+        rig = load_rig(TEMPLATE_PATH)
+        cm = rig.to_command_map()
+        assert isinstance(cm, CommandMap)
+
+    def test_has_expected_commands(self):
+        cm = load_rig(TEMPLATE_PATH).to_command_map()
+        assert cm.has("get_freq")
+        assert cm.has("set_freq")
+        assert cm.has("get_af_level")
+        assert cm.has("ptt_on")
+        assert cm.has("scope_on")
+
+    def test_wire_bytes_correct(self):
+        cm = load_rig(TEMPLATE_PATH).to_command_map()
+        assert cm.get("get_freq") == (0x03,)
+        assert cm.get("get_af_level") == (0x14, 0x01)
+        assert cm.get("ptt_on") == (0x1C, 0x00, 0x01)
+
+    def test_command_count(self):
+        cm = load_rig(TEMPLATE_PATH).to_command_map()
+        assert len(cm) > 50  # template has ~100 commands
+
+    def test_three_byte_wire_round_trips_intact(self, tmp_path):
+        """Q7 (docs/plans/2026-08-29-profile-driven-command-bytes.md §8.1):
+        a [commands] entry longer than command+sub — here a constant
+        payload byte, the shape of rigs/x6100.toml's
+        ptt_on = [0x1C, 0x00, 0x01] — must arrive in to_command_map()
+        byte-for-byte. Pins against a future "normalization" that cuts a
+        tuple back to (command, sub); nothing in the loader does that
+        today, but nothing would catch it either without this test.
+        """
+        toml = _MINIMAL_TOML.replace(
+            "set_freq = [0x05]",
+            "set_freq = [0x05]\nptt_on = [0x1C, 0x00, 0x01]",
+        )
+        rig = load_rig(_write_toml(tmp_path, toml))
+        cm = rig.to_command_map()
+        assert cm.get("ptt_on") == (0x1C, 0x00, 0x01)
+
+    def test_ic7610_drops_dead_tone_commands(self):
+        """MOR-682: IC-7610 has no FM-repeater tone capability, so the
+        repeater-tone / TSQL command entries must not be in the command map."""
+        cm = load_rig(TEMPLATE_PATH).to_command_map()
+        for key in (
+            "get_repeater_tone",
+            "set_repeater_tone",
+            "get_repeater_tsql",
+            "set_repeater_tsql",
+            "get_tone_freq",
+            "set_tone_freq",
+            "get_tsql_freq",
+            "set_tsql_freq",
+        ):
+            assert not cm.has(key), f"dead tone command {key!r} still present"
+
+
+class TestAbsentCommandSemantics:
+    """The declared-absent spelling's effect on ``RadioProfile`` (MOR-2005
+    step 4a, plan `docs/plans/2026-08-29-profile-driven-command-bytes.md`
+    §8.1 D1/D2). This step only makes states (2) declared-absent and (3)
+    unknown *representable* and distinguishable via
+    ``RadioProfile.absent_command_names`` — the refusal policy that acts on
+    that distinction (D1 states 2 vs. 3) is Step 4b, not implemented here.
+    ``supports_command`` returns False for both today, same as before this
+    change.
+    """
+
+    _TOML_WITH_ABSENT = (
+        _MINIMAL_TOML
+        + '\nget_dual_watch = { absent = "IC-7300 Full Manual (A7292-4EX), no dual-watch item" }\n'
+    )
+
+    def test_absent_name_excluded_from_command_names(self, tmp_path):
+        p = _write_toml(tmp_path, self._TOML_WITH_ABSENT)
+        profile = load_rig(p).to_profile()
+        assert "get_dual_watch" not in profile.command_names
+
+    def test_absent_name_present_in_absent_command_names(self, tmp_path):
+        p = _write_toml(tmp_path, self._TOML_WITH_ABSENT)
+        profile = load_rig(p).to_profile()
+        assert "get_dual_watch" in profile.absent_command_names
+
+    def test_absent_command_sources_keys_match_absent_command_names(self, tmp_path):
+        """MOR-2005 step 4b: ``absent_command_sources`` (D1 state 2's
+        refusal source, plan §8.1) is coherent with ``absent_command_names``
+        by construction -- pinned here rather than left implicit."""
+        p = _write_toml(tmp_path, self._TOML_WITH_ABSENT)
+        profile = load_rig(p).to_profile()
+        assert frozenset(profile.absent_command_sources) == profile.absent_command_names
+
+    def test_supports_command_false_for_absent_name(self, tmp_path):
+        p = _write_toml(tmp_path, self._TOML_WITH_ABSENT)
+        profile = load_rig(p).to_profile()
+        assert profile.supports_command("get_dual_watch") is False
+
+    def test_absent_name_excluded_from_command_map(self, tmp_path):
+        p = _write_toml(tmp_path, self._TOML_WITH_ABSENT)
+        cm = load_rig(p).to_command_map()
+        assert not cm.has("get_dual_watch")
+
+    def test_declared_siblings_unaffected(self, tmp_path):
+        """A declared-absent entry does not push out sibling declared
+        commands from either set."""
+        p = _write_toml(tmp_path, self._TOML_WITH_ABSENT)
+        profile = load_rig(p).to_profile()
+        assert "get_freq" in profile.command_names
+        assert "get_freq" not in profile.absent_command_names
+
+    def test_no_absent_declaration_leaves_absent_command_names_empty(self, tmp_path):
+        p = _write_toml(tmp_path, _MINIMAL_TOML)
+        profile = load_rig(p).to_profile()
+        assert profile.absent_command_names == frozenset()
+
+    def test_unknown_name_is_in_neither_set(self, tmp_path):
+        """D1 state (3) — a name the profile never mentions at all, not
+        even as declared-absent — lands in neither set. This is the state
+        this step makes representable but does not yet resolve: it stays
+        indistinguishable from state (2) at ``supports_command``, but is
+        distinguishable here by checking both sets directly."""
+        p = _write_toml(tmp_path, self._TOML_WITH_ABSENT)
+        profile = load_rig(p).to_profile()
+        assert "totally_unknown_command" not in profile.command_names
+        assert "totally_unknown_command" not in profile.absent_command_names
+
+
+class TestSetModeViaSelectedDiscriminatesAbsent:
+    """MOR-2005 step 4a review finding: this step changes what membership
+    in ``RigConfig.commands`` means (a key can now hold an
+    ``AbsentCommandSpec``), so every derivation that read plain membership
+    to mean "the radio has this command" must be swept, not just
+    ``command_names``. ``set_mode_via_selected`` (consumed by
+    `runtime/_dual_rx_runtime.py: DualRxRuntimeMixin._set_mode_main` to
+    gate CI-V 0x26 0x00 selected-mode routing) was the one other such
+    site in `profiles/rig_loader.py: RigConfig.to_profile` — it must be
+    True only when ``set_selected_mode`` is declared with real CI-V bytes,
+    not merely present as *some* dict key.
+    """
+
+    _TOML_WITH_SELECTED_MODE_ABSENT = _MINIMAL_TOML + (
+        '\nset_selected_mode = { absent = "IC-7300 Full Manual '
+        '(A7292-4EX), no selected-mode-set item" }\n'
+    )
+
+    def test_declared_absent_selected_mode_yields_false(self, tmp_path):
+        p = _write_toml(tmp_path, self._TOML_WITH_SELECTED_MODE_ABSENT)
+        profile = load_rig(p).to_profile()
+        assert profile.set_mode_via_selected is False
+
+    def test_declared_with_bytes_still_yields_true(self, tmp_path):
+        """Unchanged behavior for the real declared case (X6200/IC-705
+        shape) — the fix must not flip this the other way."""
+        toml = _MINIMAL_TOML + "\nset_selected_mode = [0x26, 0x00]\n"
+        p = _write_toml(tmp_path, toml)
+        profile = load_rig(p).to_profile()
+        assert profile.set_mode_via_selected is True
+
+    def test_not_declared_at_all_still_yields_false(self, tmp_path):
+        p = _write_toml(tmp_path, _MINIMAL_TOML)
+        profile = load_rig(p).to_profile()
+        assert profile.set_mode_via_selected is False
+
+
+# ── discover_rigs ────────────────────────────────────────────────
+
+
+class TestDiscoverRigs:
+    """discover_rigs() directory scanning."""
+
+    def test_finds_rig_files(self, tmp_path):
+        (tmp_path / "ic7300.toml").write_text(_MINIMAL_TOML)
+        rigs = discover_rigs(tmp_path)
+        assert "IC-7300" in rigs
+        assert isinstance(rigs["IC-7300"], RigConfig)
+
+    def test_discovers_ic7610(self):
+        # rigs/ has ic7610.toml — should be discovered
+        rigs = discover_rigs(RIGS_DIR)
+        assert "IC-7610" in rigs
+
+    def test_ignores_underscore_prefix(self, tmp_path):
+        # Create a proper rig file and an underscore-prefixed file
+        (tmp_path / "ic7300.toml").write_text(_MINIMAL_TOML)
+        (tmp_path / "_defaults.toml").write_text(_MINIMAL_TOML)
+        rigs = discover_rigs(tmp_path)
+        assert "IC-7300" in rigs
+        assert len(rigs) == 1  # _defaults.toml was ignored
+
+    def test_returns_dict_keyed_by_model(self, tmp_path):
+        (tmp_path / "ic7300.toml").write_text(_MINIMAL_TOML)
+        rigs = discover_rigs(tmp_path)
+        for model, rig in rigs.items():
+            assert rig.model == model
+
+    def test_empty_directory(self, tmp_path):
+        rigs = discover_rigs(tmp_path)
+        assert rigs == {}
+        assert rigs == {}
+        assert rigs == {}
+
+
+class TestCodecPreference:
+    """Per-profile [audio] codec_preference override (#797)."""
+
+    def test_single_rx_rigs_pin_mono_first(self):
+        """IC-7300/IC-705/IC-9700 all carry mono-first codec preference."""
+        for name in ("ic7300.toml", "ic705.toml", "ic9700.toml"):
+            rig = load_rig(RIGS_DIR / name)
+            assert rig.codec_preference == ("PCM_1CH_16BIT", "ULAW_1CH"), (
+                f"{name} must pin mono-first codec_preference"
+            )
+            profile = rig.to_profile()
+            assert profile.codec_preference == ("PCM_1CH_16BIT", "ULAW_1CH")
+
+    def test_ic7610_declares_stereo_pcm_first_override(self):
+        """IC-7610 explicitly pins the direct-LAN PCM-first RX preference."""
+        rig = load_rig(TEMPLATE_PATH)
+        assert rig.codec_preference == (
+            "PCM_2CH_16BIT",
+            "PCM_1CH_16BIT",
+            "ULAW_2CH",
+            "ULAW_1CH",
+        )
+        assert rig.to_profile().codec_preference == (
+            "PCM_2CH_16BIT",
+            "PCM_1CH_16BIT",
+            "ULAW_2CH",
+            "ULAW_1CH",
+        )
+
+    def test_codec_preference_parses_list_of_strings(self, tmp_path):
+        toml = _MINIMAL_TOML + '\n[audio]\ncodec_preference = ["PCM_1CH_16BIT"]\n'
+        p = _write_toml(tmp_path, toml)
+        rig = load_rig(p)
+        assert rig.codec_preference == ("PCM_1CH_16BIT",)
+
+    def test_missing_audio_section_is_ok(self, tmp_path):
+        p = _write_toml(tmp_path, _MINIMAL_TOML)
+        rig = load_rig(p)
+        assert rig.codec_preference is None
+
+    def test_empty_codec_preference_rejected(self, tmp_path):
+        toml = _MINIMAL_TOML + "\n[audio]\ncodec_preference = []\n"
+        p = _write_toml(tmp_path, toml)
+        with pytest.raises(RigLoadError, match="must not be empty"):
+            load_rig(p)
+
+    def test_unknown_codec_name_rejected(self, tmp_path):
+        toml = _MINIMAL_TOML + '\n[audio]\ncodec_preference = ["BOGUS_CODEC"]\n'
+        p = _write_toml(tmp_path, toml)
+        with pytest.raises(RigLoadError, match="unknown codec"):
+            load_rig(p)
+
+    def test_non_string_codec_entry_rejected(self, tmp_path):
+        toml = _MINIMAL_TOML + "\n[audio]\ncodec_preference = [123]\n"
+        p = _write_toml(tmp_path, toml)
+        with pytest.raises(RigLoadError, match="list of strings"):
+            load_rig(p)
+
+    def test_non_table_audio_section_rejected(self, tmp_path):
+        # Insert ``audio = "..."`` before any TOML table so it lands at top level.
+        toml = 'audio = "not a table"\n' + _MINIMAL_TOML
+        p = _write_toml(tmp_path, toml)
+        with pytest.raises(RigLoadError, match=r"\[audio\] must be a table"):
+            load_rig(p)
+
+
+# ── [scope].span_presets_hz (MOR-2258) ──────────────────────────
+
+
+_SHIPPED_SCOPE_RIGS = ("ic7300.toml", "ic705.toml", "ic9700.toml", "ic7610.toml")
+_EXPECTED_SPAN_PRESETS_HZ = (
+    2500,
+    5000,
+    10000,
+    25000,
+    50000,
+    100000,
+    250000,
+    500000,
+)
+
+
+class TestScopeSpanPresets:
+    """[scope].span_presets_hz parsing, validation, and shipped-profile parity.
+
+    MOR-2258: ``RadioProfile.scope_span_presets_hz`` is the sole source of
+    the Hz<->span-index mapping. It is read by the waveform-stream span
+    derivation (``runtime/_civ_rx.py:
+    CivRuntime._publish_scope_span_observation``) and passed into the 0x15
+    reply-path decoder/encoder (``commands/scope.py:
+    parse_scope_span_response``/``scope_set_span``), which take it as a
+    parameter because ``commands/`` may not import ``profiles/``.
+    """
+
+    def test_defaults_to_empty_tuple_when_undeclared(self, tmp_path):
+        p = _write_toml(tmp_path, _MINIMAL_TOML)
+        rig = load_rig(p)
+        assert rig.scope_span_presets_hz == ()
+        assert rig.to_profile().scope_span_presets_hz == ()
+
+    def test_parses_declared_presets(self, tmp_path):
+        toml = (
+            _MINIMAL_TOML
+            + "\n[scope]\nspan_presets_hz = [2500, 5000, 10000]\n"
+            + 'span_preset_semantics = "half_width"\n'
+        )
+        p = _write_toml(tmp_path, toml)
+        rig = load_rig(p)
+        assert rig.scope_span_presets_hz == (2500, 5000, 10000)
+        assert rig.to_profile().scope_span_presets_hz == (2500, 5000, 10000)
+
+    def test_rejects_empty_array(self, tmp_path):
+        toml = _MINIMAL_TOML + "\n[scope]\nspan_presets_hz = []\n"
+        p = _write_toml(tmp_path, toml)
+        with pytest.raises(
+            RigLoadError, match=r"\[scope\]\.span_presets_hz must be a non-empty"
+        ):
+            load_rig(p)
+
+    @pytest.mark.parametrize(
+        "declaration",
+        [
+            "[500000, 250000, 100000]",  # descending
+            "[2500, 2500, 5000]",  # duplicate (not strictly ascending)
+        ],
+    )
+    def test_rejects_non_ascending(self, tmp_path, declaration):
+        toml = _MINIMAL_TOML + f"\n[scope]\nspan_presets_hz = {declaration}\n"
+        p = _write_toml(tmp_path, toml)
+        with pytest.raises(
+            RigLoadError, match=r"\[scope\]\.span_presets_hz must be strictly ascending"
+        ):
+            load_rig(p)
+
+    @pytest.mark.parametrize("name", _SHIPPED_SCOPE_RIGS)
+    def test_shipped_scope_rig_declares_the_eight_icom_presets(self, name):
+        """Every shipped scope-capable profile declares the same eight
+        Icom CI-V span presets (span code 0-7 -> Hz)."""
+        rig = load_rig(RIGS_DIR / name)
+        assert rig.scope_span_presets_hz == _EXPECTED_SPAN_PRESETS_HZ
+        assert rig.to_profile().scope_span_presets_hz == _EXPECTED_SPAN_PRESETS_HZ
+
+
+class TestScopeSpanPresetSemantics:
+    """MOR-4385: a profile that declares span presets must also declare
+    what those numbers mean on the radio's own wire — a ±half-width
+    (Icom CI-V ``0x27 0x15``) or a full display width — so the scope
+    pipeline can publish real view widths and grant matching coverage.
+    """
+
+    def test_semantics_is_required_with_presets(self, tmp_path):
+        toml = _MINIMAL_TOML + "\n[scope]\nspan_presets_hz = [2500, 5000]\n"
+        p = _write_toml(tmp_path, toml)
+        with pytest.raises(
+            RigLoadError,
+            match=r"\[scope\]\.span_presets_hz requires span_preset_semantics",
+        ):
+            load_rig(p)
+
+    def test_defaults_to_half_width_without_presets(self, tmp_path):
+        p = _write_toml(tmp_path, _MINIMAL_TOML)
+        rig = load_rig(p)
+        assert rig.to_profile().scope_span_preset_semantics == "half_width"
+
+    @pytest.mark.parametrize("semantics", ["half_width", "full_width"])
+    def test_parses_declared_semantics(self, tmp_path, semantics):
+        toml = (
+            _MINIMAL_TOML
+            + "\n[scope]\nspan_presets_hz = [2500, 5000]\n"
+            + f'span_preset_semantics = "{semantics}"\n'
+        )
+        p = _write_toml(tmp_path, toml)
+        rig = load_rig(p)
+        assert rig.to_profile().scope_span_preset_semantics == semantics
+
+    def test_rejects_unknown_semantics(self, tmp_path):
+        toml = (
+            _MINIMAL_TOML
+            + "\n[scope]\nspan_presets_hz = [2500, 5000]\n"
+            + 'span_preset_semantics = "widest"\n'
+        )
+        p = _write_toml(tmp_path, toml)
+        with pytest.raises(
+            RigLoadError,
+            match=r"\[scope\]\.span_preset_semantics must be half_width or"
+            r" full_width",
+        ):
+            load_rig(p)
+
+    def test_every_shipped_profile_with_presets_declares_half_width(self):
+        """Every shipped profile that declares span presets states the
+        semantics explicitly, and all of them are Icom CI-V half-widths
+        (see each profile's CI-V citation)."""
+        shipped = sorted(
+            path.name
+            for path in RIGS_DIR.glob("*.toml")
+            if "span_presets_hz" in path.read_text()
+        )
+        assert shipped, "expected at least one shipped profile with presets"
+        for name in shipped:
+            profile = load_rig(RIGS_DIR / name).to_profile()
+            assert profile.scope_span_presets_hz
+            assert profile.scope_span_preset_semantics == "half_width", name
+
+
+class TestScopeFixedEdgeRanges:
+    def test_shipped_profiles_preserve_typed_fixed_edge_ranges(self):
+        from rigplane.core.types import ScopeFixedEdgeRange
+
+        rig = load_rig(RIGS_DIR / "ic7610.toml")
+        assert len(rig.scope_fixed_edge_ranges) == 12
+        assert rig.scope_fixed_edge_step_hz == 1000
+        assert rig.to_profile().scope_fixed_edge_step_hz == 1000
+        assert rig.scope_fixed_edge_ranges[0] == ScopeFixedEdgeRange(
+            1, 30_000, 1_600_000
+        )
+        assert rig.scope_fixed_edge_ranges[5] == ScopeFixedEdgeRange(
+            6, 11_000_000, 15_000_000
+        )
+        assert rig.scope_fixed_edge_ranges[-1] == ScopeFixedEdgeRange(
+            12, 45_000_000, 60_000_000
+        )
+        assert rig.to_profile().scope_fixed_edge_ranges == rig.scope_fixed_edge_ranges
+        center = load_rig(RIGS_DIR / "ic7300.toml")
+        assert center.scope_fixed_edge_ranges == ()
+        assert center.to_profile().scope_fixed_edge_ranges == ()
+        assert center.scope_fixed_edge_step_hz is None
+        assert center.to_profile().scope_fixed_edge_step_hz is None
+
+    @pytest.mark.parametrize(
+        "ranges",
+        [
+            "[]",
+            "[{range_index = 0, start_hz = 1000, end_hz = 2000}]",
+            "[{range_index = 1, start_hz = 2000, end_hz = 1000}]",
+            "[{range_index = true, start_hz = 1000, end_hz = 2000}]",
+            "[{range_index = 1, start_hz = 1000.0, end_hz = 2000}]",
+            "[{range_index = 1, start_hz = 1000, end_hz = 2000}, {range_index = 1, start_hz = 2000, end_hz = 3000}]",
+            "[{range_index = 1, start_hz = 1000, end_hz = 2500}, {range_index = 2, start_hz = 2000, end_hz = 3000}]",
+        ],
+    )
+    def test_rejects_invalid_ranges(self, tmp_path, ranges):
+        text = (
+            _MINIMAL_TOML
+            + f"\n[scope]\nfixed_edge_ranges = {ranges}\nfixed_edge_step_hz = 1000\n"
+        )
+        with pytest.raises(RigLoadError, match="fixed_edge_ranges"):
+            load_rig(_write_toml(tmp_path, text))
+
+    @pytest.mark.parametrize(
+        "declaration",
+        [
+            "fixed_edge_step_hz = 1000",
+            "fixed_edge_ranges = [{range_index = 1, start_hz = 1000, end_hz = 2000}]",
+            "fixed_edge_ranges = [{range_index = 1, start_hz = 1000, end_hz = 2000}]\nfixed_edge_step_hz = 0",
+            "fixed_edge_ranges = [{range_index = 1, start_hz = 1000, end_hz = 2000}]\nfixed_edge_step_hz = true",
+        ],
+    )
+    def test_fixed_ranges_and_positive_step_are_declared_together(
+        self, tmp_path, declaration
+    ):
+        with pytest.raises(RigLoadError, match="fixed_edge"):
+            load_rig(
+                _write_toml(tmp_path, _MINIMAL_TOML + f"\n[scope]\n{declaration}\n")
+            )
+
+
+class TestAudioPolicy:
+    """Per-profile [audio] codec and sample-rate policy (#1470)."""
+
+    def test_ic7610_declares_pcm_first_lan_policy(self):
+        rig = load_rig(TEMPLATE_PATH)
+
+        assert rig.codec_preference == (
+            "PCM_2CH_16BIT",
+            "PCM_1CH_16BIT",
+            "ULAW_2CH",
+            "ULAW_1CH",
+        )
+        assert rig.tx_codec == "PCM_1CH_16BIT"
+        assert rig.default_sample_rate_hz == 48000
+        assert rig.supported_sample_rates_hz is None
+        assert rig.sample_rate_by_codec == {
+            "PCM_2CH_16BIT": 48000,
+            "PCM_1CH_16BIT": 48000,
+            "ULAW_2CH": 48000,
+            "ULAW_1CH": 48000,
+        }
+        assert rig.browser_rx_transport == "auto"
+        assert rig.browser_rx_transcode_to_opus is True
+
+        profile = rig.to_profile()
+        assert profile.codec_preference == (
+            "PCM_2CH_16BIT",
+            "PCM_1CH_16BIT",
+            "ULAW_2CH",
+            "ULAW_1CH",
+        )
+        assert profile.tx_codec == "PCM_1CH_16BIT"
+        assert profile.default_sample_rate_hz == 48000
+        assert profile.supported_sample_rates_hz is None
+        assert profile.sample_rate_by_codec == {
+            "PCM_2CH_16BIT": 48000,
+            "PCM_1CH_16BIT": 48000,
+            "ULAW_2CH": 48000,
+            "ULAW_1CH": 48000,
+        }
+        assert profile.browser_rx_transport == "auto"
+        assert profile.browser_rx_transcode_to_opus is True
+
+    def test_ic705_and_ic9700_declare_evidence_backed_mono_lan_policy(self):
+        for name in ("ic705.toml", "ic9700.toml"):
+            rig = load_rig(RIGS_DIR / name)
+
+            assert rig.codec_preference == ("PCM_1CH_16BIT", "ULAW_1CH")
+            assert rig.tx_codec == "PCM_1CH_16BIT"
+            assert rig.default_sample_rate_hz is None
+            assert rig.supported_sample_rates_hz is None
+            assert rig.sample_rate_by_codec is None
+            assert rig.browser_rx_transport == "auto"
+            assert rig.browser_rx_transcode_to_opus is True
+
+            profile = rig.to_profile()
+            assert profile.tx_codec == "PCM_1CH_16BIT"
+            assert profile.default_sample_rate_hz is None
+            assert profile.sample_rate_by_codec is None
+            assert profile.browser_rx_transport == "auto"
+            assert profile.browser_rx_transcode_to_opus is True
+
+    def test_full_audio_policy_parses(self, tmp_path):
+        toml = (
+            _MINIMAL_TOML
+            + """
+
+[audio]
+codec_preference = ["PCM_2CH_16BIT", "PCM_1CH_16BIT"]
+tx_codec = "PCM_1CH_16BIT"
+default_sample_rate_hz = 16000
+supported_sample_rates_hz = [8000, 16000, 48000]
+sample_rate_by_codec = { PCM_2CH_16BIT = 16000, PCM_1CH_16BIT = 16000 }
+browser_rx_transport = "auto"
+browser_rx_transcode_to_opus = true
+"""
+        )
+        rig = load_rig(_write_toml(tmp_path, toml))
+
+        assert rig.codec_preference == ("PCM_2CH_16BIT", "PCM_1CH_16BIT")
+        assert rig.tx_codec == "PCM_1CH_16BIT"
+        assert rig.default_sample_rate_hz == 16000
+        assert rig.supported_sample_rates_hz == (8000, 16000, 48000)
+        assert rig.sample_rate_by_codec == {
+            "PCM_2CH_16BIT": 16000,
+            "PCM_1CH_16BIT": 16000,
+        }
+        assert rig.browser_rx_transport == "auto"
+        assert rig.browser_rx_transcode_to_opus is True
+
+    def test_existing_profiles_without_new_policy_load_unchanged(self, tmp_path):
+        rig = load_rig(_write_toml(tmp_path, _MINIMAL_TOML))
+        profile = rig.to_profile()
+
+        assert rig.codec_preference is None
+        assert rig.tx_codec is None
+        assert rig.default_sample_rate_hz is None
+        assert rig.supported_sample_rates_hz is None
+        assert rig.sample_rate_by_codec is None
+        assert rig.browser_rx_transport is None
+        assert rig.browser_rx_transcode_to_opus is None
+        assert profile.tx_codec is None
+        assert profile.default_sample_rate_hz is None
+
+    def test_removed_audio_level_menu_is_ignored_as_an_unknown_key(self, tmp_path):
+        toml = _MINIMAL_TOML + "\n[audio]\nrx_audio_level_menu = 100\n"
+        rig = load_rig(_write_toml(tmp_path, toml))
+        assert not hasattr(rig, "rx_audio_level_menu")
+        assert not hasattr(rig.to_profile(), "rx_audio_level_menu")
+
+    def test_unknown_tx_codec_rejected(self, tmp_path):
+        toml = _MINIMAL_TOML + '\n[audio]\ntx_codec = "BOGUS_CODEC"\n'
+        with pytest.raises(RigLoadError, match=r"\[audio\].tx_codec.*unknown codec"):
+            load_rig(_write_toml(tmp_path, toml))
+
+    def test_unsupported_default_sample_rate_rejected(self, tmp_path):
+        toml = _MINIMAL_TOML + "\n[audio]\ndefault_sample_rate_hz = 44100\n"
+        with pytest.raises(RigLoadError, match="default_sample_rate_hz"):
+            load_rig(_write_toml(tmp_path, toml))
+
+    def test_negative_sample_rate_rejected(self, tmp_path):
+        toml = _MINIMAL_TOML + "\n[audio]\nsupported_sample_rates_hz = [16000, -1]\n"
+        with pytest.raises(RigLoadError, match="supported_sample_rates_hz"):
+            load_rig(_write_toml(tmp_path, toml))
+
+    def test_unknown_sample_rate_codec_key_rejected(self, tmp_path):
+        toml = (
+            _MINIMAL_TOML
+            + "\n[audio]\nsample_rate_by_codec = { BOGUS_CODEC = 16000 }\n"
+        )
+        with pytest.raises(RigLoadError, match="sample_rate_by_codec.*unknown codec"):
+            load_rig(_write_toml(tmp_path, toml))
+
+    def test_invalid_browser_transport_rejected(self, tmp_path):
+        toml = _MINIMAL_TOML + '\n[audio]\nbrowser_rx_transport = "rtmp"\n'
+        with pytest.raises(RigLoadError, match="browser_rx_transport"):
+            load_rig(_write_toml(tmp_path, toml))
+
+
+class TestWriteOnlyControls:
+    """[validation].write_only_controls parsing and propagation (MOR-208)."""
+
+    def test_write_only_controls_parsed(self, tmp_path):
+        # "scope" is declared in _MINIMAL_TOML's features; mark it write-only.
+        toml = _MINIMAL_TOML + '\n[validation]\nwrite_only_controls = ["scope"]\n'
+        rig = load_rig(_write_toml(tmp_path, toml))
+        assert rig.write_only_controls == ("scope",)
+        assert rig.to_profile().write_only_controls == frozenset({"scope"})
+
+    def test_write_only_controls_defaults_empty(self, tmp_path):
+        rig = load_rig(_write_toml(tmp_path, _MINIMAL_TOML))
+        assert rig.write_only_controls == ()
+        assert rig.to_profile().write_only_controls == frozenset()
+
+    def test_write_only_controls_must_be_declared_capability(self, tmp_path):
+        # "rit" is NOT in _MINIMAL_TOML's features.
+        toml = _MINIMAL_TOML + '\n[validation]\nwrite_only_controls = ["rit"]\n'
+        with pytest.raises(RigLoadError, match="rit"):
+            load_rig(_write_toml(tmp_path, toml))
+
+    def test_x6200_declares_rit_xit_notch_write_only(self):
+        profile = get_radio_profile("X6200")
+        assert profile.write_only_controls >= {"rit", "xit", "notch"}
+
+    def test_x6200_drops_tone_family_and_does_not_declare_filter_width(self):
+        # MOR-683: a live X6200 capture (CI-V 0xA4) confirmed the tone family
+        # (repeater_tone / tsql, driving 0x16 0x42/0x43 + 0x1B) times out, so
+        # those caps are dropped → the four tone RMVR checks resolve
+        # UNSUPPORTED instead of FAIL. filter_width stays UNDECLARED: the same
+        # live capture showed 0x1A 0x03 cannot be round-tripped (get reads a
+        # passband index, the USB setter guards 50-9999 Hz) and Hamlib marks
+        # x1ax03_supported=0. rit/xit/notch and the DSP toggles stay untouched.
+        caps = get_radio_profile("X6200").capabilities
+        assert "repeater_tone" not in caps
+        assert "tsql" not in caps
+        assert "filter_width" not in caps
+        assert {"rit", "xit", "notch", "nr", "nb", "compressor"} <= caps
+
+    def test_x6200_filter_width_is_read_only_raw_byte_profile_mapping(self):
+        # MOR-706: X6200 0x1A/0x03 returns a single raw byte index for the
+        # active FIL slot width. Keep the public capability undeclared because
+        # the Hz setter is not live-proven, but preserve the GET command so
+        # runtime reads can use the profile mapping.
+        rig = load_rig(RIGS_DIR / "x6200.toml")
+        profile = rig.to_profile()
+
+        assert profile.filter_width_encoding == "raw_byte_index"
+        assert "filter_width" not in profile.capabilities
+        assert "get_filter_width" in profile.command_names
+        assert "set_filter_width" not in profile.command_names
+
+        rule = profile.resolve_filter_rule("USB")
+        assert rule is not None
+        assert rule.segments
+        for fixed_mode in ("AM", "FM"):
+            fixed_rule = profile.resolve_filter_rule(fixed_mode)
+            assert fixed_rule is not None
+            assert fixed_rule.fixed is True
+
+    def test_x6200_drops_over_declared_pbt(self):
+        # MOR-699: a live X6200 probe (CI-V 0xA4) showed twin-PBT (get_pbt_inner
+        # 0x14 0x07 and get_pbt_outer 0x14 0x08) time out in BOTH AM and USB
+        # modes — the front-panel PBT is not exposed over CI-V. The cap is
+        # over-declared (Hamlib xiegu.c declares it without a round-trip), so it
+        # is dropped → no pbt check is generated (cap undeclared) instead of the
+        # earlier spurious pbt.presence dry-run pass. Kept controls stay intact.
+        caps = get_radio_profile("X6200").capabilities
+        assert "pbt" not in caps
+        assert {"rit", "xit", "notch", "nr", "nb", "compressor"} <= caps
+
+    def test_x6100_drops_unsupported_tone_and_pbt(self):
+        # MOR-634: the X6100 over-declared repeater_tone / tsql / pbt. By the
+        # X6100/X6200 shared-firmware inference (Hamlib xiegu.c reuses the same
+        # x6100_priv_caps struct for RIG_MODEL_X6200=3091) plus live X6200
+        # evidence — tone 0x16 0x42/0x43 + 0x1B (MOR-683) and pbt 0x14 07/08
+        # (MOR-699) both time out on real hardware — these caps are dropped.
+        # NOT live-confirmed on an X6100 (no X6100 hardware exists to capture);
+        # this is a conservative by-inference alignment pending direct
+        # confirmation. The profile must still load and keep its other caps.
+        profile = get_radio_profile("X6100")
+        caps = profile.capabilities
+        assert "repeater_tone" not in caps
+        assert "tsql" not in caps
+        assert "pbt" not in caps
+        # filter_width is already (correctly) not advertised — keep it so.
+        assert "filter_width" not in caps
+        # Unrelated caps stay untouched.
+        assert {"rit", "xit", "notch", "nr", "nb", "compressor"} <= caps
+
+
+class TestFixedValueChecks:
+    """[validation.fixed_value] parsing and propagation (MOR-2105 part 2).
+
+    Only for a fact with no other home in ``RadioProfile`` (F1/F2, owner
+    ruling): ``scope_receiver.set`` (IC-7300's single-receiver fact) is NOT
+    declared here -- ``receiver_count``/``supports_receiver`` already say
+    so, and ``validation/hardware.py: _run_one_check`` derives it from that
+    directly instead of restating it. Only ``scope_dual.set`` (single-scope;
+    no ``receiver_count``-like field exists for "scope count") uses this
+    table.
+    """
+
+    def test_fixed_value_checks_parsed(self, tmp_path):
+        toml = (
+            _MINIMAL_TOML
+            + '\n[validation.fixed_value]\n"scope_dual.set" = "some source"\n'
+        )
+        rig = load_rig(_write_toml(tmp_path, toml))
+        assert rig.fixed_value_checks == {"scope_dual.set": "some source"}
+        assert rig.to_profile().fixed_value_checks == {"scope_dual.set": "some source"}
+
+    def test_fixed_value_checks_defaults_empty(self, tmp_path):
+        rig = load_rig(_write_toml(tmp_path, _MINIMAL_TOML))
+        assert rig.fixed_value_checks == {}
+        assert rig.to_profile().fixed_value_checks == {}
+
+    def test_fixed_value_checks_source_must_be_nonempty_string(self, tmp_path):
+        toml = _MINIMAL_TOML + '\n[validation.fixed_value]\n"scope_dual.set" = ""\n'
+        with pytest.raises(RigLoadError, match="non-empty string"):
+            load_rig(_write_toml(tmp_path, toml))
+
+    def test_ic7300_fixed_value_checks_is_exactly_scope_dual(self):
+        """MOR-2105 part 2, F1: after deriving scope_receiver.set from
+        receiver_count, rigs/ic7300.toml's [validation.fixed_value] table
+        must hold exactly one entry -- a second entry reappearing here
+        (e.g. a future edit re-adding scope_receiver.set) would silently
+        reinstate the two-sources-of-truth defect F1 removed.
+        """
+        profile = load_rig(RIGS_DIR / "ic7300.toml").to_profile()
+        assert profile.fixed_value_checks == {
+            "scope_dual.set": (
+                "IC-7300 Advanced Manual (11a) command table p.19-7: "
+                "27 13 data column = 00 (Single only)"
+            )
+        }
+
+    # The cross-check against the live validation registry
+    # (test_every_shipped_profiles_fixed_value_check_ids_are_real_registry_
+    # check_ids) lives below, parametrized over _SHIPPED_RIG_TOMLS rather
+    # than hardcoded to ic7300.toml here, per the directory-driven idiom
+    # TestAgcDomainDeclaredOrCapabilityAbsent's docstring states just below
+    # this class -- _SHIPPED_RIG_TOMLS is defined after this class, so the
+    # parametrize can't reference it from inside this class body.
+
+
+# ── AGC domain declaration, table-driven over every shipped profile ──────
+# (MOR-1522). "Shipped profile" = every rigs/*.toml except the UI-only
+# _keyboard-default.toml, taken from the directory listing itself rather
+# than a hand-maintained name list, so a new profile can't silently land
+# in the ambiguous middle this test forbids.
+
+_SHIPPED_RIG_TOMLS = sorted(
+    p for p in RIGS_DIR.glob("*.toml") if not p.name.startswith("_")
+)
+
+# MOR-3632: the per-profile literal of band rows flagged ``rx_only``. The
+# test below refuses a shipped profile missing from this mapping, so a new
+# profile cannot land with a receive-only row silently counting as a TX
+# band: its author must classify every row here first.
+_SHIPPED_RX_ONLY_BANDS = {
+    # MOR-4433: every FT-991A band row is a TX-capable ham band (160m..70cm,
+    # inside the manual/Hamlib TX ranges 1.8-54, 144-148, 430-450 MHz), so no
+    # row is flagged rx_only. The profile declares no general-coverage,
+    # air, WFM, or utility rows.
+    "ft991a.toml": (),
+    "ftx1.toml": (),
+    "g7250.toml": (),
+    "ic705.toml": ("2200m", "630m", "WFM", "Air", "Gen"),
+    "ic7300.toml": (),
+    "ic7300mk2.toml": (),
+    "ic7610.toml": (),
+    "ic905.toml": (),
+    "ic9700.toml": (),
+    "tx500.toml": (),
+    "x6100.toml": (),
+    "x6200.toml": (),
+}
+
+
+def test_every_shipped_profiles_rx_only_bands_are_pinned():
+    """Every shipped profile's ``rx_only`` band rows equal the literal
+    mapping above (MOR-3632), directory-driven like the AGC table below, so
+    neither an unclassified new profile nor a quiet reclassification of an
+    existing row can pass unnoticed."""
+    assert {p.name for p in _SHIPPED_RIG_TOMLS} == set(_SHIPPED_RX_ONLY_BANDS), (
+        "a shipped profile is missing from _SHIPPED_RX_ONLY_BANDS"
+    )
+    for toml_path in _SHIPPED_RIG_TOMLS:
+        profile = load_rig(toml_path).to_profile()
+        flagged = tuple(
+            band.name
+            for freq_range in profile.freq_ranges
+            for band in freq_range.bands
+            if band.rx_only
+        )
+        assert flagged == _SHIPPED_RX_ONLY_BANDS[toml_path.name], toml_path.name
+
+
+@pytest.mark.parametrize("toml_path", _SHIPPED_RIG_TOMLS, ids=lambda p: p.stem)
+def test_every_shipped_profiles_fixed_value_check_ids_are_real_registry_check_ids(
+    toml_path,
+):
+    """[validation.fixed_value] check_id existence, cross-checked against the
+    live validation registry, over every shipped profile (MOR-2105 part 2) --
+    directory-driven like TestAgcDomainDeclaredOrCapabilityAbsent just below,
+    so a future profile adding this table lands under the same cross-check
+    without a hand-written addition here. Most profiles declare no
+    [validation.fixed_value] table at all (empty dict, trivially a subset);
+    today only rigs/ic7300.toml (scope_dual.set) is non-empty.
+    `rigplane.profiles` may not import `rigplane.validation`
+    (`.importlinter`'s validation-leaf contract), so `load_rig` itself
+    cannot raise on an unknown check_id at parse time -- this test is where
+    that guarantee is exercised instead, by a caller (this test file) that
+    may legally import both.
+    """
+    from rigplane.validation.registry import REGISTRY_BY_ID
+
+    profile = load_rig(toml_path).to_profile()
+    assert set(profile.fixed_value_checks) <= set(REGISTRY_BY_ID)
+
+
+class TestAgcDomainDeclaredOrCapabilityAbsent:
+    """Every shipped profile must land on one of exactly two sides:
+
+    (a) it does not declare the ``agc`` capability at all — the
+        capability-absent selector-hiding pattern (MOR-1494) — or
+    (b) it declares ``agc`` AND a non-empty ``[agc] modes`` domain that
+        every declared value can be encoded into a legal wire command.
+
+    No profile may declare the capability without a domain, or a domain
+    without the capability.
+    """
+
+    @pytest.mark.parametrize("toml_path", _SHIPPED_RIG_TOMLS, ids=lambda p: p.stem)
+    def test_agc_capability_and_domain_agree(self, toml_path):
+        rig = load_rig(toml_path)
+        has_agc_capability = "agc" in rig.capabilities
+
+        if not has_agc_capability:
+            assert rig.agc_modes is None, (
+                f"{toml_path.name}: declares [agc] modes without the "
+                f"'agc' capability feature"
+            )
+            return
+
+        assert rig.agc_modes, (
+            f"{toml_path.name}: declares the 'agc' capability but no "
+            f"(or an empty) [agc] modes domain"
+        )
+
+    @pytest.mark.parametrize(
+        "toml_path",
+        [p for p in _SHIPPED_RIG_TOMLS if load_rig(p).protocol_type == "civ"],
+        ids=lambda p: p.stem,
+    )
+    def test_civ_agc_modes_encode_to_a_legal_command(self, toml_path):
+        """Every declared mode for a CI-V family radio must round-trip
+        through the real wire-command builder without raising — the
+        profile's domain must map to a legal command, not just a legal
+        Python int (MOR-1522)."""
+        from rigplane.commands.dsp import set_agc
+
+        rig = load_rig(toml_path)
+        if rig.agc_modes is None:
+            pytest.skip(f"{toml_path.name}: no agc capability")
+        for mode in rig.agc_modes:
+            civ = set_agc(mode, to_addr=rig.civ_addr, cmd_map=rig.to_command_map())
+            # All shipped AGC domains are single-digit (0-9), so the BCD
+            # byte equals the raw mode value — this is both the
+            # "encodes without raising" check and a byte-shape pin.
+            assert civ.endswith(bytes([0x16, 0x12, mode, 0xFD])), (
+                f"{toml_path.name}: mode {mode} did not encode to the "
+                f"expected 0x16 0x12 {mode:#04x} wire command"
+            )
+
+    def test_ic7300_declares_exactly_fast_mid_slow_no_off(self):
+        """The MOR-1522 regression pin: IC-7300 must show FAST/MID/SLOW
+        only. Confirmed against docs/validation/cat-audits/ic7300.md
+        (CI-V 0x16 0x12: 1=FAST, 2=MID, 3=SLOW, no OFF)."""
+        rig = load_rig(RIGS_DIR / "ic7300.toml")
+        assert rig.agc_modes == (1, 2, 3)
+        assert 0 not in rig.agc_modes
+
+    def test_x6200_keeps_its_declared_off(self):
+        """A profile that DOES have AGC OFF must keep it — the fix must not
+        over-correct into dropping OFF everywhere. X6200 CI-V doc (PDF page
+        8): 0x16 0x12 0x00..0x03 = off/fast/slow/auto."""
+        rig = load_rig(RIGS_DIR / "x6200.toml")
+        assert 0 in rig.agc_modes
+        assert rig.agc_labels["0"] == "OFF"
+
+    def test_ftx1_keeps_its_declared_off(self):
+        """FTX-1 (live bench hardware) also legitimately has AGC OFF."""
+        rig = load_rig(RIGS_DIR / "ftx1.toml")
+        assert 0 in rig.agc_modes
+        assert rig.agc_labels["0"] == "OFF"
+
+    def test_ftx1_agc_catalogs_separate_settable_and_readback_values(self):
+        rig = load_rig(RIGS_DIR / "ftx1.toml")
+        assert rig.agc_modes == (0, 1, 2, 3, 4)
+        assert rig.agc_labels["4"] == "AUTO"
+        assert rig.agc_readback_modes == (0, 1, 2, 3, 4, 5, 6)
+        assert rig.agc_auto_mode == 4
+        assert rig.agc_auto_speed_labels == {"4": "FAST", "5": "MID", "6": "SLOW"}
+        assert max(len(label) for label in rig.agc_labels.values()) <= 4
+
+    def test_x6100_and_tx500_declare_no_agc_capability(self):
+        """Neither has AGC wired at all today (X6100: no confirmed hardware
+        capture; TX-500: no backend/CAT implementation at all) — capability-
+        absent is correct for both, not an empty/invented domain."""
+        for name in ("x6100", "tx500"):
+            rig = load_rig(RIGS_DIR / f"{name}.toml")
+            assert "agc" not in rig.capabilities
+            assert rig.agc_modes is None
+
+
+# ── Preamp domain declaration, table-driven over every shipped profile ───
+# (MOR-1523, mirrors MOR-1522's AGC table above). Reuses _SHIPPED_RIG_TOMLS.
+
+
+class TestPreampDomainDeclaredOrCapabilityAbsent:
+    """Every shipped profile must land on one of exactly two sides:
+
+    (a) it does not declare the ``preamp`` capability at all — the
+        capability-absent selector-hiding pattern (MOR-1494) — or
+    (b) it declares ``preamp`` AND a non-empty ``[preamp] values`` domain
+        that every declared value can be encoded into a legal wire command.
+
+    No profile may declare the capability without a domain, or a domain
+    without the capability.
+    """
+
+    @pytest.mark.parametrize("toml_path", _SHIPPED_RIG_TOMLS, ids=lambda p: p.stem)
+    def test_preamp_capability_and_domain_agree(self, toml_path):
+        rig = load_rig(toml_path)
+        has_preamp_capability = "preamp" in rig.capabilities
+
+        if not has_preamp_capability:
+            assert rig.pre_values is None, (
+                f"{toml_path.name}: declares [preamp] values without the "
+                f"'preamp' capability feature"
+            )
+            return
+
+        assert rig.pre_values, (
+            f"{toml_path.name}: declares the 'preamp' capability but no "
+            f"(or an empty) [preamp] values domain"
+        )
+
+    @pytest.mark.parametrize(
+        "toml_path",
+        [p for p in _SHIPPED_RIG_TOMLS if load_rig(p).protocol_type == "civ"],
+        ids=lambda p: p.stem,
+    )
+    def test_civ_preamp_values_encode_to_a_legal_command(self, toml_path):
+        """Every declared level for a CI-V family radio must round-trip
+        through the real wire-command builder without raising — the
+        profile's domain must map to a legal command, not just a legal
+        Python int (MOR-1523)."""
+        from rigplane.commands.dsp import set_preamp
+
+        rig = load_rig(toml_path)
+        if rig.pre_values is None:
+            pytest.skip(f"{toml_path.name}: no preamp capability")
+        for level in rig.pre_values:
+            civ = set_preamp(level, to_addr=rig.civ_addr, cmd_map=rig.to_command_map())
+            # All shipped preamp domains are single-digit (0-9), so the BCD
+            # byte equals the raw level value.
+            assert civ.endswith(bytes([0x16, 0x02, level, 0xFD])), (
+                f"{toml_path.name}: level {level} did not encode to the "
+                f"expected 0x16 0x02 {level:#04x} wire command"
+            )
+
+    def test_ic7300_declares_off_amp1_amp2(self):
+        """IC-7300 P.AMP: 0=OFF, 1=P.AMP1, 2=P.AMP2 (CI-V 0x16 0x02, per
+        rigs/ic7300.toml's [preamp] comment)."""
+        rig = load_rig(RIGS_DIR / "ic7300.toml")
+        assert rig.pre_values == (0, 1, 2)
+
+    def test_x6200_has_no_second_preamp_stage(self):
+        """The X6200 declares only [0, 1] — it has no P.AMP2 hardware stage,
+        unlike the IC-7300 family's [0, 1, 2]. Domain-shape difference the
+        validation seat must honor, not flatten to a universal 3-state
+        enum."""
+        rig = load_rig(RIGS_DIR / "x6200.toml")
+        assert rig.pre_values == (0, 1)
+
+    def test_ftx1_declares_ipo_amp1_amp2_with_labels(self):
+        """FTX-1 (live bench hardware) declares [preamp] values = [0, 1, 2]
+        with IPO/AMP1/AMP2 labels (rigs/ftx1.toml:430-436)."""
+        rig = load_rig(RIGS_DIR / "ftx1.toml")
+        assert rig.pre_values == (0, 1, 2)
+
+
+# ── MOR-1534: break_in/notch-width/ssb_tx_bw/filter_shape were each either
+# declared in TOML but never parsed (break_in, notch width), hardcoded via
+# an IC-7610-specific enum with no profile domain at all (ssb_tx_bw), or had
+# no TOML domain to begin with (filter_shape). All four now route through
+# ``_parse_enumerated_domain`` — the same shared fail-loud contract
+# ``[agc] modes/labels`` (MOR-1522) established, generalized rather than
+# copy-pasted four times.
+
+
+class TestEnumeratedDomainMalformedDeclarations:
+    """One shared parametrized suite over all four [section] value/label
+    pairs, instead of four near-identical malformed-declaration classes —
+    they all share the same ``_parse_enumerated_domain`` implementation."""
+
+    _SECTIONS = [
+        ("break_in", "values", "labels"),
+        ("notch", "width_values", "width_labels"),
+        ("ssb_tx_bw", "values", "labels"),
+        ("filter_shape", "values", "labels"),
+    ]
+
+    @pytest.mark.parametrize(
+        ("section", "values_key", "labels_key"), _SECTIONS, ids=lambda t: t
+    )
+    def test_domain_values_and_labels_load(
+        self, tmp_path, section, values_key, labels_key
+    ):
+        p = _write_toml(
+            tmp_path,
+            _MINIMAL_TOML
+            + f"""
+
+[{section}]
+{values_key} = [0, 1, 2]
+{labels_key} = {{ "0" = "A", "1" = "B", "2" = "C" }}
+""",
+        )
+        rig = load_rig(p)
+        values_attr = {
+            "break_in": "break_in_modes",
+            "notch": "notch_width_values",
+            "ssb_tx_bw": "ssb_tx_bw_values",
+            "filter_shape": "filter_shape_values",
+        }[section]
+        labels_attr = {
+            "break_in": "break_in_labels",
+            "notch": "notch_width_labels",
+            "ssb_tx_bw": "ssb_tx_bw_labels",
+            "filter_shape": "filter_shape_labels",
+        }[section]
+        assert getattr(rig, values_attr) == (0, 1, 2)
+        assert getattr(rig, labels_attr) == {"0": "A", "1": "B", "2": "C"}
+
+    @pytest.mark.parametrize(
+        ("section", "values_key", "labels_key"), _SECTIONS, ids=lambda t: t
+    )
+    def test_domain_rejects_unknown_key(
+        self, tmp_path, section, values_key, labels_key
+    ):
+        p = _write_toml(
+            tmp_path,
+            _MINIMAL_TOML
+            + f"""
+
+[{section}]
+bogus = [0, 1]
+""",
+        )
+        with pytest.raises(RigLoadError, match=rf"\[{section}\].*unknown key"):
+            load_rig(p)
+
+    @pytest.mark.parametrize(
+        ("section", "values_key", "labels_key"), _SECTIONS, ids=lambda t: t
+    )
+    def test_domain_rejects_empty_values_list(
+        self, tmp_path, section, values_key, labels_key
+    ):
+        p = _write_toml(
+            tmp_path,
+            _MINIMAL_TOML
+            + f"""
+
+[{section}]
+{values_key} = []
+""",
+        )
+        with pytest.raises(RigLoadError, match=rf"\[{section}\]\.{values_key}"):
+            load_rig(p)
+
+    @pytest.mark.parametrize(
+        ("section", "values_key", "labels_key"), _SECTIONS, ids=lambda t: t
+    )
+    def test_domain_rejects_non_integer_entries(
+        self, tmp_path, section, values_key, labels_key
+    ):
+        p = _write_toml(
+            tmp_path,
+            _MINIMAL_TOML
+            + f"""
+
+[{section}]
+{values_key} = [0, "WIDE", 2]
+""",
+        )
+        with pytest.raises(RigLoadError, match=rf"\[{section}\]\.{values_key}"):
+            load_rig(p)
+
+    @pytest.mark.parametrize(
+        ("section", "values_key", "labels_key"), _SECTIONS, ids=lambda t: t
+    )
+    def test_domain_rejects_orphan_label_key(
+        self, tmp_path, section, values_key, labels_key
+    ):
+        p = _write_toml(
+            tmp_path,
+            _MINIMAL_TOML
+            + f"""
+
+[{section}]
+{values_key} = [0, 1, 2]
+{labels_key} = {{ "0" = "A", "1" = "B", "2" = "C", "9" = "PHANTOM" }}
+""",
+        )
+        with pytest.raises(RigLoadError, match=rf"\[{section}\]\.{labels_key}.*9"):
+            load_rig(p)
+
+    @pytest.mark.parametrize(
+        ("section", "values_key", "labels_key"), _SECTIONS, ids=lambda t: t
+    )
+    def test_domain_rejects_labels_declared_without_values(
+        self, tmp_path, section, values_key, labels_key
+    ):
+        """MOR-1522 R1 (B2) hole class, generalized: labels with no values
+        must not load silently — that would yield a capability-present
+        control with an empty domain, short-circuiting the runtime
+        validation seat's ``is not None`` guard into a permissive no-op."""
+        p = _write_toml(
+            tmp_path,
+            _MINIMAL_TOML
+            + f"""
+
+[{section}]
+{labels_key} = {{ "0" = "A", "1" = "B", "2" = "C" }}
+""",
+        )
+        with pytest.raises(
+            RigLoadError,
+            match=rf"\[{section}\]\.{labels_key} declared without \[{section}\]\.{values_key}",
+        ):
+            load_rig(p)
+
+    @pytest.mark.parametrize(
+        ("section", "values_key", "labels_key"), _SECTIONS, ids=lambda t: t
+    )
+    def test_domain_absent_when_section_absent(
+        self, tmp_path, section, values_key, labels_key
+    ):
+        p = _write_toml(tmp_path, _MINIMAL_TOML)
+        rig = load_rig(p)
+        values_attr = {
+            "break_in": "break_in_modes",
+            "notch": "notch_width_values",
+            "ssb_tx_bw": "ssb_tx_bw_values",
+            "filter_shape": "filter_shape_values",
+        }[section]
+        assert getattr(rig, values_attr) is None
+
+
+class TestNotchWidthLabelsComplete:
+    """MOR-1685: a declared ``[notch] width_values`` entry with no label
+    would raise ``KeyError`` inside the capabilities serializer at request
+    time — the loader must fail loud at load time instead."""
+
+    def test_notch_rejects_partial_width_labels(self, tmp_path):
+        p = _write_toml(
+            tmp_path,
+            _MINIMAL_TOML
+            + """
+[notch]
+width_values = [0, 1, 2]
+width_labels = { "0" = "A" }
+""",
+        )
+        with pytest.raises(RigLoadError, match=r"width_labels.*1"):
+            load_rig(p)
+
+    def test_notch_rejects_width_values_without_labels_table(self, tmp_path):
+        p = _write_toml(
+            tmp_path,
+            _MINIMAL_TOML
+            + """
+[notch]
+width_values = [0, 1, 2]
+""",
+        )
+        with pytest.raises(RigLoadError, match=r"width_labels"):
+            load_rig(p)
+
+
+class TestBreakInLabelsComplete:
+    """MOR-2729: the capabilities payload publishes every ``[break_in]``
+    value with its label, so a value with no label fails the load."""
+
+    def test_break_in_rejects_partial_labels(self, tmp_path):
+        p = _write_toml(
+            tmp_path,
+            _MINIMAL_TOML
+            + """
+[break_in]
+values = [0, 1, 2]
+labels = { "0" = "A" }
+""",
+        )
+        with pytest.raises(RigLoadError, match=r"\[break_in\]\.labels.*'1', '2'"):
+            load_rig(p)
+
+    def test_break_in_rejects_values_without_labels_table(self, tmp_path):
+        p = _write_toml(
+            tmp_path,
+            _MINIMAL_TOML
+            + """
+[break_in]
+values = [0, 1]
+""",
+        )
+        with pytest.raises(RigLoadError, match=r"\[break_in\]\.labels"):
+            load_rig(p)
+
+
+class TestBreakInDomainDeclaredOrDocumentedAbsent:
+    """Every shipped profile must land on one of exactly two sides:
+
+    (a) it does not declare the ``break_in`` capability at all, or
+    (b) it declares ``break_in`` AND a non-empty ``[break_in] values``
+        domain — UNLESS it is one of the documented exceptions below, each
+        of which declares the capability without a domain for its own
+        reason (not an oversight):
+
+        - ``x6100``/``x6200``: advertise the capability but the backend's
+          break-in opcode (0x16 0x47, IC-7610's CW BK-IN register) is not
+          confirmed in either radio's documented CI-V table
+          (docs/validation/cat-audits/x6200.md lines 56/109/128/132; no
+          X6100 cat-audit exists at all). No trustworthy in-repo source for
+          a value domain — ``CoreRadio.set_break_in`` fails loud instead.
+    """
+
+    _NO_DOMAIN_BY_DESIGN = frozenset({"x6100", "x6200"})
+
+    @pytest.mark.parametrize("toml_path", _SHIPPED_RIG_TOMLS, ids=lambda p: p.stem)
+    def test_break_in_capability_and_domain_agree(self, toml_path):
+        rig = load_rig(toml_path)
+        has_break_in_capability = "break_in" in rig.capabilities
+
+        if not has_break_in_capability:
+            assert rig.break_in_modes is None, (
+                f"{toml_path.name}: declares [break_in] values without the "
+                f"'break_in' capability feature"
+            )
+            return
+
+        if toml_path.stem in self._NO_DOMAIN_BY_DESIGN:
+            assert rig.break_in_modes is None, (
+                f"{toml_path.name}: now declares a [break_in] domain — "
+                "update TestBreakInDomainDeclaredOrDocumentedAbsent's "
+                "_NO_DOMAIN_BY_DESIGN exception list to match"
+            )
+            return
+
+        assert rig.break_in_modes, (
+            f"{toml_path.name}: declares the 'break_in' capability but no "
+            f"(or an empty) [break_in] values domain"
+        )
+
+    def test_ic7610_family_declares_off_semi_full(self):
+        """IC-705/IC-7300/IC-9700/IC-7610 all declare the same CI-V 0x16
+        0x47 domain: 0=OFF, 1=SEMI, 2=FULL."""
+        for name in ("ic705", "ic7300", "ic9700", "ic7610"):
+            rig = load_rig(RIGS_DIR / f"{name}.toml")
+            assert rig.break_in_modes == (0, 1, 2), name
+            assert rig.break_in_labels == {
+                "0": "OFF",
+                "1": "SEMI",
+                "2": "FULL",
+            }, name
+
+    def test_ftx1_declares_off_on(self):
+        """MOR-2729: the FTX-1 CAT ``BI`` command takes 0 (OFF) and 1 (ON)."""
+        rig = load_rig(RIGS_DIR / "ftx1.toml")
+        assert rig.break_in_modes == (0, 1)
+        assert rig.break_in_labels == {"0": "OFF", "1": "ON"}
+
+    def test_documented_exceptions_declare_capability_without_domain(self):
+        for name in ("x6100", "x6200"):
+            rig = load_rig(RIGS_DIR / f"{name}.toml")
+            assert "break_in" in rig.capabilities, name
+            assert rig.break_in_modes is None, name
+
+
+class TestNotchWidthDomain:
+    """'notch' is a broader capability than manual notch WIDTH — a radio
+    can have auto-notch with no manual-notch-width command at all (IC-705
+    has no CI-V 0x16 0x57 mapping yet still declares width_values "for UI
+    parity"; X6100/X6200/FTX-1/TX-500 have neither the mapping nor a width
+    domain). So, unlike ssb_tx_bw/filter_shape below, this is NOT a strict
+    capability-implies-domain invariant — just direct regression pins.
+
+    MOR-1551 audited the four profiles below (none had a ``[notch]
+    width_values`` domain) against in-repo sources and found no trustworthy
+    evidence of an actual manual-notch WIDTH control on any of them — see
+    the per-profile ``[capabilities]`` comments in each ``.toml`` for the
+    full provenance. This class pins that "undeclared" is the correct,
+    audited state, not an oversight."""
+
+    def test_ic7610_family_declares_wide_mid_nar(self):
+        for name in ("ic705", "ic7300", "ic9700", "ic7610"):
+            rig = load_rig(RIGS_DIR / f"{name}.toml")
+            assert rig.notch_width_values == (0, 1, 2), name
+            assert rig.notch_width_labels == {
+                "0": "WIDE",
+                "1": "MID",
+                "2": "NAR",
+            }, name
+
+    def test_x6100_x6200_declare_notch_without_a_width_domain(self):
+        """X6200's own cat-audit (docs/validation/cat-audits/x6200.md lines
+        55/95/107) found no WIDE/MID/NAR-style width register anywhere in
+        the documented CI-V table — its real notch is a DNF toggle
+        (0x16 0x41) + center frequency (0x14 0x0D). X6100 has no hardware
+        to audit directly and leans on X6100/X6200 shared-firmware
+        inference (same basis as the existing break_in exception)."""
+        for name in ("x6100", "x6200"):
+            rig = load_rig(RIGS_DIR / f"{name}.toml")
+            assert "notch" in rig.capabilities, name
+            assert rig.notch_width_values is None, name
+
+    def test_ftx1_declares_notch_without_a_width_domain(self):
+        """FTX-1's manual notch is a Yaesu CAT BP00 (on/off) + BP01
+        (frequency index 0-255) pair — no separate WIDTH register is
+        documented in wfview's FTX-1.rig or the Yaesu FT-X1 CAT manual.
+        YaesuCatRadio.set_manual_notch_width/get_manual_notch_width also
+        raise NotImplementedError unconditionally, so this control is not
+        wire-reachable on this backend regardless of the TOML domain."""
+        rig = load_rig(RIGS_DIR / "ftx1.toml")
+        assert "notch" in rig.capabilities
+        assert rig.notch_width_values is None
+
+    def test_tx500_declares_notch_without_a_width_domain(self):
+        """TX-500's NT command is a single 0=OFF/1=Auto toggle per the
+        Lab599 CAT Protocol rev. 2 (docs/validation/cat-audits/tx500.md
+        line 37) — auto-notch only, no manual notch and therefore no width
+        parameter documented anywhere in the protocol doc."""
+        rig = load_rig(RIGS_DIR / "tx500.toml")
+        assert "notch" in rig.capabilities
+        assert rig.notch_width_values is None
+
+
+class TestSsbTxBwDomainDeclaredOrCapabilityAbsent:
+    @pytest.mark.parametrize("toml_path", _SHIPPED_RIG_TOMLS, ids=lambda p: p.stem)
+    def test_ssb_tx_bw_capability_and_domain_agree(self, toml_path):
+        rig = load_rig(toml_path)
+        has_capability = "ssb_tx_bw" in rig.capabilities
+
+        if not has_capability:
+            assert rig.ssb_tx_bw_values is None, (
+                f"{toml_path.name}: declares [ssb_tx_bw] values without "
+                f"the 'ssb_tx_bw' capability feature"
+            )
+            return
+
+        assert rig.ssb_tx_bw_values, (
+            f"{toml_path.name}: declares the 'ssb_tx_bw' capability but no "
+            f"(or an empty) [ssb_tx_bw] values domain"
+        )
+
+    def test_ic7610_family_declares_wide_mid_nar(self):
+        for name in ("ic705", "ic7300", "ic9700", "ic7610"):
+            rig = load_rig(RIGS_DIR / f"{name}.toml")
+            assert rig.ssb_tx_bw_values == (0, 1, 2), name
+
+
+class TestFilterShapeDomainDeclaredOrCapabilityAbsent:
+    """MOR-1534: filter_shape had NO TOML domain at all before this ticket
+    (unlike the other three, which were declared-but-dead). Added here for
+    the exact four profiles that already declare the ``filter_shape``
+    capability, sourced from docs/validation/cat-audits/{ic7300,ic7610}.md
+    (S/R-confirmed for those two) and, for ic705/ic9700 (no dedicated
+    cat-audit in-repo), from the shared runtime ``FilterShape`` enum's
+    pre-existing SHARP=0/SOFT=1 assumption for the same CI-V 0x16 0x56
+    command — see each profile's ``[filter_shape]`` TOML comment for the
+    exact provenance."""
+
+    @pytest.mark.parametrize("toml_path", _SHIPPED_RIG_TOMLS, ids=lambda p: p.stem)
+    def test_filter_shape_capability_and_domain_agree(self, toml_path):
+        rig = load_rig(toml_path)
+        has_capability = "filter_shape" in rig.capabilities
+
+        if not has_capability:
+            assert rig.filter_shape_values is None, (
+                f"{toml_path.name}: declares [filter_shape] values without "
+                f"the 'filter_shape' capability feature"
+            )
+            return
+
+        assert rig.filter_shape_values, (
+            f"{toml_path.name}: declares the 'filter_shape' capability but "
+            f"no (or an empty) [filter_shape] values domain"
+        )
+
+    def test_ic7610_family_declares_sharp_soft(self):
+        for name in ("ic705", "ic7300", "ic9700", "ic7610"):
+            rig = load_rig(RIGS_DIR / f"{name}.toml")
+            assert rig.filter_shape_values == (0, 1), name
+            assert rig.filter_shape_labels == {"0": "SHARP", "1": "SOFT"}, name
+
+
+# Manual-only membership and other-model absent-schema pins are separate.
+
+
+class TestIc7300ManualOnlyCommands:
+    """MOR-2257: retain the 11a profile names, without negative markers --
+    except the three reads MOR-3012 found the section-19 command table
+    itself leaves undocumented (get_data2_mod_input, get_data3_mod_input,
+    get_scope_rbw): those are declared absent with a manual citation
+    instead of staying silent state-3 gaps."""
+
+    # MOR-3012: declared absent, still never wired.
+    _ABSENT_NAMES = frozenset(
+        {
+            "get_data2_mod_input",
+            "get_data3_mod_input",
+            "get_scope_rbw",
+        }
+    )
+
+    _REMOVED_NAMES = frozenset(
+        {
+            "get_af_mute",
+            "set_af_mute",
+            "get_antenna",
+            "set_antenna",
+            "get_apf_type_level",
+            "set_apf_type_level",
+            "set_data2_mod_input",
+            "set_data3_mod_input",
+            "get_digisel",
+            "set_digisel",
+            "get_digisel_shift",
+            "set_digisel_shift",
+            "get_drive_gain",
+            "set_drive_gain",
+            "get_dual_watch",
+            "set_dual_watch_off",
+            "set_dual_watch_on",
+            "set_dual_watch",
+            "get_lan_mod_level",
+            "set_lan_mod_level",
+            "get_main_sub_band",
+            "get_main_sub_tracking",
+            "set_main_sub_tracking",
+            "get_powerstat",
+            "get_quick_dual_watch",
+            "set_quick_dual_watch",
+            "get_ref_adjust",
+            "set_ref_adjust",
+            "get_rx_antenna_ant2",
+            "set_rx_antenna_ant2",
+            "set_scope_rbw",
+            "get_scope_marker_position",
+            "set_scope_marker_position",
+            "get_vfo",
+            "get_s_meter_sql_status_04",
+            "set_scope_wave",
+        }
+    )
+
+    def test_exact_retained_membership(self):
+        config = load_rig(RIGS_DIR / "ic7300.toml")
+        profile = config.to_profile()
+        assert profile.absent_command_names == self._ABSENT_NAMES
+        assert frozenset(profile.absent_command_sources) == self._ABSENT_NAMES
+        assert not (config.commands.keys() & self._REMOVED_NAMES)
+        # MOR-3115 adds the manual-derived unselected mode SET command.
+        assert len(config.commands) == 323 + len(self._ABSENT_NAMES)
+        assert len(profile.command_names) == 323
+        names = "\n".join(sorted(profile.command_names)).encode()
+        assert (
+            sha256(names).hexdigest()
+            == "bacae81299ed2074f5b6cb0b5d3e437e27289ee965367b550c8076384120e03f"
+        )
+
+    @pytest.mark.parametrize("model", ["ic7300", "ic7300mk2", "ic705"])
+    def test_unselected_mode_set_and_read_commands(self, model):
+        profile = load_rig(RIGS_DIR / f"{model}.toml").to_profile()
+        assert profile.command_map.get("set_unselected_mode") == (0x26, 0x01)
+        assert profile.command_map.get("get_unselected_mode") == (0x26, 0x01)
+        if model != "ic705":
+            assert not profile.set_mode_via_selected
+
+    def test_removed_names_have_no_callable_fallback(self):
+        from rigplane.runtime.radio import CoreRadio
+
+        profile = load_rig(RIGS_DIR / "ic7300.toml").to_profile()
+        radio = CoreRadio("127.0.0.1", profile=profile)
+        for name in self._REMOVED_NAMES:
+            assert not profile.supports_command(name), name
+            assert not radio.supports_command(name), name
+
+    @pytest.mark.parametrize("name", ["get_vfo", "get_digisel", "get_lan_mod_level"])
+    def test_missing_bound_builder_refuses(self, name):
+        from rigplane.core.exceptions import CommandError
+        from rigplane.runtime.radio import CoreRadio
+
+        radio = CoreRadio(
+            "127.0.0.1", profile=load_rig(RIGS_DIR / "ic7300.toml").to_profile()
+        )
+        with pytest.raises(CommandError, match="not declared by this profile"):
+            getattr(radio._commands, name)(to_addr=0x94)  # noqa: SLF001
+
+
+def _assert_manual_only_membership(filename, count, names_digest, removed_names):
+    config = load_rig(RIGS_DIR / filename)
+    profile = config.to_profile()
+    assert not profile.absent_command_names
+    assert not profile.absent_command_sources
+    assert not (config.commands.keys() & removed_names)
+    assert len(config.commands) == len(profile.command_names) == count
+    # Exact retained name set, not a count-only pin or a runtime command registry.
+    names = "\n".join(sorted(profile.command_names)).encode()
+    assert sha256(names).hexdigest() == names_digest
+
+
+class TestIc9700DeclaresAbsentCommands:
+    """MOR-2015 (D2): IC-9700 is filled with the ``{ absent = "<source>" }``
+    spelling for commands the IC-9700 CI-V Reference Guide (Icom, 2019)
+    confirms have no row on this radio (26 at D2 time; MOR-2008 batch 1
+    later deleted the dead bare ``quick_dual_watch`` entry, -1 net -- see
+    ``rigs/ic9700.toml``'s own comment on that section) -- 10 unique
+    gap-list base names (af_mute, data2/3_mod_input, digisel,
+    digisel_shift, drive_gain, main_sub_tracking, powerstat,
+    quick_dual_watch, rx_antenna_ant2), plus civ_output_ant (a
+    copied-but-wrong 1A05 address with no real replacement) and the
+    nb_depth/nb_width pair (no single global control, per-band only).
+    MOR-1983 adds RBW because the scope table ends at 1E; the legacy
+    TX-frequency-monitor boolean names MOR-1983 also added here were
+    deleted entirely by MOR-2246, not merely left declared absent.
+    Pinned by name, not just count, so a future D2 pass on another
+    command can't silently swap one of these for a different one and
+    still pass a bare-count check.
+    """
+
+    _EXPECTED_ABSENT = frozenset(
+        {
+            "get_af_mute",
+            "set_af_mute",
+            "get_civ_output_ant",
+            "set_civ_output_ant",
+            "get_data2_mod_input",
+            "set_data2_mod_input",
+            "get_data3_mod_input",
+            "set_data3_mod_input",
+            "get_digisel",
+            "set_digisel",
+            "get_digisel_shift",
+            "set_digisel_shift",
+            "get_drive_gain",
+            "set_drive_gain",
+            "get_main_sub_tracking",
+            "set_main_sub_tracking",
+            "get_nb_depth",
+            "set_nb_depth",
+            "get_nb_width",
+            "set_nb_width",
+            "get_powerstat",
+            "get_quick_dual_watch",
+            "set_quick_dual_watch",
+            "get_scope_rbw",
+            "set_scope_rbw",
+            # Bare "quick_dual_watch" removed here (MOR-2008 batch 1): no
+            # builder resolved it, only get_/set_quick_dual_watch above do.
+            "get_rx_antenna_ant2",
+            "set_rx_antenna_ant2",
+        }
+    )
+
+    def test_absent_command_names_match(self):
+        profile = load_rig(RIGS_DIR / "ic9700.toml").to_profile()
+        assert profile.absent_command_names == self._EXPECTED_ABSENT
+
+    def test_absent_commands_excluded_from_command_map(self):
+        cmd_map = load_rig(RIGS_DIR / "ic9700.toml").to_command_map()
+        for name in self._EXPECTED_ABSENT:
+            assert not cmd_map.has(name), f"{name} declared absent but still in map"
+
+
+class TestIc705DeclaresAbsentCommands:
+    """MOR-2016 (D2): IC-705 is filled with the ``{ absent = "<source>" }``
+    spelling for commands the IC-705 CI-V Reference Guide (A7560-8EX-1,
+    Jul.2020) confirms have no row on this radio (24 at D2 time; MOR-2007
+    ruling 1 later split ``set_dual_watch`` into
+    ``set_dual_watch_off``/``set_dual_watch_on``, +1 net; MOR-2143 added the
+    bare ``set_dual_watch`` name, +1). MOR-1983 adds the two RBW names
+    because the scope table ends at 1E; the legacy boolean
+    TX-frequency-monitor names MOR-1983 also added here were deleted
+    entirely by MOR-2246, not merely left declared absent. MOR-2917 adds
+    twelve wfview-derived names that no command-table row of either guide
+    edition (A7560-8EX-1, A7560-8EX-6) documents: drive gain (14 14),
+    DIGI-SEL shift (14 13), APF type level (14 05), audio peak filter
+    (16 32), RX antenna (16 53) and antenna select (12). Pinned by
+    name, not just count, so a future D2 pass on another command can't
+    silently swap one of these for a different one and still pass a
+    bare-count check.
+    """
+
+    _EXPECTED_ABSENT = frozenset(
+        {
+            "get_acc1_mod_level",
+            "set_acc1_mod_level",
+            "get_af_mute",
+            "set_af_mute",
+            "get_civ_output_ant",
+            "set_civ_output_ant",
+            "get_data2_mod_input",
+            "set_data2_mod_input",
+            "get_data3_mod_input",
+            "set_data3_mod_input",
+            "get_digisel",
+            "set_digisel",
+            "get_dual_watch",
+            "set_dual_watch",
+            "set_dual_watch_off",
+            "set_dual_watch_on",
+            "get_ip_plus",
+            "set_ip_plus",
+            "get_main_sub_band",
+            "get_main_sub_tracking",
+            "set_main_sub_tracking",
+            "get_quick_dual_watch",
+            "set_quick_dual_watch",
+            "quick_dual_watch",
+            "get_scope_rbw",
+            "set_scope_rbw",
+            "get_rx_antenna_ant2",
+            "set_rx_antenna_ant2",
+            "get_drive_gain",
+            "set_drive_gain",
+            "get_digisel_shift",
+            "set_digisel_shift",
+            "get_apf_type_level",
+            "set_apf_type_level",
+            "get_audio_peak_filter",
+            "set_audio_peak_filter",
+            "get_rx_antenna",
+            "set_rx_antenna",
+            "get_antenna",
+            "set_antenna",
+        }
+    )
+
+    def test_absent_command_names_match(self):
+        profile = load_rig(RIGS_DIR / "ic705.toml").to_profile()
+        assert profile.absent_command_names == self._EXPECTED_ABSENT
+
+    def test_absent_commands_excluded_from_command_map(self):
+        cmd_map = load_rig(RIGS_DIR / "ic705.toml").to_command_map()
+        for name in self._EXPECTED_ABSENT:
+            assert not cmd_map.has(name), f"{name} declared absent but still in map"
+
+
+class TestIc7610DeclaresAbsentCommands:
+    """MOR-2008 batch 2 (D1/D2): IC-7610 is filled with the
+    ``{ absent = "<source>" }`` spelling for the repeater-tone/TSQL/
+    tone-freq/TSQL-freq family (8 commands) -- a comment-only exclusion
+    since MOR-661/682 promoted to a formal declared-absent row, grounded
+    in a live-bench readback (tone_freq/tsql_freq replies decoded to
+    garbage, 16.5 Hz) rather than a documentary source, per
+    ``rigs/ic7610.toml``'s own comment on the point. Unlike IC-7300/
+    IC-9700/IC-705 above, this is not a documentary D2 pass over the
+    whole command table -- it is one feature family's absence, already
+    established by MOR-660/661/682 well before this ticket, just not
+    previously spelled with the formal marker. MOR-1983 had also marked the
+    legacy TX-frequency-monitor boolean names absent here because 1C/03 is
+    read-only; MOR-2246 deleted that pair entirely rather than leave it
+    declared absent.
+    Pinned by name, not just
+    count, so a future D2 pass on another command can't silently swap
+    one of these for a different one and still pass a bare-count check.
+    """
+
+    _EXPECTED_ABSENT = frozenset(
+        {
+            "get_repeater_tone",
+            "set_repeater_tone",
+            "get_repeater_tsql",
+            "set_repeater_tsql",
+            "get_tone_freq",
+            "set_tone_freq",
+            "get_tsql_freq",
+            "set_tsql_freq",
+        }
+    )
+
+    def test_absent_command_names_match(self):
+        profile = load_rig(RIGS_DIR / "ic7610.toml").to_profile()
+        assert profile.absent_command_names == self._EXPECTED_ABSENT
+
+    def test_absent_commands_excluded_from_command_map(self):
+        cmd_map = load_rig(RIGS_DIR / "ic7610.toml").to_command_map()
+        for name in self._EXPECTED_ABSENT:
+            assert not cmd_map.has(name), f"{name} declared absent but still in map"
+
+
+class _X6DeclaresAbsentCommands:
+    """Shared body for the X6100/X6200 absent-command pin below.
+
+    MOR-2008 batch 3: both profiles at the time formally declared
+    ``get_/set_vox``, ``get_/set_break_in`` and ``get_/set_manual_notch``
+    absent, promoted from a comment-only note (``rigs/x6200.toml``'s own
+    "vox"/"notch"/"break_in" bullets, inherited into ``rigs/x6100.toml``
+    per its D2 MOR-2018 sourcing rule) once the bound-command-map
+    migration (MOR-2006) made the fallback that used to silently send
+    each control's hardcoded, undocumented opcode dead code. Distinct
+    from ``get_/set_nr``, ``get_/set_compressor`` and
+    ``get_/set_auto_notch``, which the same migration round declares
+    *present* instead, at opcodes the project's own cat-audit already
+    confirmed correct (docs/validation/cat-audits/x6200.md) -- those
+    three are not absent commands and must not appear here.
+
+    MOR-2008 batch 4 adds 11 more: the entire memory.py (9 keys) and
+    tx_band.py (2 keys) Group B family is absent on both profiles --
+    none of the nine memory-family opcodes (0x08/0x09/0x0A/0x0B/0x1A 0x00)
+    nor the two TX-band-edge opcodes (0x1E) appear anywhere in the
+    Radioddity X6200 CI-V V1.0.6 Table 1 (pp.5-9, the complete documented
+    opcode list); ``get_bsr``/``set_bsr`` specifically because the
+    opcode [0x1A, 0x01] the table *does* document is a different,
+    2-byte-payload command (exposed instead as
+    ``get_band_spectrum_display``), not Icom's own 9-byte band-stacking
+    record -- see each profile's own ``rigs/*.toml`` comments and the
+    class-name renaming this batch made necessary (was
+    ``_X6DeclaresAbsentVoxBreakInManualNotch``, no longer describes the
+    full set this shared body pins).
+
+    MOR-2488/MOR-2489 splits the vox pair: the X6100's own manual
+    (Radioddity Extended manual for Xiegu X6100 v1.1.8 §15 Table 1)
+    lists ``0x16 0x46`` "Get VOX switch" for X6100, so ``get_vox`` is
+    PRESENT on x6100.toml and only ``set_vox`` (GET-only row, no SET
+    row in the table) stays absent there; x6200.toml keeps the full
+    sibling-table basis (its V1.0.6 table has no VOX row of any kind)
+    and stays absent in both directions.
+
+    MOR-4352 adds the CW-keying pair to x6200.toml only: the V1.0.6
+    Table 1 has no CI-V CW send/stop row, so the managed full-force
+    release's STOP_CW is not applicable on an X6200 and both names are
+    formally absent. The X6100 keeps its own sourcing rule (its manual
+    was not re-read for CW keying here), so it adds nothing.
+    """
+
+    _SHARED_ABSENT = frozenset(
+        {
+            "set_vox",
+            "get_break_in",
+            "set_break_in",
+            "get_manual_notch",
+            "set_manual_notch",
+            "get_memory_mode",
+            "set_memory_mode",
+            "memory_write",
+            "memory_to_vfo",
+            "memory_clear",
+            "get_memory_contents",
+            "set_memory_contents",
+            "get_bsr",
+            "set_bsr",
+            "get_tx_band_count",
+            "get_tx_band_edge",
+        }
+    )
+    # Per-profile additions on top of _SHARED_ABSENT, folded into each
+    # subclass's _EXPECTED_ABSENT class attribute (kept a plain
+    # attribute -- tests/test_command_spec.py imports these pins).
+    _TOML_NAME: str
+
+    def test_absent_command_names_match(self):
+        profile = load_rig(RIGS_DIR / self._TOML_NAME).to_profile()
+        assert profile.absent_command_names == self._EXPECTED_ABSENT
+
+    def test_absent_commands_excluded_from_command_map(self):
+        cmd_map = load_rig(RIGS_DIR / self._TOML_NAME).to_command_map()
+        for name in self._EXPECTED_ABSENT:
+            assert not cmd_map.has(name), f"{name} declared absent but still in map"
+
+    def test_nr_compressor_auto_notch_stay_present_not_absent(self):
+        """The under-declared-not-absent sibling fix (same migration round)."""
+        profile = load_rig(RIGS_DIR / self._TOML_NAME).to_profile()
+        declared_present = {
+            "get_nr",
+            "set_nr",
+            "get_compressor",
+            "set_compressor",
+            "get_auto_notch",
+            "set_auto_notch",
+        }
+        assert declared_present <= profile.command_names
+        assert not (declared_present & profile.absent_command_names)
+
+    def test_selected_freq_mode_family_stays_present_not_absent(self):
+        """The DECLARED-OK sibling fix (MOR-2008 batch 4): the five
+        canonical freq.py Group B keys are sourced and present on both
+        profiles, not absent -- only memory.py/tx_band.py are absent
+        here.
+        """
+        profile = load_rig(RIGS_DIR / self._TOML_NAME).to_profile()
+        declared_present = {
+            "get_selected_freq",
+            "get_unselected_freq",
+            "get_selected_mode",
+            "get_unselected_mode",
+            "set_selected_mode",
+        }
+        assert declared_present <= profile.command_names
+        assert not (declared_present & profile.absent_command_names)
+
+
+class TestX6200DeclaresAbsentCommands(_X6DeclaresAbsentCommands):
+    _TOML_NAME = "x6200.toml"
+    _EXPECTED_ABSENT = _X6DeclaresAbsentCommands._SHARED_ABSENT | frozenset(
+        {"get_vox", "send_cw", "stop_cw"}
+    )
+
+
+class TestX6100DeclaresAbsentCommands(_X6DeclaresAbsentCommands):
+    _TOML_NAME = "x6100.toml"
+    _EXPECTED_ABSENT = _X6DeclaresAbsentCommands._SHARED_ABSENT
+
+    def test_get_vox_present_at_manual_documented_opcode(self):
+        """MOR-2488/MOR-2489: the X6100 manual's §15 Table 1 lists
+        0x16 0x46 "Get VOX switch" (Rigs: X6100; data 0x00 OFF /
+        0x01 ON), so get_vox is present on this profile while set_vox
+        (no SET row in the table) stays absent."""
+        profile = load_rig(RIGS_DIR / self._TOML_NAME).to_profile()
+        assert "get_vox" in profile.command_names
+        assert "get_vox" not in profile.absent_command_names
+        assert profile.command_map.get("get_vox") == (0x16, 0x46)
+
+
+class _CatOnlyDeclaresAllGroupBAbsent:
+    """TX-500 retains its existing CI-V protocol-mismatch markers."""
+
+    _EXPECTED_ABSENT = frozenset(
+        {
+            "get_memory_mode",
+            "set_memory_mode",
+            "memory_write",
+            "memory_to_vfo",
+            "memory_clear",
+            "get_memory_contents",
+            "set_memory_contents",
+            "get_bsr",
+            "set_bsr",
+            "get_tx_band_count",
+            "get_tx_band_edge",
+            "get_selected_freq",
+            "get_unselected_freq",
+            "get_selected_mode",
+            "get_unselected_mode",
+            "set_selected_mode",
+        }
+    )
+    _TOML_NAME: str
+
+    def test_absent_command_names_match(self):
+        profile = load_rig(RIGS_DIR / self._TOML_NAME).to_profile()
+        assert profile.absent_command_names == self._EXPECTED_ABSENT
+
+    def test_absent_commands_excluded_from_command_map(self):
+        cmd_map = load_rig(RIGS_DIR / self._TOML_NAME).to_command_map()
+        for name in self._EXPECTED_ABSENT:
+            assert not cmd_map.has(name), f"{name} declared absent but still in map"
+
+
+class TestFtx1ManualOnlyCommands:
+    """MOR-2257: retain CAT 2508-C names; RC has no row in that edition.
+
+    MOR-2531 added two 2508-C names: ``vfo_swap`` (SV; — SWAP VFO) and
+    ``vfo_equalize`` (AB; — MAIN-side to SUB-side), the FTX-1's M⇄S / M=S.
+    MOR-3678 added ``write_keyer_memory`` (KM; — KEYING MEMORY, printed
+    p.17), which send_cw_text writes before KY plays the channel.
+    """
+
+    _REMOVED_NAMES = frozenset(
+        {
+            "get_memory_mode",
+            "set_memory_mode",
+            "memory_write",
+            "memory_to_vfo",
+            "memory_clear",
+            "get_memory_contents",
+            "set_memory_contents",
+            "get_bsr",
+            "set_bsr",
+            "get_tx_band_count",
+            "get_tx_band_edge",
+            "get_selected_freq",
+            "get_unselected_freq",
+            "get_selected_mode",
+            "get_unselected_mode",
+            "set_selected_mode",
+            "reset_clarifier",
+        }
+    )
+
+    def test_exact_retained_membership(self):
+        _assert_manual_only_membership(
+            "ftx1.toml",
+            131,
+            "a295a3445022f0cf018cf53b515fd4e6fa03503d98fec7d3da995ff40ef976e7",
+            self._REMOVED_NAMES,
+        )
+
+    def test_removed_names_have_no_callable_fallback(self):
+        from rigplane.backends.yaesu_cat.radio import YaesuCatRadio
+
+        config = load_rig(RIGS_DIR / "ftx1.toml")
+        profile = config.to_profile()
+        radio = YaesuCatRadio("/dev/null", profile=config)
+        for name in self._REMOVED_NAMES:
+            assert not profile.supports_command(name), name
+            assert not radio.supports_command(name), name
+
+
+class TestTx500DeclaresAbsentCommands(_CatOnlyDeclaresAllGroupBAbsent):
+    _TOML_NAME = "tx500.toml"
+
+
+# ── [radio].id / [radio].model types (MOR-3859) ──────────────────
+
+
+class TestRadioIdentityFieldTypes:
+    """A bad ``id``/``model`` is a RigLoadError at load, never a crash later."""
+
+    @pytest.mark.parametrize(
+        ("field", "bad_value"),
+        [
+            ("id", "123"),
+            ("id", "true"),
+            ("id", '""'),
+            ("id", '"   "'),
+            ("id", '["icom_ic7300"]'),
+            ("model", "7300"),
+            ("model", "false"),
+            ("model", '""'),
+            ("model", '"  "'),
+            ("model", '{ name = "IC-7300" }'),
+        ],
+    )
+    def test_non_string_or_blank_identity_is_a_load_error(
+        self, tmp_path: Path, field: str, bad_value: str
+    ) -> None:
+        toml = re.sub(
+            rf"(?m)^{field} = .*$", f"{field} = {bad_value}", _MINIMAL_TOML, count=1
+        )
+        path = _write_toml(tmp_path, toml)
+        with pytest.raises(RigLoadError, match=rf"\[radio\]\.{field} must be a"):
+            load_rig(path)
+
+    def test_radio_section_must_be_a_table(self, tmp_path: Path) -> None:
+        rest = _MINIMAL_TOML[_MINIMAL_TOML.index("[spectrum]") :]
+        path = _write_toml(tmp_path, 'radio = "IC-7300"\n' + rest)
+        with pytest.raises(RigLoadError, match=r"\[radio\] must be a table"):
+            load_rig(path)

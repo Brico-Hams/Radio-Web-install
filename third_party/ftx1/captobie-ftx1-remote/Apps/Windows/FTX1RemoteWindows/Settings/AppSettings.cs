@@ -1,0 +1,1218 @@
+using System.Text.Json;
+using FTX1RemoteWindows.Models;
+using FTX1RemoteWindows.Services;
+using FTX1RemoteWindows.Services.Digi;
+
+namespace FTX1RemoteWindows.Settings;
+
+/// Where the radio's USB cable is plugged in — same split as the Mac's
+/// RigctldSettings.ConnectionMode (Apps/Mac/FTX1RemoteMac/
+/// RigctldSettings.swift): Remote talks to the Pi's always-on
+/// rigctld.service over Tailscale; Local launches (or adopts) a rigctld.exe
+/// on this PC against a USB-attached rig. Either way this app only ever
+/// talks rigctld's TCP protocol — never CAT over the serial port itself.
+public enum ConnectionMode
+{
+    Remote,
+    Local,
+}
+
+/// Which external logbook the CW window logs to and reads worked-before
+/// from (Settings → Logbook) — the Mac's LogbookSettings.Logger, which has
+/// MacLoggerDX where this has HRD Logbook (Services/HrdLogbook.cs) and
+/// Log4OM (Services/Log4OmLogbook.cs).
+public enum LogbookKind
+{
+    None,
+    HrdLogbook,
+    Log4Om,
+}
+
+/// Persists this app's settings: the connection mode, the Pi's Tailscale
+/// MagicDNS hostname for Remote (port fixed at 4532, not configurable —
+/// see Apps/Windows/README.md's "Settings" section, matching
+/// RigctldSettings.remoteHost on the Mac side), and the rigctld launch
+/// configuration for Local (mirroring RigctldSettings' binaryPath/
+/// modelNumber/devicePath/baudRate), plus the audio link's on/off and
+/// per-channel playback settings (same defaults as the Mac's
+/// AudioPlaybackSettings).
+///
+/// File-based (not ApplicationData.Current.LocalSettings) because the
+/// project currently builds unpackaged (WindowsPackageType=None — see
+/// FTX1RemoteWindows.csproj's comment) and LocalSettings requires package
+/// identity. Swap to LocalSettings once packaging flips to MSIX; the
+/// static get/set surface below can stay the same either way.
+public static class AppSettings
+{
+    private sealed class Data
+    {
+        // Remote by default: this app was remote-only before Local existed,
+        // so an existing settings file (which has no ConnectionMode key)
+        // keeps behaving exactly as it did.
+        public ConnectionMode ConnectionMode { get; set; } = ConnectionMode.Remote;
+        public string PiHost { get; set; } = "";
+        /// Pre-0.10 explicit path, read only for migration (RigctldChoice).
+        public string RigctldPath { get; set; } = "";
+        /// RigctldBinary.Choice.StoredValue; null until first saved.
+        public string? RigctldChoice { get; set; }
+        public int ModelNumber { get; set; } = 1051;
+        public string ComPort { get; set; } = "";
+        public int BaudRate { get; set; } = 38400;
+        public bool AudioEnabled { get; set; } = true;
+        public int FrequencyStepHz { get; set; } = 1_000;
+        public bool TransmitEnabled { get; set; } = true;
+        /// PrivilegeChoice's stored form; off unless chosen.
+        public string LicensePrivileges { get; set; } = PrivilegeChoice.Off;
+        public PrivilegeProfile? LicenseCustomProfile { get; set; }
+        public string LocalAudioDeviceId { get; set; } = "";
+        public string LocalAudioDeviceName { get; set; } = "";
+        public string AudioOutputDeviceId { get; set; } = "";
+        public string AudioOutputDeviceName { get; set; } = "";
+        public string TxAudioOutputDeviceId { get; set; } = "";
+        public string TxAudioOutputDeviceName { get; set; } = "";
+        public bool AudioChannelsSwapped { get; set; }
+        public ChannelAudio MainAudio { get; set; } = new();
+        public ChannelAudio SubAudio { get; set; } = new();
+        public double SquelchHangSeconds { get; set; } = DefaultSquelchHangSeconds;
+        public MeterSelection MainMeterSelection { get; set; } = MeterSelection.Po;
+        public MeterSelection SubMeterSelection { get; set; } = MeterSelection.Po;
+        public bool WpsdEnabled { get; set; }
+        public string WpsdHost { get; set; } = "";
+        public int PollIntervalMs { get; set; } = PollIntervalMsSetting.Default;
+        public int SlowPollEvery { get; set; } = SlowPollEverySetting.Default;
+        public int WpsdCallerSeconds { get; set; } = WpsdCallerSecondsSetting.Default;
+        public int WpsdReflectorSeconds { get; set; } = WpsdReflectorSecondsSetting.Default;
+        /// Keyed by HomeBand.Name; a missing band uses its factory frequency.
+        public Dictionary<string, long> HomeFrequencies { get; set; } = new();
+        /// The Light/Dark/Auto setting before themes; read only to migrate
+        /// to ThemeName.
+        public AppTheme Theme { get; set; } = AppTheme.System;
+        /// Settings → Appearance → Theme, by name (ThemePresets); null until
+        /// first saved, then Theme's old value applies.
+        public string? ThemeName { get; set; }
+        /// Settings → Appearance → VFO digits; null = the theme's font.
+        public VfoDigitFont? VfoDigitFont { get; set; }
+        /// Settings → Appearance → VFO digit color; null = the theme's.
+        public ButtonValueColor? VfoDigitColor { get; set; }
+        public ButtonValueColor ButtonValueColor { get; set; } = ButtonValueColor.Orange;
+        /// Settings → Appearance → S-meter.
+        public SMeterStyle SMeterStyle { get; set; } = SMeterStyle.Lighted;
+        public ScopeDisplayMode ScopeDisplayMode { get; set; } = ScopeDisplayMode.Waterfall;
+        public bool AprsEnabled { get; set; }
+        public long AprsFrequencyHz { get; set; } = DefaultAprsFrequencyHz;
+        public int AprsToleranceHz { get; set; } = AprsToleranceHzSetting.Default;
+        public int AprsMaxStations { get; set; } = AprsMaxStationsSetting.Default;
+        public int AprsMaxMessages { get; set; } = AprsMaxMessagesSetting.Default;
+        public string GridSquare { get; set; } = "";
+        public string Callsign { get; set; } = "";
+        public string WebSdrHostPort { get; set; } = "";
+        public bool WebSdrFollowRig { get; set; } = true;
+        public bool WebSdrTuneRig { get; set; } = true;
+        public bool WebSdrMuted { get; set; }
+        public bool WebSdrMuteOnTransmit { get; set; } = true;
+        public CwAudioChannel CwChannel { get; set; } = CwAudioChannel.Main;
+        public double CwToneFrequency { get; set; } = 700;
+        public bool CwAutoTune { get; set; } = true;
+        public double CwSquelchDb { get; set; } = 12;
+        public int CwKeyerSlot { get; set; } = 1;
+        public bool CwMonitor { get; set; }
+        public CwDecoderKind CwDecoder { get; set; } = CwDecoderKind.Neural;
+        public List<CwMacro>? CwMacros { get; set; }
+        public DigiData Digi { get; set; } = new();
+        public Ft8Data Ft8 { get; set; } = new();
+        public WebSdrFavorite? WebSdrPickedStation { get; set; }
+        public List<WebSdrFavorite> WebSdrFavorites { get; set; } = [];
+        public string? WebSdrDirectoryETag { get; set; }
+        public SdrPlatform WebSdrStationsTab { get; set; } = SdrPlatform.KiwiSdr;
+        public bool MainMutedByWebSdr { get; set; }
+        public bool CheckForUpdatesAtLaunch { get; set; } = true;
+        public LogbookKind Logbook { get; set; } = LogbookKind.None;
+        public string HrdLogPath { get; set; } = "";
+        public string HrdUdpHost { get; set; } = "";
+        public int HrdUdpPort { get; set; }
+        public string Log4OmLogPath { get; set; } = "";
+        public string Log4OmUdpHost { get; set; } = "";
+        public int Log4OmUdpPort { get; set; }
+        public bool WavelogEnabled { get; set; }
+        public string WavelogUrl { get; set; } = "";
+        public string WavelogStationId { get; set; } = "";
+        public string WavelogStationName { get; set; } = "";
+        public string WavelogStationCallsign { get; set; } = "";
+        public bool WavelogCatEnabled { get; set; }
+        public string WavelogRadioName { get; set; } = "";
+        public bool WavelogTuneEnabled { get; set; }
+        public int WavelogTunePort { get; set; } = DefaultWavelogTunePort;
+        public bool HubEnabled { get; set; }
+        public WindowBounds? MainWindowBounds { get; set; }
+        public LocalSdrData LocalSdr { get; set; } = new();
+        public AprsTransmitData AprsTx { get; set; } = new();
+    }
+
+    /// The MyKiwiSDR window's settings (the Mac's localSDR.* keys). The
+    /// password is in Credential Manager (LocalSdrPassword), not here.
+    public sealed class LocalSdrData
+    {
+        /// "host" or "host:port" (8073 when absent), from Settings → Devices.
+        public string Host { get; set; } = "";
+        /// Shows the main window's MyKiwiSDR button. Unset (a setup from before
+        /// this switch) counts as on when an address is saved.
+        public bool? Enabled { get; set; }
+        [System.Text.Json.Serialization.JsonIgnore]
+        public bool IsEnabled => Enabled ?? !string.IsNullOrWhiteSpace(Host);
+        public int FrequencyHz { get; set; } = 14_074_000;
+        public string Mode { get; set; } = "usb";
+        public double Volume { get; set; } = 0.8;
+        public bool Muted { get; set; }
+        public int WaterfallZoom { get; set; } = 8;
+        public bool FollowRig { get; set; } = true;
+        public bool TuneRig { get; set; } = true;
+        public bool FollowRigWidth { get; set; }
+        public bool MuteOnTransmit { get; set; } = true;
+        /// Each mode's last passband, keyed by KiwiSdrMode.RawValue: [low, high].
+        public Dictionary<string, int[]> Passbands { get; set; } = [];
+        public KiwiReceiverSettings Receiver { get; set; } = new();
+    }
+
+    /// The main window's restored (not maximized) position and size in
+    /// physical pixels, plus whether it was maximized when last closed.
+    public sealed record WindowBounds(int X, int Y, int Width, int Height, bool Maximized);
+
+    /// One Polling-tab value: its default and allowed range. Every getter
+    /// clamps, so a hand-edited 0 in settings.json can't turn a loop into a
+    /// tight spin against rigctld or the hotspot (the Mac's
+    /// PollingSettings.Setting, same reason).
+    public readonly record struct IntSetting(int Default, int Min, int Max)
+    {
+        public int Clamp(int value) => Math.Clamp(value, Min, Max);
+    }
+
+    /// Poll tick interval — the Mac's fast-tier default and range.
+    public static readonly IntSetting PollIntervalMsSetting = new(500, 100, 5_000);
+    /// The slow tier (FR, C4FM, MENU grid) runs on every Nth poll: 10 × 500
+    /// ms keeps it at ~5 s. The Mac spreads its slow reads over every tick
+    /// instead ("reads per tick"); this app still reads the whole slow tier
+    /// at once, so its setting stays "every N polls".
+    public static readonly IntSetting SlowPollEverySetting = new(10, 1, 60);
+    /// The Mac's WPSD lookup defaults and ranges.
+    public static readonly IntSetting WpsdCallerSecondsSetting = new(3, 1, 60);
+    public static readonly IntSetting WpsdReflectorSecondsSetting = new(30, 5, 600);
+
+    /// APRS decoding — the Mac's APRSSettings defaults: the US calling
+    /// frequency (144.800 MHz in Europe etc. is a Settings edit), ±5 kHz,
+    /// and 1,000 stations/messages kept before the oldest are dropped.
+    public const long DefaultAprsFrequencyHz = 144_390_000;
+    public static readonly IntSetting AprsToleranceHzSetting = new(5_000, 100, 100_000);
+    public static readonly IntSetting AprsMaxStationsSetting = new(1_000, 10, 100_000);
+    public static readonly IntSetting AprsMaxMessagesSetting = new(1_000, 10, 100_000);
+
+    /// One receiver's playback settings. SquelchThreshold is SquelchGate's
+    /// raw threshold (RMS at or below which a chunk counts as a quieting
+    /// dip), not the inverted value the slider shows.
+    public sealed class Ft8Data
+    {
+        /// The decoded source per window (the Mac's ft8.channel/ft4.channel).
+        public CwAudioChannel Ft8Channel { get; set; } = CwAudioChannel.Main;
+        public CwAudioChannel Ft4Channel { get; set; } = CwAudioChannel.Main;
+        /// "Upload to PSK Reporter" (ft8.pskReporterEnabled), off by default.
+        public bool PskReporterEnabled { get; set; }
+    }
+
+    public sealed class DigiData
+    {
+        public DigiMode Mode { get; set; } = DigiMode.Rtty;
+        public CwAudioChannel Channel { get; set; } = CwAudioChannel.Main;
+        /// Defaults: RTTY centred for the usual 2125/2295 Hz tones, PSK at
+        /// 1000 Hz (the rig's default PSK TONE).
+        public double RttyCenterHz { get; set; } = 2210;
+        public double PskCenterHz { get; set; } = 1000;
+        public double RttyShiftHz { get; set; } = 170;
+        public double RttyBaud { get; set; } = 45.45;
+        public bool RttyReverse { get; set; }
+        public bool RttyUnshiftOnSpace { get; set; } = true;
+        public bool Afc { get; set; } = true;
+        public double Squelch { get; set; } = 0.3;
+        public double TxLevelDb { get; set; } = -6;
+        public List<DigiMacro>? Macros { get; set; }
+    }
+
+    public sealed class ChannelAudio
+    {
+        public double Volume { get; set; } = 0.8;
+        public double SquelchThreshold { get; set; } = 0.015;
+        public bool Muted { get; set; }
+    }
+
+    private static readonly string SettingsPath = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        "FTX1RemoteWindows",
+        "settings.json");
+
+    private static Data _cache = Load();
+
+    public static ConnectionMode ConnectionMode
+    {
+        get => _cache.ConnectionMode;
+        set
+        {
+            _cache.ConnectionMode = value;
+            Save();
+        }
+    }
+
+    public static string PiHost
+    {
+        get => _cache.PiHost;
+        set
+        {
+            _cache.PiHost = value;
+            Save();
+        }
+    }
+
+    /// Which rigctld.exe Local mode launches (RigctldBinary.Choice):
+    /// Automatic by default. Before Automatic existed this was a plain path
+    /// with no default (RigctldPath); on first read an empty one becomes
+    /// Automatic and any other stays as an explicit choice — on Windows the
+    /// user always typed or browsed it themselves. A separate key, so a
+    /// path chosen later isn't migrated again.
+    public static RigctldBinary.Choice RigctldChoice
+    {
+        get => _cache.RigctldChoice is { } stored
+            ? RigctldBinary.Choice.FromStored(stored)
+            : _cache.RigctldPath.Length == 0
+                ? RigctldBinary.Choice.Automatic
+                : RigctldBinary.Choice.ForPath(_cache.RigctldPath);
+        set
+        {
+            _cache.RigctldChoice = value.StoredValue;
+            Save();
+        }
+    }
+
+    /// The VFO entry flyout's up/down step (10 Hz, 100 Hz, 1 kHz or 10 kHz), kept
+    /// between openings like the Mac's "ui.frequencyStepSize".
+    public static int FrequencyStepHz
+    {
+        get => _cache.FrequencyStepHz is 10 or 100 or 1_000 or 10_000 ? _cache.FrequencyStepHz : 1_000;
+        set
+        {
+            _cache.FrequencyStepHz = value;
+            Save();
+        }
+    }
+
+    /// Whether to open the :8532 audio link on connect. Off lets another
+    /// client (the Mac) have the Pi's single audio-stream slot while this
+    /// app keeps rig control.
+    public static bool AudioEnabled
+    {
+        get => _cache.AudioEnabled;
+        set
+        {
+            _cache.AudioEnabled = value;
+            Save();
+        }
+    }
+
+    /// The Enable Transmit safety cutoff — see TransmitGate. Defaults to on
+    /// (an existing settings file has no key for it), same as the Mac's
+    /// RigctldSettings.transmitEnabled, so upgrading doesn't silently stop
+    /// PTT working.
+    public static bool TransmitEnabled
+    {
+        get => _cache.TransmitEnabled;
+        set
+        {
+            _cache.TransmitEnabled = value;
+            Save();
+        }
+    }
+
+    /// Settings → License (the Mac's LicensePrivilegeSettings): which
+    /// privileges the transmit gate applies on top of the amateur bands —
+    /// PrivilegeChoice's stored form ("off", a preset's raw value, or
+    /// "custom"). Off by default, so the gate checks the bands only, as
+    /// before.
+    public static string LicensePrivileges
+    {
+        get => PrivilegeChoice.Normalize(_cache.LicensePrivileges);
+        set
+        {
+            _cache.LicensePrivileges = PrivilegeChoice.Normalize(value);
+            Save();
+        }
+    }
+
+    /// The operator's own table. Starts empty, which blocks every
+    /// transmission while Custom is chosen.
+    public static PrivilegeProfile LicenseCustomProfile
+    {
+        get => _cache.LicenseCustomProfile ?? new PrivilegeProfile("Custom", []);
+        set
+        {
+            _cache.LicenseCustomProfile = value;
+            Save();
+        }
+    }
+
+    /// What the gate applies now: null = off.
+    public static PrivilegeProfile? ActivePrivileges => PrivilegeChoice.Profile(LicensePrivileges, LicenseCustomProfile);
+
+    /// hamlib rig model number — 1051 is the FTX-1, same default as the
+    /// Mac's RigctldSettings.modelNumber. Not exposed in the UI (this app
+    /// only drives one radio); kept as a setting so a hamlib renumbering
+    /// can be fixed by editing settings.json.
+    public static int ModelNumber
+    {
+        get => _cache.ModelNumber;
+        set
+        {
+            _cache.ModelNumber = value;
+            Save();
+        }
+    }
+
+    /// The rig's CAT serial port, e.g. "COM3" (the Enhanced COM port of the
+    /// FTX-1's CP210x pair).
+    public static string ComPort
+    {
+        get => _cache.ComPort;
+        set
+        {
+            _cache.ComPort = value;
+            Save();
+        }
+    }
+
+    public static int BaudRate
+    {
+        get => _cache.BaudRate;
+        set
+        {
+            _cache.BaudRate = value;
+            Save();
+        }
+    }
+
+    /// See AudioChannelSwapTracker. Persisted because the rig keeps its
+    /// state across app launches, so the last known parity is the best guess.
+    public static bool AudioChannelsSwapped
+    {
+        get => _cache.AudioChannelsSwapped;
+        set
+        {
+            _cache.AudioChannelsSwapped = value;
+            Save();
+        }
+    }
+
+    /// Local mode's audio input: a Windows capture endpoint ID (stable across
+    /// reboots and replugs into the same port), plus its name for showing it
+    /// while it isn't plugged in.
+    public static void SetLocalAudioDevice(string id, string name)
+    {
+        _cache.LocalAudioDeviceId = id;
+        _cache.LocalAudioDeviceName = name;
+        Save();
+    }
+
+    public static string LocalAudioDeviceId => _cache.LocalAudioDeviceId;
+
+    /// Playback output device ("" = Windows' default output), both modes.
+    public static void SetAudioOutputDevice(string id, string name)
+    {
+        _cache.AudioOutputDeviceId = id;
+        _cache.AudioOutputDeviceName = name;
+        Save();
+    }
+
+    public static string AudioOutputDeviceId => _cache.AudioOutputDeviceId;
+
+    public static string AudioOutputDeviceName => _cache.AudioOutputDeviceName;
+
+    public static string LocalAudioDeviceName => _cache.LocalAudioDeviceName;
+
+    /// Local mode's "Transmit audio output": where a Desktop hub client's
+    /// microphone plays (the rig's USB audio input, as a Windows playback
+    /// device). "" = none — never Windows' default output. The Mac's
+    /// TXAudioOutputSettings.
+    public static void SetTxAudioOutputDevice(string id, string name)
+    {
+        _cache.TxAudioOutputDeviceId = id;
+        _cache.TxAudioOutputDeviceName = name;
+        Save();
+    }
+
+    public static string TxAudioOutputDeviceId => _cache.TxAudioOutputDeviceId;
+
+    public static string TxAudioOutputDeviceName => _cache.TxAudioOutputDeviceName;
+
+    /// What each S-meter's lower scale shows while transmitting (see
+    /// Controls/SMeter). PO by default, like the rig; Main and Sub are
+    /// remembered separately, like the Mac's MeterSettings.key/subKey.
+    public static MeterSelection MainMeterSelection
+    {
+        get => _cache.MainMeterSelection;
+        set
+        {
+            _cache.MainMeterSelection = value;
+            Save();
+        }
+    }
+
+    public static MeterSelection SubMeterSelection
+    {
+        get => _cache.SubMeterSelection;
+        set
+        {
+            _cache.SubMeterSelection = value;
+            Save();
+        }
+    }
+
+    /// The WPSD hotspot callsign lookup (Services/WpsdCallsignMonitor.cs),
+    /// the Mac's WPSDSettings: off by default, and an empty host keeps it
+    /// off either way. The host is an IP or hostname, optionally with a
+    /// port (e.g. "192.168.1.50" or "pi-star.local:8080").
+    public static bool WpsdEnabled
+    {
+        get => _cache.WpsdEnabled;
+        set
+        {
+            _cache.WpsdEnabled = value;
+            Save();
+        }
+    }
+
+    public static string WpsdHost
+    {
+        get => _cache.WpsdHost;
+        set
+        {
+            _cache.WpsdHost = value;
+            Save();
+        }
+    }
+
+    public static int PollIntervalMs
+    {
+        get => PollIntervalMsSetting.Clamp(_cache.PollIntervalMs);
+        set
+        {
+            _cache.PollIntervalMs = PollIntervalMsSetting.Clamp(value);
+            Save();
+        }
+    }
+
+    public static int SlowPollEvery
+    {
+        get => SlowPollEverySetting.Clamp(_cache.SlowPollEvery);
+        set
+        {
+            _cache.SlowPollEvery = SlowPollEverySetting.Clamp(value);
+            Save();
+        }
+    }
+
+    /// Read by WpsdCallsignMonitor before each wait, so a change applies
+    /// from the next fetch.
+    public static int WpsdCallerSeconds
+    {
+        get => WpsdCallerSecondsSetting.Clamp(_cache.WpsdCallerSeconds);
+        set
+        {
+            _cache.WpsdCallerSeconds = WpsdCallerSecondsSetting.Clamp(value);
+            Save();
+        }
+    }
+
+    public static int WpsdReflectorSeconds
+    {
+        get => WpsdReflectorSecondsSetting.Clamp(_cache.WpsdReflectorSeconds);
+        set
+        {
+            _cache.WpsdReflectorSeconds = WpsdReflectorSecondsSetting.Clamp(value);
+            Save();
+        }
+    }
+
+    /// The MENU grid HOME button's frequency for a band group — the Mac's
+    /// HomeFrequencySettings. The factory frequency until one is saved.
+    public static long HomeFrequencyHz(HomeBand band) =>
+        _cache.HomeFrequencies.TryGetValue(band.Name, out var hz) && hz > 0 ? hz : band.FrequencyHz;
+
+    /// Saving a band's factory frequency drops its entry, so a later change
+    /// to the factory table still reaches it.
+    public static void SetHomeFrequencyHz(HomeBand band, long hz)
+    {
+        if (hz == band.FrequencyHz)
+        {
+            _cache.HomeFrequencies.Remove(band.Name);
+        }
+        else
+        {
+            _cache.HomeFrequencies[band.Name] = hz;
+        }
+        Save();
+    }
+
+    /// The chosen theme's name, or ThemePresets.Auto.
+    public static string ThemeName
+    {
+        get => _cache.ThemeName ?? ThemePresets.FromLegacy((int)_cache.Theme);
+        set
+        {
+            _cache.ThemeName = value;
+            Save();
+        }
+    }
+
+    /// The light/dark side of the current theme, for the windows and
+    /// dialogs that set RequestedTheme (ThemeEngine.Load has run by then).
+    public static AppTheme Theme => ThemeEngine.ElementTheme switch
+    {
+        Microsoft.UI.Xaml.ElementTheme.Light => AppTheme.Light,
+        Microsoft.UI.Xaml.ElementTheme.Dark => AppTheme.Dark,
+        _ => AppTheme.System,
+    };
+
+    /// Overrides the theme's VFO digit color; null = the theme's.
+    public static ButtonValueColor? VfoDigitColor
+    {
+        get => _cache.VfoDigitColor;
+        set
+        {
+            _cache.VfoDigitColor = value;
+            Save();
+        }
+    }
+
+    /// Overrides the theme's VFO digit font; null = the theme's.
+    public static VfoDigitFont? VfoDigitFont
+    {
+        get => _cache.VfoDigitFont;
+        set
+        {
+            _cache.VfoDigitFont = value;
+            Save();
+        }
+    }
+
+    public static SMeterStyle SMeterStyle
+    {
+        get => _cache.SMeterStyle;
+        set
+        {
+            _cache.SMeterStyle = value;
+            Save();
+        }
+    }
+
+    public static ButtonValueColor ButtonValueColor
+    {
+        get => _cache.ButtonValueColor;
+        set
+        {
+            _cache.ButtonValueColor = value;
+            Save();
+        }
+    }
+
+    /// The waterfall/oscilloscope column's mode (the Mac's ScopeDisplayMode
+    /// @AppStorage).
+    public static ScopeDisplayMode ScopeDisplayMode
+    {
+        get => _cache.ScopeDisplayMode;
+        set
+        {
+            _cache.ScopeDisplayMode = value;
+            Save();
+        }
+    }
+
+    /// Decode APRS from the audio (Services/AprsDecoder.cs). Off by default,
+    /// like the Mac. Read from the audio thread on every chunk — plain
+    /// field reads, no locking needed for a bool/long/int.
+    public static bool AprsEnabled
+    {
+        get => _cache.AprsEnabled;
+        set
+        {
+            _cache.AprsEnabled = value;
+            Save();
+        }
+    }
+
+    /// A zero/negative value (hand-edited file) falls back to the default.
+    public static long AprsFrequencyHz
+    {
+        get => _cache.AprsFrequencyHz > 0 ? _cache.AprsFrequencyHz : DefaultAprsFrequencyHz;
+        set
+        {
+            _cache.AprsFrequencyHz = value;
+            Save();
+        }
+    }
+
+    public static int AprsToleranceHz
+    {
+        get => AprsToleranceHzSetting.Clamp(_cache.AprsToleranceHz);
+        set
+        {
+            _cache.AprsToleranceHz = AprsToleranceHzSetting.Clamp(value);
+            Save();
+        }
+    }
+
+    public static int AprsMaxStations
+    {
+        get => AprsMaxStationsSetting.Clamp(_cache.AprsMaxStations);
+        set
+        {
+            _cache.AprsMaxStations = AprsMaxStationsSetting.Clamp(value);
+            Save();
+        }
+    }
+
+    public static int AprsMaxMessages
+    {
+        get => AprsMaxMessagesSetting.Clamp(_cache.AprsMaxMessages);
+        set
+        {
+            _cache.AprsMaxMessages = AprsMaxMessagesSetting.Clamp(value);
+            Save();
+        }
+    }
+
+    /// Whether a VFO at this frequency should be decoded: APRS on and within
+    /// the tolerance of the APRS frequency (the Mac's APRSSettings.isActive).
+    public static bool IsAprsActive(long? frequencyHz) =>
+        AprsEnabled && frequencyHz is { } hz and > 0 && Math.Abs(hz - AprsFrequencyHz) <= AprsToleranceHz;
+
+    /// The operator's Maidenhead grid square (Settings → Station), the Mac's
+    /// StationSettings.gridSquare. Only the WebSDR Stations window uses it
+    /// so far, to sort KiwiSDRs by distance.
+    public static string GridSquare
+    {
+        get => _cache.GridSquare;
+        set
+        {
+            _cache.GridSquare = value;
+            Save();
+        }
+    }
+
+    /// The operator's callsign (Settings → Station), the Mac's
+    /// StationSettings.callsign: {MYCALL} in CW macros, and left unlinked in
+    /// the CW window's decoded text.
+    public static string Callsign
+    {
+        get => _cache.Callsign;
+        set
+        {
+            _cache.Callsign = value;
+            Save();
+        }
+    }
+
+    // The WebSDR window (Services/WebSdrFollowModel.cs) — the Mac's
+    // WebSDRSettings, same defaults.
+
+    /// The committed host (picked from the directory or Favorites, or typed).
+    public static string WebSdrHostPort
+    {
+        get => _cache.WebSdrHostPort;
+        set
+        {
+            _cache.WebSdrHostPort = value;
+            Save();
+        }
+    }
+
+    public static bool WebSdrFollowRig
+    {
+        get => _cache.WebSdrFollowRig;
+        set
+        {
+            _cache.WebSdrFollowRig = value;
+            Save();
+        }
+    }
+
+    public static bool WebSdrTuneRig
+    {
+        get => _cache.WebSdrTuneRig;
+        set
+        {
+            _cache.WebSdrTuneRig = value;
+            Save();
+        }
+    }
+
+    public static bool WebSdrMuted
+    {
+        get => _cache.WebSdrMuted;
+        set
+        {
+            _cache.WebSdrMuted = value;
+            Save();
+        }
+    }
+
+    public static bool WebSdrMuteOnTransmit
+    {
+        get => _cache.WebSdrMuteOnTransmit;
+        set
+        {
+            _cache.WebSdrMuteOnTransmit = value;
+            Save();
+        }
+    }
+
+    /// The station last picked from the directory or Favorites (host,
+    /// name, location, ranges, platform).
+    public static WebSdrFavorite? WebSdrPickedStation
+    {
+        get => _cache.WebSdrPickedStation;
+        set
+        {
+            _cache.WebSdrPickedStation = value;
+            Save();
+        }
+    }
+
+    /// Saved stations, in the user's order.
+    public static List<WebSdrFavorite> WebSdrFavorites
+    {
+        get => _cache.WebSdrFavorites;
+        set
+        {
+            _cache.WebSdrFavorites = value;
+            Save();
+        }
+    }
+
+    /// The KiwiSDR directory's last ETag, for its conditional GET.
+    public static string? WebSdrDirectoryETag
+    {
+        get => _cache.WebSdrDirectoryETag;
+        set
+        {
+            _cache.WebSdrDirectoryETag = value;
+            Save();
+        }
+    }
+
+    /// The Stations window's last tab.
+    public static SdrPlatform WebSdrStationsTab
+    {
+        get => _cache.WebSdrStationsTab;
+        set
+        {
+            _cache.WebSdrStationsTab = value;
+            Save();
+        }
+    }
+
+    /// Main's audio was muted by the WebSDR window (not by the user) — the
+    /// Mac's mainMutedByWebSDR. Persisted so a crash mid-session can't leave
+    /// Main stuck muted: the WebSDR window always opens disconnected, so
+    /// MainWindow lifts a leftover WebSDR mute at startup.
+    public static bool MainMutedByWebSdr
+    {
+        get => _cache.MainMutedByWebSdr;
+        set
+        {
+            _cache.MainMutedByWebSdr = value;
+            Save();
+        }
+    }
+
+    /// Check GitHub for a newer release at launch (Settings → About), on by
+    /// default like the Mac's Sparkle automatic checks.
+    public static bool CheckForUpdatesAtLaunch
+    {
+        get => _cache.CheckForUpdatesAtLaunch;
+        set
+        {
+            _cache.CheckForUpdatesAtLaunch = value;
+            Save();
+        }
+    }
+
+    /// Settings → Mobile's "Allow iPad connections": serve the Mac hub's
+    /// WebSocket protocol (Services/Hub/HubServer.cs). Off by default — once
+    /// commands land, anyone who can reach the port can key the rig.
+    public static bool HubEnabled
+    {
+        get => _cache.HubEnabled;
+        set
+        {
+            _cache.HubEnabled = value;
+            Save();
+        }
+    }
+
+    /// Saved when the main window closes, applied when it next opens
+    /// (MainWindow.RestoreWindowBounds). Null until the first close.
+    public static WindowBounds? MainWindowBounds
+    {
+        get => _cache.MainWindowBounds;
+        set
+        {
+            _cache.MainWindowBounds = value;
+            Save();
+        }
+    }
+
+    // Settings → Logbook (the Mac's LogbookSettings).
+
+    public static LogbookKind Logbook
+    {
+        get => _cache.Logbook;
+        set
+        {
+            _cache.Logbook = value;
+            Save();
+        }
+    }
+
+    /// An HRD log file picked by hand; empty means "the one HRD Logbook
+    /// receives QSOs into" (HrdLogbook.DetectedLogPath).
+    public static string HrdLogPath
+    {
+        get => _cache.HrdLogPath;
+        set
+        {
+            _cache.HrdLogPath = value;
+            Save();
+        }
+    }
+
+    /// Where QSOs are sent; empty / 0 means HRD's own ADIF receiver
+    /// address and port, read from its settings (HrdLogbook.Receiver).
+    public static string HrdUdpHost
+    {
+        get => _cache.HrdUdpHost;
+        set
+        {
+            _cache.HrdUdpHost = value;
+            Save();
+        }
+    }
+
+    public static int HrdUdpPort
+    {
+        get => _cache.HrdUdpPort is >= 1 and <= 65535 ? _cache.HrdUdpPort : 0;
+        set
+        {
+            _cache.HrdUdpPort = value;
+            Save();
+        }
+    }
+
+    /// A Log4OM log file picked by hand; empty means Log4OM's own
+    /// (Log4OmLogbook.DetectedLogPath).
+    public static string Log4OmLogPath
+    {
+        get => _cache.Log4OmLogPath;
+        set
+        {
+            _cache.Log4OmLogPath = value;
+            Save();
+        }
+    }
+
+    /// Where QSOs (and Lookup requests) are sent; empty means this PC.
+    public static string Log4OmUdpHost
+    {
+        get => _cache.Log4OmUdpHost;
+        set
+        {
+            _cache.Log4OmUdpHost = value;
+            Save();
+        }
+    }
+
+    /// 0 means the port of Log4OM's ADIF_MESSAGE UDP inbound connection.
+    public static int Log4OmUdpPort
+    {
+        get => _cache.Log4OmUdpPort is >= 1 and <= 65535 ? _cache.Log4OmUdpPort : 0;
+        set
+        {
+            _cache.Log4OmUdpPort = value;
+            Save();
+        }
+    }
+
+    // Wavelog (the Mac's LogbookSettings.wavelog*): a second logbook beside
+    // Logbook, not one of its choices — every QSO goes to both. The API v2
+    // token is in Credential Manager (WavelogToken), not here.
+
+    public static bool WavelogEnabled
+    {
+        get => _cache.WavelogEnabled;
+        set
+        {
+            _cache.WavelogEnabled = value;
+            Save();
+        }
+    }
+
+    public static string WavelogUrl
+    {
+        get => _cache.WavelogUrl;
+        set
+        {
+            _cache.WavelogUrl = value;
+            Save();
+        }
+    }
+
+    /// The station location QSOs are filed under, with its name and
+    /// callsign for Settings before the list has been fetched again.
+    public static string WavelogStationId => _cache.WavelogStationId;
+    public static string WavelogStationName => _cache.WavelogStationName;
+    public static string WavelogStationCallsign => _cache.WavelogStationCallsign;
+
+    public static void SetWavelogStation(string id, string name, string callsign)
+    {
+        _cache.WavelogStationId = id;
+        _cache.WavelogStationName = name;
+        _cache.WavelogStationCallsign = callsign;
+        Save();
+    }
+
+    /// Wavelog CAT (WavelogRadioReporter): the rig's frequency/mode sent to
+    /// Wavelog as the radio WavelogRadioName. Independent of logging,
+    /// though it uses the same URL and token.
+    public static bool WavelogCatEnabled
+    {
+        get => _cache.WavelogCatEnabled;
+        set
+        {
+            _cache.WavelogCatEnabled = value;
+            Save();
+        }
+    }
+
+    public const string DefaultWavelogRadioName = "FTX-1";
+
+    /// Wavelog keys radios by name (≤250 characters).
+    public static string WavelogRadioName
+    {
+        get
+        {
+            var name = _cache.WavelogRadioName.Trim();
+            return name.Length == 0 ? DefaultWavelogRadioName : name.Length > 250 ? name[..250] : name;
+        }
+        set
+        {
+            _cache.WavelogRadioName = value;
+            Save();
+        }
+    }
+
+    /// As typed (empty = the default), for the Settings field.
+    public static string WavelogRadioNameSetting => _cache.WavelogRadioName;
+
+    /// Wavelog → rig (WavelogTuneListener): Wavelog's pages tune the rig
+    /// through the radio's cat_url, http://127.0.0.1:54321 by default.
+    public static bool WavelogTuneEnabled
+    {
+        get => _cache.WavelogTuneEnabled;
+        set
+        {
+            _cache.WavelogTuneEnabled = value;
+            Save();
+        }
+    }
+
+    public const int DefaultWavelogTunePort = 54321;
+
+    public static int WavelogTunePort
+    {
+        get => _cache.WavelogTunePort is >= 1024 and <= 65535 ? _cache.WavelogTunePort : DefaultWavelogTunePort;
+        set
+        {
+            _cache.WavelogTunePort = value;
+            Save();
+        }
+    }
+
+    /// The CW window's receiver (MAIN/SUB) — the Mac's cw.channel.
+    public static CwAudioChannel CwChannel
+    {
+        get => _cache.CwChannel;
+        set
+        {
+            _cache.CwChannel = value;
+            Save();
+        }
+    }
+
+    /// The CW decoder's manual tone, auto-tune and squelch (the Mac's
+    /// cw.toneFrequency/autoTune/squelchDB, same defaults: CWKit's).
+    public static double CwToneFrequency => _cache.CwToneFrequency;
+    public static bool CwAutoTune => _cache.CwAutoTune;
+    public static double CwSquelchDb => _cache.CwSquelchDb;
+
+    public static void SaveCw(double toneFrequency, bool autoTune, double squelchDb)
+    {
+        _cache.CwToneFrequency = toneFrequency;
+        _cache.CwAutoTune = autoTune;
+        _cache.CwSquelchDb = squelchDb;
+        Save();
+    }
+
+    /// The CW window's decoder — the Mac's cw.decoder, Neural by default.
+    public static CwDecoderKind CwDecoder
+    {
+        get => _cache.CwDecoder;
+        set
+        {
+            _cache.CwDecoder = value;
+            Save();
+        }
+    }
+
+    /// The send pane's Monitor switch (the Mac's cw.monitor), off by
+    /// default — see CwMonitor.
+    public static bool CwMonitor
+    {
+        get => _cache.CwMonitor;
+        set
+        {
+            _cache.CwMonitor = value;
+            Save();
+        }
+    }
+
+    /// The CW TEXT keyer memory the send pane writes to (1-5) — the Mac's
+    /// cw.keyerSlot. Whatever the rig holds there gets overwritten.
+    public static int CwKeyerSlot
+    {
+        get => _cache.CwKeyerSlot is >= 1 and <= 5 ? _cache.CwKeyerSlot : 1;
+        set
+        {
+            _cache.CwKeyerSlot = value;
+            Save();
+        }
+    }
+
+    /// The send pane's macro buttons (the Mac's cw.macros); the defaults
+    /// until edited.
+    public static List<CwMacro> CwMacros
+    {
+        get => _cache.CwMacros ?? CwMacro.Defaults();
+        set
+        {
+            _cache.CwMacros = value;
+            Save();
+        }
+    }
+
+    /// The RTTY/PSK window's settings (the Mac's digi.* keys). Mutate the
+    /// returned object, then call <see cref="SaveDigi"/>.
+    public static DigiData Digi => _cache.Digi;
+
+    public static void SaveDigi() => Save();
+
+    /// The FT8/FT4 windows' settings. Mutate the returned object, then call
+    /// <see cref="SaveFt8"/>.
+    public static Ft8Data Ft8 => _cache.Ft8;
+
+    public static void SaveFt8() => Save();
+
+    /// The MyKiwiSDR window's settings. Mutate the returned object, then
+    /// call <see cref="SaveLocalSdr"/>.
+    public static LocalSdrData LocalSdr => _cache.LocalSdr;
+
+    /// Settings → APRS → Transmit (the Mac's APRSTransmitSettings, aprs.tx.*
+    /// keys): edit the fields, then <see cref="SaveAprsTx"/>.
+    public sealed class AprsTransmitData
+    {
+        public bool Enabled { get; set; }
+        public int Ssid { get; set; }
+        public double? Latitude { get; set; }
+        public double? Longitude { get; set; }
+        public int Ambiguity { get; set; }
+        public string Symbol { get; set; } = "/-";
+        public string Comment { get; set; } = "";
+        public string Path { get; set; } = "WIDE2-1";
+        public int BeaconMinutes { get; set; }
+        public bool AutoAck { get; set; } = true;
+        public double LevelDb { get; set; } = -6;
+        public int TxDelayMs { get; set; } = 400;
+        /// Last message id used (1…99999), so ids don't repeat soon.
+        public int MessageCounter { get; set; }
+    }
+
+    public static AprsTransmitData AprsTx => _cache.AprsTx;
+
+    public static void SaveAprsTx() => Save();
+
+    public static void SaveLocalSdr() => Save();
+
+    /// Mutate the returned object, then call <see cref="SaveAudio"/>.
+    public static ChannelAudio MainAudio => _cache.MainAudio;
+
+    public static ChannelAudio SubAudio => _cache.SubAudio;
+
+    public static void SaveAudio() => Save();
+
+    /// Seconds the virtual squelch stays open after the last quieting dip
+    /// (SquelchGate.ReleaseDuration) — the tail after a transmission ends.
+    /// One value for Main and Sub; the Mac's
+    /// AudioPlaybackSettings.squelchHangTime, same default and range.
+    // Consts, not a static readonly: _cache = Load() runs first and its
+    // Data initializer would see a not-yet-set field.
+    public const double DefaultSquelchHangSeconds = 1.5;
+    public const double MinSquelchHangSeconds = 0.3;
+    public const double MaxSquelchHangSeconds = 5.0;
+
+    public static double SquelchHangSeconds
+    {
+        get => double.IsFinite(_cache.SquelchHangSeconds)
+            ? Math.Clamp(_cache.SquelchHangSeconds, MinSquelchHangSeconds, MaxSquelchHangSeconds)
+            : DefaultSquelchHangSeconds;
+        set
+        {
+            _cache.SquelchHangSeconds = value;
+            Save();
+        }
+    }
+
+    private static Data Load()
+    {
+        try
+        {
+            if (File.Exists(SettingsPath))
+            {
+                var json = File.ReadAllText(SettingsPath);
+                return JsonSerializer.Deserialize<Data>(json) ?? new Data();
+            }
+        }
+        catch
+        {
+            // Corrupt or unreadable settings file — fall back to defaults
+            // rather than crashing app startup over a saved preference.
+        }
+        return new Data();
+    }
+
+    private static void Save()
+    {
+        try
+        {
+            var dir = Path.GetDirectoryName(SettingsPath)!;
+            Directory.CreateDirectory(dir);
+            File.WriteAllText(SettingsPath, JsonSerializer.Serialize(_cache));
+        }
+        catch
+        {
+            // Best-effort — losing a saved setting isn't fatal, the user
+            // just has to retype it next launch.
+        }
+    }
+}

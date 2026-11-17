@@ -74,7 +74,10 @@
 <h2 id="estructura">Structure</h2>
 <ul>
 <li>Fixed top bar: connection status (copy of <code>#radio-status</code>), mode badge (<code>#mode-badge</code>), and “⌁ Connect” button, which triggers the section&#39;s button and is disabled along with it.</li>
-<li>Sidebar: logo, navigation, and, on radio pages, numbered steps (0 Backups and connection … 4 Firmware) leading to each section.</li>
+<li>Sidebar: logo and a task-ordered navigation: “Inicio”, “Satelites”, “Radios” (with an indented sub-list of models: OpenGD77, Quansheng, AnyTone Beta, Yaesu FTX-1) and “Ayuda”. The current page carries <code>aria-current=&quot;page&quot;</code>; on a model page, “Radios” is marked with the <code>nav-ancestor</code> class. On mobile (≤760 px) the sub-list flattens into the scrollable row.</li>
+<li>Numbered “PASOS” steps on radio pages, grouped by task (Backups and connection, Channels/Codeplug, Satellites, Firmware, Tools).</li>
+<li>Home: “Próximo pase” panel (countdown in tabular figures) and “Tu radio” panel (remembers the last radio in <code>bricohams.lastRadio</code>). <code>radios.html</code> gathers the families and their task groups.</li>
+<li>Operation kinds on radio pages (<code>data-op</code>, without changing the text): red with left border and ⚠ = writes to the radio; blue = prepares local data; dashed = edits local data; no mark = read only. A legend explains it under the header.</li>
 <li>Label above the title: <code>RADIOAFICIÓN · HAZLO TÚ MISMO</code>.</li>
 </ul>
 <h2 id="tipografia">Typography</h2>

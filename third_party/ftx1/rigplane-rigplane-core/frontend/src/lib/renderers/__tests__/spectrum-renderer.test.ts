@@ -1,0 +1,692 @@
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import {
+  renderSpectrum as rawRenderSpectrum, SpectrumRenderer as RawSpectrumRenderer, defaultSpectrumOptions, spectrumDisplayAmplitude,
+  defaultSpectrumColorRoles, resolveSpectrumColorRoles, spectrumColorRolesToOptions,
+  type SpectrumColorRoles, type SpectrumOptions,
+} from '../spectrum-renderer';
+
+import { recordCanvasLayers } from './canvas-layers-fixture';
+afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+function renderSpectrum(...args: Parameters<typeof rawRenderSpectrum>) {
+  recordCanvasLayers(args[0]); return rawRenderSpectrum(...args);
+}
+class SpectrumRenderer extends RawSpectrumRenderer {
+  override render(...args: Parameters<RawSpectrumRenderer['render']>) {
+    recordCanvasLayers(args[0]); super.render(...args);
+  }
+}
+
+function createMockCtx() {
+  const log = {
+    fillRect: [] as number[][], fillText: [] as [string, number, number][],
+    moveTo: [] as number[][], lineTo: [] as number[][],
+    setLineDash: [] as number[][], strokes: 0, fills: 0,
+  };
+  const noop = () => {};
+  const ctx = {
+    clearRect: noop, closePath: noop, stroke: () => { log.strokes++; },
+    fill: () => { log.fills++; }, beginPath: noop,
+    fillRect: (x: number, y: number, w: number, h: number) => log.fillRect.push([x, y, w, h]),
+    fillText: (t: string, x: number, y: number) => log.fillText.push([t, x, y]),
+    moveTo: (x: number, y: number) => log.moveTo.push([x, y]),
+    lineTo: (x: number, y: number) => log.lineTo.push([x, y]),
+    setLineDash: (d: number[]) => log.setLineDash.push(d),
+    createLinearGradient: () => ({ addColorStop: noop }),
+    set fillStyle(_: any) {}, set strokeStyle(_: any) {},
+    set lineWidth(_: any) {}, set font(_: any) {}, set textAlign(_: any) {},
+  } as unknown as CanvasRenderingContext2D;
+  return { ctx, log };
+}
+
+const opts = (o: Partial<SpectrumOptions> = {}): SpectrumOptions => ({ ...defaultSpectrumOptions, ...o });
+const data50 = () => new Uint8Array(50).fill(30);
+
+describe('renderSpectrum', () => {
+  it.each([
+    ['empty data', new Uint8Array(0), 800, 400],
+    ['zero width', new Uint8Array(100), 0, 400],
+    ['zero height', new Uint8Array(100), 800, 0],
+  ])('early return for %s', (_, d, w, h) => {
+    const { ctx, log } = createMockCtx();
+    renderSpectrum(ctx, d, w, h, opts());
+    expect(log.strokes).toBe(0);
+  });
+
+  it('draws grid: 6 horizontal + 11 vertical lines', () => {
+    const { ctx, log } = createMockCtx();
+    renderSpectrum(ctx, data50(), 800, 400, opts());
+    expect(log.strokes).toBeGreaterThanOrEqual(17);
+    expect(log.lineTo.filter(([x]) => x === 800).length).toBeGreaterThanOrEqual(6);
+    expect(log.lineTo.filter(([, y]) => y === 400).length).toBeGreaterThanOrEqual(11);
+  });
+
+  it('renders 11 frequency labels when span/center set', () => {
+    const { ctx, log } = createMockCtx();
+    renderSpectrum(ctx, data50(), 800, 400, opts({ spanHz: 1e6, centerHz: 14_500_000 }));
+    expect(log.fillText.length).toBe(11);
+    expect(log.fillText[0][0]).toBe('14.000');
+    expect(log.fillText[10][0]).toBe('15.000');
+  });
+
+  it.each([
+    ['spanHz=0', { spanHz: 0, centerHz: 14e6 }],
+    ['centerHz=0', { spanHz: 1e6, centerHz: 0 }],
+  ])('skips labels when %s', (_, o) => {
+    const { ctx, log } = createMockCtx();
+    renderSpectrum(ctx, data50(), 800, 400, opts(o));
+    expect(log.fillText.length).toBe(0);
+  });
+
+  it('suppresses RF labels and carrier overlays without changing the audio trace geometry', () => {
+    const { ctx, log } = createMockCtx();
+    const reference = createMockCtx();
+    const pixels = new Uint8Array([0, 20, 80, 40, 0]);
+    renderSpectrum(ctx, pixels, 80, 40, opts({
+      spanHz: 12000, centerHz: 6000, showRfOverlays: false,
+      tuneHz: 6000, passbandHz: 2400, mode: 'USB',
+    }));
+    renderSpectrum(reference.ctx, pixels, 80, 40, opts());
+    expect(log.fillText).toEqual([]);
+    expect(log.fillRect).toEqual(reference.log.fillRect);
+    expect(log.lineTo).toEqual(reference.log.lineTo);
+    expect(log.strokes).toBe(reference.log.strokes);
+  });
+
+  it('clamps label x within [20, width-20]', () => {
+    const { ctx, log } = createMockCtx();
+    renderSpectrum(ctx, data50(), 800, 400, opts({ spanHz: 1e6, centerHz: 14_500_000 }));
+    for (const [, x] of log.fillText) expect(x).toBeGreaterThanOrEqual(20);
+    for (const [, x] of log.fillText) expect(x).toBeLessThanOrEqual(780);
+  });
+
+  it('maps amplitude 0→bottom, 80→top', () => {
+    const { ctx: c0, log: l0 } = createMockCtx();
+    renderSpectrum(c0, new Uint8Array(10).fill(0), 10, 200, opts());
+    expect(l0.lineTo.some(([, y]) => y === 200)).toBe(true);
+    const { ctx: c80, log: l80 } = createMockCtx();
+    renderSpectrum(c80, new Uint8Array(10).fill(80), 10, 200, opts());
+    expect(l80.lineTo.some(([, y]) => y === 0)).toBe(true);
+  });
+
+  it('refLevel shifts amplitude mapping', () => {
+    const d = new Uint8Array(10).fill(40);
+    const { ctx: c1, log: l1 } = createMockCtx();
+    const { ctx: c2, log: l2 } = createMockCtx();
+    renderSpectrum(c1, d, 10, 200, opts({ refLevel: 0 }));
+    renderSpectrum(c2, d, 10, 200, opts({ refLevel: 30 }));
+    expect(l1.lineTo).not.toEqual(l2.lineTo);
+  });
+
+  it('draws passband overlay with dashed edges', () => {
+    const { ctx, log } = createMockCtx();
+    renderSpectrum(ctx, data50(), 800, 400, opts({
+      spanHz: 1e6, centerHz: 14_074_000, tuneHz: 14_074_000,
+      passbandHz: 3000, mode: 'USB', scopeMode: 0,
+    }));
+    expect(log.fillRect.length).toBeGreaterThanOrEqual(1);
+    expect(log.setLineDash.length).toBe(2); // set dash + reset
+  });
+
+  it('no passband when passbandHz=0', () => {
+    const { ctx, log } = createMockCtx();
+    renderSpectrum(ctx, data50(), 800, 400, opts({
+      spanHz: 1e6, centerHz: 14_074_000, passbandHz: 0, mode: 'USB',
+    }));
+    expect(log.setLineDash.length).toBe(0);
+  });
+
+  it('CTR mode: tune indicator at midpoint', () => {
+    const { ctx, log } = createMockCtx();
+    renderSpectrum(ctx, data50(), 800, 400, opts({
+      spanHz: 1e6, centerHz: 14_074_000, tuneHz: 14_074_000, scopeMode: 0,
+    }));
+    expect(log.moveTo.some(([x]) => x === 400)).toBe(true);
+  });
+
+  it('FIX mode: tune indicator at frequency position', () => {
+    const { ctx, log } = createMockCtx();
+    renderSpectrum(ctx, data50(), 800, 400, opts({
+      spanHz: 1e6, centerHz: 14_500_000, tuneHz: 14_250_000, scopeMode: 1,
+    }));
+    // tunePx = ((14_250_000 - 14_000_000) / 1_000_000) * 800 = 200
+    expect(log.moveTo.some(([x]) => x === 200)).toBe(true);
+  });
+
+  it('fills bg only when bgColor is not transparent', () => {
+    const hasBg = (o: Partial<SpectrumOptions>) => {
+      const { ctx, log } = createMockCtx();
+      renderSpectrum(ctx, new Uint8Array(10).fill(30), 100, 50, opts(o));
+      return log.fillRect.some(([x, y, w, h]) => x === 0 && y === 0 && w === 100 && h === 50);
+    };
+    expect(hasBg({ bgColor: '#000' })).toBe(true);
+    expect(hasBg({})).toBe(false);
+  });
+});
+
+describe('frequency label thinning (MOR-3011)', () => {
+  // 9px monospace advances ~0.6em per glyph; the mock reports the same
+  // widths the renderer measures, so the box math matches production.
+  const MONO_ADVANCE_PX = 9 * 0.6;
+  function createLabelCtx() {
+    const { ctx, log } = createMockCtx();
+    (ctx as unknown as { measureText: (t: string) => { width: number } }).measureText =
+      (t: string) => ({ width: t.length * MONO_ADVANCE_PX });
+    return { ctx, log };
+  }
+  const phoneOpts = (): SpectrumOptions => opts({ spanHz: 100_000, centerHz: 14_210_000 });
+  const boxes = (log: { fillText: [string, number, number][] }) =>
+    log.fillText.map(([text, x]) => {
+      const w = text.length * MONO_ADVANCE_PX;
+      return { text, left: x - w / 2, right: x + w / 2 };
+    });
+  const expectNoOverlap = (bs: ReturnType<typeof boxes>) => {
+    for (let a = 0; a < bs.length; a++) {
+      for (let b = a + 1; b < bs.length; b++) {
+        const clear = bs[a].right <= bs[b].left || bs[b].right <= bs[a].left;
+        expect(clear).toBe(true);
+      }
+    }
+  };
+
+  it.each([320, 360, 375, 390, 430])('draws non-overlapping labels at phone width %i', (width) => {
+    const { ctx, log } = createLabelCtx();
+    renderSpectrum(ctx, data50(), width, 200, phoneOpts());
+    const bs = boxes(log);
+    // Edge labels stay readable: the first and last grid frequencies are kept.
+    expect(bs.length).toBeGreaterThan(2);
+    expect(bs[0].text).toBe('14.160');
+    expect(bs[bs.length - 1].text).toBe('14.260');
+    expectNoOverlap(bs);
+  });
+
+  const edgeCases: [number, number][] = [320, 375, 430].flatMap((w) =>
+    [25_000, 50_000, 100_000, 200_000, 500_000, 1_000_000].map((s) => [w, s] as [number, number]),
+  );
+  it.each(edgeCases)('keeps edge labels clear at width %i span %i', (width, spanHz) => {
+    const centerHz = 14_295_000;
+    const { ctx, log } = createLabelCtx();
+    renderSpectrum(ctx, data50(), width, 200, opts({ spanHz, centerHz }));
+    const bs = boxes(log);
+    expect(bs.length).toBeGreaterThanOrEqual(2);
+    expect(bs[0].text).toBe(((centerHz - spanHz / 2) / 1e6).toFixed(3));
+    expect(bs[bs.length - 1].text).toBe(((centerHz + spanHz / 2) / 1e6).toFixed(3));
+    expectNoOverlap(bs);
+  });
+
+  it('keeps all eleven labels exactly as today at desktop width 1440', () => {
+    const { ctx, log } = createLabelCtx();
+    renderSpectrum(ctx, data50(), 1440, 400, phoneOpts());
+    expect(log.fillText.map(([t]) => t)).toEqual([
+      '14.160', '14.170', '14.180', '14.190', '14.200', '14.210',
+      '14.220', '14.230', '14.240', '14.250', '14.260',
+    ]);
+    expect(log.fillText.map(([, x]) => x)).toEqual(
+      Array.from({ length: 11 }, (_, i) => Math.min(Math.max((i / 10) * 1440, 20), 1420)),
+    );
+  });
+});
+
+describe('SpectrumRenderer', () => {
+  let renderer: SpectrumRenderer;
+  beforeEach(() => { renderer = new SpectrumRenderer(); });
+
+  it('renders without errors', () => {
+    const { ctx } = createMockCtx();
+    expect(() => renderer.render(ctx, data50(), 800, 400, opts())).not.toThrow();
+  });
+
+  it('averaging: smooths output across frames', () => {
+    // Build history with high values
+    for (let i = 0; i < 10; i++) {
+      const { ctx } = createMockCtx();
+      renderer.render(ctx, new Uint8Array(10).fill(60), 10, 100, opts());
+    }
+    const { ctx: c1, log: l1 } = createMockCtx();
+    renderer.render(c1, new Uint8Array(10).fill(10), 10, 100, opts());
+    // Fresh renderer with same low input — no history
+    const fresh = new SpectrumRenderer();
+    const { ctx: c2, log: l2 } = createMockCtx();
+    fresh.render(c2, new Uint8Array(10).fill(10), 10, 100, opts());
+    expect(l1.lineTo).not.toEqual(l2.lineTo);
+  });
+
+  it('setAvgEnabled(false) clears history', () => {
+    renderer.setPeakHoldEnabled(false);
+    for (let i = 0; i < 5; i++) {
+      const { ctx } = createMockCtx();
+      renderer.render(ctx, new Uint8Array(10).fill(60), 10, 100, opts());
+    }
+    renderer.setAvgEnabled(false);
+    const { ctx: c1, log: l1 } = createMockCtx();
+    renderer.render(c1, new Uint8Array(10).fill(10), 10, 100, opts());
+
+    const fresh = new SpectrumRenderer();
+    fresh.setAvgEnabled(false);
+    fresh.setPeakHoldEnabled(false);
+    const { ctx: c2, log: l2 } = createMockCtx();
+    fresh.render(c2, new Uint8Array(10).fill(10), 10, 100, opts());
+    expect(l1.lineTo).toEqual(l2.lineTo);
+  });
+
+  it('peak hold draws extra fill overlay by default', () => {
+    const { ctx, log } = createMockCtx();
+    renderer.render(ctx, new Uint8Array(10).fill(50), 10, 100, opts());
+    expect(log.fills).toBeGreaterThanOrEqual(2);
+  });
+
+  it('setPeakHoldEnabled(false) suppresses peak overlay', () => {
+    renderer.setPeakHoldEnabled(false);
+    const { ctx, log } = createMockCtx();
+    renderer.render(ctx, new Uint8Array(10).fill(50), 10, 100, opts());
+    expect(log.fills).toBe(1);
+  });
+
+  it('peak hold retains peaks from prior high-amplitude frames', () => {
+    const { ctx: c1 } = createMockCtx();
+    renderer.render(c1, new Uint8Array(10).fill(70), 10, 100, opts());
+    const { ctx: c2, log: l2 } = createMockCtx();
+    renderer.render(c2, new Uint8Array(10).fill(10), 10, 100, opts());
+    expect(l2.fills).toBeGreaterThanOrEqual(2);
+  });
+});
+
+describe('spectrumDisplayAmplitude', () => {
+  it('preserves the established zero, mid-scale, and clamp transfer', () => {
+    expect(spectrumDisplayAmplitude(0, 0)).toBe(0);
+    expect(spectrumDisplayAmplitude(40, 0)).toBeCloseTo(Math.sqrt(0.5), 8);
+    expect(spectrumDisplayAmplitude(80, 0)).toBe(1);
+    expect(spectrumDisplayAmplitude(255, 0)).toBe(1);
+  });
+
+  it('keeps the existing reference adjustment in the shared transfer', () => {
+    expect(spectrumDisplayAmplitude(40, 30)).toBeCloseTo(Math.sqrt(0.75), 8);
+    expect(spectrumDisplayAmplitude(40, -30)).toBe(0.5);
+  });
+});
+
+// ── Colour roles ────────────────────────────────────────────────────────────
+//
+// PREVIOUS_LITERALS is transcribed from
+// `git show 8ff079b1c:frontend/src/lib/renderers/spectrum-renderer.ts`
+// (lines 28-31, 140, 180, 184, 198) — the strings this module painted with
+// before colour roles existed. It is deliberately a duplicate of the
+// production defaults so that changing a default without changing this
+// record turns the first test below red.
+const PREVIOUS_LITERALS = {
+  line: 'rgba(210,220,230,0.85)',
+  fillTop: 'rgba(30,58,138,0.30)',
+  fillBottom: 'rgba(30,58,138,0.02)',
+  grid: 'rgba(255,255,255,0.15)',
+  text: 'rgba(180,200,220,0.6)',
+  tuneLine: 'rgba(239,68,68,0.75)',
+  passbandFill: 'rgba(59,130,246,0.15)',
+  passbandEdge: 'rgba(59,130,246,0.4)',
+} as const;
+
+/** Records every paint-affecting assignment in the order the renderer makes it. */
+function createPaintCtx() {
+  const paint = {
+    fillStyle: [] as string[],
+    strokeStyle: [] as string[],
+    gradientStops: [] as [number, string][],
+  };
+  const noop = () => {};
+  const gradient = { addColorStop: (o: number, c: string) => paint.gradientStops.push([o, c]) };
+  const ctx = {
+    clearRect: noop, closePath: noop, stroke: noop, fill: noop, beginPath: noop,
+    fillRect: noop, fillText: noop, moveTo: noop, lineTo: noop, setLineDash: noop,
+    createLinearGradient: () => gradient,
+    set fillStyle(v: unknown) { if (typeof v === 'string') paint.fillStyle.push(v); },
+    set strokeStyle(v: unknown) { if (typeof v === 'string') paint.strokeStyle.push(v); },
+    set lineWidth(_: unknown) {}, set font(_: unknown) {}, set textAlign(_: unknown) {},
+  } as unknown as CanvasRenderingContext2D;
+  return { ctx, paint };
+}
+
+const overlayOpts = (o: Partial<SpectrumOptions> = {}): SpectrumOptions => opts({
+  spanHz: 1e6, centerHz: 14_500_000, tuneHz: 14_500_000, passbandHz: 2_400, mode: 'USB', ...o,
+});
+
+// ── Panorama viewport shift (MOR-2464) ───────────────────────────────────────
+//
+// Viewport center arrives as `centerHz` (labels, hit tests); the
+// sample-to-viewport offset as `panoramaShiftHz`. Uncovered edges stay blank.
+describe('panorama viewport shift (MOR-2464)', () => {
+  const WIDTH = 100;
+  const HEIGHT = 250;
+  const baseOpts = (o: Partial<SpectrumOptions> = {}): SpectrumOptions => opts({
+    spanHz: 100, centerHz: 50, scopeMode: 0, ...o,
+  });
+  const peakData = (peakIndex: number, peakValue = 80): Uint8Array => {
+    const data = new Uint8Array(100).fill(10);
+    data[peakIndex] = peakValue;
+    return data;
+  };
+  // Trace/fill sample points only (vertical grid ends at y === HEIGHT,
+  // horizontal grid at x === WIDTH).
+  const tracePoints = (log: { lineTo: number[][] }) =>
+    log.lineTo.filter(([x, y]) => x !== WIDTH && y < HEIGHT);
+  const yAt = (log: { lineTo: number[][] }, x: number) =>
+    log.lineTo.filter(([px]) => px === x).map(([, y]) => y);
+
+  it('shifts trace samples left by the viewport shift and blanks the uncovered right edge', () => {
+    const { ctx, log } = createMockCtx();
+    renderSpectrum(ctx, peakData(50), WIDTH, HEIGHT, baseOpts({ panoramaShiftHz: 10 }));
+    expect(tracePoints(log).some(([x, y]) => x === 40 && y === 0)).toBe(true);
+    expect(Math.max(...tracePoints(log).map(([x]) => x))).toBe(89);
+    expect(tracePoints(log).some(([x]) => x === 90)).toBe(false);
+  });
+
+  it('shifts trace samples right for a negative shift and blanks the uncovered left edge', () => {
+    const { ctx, log } = createMockCtx();
+    renderSpectrum(ctx, peakData(50), WIDTH, HEIGHT, baseOpts({ panoramaShiftHz: -10 }));
+    expect(tracePoints(log).some(([x, y]) => x === 60 && y === 0)).toBe(true);
+    expect(log.moveTo.some(([x, y]) => x === 10 && y < HEIGHT)).toBe(true);
+    expect(Math.min(...tracePoints(log).map(([x]) => x))).toBeGreaterThanOrEqual(10);
+    expect(tracePoints(log).some(([x]) => x === 9)).toBe(false);
+  });
+
+  it('interpolates adjacent samples for sub-pixel shifts', () => {
+    const data = peakData(50, 30);
+    data[51] = 80;
+    const shifted = createMockCtx();
+    renderSpectrum(shifted.ctx, data, WIDTH, HEIGHT, baseOpts({ panoramaShiftHz: 0.5 }));
+    const expectedY = HEIGHT * (1 - Math.sqrt(55 / 80));
+    expect(tracePoints(shifted.log).some(([x, y]) => x === 50 && Math.abs(y - expectedY) < 0.01))
+      .toBe(true);
+    const unshifted = createMockCtx();
+    renderSpectrum(unshifted.ctx, data, WIDTH, HEIGHT, baseOpts());
+    const unshiftedY = HEIGHT * (1 - Math.sqrt(30 / 80));
+    expect(tracePoints(unshifted.log)
+      .some(([x, y]) => x === 50 && Math.abs(y - unshiftedY) < 0.01)).toBe(true);
+    expect(Math.abs(expectedY - unshiftedY)).toBeGreaterThan(1);
+  });
+
+  it('keeps the CTR carrier marker at width/2 while the panorama is shifted', () => {
+    const { ctx, log } = createMockCtx();
+    renderSpectrum(ctx, peakData(50), WIDTH, HEIGHT, baseOpts({
+      tuneHz: 55, panoramaShiftHz: 10,
+    }));
+    // WIDTH/2 is also a grid position: grid one moveTo, marker the second.
+    expect(log.moveTo.filter(([x]) => x === WIDTH / 2)).toHaveLength(2);
+  });
+
+  it('renders the resting profile with bin-centre interpolation (MOR-4383)', () => {
+    // width 40 over 20 samples: every column samples the bin-space position
+    // of its centre, (x + 0.5) * n / W - 0.5, and linearly interpolates the
+    // adjacent bins. The impulse at bin 10 becomes a symmetric tent (columns
+    // 19-22 sample 20/60/60/20) instead of two hard columns.
+    const data = new Uint8Array(20).fill(0);
+    data[10] = 80;
+    const { ctx, log } = createMockCtx();
+    renderSpectrum(ctx, data, 40, 200, opts({ spanHz: 40, centerHz: 20, scopeMode: 0 }));
+    const tent = (amplitude: number) => 200 * (1 - Math.sqrt(amplitude / 80));
+    expect(yAt(log, 18)).toContain(200);
+    expect(yAt(log, 19).some((y) => Math.abs(y - tent(20)) < 1e-6)).toBe(true);
+    expect(yAt(log, 20).some((y) => Math.abs(y - tent(60)) < 1e-6)).toBe(true);
+    expect(yAt(log, 21).some((y) => Math.abs(y - tent(60)) < 1e-6)).toBe(true);
+    expect(yAt(log, 22).some((y) => Math.abs(y - tent(20)) < 1e-6)).toBe(true);
+    expect(yAt(log, 23)).toContain(200);
+    // Full-run fill closes at the pre-MOR-2464 right-bottom corner.
+    expect(log.lineTo).toContainEqual([40, 200]);
+  });
+
+  it('interpolates adjacent bins in bin space for stretched views (MOR-4383)', () => {
+    // width 100 over 50 samples, resting: pos = (x + 0.5) * 50 / 100 - 0.5
+    // = x/2 - 0.25, so the fractional part alternates 0.25/0.75 and the
+    // impulse at bin 25 ramps 20/60/60/20 around its centre x = 50.5.
+    const data = new Uint8Array(50).fill(0);
+    data[25] = 80;
+    const { ctx, log } = createMockCtx();
+    renderSpectrum(ctx, data, 100, 200, opts({ spanHz: 100, centerHz: 50, scopeMode: 0 }));
+    const amp = (y: number) => 80 * (1 - y / 200) ** 2;
+    for (const [x, expected] of [[49, 20], [50, 60], [51, 60], [52, 20]] as const) {
+      expect(yAt(log, x).some((y) => Math.abs(amp(y) - expected) < 1e-6)).toBe(true);
+    }
+  });
+
+  it('keeps the FIX carrier marker proportional and unaffected by shift semantics', () => {
+    const { ctx, log } = createMockCtx();
+    renderSpectrum(ctx, peakData(50), WIDTH, HEIGHT, baseOpts({
+      tuneHz: 25, scopeMode: 1, panoramaShiftHz: 0,
+    }));
+    expect(log.moveTo.some(([x]) => x === 25)).toBe(true);
+    expect(log.moveTo.filter(([x]) => x === WIDTH / 2)).toHaveLength(1);
+  });
+
+  it('labels frequencies through the shifted viewport center', () => {
+    const { ctx, log } = createMockCtx();
+    renderSpectrum(ctx, peakData(50), WIDTH, HEIGHT, baseOpts({
+      spanHz: 100_000, centerHz: 14_501_000,
+    }));
+    expect(log.fillText[0][0]).toBe('14.451');
+    expect(log.fillText[10][0]).toBe('14.551');
+  });
+
+  it('shifts the peak-hold line with the same viewport', () => {
+    const renderer = new SpectrumRenderer();
+    renderer.setPeakHoldEnabled(true);
+    const first = createMockCtx();
+    renderer.render(first.ctx, peakData(50), WIDTH, HEIGHT, baseOpts());
+    const second = createMockCtx();
+    renderer.render(second.ctx, new Uint8Array(100).fill(10), WIDTH, HEIGHT,
+      baseOpts({ panoramaShiftHz: 10 }));
+    expect(tracePoints(second.log).some(([x, y]) => x === 40 && y === 0)).toBe(true);
+  });
+});
+
+// ── Source-geometry reset (MOR-2464) ─────────────────────────────────────────
+//
+// Averaging history and peak hold reset when the SOURCE window changes
+// (geometryKey) and survive viewport animation.
+describe('SpectrumRenderer source-geometry reset (MOR-2464)', () => {
+  it('keeps averaging across viewport-only changes, resets on geometry change', () => {
+    const renderer = new SpectrumRenderer();
+    for (let i = 0; i < 5; i++) {
+      renderer.render(createMockCtx().ctx, new Uint8Array(10).fill(60), 10, 100, opts({ geometryKey: 'window-a' }));
+    }
+    const animated = createMockCtx();
+    renderer.render(animated.ctx, new Uint8Array(10).fill(10), 10, 100,
+      opts({ geometryKey: 'window-a', centerHz: 14_051_000, panoramaShiftHz: 1_000 }));
+    const freshA = createMockCtx();
+    new SpectrumRenderer().render(freshA.ctx, new Uint8Array(10).fill(10), 10, 100, opts({ geometryKey: 'window-a' }));
+    expect(animated.log.lineTo).not.toEqual(freshA.log.lineTo);
+    const moved = createMockCtx();
+    renderer.render(moved.ctx, new Uint8Array(10).fill(10), 10, 100, opts({ geometryKey: 'window-b' }));
+    const freshB = createMockCtx();
+    new SpectrumRenderer().render(freshB.ctx, new Uint8Array(10).fill(10), 10, 100, opts({ geometryKey: 'window-b' }));
+    expect(moved.log.lineTo).toEqual(freshB.log.lineTo);
+  });
+
+  it('keeps peak hold across viewport-only changes, drops it on geometry change', () => {
+    const peakY = 100 * (1 - Math.sqrt(70 / 80));
+    const renderer = new SpectrumRenderer();
+    renderer.render(createMockCtx().ctx, new Uint8Array(10).fill(70), 10, 100, opts({ geometryKey: 'window-a' }));
+    const animated = createMockCtx();
+    renderer.render(animated.ctx, new Uint8Array(10).fill(10), 10, 100,
+      opts({ geometryKey: 'window-a', panoramaShiftHz: 500 }));
+    expect(animated.log.lineTo.some(([, y]) => Math.abs(y - peakY) < 0.5)).toBe(true);
+    const moved = createMockCtx();
+    renderer.render(moved.ctx, new Uint8Array(10).fill(10), 10, 100, opts({ geometryKey: 'window-b' }));
+    expect(moved.log.lineTo.some(([, y]) => Math.abs(y - peakY) < 0.5)).toBe(false);
+  });
+});
+
+describe('spectrum colour roles', () => {
+  it('resolves to the literals this renderer painted with before roles existed', () => {
+    expect(resolveSpectrumColorRoles()).toEqual({
+      trace: PREVIOUS_LITERALS.line,
+      traceFill: { top: PREVIOUS_LITERALS.fillTop, bottom: PREVIOUS_LITERALS.fillBottom },
+      grid: PREVIOUS_LITERALS.grid,
+      axisText: PREVIOUS_LITERALS.text,
+      tuneLine: PREVIOUS_LITERALS.tuneLine,
+      passbandFill: PREVIOUS_LITERALS.passbandFill,
+      passbandEdge: PREVIOUS_LITERALS.passbandEdge,
+    });
+    expect(resolveSpectrumColorRoles()).toEqual(defaultSpectrumColorRoles);
+  });
+
+  it('resolves an undefined-valued override to the default, nested fill included', () => {
+    // `Partial<SpectrumColorRoles>` admits an explicit `undefined` for every
+    // top-level role; the nested cast stands for a host record that carries
+    // one under `traceFill` too.
+    const overrides: Partial<SpectrumColorRoles> = {
+      tuneLine: undefined,
+      traceFill: { top: undefined, bottom: undefined } as unknown as SpectrumColorRoles['traceFill'],
+    };
+    expect(resolveSpectrumColorRoles(overrides)).toEqual(defaultSpectrumColorRoles);
+    expect(spectrumColorRolesToOptions(resolveSpectrumColorRoles(overrides))).toMatchObject({
+      tuneLineColor: PREVIOUS_LITERALS.tuneLine,
+      fillColor: PREVIOUS_LITERALS.fillTop,
+      fillColorBottom: PREVIOUS_LITERALS.fillBottom,
+    });
+  });
+
+  it('carries the resolved roles into the option fields of the same names', () => {
+    const roles = resolveSpectrumColorRoles({ trace: '#111111', traceFill: { top: '#222222', bottom: '#333333' } });
+    expect(spectrumColorRolesToOptions(roles)).toEqual({
+      lineColor: '#111111',
+      fillColor: '#222222',
+      fillColorBottom: '#333333',
+      gridColor: PREVIOUS_LITERALS.grid,
+      textColor: PREVIOUS_LITERALS.text,
+      tuneLineColor: PREVIOUS_LITERALS.tuneLine,
+      passbandFillColor: PREVIOUS_LITERALS.passbandFill,
+      passbandEdgeColor: PREVIOUS_LITERALS.passbandEdge,
+    });
+  });
+
+  it('keeps the default option colours equal to the previous literals', () => {
+    expect(defaultSpectrumOptions).toMatchObject({
+      lineColor: PREVIOUS_LITERALS.line,
+      fillColor: PREVIOUS_LITERALS.fillTop,
+      fillColorBottom: PREVIOUS_LITERALS.fillBottom,
+      gridColor: PREVIOUS_LITERALS.grid,
+      textColor: PREVIOUS_LITERALS.text,
+      tuneLineColor: PREVIOUS_LITERALS.tuneLine,
+      passbandFillColor: PREVIOUS_LITERALS.passbandFill,
+      passbandEdgeColor: PREVIOUS_LITERALS.passbandEdge,
+    });
+  });
+
+  it('paints the default overlay pass with the previous tune-line and passband literals', () => {
+    const { ctx, paint } = createPaintCtx();
+    renderSpectrum(ctx, data50(), 800, 400, overlayOpts());
+    expect(paint.gradientStops).toEqual([[0, PREVIOUS_LITERALS.fillTop], [1, PREVIOUS_LITERALS.fillBottom]]);
+    expect(paint.fillStyle).toEqual([PREVIOUS_LITERALS.text, PREVIOUS_LITERALS.passbandFill]);
+    expect(paint.strokeStyle).toEqual([
+      PREVIOUS_LITERALS.grid,
+      PREVIOUS_LITERALS.passbandEdge,
+      PREVIOUS_LITERALS.tuneLine,
+      PREVIOUS_LITERALS.line,
+    ]);
+  });
+
+  it('paints the overlay pass with the supplied colours instead of the previous literals', () => {
+    const { ctx, paint } = createPaintCtx();
+    renderSpectrum(ctx, data50(), 800, 400, overlayOpts({
+      ...spectrumColorRolesToOptions(resolveSpectrumColorRoles({
+        trace: '#010101', traceFill: { top: '#020202', bottom: '#030303' }, grid: '#040404',
+        axisText: '#050505', tuneLine: '#060606', passbandFill: '#070707', passbandEdge: '#080808',
+      })),
+    }));
+    expect(paint.gradientStops).toEqual([[0, '#020202'], [1, '#030303']]);
+    expect(paint.fillStyle).toEqual(['#050505', '#070707']);
+    expect(paint.strokeStyle).toEqual(['#040404', '#080808', '#060606', '#010101']);
+    for (const literal of Object.values(PREVIOUS_LITERALS)) {
+      expect([...paint.fillStyle, ...paint.strokeStyle]).not.toContain(literal);
+    }
+  });
+
+  it('rebuilds the cached gradient when only the bottom stop changes', () => {
+    const cache = { current: null } as Parameters<typeof renderSpectrum>[5];
+    const first = createPaintCtx();
+    renderSpectrum(first.ctx, data50(), 800, 400, opts(), cache);
+    const second = createPaintCtx();
+    renderSpectrum(second.ctx, data50(), 800, 400, opts({ fillColorBottom: '#090909' }), cache);
+    expect(second.paint.gradientStops).toEqual([[0, PREVIOUS_LITERALS.fillTop], [1, '#090909']]);
+  });
+});
+
+describe('requested View coordinates (MOR-4270)', () => {
+  it('places a narrower sample plane inside the requested view without stretching', () => {
+    const { ctx, log } = createMockCtx();
+    renderSpectrum(ctx, new Uint8Array([80, 80, 80, 80]), 100, 40, opts({
+      spanHz: 200_000, sampleSpanHz: 100_000, centerHz: 14_050_000,
+      showRfOverlays: false,
+    }));
+    const tracePoints = log.lineTo.slice(17).filter(([, y]) => y === 0);
+    expect(log.moveTo).toContainEqual([25, 0]);
+    expect(Math.min(...tracePoints.map(([x]) => x))).toBeGreaterThanOrEqual(25);
+    expect(Math.max(...tracePoints.map(([x]) => x))).toBe(74);
+  });
+});
+
+describe('central audio sample interpretation (MOR-4270)', () => {
+  it('crops and scales inside the renderer exactly like the former pre-sink conversion', () => {
+    const actual = createMockCtx(); const expected = createMockCtx();
+    renderSpectrum(actual.ctx, new Uint8Array([255, 255, 40, 160]), 100, 40,
+      opts({ sampleOffset: 2, sampleAmplitudeMax: 160 }));
+    renderSpectrum(expected.ctx, new Uint8Array([20, 80]), 100, 40, opts());
+    expect(actual.log).toEqual(expected.log);
+  });
+});
+
+it('preserves audio clamp/rounding order through averaging and peak hold', () => {
+  const actual = createMockCtx(); const expected = createMockCtx();
+  const a = new SpectrumRenderer(); const b = new SpectrumRenderer();
+  for (const raw of [new Uint8Array([5, 6, 40, 160]), new Uint8Array([5, 6, 255, 0])]) {
+    a.render(actual.ctx, raw, 100, 40, opts({ sampleOffset: 2, sampleAmplitudeMax: 160 }));
+    b.render(expected.ctx, raw.slice(2).map(value => Math.round(Math.min(value, 160) / 2)), 100, 40, opts());
+  }
+  expect(actual.log).toEqual(expected.log);
+});
+
+it('can hide only the carrier marker while retaining RF geometry and labels', () => {
+  const shown = createMockCtx(); const hidden = createMockCtx();
+  const options = opts({ spanHz: 100_000, centerHz: 14_050_000, tuneHz: 14_050_000 });
+  renderSpectrum(shown.ctx, data50(), 200, 100, options);
+  renderSpectrum(hidden.ctx, data50(), 200, 100, { ...options, showTuneIndicator: false });
+  expect(hidden.log.fillText).toEqual(shown.log.fillText);
+  expect(hidden.log.strokes).toBe(shown.log.strokes - 1);
+});
+
+// ── Single hatch decision (MOR-4451) ────────────────────────────────────────
+//
+// The canvas fill is drawn only for the panel's hatchRanges — never from
+// coverage on its own. Uncovered columns without a range stay plain
+// background (the trace gap leaves them blank, never hatched).
+describe('canvas hatch ranges (MOR-4451)', () => {
+  const hatchOpts = (o: Partial<SpectrumOptions> = {}): SpectrumOptions => opts({
+    spanHz: 100_000, centerHz: 14_250_000, scopeMode: 0, passbandHz: 0, ...o,
+  });
+  // The overlay fill paints one full-canvas fillRect through the clip; the
+  // background never paints one (bgColor stays transparent) and the trace
+  // fill goes through fill(path), never fillRect.
+  const fullFills = (log: { fillRect: number[][] }) =>
+    log.fillRect.filter(([x, y, w, h]) => x === 0 && y === 0 && w === 800 && h === 400);
+  // Hatch diagonals start left of the canvas (x steps from -height at y 0);
+  // grid and marker strokes never moveTo a negative x at y 0.
+  const hatchDiagonals = (log: { moveTo: number[][] }) =>
+    log.moveTo.filter(([x, y]) => y === 0 && x < 0);
+
+  it('draws no fill without hatch ranges even when coverage is narrower than the view', () => {
+    const { ctx, log } = createMockCtx();
+    renderSpectrum(ctx, data50(), 800, 400, hatchOpts({
+      coverage: { startHz: 14_200_000, endHz: 14_290_000 },
+      hatchRanges: null,
+    }));
+    expect(fullFills(log)).toEqual([]);
+    expect(hatchDiagonals(log)).toEqual([]);
+  });
+
+  it('draws the fill only for the given hatch ranges', () => {
+    const { ctx, log } = createMockCtx();
+    renderSpectrum(ctx, data50(), 800, 400, hatchOpts({
+      coverage: { startHz: 14_200_000, endHz: 14_290_000 },
+      hatchRanges: [{ start: 0.9, end: 1 }],
+    }));
+    expect(fullFills(log)).toHaveLength(1);
+    expect(hatchDiagonals(log).length).toBeGreaterThan(0);
+  });
+});

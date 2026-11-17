@@ -102,6 +102,36 @@ La liste des fonctions s'inspire de cat-ftx1 (rzochowski, licence MIT selon son
 auteur ; le fichier LICENSE est encore en attente dans ce dépôt). Aucun code n'a
 été copié.
 
+### Contrôles de réception supplémentaires
+
+Eux aussi par côté (MAIN/SUB), en réception uniquement, vérifiés par relecture
+et refusés avant l'envoi s'ils sont hors plage :
+
+| Commande | Usage |
+| --- | --- |
+| `NL P1 P2P2P2;` | Réducteur d'impulsions NB, 0 (OFF) ou 1-10 |
+| `RL P1 P2P2;` | Réduction de bruit DNR, 0 (OFF) ou 1-10 |
+| `BC P1 P2;` | Notch automatique, OFF/ON |
+| `BP P1 0 P3P3P3;` | Notch manuel OFF/ON (000/001) |
+| `BP P1 1 P3P3P3;` | Fréquence du notch manuel, 001-320 (x10 Hz : 10-3200 Hz) |
+| `NA P1 P2;` | Filtre étroit (NAR), OFF/ON |
+| `CF P1 0 0 P3 P4 000;` | Clarifier : la page web active celui de réception et laisse celui d'émission éteint |
+| `CF P1 0 1 P3 P4P4P4P4;` | Décalage du clarifier, -9999..+9999 Hz |
+| `KS P1P1P1;` | Vitesse CW, 4-60 WPM (sans côté) |
+| `LK P1;` | Verrouillage du panneau, OFF/ON (sans côté) |
+
+En FM, la radio répond au notch manuel par une valeur non numérique (par exemple
+`BP01F35;`) : la page web la considère comme indisponible et laisse le champ
+vide.
+
+## VFO
+
+Le panneau « 5. VFO » (appuyez d'abord sur « Lire VFO ») fixe la fréquence du VFO
+A (`FA`) et du VFO B (`FB`) entre 0.030000 et 470.000000 MHz, le mode de MAIN
+(`MD0 m`, uniquement les modes documentés) et le split (`ST0`/`ST1`). Chaque
+changement est relu et comparé. Rien de tout cela n'émet. Selon le manuel, `ST1`
+éteint le double affichage (`FR01`).
+
 ## Limites
 
 - Uniquement les canaux mémoire 1-999. PMS, 5 MHz, canal d'urgence et mémoires

@@ -1,0 +1,3218 @@
+"""Tests for serial port enumeration, candidate filtering, and CI-V probing."""
+
+from __future__ import annotations
+
+import asyncio
+import errno
+import json
+import logging
+import socket
+import sys
+import time
+from contextlib import ExitStack, contextmanager, nullcontext
+from functools import partial
+from threading import Event, get_ident
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
+
+import pytest
+
+from civ_fake import CivRadioFake, CivSerialPort
+from rigplane.discovery import (
+    CivProbeResult,
+    RadioDiscoveryResult,
+    SerialPortCandidate,
+    _are_you_there_packet,
+    _is_candidate,
+    _parse_xiegu_model_id_reply,
+    _local_ipv4_addresses,
+    _parse_probe_response,
+    build_setup_discovery_payload,
+    _parse_yaesu_id_response,
+    dedupe_radios,
+    discover_lan_radios,
+    discover_serial_radios,
+    enumerate_serial_ports,
+    probe_lan_radio,
+    probe_serial_civ,
+    probe_serial_yaesu_cat,
+    probe_xiegu_model_id,
+)
+from rigplane.usb_audio_resolve import AudioDeviceMapping
+from rigplane_testkit.icom import MockIcomRadio
+
+
+@pytest.mark.parametrize("os_name,indices", [("macos", (3, 3)), ("windows", (1, 5))])
+@pytest.mark.parametrize("extra_owner", [False, True])
+async def test_discover_cli_keeps_profile_audio_pair_and_refuses_extra_owner(
+    monkeypatch, capsys, os_name, indices, extra_owner
+):
+    from test_usb_pairing_macos import FTX_PORT, _inject_macos, _macos_session
+    from test_usb_pairing_windows import _inject_windows, _synthetic_session
+    from rigplane.cli import _build_parser, _cmd_discover
+
+    if os_name == "macos":
+        session = _macos_session()
+        if extra_owner:
+            raw = session["raw"]["macos"]
+            raw["usb_devices"].append(
+                {
+                    **next(
+                        row
+                        for row in raw["usb_devices"]
+                        if row["registry_id"] == 4295976929
+                    ),
+                    "registry_id": 999,
+                    "vendor_id": 0xFFFF,
+                    "product_id": 1,
+                }
+            )
+            raw["serial_devices"].append(
+                {"device": "/dev/cu.undeclared", "usb_registry_id": 999}
+            )
+        _, sd = _inject_macos(monkeypatch, session)
+        port = FTX_PORT
+    else:
+        session = _synthetic_session(codec=("0D8C", "0016"))
+        rows = session["raw"]["windows"]["devnodes"]
+        rows[2]["instance_id"] = r"USB\VID_10C4&PID_EA70\S"
+        rows.append(
+            {
+                **rows[2],
+                "instance_id": r"USB\VID_26AA&PID_0030\HRI",
+                "friendly_name": "HRI (COM5)",
+            }
+        )
+        if extra_owner:
+            rows.append(
+                {
+                    **rows[2],
+                    "instance_id": r"USB\VID_FFFF&PID_0001\extra",
+                    "friendly_name": "Extra (COM6)",
+                }
+            )
+        _, sd = _inject_windows(monkeypatch, session)
+        port = "COM3"
+    monkeypatch.setitem(sys.modules, "sounddevice", sd)
+    monkeypatch.setattr(
+        "rigplane.discovery.enumerate_serial_ports",
+        lambda: [SerialPortCandidate(port, "Dual UART", None)],
+    )
+    monkeypatch.setattr(
+        "rigplane.discovery.probe_serial_civ", AsyncMock(return_value=None)
+    )
+    monkeypatch.setattr(
+        "rigplane.discovery.probe_serial_yaesu_cat",
+        AsyncMock(
+            return_value=RadioDiscoveryResult(
+                port, "yaesu_cat", "FTX-1", "yaesu_ftx1", 38400, 0
+            )
+        ),
+    )
+    args = _build_parser().parse_args(["--json", "discover", "--serial-only"])
+    assert await _cmd_discover(None, args) == 0
+    payload = json.loads(capsys.readouterr().out)
+    connection = payload["radios"][0]["connections"][0]
+    if extra_owner:
+        assert "usbAudio" not in connection
+    else:
+        assert connection["usbAudio"] == {
+            "rxDeviceIndex": indices[0],
+            "txDeviceIndex": indices[1],
+            "serialPort": port,
+            "locationPrefix": None,
+        }
+
+
+@pytest.mark.parametrize(
+    "profile_error",
+    [None, KeyError("missing profile"), RuntimeError("profile load failed")],
+    ids=["cold_start", "missing_profile", "profile_load_error"],
+)
+@pytest.mark.parametrize(
+    "protocol,profile_id,model,address",
+    [
+        ("civ", "icom_ic705", "IC-705", 0xA4),
+        ("yaesu_cat", "yaesu_ftx1", "FTX-1", None),
+        ("kenwood_cat", "icom_ic705", "IC-705", None),
+    ],
+)
+async def test_discovery_passes_resolved_profile_identity(
+    monkeypatch, protocol, profile_id, model, address, profile_error
+):
+    from rigplane import profiles
+    from rigplane.profiles import rig_loader
+
+    loop = asyncio.get_running_loop()
+    loop_thread = get_ident()
+    lookup_ready = asyncio.Event()
+    lookup_done = Event()
+    loader_threads = []
+    discover_rigs = rig_loader.discover_rigs
+
+    def load_rigs(rig_dir):
+        loader_threads.append(get_ident())
+        loop.call_soon_threadsafe(lookup_ready.set)
+        if get_ident() != loop_thread:
+            assert lookup_done.wait(10)
+        return discover_rigs(rig_dir)
+
+    async def lookup_profile():
+        await asyncio.wait_for(lookup_ready.wait(), 10)
+        try:
+            return profiles.get_radio_profile(profile_id)
+        finally:
+            lookup_done.set()
+
+    monkeypatch.setattr(profiles, "_profiles", None)
+    for index in ("_by_normalized", "_by_id", "_by_civ_addr"):
+        monkeypatch.setattr(profiles, index, {})
+    monkeypatch.setattr(rig_loader, "discover_rigs", load_rigs)
+
+    port = "/dev/cu.fixture"
+    monkeypatch.setattr(
+        "rigplane.discovery.enumerate_serial_ports",
+        lambda: [SerialPortCandidate(port, "Serial", None)],
+    )
+    result = RadioDiscoveryResult(
+        port, protocol, model, profile_id, 38400, address or 0
+    )
+    for probe, value in (
+        (
+            "probe_serial_civ",
+            CivProbeResult(port, 38400, address, bytes([address]))
+            if protocol == "civ"
+            else None,
+        ),
+        ("probe_serial_yaesu_cat", result if protocol == "yaesu_cat" else None),
+        ("probe_serial_kenwood_cat", result if protocol == "kenwood_cat" else None),
+    ):
+        monkeypatch.setattr(
+            "rigplane.discovery." + probe, AsyncMock(return_value=value)
+        )
+    monkeypatch.setattr(
+        "rigplane.discovery.resolve_civ_radio_identity",
+        AsyncMock(return_value=(model, profile_id)),
+    )
+    resolve = Mock(return_value=AudioDeviceMapping(2, 1, port))
+    monkeypatch.setattr("rigplane.discovery.resolve_audio_for_serial_port", resolve)
+    if profile_error is not None:
+        monkeypatch.setattr(
+            "rigplane.discovery.get_radio_profile", Mock(side_effect=profile_error)
+        )
+        results = await discover_serial_radios()
+        assert len(results) == 1
+        assert results[0].usb_audio is None
+        resolve.assert_not_called()
+        return
+    results, profile = await asyncio.gather(
+        discover_serial_radios(), lookup_profile(), return_exceptions=True
+    )
+    assert not isinstance(profile, BaseException), repr(profile)
+    assert profile.id == profile_id
+    assert not isinstance(results, BaseException), repr(results)
+    assert len(results) == 1
+    assert results[0].usb_audio == {
+        "rx_device_index": 2,
+        "tx_device_index": 1,
+        "serial_port": port,
+        "location_prefix": None,
+    }
+    assert loader_threads == [loop_thread]
+    resolve.assert_called_once_with(port, usb_identity=profile.usb_identity)
+
+
+@contextmanager
+def _fast_probes():
+    """Patch probe_serial_civ / probe_serial_yaesu_cat to use a single baud and
+    tiny timeout. Cuts ~4 s (4 bauds × 1.0 s) per miss path to milliseconds.
+
+    Used by ``TestDiscoverSerialRadios`` — those tests only care about the
+    probe outcome, not about baud sweeping or real timeout values.
+    """
+    with ExitStack() as stack:
+        stack.enter_context(
+            patch(
+                "rigplane.discovery.probe_serial_civ",
+                partial(probe_serial_civ, baud_rates=[19200], timeout=0.01),
+            )
+        )
+        stack.enter_context(
+            patch(
+                "rigplane.discovery.probe_serial_yaesu_cat",
+                partial(probe_serial_yaesu_cat, baud_rates=[38400], timeout=0.01),
+            )
+        )
+        stack.enter_context(
+            patch(
+                "rigplane.discovery.probe_xiegu_model_id",
+                partial(probe_xiegu_model_id, timeout=0.01),
+            )
+        )
+        yield
+
+
+# ---------------------------------------------------------------------------
+# Fake serial transport helpers for CI-V probe tests
+# ---------------------------------------------------------------------------
+
+
+class _FakeReader:
+    def __init__(self, chunks: list[bytes]) -> None:
+        self._queue: asyncio.Queue[bytes] = asyncio.Queue()
+        for chunk in chunks:
+            self._queue.put_nowait(chunk)
+
+    async def read(self, n: int) -> bytes:
+        return await self._queue.get()
+
+
+class _FakeWriter:
+    def __init__(self) -> None:
+        self.written: list[bytes] = []
+        self.closed = False
+
+    def write(self, data: bytes) -> None:
+        self.written.append(bytes(data))
+
+    async def drain(self) -> None:
+        pass
+
+    def close(self) -> None:
+        self.closed = True
+
+    async def wait_closed(self) -> None:
+        pass
+
+
+def _make_open(reader: _FakeReader, writer: _FakeWriter):
+    async def _open(*, url: str, baudrate: int, **_kw: object):
+        return reader, writer
+
+    return _open
+
+
+_IC7610_RESPONSE = bytes([0xFE, 0xFE, 0xE0, 0x98, 0x19, 0x00, 0x01, 0x06, 0xFD])
+# IC-705 / X6200 share CI-V address 0xA4; the wire response is identical
+# at the address level — disambiguation is by USB hwid, not CI-V payload.
+_IC705_RESPONSE = bytes([0xFE, 0xFE, 0xE0, 0xA4, 0x19, 0x00, 0x01, 0x05, 0xFD])
+_PROBE_CMD = bytes([0xFE, 0xFE, 0x00, 0xE0, 0x19, 0x00, 0xFD])
+
+# Xiegu model-ID (0x1D 0x19) replies (MOR-226). The X6200 echoes the command
+# and returns its model id (0x62 0x00); the IC-705 has no such opcode and NAKs.
+_XIEGU_MODEL_ID_CMD = bytes([0xFE, 0xFE, 0xA4, 0xE0, 0x1D, 0x19, 0xFD])
+_XIEGU_MODEL_ID_REPLY = bytes([0xFE, 0xFE, 0xE0, 0xA4, 0x1D, 0x19, 0x62, 0x00, 0xFD])
+_XIEGU_NAK_REPLY = bytes([0xFE, 0xFE, 0xE0, 0xA4, 0xFA, 0xFD])
+
+# G7250 live wire frames (LIVE bench audit 2026-11-09, MOR-4352). The radio
+# answers the broadcast probe with the echoed broadcast address 0x00, and
+# answers 0x1D 0x19 with its model id `72 50` at whatever address was asked.
+_G7250_ECHO_ID_REPLY = bytes([0xFE, 0xFE, 0xE0, 0x00, 0x19, 0x00, 0x00, 0xFD])
+_G7250_MODEL_ID_REPLY_00 = bytes([0xFE, 0xFE, 0xE0, 0x00, 0x1D, 0x19, 0x72, 0x50, 0xFD])
+_G7250_MODEL_ID_REPLY_A4 = bytes([0xFE, 0xFE, 0xE0, 0xA4, 0x1D, 0x19, 0x72, 0x50, 0xFD])
+# A future/unlisted Xiegu answering an unknown model id at 0xA4.
+_XIEGU_UNKNOWN_MODEL_ID_REPLY = bytes(
+    [0xFE, 0xFE, 0xE0, 0xA4, 0x1D, 0x19, 0x51, 0x00, 0xFD]
+)
+
+
+# ---------------------------------------------------------------------------
+# CI-V probe tests
+# ---------------------------------------------------------------------------
+
+
+class TestProbeSerialCiv:
+    @pytest.mark.asyncio
+    async def test_success_at_first_baud(self) -> None:
+        reader = _FakeReader([_IC7610_RESPONSE])
+        writer = _FakeWriter()
+        result = await probe_serial_civ(
+            "/dev/ttyUSB0",
+            baud_rates=[19200, 9600],
+            timeout=0.1,
+            _open_serial=_make_open(reader, writer),
+        )
+        assert isinstance(result, CivProbeResult)
+        assert result.port == "/dev/ttyUSB0"
+        assert result.baud == 19200
+        assert result.address == 0x98
+        assert result.model_id == bytes([0x01, 0x06])
+
+    @pytest.mark.asyncio
+    async def test_timeout_tries_next_baud(self) -> None:
+        # At 19200 the port opens but the device on it is not a radio
+        # (silent); at 9600 the IC-7610 answers.
+        silent = CivSerialPort(CivRadioFake("IC-7610"), silent=True)
+        live = CivSerialPort(CivRadioFake("IC-7610"))
+        seen_bauds: list[int] = []
+
+        async def _open(*, url: str, baudrate: int, **kw: object):
+            seen_bauds.append(baudrate)
+            port = silent if baudrate == 19200 else live
+            return await port.opener(url=url, baudrate=baudrate, **kw)
+
+        result = await probe_serial_civ(
+            "/dev/ttyUSB0",
+            baud_rates=[19200, 9600],
+            timeout=0.05,
+            _open_serial=_open,
+        )
+        assert result is not None
+        assert result.baud == 9600
+        assert seen_bauds == [19200, 9600]
+
+    @pytest.mark.asyncio
+    async def test_invalid_response_returns_none(self) -> None:
+        garbage = bytes([0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08])
+        reader = _FakeReader([garbage])
+        writer = _FakeWriter()
+        result = await probe_serial_civ(
+            "/dev/ttyUSB0",
+            baud_rates=[19200],
+            timeout=0.1,
+            _open_serial=_make_open(reader, writer),
+        )
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_all_bauds_fail_returns_none(self) -> None:
+        async def _open(*, url: str, baudrate: int, **_kw: object):
+            return _FakeReader([]), _FakeWriter()
+
+        result = await probe_serial_civ(
+            "/dev/ttyUSB0",
+            baud_rates=[19200, 9600],
+            timeout=0.05,
+            _open_serial=_open,
+        )
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_port_busy_returns_none(self) -> None:
+        async def _open(*, url: str, baudrate: int, **_kw: object):
+            raise OSError("Resource busy")
+
+        result = await probe_serial_civ(
+            "/dev/ttyUSB0",
+            baud_rates=[19200, 9600],
+            timeout=0.1,
+            _open_serial=_open,
+        )
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_echoed_command_before_response(self) -> None:
+        data = _PROBE_CMD + _IC7610_RESPONSE
+        reader = _FakeReader([data])
+        writer = _FakeWriter()
+        result = await probe_serial_civ(
+            "/dev/ttyUSB0",
+            baud_rates=[19200],
+            timeout=0.1,
+            _open_serial=_make_open(reader, writer),
+        )
+        assert result is not None
+        assert result.address == 0x98
+        assert result.model_id == bytes([0x01, 0x06])
+
+    @pytest.mark.asyncio
+    async def test_sends_correct_civ_command(self) -> None:
+        reader = _FakeReader([_IC7610_RESPONSE])
+        writer = _FakeWriter()
+        await probe_serial_civ(
+            "/dev/ttyUSB0",
+            baud_rates=[19200],
+            timeout=0.1,
+            _open_serial=_make_open(reader, writer),
+        )
+        assert writer.written[0] == _PROBE_CMD
+
+    @pytest.mark.asyncio
+    async def test_closes_writer_after_success(self) -> None:
+        reader = _FakeReader([_IC7610_RESPONSE])
+        writer = _FakeWriter()
+        await probe_serial_civ(
+            "/dev/ttyUSB0",
+            baud_rates=[19200],
+            timeout=0.1,
+            _open_serial=_make_open(reader, writer),
+        )
+        assert writer.closed is True
+
+    @pytest.mark.asyncio
+    async def test_default_baud_rates_used_when_none_specified(self) -> None:
+        seen_bauds: list[int] = []
+
+        async def _open(*, url: str, baudrate: int, **_kw: object):
+            seen_bauds.append(baudrate)
+            return _FakeReader([]), _FakeWriter()
+
+        await probe_serial_civ("/dev/ttyUSB0", timeout=0.01, _open_serial=_open)
+        # The profile baud first (MOR-4207), then the documented fallbacks.
+        assert seen_bauds == [115200, 19200, 9600, 4800]
+
+
+class TestParseProbeResponse:
+    def test_valid_ic7610_response(self) -> None:
+        result = _parse_probe_response("/dev/x", 19200, _IC7610_RESPONSE)
+        assert result is not None
+        assert result.address == 0x98
+        assert result.model_id == bytes([0x01, 0x06])
+
+    def test_no_preamble_returns_none(self) -> None:
+        assert _parse_probe_response("/dev/x", 19200, bytes(9)) is None
+
+    def test_too_short_after_preamble_returns_none(self) -> None:
+        data = bytes([0xFE, 0xFE, 0xE0, 0x98])
+        assert _parse_probe_response("/dev/x", 19200, data) is None
+
+    def test_wrong_command_byte_returns_none(self) -> None:
+        # byte[4] should be 0x19; use 0x00 here
+        data = bytes([0xFE, 0xFE, 0xE0, 0x98, 0x00, 0x00, 0x01, 0x06, 0xFD])
+        assert _parse_probe_response("/dev/x", 19200, data) is None
+
+    def test_no_terminator_returns_none(self) -> None:
+        data = bytes([0xFE, 0xFE, 0xE0, 0x98, 0x19, 0x00, 0x01, 0x06])
+        assert _parse_probe_response("/dev/x", 19200, data) is None
+
+
+# ---------------------------------------------------------------------------
+# Xiegu model-ID probe tests (MOR-226)
+# ---------------------------------------------------------------------------
+
+
+class TestParseXieguModelIdReply:
+    def test_valid_reply_yields_the_model_id_bytes(self) -> None:
+        assert (
+            _parse_xiegu_model_id_reply("/dev/x", _XIEGU_MODEL_ID_REPLY) == b"\x62\x00"
+        )
+
+    def test_g7250_echo_reply_yields_its_model_id_bytes(self) -> None:
+        # Real G7250 frame: asked at the echoed broadcast address 0x00
+        # (LIVE G7250 2026-11-09, MOR-4352).
+        assert (
+            _parse_xiegu_model_id_reply("/dev/x", _G7250_MODEL_ID_REPLY_00)
+            == b"\x72\x50"
+        )
+
+    def test_nak_is_not_a_xiegu(self) -> None:
+        # IC-705 has no 0x1D 0x19 opcode → NAK collision FE FE E0 A4 FA FD.
+        assert _parse_xiegu_model_id_reply("/dev/x", _XIEGU_NAK_REPLY) is None
+
+    def test_wrong_command_echo_is_not_a_xiegu(self) -> None:
+        # A 0x19 0x00 transceiver-ID frame must not be mistaken for 0x1D 0x19.
+        assert _parse_xiegu_model_id_reply("/dev/x", _IC705_RESPONSE) is None
+
+    def test_no_preamble_is_not_a_xiegu(self) -> None:
+        assert _parse_xiegu_model_id_reply("/dev/x", bytes(8)) is None
+
+    def test_short_reply_is_not_a_xiegu(self) -> None:
+        assert _parse_xiegu_model_id_reply("/dev/x", bytes([0xFE, 0xFE, 0xE0])) is None
+
+    def test_command_echo_before_reply_is_ignored(self) -> None:
+        # The radio's echo of our command (dest 0xA4) lacks the FE FE E0
+        # controller preamble, so only the real reply is matched.
+        data = _XIEGU_MODEL_ID_CMD + _XIEGU_MODEL_ID_REPLY
+        assert _parse_xiegu_model_id_reply("/dev/x", data) == b"\x62\x00"
+
+
+class TestProbeXieguModelId:
+    @pytest.mark.asyncio
+    async def test_x6200_reply_returns_its_model_id_bytes(self) -> None:
+        radio = CivRadioFake("X6200")
+        result = await probe_xiegu_model_id(
+            "/dev/x", 19200, 0xA4, timeout=0.1, _open_serial=CivSerialPort(radio).opener
+        )
+        assert result == b"\x62\x00"
+        (sent,) = radio.commands
+        assert (sent.to_addr, sent.command, sent.sub, sent.data) == (
+            0xA4,
+            0x1D,
+            None,
+            b"\x19",
+        )
+
+    @pytest.mark.asyncio
+    async def test_g7250_reply_returns_its_model_id_bytes(self) -> None:
+        # Asked at the Xiegu family default 0xA4 the radio is the 0xA4
+        # radio (it answers ANY address and echoes it, LIVE G7250
+        # 2026-11-09), so the fake sits at the asked address explicitly —
+        # its default is the profile address 0xA0.
+        radio = CivRadioFake("G7250", civ_addr=0xA4)
+        result = await probe_xiegu_model_id(
+            "/dev/x",
+            115200,
+            0xA4,
+            timeout=0.1,
+            _open_serial=CivSerialPort(radio).opener,
+        )
+        assert result == b"\x72\x50"
+
+    @pytest.mark.asyncio
+    async def test_probe_asks_the_passed_address(self) -> None:
+        # The G7250 answers any address and echoes it as its own (LIVE
+        # G7250 2026-11-09, MOR-4352): the echo path probes 0x1D 0x19 at
+        # the echoed broadcast address 0x00, not at a fixed 0xA4.
+        radio = CivRadioFake("G7250")
+        await probe_xiegu_model_id(
+            "/dev/x",
+            115200,
+            0x00,
+            timeout=0.1,
+            _open_serial=CivSerialPort(radio).opener,
+        )
+        (sent,) = radio.commands
+        assert (sent.to_addr, sent.command, sent.data) == (0x00, 0x1D, b"\x19")
+
+    @pytest.mark.asyncio
+    async def test_nak_returns_none(self) -> None:
+        # An IC-705 NAKs 0x1D 0x19 because that is what an IC-705 is —
+        # identity, not an injected fault.
+        radio = CivRadioFake("IC-705")
+        result = await probe_xiegu_model_id(
+            "/dev/x", 19200, 0xA4, timeout=0.1, _open_serial=CivSerialPort(radio).opener
+        )
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_timeout_returns_none(self) -> None:
+        # The port opens, but the device on it is not a radio.
+        port = CivSerialPort(CivRadioFake("X6200"), silent=True)
+        result = await probe_xiegu_model_id(
+            "/dev/x", 19200, 0xA4, timeout=0.05, _open_serial=port.opener
+        )
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_open_failure_returns_none(self) -> None:
+        async def _open(*, url: str, baudrate: int, **_kw: object):
+            raise OSError("Resource busy")
+
+        result = await probe_xiegu_model_id(
+            "/dev/x", 19200, 0xA4, timeout=0.1, _open_serial=_open
+        )
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_closes_writer(self) -> None:
+        port = CivSerialPort(CivRadioFake("X6200"))
+        writers = []
+
+        async def _open(*, url: str, baudrate: int, **kw: object):
+            pair = await port.opener(url=url, baudrate=baudrate, **kw)
+            writers.append(pair[1])
+            return pair
+
+        await probe_xiegu_model_id(
+            "/dev/x", 19200, 0xA4, timeout=0.1, _open_serial=_open
+        )
+        assert writers[0].closed is True
+
+
+def _make_port(
+    device: str,
+    description: str = "",
+    hwid: str | None = None,
+    **metadata: object,
+) -> SimpleNamespace:
+    return SimpleNamespace(
+        device=device,
+        description=description,
+        hwid=hwid,
+        **metadata,
+    )
+
+
+class TestIsCandidate:
+    def test_usb_serial_included(self) -> None:
+        port = _make_port("/dev/ttyUSB0", "USB Serial", "USB VID:PID=10C4:EA60")
+        assert _is_candidate(port) is True
+
+    def test_usb_modem_included(self) -> None:
+        # macOS USB CDC devices appear as /dev/tty.usbmodem*
+        port = _make_port(
+            "/dev/tty.usbmodem14101", "USB Modem", "USB VID:PID=0403:6001"
+        )
+        assert _is_candidate(port) is True
+
+    def test_usb_upper_case_included(self) -> None:
+        port = _make_port("/dev/ttyUSB1", "USB-Serial CH340", "USB VID:PID=1A86:7523")
+        assert _is_candidate(port) is True
+
+    def test_bluetooth_excluded(self) -> None:
+        port = _make_port("/dev/tty.Bluetooth-Incoming-Port", "Bluetooth")
+        assert _is_candidate(port) is False
+
+    def test_bluetooth_lowercase_excluded(self) -> None:
+        port = _make_port("/dev/rfcomm0", "Bluetooth Serial")
+        assert _is_candidate(port) is False
+
+    def test_debug_virtual_excluded(self) -> None:
+        port = _make_port("/dev/ttydebug0", "Debug UART")
+        assert _is_candidate(port) is False
+
+    def test_wlan_virtual_excluded(self) -> None:
+        port = _make_port("/dev/ttywlan0", "WLAN UART")
+        assert _is_candidate(port) is False
+
+    def test_spi_virtual_excluded(self) -> None:
+        port = _make_port("/dev/ttyspi0", "SPI bridge")
+        assert _is_candidate(port) is False
+
+    def test_plain_serial_without_usb_excluded(self) -> None:
+        port = _make_port("/dev/ttyS0", "Standard Serial")
+        assert _is_candidate(port) is False
+
+    # MOR-224: CDC-ACM bridges (e.g. the X6200's WCH CH342) enumerate under
+    # device names that do NOT contain "usb" on Linux (/dev/ttyACM*) and
+    # Windows (COMx). They must still be accepted via their USB identity.
+    def test_x6200_linux_ttyacm_included_by_vid(self) -> None:
+        port = _make_port(
+            "/dev/ttyACM0",
+            "USB Dual_Serial",
+            "USB VID:PID=1A86:55D2 LOCATION=1-1.2.4",
+            vid=0x1A86,
+            pid=0x55D2,
+            product="USB Dual_Serial",
+        )
+        assert _is_candidate(port) is True
+
+    def test_x6200_windows_com_included_by_vid(self) -> None:
+        port = _make_port(
+            "COM3",
+            "USB Dual_Serial",
+            "USB VID:PID=1A86:55D2",
+            vid=0x1A86,
+            pid=0x55D2,
+            product="USB Dual_Serial",
+        )
+        assert _is_candidate(port) is True
+
+    def test_generic_usb_radio_windows_com_included_by_vid(self) -> None:
+        # Any USB serial radio on Windows surfaces as COMx (no "usb" in name).
+        port = _make_port(
+            "COM4", "Silicon Labs CP210x", "USB VID:PID=10C4:EA60", vid=0x10C4
+        )
+        assert _is_candidate(port) is True
+
+    def test_cdc_acm_included_by_hwid_when_vid_absent(self) -> None:
+        # Some OS/permission setups don't surface vid via pyserial; the
+        # "USB VID:PID=" hwid string is the robust-identity fallback.
+        port = _make_port("/dev/ttyACM0", "", "USB VID:PID=1A86:55D2")
+        assert _is_candidate(port) is True
+
+    def test_bluetooth_with_vid_still_excluded(self) -> None:
+        # Name-based exclusions take precedence over the USB-identity accept.
+        port = _make_port("/dev/tty.Bluetooth-Incoming-Port", "Bluetooth", vid=0x1234)
+        assert _is_candidate(port) is False
+
+
+class TestEnumerateSerialPorts:
+    def test_usb_port_returned(self) -> None:
+        port = _make_port(
+            "/dev/ttyUSB0",
+            "USB Serial",
+            "USB VID:PID=10C4:EA60",
+            vid=0x10C4,
+            pid=0xEA60,
+            manufacturer="Silicon Labs",
+            product="CP210x USB to UART Bridge",
+            serial_number="0001",
+        )
+        with patch("serial.tools.list_ports.comports", return_value=[port]):
+            result = enumerate_serial_ports()
+        assert len(result) == 1
+        assert result[0] == SerialPortCandidate(
+            device="/dev/ttyUSB0",
+            description="USB Serial",
+            hwid="USB VID:PID=10C4:EA60",
+            vid=0x10C4,
+            pid=0xEA60,
+            manufacturer="Silicon Labs",
+            product="CP210x USB to UART Bridge",
+            serial_number="0001",
+        )
+
+    def test_missing_usb_metadata_attrs_are_optional(self) -> None:
+        port = _make_port("/dev/ttyUSB0", "USB Serial", "USB VID:PID=10C4:EA60")
+        with patch("serial.tools.list_ports.comports", return_value=[port]):
+            result = enumerate_serial_ports()
+        assert result[0].vid is None
+        assert result[0].pid is None
+        assert result[0].manufacturer is None
+        assert result[0].product is None
+        assert result[0].serial_number is None
+
+    def test_bluetooth_excluded(self) -> None:
+        port = _make_port("/dev/tty.Bluetooth-Incoming-Port", "Bluetooth")
+        with patch("serial.tools.list_ports.comports", return_value=[port]):
+            result = enumerate_serial_ports()
+        assert result == []
+
+    def test_virtual_ports_excluded(self) -> None:
+        ports = [
+            _make_port("/dev/ttydebug0", "Debug"),
+            _make_port("/dev/ttywlan0", "WLAN"),
+            _make_port("/dev/ttyspi0", "SPI"),
+        ]
+        with patch("serial.tools.list_ports.comports", return_value=ports):
+            result = enumerate_serial_ports()
+        assert result == []
+
+    def test_empty_list(self) -> None:
+        with patch("serial.tools.list_ports.comports", return_value=[]):
+            result = enumerate_serial_ports()
+        assert result == []
+
+    def test_mixed_ports_only_usb_returned(self) -> None:
+        ports = [
+            _make_port("/dev/ttyUSB0", "USB Serial", "USB VID:PID=10C4:EA60"),
+            _make_port("/dev/tty.Bluetooth-Incoming-Port", "Bluetooth"),
+            _make_port("/dev/ttyS0", "Standard"),
+        ]
+        with patch("serial.tools.list_ports.comports", return_value=ports):
+            result = enumerate_serial_ports()
+        assert len(result) == 1
+        assert result[0].device == "/dev/ttyUSB0"
+
+    def test_returns_list_of_candidates(self) -> None:
+        with patch("serial.tools.list_ports.comports", return_value=[]):
+            result = enumerate_serial_ports()
+        assert isinstance(result, list)
+
+    def test_x6200_cdc_acm_returned_as_candidate(self) -> None:
+        # MOR-224: the X6200's CH342 on Linux (/dev/ttyACM*) must enumerate
+        # as a candidate even though its device name has no "usb".
+        port = _make_port(
+            "/dev/ttyACM0",
+            "USB Dual_Serial",
+            "USB VID:PID=1A86:55D2 LOCATION=1-1.2.4",
+            vid=0x1A86,
+            pid=0x55D2,
+            product="USB Dual_Serial",
+            manufacturer=None,
+            serial_number="5891018109",
+        )
+        with patch("serial.tools.list_ports.comports", return_value=[port]):
+            result = enumerate_serial_ports()
+        assert len(result) == 1
+        assert result[0].device == "/dev/ttyACM0"
+        assert result[0].vid == 0x1A86
+        assert result[0].pid == 0x55D2
+
+
+# ---------------------------------------------------------------------------
+# dedupe_radios tests
+# ---------------------------------------------------------------------------
+
+
+class TestDedupeRadios:
+    def test_same_radio_lan_and_serial_grouped(self) -> None:
+        lan = [{"model": "IC-7610", "address": 0x98, "host": "192.168.1.100"}]
+        serial = [
+            {"model": "IC-7610", "address": 0x98, "port": "/dev/ttyUSB0", "baud": 19200}
+        ]
+
+        result = dedupe_radios(lan, serial)
+
+        assert len(result) == 1
+        assert result[0]["model"] == "IC-7610"
+        assert len(result[0]["lan"]) == 1
+        assert len(result[0]["serial"]) == 1
+
+    def test_different_radios_stay_separate(self) -> None:
+        lan = [{"model": "IC-7610", "address": 0x98, "host": "192.168.1.100"}]
+        serial = [
+            {"model": "IC-705", "address": 0xA4, "port": "/dev/ttyUSB0", "baud": 19200}
+        ]
+
+        result = dedupe_radios(lan, serial)
+
+        assert len(result) == 2
+
+    def test_lan_only_no_serial_section(self) -> None:
+        lan = [{"model": "IC-7610", "address": 0x98, "host": "192.168.1.100"}]
+        serial: list[dict] = []
+
+        result = dedupe_radios(lan, serial)
+
+        assert len(result) == 1
+        assert len(result[0]["serial"]) == 0
+        assert len(result[0]["lan"]) == 1
+
+    def test_serial_only_no_lan_section(self) -> None:
+        lan: list[dict] = []
+        serial = [
+            {"model": "IC-705", "address": 0xA4, "port": "/dev/ttyUSB0", "baud": 19200}
+        ]
+
+        result = dedupe_radios(lan, serial)
+
+        assert len(result) == 1
+        assert len(result[0]["lan"]) == 0
+        assert len(result[0]["serial"]) == 1
+
+    def test_empty_both(self) -> None:
+        assert dedupe_radios([], []) == []
+
+    def test_two_lan_same_radio_merged(self) -> None:
+        # Same model+address from two LAN entries — merged (unusual but defensive)
+        lan = [
+            {"model": "IC-7610", "address": 0x98, "host": "192.168.1.100"},
+            {"model": "IC-7610", "address": 0x98, "host": "192.168.1.101"},
+        ]
+        result = dedupe_radios(lan, [])
+        assert len(result) == 1
+        assert len(result[0]["lan"]) == 2
+
+    def test_lan_without_model_not_merged_with_serial(self) -> None:
+        # LAN entry has no model/address → cannot be deduped → stays separate
+        lan = [{"host": "192.168.1.100"}]
+        serial = [
+            {"model": "IC-7610", "address": 0x98, "port": "/dev/ttyUSB0", "baud": 19200}
+        ]
+
+        result = dedupe_radios(lan, serial)
+
+        assert len(result) == 2
+
+    def test_multiple_lan_without_model_each_separate(self) -> None:
+        # Two unidentified LAN radios → each is its own entry
+        lan = [{"host": "192.168.1.100"}, {"host": "192.168.1.101"}]
+        result = dedupe_radios(lan, [])
+        assert len(result) == 2
+
+    def test_return_type_is_list(self) -> None:
+        result = dedupe_radios([], [])
+        assert isinstance(result, list)
+
+    def test_result_entry_has_required_keys(self) -> None:
+        lan = [{"model": "IC-7610", "address": 0x98, "host": "192.168.1.100"}]
+        result = dedupe_radios(lan, [])
+        assert "model" in result[0]
+        assert "lan" in result[0]
+        assert "serial" in result[0]
+
+
+def test_build_setup_discovery_payload_is_stable_and_credential_free() -> None:
+    grouped = [
+        {
+            "model": "IC-7610",
+            "lan": [
+                {
+                    "host": "192.168.55.40",
+                    "remote_id": 0x12345678,
+                    "user": "must-not-leak",
+                    "password": "must-not-leak",
+                }
+            ],
+            "serial": [
+                {
+                    "port": "/dev/cu.usbmodem7610",
+                    "protocol": "civ",
+                    "model": "IC-7610",
+                    "profile_id": "icom_ic7610",
+                    "baudrate": 115200,
+                    "address": 0x98,
+                    "description": "IC-7610 USB",
+                    "hwid": "USB VID:PID=10C4:EA60",
+                    "vid": 0x10C4,
+                    "pid": 0xEA60,
+                    "manufacturer": "Silicon Labs",
+                    "product": "CP210x USB to UART Bridge",
+                    "serial_number": "0001",
+                    "token": "must-not-leak",
+                    "hostname": "private-host.local",
+                }
+            ],
+        }
+    ]
+
+    payload = build_setup_discovery_payload(grouped)
+
+    assert payload["schema"] == "rigplane.discovery.v1"
+    radio = payload["radios"][0]
+    assert radio["model"] == "IC-7610"
+    assert radio["connections"][0] == {
+        "type": "lan",
+        "backend": "lan",
+        "label": "LAN 192.168.55.40",
+        "host": "192.168.55.40",
+        "remoteId": 0x12345678,
+        "requiresCredentials": True,
+    }
+    assert radio["connections"][1]["type"] == "serial"
+    assert radio["connections"][1]["description"] == "IC-7610 USB"
+    assert radio["connections"][1]["hwid"] == "USB VID:PID=10C4:EA60"
+    assert radio["connections"][1]["vid"] == 0x10C4
+    assert radio["connections"][1]["pid"] == 0xEA60
+    assert radio["connections"][1]["manufacturer"] == "Silicon Labs"
+    assert radio["connections"][1]["product"] == "CP210x USB to UART Bridge"
+    assert radio["connections"][1]["serialNumber"] == "0001"
+    assert "password" not in str(payload).lower()
+    assert "token" not in str(payload).lower()
+    assert "private-host" not in str(payload).lower()
+    assert payload["limitations"]["windowsUsbAudio"] == "manual-device-selection"
+
+
+def test_setup_payload_preserves_usb_audio_metadata_without_credentials() -> None:
+    grouped = [
+        {
+            "model": "IC-7610",
+            "lan": [],
+            "serial": [
+                {
+                    "port": "/dev/cu.usbserial-111120",
+                    "protocol": "civ",
+                    "model": "IC-7610",
+                    "profile_id": "icom_ic7610",
+                    "baudrate": 115200,
+                    "address": 0x98,
+                    "description": "Silicon Labs CP210x USB to UART Bridge",
+                    "hwid": "USB VID:PID=10C4:EA60 LOCATION=1-1.2",
+                    "usb_audio": {
+                        "rx_device_index": 6,
+                        "tx_device_index": 5,
+                        "serial_port": "/dev/cu.usbserial-111120",
+                        "location_prefix": 0x0111,
+                    },
+                    "user": "must-not-leak",
+                    "password": "must-not-leak",
+                    "private_key": "must-not-leak",
+                }
+            ],
+        }
+    ]
+
+    payload = build_setup_discovery_payload(grouped)
+
+    connection = payload["radios"][0]["connections"][0]
+    assert connection["requiresCredentials"] is False
+    assert connection["usbAudio"] == {
+        "rxDeviceIndex": 6,
+        "txDeviceIndex": 5,
+        "serialPort": "/dev/cu.usbserial-111120",
+        "locationPrefix": 0x0111,
+    }
+    assert "password" not in str(payload).lower()
+    assert "private_key" not in str(payload).lower()
+
+
+# ---------------------------------------------------------------------------
+# Fake Yaesu CAT transport helpers
+# ---------------------------------------------------------------------------
+
+
+class _FakeCatTransport:
+    """Minimal fake of YaesuCatTransport for probe tests."""
+
+    def __init__(self, response: str | None, *, fail_connect: bool = False) -> None:
+        self._response = response
+        self._fail_connect = fail_connect
+        self.connected = False
+        self.closed = False
+        self.queries: list[str] = []
+
+    async def connect(self) -> None:
+        if self._fail_connect:
+            raise OSError("Resource busy")
+        self.connected = True
+
+    async def close(self) -> None:
+        self.closed = True
+
+    async def query(self, command: str, *, timeout: float | None = None) -> str:
+        self.queries.append(command)
+        if self._response is None:
+            from rigplane.backends.yaesu_cat.transport import CatTimeoutError
+
+            raise CatTimeoutError("timeout")
+        return self._response
+
+
+def _make_yaesu_factory(response: str | None, *, fail_connect: bool = False):
+    """Return a transport factory producing a _FakeCatTransport."""
+    instances: list[_FakeCatTransport] = []
+
+    def factory(**kwargs: object) -> _FakeCatTransport:
+        t = _FakeCatTransport(response, fail_connect=fail_connect)
+        instances.append(t)
+        return t
+
+    factory.instances = instances  # type: ignore[attr-defined]
+    return factory
+
+
+# ---------------------------------------------------------------------------
+# _parse_yaesu_id_response tests
+# ---------------------------------------------------------------------------
+
+
+class TestParseYaesuIdResponse:
+    def test_known_ftx1(self) -> None:
+        result = _parse_yaesu_id_response("/dev/ttyUSB0", 38400, "ID0840")
+        assert result is not None
+        assert result.model == "FTX-1"
+        assert result.profile_id == "yaesu_ftx1"
+        assert result.protocol == "yaesu_cat"
+        assert result.address == "0840"
+        assert result.baudrate == 38400
+        assert result.port == "/dev/ttyUSB0"
+
+    def test_unknown_model_id(self) -> None:
+        result = _parse_yaesu_id_response("/dev/ttyUSB0", 38400, "ID9999")
+        assert result is not None
+        assert result.model == "Yaesu (9999)"
+        assert result.profile_id == ""
+        assert result.address == "9999"
+
+    def test_too_short(self) -> None:
+        assert _parse_yaesu_id_response("/dev/x", 38400, "ID084") is None
+
+    def test_too_long(self) -> None:
+        assert _parse_yaesu_id_response("/dev/x", 38400, "ID08401") is None
+
+    def test_wrong_prefix(self) -> None:
+        assert _parse_yaesu_id_response("/dev/x", 38400, "FA0840") is None
+
+    def test_empty_response(self) -> None:
+        assert _parse_yaesu_id_response("/dev/x", 38400, "") is None
+
+
+# ---------------------------------------------------------------------------
+# probe_serial_yaesu_cat tests
+# ---------------------------------------------------------------------------
+
+
+class TestProbeSerialYaesuCat:
+    @pytest.mark.asyncio
+    async def test_success_ftx1(self) -> None:
+        factory = _make_yaesu_factory("ID0840")
+        result = await probe_serial_yaesu_cat(
+            "/dev/ttyUSB0",
+            baud_rates=[38400],
+            timeout=0.1,
+            _transport_factory=factory,
+        )
+        assert isinstance(result, RadioDiscoveryResult)
+        assert result.model == "FTX-1"
+        assert result.protocol == "yaesu_cat"
+        assert result.baudrate == 38400
+        assert result.address == "0840"
+
+    @pytest.mark.asyncio
+    async def test_success_at_second_baud(self) -> None:
+        call_count = 0
+
+        def factory(**kwargs: object) -> _FakeCatTransport:
+            nonlocal call_count
+            call_count += 1
+            baud = kwargs.get("baudrate")
+            if baud == 38400:
+                return _FakeCatTransport(None)  # timeout
+            return _FakeCatTransport("ID0840")
+
+        result = await probe_serial_yaesu_cat(
+            "/dev/ttyUSB0",
+            baud_rates=[38400, 9600],
+            timeout=0.1,
+            _transport_factory=factory,
+        )
+        assert result is not None
+        assert result.baudrate == 9600
+        assert call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_timeout_returns_none(self) -> None:
+        factory = _make_yaesu_factory(None)  # all timeouts
+        result = await probe_serial_yaesu_cat(
+            "/dev/ttyUSB0",
+            baud_rates=[38400, 9600],
+            timeout=0.1,
+            _transport_factory=factory,
+        )
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_port_busy_returns_none(self) -> None:
+        factory = _make_yaesu_factory("ID0840", fail_connect=True)
+        result = await probe_serial_yaesu_cat(
+            "/dev/ttyUSB0",
+            baud_rates=[38400],
+            timeout=0.1,
+            _transport_factory=factory,
+        )
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_invalid_response_returns_none(self) -> None:
+        factory = _make_yaesu_factory("GARBAGE")
+        result = await probe_serial_yaesu_cat(
+            "/dev/ttyUSB0",
+            baud_rates=[38400],
+            timeout=0.1,
+            _transport_factory=factory,
+        )
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_sends_id_command(self) -> None:
+        factory = _make_yaesu_factory("ID0840")
+        await probe_serial_yaesu_cat(
+            "/dev/ttyUSB0",
+            baud_rates=[38400],
+            timeout=0.1,
+            _transport_factory=factory,
+        )
+        assert factory.instances[0].queries == ["ID;"]
+
+    @pytest.mark.asyncio
+    async def test_closes_transport_after_success(self) -> None:
+        factory = _make_yaesu_factory("ID0840")
+        await probe_serial_yaesu_cat(
+            "/dev/ttyUSB0",
+            baud_rates=[38400],
+            timeout=0.1,
+            _transport_factory=factory,
+        )
+        assert factory.instances[0].closed is True
+
+    @pytest.mark.asyncio
+    async def test_closes_transport_on_timeout(self) -> None:
+        factory = _make_yaesu_factory(None)
+        await probe_serial_yaesu_cat(
+            "/dev/ttyUSB0",
+            baud_rates=[38400],
+            timeout=0.1,
+            _transport_factory=factory,
+        )
+        assert factory.instances[0].closed is True
+
+    @pytest.mark.asyncio
+    async def test_default_baud_rates(self) -> None:
+        seen_bauds: list[int] = []
+
+        def factory(**kwargs: object) -> _FakeCatTransport:
+            seen_bauds.append(int(str(kwargs["baudrate"])))
+            return _FakeCatTransport(None)
+
+        await probe_serial_yaesu_cat(
+            "/dev/ttyUSB0", timeout=0.01, _transport_factory=factory
+        )
+        assert seen_bauds == [38400, 9600, 115200]
+
+
+# ---------------------------------------------------------------------------
+# Probe step markers (MOR-3040): DEBUG logging around open and close
+# ---------------------------------------------------------------------------
+
+
+def _captured_messages(caplog: pytest.LogCaptureFixture) -> list[str]:
+    return [record.getMessage() for record in caplog.records]
+
+
+def _marker_positions(messages: list[str], needles: list[str]) -> list[int]:
+    """Index of the first message containing each needle; -1 when absent."""
+    return [
+        next((i for i, message in enumerate(messages) if needle in message), -1)
+        for needle in needles
+    ]
+
+
+class TestProbeStepMarkers:
+    """MOR-3040: each probe logs opening/closing/closed around its port."""
+
+    @pytest.mark.asyncio
+    async def test_civ_marker_order_open_to_close(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # Silent port: open succeeds, probe is written, the read times out,
+        # the writer closes — the full marker sequence must appear in order.
+        port = CivSerialPort(CivRadioFake("IC-7610"), silent=True)
+        with caplog.at_level(logging.DEBUG, logger="rigplane.backends.discovery"):
+            result = await probe_serial_civ(
+                "/dev/ttyUSB0",
+                baud_rates=[19200],
+                timeout=0.05,
+                _open_serial=port.opener,
+            )
+        assert result is None
+        messages = _captured_messages(caplog)
+        positions = _marker_positions(
+            messages,
+            [
+                "opening /dev/ttyUSB0 @ 19200",
+                "sent probe to /dev/ttyUSB0 @ 19200 baud",
+                "closing /dev/ttyUSB0",
+                "closed /dev/ttyUSB0",
+            ],
+        )
+        assert all(p != -1 for p in positions)
+        assert positions == sorted(positions)
+
+    @pytest.mark.asyncio
+    async def test_civ_failed_open_logs_no_close(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        async def _open(*, url: str, baudrate: int, **_kw: object):
+            raise OSError("Resource busy")
+
+        with caplog.at_level(logging.DEBUG, logger="rigplane.backends.discovery"):
+            result = await probe_serial_civ(
+                "/dev/ttyUSB0",
+                baud_rates=[19200],
+                timeout=0.05,
+                _open_serial=_open,
+            )
+        assert result is None
+        messages = _captured_messages(caplog)
+        opening, cannot_open = _marker_positions(
+            messages,
+            ["opening /dev/ttyUSB0 @ 19200", "cannot open /dev/ttyUSB0 @ 19200"],
+        )
+        assert opening != -1
+        assert cannot_open != -1
+        assert opening < cannot_open
+        assert not any(
+            "closing" in message or "closed" in message for message in messages
+        )
+
+    @pytest.mark.asyncio
+    async def test_xiegu_markers_around_open_and_close(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        port = CivSerialPort(CivRadioFake("X6200"), silent=True)
+        with caplog.at_level(logging.DEBUG, logger="rigplane.backends.discovery"):
+            result = await probe_xiegu_model_id(
+                "/dev/x", 19200, 0xA4, timeout=0.05, _open_serial=port.opener
+            )
+        assert result is None
+        messages = _captured_messages(caplog)
+        positions = _marker_positions(
+            messages, ["opening /dev/x @ 19200", "closing /dev/x", "closed /dev/x"]
+        )
+        assert all(p != -1 for p in positions)
+        assert positions == sorted(positions)
+
+    @pytest.mark.asyncio
+    async def test_yaesu_markers_around_open_and_close(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        factory = _make_yaesu_factory(None)  # query times out
+        with caplog.at_level(logging.DEBUG, logger="rigplane.backends.discovery"):
+            result = await probe_serial_yaesu_cat(
+                "/dev/ttyUSB0",
+                baud_rates=[38400],
+                timeout=0.05,
+                _transport_factory=factory,
+            )
+        assert result is None
+        messages = _captured_messages(caplog)
+        positions = _marker_positions(
+            messages,
+            [
+                "opening /dev/ttyUSB0 @ 38400",
+                "closing /dev/ttyUSB0",
+                "closed /dev/ttyUSB0",
+            ],
+        )
+        assert all(p != -1 for p in positions)
+        assert positions == sorted(positions)
+
+
+# ---------------------------------------------------------------------------
+# discover_serial_radios multi-protocol tests
+# ---------------------------------------------------------------------------
+
+
+def test_radio_discovery_result_legacy_positional_usb_audio_binding() -> None:
+    usb_audio = {"rx_device_index": 6}
+
+    result = RadioDiscoveryResult(
+        "/dev/ttyUSB0",
+        "civ",
+        "IC-7610",
+        "icom_ic7610",
+        115200,
+        0x98,
+        "USB Serial",
+        "USB VID:PID=10C4:EA60",
+        usb_audio,
+    )
+
+    assert result.usb_audio is usb_audio
+    assert result.vid is None
+    assert result.pid is None
+
+
+class TestDiscoverSerialRadios:
+    @pytest.mark.asyncio
+    async def test_civ_radio_detected(self) -> None:
+        reader = _FakeReader([_IC7610_RESPONSE])
+        writer = _FakeWriter()
+
+        port = _make_port("/dev/ttyUSB0", "USB Serial", "USB VID:PID=10C4:EA60")
+        with (
+            _fast_probes(),
+            patch("serial.tools.list_ports.comports", return_value=[port]),
+        ):
+            results = await discover_serial_radios(
+                _open_serial=_make_open(reader, writer),
+            )
+
+        assert len(results) == 1
+        r = results[0]
+        assert isinstance(r, RadioDiscoveryResult)
+        assert r.protocol == "civ"
+        assert r.model == "IC-7610"
+        assert r.profile_id == "icom_ic7610"
+        assert r.address == 0x98
+        assert r.description == "USB Serial"
+        assert r.hwid == "USB VID:PID=10C4:EA60"
+
+    @pytest.mark.asyncio
+    async def test_civ_radio_preserves_serial_usb_metadata(self) -> None:
+        reader = _FakeReader([_IC7610_RESPONSE])
+        writer = _FakeWriter()
+
+        port = _make_port(
+            "/dev/ttyUSB0",
+            "USB Serial",
+            "USB VID:PID=10C4:EA60",
+            vid=0x10C4,
+            pid=0xEA60,
+            manufacturer="Silicon Labs",
+            product="CP210x USB to UART Bridge",
+            serial_number="0001",
+        )
+        with (
+            _fast_probes(),
+            patch("serial.tools.list_ports.comports", return_value=[port]),
+        ):
+            results = await discover_serial_radios(
+                _open_serial=_make_open(reader, writer),
+            )
+
+        r = results[0]
+        assert r.vid == 0x10C4
+        assert r.pid == 0xEA60
+        assert r.manufacturer == "Silicon Labs"
+        assert r.product == "CP210x USB to UART Bridge"
+        assert r.serial_number == "0001"
+
+    @pytest.mark.asyncio
+    async def test_civ_addr_0xA4_with_xiegu_hwid_resolves_to_x6200(self) -> None:
+        """MOR-170: at the shared 0xA4 address, the WCH CH342 VID:PID
+        + ``USB Dual_Serial`` product name must classify as Xiegu X6200,
+        not the address-default IC-705.
+        """
+        reader = _FakeReader([_IC705_RESPONSE])
+        writer = _FakeWriter()
+
+        port = _make_port(
+            "/dev/cu.usbmodem58910181093",
+            "USB Dual_Serial",
+            "USB VID:PID=1A86:55D2 SER=5891018109 LOCATION=0-1.2.4",
+            vid=0x1A86,
+            pid=0x55D2,
+            manufacturer=None,
+            product="USB Dual_Serial",
+            serial_number="5891018109",
+        )
+        with (
+            _fast_probes(),
+            patch("serial.tools.list_ports.comports", return_value=[port]),
+        ):
+            results = await discover_serial_radios(
+                _open_serial=_make_open(reader, writer),
+            )
+
+        assert len(results) == 1
+        r = results[0]
+        assert r.protocol == "civ"
+        assert r.address == 0xA4
+        assert r.model == "X6200"
+        assert r.profile_id == "xiegu_x6200"
+        # USB metadata still surfaced unmodified
+        assert r.vid == 0x1A86
+        assert r.pid == 0x55D2
+        assert r.product == "USB Dual_Serial"
+
+    @pytest.mark.asyncio
+    async def test_civ_addr_0xA4_without_xiegu_hwid_stays_ic705(self) -> None:
+        """MOR-170: at 0xA4, ports that do NOT match the X6200 fingerprint
+        must keep classifying as IC-705 — the existing behaviour for
+        actual IC-705 owners is preserved.
+        """
+        reader = _FakeReader([_IC705_RESPONSE])
+        writer = _FakeWriter()
+
+        port = _make_port(
+            "/dev/ttyUSB0",
+            "USB Serial",
+            "USB VID:PID=0C26:0036",
+            vid=0x0C26,
+            pid=0x0036,
+            manufacturer="Icom Inc.",
+            product="IC-705",
+            serial_number="0001",
+        )
+        with (
+            _fast_probes(),
+            patch("serial.tools.list_ports.comports", return_value=[port]),
+        ):
+            results = await discover_serial_radios(
+                _open_serial=_make_open(reader, writer),
+            )
+
+        assert len(results) == 1
+        r = results[0]
+        assert r.address == 0xA4
+        assert r.model == "IC-705"
+        assert r.profile_id == "icom_ic705"
+
+    @pytest.mark.asyncio
+    async def test_civ_addr_0xA4_xiegu_product_name_fallback(self) -> None:
+        """MOR-170: even when pyserial does not surface VID/PID (some OSes /
+        permission setups), a ``product`` field containing ``"USB Dual_Serial"``
+        is enough to classify as X6200.
+        """
+        reader = _FakeReader([_IC705_RESPONSE])
+        writer = _FakeWriter()
+
+        port = _make_port(
+            "/dev/cu.usbmodem58910181093",
+            "USB Dual_Serial",
+            "USB Dual_Serial",
+            vid=None,
+            pid=None,
+            product="USB Dual_Serial",
+        )
+        with (
+            _fast_probes(),
+            patch("serial.tools.list_ports.comports", return_value=[port]),
+        ):
+            results = await discover_serial_radios(
+                _open_serial=_make_open(reader, writer),
+            )
+
+        assert results[0].model == "X6200"
+        assert results[0].profile_id == "xiegu_x6200"
+
+    @pytest.mark.asyncio
+    async def test_civ_addr_0xA4_civ_model_id_resolves_to_x6200(self) -> None:
+        """MOR-226: an X6200 whose USB hwid does NOT match the CH342
+        fingerprint (e.g. a different/future USB bridge, or VID/PID not
+        surfaced and no ``USB Dual_Serial`` product) is still classified as
+        X6200 via the Xiegu-only CI-V model-ID opcode (0x1D 0x19).
+        """
+        # First read → CI-V transceiver-ID probe response (addr 0xA4);
+        # second read → the Xiegu model-ID reply to 0x1D 0x19.
+        reader = _FakeReader([_IC705_RESPONSE, _XIEGU_MODEL_ID_REPLY])
+        writer = _FakeWriter()
+
+        port = _make_port(
+            "/dev/ttyACM0",
+            "Some Generic CDC-ACM",
+            "USB VID:PID=DEAD:BEEF",
+            vid=0xDEAD,
+            pid=0xBEEF,
+            product="Generic Serial",
+        )
+        with (
+            _fast_probes(),
+            patch("serial.tools.list_ports.comports", return_value=[port]),
+        ):
+            results = await discover_serial_radios(
+                _open_serial=_make_open(reader, writer),
+            )
+
+        assert len(results) == 1
+        assert results[0].address == 0xA4
+        assert results[0].model == "X6200"
+        assert results[0].profile_id == "xiegu_x6200"
+
+    @pytest.mark.asyncio
+    async def test_civ_addr_0xA4_civ_nak_stays_ic705(self) -> None:
+        """MOR-226: a genuine IC-705 (non-Xiegu hwid) that NAKs 0x1D 0x19
+        must remain classified as IC-705 — no false X6200 promotion.
+        """
+        reader = _FakeReader([_IC705_RESPONSE, _XIEGU_NAK_REPLY])
+        writer = _FakeWriter()
+
+        port = _make_port(
+            "/dev/ttyUSB0",
+            "USB Serial",
+            "USB VID:PID=0C26:0036",
+            vid=0x0C26,
+            pid=0x0036,
+            manufacturer="Icom Inc.",
+            product="IC-705",
+        )
+        with (
+            _fast_probes(),
+            patch("serial.tools.list_ports.comports", return_value=[port]),
+        ):
+            results = await discover_serial_radios(
+                _open_serial=_make_open(reader, writer),
+            )
+
+        assert len(results) == 1
+        assert results[0].address == 0xA4
+        assert results[0].model == "IC-705"
+        assert results[0].profile_id == "icom_ic705"
+
+    @pytest.mark.asyncio
+    async def test_civ_broadcast_echo_g7250_resolves_by_model_id(self) -> None:
+        """MOR-4352: a G7250 answers the broadcast probe with the echoed
+        broadcast address 0x00 (real wire frame from the bench, LIVE
+        2026-11-09). The address table alone would say "Unknown (0x00)";
+        the Xiegu model-ID probe at 0x00 resolves it to the G7250 profile.
+        """
+        # First read → broadcast-ID echo reply (addr 0x00, payload 0x00);
+        # second read → the Xiegu model-ID reply to 0x1D 0x19 asked at 0x00.
+        reader = _FakeReader([_G7250_ECHO_ID_REPLY, _G7250_MODEL_ID_REPLY_00])
+        writer = _FakeWriter()
+
+        # The real bench bridge: a generic WCH CH340 (1A86:7523) "USB
+        # Serial" — deliberately NOT the X6200 CH342 fingerprint.
+        port = _make_port(
+            "/dev/cu.usbserial-2130",
+            "USB Serial",
+            "USB VID:PID=1A86:7523",
+            vid=0x1A86,
+            pid=0x7523,
+            manufacturer="wch",
+            product="USB Serial",
+        )
+        with (
+            _fast_probes(),
+            patch("serial.tools.list_ports.comports", return_value=[port]),
+        ):
+            results = await discover_serial_radios(
+                _open_serial=_make_open(reader, writer),
+            )
+
+        assert len(results) == 1
+        assert results[0].address == 0x00
+        assert results[0].model == "G7250"
+        assert results[0].profile_id == "xiegu_g7250"
+
+    @pytest.mark.asyncio
+    async def test_civ_broadcast_echo_x6200_resolves_by_model_id(self) -> None:
+        """Any Xiegu behind the 0x00 echo resolves by its model id: an
+        echoing X6200 (0x62 0x00 asked at 0x00) classifies as X6200, not
+        as the 0xA4 address default IC-705."""
+        echo = bytes([0xFE, 0xFE, 0xE0, 0x00, 0x19, 0x00, 0x00, 0xFD])
+        reply = bytes([0xFE, 0xFE, 0xE0, 0x00, 0x1D, 0x19, 0x62, 0x00, 0xFD])
+        reader = _FakeReader([echo, reply])
+        writer = _FakeWriter()
+
+        port = _make_port("/dev/ttyUSB0", "USB Serial", "USB VID:PID=1A86:7523")
+        with (
+            _fast_probes(),
+            patch("serial.tools.list_ports.comports", return_value=[port]),
+        ):
+            results = await discover_serial_radios(
+                _open_serial=_make_open(reader, writer),
+            )
+
+        assert len(results) == 1
+        assert results[0].model == "X6200"
+        assert results[0].profile_id == "xiegu_x6200"
+
+    @pytest.mark.asyncio
+    async def test_civ_broadcast_echo_silent_model_id_stays_unknown(self) -> None:
+        """A radio echoing 0x00 that does NOT answer 0x1D 0x19 keeps the
+        documented Unknown (0x00) result — no guess, no fallback label."""
+        reader = _FakeReader([_G7250_ECHO_ID_REPLY])
+        writer = _FakeWriter()
+
+        port = _make_port("/dev/ttyUSB0", "USB Serial", "USB VID:PID=1A86:7523")
+        with (
+            _fast_probes(),
+            patch("serial.tools.list_ports.comports", return_value=[port]),
+        ):
+            results = await discover_serial_radios(
+                _open_serial=_make_open(reader, writer),
+            )
+
+        assert len(results) == 1
+        assert results[0].model == "Unknown (0x00)"
+        assert results[0].profile_id == ""
+
+    @pytest.mark.asyncio
+    async def test_civ_addr_0xA4_g7250_model_id_resolves_to_g7250(self) -> None:
+        """MOR-4352: a G7250 asked at the Xiegu family default 0xA4 (the
+        radio echoes any address) is resolved by its `72 50` model id —
+        data-driven through the profiles, not a model branch."""
+        reader = _FakeReader([_IC705_RESPONSE, _G7250_MODEL_ID_REPLY_A4])
+        writer = _FakeWriter()
+
+        port = _make_port(
+            "/dev/cu.usbserial-2130",
+            "USB Serial",
+            "USB VID:PID=1A86:7523",
+            vid=0x1A86,
+            pid=0x7523,
+            product="USB Serial",
+        )
+        with (
+            _fast_probes(),
+            patch("serial.tools.list_ports.comports", return_value=[port]),
+        ):
+            results = await discover_serial_radios(
+                _open_serial=_make_open(reader, writer),
+            )
+
+        assert len(results) == 1
+        assert results[0].address == 0xA4
+        assert results[0].model == "G7250"
+        assert results[0].profile_id == "xiegu_g7250"
+
+    @pytest.mark.asyncio
+    async def test_civ_addr_0xA4_unknown_xiegu_model_id_reports_unknown_xiegu(
+        self,
+    ) -> None:
+        """A valid 0x1D 0x19 reply whose bytes match no profile is named
+        "Unknown Xiegu (model id XXXX)" instead of being mislabeled X6200
+        (the pre-MOR-4352 behaviour for any answering Xiegu at 0xA4)."""
+        reader = _FakeReader([_IC705_RESPONSE, _XIEGU_UNKNOWN_MODEL_ID_REPLY])
+        writer = _FakeWriter()
+
+        port = _make_port("/dev/ttyUSB0", "USB Serial", "USB VID:PID=DEAD:BEEF")
+        with (
+            _fast_probes(),
+            patch("serial.tools.list_ports.comports", return_value=[port]),
+        ):
+            results = await discover_serial_radios(
+                _open_serial=_make_open(reader, writer),
+            )
+
+        assert len(results) == 1
+        assert results[0].model == "Unknown Xiegu (model id 5100)"
+        assert results[0].profile_id == ""
+
+    @pytest.mark.asyncio
+    async def test_civ_radio_preserves_usb_audio_resolution_metadata(self) -> None:
+        reader = _FakeReader([_IC7610_RESPONSE])
+        writer = _FakeWriter()
+
+        port = _make_port("/dev/ttyUSB0", "USB Serial", "USB VID:PID=10C4:EA60")
+        mapping = AudioDeviceMapping(
+            rx_device_index=6,
+            tx_device_index=5,
+            serial_port="/dev/ttyUSB0",
+            location_prefix=None,
+        )
+        with (
+            _fast_probes(),
+            patch("serial.tools.list_ports.comports", return_value=[port]),
+            patch(
+                "rigplane.discovery.resolve_audio_for_serial_port",
+                return_value=mapping,
+            ),
+        ):
+            results = await discover_serial_radios(
+                _open_serial=_make_open(reader, writer),
+            )
+
+        assert results[0].usb_audio == {
+            "rx_device_index": 6,
+            "tx_device_index": 5,
+            "serial_port": "/dev/ttyUSB0",
+            "location_prefix": None,
+        }
+
+    @pytest.mark.asyncio
+    async def test_yaesu_radio_detected(self) -> None:
+        # CI-V probe times out, Yaesu CAT succeeds
+        async def _civ_open(*, url: str, baudrate: int, **_kw: object):
+            return _FakeReader([]), _FakeWriter()
+
+        yaesu_factory = _make_yaesu_factory("ID0840")
+
+        port = _make_port(
+            "/dev/ttyUSB0",
+            "USB Serial",
+            "USB VID:PID=0403:6001",
+            vid=0x0403,
+            pid=0x6001,
+            manufacturer="FTDI",
+            product="USB Serial Converter",
+            serial_number="YAESU1",
+        )
+        with (
+            _fast_probes(),
+            patch("serial.tools.list_ports.comports", return_value=[port]),
+        ):
+            results = await discover_serial_radios(
+                _open_serial=_civ_open,
+                _yaesu_transport_factory=yaesu_factory,
+            )
+
+        assert len(results) == 1
+        r = results[0]
+        assert r.protocol == "yaesu_cat"
+        assert r.model == "FTX-1"
+        assert r.profile_id == "yaesu_ftx1"
+        assert r.vid == 0x0403
+        assert r.pid == 0x6001
+        assert r.manufacturer == "FTDI"
+        assert r.product == "USB Serial Converter"
+        assert r.serial_number == "YAESU1"
+
+    @pytest.mark.asyncio
+    async def test_no_radio_on_port(self) -> None:
+        async def _civ_open(*, url: str, baudrate: int, **_kw: object):
+            return _FakeReader([]), _FakeWriter()
+
+        yaesu_factory = _make_yaesu_factory(None)
+
+        port = _make_port("/dev/ttyUSB0", "USB Serial", "USB VID:PID=0403:6001")
+        with (
+            _fast_probes(),
+            patch("serial.tools.list_ports.comports", return_value=[port]),
+        ):
+            results = await discover_serial_radios(
+                _open_serial=_civ_open,
+                _yaesu_transport_factory=yaesu_factory,
+            )
+
+        assert results == []
+
+    @pytest.mark.asyncio
+    async def test_mixed_civ_and_yaesu(self) -> None:
+        # Two ports: one CI-V, one Yaesu
+        civ_reader = _FakeReader([_IC7610_RESPONSE])
+        civ_writer = _FakeWriter()
+
+        call_n = 0
+
+        async def _civ_open(*, url: str, baudrate: int, **_kw: object):
+            nonlocal call_n
+            call_n += 1
+            # Second port group: all CI-V bauds timeout
+            if url == "/dev/ttyUSB1":
+                return _FakeReader([]), _FakeWriter()
+            return civ_reader, civ_writer
+
+        yaesu_factory = _make_yaesu_factory("ID0840")
+
+        ports = [
+            _make_port("/dev/ttyUSB0", "USB Serial"),
+            _make_port("/dev/ttyUSB1", "USB Serial"),
+        ]
+        with (
+            _fast_probes(),
+            patch("serial.tools.list_ports.comports", return_value=ports),
+        ):
+            results = await discover_serial_radios(
+                _open_serial=_civ_open,
+                _yaesu_transport_factory=yaesu_factory,
+            )
+
+        assert len(results) == 2
+        protocols = {r.protocol for r in results}
+        assert protocols == {"civ", "yaesu_cat"}
+
+
+def _per_port_timeout_probe(port: str, **kwargs: object):
+    """CI-V probe whose first port times out fast (then closes) and whose second waits."""
+    timeout = 0.01 if port.endswith("0") else 30.0
+    return probe_serial_civ(port, baud_rates=[19200], timeout=timeout, **kwargs)  # type: ignore[arg-type]
+
+
+class TestDiscoverSerialRadiosConcurrent:
+    """MOR-3682: candidate ports are probed concurrently, not one after another."""
+
+    @pytest.mark.asyncio
+    async def test_silent_ports_are_probed_concurrently(self) -> None:
+        ports = [
+            _make_port(f"/dev/ttyUSB{i}", "USB Serial", "USB VID:PID=0403:6001")
+            for i in range(4)
+        ]
+        per_open = 0.05
+        active = 0
+        peak = 0
+
+        async def _open(*, url: str, baudrate: int, **_kw: object):
+            nonlocal active, peak
+            active += 1
+            peak = max(peak, active)
+            try:
+                await asyncio.sleep(per_open)
+                raise OSError("silent port")
+            finally:
+                active -= 1
+
+        loop = asyncio.get_running_loop()
+        start = loop.time()
+        with (
+            _fast_probes(),
+            patch("serial.tools.list_ports.comports", return_value=ports),
+        ):
+            results = await discover_serial_radios(
+                _open_serial=_open,
+                _yaesu_transport_factory=_make_yaesu_factory(None),
+            )
+        elapsed = loop.time() - start
+
+        assert results == []
+        assert peak > 1
+        assert elapsed < len(ports) * per_open
+
+    @pytest.mark.asyncio
+    async def test_mixed_results_keep_enumeration_order(self) -> None:
+        """[silent, IC-705, silent, Yaesu FTX-1] yields the two radios in order."""
+        ic705 = _make_port(
+            "/dev/ttyUSB1",
+            "IC-705",
+            "USB VID:PID=0C26:0036",
+            vid=0x0C26,
+            pid=0x0036,
+            manufacturer="Icom Inc.",
+            product="IC-705",
+            serial_number="12003912",
+        )
+        yaesu = _make_port(
+            "/dev/ttyUSB3",
+            "USB Serial",
+            "USB VID:PID=0403:6001",
+            vid=0x0403,
+            pid=0x6001,
+        )
+        ports = [
+            _make_port("/dev/ttyUSB0", "USB Serial", "USB VID:PID=0403:6001"),
+            ic705,
+            _make_port("/dev/ttyUSB2", "USB Serial", "USB VID:PID=0403:6001"),
+            yaesu,
+        ]
+
+        async def _open(*, url: str, baudrate: int, **kw: object):
+            if url == "/dev/ttyUSB1":
+                return await CivSerialPort(CivRadioFake("IC-705")).opener(
+                    url=url, baudrate=baudrate, **kw
+                )
+            return await CivSerialPort(CivRadioFake("IC-7610"), silent=True).opener(
+                url=url, baudrate=baudrate, **kw
+            )
+
+        def _factory(**kwargs: object) -> _FakeCatTransport:
+            if kwargs.get("device") == "/dev/ttyUSB3":
+                return _FakeCatTransport("ID0840")
+            return _FakeCatTransport(None)
+
+        with (
+            _fast_probes(),
+            patch("serial.tools.list_ports.comports", return_value=ports),
+        ):
+            results = await discover_serial_radios(
+                _open_serial=_open,
+                _yaesu_transport_factory=_factory,
+            )
+
+        assert [r.port for r in results] == ["/dev/ttyUSB1", "/dev/ttyUSB3"]
+        civ, cat = results
+        assert civ.protocol == "civ"
+        assert civ.model == "IC-705"
+        assert civ.profile_id == "icom_ic705"
+        assert civ.address == 0xA4
+        assert cat.protocol == "yaesu_cat"
+        assert cat.model == "FTX-1"
+        assert cat.profile_id == "yaesu_ftx1"
+
+    @pytest.mark.asyncio
+    async def test_failed_probe_cancels_and_awaits_sibling_probes(self) -> None:
+        """One port raising must not leave the other probes running on their ports."""
+        ports = [
+            _make_port(f"/dev/ttyUSB{i}", "USB Serial", "USB VID:PID=0403:6001")
+            for i in range(2)
+        ]
+        started = asyncio.Event()
+        sibling_cancelled = False
+
+        async def _probe(port: object, **_kw: object) -> None:
+            nonlocal sibling_cancelled
+            if port.device == "/dev/ttyUSB0":  # type: ignore[attr-defined]
+                await started.wait()
+                raise OSError("device unplugged")
+            started.set()
+            try:
+                await asyncio.sleep(30)
+            except asyncio.CancelledError:
+                sibling_cancelled = True
+                raise
+
+        with (
+            patch("serial.tools.list_ports.comports", return_value=ports),
+            patch("rigplane.backends.discovery._discover_one_port", _probe),
+            pytest.raises(OSError, match="device unplugged"),
+        ):
+            await discover_serial_radios()
+
+        assert sibling_cancelled
+
+    @staticmethod
+    def _slow_close_ports() -> tuple[
+        list[SimpleNamespace],
+        asyncio.Event,
+        asyncio.Event,
+        asyncio.Event,
+        dict[str, bool],
+    ]:
+        ports = [
+            _make_port(f"/dev/ttyUSB{i}", "USB Serial", "USB VID:PID=0403:6001")
+            for i in range(2)
+        ]
+        return (
+            ports,
+            asyncio.Event(),  # port 0 started closing
+            asyncio.Event(),  # lets port 0's close finish
+            {"closed": False},
+        )
+
+    def _slow_close_opener(
+        self,
+        closing: asyncio.Event,
+        release: asyncio.Event,
+        state: dict[str, bool],
+        *,
+        fail_sibling: bool,
+    ):
+        class _Reader:
+            def __init__(self, fail: bool) -> None:
+                self._fail = fail
+
+            async def read(self, _n: int) -> bytes:
+                if self._fail:
+                    await closing.wait()  # fail while the other port is mid-close
+                    raise OSError("device unplugged")
+                await (
+                    asyncio.Event().wait()
+                )  # silent port: the probe times out, then closes
+                return b""
+
+        class _Writer:
+            def __init__(self, slow: bool) -> None:
+                self._slow = slow
+
+            def write(self, _data: bytes) -> None:
+                pass
+
+            async def drain(self) -> None:
+                pass
+
+            def close(self) -> None:
+                pass
+
+            async def wait_closed(self) -> None:
+                if self._slow:
+                    closing.set()
+                    await release.wait()
+                    state["closed"] = True
+
+        async def _open(*, url: str, baudrate: int, **_kw: object):
+            first = url == "/dev/ttyUSB0"
+            return _Reader(fail=fail_sibling and not first), _Writer(slow=first)
+
+        return _open
+
+    @pytest.mark.asyncio
+    async def test_sibling_failure_waits_for_the_other_port_to_finish_closing(
+        self,
+    ) -> None:
+        ports, closing, release, state = self._slow_close_ports()
+        opener = self._slow_close_opener(closing, release, state, fail_sibling=True)
+        with (
+            patch("serial.tools.list_ports.comports", return_value=ports),
+            patch(
+                "rigplane.discovery.probe_serial_civ",
+                _per_port_timeout_probe,
+            ),
+        ):
+            scan = asyncio.ensure_future(discover_serial_radios(_open_serial=opener))
+            await asyncio.wait_for(closing.wait(), 5)
+            for _ in range(20):
+                await asyncio.sleep(0)
+            assert not scan.done(), "discovery exited while a port was still closing"
+            release.set()
+            with pytest.raises(OSError, match="device unplugged"):
+                await asyncio.wait_for(scan, 5)
+        assert state["closed"]
+
+    @pytest.mark.asyncio
+    async def test_scan_cancellation_waits_for_ports_to_finish_closing(self) -> None:
+        ports, closing, release, state = self._slow_close_ports()
+        opener = self._slow_close_opener(closing, release, state, fail_sibling=False)
+        with (
+            patch("serial.tools.list_ports.comports", return_value=ports[:1]),
+            patch(
+                "rigplane.discovery.probe_serial_civ",
+                partial(probe_serial_civ, baud_rates=[19200], timeout=0.01),
+            ),
+        ):
+            scan = asyncio.ensure_future(discover_serial_radios(_open_serial=opener))
+            await asyncio.wait_for(closing.wait(), 5)
+            scan.cancel()
+            for _ in range(20):
+                await asyncio.sleep(0)
+            assert not scan.done(), "discovery exited while a port was still closing"
+            release.set()
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(scan, 5)
+        assert state["closed"]
+
+    @pytest.mark.asyncio
+    async def test_yaesu_transport_close_finishes_when_the_scan_is_cancelled(
+        self,
+    ) -> None:
+        ports, closing, release, state = self._slow_close_ports()
+
+        class _Transport:
+            async def connect(self) -> None:
+                pass
+
+            async def query(
+                self, _command: str, *, timeout: float | None = None
+            ) -> str:
+                raise TimeoutError("no answer")
+
+            async def close(self) -> None:
+                closing.set()
+                await release.wait()
+                state["closed"] = True
+
+        async def _silent_open(*, url: str, baudrate: int, **_kw: object):
+            raise OSError("not a CI-V radio")
+
+        with (
+            patch("serial.tools.list_ports.comports", return_value=ports[:1]),
+            patch(
+                "rigplane.discovery.probe_serial_civ",
+                partial(probe_serial_civ, baud_rates=[19200], timeout=0.01),
+            ),
+        ):
+            scan = asyncio.ensure_future(
+                discover_serial_radios(
+                    _open_serial=_silent_open,
+                    _yaesu_transport_factory=lambda **_kw: _Transport(),
+                )
+            )
+            await asyncio.wait_for(closing.wait(), 5)
+            scan.cancel()
+            for _ in range(20):
+                await asyncio.sleep(0)
+            assert not scan.done(), (
+                "discovery exited while a transport was still closing"
+            )
+            release.set()
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(scan, 5)
+        assert state["closed"]
+
+    @pytest.mark.asyncio
+    async def test_finish_close_completes_the_close_then_reraises_cancellation(
+        self,
+    ) -> None:
+        from rigplane.backends.discovery import _finish_close
+
+        release = asyncio.Event()
+        done: list[bool] = []
+
+        async def _close() -> None:
+            await release.wait()
+            done.append(True)
+
+        task = asyncio.ensure_future(_finish_close(_close()))
+        await asyncio.sleep(0)
+        task.cancel()
+        await asyncio.sleep(0)
+        assert not task.done()
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert done == [True]
+
+    def test_recorded_macos_fixture_offers_both_ic705_ports(self) -> None:
+        """Recorded bench entries: both IC-705 usbmodem ports are candidates."""
+        ports = [
+            _make_port(
+                "/dev/cu.usbmodem3122201",
+                "IC-705",
+                "USB VID:PID=0C26:0036 SER=IC-705",
+                vid=0x0C26,
+                pid=0x0036,
+                manufacturer="Icom Inc.",
+                product="IC-705",
+                serial_number="IC-705 12003912",
+            ),
+            _make_port(
+                "/dev/cu.usbmodem3122203",
+                "IC-705",
+                "USB VID:PID=0C26:0036 SER=IC-705",
+                vid=0x0C26,
+                pid=0x0036,
+                manufacturer="Icom Inc.",
+                product="IC-705",
+                serial_number="IC-705 12003912",
+            ),
+            _make_port(
+                "/dev/cu.usbserial-01AE340D0",
+                "CP2105 Dual USB to UART Bridge Controller",
+                "USB VID:PID=10C4:EA70",
+                vid=0x10C4,
+                pid=0xEA70,
+                manufacturer="Silicon Labs",
+                product="CP2105 Dual USB to UART Bridge Controller",
+            ),
+            _make_port(
+                "/dev/cu.usbserial-01AE340D1",
+                "CP2105 Dual USB to UART Bridge Controller",
+                "USB VID:PID=10C4:EA70",
+                vid=0x10C4,
+                pid=0xEA70,
+                manufacturer="Silicon Labs",
+                product="CP2105 Dual USB to UART Bridge Controller",
+            ),
+            _make_port(
+                "/dev/cu.usbmodem00000000000011",
+                "YAESU HRI USB I/F",
+                "USB VID:PID=0B00:3011",
+                vid=0x0B00,
+                pid=0x3011,
+                manufacturer="YAESU",
+                product="HRI USB I/F",
+            ),
+            _make_port("/dev/cu.Bluetooth-Incoming-Port", "Bluetooth-Incoming-Port"),
+            _make_port("/dev/cu.debug-console", "Debug console"),
+        ]
+        with patch("serial.tools.list_ports.comports", return_value=ports):
+            result = enumerate_serial_ports()
+
+        devices = [c.device for c in result]
+        assert devices == [
+            "/dev/cu.usbmodem3122201",
+            "/dev/cu.usbmodem3122203",
+            "/dev/cu.usbserial-01AE340D0",
+            "/dev/cu.usbserial-01AE340D1",
+            "/dev/cu.usbmodem00000000000011",
+        ]
+        first = result[0]
+        assert (first.vid, first.pid) == (0x0C26, 0x0036)
+        assert first.product == "IC-705"
+        assert first.manufacturer == "Icom Inc."
+        assert first.serial_number == "IC-705 12003912"
+
+
+# ---------------------------------------------------------------------------
+# LAN UDP discovery (discover_lan_radios) — probe retransmit / dedup
+# ---------------------------------------------------------------------------
+
+
+def _i_am_here(remote_id: int) -> bytes:
+    """Build a minimal Icom I_AM_HERE (0x04) reply packet."""
+    import struct
+
+    pkt = bytearray(0x10)
+    struct.pack_into("<I", pkt, 0, 0x10)  # size
+    struct.pack_into("<H", pkt, 4, 0x04)  # I_AM_HERE
+    struct.pack_into("<H", pkt, 6, 0)  # seq
+    struct.pack_into("<I", pkt, 8, remote_id)  # remote_id
+    struct.pack_into("<I", pkt, 0x0C, 0)
+    return bytes(pkt)
+
+
+class _FakeClock:
+    """Monotonic clock that advances a fixed step on every read.
+
+    Lets the scan loop terminate deterministically without real waiting while
+    still crossing the resend thresholds so retransmits fire.
+    """
+
+    def __init__(self, step: float = 0.05) -> None:
+        self._t = 1000.0
+        self._step = step
+
+    def __call__(self) -> float:
+        now = self._t
+        self._t += self._step
+        return now
+
+
+class _FakeUdpSocket:
+    """Fake UDP socket for discover_lan_radios.
+
+    ``responses`` maps a probe index (1-based count of sendto calls so far) to
+    a list of (data, addr) tuples to hand back from the *next* recvfrom calls.
+    Each scripted response is delivered exactly once; otherwise recvfrom raises
+    socket.timeout so the scan keeps looping until the clock passes the
+    deadline.
+
+    ``recv_errors`` are raised from recvfrom (one per call, before any queued
+    response is delivered); ``recv_error_always`` is raised from every
+    recvfrom call. They fake per-socket receive failures such as Windows
+    ConnectionResetError (WSAECONNRESET) after an ICMP port-unreachable.
+
+    ``bind_error`` is raised from bind() to fake an address that can no
+    longer be bound (adapter vanished, address reassigned).
+
+    ``send_error`` is raised from every sendto call (after the attempt is
+    recorded), faking e.g. a pending ICMP error surfacing on Linux
+    retransmits.
+    """
+
+    def __init__(
+        self,
+        responses: dict[int, list[tuple[bytes, tuple]]],
+        *,
+        recv_errors: list[Exception] | None = None,
+        recv_error_always: Exception | None = None,
+        bind_error: Exception | None = None,
+        send_error: Exception | None = None,
+    ) -> None:
+        self._responses = {k: list(v) for k, v in responses.items()}
+        self._recv_errors = list(recv_errors or [])
+        self._recv_error_always = recv_error_always
+        self._bind_error = bind_error
+        self._send_error = send_error
+        self.send_count = 0
+        self.sent_to: list[tuple] = []
+        self.sent: list[bytes] = []
+        self.bound_to: tuple | None = None
+        self.closed = False
+        self._pending: list[tuple[bytes, tuple]] = []
+
+    def setsockopt(self, *_a: object, **_k: object) -> None:
+        pass
+
+    def settimeout(self, *_a: object, **_k: object) -> None:
+        pass
+
+    def bind(self, addr: tuple) -> None:
+        if self._bind_error is not None:
+            raise self._bind_error
+        self.bound_to = addr
+
+    def sendto(self, _data: bytes, addr: tuple) -> int:
+        self.send_count += 1
+        self.sent_to.append(addr)
+        self.sent.append(bytes(_data))
+        if self._send_error is not None:
+            raise self._send_error
+        # Queue any responses unlocked by reaching this probe count.
+        self._pending.extend(self._responses.pop(self.send_count, []))
+        return len(_data)
+
+    def recvfrom(self, _bufsize: int) -> tuple[bytes, tuple]:
+        import socket as _socket
+
+        if self._recv_error_always is not None:
+            raise self._recv_error_always
+        if self._recv_errors:
+            raise self._recv_errors.pop(0)
+        if self._pending:
+            return self._pending.pop(0)
+        raise _socket.timeout()
+
+    def close(self) -> None:
+        self.closed = True
+
+
+@contextmanager
+def _patched_lan_socket(fake: _FakeUdpSocket, *, step: float | None = 0.05):
+    import socket as _socket
+    import time as _time
+
+    # ``step=None`` leaves the real clock in place. Patching time.monotonic
+    # redirects EVERY reader in the process, including the event loop's own
+    # clock, so asyncio.sleep timers fire only when the fake clock advances;
+    # a frozen clock (step=0.0) hangs any await asyncio.sleep in the test.
+    clock = (
+        patch.object(_time, "monotonic", _FakeClock(step=step))
+        if step is not None
+        else nullcontext()
+    )
+    with (
+        patch.object(_socket, "socket", return_value=fake),
+        clock,
+        # The fake has no connect()/getsockname(); without this patch the
+        # single-socket tests would rely on the address probe raising
+        # AttributeError and pre-setting fake.closed via its finally-close.
+        patch("rigplane.discovery._local_ipv4_addresses", return_value=[]),
+    ):
+        yield
+
+
+@contextmanager
+def _patched_lan_sockets(
+    fakes: list[_FakeUdpSocket], local_addresses: list[str], *, step: float = 0.05
+):
+    """Multi-socket variant of ``_patched_lan_socket``.
+
+    Every ``socket.socket()`` call returns the next fake from ``fakes`` (the
+    first call is the unbound socket, then one per local address in order),
+    and the address-enumeration helper is patched to return
+    ``local_addresses``.
+    """
+    import socket as _socket
+    import time as _time
+
+    with (
+        patch.object(_socket, "socket", side_effect=list(fakes)),
+        patch.object(_time, "monotonic", _FakeClock(step=step)),
+        patch("rigplane.discovery._local_ipv4_addresses", return_value=local_addresses),
+    ):
+        yield
+
+
+class TestDiscoverLanRadios:
+    async def test_radio_answering_only_later_probe_is_found(self) -> None:
+        # Radio stays silent for probe #1, replies only after the 3rd probe.
+        addr = ("192.168.1.50", 50001)
+        fake = _FakeUdpSocket({3: [(_i_am_here(0xDEADBEEF), addr)]})
+        with _patched_lan_socket(fake):
+            result = await discover_lan_radios(timeout=3.0)
+
+        assert fake.send_count >= 3  # the probe was retransmitted
+        assert result == [{"host": "192.168.1.50", "remote_id": 0xDEADBEEF}]
+
+    async def test_single_probe_would_miss_late_responder(self) -> None:
+        # Sanity-anchor the regression: a radio that ignores the first probe is
+        # only recoverable because of retransmits. With responses gated behind
+        # probe #2+, a single-shot scan (send_count==1) would return nothing.
+        addr = ("192.168.1.51", 50001)
+        fake = _FakeUdpSocket({2: [(_i_am_here(0x11112222), addr)]})
+        with _patched_lan_socket(fake):
+            result = await discover_lan_radios(timeout=3.0)
+
+        assert fake.send_count >= 2
+        assert result == [{"host": "192.168.1.51", "remote_id": 0x11112222}]
+
+    async def test_radio_answering_multiple_probes_is_deduplicated(self) -> None:
+        # Same host replies to probe #1 and probe #2 -> returned exactly once.
+        addr = ("192.168.1.60", 50001)
+        fake = _FakeUdpSocket(
+            {
+                1: [(_i_am_here(0xAABBCCDD), addr)],
+                2: [(_i_am_here(0xAABBCCDD), addr)],
+            }
+        )
+        with _patched_lan_socket(fake):
+            result = await discover_lan_radios(timeout=3.0)
+
+        assert result == [{"host": "192.168.1.60", "remote_id": 0xAABBCCDD}]
+        assert len(result) == 1
+
+    async def test_multiple_distinct_radios_collected(self) -> None:
+        a = ("192.168.1.70", 50001)
+        b = ("192.168.1.71", 50001)
+        fake = _FakeUdpSocket(
+            {
+                1: [(_i_am_here(0x1), a)],
+                2: [(_i_am_here(0x2), b)],
+            }
+        )
+        with _patched_lan_socket(fake):
+            result = await discover_lan_radios(timeout=3.0)
+
+        hosts = {r["host"] for r in result}
+        assert hosts == {"192.168.1.70", "192.168.1.71"}
+        assert len(result) == 2
+
+    async def test_no_responder_returns_empty(self) -> None:
+        fake = _FakeUdpSocket({})
+        with _patched_lan_socket(fake):
+            result = await discover_lan_radios(timeout=3.0)
+
+        assert result == []
+        assert fake.send_count >= 2  # still retransmitted across the window
+        assert fake.closed
+
+    async def test_recvfrom_connection_reset_once_still_finds_radio(self) -> None:
+        # Windows raises ConnectionResetError (WSAECONNRESET) from recvfrom
+        # after an ICMP port-unreachable. The reset fires before the queued
+        # reply is delivered, so one such error must not kill the scan — the
+        # reply waiting behind it is still found.
+        addr = ("192.168.1.81", 50001)
+        fake = _FakeUdpSocket(
+            {1: [(_i_am_here(0x0BADF00D), addr)]},
+            recv_errors=[ConnectionResetError()],
+        )
+        with _patched_lan_socket(fake):
+            result = await discover_lan_radios(timeout=3.0)
+
+        assert result == [{"host": "192.168.1.81", "remote_id": 0x0BADF00D}]
+
+    async def test_recvfrom_connection_reset_every_time_returns_empty(self) -> None:
+        # A socket in a permanent reset state must not raise out of the scan.
+        fake = _FakeUdpSocket({}, recv_error_always=ConnectionResetError())
+        with _patched_lan_socket(fake):
+            result = await discover_lan_radios(timeout=3.0)
+
+        assert result == []
+
+    async def test_probe_leaves_through_every_local_adapter(self) -> None:
+        # One unbound socket plus one bound to each local address; every
+        # socket sends the limited broadcast (on Windows an unbound socket
+        # emits it through a single adapter only).
+        fakes = [_FakeUdpSocket({}) for _ in range(3)]
+        with _patched_lan_sockets(fakes, ["192.168.1.5", "10.8.0.2"]):
+            result = await discover_lan_radios(timeout=3.0)
+
+        assert result == []
+        assert fakes[0].bound_to is None
+        assert fakes[1].bound_to == ("192.168.1.5", 0)
+        assert fakes[2].bound_to == ("10.8.0.2", 0)
+        for fake in fakes:
+            assert fake.send_count >= 1  # every socket retransmits
+            assert all(dest == ("255.255.255.255", 50001) for dest in fake.sent_to)
+
+    async def test_reply_on_second_adapter_socket_is_found(self) -> None:
+        # A radio reachable only through the second local address replies on
+        # the socket bound to it; the receive loop must poll every socket.
+        addr = ("192.168.1.82", 50001)
+        fakes = [
+            _FakeUdpSocket({}),
+            _FakeUdpSocket({}),
+            _FakeUdpSocket({1: [(_i_am_here(0x55667788), addr)]}),
+        ]
+        with _patched_lan_sockets(fakes, ["192.168.1.5", "10.8.0.2"]):
+            result = await discover_lan_radios(timeout=3.0)
+
+        assert result == [{"host": "192.168.1.82", "remote_id": 0x55667788}]
+
+    async def test_address_enumeration_error_falls_back_to_unbound(self) -> None:
+        # If enumerating local addresses raises, the scan still runs on the
+        # plain unbound socket.
+        addr = ("192.168.1.83", 50001)
+        fake = _FakeUdpSocket({1: [(_i_am_here(0x9ABCDEF0), addr)]})
+        with (
+            _patched_lan_socket(fake),
+            patch(
+                "rigplane.discovery._local_ipv4_addresses",
+                side_effect=RuntimeError("enumeration boom"),
+            ),
+        ):
+            result = await discover_lan_radios(timeout=3.0)
+
+        assert result == [{"host": "192.168.1.83", "remote_id": 0x9ABCDEF0}]
+
+    async def test_all_sockets_closed_despite_recv_oserror(self) -> None:
+        # Every created socket is closed even while one keeps raising an
+        # unexpected OSError from recvfrom.
+        fakes = [
+            _FakeUdpSocket({}),
+            _FakeUdpSocket({}, recv_error_always=OSError("adapter vanished")),
+        ]
+        with _patched_lan_sockets(fakes, ["192.168.1.5"]):
+            result = await discover_lan_radios(timeout=3.0)
+
+        assert result == []
+        assert all(fake.closed for fake in fakes)
+
+    async def test_bind_failure_closes_socket_and_probes_rest(self) -> None:
+        # A local address whose bind fails (address vanished, adapter
+        # removed) is skipped after its half-open socket is closed; the
+        # remaining sockets still probe and find the radio.
+        addr = ("192.168.1.84", 50001)
+        fakes = [
+            _FakeUdpSocket({}),
+            _FakeUdpSocket({}, bind_error=OSError("cannot assign requested address")),
+            _FakeUdpSocket({1: [(_i_am_here(0x0C0FFEE0), addr)]}),
+        ]
+        with _patched_lan_sockets(fakes, ["192.168.1.5", "10.8.0.2"]):
+            result = await discover_lan_radios(timeout=3.0)
+
+        assert result == [{"host": "192.168.1.84", "remote_id": 0x0C0FFEE0}]
+        assert fakes[1].closed is True  # the half-open socket was closed
+        assert fakes[1].send_count == 0  # and never used to probe
+        assert fakes[0].send_count >= 1
+        assert fakes[2].send_count >= 1
+
+
+# ---------------------------------------------------------------------------
+# Shared "Are You There" packet layout (MOR-3669)
+# ---------------------------------------------------------------------------
+
+
+class TestAreYouTherePacket:
+    def test_layout_is_pinned(self) -> None:
+        # size 0x10 | ptype 0x03 (ARE_YOU_THERE) | seq 0 | sender_id |
+        # remote_id 0, all little-endian — the same 16 bytes the broadcast
+        # scan built inline before the helper existed.
+        pkt = _are_you_there_packet(0x11223344)
+        assert pkt == bytes.fromhex("10000000030000004433221100000000")
+        assert len(pkt) == 0x10
+
+    async def test_broadcast_scan_sends_packets_with_that_layout(self) -> None:
+        # The scan must send exactly the shared helper's layout: size
+        # 0x10, ptype 0x03, seq 0, a non-zero sender id (the IC-7610
+        # ignores sender_id=0) and remote_id 0.
+        fake = _FakeUdpSocket({})
+        with _patched_lan_socket(fake):
+            await discover_lan_radios(timeout=3.0)
+
+        assert fake.sent, "the scan must send at least one probe"
+        import struct
+
+        for data in fake.sent:
+            size, ptype, seq = struct.unpack_from("<IHH", data, 0)
+            sender, remote = struct.unpack_from("<II", data, 8)
+            assert (size, ptype, seq) == (0x10, 0x03, 0)
+            assert sender != 0
+            assert remote == 0
+
+
+# ---------------------------------------------------------------------------
+# Unicast "Are You There" probe (probe_lan_radio) — MOR-3669
+# ---------------------------------------------------------------------------
+
+
+class TestProbeLanRadioFakeSocket:
+    async def test_returns_true_on_first_i_am_here_and_stops(self) -> None:
+        addr = ("192.168.1.50", 50001)
+        fake = _FakeUdpSocket({1: [(_i_am_here(0xDEADBEEF), addr)]})
+        with _patched_lan_socket(fake):
+            result = await probe_lan_radio("192.168.1.50", timeout=3.0)
+
+        assert result is True
+        assert fake.send_count == 1  # returned on the first answer
+        assert fake.sent_to == [addr]  # unicast to the host, not broadcast
+        assert fake.closed
+
+    async def test_answer_from_a_different_host_does_not_count(self) -> None:
+        other = ("192.168.1.99", 50001)
+        fake = _FakeUdpSocket({1: [(_i_am_here(0x1), other)]})
+        with _patched_lan_socket(fake):
+            result = await probe_lan_radio("192.168.1.50", timeout=3.0)
+
+        assert result is False
+        assert fake.closed
+
+    async def test_datagram_that_is_not_i_am_here_does_not_count(self) -> None:
+        addr = ("192.168.1.50", 50001)
+        noise = bytearray(0x10)
+        import struct
+
+        struct.pack_into("<I", noise, 0, 0x10)
+        struct.pack_into("<H", noise, 4, 0x00)  # not I_AM_HERE (0x04)
+        fake = _FakeUdpSocket({1: [(bytes(noise), addr)]})
+        with _patched_lan_socket(fake):
+            result = await probe_lan_radio("192.168.1.50", timeout=3.0)
+
+        assert result is False
+
+    async def test_radio_answering_only_a_later_probe_is_found(self) -> None:
+        # Like the scan, the probe retransmits across the window instead of
+        # trusting one datagram.
+        addr = ("192.168.1.50", 50001)
+        fake = _FakeUdpSocket({3: [(_i_am_here(0x2), addr)]})
+        with _patched_lan_socket(fake):
+            result = await probe_lan_radio("192.168.1.50", timeout=3.0)
+
+        assert result is True
+        assert fake.send_count >= 3
+
+    async def test_silent_host_returns_false_and_closes_socket(self) -> None:
+        fake = _FakeUdpSocket({})
+        with _patched_lan_socket(fake):
+            result = await probe_lan_radio("192.168.1.50", timeout=3.0)
+
+        assert result is False
+        assert fake.send_count >= 2  # kept retransmitting through the window
+        assert fake.closed
+
+    async def test_recvfrom_connection_refused_returns_false(self) -> None:
+        # ICMP port unreachable surfaces as ConnectionRefusedError on some
+        # platforms; it must end the probe as a plain False.
+        fake = _FakeUdpSocket({}, recv_error_always=ConnectionRefusedError())
+        with _patched_lan_socket(fake):
+            result = await probe_lan_radio("192.168.1.50", timeout=3.0)
+
+        assert result is False
+        assert fake.closed
+
+    async def test_recvfrom_host_unreachable_errno_returns_false(self) -> None:
+        err = OSError(errno.EHOSTUNREACH, "no route to host")
+        fake = _FakeUdpSocket({}, recv_error_always=err)
+        with _patched_lan_socket(fake):
+            result = await probe_lan_radio("192.168.1.50", timeout=3.0)
+
+        assert result is False
+        assert fake.closed
+
+    async def test_sendto_connection_refused_returns_false(self) -> None:
+        # A pending ICMP error can surface from a later sendto (Linux
+        # retransmits) instead of from recvfrom.
+        fake = _FakeUdpSocket({}, send_error=ConnectionRefusedError())
+        with _patched_lan_socket(fake):
+            result = await probe_lan_radio("192.168.1.50", timeout=3.0)
+
+        assert result is False
+        assert fake.closed
+
+    async def test_cancellation_mid_probe_closes_socket(self) -> None:
+        # The 300 s window is far beyond the test's lifetime, so only the
+        # cancellation stop signal can end the probe loop and close the
+        # socket. The real clock is used on purpose: freezing time.monotonic
+        # also freezes the event loop's clock, and the awaits below would
+        # never fire — the hang this test showed on the CI Mac mini.
+        fake = _FakeUdpSocket({})
+        with _patched_lan_socket(fake, step=None):
+            probe = asyncio.create_task(probe_lan_radio("192.168.1.50", timeout=300.0))
+            await asyncio.sleep(0.15)
+            assert not fake.closed
+            probe.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await probe
+
+            deadline = time.perf_counter() + 5.0
+            while not fake.closed:
+                assert time.perf_counter() < deadline, (
+                    "probe socket still open after cancellation"
+                )
+                await asyncio.sleep(0.01)
+
+
+class TestProbeLanRadioRealSocket:
+    async def test_running_simulator_answers(self) -> None:
+        # The IC-7610 LAN wire simulator answers the control-port handshake;
+        # the probe must see its "I Am Here" on the simulator's actual
+        # ephemeral port.
+        sim = MockIcomRadio()
+        await sim.start()
+        try:
+            result = await probe_lan_radio("127.0.0.1", sim.control_port, timeout=2.0)
+        finally:
+            await sim.stop()
+
+        assert result is True
+
+    async def test_closed_loopback_port_returns_false_within_window(self) -> None:
+        # Nothing listens on the port (the ICMP port-unreachable path, or
+        # plain silence on platforms that do not report it to unconnected
+        # sockets): the probe ends in False, never an exception.
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            sock.bind(("127.0.0.1", 0))
+            port = sock.getsockname()[1]
+        finally:
+            sock.close()
+
+        t0 = time.monotonic()
+        result = await probe_lan_radio("127.0.0.1", port, timeout=1.0)
+        elapsed = time.monotonic() - t0
+
+        assert result is False
+        assert elapsed <= 1.0 + 2.0
+
+    async def test_bound_silent_socket_returns_false_at_window_end(self) -> None:
+        # A socket that is bound but never answers is a blackhole: only the
+        # window can end it.
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            sock.bind(("127.0.0.1", 0))
+            port = sock.getsockname()[1]
+            t0 = time.monotonic()
+            result = await probe_lan_radio("127.0.0.1", port, timeout=1.0)
+            elapsed = time.monotonic() - t0
+        finally:
+            sock.close()
+
+        assert result is False
+        assert 0.9 <= elapsed <= 3.0
+
+    async def test_unresolvable_host_returns_false(self) -> None:
+        # ".invalid" can never resolve (RFC 6761): the name-resolution
+        # failure is a plain False.
+        result = await probe_lan_radio(
+            "rigplane-no-such-host-3669.invalid", timeout=1.0
+        )
+
+        assert result is False
+
+
+class _FakeRouteSocket:
+    """Socket stand-in for the UDP-connect probe in _local_ipv4_addresses.
+
+    ``connect`` records nothing and sends nothing (as on a real UDP socket);
+    ``getsockname`` reports the scripted local address.
+    """
+
+    def __init__(self, local: str) -> None:
+        self._local = local
+        self.closed = False
+
+    def connect(self, _addr: tuple) -> None:
+        pass
+
+    def getsockname(self) -> tuple:
+        return (self._local, 0)
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class TestLocalIpv4Addresses:
+    def test_windows_drops_loopback_unspecified_and_duplicates(self) -> None:
+        import socket as _socket
+
+        def _info(address: str) -> tuple:
+            return (_socket.AF_INET, _socket.SOCK_DGRAM, 0, "", (address, 0))
+
+        route_sock = _FakeRouteSocket("192.168.1.5")
+        getaddrinfo = MagicMock(
+            return_value=[
+                _info("10.8.0.2"),
+                _info("192.168.1.5"),  # duplicate of the route address
+                _info("127.0.0.1"),  # loopback dropped
+                _info("0.0.0.0"),  # unspecified dropped
+                _info("10.0.0.9"),
+            ]
+        )
+        with (
+            patch.object(_socket, "socket", return_value=route_sock),
+            patch.object(_socket, "getaddrinfo", getaddrinfo),
+            patch("sys.platform", "win32"),
+        ):
+            result = _local_ipv4_addresses()
+
+        assert result == ["192.168.1.5", "10.8.0.2", "10.0.0.9"]
+        assert route_sock.closed
+        getaddrinfo.assert_called_once()
+
+    def test_non_windows_skips_hostname_lookup(self) -> None:
+        # Outside Windows the hostname enumeration must not run at all: a
+        # locally unresolvable hostname (e.g. .local) would stall the
+        # resolver for seconds before the scan's clock starts.
+        import socket as _socket
+
+        route_sock = _FakeRouteSocket("192.168.1.5")
+        getaddrinfo = MagicMock()
+        with (
+            patch.object(_socket, "socket", return_value=route_sock),
+            patch.object(_socket, "getaddrinfo", getaddrinfo),
+            patch("sys.platform", "linux"),
+        ):
+            result = _local_ipv4_addresses()
+
+        assert result == ["192.168.1.5"]
+        assert route_sock.closed
+        getaddrinfo.assert_not_called()
+
+
+# MOR-3133: exercise the actual opener/read boundary on the old API as well.
+def _diagnostic_sink():
+    from rigplane.backends import discovery
+
+    sink_type = getattr(discovery, "CivProbeDiagnostic", None)
+    if sink_type is not None:
+        return sink_type()
+    return SimpleNamespace(
+        status="not_attempted", stage=None, code=None, open_failure_codes=()
+    )
+
+
+async def _probe_with_diagnostics(sink, opener, bauds=None):
+    import inspect
+
+    kwargs = {"baud_rates": bauds or [19200], "timeout": 0.01, "_open_serial": opener}
+    if "diagnostics" in inspect.signature(probe_serial_civ).parameters:
+        kwargs["diagnostics"] = sink
+    return await probe_serial_civ("/private/sentinel-port", **kwargs)
+
+
+class TestCivProbeDiagnostics:
+    def test_public_sink_and_keyword_only_api(self):
+        import inspect
+        from dataclasses import asdict
+
+        from rigplane.backends import discovery
+        import rigplane.discovery as legacy
+
+        assert legacy is discovery
+        assert "CivProbeDiagnostic" in discovery.__all__
+        parameter = inspect.signature(probe_serial_civ).parameters["diagnostics"]
+        assert parameter.kind is inspect.Parameter.KEYWORD_ONLY
+        assert parameter.default is None
+        assert asdict(discovery.CivProbeDiagnostic()) == {
+            "status": "not_attempted",
+            "stage": None,
+            "code": None,
+            "open_failure_codes": (),
+        }
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("error", "code"),
+        [
+            (PermissionError("secret"), "serial_permission_denied"),
+            (OSError(errno.EACCES, "secret"), "serial_permission_denied"),
+            (OSError(errno.EPERM, "secret"), "serial_permission_denied"),
+            (OSError(errno.EBUSY, "secret"), "serial_busy"),
+            (OSError(errno.EAGAIN, "secret"), "serial_busy"),
+            (OSError(errno.ENOENT, "secret"), "serial_not_found"),
+            (OSError(errno.ENODEV, "secret"), "serial_not_found"),
+            (OSError(errno.ETIMEDOUT, "secret"), "serial_timeout"),
+            (TimeoutError("secret"), "serial_timeout"),
+            (OSError("Resource busy secret"), "serial_unknown"),
+            (ValueError("Permission denied secret"), "serial_unknown"),
+        ],
+    )
+    async def test_actual_open_failure_keeps_verified_code(self, error, code):
+        sink = _diagnostic_sink()
+        opened = []
+
+        async def opener(**kwargs):
+            opened.append(kwargs["baudrate"])
+            raise error
+
+        assert await _probe_with_diagnostics(sink, opener) is None
+        assert opened == [19200]
+        assert (sink.status, sink.stage, sink.code) == ("open_failed", "open", code)
+        assert sink.open_failure_codes == (code,)
+        assert "secret" not in repr(sink)
+        assert "sentinel-port" not in repr(sink)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("link", ["cause", "context", "suppressed"])
+    async def test_actual_wrapped_open_error_respects_context(self, link):
+        wrapper = RuntimeError("wrapper secret")
+        cause = OSError(errno.EACCES, "private secret")
+        if link == "cause":
+            wrapper.__cause__ = cause
+        else:
+            wrapper.__context__ = cause
+            wrapper.__suppress_context__ = link == "suppressed"
+        sink = _diagnostic_sink()
+
+        async def opener(**kwargs):
+            raise wrapper
+
+        assert await _probe_with_diagnostics(sink, opener) is None
+        expected = (
+            "serial_unknown" if link == "suppressed" else "serial_permission_denied"
+        )
+        assert sink.code == expected
+        assert sink.open_failure_codes == (expected,)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("chunks", "status", "stage"),
+        [
+            ([], "opened_no_response", "read"),
+            ([_PROBE_CMD], "opened_no_response", "read"),
+            ([_PROBE_CMD * 2], "opened_no_response", "read"),
+            ([b"garbage"], "malformed_reply", "parse"),
+            ([bytes([0xFE, 0xFE, 0xE0, 0x94])], "incomplete_reply", "parse"),
+            ([_IC7610_RESPONSE[:-1]], "incomplete_reply", "parse"),
+            (
+                [bytes([0xFE, 0xFE, 0xE0, 0x94, 0, 0, 1, 0xFD])],
+                "malformed_reply",
+                "parse",
+            ),
+        ],
+    )
+    async def test_actual_read_boundary_distinguishes_missing_and_invalid_reply(
+        self, chunks, status, stage
+    ):
+        reader, writer = _FakeReader(chunks), _FakeWriter()
+        sink = _diagnostic_sink()
+        assert await _probe_with_diagnostics(sink, _make_open(reader, writer)) is None
+        assert (sink.status, sink.stage, sink.code) == (status, stage, None)
+        assert sink.open_failure_codes == ()
+        assert writer.written == [_PROBE_CMD]
+        assert writer.closed
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("open_first", [True, False])
+    async def test_opened_evidence_outranks_other_baud_open_error(self, open_first):
+        sink = _diagnostic_sink()
+        writers = []
+
+        async def opener(**kwargs):
+            if (kwargs["baudrate"] == 19200) == open_first:
+                writer = _FakeWriter()
+                writers.append(writer)
+                return _FakeReader([]), writer
+            raise OSError(errno.EBUSY, "private secret")
+
+        assert await _probe_with_diagnostics(sink, opener, [19200, 9600]) is None
+        assert (sink.status, sink.stage, sink.code) == (
+            "opened_no_response",
+            "read",
+            None,
+        )
+        assert sink.open_failure_codes == ("serial_busy",)
+        assert all(writer.closed for writer in writers)
+
+    @pytest.mark.asyncio
+    async def test_mixed_open_failures_preserve_bounded_distinct_causes(self):
+        errors = [
+            OSError(errno.EACCES, "secret"),
+            OSError(errno.EBUSY, "secret"),
+            OSError(errno.ENOENT, "secret"),
+            TimeoutError("secret"),
+            OSError("secret"),
+        ] * 3
+        sink = _diagnostic_sink()
+
+        async def opener(**kwargs):
+            raise errors.pop(0)
+
+        assert await _probe_with_diagnostics(sink, opener, list(range(15))) is None
+        assert (sink.status, sink.stage, sink.code) == (
+            "open_failed",
+            "open",
+            "serial_unknown",
+        )
+        assert sink.open_failure_codes == (
+            "serial_permission_denied",
+            "serial_busy",
+            "serial_not_found",
+            "serial_timeout",
+            "serial_unknown",
+        )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("data", "status"),
+        [(b"garbage", "malformed_reply"), (b"\xfe\xfe\xe0\x94", "incomplete_reply")],
+    )
+    async def test_parse_evidence_survives_later_silence(self, data, status):
+        sink = _diagnostic_sink()
+
+        async def opener(**kwargs):
+            chunks = [data] if kwargs["baudrate"] == 19200 else []
+            return _FakeReader(chunks), _FakeWriter()
+
+        assert await _probe_with_diagnostics(sink, opener, [19200, 9600]) is None
+        assert (sink.status, sink.stage, sink.code) == (status, "parse", None)
+
+    @pytest.mark.asyncio
+    async def test_success_overrides_misses_and_sink_reuse_resets(self):
+        sink = _diagnostic_sink()
+        writer = _FakeWriter()
+
+        async def opener(**kwargs):
+            if kwargs["baudrate"] == 19200:
+                raise PermissionError("secret")
+            return _FakeReader([_IC7610_RESPONSE]), writer
+
+        result = await _probe_with_diagnostics(sink, opener, [19200, 9600, 4800])
+        assert result is not None and result.baud == 9600
+        assert result.model_id == b"\x01\x06"
+        assert (sink.status, sink.stage, sink.code) == ("response", "parse", None)
+        assert sink.open_failure_codes == ("serial_permission_denied",)
+        assert writer.closed
+        from rigplane.backends import discovery
+
+        if "CivProbeDiagnostic" not in discovery.__all__:
+            pytest.fail("diagnostic API absent after actual probe boundary executed")
+        assert await probe_serial_civ("unused", [], diagnostics=sink) is None
+        assert (sink.status, sink.stage, sink.code) == ("not_attempted", None, None)
+        assert sink.open_failure_codes == ()
+
+    @pytest.mark.asyncio
+    async def test_legacy_mock_receives_no_new_keyword(self, monkeypatch):
+        from rigplane.backends import discovery
+
+        seen = []
+
+        async def legacy_try(port, baud, timeout, *, _open_serial=None):
+            seen.append((port, baud, timeout, _open_serial))
+            return None
+
+        monkeypatch.setattr(discovery, "_try_baud", legacy_try)
+        assert await probe_serial_civ("legacy", [19200, 9600], 0.02) is None
+        assert seen == [("legacy", 19200, 0.02, None), ("legacy", 9600, 0.02, None)]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("error", [asyncio.CancelledError(), OSError("secret")])
+    async def test_post_open_exception_and_cancel_close_and_propagate(self, error):
+        class Reader:
+            async def read(self, size):
+                raise error
+
+        writer = _FakeWriter()
+        sink = _diagnostic_sink()
+        with pytest.raises(type(error)):
+            await _probe_with_diagnostics(sink, _make_open(Reader(), writer))
+        assert writer.closed
+        assert sink.open_failure_codes == ()
+        assert (sink.status, sink.stage, sink.code) == ("probe_error", "read", None)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("operation", ["write", "drain", "close", "wait_closed"])
+    async def test_failing_operation_stage_is_preserved(self, operation):
+        error = OSError("private operation error")
+
+        class Writer(_FakeWriter):
+            def write(self, data):
+                if operation == "write":
+                    raise error
+                super().write(data)
+
+            async def drain(self):
+                if operation == "drain":
+                    raise error
+
+            def close(self):
+                super().close()
+                if operation == "close":
+                    raise error
+
+            async def wait_closed(self):
+                if operation == "wait_closed":
+                    raise error
+
+        writer, sink = Writer(), _diagnostic_sink()
+        with pytest.raises(OSError) as raised:
+            await _probe_with_diagnostics(
+                sink, _make_open(_FakeReader([_IC7610_RESPONSE]), writer)
+            )
+        assert raised.value is error
+        expected = "write" if operation in {"write", "drain"} else "close"
+        assert (sink.status, sink.stage, sink.code) == ("probe_error", expected, None)
+        assert sink.open_failure_codes == ()
+        assert writer.closed
+
+    @pytest.mark.asyncio
+    async def test_close_error_is_final_stage_without_hiding_read_cause(self):
+        read_error, close_error = OSError("read secret"), OSError("close secret")
+
+        class Reader:
+            async def read(self, size):
+                raise read_error
+
+        class Writer(_FakeWriter):
+            async def wait_closed(self):
+                raise close_error
+
+        writer, sink = Writer(), _diagnostic_sink()
+        with pytest.raises(OSError) as raised:
+            await _probe_with_diagnostics(sink, _make_open(Reader(), writer))
+        assert raised.value is close_error
+        assert raised.value.__context__ is read_error
+        assert (sink.status, sink.stage, sink.code) == ("probe_error", "close", None)
+        assert writer.closed
+
+
+class TestCivProbeFraming:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("sizes", [(3, 5), (4, 4), (7, 1), (1, 2, 5)])
+    async def test_fragmented_id_is_read_to_completion(self, sizes):
+        response = bytes([0xFE, 0xFE, 0xE0, 0x94, 0x19, 0, 0x94, 0xFD])
+        chunks, offset = [], 0
+        for size in sizes:
+            chunks.append(response[offset : offset + size])
+            offset += size
+        reader, writer = _FakeReader(chunks), _FakeWriter()
+        result = await probe_serial_civ(
+            "fake", [115200], 0.02, _open_serial=_make_open(reader, writer)
+        )
+        assert result is not None
+        assert (result.address, result.model_id, result.baud) == (0x94, b"\x94", 115200)
+        assert reader._queue.empty()
+        assert writer.written == [_PROBE_CMD]
+        assert writer.closed
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("same_chunk", [True, False])
+    @pytest.mark.parametrize(
+        "leading",
+        [
+            bytes([0xFE, 0xFE, 0xE0, 0x94, 3, 0, 0, 0xFD]),
+            bytes([0xFE, 0xFE, 0xE0, 0x94, 0x19, 0, 0xFD]),
+            bytes([0xFE, 0xFE, 0xE0, 0x94, 0x19, 0, 0x94]),
+            bytes([0xFE, 0xFE, 0xE0, 0x94, 0x19, 0xFD]),
+            _PROBE_CMD,
+        ],
+    )
+    async def test_leading_non_id_frame_does_not_hide_valid_id(
+        self, leading, same_chunk
+    ):
+        response = bytes([0xFE, 0xFE, 0xE0, 0x94, 0x19, 0, 0x94, 0xFD])
+        chunks = [leading + response] if same_chunk else [leading, response]
+        reader, writer = _FakeReader(chunks), _FakeWriter()
+        result = await probe_serial_civ(
+            "fake", [115200], 0.02, _open_serial=_make_open(reader, writer)
+        )
+        assert result is not None
+        assert (result.address, result.model_id) == (0x94, b"\x94")
+        assert writer.closed
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "data",
+        [
+            b"\xfe\xfe\xe0\x94\x19\x00\x94",
+            b"\xfe\xfe\xe0\x94\x03\x00\x00\xfd",
+        ],
+    )
+    async def test_non_id_reply_keeps_waiting_until_deadline_and_closes(self, data):
+        class Reader(_FakeReader):
+            calls = 0
+            cancelled = False
+
+            async def read(self, size):
+                self.calls += 1
+                try:
+                    return await super().read(size)
+                except asyncio.CancelledError:
+                    self.cancelled = True
+                    raise
+
+        reader, writer = Reader([data]), _FakeWriter()
+        assert (
+            await probe_serial_civ(
+                "fake", [115200], 0.01, _open_serial=_make_open(reader, writer)
+            )
+            is None
+        )
+        assert reader.calls == 2
+        assert reader.cancelled
+        assert writer.closed
+
+    @pytest.mark.parametrize(
+        "data",
+        [
+            b"\xfe\xfe\xe0\x94\x19\x00\xfd",
+            b"\xfe\xfe\xe0\x94\x19\x00\xfd\x00\x00",
+            b"\xfe\xfe\xe0\x94\x19\x00\x94\xfe\xfe\x00\xe0\x03\xfd",
+            b"\xfe\xfe\xe0\x94\x19\x00\xfe\xfe\xe0\x94\x03\x00\xfd",
+        ],
+    )
+    def test_empty_or_crossed_frame_cannot_be_a_valid_id(self, data):
+        assert _parse_probe_response("fake", 115200, data) is None
+
+    @pytest.mark.asyncio
+    async def test_repeated_non_id_chunks_share_one_read_deadline(self, monkeypatch):
+        original_wait_for = asyncio.wait_for
+        deadlines, budgets = [], []
+
+        async def recording_wait_for(awaitable, timeout):
+            deadlines.append(asyncio.get_running_loop().time() + timeout)
+            budgets.append(timeout)
+            return await original_wait_for(awaitable, timeout=timeout)
+
+        class Reader(_FakeReader):
+            async def read(self, size):
+                if not self._queue.empty():
+                    await asyncio.sleep(0.005)
+                return await super().read(size)
+
+        unrelated = b"\xfe\xfe\xe0\x94\x03\x00\x00\xfd"
+        reader, writer = Reader([unrelated, unrelated]), _FakeWriter()
+        monkeypatch.setattr(asyncio, "wait_for", recording_wait_for)
+        assert (
+            await probe_serial_civ(
+                "fake", [115200], 0.03, _open_serial=_make_open(reader, writer)
+            )
+            is None
+        )
+        assert len(budgets) == 3
+        assert max(deadlines) - min(deadlines) < 0.004
+        assert budgets[-1] < budgets[0] - 0.005
+        assert writer.closed

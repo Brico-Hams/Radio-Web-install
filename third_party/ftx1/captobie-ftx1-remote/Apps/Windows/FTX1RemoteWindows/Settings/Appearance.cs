@@ -1,0 +1,106 @@
+using FTX1RemoteWindows.Models;
+using Microsoft.UI;
+using Microsoft.UI.Xaml;
+using Windows.UI;
+
+namespace FTX1RemoteWindows.Settings;
+
+/// Port of Sources/FTX1Core/Appearance/AppTheme.swift: Auto follows
+/// Windows' app mode. Stored by number in settings.json, so new cases go
+/// at the end.
+public enum AppTheme
+{
+    System,
+    Light,
+    Dark,
+}
+
+/// Port of ButtonValueColor.swift: the color of a MENU grid button's
+/// value line (the current setting), orange by default like the rig's own
+/// MENU display. Stored by number, so new cases go at the end.
+public enum ButtonValueColor
+{
+    Orange,
+    Red,
+    Yellow,
+    Green,
+    Cyan,
+    Blue,
+    Pink,
+    White,
+}
+
+/// Port of SMeterStyle (SMeterView.swift): how the S-meters are drawn — the
+/// backlit analog face, the same face unlit, or a two-line segmented bar
+/// with a numeric readout. Stored by number, so new cases go at the end.
+public enum SMeterStyle
+{
+    Lighted,
+    Unlighted,
+    Digital,
+}
+
+public static class AppearanceExtensions
+{
+    public static string DisplayName(this SMeterStyle style) => style switch
+    {
+        SMeterStyle.Unlighted => Loc.S("sMeterStyle.unlighted"),
+        SMeterStyle.Digital => Loc.S("sMeterStyle.digital"),
+        _ => Loc.S("sMeterStyle.lighted"),
+    };
+
+    public static string DisplayName(this AppTheme theme) => theme switch
+    {
+        AppTheme.Light => "Light",
+        AppTheme.Dark => "Dark",
+        _ => "Auto",
+    };
+
+    public static ElementTheme ElementTheme(this AppTheme theme) => theme switch
+    {
+        AppTheme.Light => Microsoft.UI.Xaml.ElementTheme.Light,
+        AppTheme.Dark => Microsoft.UI.Xaml.ElementTheme.Dark,
+        _ => Microsoft.UI.Xaml.ElementTheme.Default,
+    };
+
+    public static string DisplayName(this ButtonValueColor color) => color switch
+    {
+        ButtonValueColor.Orange => Loc.S("buttonValueColor.orange"),
+        ButtonValueColor.Red => Loc.S("buttonValueColor.red"),
+        ButtonValueColor.Yellow => Loc.S("buttonValueColor.yellow"),
+        ButtonValueColor.Green => Loc.S("buttonValueColor.green"),
+        ButtonValueColor.Cyan => Loc.S("buttonValueColor.cyan"),
+        ButtonValueColor.Blue => Loc.S("buttonValueColor.blue"),
+        ButtonValueColor.Pink => Loc.S("buttonValueColor.pink"),
+        ButtonValueColor.White => Loc.S("buttonValueColor.white"),
+        _ => color.ToString(),
+    };
+
+    /// The color as theme JSON writes it ("#AARRGGBB").
+    public static string Hex(this ButtonValueColor color)
+    {
+        var c = color.Color();
+        return $"#{c.A:X2}{c.R:X2}{c.G:X2}{c.B:X2}";
+    }
+
+    public static string DisplayName(this VfoDigitFont font) => font switch
+    {
+        VfoDigitFont.CascadiaMono => "Cascadia Mono",
+        VfoDigitFont.SevenSegment => Loc.S("vfoDigitFont.sevenSegment"),
+        _ => "Consolas",
+    };
+
+    /// Named WinUI colors picked to read on both the light and dark button
+    /// backgrounds (White, like on the Mac, is for dark mode only).
+    public static Color Color(this ButtonValueColor color) => color switch
+    {
+        ButtonValueColor.Red => Colors.Red,
+        ButtonValueColor.Yellow => Colors.Gold,
+        ButtonValueColor.Green => Colors.LimeGreen,
+        ButtonValueColor.Cyan => Colors.DarkTurquoise,
+        ButtonValueColor.Blue => Colors.DodgerBlue,
+        ButtonValueColor.Pink => Colors.HotPink,
+        ButtonValueColor.White => Colors.White,
+        _ => Colors.Orange,
+    };
+}

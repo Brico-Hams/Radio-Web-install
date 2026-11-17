@@ -1,0 +1,1202 @@
+<script lang="ts">
+  import { onDestroy, untrack } from 'svelte';
+  import type { FilterModeConfig } from '$lib/types/capabilities';
+  import { HardwareButton } from '$lib/Button';
+  import { ValueControl } from '../controls/value-control';
+  import { formatFilterWidth } from './filter-utils';
+  import { getShortcutHint, joinShortcutHints } from '../layout/shortcut-hints';
+  import { t } from '$lib/i18n';
+  import {
+    createBipolarContinuousScalarPolicy,
+    createContinuousScalar,
+    type CommandScalarFeedback,
+    type ContinuousScalarPolicy,
+    type ContinuousScalarView,
+  } from '../../primitives/scalar/continuous-scalar.svelte';
+  import { finiteValue, valueText } from '../../primitives/reading-text';
+  import type {
+    HBarIssuedStatusPresentation,
+    HBarIssuedStatusSnapshot,
+    HBarValueProjection,
+  } from '../controls/value-control/skin';
+
+  import {
+    deriveFilterProps,
+    getFilterHandlers,
+    getFilterArmed,
+    getFilterShapeArmed,
+    getFilterShapeControlFeedback,
+    getFilterWidthControlFeedback,
+    getIfShiftControlFeedback,
+    getPbtInnerHzControlFeedback,
+    getPbtOuterHzControlFeedback,
+  } from '$lib/runtime/adapters/panel-adapters';
+  import {
+    projectControlFeedbackPresentation,
+    type ControlFeedbackPresentationInput,
+  } from '../../primitives/control-feedback/control-feedback-presentation';
+
+  // MOR-1689: the panel's SHARP/SOFT choice catalog — one definition for
+  // the settings-modal buttons and the live status's target description.
+  const FILTER_SHAPE_CHOICES = [
+    { value: 0, label: 'SHARP' },
+    { value: 1, label: 'SOFT' },
+  ] as const;
+
+  const handlers = getFilterHandlers();
+  let p = $derived(deriveFilterProps());
+  // MOR-1536: the freshest in-flight `set_filter` target, DISPLAY ONLY (see
+  // `panel-adapters.ts`'s ARMED-SIGNAL CONTRACT). `currentFilter` below
+  // stays the sole selection source — armed only marks the button the
+  // pending command is racing toward, never a substitute for the confirmed
+  // reading.
+  let filterArmed = $derived(getFilterArmed());
+  // MOR-1689: the freshest in-flight `set_filter_shape` target, DISPLAY
+  // ONLY — same doctrine as `filterArmed` above. `filterShape` stays the
+  // sole selection source; armed only marks the SHARP/SOFT button the
+  // pending command is racing toward.
+  let filterShapeArmed = $derived(getFilterShapeArmed());
+  // MOR-1689 leg 2: the SAME lifecycle through the full MOR-1687 projection
+  // — the structural phase for the actual buttons and a
+  // transition-deduplicated polite live status naming the requested target.
+  // Consulted only while the radio has a `filter_shape` capability, so an
+  // FTX-1-shaped mount never reads the lifecycle at all.
+  let filterShapeFeedback = $derived(
+    p.hasFilterShape === true ? getFilterShapeControlFeedback() : null,
+  );
+  const describeShapeTarget = (target: number): string =>
+    FILTER_SHAPE_CHOICES.find(choice => choice.value === target)?.label ?? String(target);
+  let shapeAnnouncedTransitionIds: readonly string[] = [];
+  let shapeLive = $state<Readonly<{ transitionId: string; text: string }> | null>(null);
+  let shapeBusy = $state(false);
+  $effect(() => {
+    const feedback: Readonly<ControlFeedbackPresentationInput<number>> | null = filterShapeFeedback;
+    if (feedback === null) {
+      shapeAnnouncedTransitionIds = [];
+      shapeLive = null;
+      shapeBusy = false;
+      return;
+    }
+    const presentation = projectControlFeedbackPresentation(
+      feedback, { announcedTransitionIds: shapeAnnouncedTransitionIds }, describeShapeTarget,
+    );
+    shapeAnnouncedTransitionIds = presentation.state.announcedTransitionIds;
+    shapeBusy = presentation.attributes['aria-busy'] === 'true';
+    // Phone emitter doctrine (MOR-1703 width precedent): the localized
+    // pending family announces while the control is in flight, exactly once
+    // per transition; terminal outcomes stay the semantic host's projector
+    // messages. An unchanged transition must not erase the standing text.
+    if (!shapeBusy) {
+      shapeLive = null;
+      return;
+    }
+    if (presentation.politeAnnouncement !== null && feedback.target !== null) {
+      shapeLive = {
+        transitionId: presentation.politeAnnouncement.transitionId,
+        text: `${describeShapeTarget(feedback.target)}: ${t('core.filter.select.pendingAnnouncement')}`,
+      };
+    }
+  });
+  let filterWidthFeedback = $derived(getFilterWidthControlFeedback());
+  const filterArmedIdBase = $props.id();
+
+  let currentMode = $derived(p.currentMode);
+  let currentFilter = $derived(p.currentFilter);
+  let filterShape = $derived(p.filterShape);
+  // MOR-2978: `null` is the unread sentinel for both (`toFilterProps`) —
+  // the FIL and SHARP/SOFT keys expose the confirmed selection and stay
+  // disabled until observed.
+  let filterKnown = $derived(currentFilter !== null);
+  let shapeKnown = $derived(filterShape !== null);
+  // MOR-1503: only radios with a REAL filter_shape command (Icom family,
+  // e.g. IC-7300) show the SHARP/SOFT shape buttons. The FTX-1 declares
+  // no `filter_shape` capability — rendering the buttons anyway is a dead
+  // control, same class as MOR-1494's IF-shift row.
+  let hasFilterShape = $derived(p.hasFilterShape ?? false);
+  let filterLabels = $derived(p.filterLabels ?? ['FIL1', 'FIL2', 'FIL3']);
+  let filterWidth = $derived(p.filterWidth);
+  // MOR-3677: the Hz-less width states name themselves instead of a blank
+  // reserved slot — `toFilterProps` gates both leaves on their own field
+  // availability, so the chip only appears for a CONFIRMED radio-default or
+  // NARROW reading (never for a plain unobserved width).
+  let filterWidthState = $derived(p.filterWidthState ?? null);
+  let widthStateText = $derived(
+    filterWidthState === 'radio-default' ? t('core.filter.width.value.radioDefault')
+      : filterWidthState === 'narrow' ? t('core.filter.width.value.narrow')
+      : '',
+  );
+  let widthStateTitle = $derived(
+    filterWidthState === 'radio-default' ? t('core.filter.width.reason.radioDefault')
+      : filterWidthState === 'narrow' ? t('core.filter.width.reason.narrow')
+      : undefined,
+  );
+  let filterWidthMin = $derived(p.filterWidthMin ?? 50);
+  let filterWidthMax = $derived(p.filterWidthMax ?? 9999);
+  let filterConfig = $derived(p.filterConfig ?? null);
+  // MOR-1494: only radios with a REAL if_shift command (Yaesu-family, e.g.
+  // FTX-1) show this control. Icom radios (PBT-only, e.g. IC-7300) have no
+  // if_shift command at all — showing it permanently disabled with a
+  // PBT-derived stand-in value is a dead control, not a usable one; PBT
+  // Inner/Outer below are the genuine controls for those radios.
+  let hasIfShift = $derived(p.hasIfShift ?? false);
+  // MOR-1681: IF-shift range/step come from the profile's
+  // `controls.if_shift` entry when it publishes a usable domain; the
+  // per-branch constants are the explicit today-behaviour fallbacks for a
+  // radio that publishes none (table-mode row 20 Hz, non-table row 25 Hz).
+  let tableIfShiftDomain = $derived(p.ifShiftDomain ?? { min: -1200, max: 1200, step: 20 });
+  let defaultIfShiftDomain = $derived(p.ifShiftDomain ?? { min: -1200, max: 1200, step: 25 });
+  let hasPbt = $derived(p.hasPbt ?? false);
+  // MOR-2497: PBT slider bounds come from the measured lattice through the
+  // props layer (`toFilterProps`'s `pbtDomain`, derived by
+  // `measuredPbtDisplayDomain` — e.g. +/-1800/50 at USB 3600). Null keeps
+  // this row's own explicit today-behaviour constants, the same fallback
+  // contract `ifShiftDomain` established (MOR-1681) — a legacy payload that
+  // publishes no `pbtStepHz` has no lattice to read bounds from.
+  let pbtDomain = $derived(p.pbtDomain ?? { min: -1200, max: 1200, step: 25 });
+  const onFilterChange = handlers.onFilterChange;
+  const onFilterWidthChange = handlers.onFilterWidthChange;
+  const onFilterWidthReset = handlers.onFilterWidthReset;
+  const onFilterShapeChange = handlers.onFilterShapeChange;
+  const onFilterPresetChange = handlers.onFilterPresetChange;
+  const onFilterDefaults = handlers.onFilterDefaults;
+  const onIfShiftChange = handlers.onIfShiftChange;
+  const onPbtInnerChange = handlers.onPbtInnerChange;
+  const onPbtOuterChange = handlers.onPbtOuterChange;
+  const onPbtReset = handlers.onPbtReset;
+
+  let modalOpen = $state(false);
+  let draftWidths = $state<number[]>([]);
+
+  // MOR-1409 A12 (adjudication 5245697359, Core #2317): no re-fabricated
+  // FIL1/FIL2/FIL3 stand-in when `filterLabels` is the honest empty array
+  // (unknown filter catalog). Pass it through unchanged — the modal's
+  // `{#each normalizedLabels as label, index}` then renders zero rows,
+  // which is the correct "unavailable, not fabricated" behavior.
+  let normalizedLabels = $derived(filterLabels);
+  let factoryDefaults = $derived.by(() => {
+    const fallback = Array.from({ length: normalizedLabels.length }, () => filterWidth);
+    const defaults = filterConfig?.defaults?.slice(0, normalizedLabels.length) ?? fallback;
+    while (defaults.length < normalizedLabels.length) {
+      defaults.push(defaults[defaults.length - 1] ?? filterWidth);
+    }
+    return defaults;
+  });
+  let visibleWidths = $derived.by(() => {
+    const values = [...factoryDefaults];
+    // MOR-2683: `currentFilter` is `null` while the filter reading has not
+    // arrived — no row may borrow the width as if its filter were current
+    // (`null - 1` clamps to index 0, which would mark FIL1's row).
+    if (currentFilter != null) {
+      const activeIndex = Math.max(0, Math.min(normalizedLabels.length - 1, currentFilter - 1));
+      values[activeIndex] = filterWidth;
+    }
+    return values;
+  });
+  let isTableMode = $derived(!!(filterConfig?.table?.length));
+  let modalMin = $derived(
+    filterConfig?.minHz ?? (isTableMode ? filterConfig!.table![0] : filterWidthMin)
+  );
+  let modalMax = $derived(
+    filterConfig?.maxHz ?? (isTableMode ? filterConfig!.table![filterConfig!.table!.length - 1] : filterWidthMax)
+  );
+  let modalStep = $derived(
+    isTableMode ? 1 : (filterConfig?.stepHz ?? filterConfig?.segments?.[0]?.stepHz ?? 50)
+  );
+
+  function tableIndexToHz(idx: number): number {
+    const table = filterConfig?.table ?? [];
+    return table[Math.max(0, Math.min(table.length - 1, Math.round(idx)))] ?? idx;
+  }
+
+  function hzToTableIndex(hz: number): number {
+    const table = filterConfig?.table ?? [];
+    if (!table.length) return hz;
+    let closest = 0;
+    let minDist = Math.abs(hz - table[0]);
+    for (let i = 1; i < table.length; i++) {
+      const dist = Math.abs(hz - table[i]);
+      if (dist < minDist) { minDist = dist; closest = i; }
+    }
+    return closest;
+  }
+  const cycleFilterShortcut = joinShortcutHints(
+    getShortcutHint('cycle_filter'),
+    getShortcutHint('cycle_filter', (binding) => Number(binding.params?.step ?? 0) === -1),
+  );
+  const filterSettingsShortcut = getShortcutHint('open_filter_settings');
+
+  $effect(() => {
+    if (!modalOpen || (!filterWidthFeedback.busy && filterWidthFeedback.outcome !== null)) {
+      draftWidths = [...visibleWidths];
+    }
+  });
+
+  function formatWidthDisplay(hz: number): string {
+    // MOR-1409 A12 (adjudication 5245697359, Core #2317): `panel-props.ts`'s
+    // `toFilterProps`/`toAudioSpectrumProps` now return NaN for an
+    // unobserved filterWidth instead of fabricating 2400 Hz. Guard at this
+    // choke point — rather than let `formatFilterWidth(NaN)` leak the
+    // literal "NaNkHz" into the settings modal. MOR-2667: an
+    // unread value renders an unlit, EMPTY box in a reserved slot (the
+    // `.modal-fixed-value` rule below), never a placeholder.
+    return valueText(finiteValue(hz), (value) => {
+      const formatted = formatFilterWidth(value);
+      return formatted.includes('k') ? `${formatted}Hz` : `${formatted} ${t('core.filter.unit.hz')}`;
+    });
+  }
+
+  function formatExactWidthDisplay(hz: number | null): string {
+    // MOR-2667: an unread value renders an unlit, EMPTY box in a reserved
+    // slot — never a `'--- Hz'` placeholder.
+    return valueText(finiteValue(hz), (value) => {
+      if (Number.isInteger(value) && value >= 1000 && value % 100 === 0) {
+        const kilohertz = value / 1000;
+        return `${Number.isInteger(kilohertz) ? kilohertz : kilohertz.toFixed(1)}kHz`;
+      }
+      return `${value} ${t('core.filter.unit.hz')}`;
+    });
+  }
+
+  let currentWidthTable = $derived(filterConfig?.table ?? []);
+  const validWidthCatalog = (): boolean => currentWidthTable.length > 0
+    && currentWidthTable.every((value, index) => Number.isFinite(value)
+      && (index === 0 || value > currentWidthTable[index - 1]));
+  function nearestWidthChoice(value: number): number | null {
+    if (!validWidthCatalog() || !Number.isFinite(value)) return null;
+    return currentWidthTable.reduce((nearest, choice) =>
+      Math.abs(choice - value) < Math.abs(nearest - value) ? choice : nearest);
+  }
+  function adjacentWidthChoice(value: number, direction: -1 | 1): number | null {
+    if (!validWidthCatalog() || !Number.isFinite(value)) return null;
+    if (direction > 0) return currentWidthTable.find((choice) => choice > value)
+      ?? currentWidthTable[currentWidthTable.length - 1];
+    for (let index = currentWidthTable.length - 1; index >= 0; index -= 1) {
+      if (currentWidthTable[index] < value) return currentWidthTable[index];
+    }
+    return currentWidthTable[0];
+  }
+  function widthPosition(value: number): number | null {
+    if (!validWidthCatalog() || !Number.isFinite(value)) return null;
+    const first = currentWidthTable[0];
+    const last = currentWidthTable[currentWidthTable.length - 1];
+    if (value < first || value > last) return null;
+    if (currentWidthTable.length === 1) return 0;
+    const upper = currentWidthTable.findIndex((choice) => choice >= value);
+    if (upper <= 0) return 0;
+    const lower = upper - 1;
+    const fraction = (value - currentWidthTable[lower])
+      / (currentWidthTable[upper] - currentWidthTable[lower]);
+    return (lower + fraction) / (currentWidthTable.length - 1);
+  }
+  function widthChoiceAt(position: number): number | null {
+    if (!validWidthCatalog() || !Number.isFinite(position)) return null;
+    const index = Math.round(Math.max(0, Math.min(1, position)) * (currentWidthTable.length - 1));
+    return currentWidthTable[index];
+  }
+
+  const filterWidthProjection: Readonly<HBarValueProjection> = {
+    get contextKey() { return JSON.stringify([currentMode, currentWidthTable]); },
+    positionOf: widthPosition,
+    valueAt: widthChoiceAt,
+  };
+  const filterWidthPolicy: Readonly<ContinuousScalarPolicy> = {
+    name: 'filter-width-catalog',
+    preview: 'confirmed',
+    normalize: (value) => nearestWidthChoice(value),
+    wheel: (current, event) => {
+      const steps = event.steps ?? 1;
+      if (!Number.isInteger(steps) || steps < 1 || steps > 8) return null;
+      let candidate: number | null = current;
+      for (let index = 0; index < steps && candidate !== null; index += 1) {
+        candidate = adjacentWidthChoice(candidate, event.direction);
+      }
+      return candidate;
+    },
+    key: (current, event) => {
+      if (event.key === 'Home') return validWidthCatalog() ? currentWidthTable[0] : null;
+      if (event.key === 'End') return validWidthCatalog()
+        ? currentWidthTable[currentWidthTable.length - 1] : null;
+      if (event.key === 'ArrowRight' || event.key === 'ArrowUp') return adjacentWidthChoice(current, 1);
+      if (event.key === 'ArrowLeft' || event.key === 'ArrowDown') return adjacentWidthChoice(current, -1);
+      return null;
+    },
+    reset: () => validWidthCatalog() ? currentWidthTable[0] : null,
+    dispatch: (source) => source === 'keyboard' || source === 'reset'
+      ? { debounceMs: 50 } : 'immediate',
+    dispatchesCanonical: (source) => source === 'wheel',
+    wheelIdleMs: 300,
+    describeTarget: formatExactWidthDisplay,
+  };
+  function filterWidthInput() {
+    const catalogValid = validWidthCatalog();
+    const min = catalogValid ? currentWidthTable[0] : filterWidthMin;
+    const max = catalogValid ? currentWidthTable[currentWidthTable.length - 1] : filterWidthMax;
+    const confirmed = filterWidthFeedback.confirmed;
+    const tableReadingInRange = !isTableMode || (catalogValid && confirmed !== null
+      && Number.isFinite(confirmed) && confirmed >= min && confirmed <= max);
+    return {
+      evidence: 'command-feedback' as const,
+      feedback: filterWidthFeedback,
+      command: 'set_filter_width',
+      domain: { min, max, step: 1, defaultValue: min, fineStepDivisor: 1 },
+      // MOR-1679: a fixed-width mode must not command a width write —
+      // the control reads the fixed Hz disabled. Pinned by the
+      // 'MOR-1679 FTX-1 fixed-width modes are not operable' describe in
+      // FilterPanel.ftx1-table5.isolated.test.ts.
+      enabled: !filterConfig?.fixed
+        && filterWidthFeedback.availability === 'available' && tableReadingInRange,
+      request: onFilterWidthChange,
+    };
+  }
+  const filterWidthBinding = createContinuousScalar(filterWidthInput, filterWidthPolicy);
+  const feedbackIntegratedRange = { 'feedback-policy': 'feedback-integrated' } as const;
+  onDestroy(() => filterWidthBinding.destroy());
+
+  // MOR-1687 part 1: PBT Inner/Outer and IF Shift ride the same
+  // feedback-integrated bipolar scalar the width control uses. The
+  // producers hand back values in the DISPLAY unit — Hz on the measured
+  // PBT lattice (or the identity-mapped real if_shift scale) — for
+  // confirmed, target and requestedTarget alike.
+  let ifShiftFeedback = $derived(getIfShiftControlFeedback());
+  let pbtInnerFeedback = $derived(getPbtInnerHzControlFeedback());
+  let pbtOuterFeedback = $derived(getPbtOuterHzControlFeedback());
+  // MOR-1691: pointer drags commit ON RELEASE — every intermediate pointer
+  // candidate stays the gesture-local draft and exactly one request leaves
+  // the row at pointerup, bounding the dispatch count per gesture instead
+  // of streaming a per-move CAT write. Keyboard/reset keep their debounce.
+  const passbandPolicy = createBipolarContinuousScalarPolicy({
+    debounceMs: 50, pointerDispatch: 'on-release',
+    describeTarget: (value) => `${value} ${t('core.filter.unit.hz')}`,
+  });
+  function passbandPendingTarget(feedback: Readonly<CommandScalarFeedback>): number | null {
+    return feedback.busy && feedback.target !== null ? feedback.target : null;
+  }
+  function ifShiftInput() {
+    const domain = isTableMode ? tableIfShiftDomain : defaultIfShiftDomain;
+    const common = {
+      command: 'set_if_shift',
+      domain: {
+        min: domain.min, max: domain.max, step: domain.step,
+        defaultValue: 0, fineStepDivisor: 10,
+      },
+      request: (value: number) => onIfShiftChange(value),
+    };
+    if (ifShiftFeedback.availability === 'available') {
+      return {
+        ...common, evidence: 'command-feedback' as const, feedback: ifShiftFeedback,
+        enabled: hasIfShift && (isTableMode || !hasPbt),
+      };
+    }
+    return {
+      ...common, evidence: 'reading' as const,
+      reading: Number.isFinite(p.ifShift) ? { status: 'known' as const, value: p.ifShift } : { status: 'unknown' as const },
+      ownerKey: 'filter-panel-if-shift',
+      enabled: hasIfShift && (isTableMode || !hasPbt),
+    };
+  }
+  const ifShiftBinding = createContinuousScalar(ifShiftInput, passbandPolicy);
+  function pbtInput(
+    feedback: Readonly<CommandScalarFeedback>, command: string,
+    readingHz: number | null, ownerKey: string, request: (value: number) => void,
+  ) {
+    const common = {
+      command,
+      domain: {
+        min: pbtDomain.min, max: pbtDomain.max, step: pbtDomain.step,
+        // MOR-2535/MOR-2909 (the semantic FilterSurface's `passbandInput`
+        // doctrine): the PBT lanes declare NO lease-level default, so a
+        // null here keeps `lease.reset()` a no-op — a track double-click
+        // sends nothing. The reset is the ATOMIC `onPbtReset` dispatch
+        // site (the Reset button); the legacy panel has no label/value
+        // cells to carry the gesture.
+        defaultValue: null, fineStepDivisor: 10,
+      },
+      request,
+    };
+    if (feedback.availability === 'available') {
+      return {
+        ...common, evidence: 'command-feedback' as const, feedback,
+        enabled: hasPbt,
+      };
+    }
+    return {
+      ...common, evidence: 'reading' as const,
+      reading: readingHz !== null && Number.isFinite(readingHz)
+        ? { status: 'known' as const, value: readingHz } : { status: 'unknown' as const },
+      ownerKey,
+      // MOR-2425/R40, same fallback the semantic FilterSurface keeps: a
+      // held (stale) reading still commands through its own props truth.
+      enabled: hasPbt,
+    };
+  }
+  const pbtInnerBinding = createContinuousScalar(
+    () => pbtInput(pbtInnerFeedback, 'set_pbt_inner', p.pbtInner, 'filter-panel-pbt-inner',
+      (value) => onPbtInnerChange(value)),
+    passbandPolicy,
+  );
+  const pbtOuterBinding = createContinuousScalar(
+    () => pbtInput(pbtOuterFeedback, 'set_pbt_outer', p.pbtOuter, 'filter-panel-pbt-outer',
+      (value) => onPbtOuterChange(value)),
+    passbandPolicy,
+  );
+  onDestroy(() => {
+    ifShiftBinding.destroy();
+    pbtInnerBinding.destroy();
+    pbtOuterBinding.destroy();
+  });
+
+  function formatIssuedWidthStatus(snapshot: Readonly<HBarIssuedStatusSnapshot>): string {
+    const feedback = snapshot.view.feedback;
+    // MOR-2667: a screen reader must never hear a placeholder — while a
+    // value the message needs is unread, the announcement is skipped
+    // entirely (same doctrine as FilterSurface's MOR-2648 width formatter).
+    const requested = formatExactWidthDisplay(feedback.requestedTarget);
+    const confirmed = formatExactWidthDisplay(feedback.confirmed);
+    let message: string;
+    switch (snapshot.announcement.phase) {
+      case 'submitted':
+      case 'queued':
+      case 'dispatched':
+      case 'awaiting-confirmation':
+        if (requested === '') return '';
+        message = t('core.filter.width.pendingAnnouncement', { target: requested });
+        break;
+      case 'confirmed':
+        if (confirmed === '') return '';
+        message = t('core.filter.width.confirmedAnnouncement', { confirmed });
+        break;
+      case 'failed':
+        if (requested === '' || confirmed === '') return '';
+        message = t('core.filter.width.failedAnnouncement', { target: requested, confirmed });
+        break;
+      case 'timed-out':
+        if (requested === '' || confirmed === '') return '';
+        message = t('core.filter.width.timedOutAnnouncement', { target: requested, confirmed });
+        break;
+      case 'cancelled':
+        if (requested === '' || confirmed === '') return '';
+        message = t('core.filter.width.cancelledAnnouncement', { target: requested, confirmed });
+        break;
+      case 'superseded':
+        if (requested === '' || confirmed === '') return '';
+        message = t('core.filter.width.supersededAnnouncement', { target: requested, confirmed });
+        break;
+      default:
+        message = '';
+    }
+    if (message.length === 0) return '';
+    return snapshot.view.error === null ? message
+      : `${message.replace(/[.!?]$/, '')}: ${snapshot.view.error}`;
+  }
+  let filterWidthStatusText = $state<string | null>(null);
+  const filterWidthStatusPresentation: Readonly<HBarIssuedStatusPresentation> = {
+    get text() { return filterWidthStatusText; },
+      format: formatIssuedWidthStatus,
+      // MOR-2667: a formatter that skips an announcement returns '' — an
+      // empty live region is never minted (same skip as FilterSurface's
+      // MOR-2648 nextFilterWidthAnnouncement).
+      accept(text) { filterWidthStatusText = text === '' ? null : text; },
+  };
+  function consumeReadOnlyWidthStatus(view: Readonly<ContinuousScalarView>): void {
+    if (view.evidence !== 'command-feedback') return;
+    const announcement = view.presentation.politeAnnouncement;
+    if (announcement !== null) {
+      filterWidthStatusPresentation.accept(untrack(() =>
+        filterWidthStatusPresentation.format({ view, announcement })));
+    } else if (view.feedback.transitionId === null) {
+      filterWidthStatusPresentation.accept(null);
+    }
+  }
+  $effect(() => {
+    if (isTableMode) return;
+    const view = filterWidthBinding.view;
+    consumeReadOnlyWidthStatus(view);
+  });
+
+  // MOR-1687 part 2: the three passband rows announce through the same
+  // issued-status seam the width row uses — one message family
+  // (`core.filter.passband.*Announcement`) whose `{control}` placeholder
+  // resolves from `core.filter.passband.control.*`, not three per-control
+  // families. The pins live in FilterPanel.isolated.test.ts's passband
+  // describe (en-US texts plus the ru-RU family pin).
+  function formatIssuedPassbandStatus(
+    control: 'pbtInner' | 'pbtOuter' | 'ifShift',
+    snapshot: Readonly<HBarIssuedStatusSnapshot>,
+  ): string {
+    const feedback = snapshot.view.feedback;
+    const controlName = t(`core.filter.passband.control.${control}`);
+    // MOR-2667: a screen reader must never hear a placeholder — while a
+    // value the message needs is unread, the announcement is skipped
+    // entirely (same doctrine as FilterSurface's MOR-2648 passband
+    // formatter).
+    const hzText = (value: number): string => `${value} ${t('core.filter.unit.hz')}`;
+    const target = valueText(finiteValue(feedback.requestedTarget), hzText);
+    const confirmed = valueText(finiteValue(feedback.confirmed), hzText);
+    let message: string;
+    switch (snapshot.announcement.phase) {
+      case 'submitted':
+      case 'queued':
+      case 'dispatched':
+      case 'awaiting-confirmation':
+        if (target === '') return '';
+        message = t('core.filter.passband.pendingAnnouncement', { control: controlName, target });
+        break;
+      case 'confirmed':
+        if (confirmed === '') return '';
+        message = t('core.filter.passband.confirmedAnnouncement', { control: controlName, confirmed });
+        break;
+      case 'failed':
+        if (target === '' || confirmed === '') return '';
+        message = t('core.filter.passband.failedAnnouncement', { control: controlName, target, confirmed });
+        break;
+      case 'timed-out':
+        if (target === '' || confirmed === '') return '';
+        message = t('core.filter.passband.timedOutAnnouncement', { control: controlName, target, confirmed });
+        break;
+      case 'cancelled':
+        if (target === '' || confirmed === '') return '';
+        message = t('core.filter.passband.cancelledAnnouncement', { control: controlName, target, confirmed });
+        break;
+      case 'superseded':
+        if (target === '' || confirmed === '') return '';
+        message = t('core.filter.passband.supersededAnnouncement', { control: controlName, target, confirmed });
+        break;
+      default:
+        message = '';
+    }
+    if (message.length === 0) return '';
+    return snapshot.view.error === null ? message
+      : `${message.replace(/[.!?]$/, '')}: ${snapshot.view.error}`;
+  }
+  let passbandStatusText = $state<Record<'pbtInner' | 'pbtOuter' | 'ifShift', string | null>>({
+    pbtInner: null, pbtOuter: null, ifShift: null,
+  });
+  function passbandIssuedStatus(control: 'pbtInner' | 'pbtOuter' | 'ifShift'): Readonly<HBarIssuedStatusPresentation> {
+    return {
+      get text() { return passbandStatusText[control]; },
+      format: (snapshot) => formatIssuedPassbandStatus(control, snapshot),
+      // MOR-2667: a formatter that skips an announcement returns '' — an
+      // empty live region is never minted.
+      accept(text) { passbandStatusText[control] = text === '' ? null : text; },
+    };
+  }
+  const ifShiftStatusPresentation = passbandIssuedStatus('ifShift');
+  const pbtInnerStatusPresentation = passbandIssuedStatus('pbtInner');
+  const pbtOuterStatusPresentation = passbandIssuedStatus('pbtOuter');
+
+  let lifecycleTarget = $derived(filterWidthFeedback.busy ? filterWidthFeedback.target : null);
+
+  function openSettings(): void {
+    draftWidths = [...visibleWidths];
+    modalOpen = true;
+  }
+
+  function closeSettings(): void {
+    modalOpen = false;
+  }
+
+  function handlePresetChange(index: number, width: number): void {
+    draftWidths = draftWidths.map((value, draftIndex) => (draftIndex === index ? width : value));
+    onFilterPresetChange?.(index + 1, width);
+  }
+
+  function handleRestoreDefaults(): void {
+    draftWidths = [...factoryDefaults];
+    onFilterDefaults?.([...factoryDefaults]);
+  }
+
+  function handleTableReset(): void {
+    // MOR-1679: no width write for a fixed-width mode — only the IF-shift
+    // reset remains. Pinned by 'the table-branch Reset button resets IF
+    // shift but emits no width write' in FilterPanel.ftx1-table5.isolated.test.ts.
+    if (!filterConfig?.fixed) {
+      // MOR-2519: no radio value in shared code — the Reset returns the
+      // width to the RADIO's own mode-dependent default through the
+      // MOR-2535 radio-default handler (`reset_filter_width`, gated on the
+      // profile's `filter_width_radio_default` capability), never a
+      // hardcoded Hz constant. Pinned by the MOR-2519 Reset tests there.
+      onFilterWidthReset?.();
+    }
+    onIfShiftChange(0);
+  }
+</script>
+
+<!-- One chip shape for every passband row (MOR-1687 part 2): the text is
+     core.filter.passband.pendingChip, so a locale renders one translated
+     label — pinned by the ru-RU chip test in FilterPanel.isolated.test.ts. -->
+{#snippet pendingPassbandChip(target: number | null)}
+  {#if target !== null}
+    <span class="bw-pending-target" data-pending-passband-target>
+      {t('core.filter.passband.pendingChip', { target })}
+    </span>
+  {/if}
+{/snippet}
+
+{#if isTableMode}
+  <div class="panel-body">
+    <div
+      class="filter-width-control"
+      data-filter-width-lifecycle
+      role="group"
+      aria-label="Filter width"
+      aria-busy={filterWidthFeedback.busy}
+    >
+      <ValueControl
+        {...feedbackIntegratedRange}
+        binding={filterWidthBinding}
+        label="WIDTH"
+        unit="Hz"
+        renderer="hbar"
+        accentColor="var(--v2-accent-cyan)"
+        displayFn={formatExactWidthDisplay}
+        valueProjection={filterWidthProjection}
+        issuedStatusPresentation={filterWidthStatusPresentation}
+        variant="hardware-illuminated"
+      />
+      {#if filterWidthState !== null && Number.isNaN(filterWidth)}
+        <span class="bw-state" data-width-state={filterWidthState} title={widthStateTitle}>{widthStateText}</span>
+      {/if}
+      {#if filterWidthFeedback.busy && lifecycleTarget !== null}
+        <span class="bw-pending-target" data-pending-width-target>
+          PENDING {formatExactWidthDisplay(lifecycleTarget)}
+        </span>
+      {/if}
+    </div>
+
+    {#if hasIfShift}
+      <ValueControl
+        {...feedbackIntegratedRange}
+        binding={ifShiftBinding}
+        label="IF SHIFT"
+        unit="Hz"
+        renderer="bipolar"
+        accentColor="var(--v2-accent-cyan)"
+        variant="hardware-illuminated"
+        issuedStatusPresentation={ifShiftStatusPresentation}
+      />
+      {@render pendingPassbandChip(passbandPendingTarget(ifShiftFeedback))}
+    {/if}
+
+    <div class="filter-actions">
+      <button
+        type="button"
+        class="pbt-reset-button v2-control-button"
+        style="--control-accent:var(--v2-text-disabled); --control-active-text:var(--v2-text-bright)"
+        onclick={handleTableReset}
+      >
+        Reset
+      </button>
+    </div>
+  </div>
+{:else}
+  <div class="panel-body">
+    <div class="filter-top-row">
+      <div class="filter-grid">
+        {#each normalizedLabels as label, index}
+          {@const isFilterArmed = filterArmed.armed && filterArmed.value === index + 1}
+          {@const filterArmedId = `${filterArmedIdBase}-${index + 1}`}
+          <HardwareButton
+            active={currentFilter === index + 1}
+            pressed={filterKnown ? currentFilter === index + 1 : undefined}
+            disabled={!filterKnown}
+            indicator="edge-left"
+            color="cyan"
+            title={cycleFilterShortcut}
+            shortcutHint={cycleFilterShortcut}
+            armed={isFilterArmed}
+            describedBy={isFilterArmed ? filterArmedId : undefined}
+            onclick={() => onFilterChange?.(index + 1)}
+          >
+            {label}
+          </HardwareButton>
+          {#if isFilterArmed}
+            <span id={filterArmedId} class="sr-only">{t('core.filter.select.pendingAnnouncement')}</span>
+          {/if}
+        {/each}
+      </div>
+
+      <button
+        type="button"
+        class="settings-button v2-control-button"
+        style="--control-accent:var(--v2-text-disabled); --control-active-text:var(--v2-text-bright)"
+        aria-label="Open filter settings"
+        aria-haspopup="dialog"
+        aria-expanded={modalOpen}
+        data-shortcut-hint={filterSettingsShortcut ?? undefined}
+        title={filterSettingsShortcut ?? undefined}
+        onclick={openSettings}
+      >
+        ⚙
+      </button>
+    </div>
+
+    <div
+      class="bw-row"
+      data-filter-width-lifecycle
+      role="group"
+      aria-label="Filter width"
+      aria-busy={filterWidthFeedback.busy}
+    >
+      <span class="bw-label">BW</span>
+      <span class="bw-value" data-confirmed-width>{formatExactWidthDisplay(filterWidthFeedback.confirmed)}</span>
+      {#if filterWidthState !== null && Number.isNaN(filterWidth)}
+        <span class="bw-state" data-width-state={filterWidthState} title={widthStateTitle}>{widthStateText}</span>
+      {/if}
+      {#if filterWidthFeedback.busy && lifecycleTarget !== null}
+        <span class="bw-pending-target" data-pending-width-target>
+          PENDING {formatExactWidthDisplay(lifecycleTarget)}
+        </span>
+      {/if}
+    </div>
+    {#if filterWidthStatusText !== null}
+      <span class="sr-only" role="status" aria-live="polite" aria-atomic="true" data-filter-width-live>{filterWidthStatusText}</span>
+    {/if}
+
+    {#if hasIfShift}
+      <ValueControl
+        {...feedbackIntegratedRange}
+        binding={ifShiftBinding}
+        label={hasPbt ? "IF Shift (derived)" : "IF Shift"}
+        unit="Hz"
+        renderer="bipolar"
+        accentColor="var(--v2-accent-cyan)"
+        variant="hardware-illuminated"
+        issuedStatusPresentation={ifShiftStatusPresentation}
+      />
+      {@render pendingPassbandChip(passbandPendingTarget(ifShiftFeedback))}
+    {/if}
+    {#if hasPbt}
+      <ValueControl
+        {...feedbackIntegratedRange}
+        binding={pbtInnerBinding}
+        label="PBT Inner"
+        unit="Hz"
+        renderer="bipolar"
+        accentColor="var(--v2-accent-cyan)"
+        variant="hardware-illuminated"
+        issuedStatusPresentation={pbtInnerStatusPresentation}
+      />
+      {@render pendingPassbandChip(passbandPendingTarget(pbtInnerFeedback))}
+      <ValueControl
+        {...feedbackIntegratedRange}
+        binding={pbtOuterBinding}
+        label="PBT Outer"
+        unit="Hz"
+        renderer="bipolar"
+        accentColor="var(--v2-accent-green-bright)"
+        variant="hardware-illuminated"
+        issuedStatusPresentation={pbtOuterStatusPresentation}
+      />
+      {@render pendingPassbandChip(passbandPendingTarget(pbtOuterFeedback))}
+
+      <div class="filter-actions">
+        <button
+          type="button"
+          class="pbt-reset-button v2-control-button"
+          style="--control-accent:var(--v2-text-disabled); --control-active-text:var(--v2-text-bright)"
+          onclick={() => onPbtReset?.()}
+        >
+          Reset
+        </button>
+      </div>
+    {/if}
+  </div>
+{/if}
+
+{#if modalOpen}
+  <button
+    type="button"
+    class="modal-backdrop"
+    aria-label="Close filter settings"
+    onclick={closeSettings}
+  ></button>
+
+  <div class="filter-modal" role="dialog" aria-modal="true" aria-label={`Filter settings ${currentMode}`}>
+    <div class="modal-header">
+      <div>
+        <div class="modal-title">FILTER SETTINGS</div>
+        <div class="modal-subtitle">{currentMode}</div>
+      </div>
+      <button
+        type="button"
+        class="modal-close v2-control-button"
+        style="--control-accent:var(--v2-text-disabled); --control-active-text:var(--v2-text-bright)"
+        onclick={closeSettings}
+      >
+        Close
+      </button>
+    </div>
+
+    <div class="modal-body">
+      {#each normalizedLabels as label, index}
+        <div class="modal-filter-row" class:active={currentFilter === index + 1}>
+          <div class="modal-filter-meta">
+            <span class="modal-filter-label">{label}</span>
+            {#if currentFilter === index + 1}
+              <span class="modal-filter-active">ACTIVE</span>
+            {/if}
+          </div>
+
+          {#if filterConfig?.fixed}
+            <div class="modal-fixed-value">{formatWidthDisplay(draftWidths[index] ?? visibleWidths[index] ?? factoryDefaults[index])}</div>
+          {:else if isTableMode}
+            <ValueControl
+              label={label}
+              value={hzToTableIndex(draftWidths[index] ?? visibleWidths[index] ?? factoryDefaults[index])}
+              min={0}
+              max={(filterConfig?.table?.length ?? 1) - 1}
+              step={1}
+              unit="Hz"
+              renderer="hbar"
+              accentColor={currentFilter === index + 1 ? 'var(--v2-accent-cyan)' : 'var(--v2-accent-green-bright)'}
+              onChange={(idx) => handlePresetChange(index, tableIndexToHz(idx))}
+              variant="hardware-illuminated"
+              displayFn={(idx) => formatWidthDisplay(tableIndexToHz(idx))}
+            />
+          {:else}
+            <ValueControl
+              label={label}
+              value={draftWidths[index] ?? visibleWidths[index] ?? factoryDefaults[index]}
+              min={modalMin}
+              max={modalMax}
+              step={modalStep}
+              unit="Hz"
+              renderer="hbar"
+              accentColor={currentFilter === index + 1 ? 'var(--v2-accent-cyan)' : 'var(--v2-accent-green-bright)'}
+              onChange={(value) => handlePresetChange(index, value)}
+              variant="hardware-illuminated"
+              displayFn={formatWidthDisplay}
+            />
+          {/if}
+        </div>
+      {/each}
+
+      {#if hasFilterShape}
+        <!-- MOR-1689: the shared choice seam on the actual interactive
+             elements — every shape button carries the lifecycle's
+             data-command-phase, the section carries aria-busy for the
+             in-flight control, and a transition-deduplicated polite live
+             region names the requested target. data-armed/italic stay the
+             secondary channel, never the only indication. -->
+        {@const shapePhase = filterShapeFeedback?.phase}
+        <div class="shape-section" data-command-phase={shapePhase} aria-busy={shapeBusy}>
+          <div class="shape-title">Shape</div>
+          <div class="shape-buttons">
+            {#each FILTER_SHAPE_CHOICES as shapeChoice}
+              {@const isShapeArmed = filterShapeArmed.armed && filterShapeArmed.value === shapeChoice.value}
+              {@const shapeArmedId = `${filterArmedIdBase}-shape-${shapeChoice.value}`}
+              <button
+                type="button"
+                class="shape-button v2-control-button"
+                class:active={filterShape === shapeChoice.value}
+                style={shapeChoice.value === 0
+                  ? '--control-accent:var(--v2-accent-cyan); --control-active-text:var(--v2-text-white)'
+                  : '--control-accent:var(--v2-accent-green-bright); --control-active-text:var(--v2-bg-darkest)'}
+                data-armed={isShapeArmed ? 'true' : undefined}
+                data-command-phase={shapePhase}
+                aria-busy={isShapeArmed}
+                aria-pressed={shapeKnown ? filterShape === shapeChoice.value : undefined}
+                disabled={!shapeKnown}
+                aria-describedby={isShapeArmed ? shapeArmedId : undefined}
+                onclick={() => onFilterShapeChange?.(shapeChoice.value)}
+              >
+                {shapeChoice.label}
+              </button>
+              {#if isShapeArmed}
+                <span id={shapeArmedId} class="sr-only">{t('core.filter.select.pendingAnnouncement')}</span>
+              {/if}
+            {/each}
+          </div>
+          {#if shapeLive !== null}{#key shapeLive.transitionId}
+            <span class="sr-only" role="status" aria-live="polite" aria-atomic="true"
+              data-filter-shape-live>{shapeLive.text}</span>
+          {/key}{/if}
+        </div>
+      {/if}
+
+      {#if filterConfig?.fixed}
+        <div class="modal-note">This mode uses fixed filter widths.</div>
+      {:else if isTableMode}
+        <div class="modal-range">Discrete: {filterConfig?.table?.length} steps, {modalMin} - {modalMax} Hz</div>
+      {:else}
+        <div class="modal-range">Range: {modalMin} - {modalMax} Hz · Step: {modalStep} Hz</div>
+      {/if}
+    </div>
+
+    <div class="modal-actions">
+      {#if !filterConfig?.fixed}
+        <button
+          type="button"
+          class="defaults-button v2-control-button"
+          style="--control-accent:var(--v2-accent-green-bright); --control-active-text:var(--v2-bg-darkest)"
+          onclick={handleRestoreDefaults}
+        >
+          Restore Defaults
+        </button>
+      {/if}
+    </div>
+  </div>
+{/if}
+
+<style>
+  .panel-body {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 8px 8px;
+  }
+
+  .filter-top-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 8px;
+    align-items: start;
+  }
+
+  .filter-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 6px;
+  }
+
+  .filter-grid > :global(button),
+  .settings-button,
+  .modal-close,
+  .defaults-button {
+    min-width: 0;
+  }
+
+  /* MOR-1536 — same convention as `ModePanel.svelte`'s `.sr-only`: visually
+     hidden, `position: absolute` removes it from `.filter-grid`'s flow so
+     it never consumes a grid cell. */
+  .sr-only {
+    position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+    overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+  }
+
+  .bw-row {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 4px 2px 1px;
+    color: var(--v2-text-light);
+    font-family: 'Roboto Mono', monospace;
+  }
+
+  .bw-label {
+    color: var(--v2-text-dim);
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  .bw-value {
+    font-size: 14px;
+    font-weight: 700;
+    /* MOR-2667: the BW readout stays reserved in every state — 7ch covers
+       the widest text formatExactWidthDisplay renders ('9999 Hz',
+       '12.5kHz'); tabular digits keep a changing value from shifting the
+       row; the zero-width strut keeps the empty unread box's line-box
+       metrics in this baseline-aligned flex row. */
+    min-inline-size: 7ch;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .bw-value:empty::before { content: '\200b'; }
+
+  /* MOR-3677: the Hz-less width states (radio default, NARROW) name
+     themselves next to the reserved readout, in the pending chip's muted
+     register — a state label, not a value. */
+  .bw-state {
+    color: var(--v2-text-dim);
+    font-size: 11px;
+    letter-spacing: 0.04em;
+  }
+
+  .bw-pending-target {
+    border: 1px dashed var(--v2-accent-cyan);
+    border-radius: 2px;
+    padding: 1px 4px;
+    color: var(--v2-accent-cyan);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+  }
+
+  .filter-width-control {
+    display: grid;
+    gap: 4px;
+  }
+
+  /* Extra separation for stacked illuminated sliders */
+  .panel-body :global(.vc-bipolar) {
+    margin-block: 4px;
+  }
+
+  .filter-actions {
+    display: flex;
+    justify-content: flex-end;
+    margin-top: 4px;
+  }
+
+  .pbt-reset-button {
+    min-width: 88px;
+  }
+
+  .modal-backdrop {
+    position: fixed;
+    inset: 0;
+    top: var(--rp-chrome-top, 0px); /* MOR-3845 */
+    z-index: 10000;
+    background: var(--v2-popup-bg);
+    border: 0;
+    padding: 0;
+    margin: 0;
+  }
+
+  .filter-modal {
+    position: fixed;
+    top: calc(50% + var(--rp-chrome-top, 0px) / 2);
+    left: 50%;
+    z-index: 10001;
+    width: min(560px, calc(100vw - 24px));
+    max-height: min(calc((100vh - var(--rp-chrome-top, 0px)) * 0.88), 720px);
+    transform: translate(-50%, -50%);
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 14px;
+    background: linear-gradient(180deg, var(--v2-bg-gradient-start) 0%, var(--v2-bg-darkest) 100%);
+    border: 1px solid var(--v2-border-darker);
+    border-radius: 8px;
+    box-shadow: 0 18px 48px var(--v2-popup-shadow);
+    overflow: auto;
+  }
+
+  .modal-header,
+  .modal-actions {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+
+  .modal-title,
+  .modal-subtitle,
+  .modal-note,
+  .modal-range,
+  .modal-filter-meta,
+  .modal-fixed-value {
+    font-family: 'Roboto Mono', monospace;
+  }
+
+  .modal-title {
+    color: var(--v2-text-light);
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+  }
+
+  .modal-subtitle {
+    color: var(--v2-text-dim);
+    font-size: 11px;
+    margin-top: 3px;
+  }
+
+  .modal-body {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .shape-section {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding-top: 4px;
+  }
+
+  .shape-title {
+    color: var(--v2-text-subdued);
+    font-family: 'Roboto Mono', monospace;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  .shape-buttons {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .shape-button {
+    min-width: 0;
+  }
+
+  .modal-filter-row {
+    border: 1px solid var(--v2-border-darker);
+    border-radius: 6px;
+    padding: 10px;
+    background: var(--v2-overlay-light);
+  }
+
+  .modal-filter-row.active {
+    border-color: var(--v2-border-soft);
+    box-shadow: 0 0 0 1px var(--v2-popup-border-glow);
+  }
+
+  .modal-filter-meta {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 6px;
+  }
+
+  .modal-filter-label {
+    color: var(--v2-text-light);
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+  }
+
+  .modal-filter-active {
+    color: var(--v2-accent-cyan);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+  }
+
+  .modal-fixed-value,
+  .modal-note,
+  .modal-range {
+    color: var(--v2-text-subdued);
+    font-size: 12px;
+  }
+
+  /* MOR-2667: the fixed-width modal value stays reserved in every state —
+     7ch covers the widest formatWidthDisplay text ('999 Hz', '9.9kHz');
+     the zero-width strut keeps the empty unread box's line-box metrics. */
+  .modal-fixed-value {
+    min-inline-size: 7ch;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .modal-fixed-value:empty::before { content: '\200b'; }
+
+  @media (max-width: 640px) {
+    .filter-modal {
+      width: calc(100vw - 16px);
+      padding: 12px;
+    }
+
+    .modal-header,
+    .modal-actions {
+      flex-direction: column;
+      align-items: stretch;
+    }
+  }
+</style>

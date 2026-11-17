@@ -1,0 +1,271 @@
+<script module lang="ts">
+  import type { MeterField } from './radio-view-model';
+  import type { SignalMeterProjection } from '../components-v2/meters/smeter-scale';
+  import { renderSlot } from './design-language-renderers';
+  import type { LowerScaleDescriptor } from '../components-v2/meters/LinearSMeter.svelte';
+  import type { StationLevelMeterFrame } from './StationMeterInstrumentHost.svelte';
+
+  const present = (f: MeterField): boolean => f.availability.structural
+    && f.presence !== 'unavailable' && f.presence !== 'absent';
+  // MOR-2540 (owner ruling 2026-09-22): a declared meter whose
+  // `available_when` condition is currently false (a TX-only meter while
+  // not transmitting) KEEPS its seat, unlit — label in place, no value.
+  // Hiding it made the strip reflow the moment TX started; only a truly
+  // absent (undeclared) meter loses its seat. The S meter's own composite
+  // tile keeps the stricter `present()` above: its availability does not
+  // toggle with PTT, and its pinned presence-selection contract stands.
+  const levelPresent = (frame: StationLevelMeterFrame): boolean =>
+    frame.projection.presence !== 'absent';
+  /** Level 2 — is it readable now AND actually read. */
+  const observed = (f: MeterField): boolean =>
+    f.availability.operational && f.reading.status === 'known';
+  /**
+   * MOR-2250 (PR 2 of 2): the bottom scale row of the shared S-meter bar —
+   * the real IC-7300's second, radio-selected TX-meter scale, fixed to SWR
+   * only (owner ruling: no selector in this PR; a future instrument-group
+   * selector swaps this out as a DATA change). Label/ticks are a fixed UI
+   * constant, not radio-specific data — the same treatment `LinearSMeter`'s
+   * own hardcoded S-unit scale marks get — matching the reference photo's
+   * "SWR 1 1.5 2 2.5 3 ∞".
+   */
+  const SWR_LOWER_SCALE_TICKS = [
+    { value: 0, label: '1' },
+    { value: 0.2, label: '1.5' },
+    { value: 0.4, label: '2' },
+    { value: 0.6, label: '2.5' },
+    { value: 0.8, label: '3' },
+    { value: 1, label: '∞' },
+  ] as const;
+
+  function swrLowerScale(frame: StationLevelMeterFrame<'swr'>): LowerScaleDescriptor {
+    const projection = frame.projection;
+    return {
+      label: 'SWR',
+      ticks: projection.ratioScale ? SWR_LOWER_SCALE_TICKS : [],
+      valueFraction: frame.motion.smoothedFraction,
+      fault: projection.fault,
+      relevant: projection.relevant,
+      // MOR-2688 S4d: `projectLevelMeter` runs with `txObserved = true`,
+      // so `stateText` is '' in every state and `displayText` is the
+      // formatted value or '' — the read/unread test collapses to the
+      // ratio-scale choice, which stays a local presentation decision.
+      // The projector names an unread meter by its label, so
+      // `accessibleDescription` always exists for SWR here.
+      stateText: projection.ratioScale ? projection.stateText : projection.displayText,
+      accessibleDescription: projection.accessibleDescription ?? projection.label,
+    };
+  }
+
+  /**
+   * MOR-1275: the active design language's `meters` renderer, for the S meter —
+   * the one gauge whose grammar those renderers describe (a two-tone track that
+   * hands over at S9). The reading and crossover are the fractions from the
+   * same `SignalMeterProjection` passed to `LinearSMeter`; an unobserved meter
+   * keeps a null motion fraction and stays unknown rather than reading as zero.
+   * Annotations only — availability, relevance and the gauge itself remain this
+   * surface's decisions.
+   *
+   * MOR-2255: this single call also supplies the `BarGauge` tiles' `zones` —
+   * the slot is called ONCE per render (see `display` below) and read twice,
+   * never once per gauge.
+   */
+  const meterDisplay = (signalProjection: SignalMeterProjection): ReturnType<typeof renderSlot> =>
+    renderSlot('meters', {
+      value: signalProjection.motionFraction,
+      max: 1,
+      // Explicit raw/unknown domains cannot expose this fallback to the
+      // S-meter: `signalDisplay` below withholds their S-specific descriptor.
+      // The shared descriptor still owns the unrelated BarGauge palettes.
+      s9: signalProjection.crossoverFraction ?? 0,
+    });
+</script>
+
+<script lang="ts">
+  import LinearSMeter from '../components-v2/meters/LinearSMeter.svelte';
+  import {
+    calibratedToDbm, calibratedToSUnit, formatDbm, getCalibrationPoints, isSmeterCalibrated,
+  } from '../components-v2/meters/smeter-scale';
+  import MeterRendererSeat from '../component-kits/MeterRendererSeat.svelte';
+  import { RF_LABEL, RF_MARK, rfUnconfirmedLabel } from './rx-tx-surface';
+  import StationMeterBarPlacement from './StationMeterBarPlacement.svelte';
+  import type {
+    StationMeterInstrumentHandles, StationSignalMeterFrame,
+  } from './StationMeterInstrumentHost.svelte';
+  import type { ActionRendererSeat } from '../primitives/control-instruments/control-instrument-renderer.svelte';
+  import type { MeterRfState } from './radio-view-model';
+
+  interface Props {
+    handles: StationMeterInstrumentHandles;
+  }
+  let { handles }: Props = $props();
+
+  /** MOR-2521: the S-unit and dBm texts the mounted profile's calibration
+   *  knots print; none when uncalibrated. The S caption reserves the widest
+   *  of each, measured in its own font, as the `min-width` of its value and
+   *  dBm spans. */
+  const signalCaptionTexts = $derived.by(() => {
+    const value: string[] = [];
+    const secondary: string[] = [];
+    if (isSmeterCalibrated()) {
+      for (const point of getCalibrationPoints()) {
+        value.push(calibratedToSUnit(point.actual));
+        secondary.push(formatDbm(calibratedToDbm(point.actual)));
+      }
+    }
+    return { value, secondary };
+  });
+  let valueMeasure: HTMLSpanElement | undefined = $state();
+  let secondaryMeasure: HTMLSpanElement | undefined = $state();
+  let signalCaptionMinWidth = $state<{ value?: string; secondary?: string }>({});
+
+  /** The widest of `texts` set in `node`, which is left empty. */
+  function widestWidth(node: HTMLElement, texts: readonly string[]): string | undefined {
+    if (texts.length === 0) return undefined;
+    const widest = Math.max(...texts.map((text) => {
+      node.textContent = text;
+      return node.getBoundingClientRect().width;
+    }));
+    node.textContent = '';
+    return `${Math.ceil(widest)}px`;
+  }
+
+  $effect(() => {
+    const { value, secondary } = signalCaptionTexts;
+    const valueNode = valueMeasure;
+    const secondaryNode = secondaryMeasure;
+    if (!valueNode || !secondaryNode) return;
+    const measure = () => {
+      signalCaptionMinWidth = {
+        value: widestWidth(valueNode, value),
+        secondary: widestWidth(secondaryNode, secondary),
+      };
+    };
+    measure();
+    // Measured again once the document's fonts have loaded.
+    let live = true;
+    void document.fonts?.ready.then(() => { if (live) measure(); });
+    return () => { live = false; };
+  });
+</script>
+
+{#snippet station(
+  signalFrame: StationSignalMeterFrame | null, signalProjection: SignalMeterProjection | null,
+  swrFrame: StationLevelMeterFrame<'swr'> | null,
+  rfState: MeterRfState,
+  presentGroup: boolean,
+)}
+{#if presentGroup}
+  {@const display = signalProjection ? meterDisplay(signalProjection) : null}
+  {@const visibleSignal = signalFrame !== null && present(signalFrame.field)}
+  {@const visibleSwr = swrFrame !== null && levelPresent(swrFrame)}
+  {@const signalDisplay = signalProjection?.crossoverFraction == null ? null : display}
+  {#snippet nativeLevel(frame: StationLevelMeterFrame, resetPeakSeat?: ActionRendererSeat)}
+    {@const bar = frame.projection}
+    <div class="meter-tile" data-meter-tile data-meter={bar.key} data-testid={`meter-${bar.key}`}
+      data-relevant={bar.relevant} data-observed={bar.observed} data-fault={bar.fault}
+      data-meter-state={bar.state}
+      role="group" aria-label={`${bar.label} meter`}>
+      <div class="meter-native-caption" aria-hidden="true">
+        <span class="meter-native-label">{bar.label}</span>
+        <span class="meter-native-value">{bar.displayText}</span>
+      </div>
+      {#if bar.gauge}
+        {#key resetPeakSeat}<StationMeterBarPlacement {frame} label={bar.label}
+          displayValue={bar.displayText} accessibleDescription={bar.accessibleDescription}
+          compact fault={bar.fault} zones={display?.display?.zones} {resetPeakSeat} />{/key}
+      {:else}<span class="meter-unknown">{bar.displayText}</span>{/if}
+    </div>
+  {/snippet}
+  {#snippet level(frame: StationLevelMeterFrame, resetPeakSeat?: ActionRendererSeat)}
+    {#if levelPresent(frame)}
+      {#key resetPeakSeat}
+        <MeterRendererSeat kind="level" {frame} {resetPeakSeat} fallback={nativeLevel} />
+      {/key}
+    {/if}
+  {/snippet}
+  {#snippet power(frame: StationLevelMeterFrame<'power'>, seat?: ActionRendererSeat)}{@render level(frame, seat)}{/snippet}
+  {#snippet nativeSwr(_frame: StationLevelMeterFrame)}{/snippet}
+  {#snippet swr(frame: StationLevelMeterFrame<'swr'>)}
+    {#if levelPresent(frame)}<MeterRendererSeat kind="level" {frame} fallback={nativeSwr} />{/if}
+  {/snippet}
+  {#snippet alc(frame: StationLevelMeterFrame<'alc'>, seat?: ActionRendererSeat)}{@render level(frame, seat)}{/snippet}
+  {#snippet drainCurrent(frame: StationLevelMeterFrame<'drainCurrent'>, seat?: ActionRendererSeat)}{@render level(frame, seat)}{/snippet}
+  {#snippet drainVoltage(frame: StationLevelMeterFrame<'drainVoltage'>)}{@render level(frame)}{/snippet}
+  {#snippet compression(frame: StationLevelMeterFrame<'compression'>)}{@render level(frame)}{/snippet}
+  <section
+    class="meters-surface" data-testid="meters-surface"
+    data-rf-state={rfState} aria-label="Station meters"
+  >
+    <p class="meters-rf" data-testid="meters-rf">
+      <span data-testid="meters-rf-mark" aria-hidden="true">{RF_MARK[rfState]}</span>
+      <span data-testid="meters-rf-label" aria-label={rfUnconfirmedLabel(rfState) ?? undefined}>{RF_LABEL[rfState]}</span>
+    </p>
+
+    {#if signalFrame !== null && (visibleSignal || visibleSwr)}
+      {@const field = signalFrame.field}
+      {@const reading = observed(field) && field.reading.status === 'known'
+        && Number.isFinite(field.reading.value) ? field.reading : { status: 'unknown' } as const}
+      {#snippet nativeSignal(_frame: typeof signalFrame.motion)}
+        <div
+          class="meter-tile" data-meter-tile data-meter={present(field) ? "signal" : "swr"} data-testid={present(field) ? "meter-signal" : "meter-swr"}
+          data-relevant={field.relevant} data-observed={observed(field)}
+          role="group" aria-label={present(field) ? "S meter" : "SWR meter"}
+          {...signalDisplay?.attributes ?? {}}
+        >
+          {#if present(field)}
+            <div class="meter-native-caption" aria-hidden="true" data-relevant={field.relevant}>
+              <span class="meter-native-label">S</span>
+              <span class="meter-native-value" style:min-width={signalCaptionMinWidth.value}
+              >{signalProjection?.primaryText ?? ''}</span>
+              {#if signalCaptionTexts.secondary.length > 0}
+                <span class="meter-native-secondary" style:min-width={signalCaptionMinWidth.secondary}
+                >{signalProjection?.secondaryText ?? ''}</span>
+              {/if}
+              <span class="meter-native-value meter-native-measure" bind:this={valueMeasure}></span>
+              <span class="meter-native-secondary meter-native-measure" bind:this={secondaryMeasure}></span>
+            </div>
+          {/if}
+          {#if swrFrame && visibleSwr}
+            <div class="meter-native-caption" aria-hidden="true" data-relevant={swrFrame.projection.relevant}>
+              <span class="meter-native-label">SWR</span>
+              <span class="meter-native-value">{swrFrame.projection.displayText}</span>
+            </div>
+          {/if}
+          <LinearSMeter
+            frame={signalFrame.motion} label="S" compact
+            mainPresent={present(field)}
+            display={signalDisplay?.display ?? undefined}
+            lowerScale={swrFrame && visibleSwr ? swrLowerScale(swrFrame) : undefined}
+            relevant={field.relevant}
+          />
+        </div>
+      {/snippet}
+      <MeterRendererSeat frame={signalFrame.motion} {reading} domain={field.domain}
+        relevant={field.relevant} selectedPresent={present(field)} fallback={nativeSignal} />
+    {/if}
+    {@render handles.power(power)}
+    {@render handles.swr(swr)}
+    {@render handles.alc(alc)}
+    {@render handles.drainCurrent(drainCurrent)}
+    {@render handles.drainVoltage(drainVoltage)}
+    {@render handles.compression(compression)}
+  </section>
+{/if}
+{/snippet}
+
+{@render handles.signal(station)}
+
+<style>
+  /* Structure only — a design language owns the palette and must never become
+     the sole state channel (MOR-977). The persistent station host owns motion;
+     these gauges only draw its passive frames. */
+  .meters-surface { display: flex; flex-direction: column; gap: 0.25rem; }
+  .meters-rf { display: flex; align-items: baseline; gap: 0.4ch; margin: 0; font-weight: 700; }
+  .meter-tile { display: block; }
+  .meter-native-caption { display: none; }
+  .meter-native-measure { position: absolute; visibility: hidden; pointer-events: none; white-space: nowrap; }
+  .meter-tile[data-relevant='false']:not([data-meter='signal']):not([data-meter='swr']) {
+    opacity: 0.4;
+  }
+  .meter-unknown { font-weight: 700; }
+</style>

@@ -1,0 +1,7011 @@
+# mypy: disable-error-code=untyped-decorator
+"""Tests for RigctldHandler — command dispatch, cache, read-only, exceptions."""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+from unittest import mock
+from unittest.mock import AsyncMock
+
+import pytest
+
+from _caps import FULL_ICOM_CAPS
+from test_radio import MockTransport
+
+from rigplane.commands import CONTROLLER_ADDR
+from rigplane.core.acquisition_scheduler import (
+    AcquisitionPriority,
+    AcquisitionScheduler,
+    RadioStateModelService,
+    StateFreshnessService,
+)
+from rigplane.core.state_acquisition_policy import (
+    AcquisitionPolicy,
+    FieldCapability,
+    RadioAcquisitionProfile,
+)
+from rigplane.core.state_pipeline_contracts import (
+    CommandSource,
+    FieldPath,
+    Observation,
+    SourceMetadata,
+)
+from rigplane.core.state_store import FreshnessState, StateStore
+from rigplane.exceptions import CommandError as IcomCommandError
+from rigplane.exceptions import CommandRejectedError
+from rigplane.exceptions import ConnectionError as IcomConnectionError
+from rigplane.exceptions import TimeoutError as IcomTimeoutError
+from rigplane.profiles import resolve_radio_profile
+from rigplane.radio import IcomRadio
+from rigplane.radio_state import RadioState
+from rigplane.rigctld.contract import (
+    ClientSession,
+    HamlibError,
+    RigctldCommand,
+    RigctldConfig,
+)
+from rigplane.rigctld.handler import RigctldHandler
+from rigplane.rigctld.protocol import format_response, parse_line
+from rigplane.types import CivFrame, Mode
+from rigplane_testkit.leaked_radio_guard import fake_connected
+
+# ---------------------------------------------------------------------------
+# Fixtures
+# ---------------------------------------------------------------------------
+
+
+def make_mock_radio() -> AsyncMock:
+    """Bare radio mock that does NOT satisfy the RigctldRoutable Protocol.
+
+    Python 3.11's runtime-checkable Protocol ``isinstance()`` uses
+    ``hasattr()``, which a bare AsyncMock always satisfies, so
+    ``create_routing()`` would call the auto-generated async
+    ``rigctld_routing()`` and store a *coroutine* as ``handler._routing``.
+    Python 3.12+ uses ``inspect.getattr_static()`` (gh-102433) and is immune.
+    Deleting the attribute makes both interpreters take the built-in Icom
+    routing path. Yaesu tests wire an explicit sync ``rigctld_routing``
+    lambda instead (see ``yaesu_radio``).
+    """
+    radio = AsyncMock()
+    del radio.rigctld_routing
+    return radio
+
+
+@pytest.fixture
+def config() -> RigctldConfig:
+    return RigctldConfig()
+
+
+@pytest.fixture
+def mock_radio() -> AsyncMock:
+    """Radio mock; implements MetersCapable (get_s_meter, get_swr, get_rf_power) for get_level tests."""
+    radio = make_mock_radio()
+    radio.capabilities = set(FULL_ICOM_CAPS)
+    radio.get_data_mode.return_value = False
+    radio.get_s_meter = AsyncMock(return_value=0)
+    radio.get_swr = AsyncMock(return_value=0.0)
+    radio.get_rf_power = AsyncMock(return_value=0)
+    radio.get_comp_meter = AsyncMock(return_value=0)
+    radio.get_id_meter = AsyncMock(return_value=0)
+    radio.get_vd_meter = AsyncMock(return_value=0)
+    return radio
+
+
+@pytest.fixture
+def handler(mock_radio: AsyncMock, config: RigctldConfig) -> RigctldHandler:
+    return RigctldHandler(mock_radio, config)
+
+
+def get_cmd(long_cmd: str, *args: str) -> RigctldCommand:
+    return RigctldCommand(
+        short_cmd="", long_cmd=long_cmd, args=tuple(args), is_set=False
+    )
+
+
+def set_cmd(long_cmd: str, *args: str) -> RigctldCommand:
+    return RigctldCommand(
+        short_cmd="", long_cmd=long_cmd, args=tuple(args), is_set=True
+    )
+
+
+class _ContractModeRadio:
+    def __init__(
+        self,
+        *,
+        mode: str = "USB",
+        filter_width: int | None = 1,
+        data_mode: bool = False,
+    ) -> None:
+        self.mode = mode
+        self.filter_width = filter_width
+        self.data_mode = data_mode
+        self.set_mode_calls: list[tuple[str, int | None, int]] = []
+        self.set_data_mode_calls: list[int | bool] = []
+
+    async def get_mode(self, receiver: int = 0) -> tuple[str, int | None]:
+        assert receiver == 0
+        return self.mode, self.filter_width
+
+    async def set_mode(
+        self,
+        mode: str,
+        filter_width: int | None = None,
+        receiver: int = 0,
+    ) -> None:
+        self.set_mode_calls.append((mode, filter_width, receiver))
+        self.mode = mode
+        self.filter_width = filter_width
+
+    async def get_data_mode(self) -> bool:
+        return self.data_mode
+
+    async def set_data_mode(self, on: int | bool) -> None:
+        self.set_data_mode_calls.append(on)
+        self.data_mode = bool(on)
+
+
+class _RecordingStateModelService:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+
+    def ensure_fresh(
+        self,
+        paths: FieldPath | str | tuple[FieldPath | str, ...],
+        *,
+        max_age: float,
+        priority: str,
+        reason: str,
+        timeout: float | None = None,
+        require_fresh_dispatch: bool = False,
+    ) -> object:
+        if isinstance(paths, tuple):
+            normalized = tuple(
+                str(path) if isinstance(path, FieldPath) else path for path in paths
+            )
+        else:
+            normalized = (str(paths) if isinstance(paths, FieldPath) else paths,)
+        self.calls.append(
+            {
+                "paths": normalized,
+                "max_age": max_age,
+                "priority": priority,
+                "reason": reason,
+                "timeout": timeout,
+            }
+        )
+        return object()
+
+
+def _acquisition_profile(*paths: FieldPath) -> RadioAcquisitionProfile:
+    return RadioAcquisitionProfile(
+        provider="test_provider",
+        capabilities=tuple(
+            FieldCapability(
+                path=path,
+                polling=True,
+                command_response_observable=True,
+            )
+            for path in paths
+        ),
+        default_policy=AcquisitionPolicy(),
+    )
+
+
+def _apply_store_value(
+    store: StateStore,
+    path: str,
+    value: object,
+    *,
+    command_source: CommandSource | None = None,
+    correlation_id: str | None = None,
+    max_age: float | None = None,
+    quality: tuple[str, ...] = ("confirmed",),
+) -> None:
+    store.apply(
+        Observation(
+            path=FieldPath.parse(path),
+            value=value,
+            source=SourceMetadata(
+                source="test",
+                provider="tests",
+                command_source=command_source,
+            ),
+            timestamp_monotonic=1.0,
+            correlation_id=correlation_id,
+            max_age=max_age,
+            quality=quality,
+        )
+    )
+
+
+def _seed_known_rx(store: StateStore) -> None:
+    """MOR-1881: DEFER-classified rigctld writes (freq/mode/vfo/split) now
+    fail closed on unknown RF state instead of executing unconditionally.
+    The tests using this helper exercise unrelated store/overlay behavior,
+    so seed a known-RX PTT observation (a huge ``max_age`` so it never ages
+    out against the real monotonic clock these bare ``StateStore()``
+    fixtures use) to keep the TX interlock out of their way.
+    """
+    _apply_store_value(store, "global.tx_state.ptt", False, max_age=1e9)
+
+
+def _apply_handler_value(
+    handler: RigctldHandler,
+    path: str,
+    value: object,
+    *,
+    command_source: CommandSource | None = None,
+    correlation_id: str | None = None,
+    max_age: float | None = None,
+) -> None:
+    handler._command_service.apply_observation(  # noqa: SLF001
+        Observation(
+            path=FieldPath.parse(path),
+            value=value,
+            source=SourceMetadata(
+                source="test",
+                provider="tests",
+                command_source=command_source,
+            ),
+            timestamp_monotonic=1.0,
+            correlation_id=correlation_id,
+            max_age=max_age,
+        )
+    )
+
+
+# ---------------------------------------------------------------------------
+# get_freq / set_freq
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_freq_returns_frequency(
+    handler: RigctldHandler, mock_radio: AsyncMock
+) -> None:
+    mock_radio.get_freq.return_value = 14_074_000
+    resp = await handler.execute(get_cmd("get_freq"))
+    assert resp.ok
+    assert resp.values == ["14074000"]
+    mock_radio.get_freq.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_get_freq_served_from_cache(
+    handler: RigctldHandler, mock_radio: AsyncMock
+) -> None:
+    mock_radio.get_freq.return_value = 14_074_000
+    cmd = get_cmd("get_freq")
+    resp1 = await handler.execute(cmd)
+    resp2 = await handler.execute(cmd)
+    assert resp1.values == resp2.values
+    mock_radio.get_freq.assert_awaited_once()  # only one real call
+
+
+@pytest.mark.asyncio
+async def test_get_freq_projects_state_store_snapshot(
+    mock_radio: AsyncMock,
+) -> None:
+    store = StateStore()
+    mock_radio.state_store = store
+    _apply_store_value(store, "receiver.main.active.freq_mode.freq_hz", 14_074_000)
+    handler = RigctldHandler(mock_radio, RigctldConfig())
+
+    resp = await handler.execute(get_cmd("get_freq"))
+
+    assert resp.ok
+    assert resp.values == ["14074000"]
+    mock_radio.get_freq.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_get_freq_projects_numeric_active_main_alias(
+    mock_radio: AsyncMock,
+) -> None:
+    store = StateStore()
+    mock_radio.state_store = store
+    _apply_store_value(store, "receiver.0.active.freq_mode.freq_hz", 14_074_000)
+    state = RadioState()
+    state.main.freq = 14_250_000
+    mock_radio.radio_state = state
+    handler = RigctldHandler(mock_radio, RigctldConfig())
+
+    resp = await handler.execute(get_cmd("get_freq"))
+
+    assert resp.ok
+    assert resp.values == ["14074000"]
+    mock_radio.get_freq.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_get_freq_prefers_radio_state(
+    handler: RigctldHandler, mock_radio: AsyncMock
+) -> None:
+    state = RadioState()
+    state.main.freq = 14_074_000
+    mock_radio.radio_state = state
+
+    resp = await handler.execute(get_cmd("get_freq"))
+
+    assert resp.ok
+    assert resp.values == ["14074000"]
+    mock_radio.get_freq.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_get_freq_radio_state_fallback_does_not_write_state_store(
+    handler: RigctldHandler, mock_radio: AsyncMock
+) -> None:
+    """The RadioState fallback answers the client but never writes.
+
+    ``_cmd_get_freq`` returns the mirror frequency to the client and
+    leaves the canonical StateStore untouched: an untimestamped mirror
+    read must not be re-stamped as a fresh ``state_poller`` observation
+    that later GETs and other consumers then trust. The write-back this
+    test replaces used to pin the opposite behaviour.
+    """
+
+    state = RadioState()
+    state.main.freq = 14_074_000
+    mock_radio.radio_state = state
+
+    resp = await handler.execute(get_cmd("get_freq"))
+
+    assert resp.values == ["14074000"]
+    snapshot = handler._state_store.snapshot()  # noqa: SLF001
+    with pytest.raises(KeyError):
+        snapshot.field("receiver.main.active.freq_mode.freq_hz")
+    assert all(field.source.source != "state_poller" for field in snapshot.fields)
+
+
+_MIRROR_FALLBACK_SITES = (
+    "get_freq_main",
+    "get_freq_vfob_sub",
+    "get_level_strength_main",
+    "get_level_strength_vfob_sub",
+    "get_level_rfpower",
+    "get_split_vfo",
+)
+
+
+def _mirror_fallback_case(
+    site: str,
+) -> tuple[AsyncMock, RigctldCommand, list[str], str, object]:
+    """Build one mirror-fallback GET.
+
+    Returns ``(radio, cmd, expected_values, canonical_path, stale_seed)``
+    with the ``RadioState`` mirror populated and the canonical store left
+    to the caller (absent, or pre-seeded stale with ``stale_seed``).
+    """
+    radio = make_mock_radio()
+    radio.capabilities = set(FULL_ICOM_CAPS)
+    state = RadioState()
+    if site in ("get_freq_vfob_sub", "get_level_strength_vfob_sub"):
+        radio.profile = _FakeProfile(receiver_count=2, vfo_scheme="main_sub")
+    if site == "get_freq_main":
+        state.main.freq = 14_074_000
+        cmd = get_cmd("get_freq")
+        expected = ["14074000"]
+        path = "receiver.main.active.freq_mode.freq_hz"
+        stale_seed = 3_500_000
+    elif site == "get_freq_vfob_sub":
+        state.sub.freq = 7_100_000
+        cmd = _vfo_get_cmd("get_freq", "VFOB")
+        expected = ["7100000"]
+        path = "receiver.sub.active.freq_mode.freq_hz"
+        stale_seed = 3_500_000
+    elif site == "get_level_strength_main":
+        state.main.freq = 14_074_000
+        state.main.s_meter = 120
+        cmd = get_cmd("get_level", "STRENGTH")
+        expected = ["3"]  # round(120 / 241 * 114 - 54)
+        path = "receiver.main.meters.s_meter"
+        stale_seed = 60
+    elif site == "get_level_strength_vfob_sub":
+        state.sub.s_meter = 120
+        cmd = _vfo_get_cmd("get_level", "VFOB", "STRENGTH")
+        expected = ["3"]  # round(120 / 241 * 114 - 54)
+        path = "receiver.sub.meters.s_meter"
+        stale_seed = 60
+    elif site == "get_level_rfpower":
+        state.main.freq = 14_074_000
+        state.power_level = 128
+        cmd = get_cmd("get_level", "RFPOWER")
+        expected = [f"{128 / 255.0:.6f}"]
+        path = "global.operator_controls.power_level"
+        stale_seed = 255
+    else:
+        assert site == "get_split_vfo"
+        state.split = True
+        cmd = get_cmd("get_split_vfo")
+        expected = ["1", "VFOA"]
+        path = "global.tx_state.split"
+        stale_seed = False
+    radio.radio_state = state
+    return radio, cmd, expected, path, stale_seed
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("canonical", ["missing", "stale"])
+@pytest.mark.parametrize("site", _MIRROR_FALLBACK_SITES)
+async def test_get_mirror_fallback_answers_client_without_store_write(
+    site: str, canonical: str
+) -> None:
+    """Every RadioState-mirror GET fallback answers the client but never writes.
+
+    When the canonical StateStore projection for a GET is missing or not
+    fresh, the handler falls back to the untimestamped ``RadioState``
+    mirror. The client keeps receiving the same answer the fallback
+    always produced, while the canonical store gains no fresh
+    ``state_poller`` observation of the mirror value: a read on this
+    ingress does not manufacture truth for other consumers.
+    """
+    radio, cmd, expected, path, stale_seed = _mirror_fallback_case(site)
+    store = StateStore()
+    if canonical == "stale":
+        _apply_store_value(store, path, stale_seed, max_age=0.25)
+        store.mark_stale_due(now=2.0)
+        before = store.snapshot().field(path)
+        assert before.freshness is FreshnessState.STALE
+
+    handler = RigctldHandler(radio, RigctldConfig(), state_store=store)
+    resp = await handler.execute(cmd)
+
+    assert resp.ok
+    assert resp.values == expected
+    snapshot = store.snapshot()
+    if canonical == "missing":
+        with pytest.raises(KeyError):
+            snapshot.field(path)
+    else:
+        after = snapshot.field(path)
+        assert after.freshness is FreshnessState.STALE
+        assert after.value == stale_seed
+        assert after.source.source == "test"
+    assert all(field.source.source != "state_poller" for field in snapshot.fields)
+
+
+@pytest.mark.asyncio
+async def test_handler_captures_fallback_store_token_before_awaited_get(
+    mock_radio: AsyncMock,
+) -> None:
+    """An old request may return a response, but cannot relabel its readback."""
+    store = StateStore()
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def delayed_get_freq() -> int:
+        started.set()
+        await release.wait()
+        return 14_074_000
+
+    mock_radio.get_freq.side_effect = delayed_get_freq
+    handler = RigctldHandler(mock_radio, RigctldConfig(), state_store=store)
+    request = asyncio.create_task(handler.execute(get_cmd("get_freq")))
+    await started.wait()
+    store.begin_provider_generation()
+    before = store.snapshot()
+    release.set()
+    response = await request
+
+    assert response.values == ["14074000"]
+    after = store.snapshot()
+    assert after.state_revision == before.state_revision
+    assert after.freshness_revision == before.freshness_revision
+    assert after.observation_seq == before.observation_seq
+    assert after.fields == before.fields
+
+
+@pytest.mark.asyncio
+async def test_get_freq_ensure_fresh_requests_bounded_projection(
+    mock_radio: AsyncMock,
+) -> None:
+    store = StateStore()
+    model_service = _RecordingStateModelService()
+    _apply_store_value(
+        store,
+        "receiver.main.active.freq_mode.freq_hz",
+        14_074_000,
+        max_age=1.0,
+    )
+    handler = RigctldHandler(
+        mock_radio,
+        RigctldConfig(cache_ttl=0.25),
+        state_store=store,
+        state_model_service=model_service,
+    )
+
+    resp = await handler.execute(get_cmd("get_freq"))
+
+    assert resp.values == ["14074000"]
+    assert model_service.calls == [
+        {
+            "paths": ("receiver.main.active.freq_mode.freq_hz",),
+            "max_age": 0.25,
+            "priority": "user",
+            "reason": "rigctld.get_freq",
+            "timeout": None,
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_get_freq_ensure_fresh_queues_canonical_request_with_real_service(
+    mock_radio: AsyncMock,
+) -> None:
+    store = StateStore()
+    freq = FieldPath.active("main", "freq_mode", "freq_hz")
+    scheduler = AcquisitionScheduler(profile=_acquisition_profile(freq))
+    model_service = RadioStateModelService(store=store, scheduler=scheduler)
+    mock_radio.state_store = store
+    mock_radio.state_model_service = model_service
+    mock_radio.get_freq.return_value = 14_074_000
+    handler = RigctldHandler(mock_radio, RigctldConfig(cache_ttl=0.25))
+
+    resp = await handler.execute(get_cmd("get_freq"))
+
+    assert resp.values == ["14074000"]
+    requests = scheduler.pending_requests()
+    assert len(requests) == 1
+    assert requests[0].paths == (freq,)
+    assert requests[0].priority is AcquisitionPriority.USER
+    assert requests[0].reason == "rigctld.get_freq"
+
+
+@pytest.mark.asyncio
+async def test_ensure_fresh_skips_coroutine_service_per_sync_contract(
+    mock_radio: AsyncMock,
+) -> None:
+    """MOR-431: a service whose ensure_fresh is a coroutine violates the
+    synchronous StateModelService contract, so the handler skips it rather
+    than awaiting it, and still serves the request via store/readback.
+    """
+
+    class _AsyncContractViolatingService:
+        def __init__(self) -> None:
+            self.called = False
+
+        async def ensure_fresh(
+            self,
+            paths: object,
+            *,
+            max_age: float,
+            priority: str,
+            reason: str,
+            timeout: float | None = None,
+            require_fresh_dispatch: bool = False,
+        ) -> object:  # pragma: no cover - must never be invoked
+            self.called = True
+            return object()
+
+    service = _AsyncContractViolatingService()
+    store = StateStore()
+    _apply_store_value(
+        store,
+        "receiver.main.active.freq_mode.freq_hz",
+        14_074_000,
+        max_age=1.0,
+    )
+    handler = RigctldHandler(
+        mock_radio,
+        RigctldConfig(cache_ttl=0.25),
+        state_store=store,
+        state_model_service=service,
+    )
+
+    freq_path = FieldPath.active("main", "freq_mode", "freq_hz")
+    result = handler._ensure_fresh((freq_path,), reason="rigctld.get_freq")  # noqa: SLF001
+
+    # Coroutine service is skipped (returns None), never awaited or called.
+    assert result is None
+    assert service.called is False
+    # The handler still serves the value from the fresh store projection.
+    resp = await handler.execute(get_cmd("get_freq"))
+    assert resp.values == ["14074000"]
+
+
+@pytest.mark.asyncio
+async def test_get_freq_stale_store_value_falls_through_to_radio_readback(
+    mock_radio: AsyncMock,
+) -> None:
+    store = StateStore()
+    freq = FieldPath.active("main", "freq_mode", "freq_hz")
+    scheduler = AcquisitionScheduler(profile=_acquisition_profile(freq))
+    model_service = RadioStateModelService(store=store, scheduler=scheduler)
+    mock_radio.state_store = store
+    mock_radio.state_model_service = model_service
+    mock_radio.get_freq.return_value = 14_090_000
+    _apply_store_value(
+        store,
+        "receiver.main.active.freq_mode.freq_hz",
+        14_074_000,
+        max_age=0.25,
+    )
+    store.mark_stale_due(now=2.0)
+    handler = RigctldHandler(mock_radio, RigctldConfig(cache_ttl=0.25))
+
+    resp = await handler.execute(get_cmd("get_freq"))
+
+    assert resp.values == ["14090000"]
+    requests = scheduler.pending_requests()
+    assert len(requests) == 1
+    assert requests[0].paths == (freq,)
+    assert requests[0].priority is AcquisitionPriority.USER
+    assert requests[0].reason == "rigctld.get_freq"
+    mock_radio.get_freq.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_get_freq_headless_freshness_service_stale_value_queues_reconciliation(
+    mock_radio: AsyncMock,
+) -> None:
+    store = StateStore()
+    freq = FieldPath.active("main", "freq_mode", "freq_hz")
+    scheduler = AcquisitionScheduler(profile=_acquisition_profile(freq))
+    model_service = RadioStateModelService(store=store, scheduler=scheduler)
+    freshness_service = StateFreshnessService(store=store, scheduler=scheduler)
+    mock_radio.state_store = store
+    mock_radio.state_model_service = model_service
+    mock_radio._state_freshness_service = freshness_service
+    mock_radio.get_freq.return_value = 14_090_000
+    _apply_store_value(
+        store,
+        "receiver.main.active.freq_mode.freq_hz",
+        14_074_000,
+        max_age=0.25,
+    )
+    freshness_service.tick(now=2.0)
+    handler = RigctldHandler(mock_radio, RigctldConfig(cache_ttl=0.25))
+
+    resp = await handler.execute(get_cmd("get_freq"))
+
+    assert resp.values == ["14090000"]
+    requests = scheduler.pending_requests()
+    assert len(requests) == 1
+    assert requests[0].paths == (freq,)
+    assert requests[0].priority is AcquisitionPriority.USER
+    assert requests[0].reasons == ("stale", "rigctld.get_freq")
+    mock_radio.get_freq.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_set_freq_calls_radio(
+    handler: RigctldHandler, mock_radio: AsyncMock
+) -> None:
+    resp = await handler.execute(set_cmd("set_freq", "14074000"))
+    assert resp.ok
+    mock_radio.set_freq.assert_awaited_once_with(14_074_000, receiver=0)
+
+
+@pytest.mark.asyncio
+async def test_set_freq_enters_command_service_without_confirming_state(
+    mock_radio: AsyncMock,
+) -> None:
+    store = StateStore()
+    mock_radio.state_store = store
+    _seed_known_rx(store)
+    handler = RigctldHandler(mock_radio, RigctldConfig())
+
+    resp = await handler.execute(set_cmd("set_freq", "14074000"))
+
+    assert resp.ok
+    events = handler._command_service.lifecycle_events()  # noqa: SLF001
+    assert [event.state for event in events[:4]] == [
+        "accepted",
+        "queued",
+        "sent",
+        "acknowledged",
+    ]
+    assert events[0].source == "rigctld"
+    with pytest.raises(KeyError):
+        store.snapshot().field("receiver.0.freq_mode.freq_hz")
+    assert handler._command_service.project_pending_values(  # noqa: SLF001
+        source="rigctld",
+        session_id=None,
+        paths=(FieldPath.receiver("0", "freq_mode", "freq_hz"),),
+    ) == {FieldPath.receiver("0", "freq_mode", "freq_hz"): 14_074_000}
+
+
+@pytest.mark.asyncio
+async def test_set_freq_invalidates_cache(
+    handler: RigctldHandler, mock_radio: AsyncMock
+) -> None:
+    mock_radio.get_freq.return_value = 14_074_000
+    await handler.execute(get_cmd("get_freq"))  # populate cache
+
+    await handler.execute(set_cmd("set_freq", "7050000"))
+
+    resp = await handler.execute(get_cmd("get_freq"))
+    assert resp.values == ["7050000"]
+    assert mock_radio.get_freq.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_set_freq_invalid_arg(
+    handler: RigctldHandler, mock_radio: AsyncMock
+) -> None:
+    resp = await handler.execute(set_cmd("set_freq", "not_a_number"))
+    assert resp.error == HamlibError.EINVAL
+    mock_radio.set_freq.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_set_freq_no_args(handler: RigctldHandler, mock_radio: AsyncMock) -> None:
+    resp = await handler.execute(set_cmd("set_freq"))
+    assert resp.error == HamlibError.EINVAL
+
+
+# ---------------------------------------------------------------------------
+# get_mode / set_mode
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_mode_returns_mode_and_passband(
+    handler: RigctldHandler, mock_radio: AsyncMock
+) -> None:
+    mock_radio.get_mode_info.return_value = (Mode.USB, 2)
+    resp = await handler.execute(get_cmd("get_mode"))
+    assert resp.ok
+    assert resp.values[0] == "USB"
+    assert resp.values[1] == "2400"  # FIL2 → 2400 Hz
+
+
+@pytest.mark.asyncio
+async def test_get_mode_none_filter_returns_zero_passband(
+    handler: RigctldHandler, mock_radio: AsyncMock
+) -> None:
+    mock_radio.get_mode_info.return_value = (Mode.CW, None)
+    resp = await handler.execute(get_cmd("get_mode"))
+    assert resp.values[0] == "CW"
+    assert resp.values[1] == "0"
+
+
+@pytest.mark.asyncio
+async def test_get_mode_falls_back_to_core_radio_contract() -> None:
+    radio = _ContractModeRadio(mode="LSB", filter_width=2)
+    h = RigctldHandler(radio, RigctldConfig())
+    resp = await h.execute(get_cmd("get_mode"))
+    assert resp.ok
+    assert resp.values == ["LSB", "2400"]
+
+
+@pytest.mark.asyncio
+async def test_get_mode_projects_state_store_snapshot(
+    mock_radio: AsyncMock,
+) -> None:
+    store = StateStore()
+    mock_radio.state_store = store
+    _apply_store_value(store, "receiver.main.active.freq_mode.mode", "USB")
+    # ``filter_width`` is Hz; the rigctld passband reads ``filter_num`` (the
+    # NUMBER). Seeding the real CI-V shape (Hz + NUMBER) so passband == 2400
+    # comes from filter_num=2, NOT from feeding Hz to _filter_to_passband.
+    _apply_store_value(store, "receiver.main.active.freq_mode.filter_width", 2400)
+    _apply_store_value(store, "receiver.main.active.freq_mode.filter_num", 2)
+    _apply_store_value(store, "receiver.main.active.freq_mode.data_mode", True)
+    handler = RigctldHandler(mock_radio, RigctldConfig())
+
+    resp = await handler.execute(get_cmd("get_mode"))
+
+    assert resp.ok
+    assert resp.values == ["PKTUSB", "2400"]
+    mock_radio.get_mode_info.assert_not_awaited()
+    mock_radio.get_data_mode.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_get_mode_projects_numeric_active_main_alias(
+    mock_radio: AsyncMock,
+) -> None:
+    store = StateStore()
+    mock_radio.state_store = store
+    _apply_store_value(store, "receiver.0.active.freq_mode.mode", "LSB")
+    # filter_width=Hz, filter_num=NUMBER; passband 3000 derives from
+    # filter_num=1 (not from Hz). (MOR-895.)
+    _apply_store_value(store, "receiver.0.active.freq_mode.filter_width", 3000)
+    _apply_store_value(store, "receiver.0.active.freq_mode.filter_num", 1)
+    _apply_store_value(store, "receiver.0.active.freq_mode.data_mode", True)
+    state = RadioState()
+    state.main.freq = 14_250_000
+    state.main.mode = "USB"
+    state.main.filter = 2
+    state.main.data_mode = False
+    mock_radio.radio_state = state
+    handler = RigctldHandler(mock_radio, RigctldConfig())
+
+    resp = await handler.execute(get_cmd("get_mode"))
+
+    assert resp.ok
+    assert resp.values == ["PKTLSB", "3000"]
+    mock_radio.get_mode_info.assert_not_awaited()
+    mock_radio.get_data_mode.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_get_mode_projection_passband_uses_filter_num_not_filter_width(
+    mock_radio: AsyncMock,
+) -> None:
+    """Regression (MOR-895, pro#1200): the get_mode projection passband must be
+    derived from the ``filter_num`` store key (the filter NUMBER), NOT from
+    ``filter_width`` which holds decoded Hz.
+
+    With real CI-V state (``filter_width=3000`` Hz, ``filter_num=1``) the old
+    code fed the Hz value to ``_filter_to_passband`` (which only maps 1/2/3),
+    yielding passband ``"0"``. The fix reads ``filter_num=1`` -> ``"3000"``.
+    """
+    store = StateStore()
+    mock_radio.state_store = store
+    _apply_store_value(store, "receiver.main.active.freq_mode.mode", "USB")
+    # filter_width holds Hz (3000); filter_num holds the NUMBER (1).
+    _apply_store_value(store, "receiver.main.active.freq_mode.filter_width", 3000)
+    _apply_store_value(store, "receiver.main.active.freq_mode.filter_num", 1)
+    _apply_store_value(store, "receiver.main.active.freq_mode.data_mode", False)
+    handler = RigctldHandler(mock_radio, RigctldConfig())
+
+    resp = await handler.execute(get_cmd("get_mode"))
+
+    assert resp.ok
+    # NOT "0": the passband comes from filter_num=1, not from the Hz value.
+    assert resp.values == ["USB", "3000"]
+
+
+@pytest.mark.asyncio
+async def test_get_mode_is_read_only_and_does_not_self_cache(
+    handler: RigctldHandler, mock_radio: AsyncMock
+) -> None:
+    """get_mode is a READ: it must not write its readback into the StateStore.
+
+    Previously the first get_mode wrote ``mode``/``filter_width``/``data_mode``
+    back into the canonical store so a second poll was served from the
+    projection. That write-back clobbered the CI-V-owned ``filter_width`` (Hz)
+    and ``data_mode`` (int) keys (MOR-895), so it was removed: each get_mode now
+    reads the radio and leaves the canonical store untouched.
+    """
+    mock_radio.get_mode_info.return_value = (Mode.USB, 1)
+    cmd = get_cmd("get_mode")
+    resp1 = await handler.execute(cmd)
+    resp2 = await handler.execute(cmd)
+
+    assert resp1.values == resp2.values == ["USB", "3000"]
+    # No write-back: the read polls the radio each time and the canonical
+    # freq_mode keys are never populated by the GET path.
+    assert mock_radio.get_mode_info.await_count == 2
+    snapshot = handler._state_store.snapshot()  # noqa: SLF001
+    with pytest.raises(KeyError):
+        snapshot.field("receiver.main.active.freq_mode.filter_width")
+    with pytest.raises(KeyError):
+        snapshot.field("receiver.main.active.freq_mode.data_mode")
+
+
+@pytest.mark.asyncio
+async def test_get_mode_prefers_radio_state(
+    handler: RigctldHandler, mock_radio: AsyncMock
+) -> None:
+    state = RadioState()
+    state.main.freq = 14_074_000
+    state.main.mode = "USB"
+    state.main.filter = 2
+    state.main.data_mode = True
+    mock_radio.radio_state = state
+
+    resp = await handler.execute(get_cmd("get_mode"))
+
+    assert resp.ok
+    assert resp.values == ["PKTUSB", "2400"]
+    mock_radio.get_mode_info.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_get_mode_ensure_fresh_requests_bounded_projection(
+    mock_radio: AsyncMock,
+) -> None:
+    store = StateStore()
+    model_service = _RecordingStateModelService()
+    mock_radio.state_store = store
+    mock_radio.state_model_service = model_service
+    _apply_store_value(store, "receiver.main.active.freq_mode.mode", "USB", max_age=1.0)
+    # The rigctld passband reads ``filter_num`` (the NUMBER, 2 -> 2400). The
+    # Hz-typed ``filter_width`` is no longer part of the get_mode projection.
+    # (MOR-895.)
+    _apply_store_value(
+        store,
+        "receiver.main.active.freq_mode.filter_num",
+        2,
+        max_age=1.0,
+    )
+    _apply_store_value(
+        store,
+        "receiver.main.active.freq_mode.data_mode",
+        False,
+        max_age=1.0,
+    )
+    handler = RigctldHandler(mock_radio, RigctldConfig(cache_ttl=0.5))
+
+    resp = await handler.execute(get_cmd("get_mode"))
+
+    assert resp.values == ["USB", "2400"]
+    assert model_service.calls == [
+        {
+            "paths": (
+                "receiver.main.active.freq_mode.data_mode",
+                "receiver.main.active.freq_mode.filter_num",
+                "receiver.main.active.freq_mode.mode",
+            ),
+            "max_age": 0.5,
+            "priority": "user",
+            "reason": "rigctld.get_mode",
+            "timeout": None,
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_set_mode_calls_radio(
+    handler: RigctldHandler, mock_radio: AsyncMock
+) -> None:
+    resp = await handler.execute(set_cmd("set_mode", "USB", "2400"))
+    assert resp.ok
+    mock_radio.set_mode.assert_awaited_once_with("USB", filter_width=2)
+
+
+@pytest.mark.asyncio
+async def test_set_mode_without_passband_uses_none_filter(
+    handler: RigctldHandler, mock_radio: AsyncMock
+) -> None:
+    resp = await handler.execute(set_cmd("set_mode", "LSB"))
+    assert resp.ok
+    mock_radio.set_mode.assert_awaited_once_with("LSB", filter_width=None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["USB", "LSB"])
+async def test_set_mode_plain_ssb_explicitly_clears_data(
+    handler: RigctldHandler, mock_radio: AsyncMock, mode: str
+) -> None:
+    resp = await handler.execute(set_cmd("set_mode", mode))
+    assert resp.ok
+    mock_radio.set_mode.assert_awaited_once_with(mode, filter_width=None)
+    mock_radio.set_data_mode.assert_awaited_once_with(False)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "supports_factory", [mock.Mock, AsyncMock], ids=["sync", "async"]
+)
+async def test_set_mode_capability_error_does_not_report_success(
+    handler: RigctldHandler, mock_radio: AsyncMock, supports_factory
+) -> None:
+    mock_radio.supports_command = supports_factory(
+        side_effect=RuntimeError("capability lookup failed")
+    )
+    cmd = set_cmd("set_mode", "USB", "2400")
+
+    resp = await handler.execute(cmd)
+
+    assert resp.error == HamlibError.EINTERNAL
+    assert format_response(cmd, resp, ClientSession()) == b"RPRT -7\n"
+    mock_radio.supports_command.assert_called_once_with("set_data_mode")
+    mock_radio.set_data_mode.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_set_mode_passband_zero_uses_none_filter(
+    handler: RigctldHandler, mock_radio: AsyncMock
+) -> None:
+    resp = await handler.execute(set_cmd("set_mode", "FM", "0"))
+    assert resp.ok
+    mock_radio.set_mode.assert_awaited_once_with("FM", filter_width=None)
+
+
+@pytest.mark.asyncio
+async def test_set_mode_pktrtty_maps_to_rtty_and_sets_data(
+    handler: RigctldHandler, mock_radio: AsyncMock
+) -> None:
+    resp = await handler.execute(set_cmd("set_mode", "PKTRTTY"))
+    assert resp.ok
+    mock_radio.set_mode.assert_awaited_once_with("RTTY", filter_width=None)
+    mock_radio.set_data_mode.assert_awaited_once_with(True)
+
+
+@pytest.mark.parametrize(
+    ("packet_mode", "base_mode"),
+    (("PKTUSB", "USB"), ("PKTLSB", "LSB"), ("PKTRTTY", "RTTY")),
+)
+@pytest.mark.asyncio
+async def test_set_mode_packet_refreshes_data_mode_cache(
+    mock_radio: AsyncMock,
+    packet_mode: str,
+    base_mode: str,
+) -> None:
+    handler = RigctldHandler(mock_radio, RigctldConfig())
+
+    resp = await handler.execute(set_cmd("set_mode", packet_mode))
+
+    assert resp.ok
+    mock_radio.set_mode.assert_awaited_once_with(base_mode, filter_width=None)
+    mock_radio.set_data_mode.assert_awaited_once_with(True)
+
+
+@pytest.mark.asyncio
+async def test_set_mode_uses_core_contract_string_values() -> None:
+    radio = _ContractModeRadio(mode="USB", filter_width=1, data_mode=False)
+    h = RigctldHandler(radio, RigctldConfig())
+    resp = await h.execute(set_cmd("set_mode", "PKTUSB", "2400"))
+    assert resp.ok
+    assert radio.set_mode_calls == [("USB", 2, 0)]
+    assert radio.set_data_mode_calls == [True]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reject_input", (False, True))
+async def test_mk2_packet_mode_applies_lan_input_before_data_mode(
+    reject_input: bool,
+) -> None:
+    from rigplane.audio.route import resolve_audio_route, rigctld_wsjtx_policy
+    from rigplane.profiles import get_radio_profile
+
+    class Mk2ModeRadio(_ContractModeRadio):
+        backend_id = "rigplane"
+        profile = get_radio_profile("IC-7300MK2")
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.calls: list[tuple[str, int | bool]] = []
+
+        def supports_command(self, name: str) -> bool:
+            return name == "set_data1_mod_input"
+
+        async def set_data1_mod_input(self, source: int) -> None:
+            self.calls.append(("mod_input", source))
+            if reject_input:
+                raise IcomCommandError("mod input rejected")
+
+        async def set_data_mode(self, on: int | bool) -> None:
+            self.calls.append(("data_mode", on))
+            await super().set_data_mode(on)
+
+    radio = Mk2ModeRadio()
+    mode, source = rigctld_wsjtx_policy(resolve_audio_route(radio))
+    h = RigctldHandler(
+        radio, RigctldConfig(wsjtx_data_mode=mode, wsjtx_data_mod_input=source)
+    )
+
+    resp = await h.execute(set_cmd("set_mode", "PKTUSB", "2400"))
+
+    if reject_input:
+        assert not resp.ok
+        assert radio.calls == [("mod_input", 5)]
+        assert radio.set_data_mode_calls == []
+    else:
+        assert resp.ok
+        assert radio.calls == [("mod_input", 5), ("data_mode", 1)]
+        assert type(radio.calls[1][1]) is int
+
+
+@pytest.mark.asyncio
+async def test_set_mode_packet_uses_configured_wsjtx_data_mode() -> None:
+    radio = make_mock_radio()
+    radio.set_mode = AsyncMock()
+    radio.set_data_mode = AsyncMock()
+    radio.set_data2_mod_input = AsyncMock()
+    radio.get_mode_info = AsyncMock(return_value=(Mode.USB, 1))
+    radio.get_data_mode = AsyncMock(return_value=True)
+    radio.profile = type("Profile", (), {"data_mode_count": 3})()
+    h = RigctldHandler(
+        radio,
+        RigctldConfig(wsjtx_data_mode=2, wsjtx_data_mod_input=5),
+    )
+
+    resp = await h.execute(set_cmd("set_mode", "PKTUSB", "2400"))
+
+    assert resp.ok
+    radio.set_mode.assert_awaited_once_with("USB", filter_width=2)
+    radio.set_data2_mod_input.assert_awaited_once_with(5)
+    radio.set_data_mode.assert_awaited_once_with(2)
+
+
+@pytest.mark.asyncio
+async def test_set_mode_packet_configured_data2_falls_back_on_single_data_profile() -> (
+    None
+):
+    radio = make_mock_radio()
+    radio.set_mode = AsyncMock()
+    radio.set_data_mode = AsyncMock()
+    radio.set_data2_mod_input = AsyncMock()
+    radio.get_mode_info = AsyncMock(return_value=(Mode.USB, 1))
+    radio.get_data_mode = AsyncMock(return_value=True)
+    radio.profile = type("Profile", (), {"data_mode_count": 1})()
+    h = RigctldHandler(
+        radio,
+        RigctldConfig(wsjtx_data_mode=2, wsjtx_data_mod_input=5),
+    )
+
+    resp = await h.execute(set_cmd("set_mode", "PKTUSB", "2400"))
+
+    assert resp.ok
+    radio.set_data2_mod_input.assert_not_called()
+    radio.set_data_mode.assert_awaited_once_with(True)
+
+
+@pytest.mark.asyncio
+async def test_set_mode_packet_without_wsjtx_data_config_does_not_touch_data_mod_input() -> (
+    None
+):
+    radio = make_mock_radio()
+    radio.set_mode = AsyncMock()
+    radio.set_data_mode = AsyncMock()
+    radio.set_data1_mod_input = AsyncMock()
+    radio.set_data2_mod_input = AsyncMock()
+    radio.get_mode_info = AsyncMock(return_value=(Mode.USB, 1))
+    radio.get_data_mode = AsyncMock(return_value=True)
+    radio.profile = type("Profile", (), {"data_mode_count": 3})()
+    h = RigctldHandler(radio, RigctldConfig())
+
+    resp = await h.execute(set_cmd("set_mode", "PKTUSB", "2400"))
+
+    assert resp.ok
+    radio.set_data1_mod_input.assert_not_called()
+    radio.set_data2_mod_input.assert_not_called()
+    radio.set_data_mode.assert_awaited_once_with(True)
+
+
+@pytest.mark.asyncio
+async def test_set_mode_invalid_mode(
+    handler: RigctldHandler, mock_radio: AsyncMock
+) -> None:
+    resp = await handler.execute(set_cmd("set_mode", "INVALID"))
+    assert resp.error == HamlibError.EINVAL
+    mock_radio.set_mode.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_set_mode_does_not_confirm_mode_into_canonical_store(
+    handler: RigctldHandler, mock_radio: AsyncMock
+) -> None:
+    """set_mode drives the radio; the canonical mode comes from CI-V readback.
+
+    Previously a non-packet set_mode promoted its mode/filter into the
+    canonical StateStore so the next get_mode was served without a radio read.
+    That confirm-path wrote a filter NUMBER into the Hz-typed ``filter_width``
+    key (MOR-895), so it was removed. A following get_mode now reflects what the
+    radio actually reports rather than an optimistic rigctld write.
+    """
+    mock_radio.get_mode_info.return_value = (Mode.USB, 1)
+    await handler.execute(get_cmd("get_mode"))
+
+    await handler.execute(set_cmd("set_mode", "LSB"))
+    mock_radio.set_mode.assert_awaited()
+
+    resp = await handler.execute(get_cmd("get_mode"))
+    # The mock radio still reports USB (no CI-V feedback wired): get_mode reads
+    # the radio rather than an optimistic in-handler confirm.
+    assert resp.values[0] == "USB"
+    # No mode observation was promoted into the canonical store by set_mode.
+    snapshot = handler._state_store.snapshot()  # noqa: SLF001
+    with pytest.raises(KeyError):
+        snapshot.field("receiver.main.active.freq_mode.filter_width")
+
+
+@pytest.mark.asyncio
+async def test_get_freq_keeps_optimistic_value_until_radio_state_catches_up(
+    handler: RigctldHandler, mock_radio: AsyncMock
+) -> None:
+    state = RadioState()
+    state.main.freq = 14_074_000
+    mock_radio.radio_state = state
+
+    await handler.execute(set_cmd("set_freq", "7050000"))
+
+    resp = await handler.execute(get_cmd("get_freq"))
+    assert resp.values == ["7050000"]
+
+    state.main.freq = 7_050_000
+    resp = await handler.execute(get_cmd("get_freq"))
+    assert resp.values == ["7050000"]
+
+
+@pytest.mark.asyncio
+async def test_get_mode_read_after_write_uses_pending_overlays_until_reconciled(
+    mock_radio: AsyncMock,
+) -> None:
+    store = StateStore()
+    mock_radio.state_store = store
+    _apply_store_value(store, "receiver.main.active.freq_mode.mode", "USB")
+    # filter_width=Hz canonical, filter_num=NUMBER canonical (real CI-V shape).
+    _apply_store_value(store, "receiver.main.active.freq_mode.filter_width", 3000)
+    _apply_store_value(store, "receiver.main.active.freq_mode.filter_num", 1)
+    _apply_store_value(store, "receiver.main.active.freq_mode.data_mode", False)
+    _seed_known_rx(store)
+    handler = RigctldHandler(mock_radio, RigctldConfig())
+
+    resp = await handler.execute(set_cmd("set_mode", "PKTUSB", "2400"))
+
+    assert resp.ok
+    before = await handler.execute(get_cmd("get_mode"))
+    assert before.values == ["PKTUSB", "2400"]
+
+    overlays = handler._command_service.pending_overlays(  # noqa: SLF001
+        source="rigctld",
+        session_id=None,
+    )
+    overlay_ids = {str(item.path): item.command_id for item in overlays}
+    # The set_mode readback overlay for the filter NUMBER lives on filter_num
+    # (MOR-895), not filter_width.
+    assert overlay_ids["receiver.main.active.freq_mode.filter_num"].startswith(
+        "rigctld-set-mode-"
+    )
+    assert overlay_ids["receiver.main.active.freq_mode.data_mode"].startswith(
+        "rigctld-set-mode-"
+    )
+
+    _apply_handler_value(
+        handler,
+        "receiver.0.freq_mode.mode",
+        "USB",
+        command_source="rigctld",
+        correlation_id=overlay_ids["receiver.0.freq_mode.mode"],
+    )
+    _apply_handler_value(
+        handler,
+        "receiver.main.active.freq_mode.filter_num",
+        2,
+        command_source="rigctld",
+        correlation_id=overlay_ids["receiver.main.active.freq_mode.filter_num"],
+    )
+    _apply_handler_value(
+        handler,
+        "receiver.main.active.freq_mode.data_mode",
+        True,
+        command_source="rigctld",
+        correlation_id=overlay_ids["receiver.main.active.freq_mode.data_mode"],
+    )
+
+    assert (
+        handler._command_service.pending_overlays(  # noqa: SLF001
+            source="rigctld",
+            session_id=None,
+        )
+        == ()
+    )
+
+    after = await handler.execute(get_cmd("get_mode"))
+    assert after.values == ["PKTUSB", "2400"]
+
+
+@pytest.mark.asyncio
+async def test_get_mode_pending_overlays_are_scoped_to_rigctld_session(
+    mock_radio: AsyncMock,
+) -> None:
+    store = StateStore()
+    mock_radio.state_store = store
+    _apply_store_value(store, "receiver.main.active.freq_mode.mode", "USB")
+    # filter_width=Hz canonical, filter_num=NUMBER canonical. client_b (no
+    # overlay) reads filter_num=1 -> passband 3000. (MOR-895.)
+    _apply_store_value(store, "receiver.main.active.freq_mode.filter_width", 3000)
+    _apply_store_value(store, "receiver.main.active.freq_mode.filter_num", 1)
+    _apply_store_value(store, "receiver.main.active.freq_mode.data_mode", False)
+    _seed_known_rx(store)
+    handler = RigctldHandler(mock_radio, RigctldConfig())
+
+    resp = await handler.execute(
+        set_cmd("set_mode", "PKTUSB", "2400"),
+        session_id="rigctld-client-a",
+    )
+
+    assert resp.ok
+    client_a = await handler.execute(
+        get_cmd("get_mode"),
+        session_id="rigctld-client-a",
+    )
+    client_b = await handler.execute(
+        get_cmd("get_mode"),
+        session_id="rigctld-client-b",
+    )
+
+    assert client_a.values == ["PKTUSB", "2400"]
+    assert client_b.values == ["USB", "3000"]
+
+
+# ---------------------------------------------------------------------------
+# get_ptt / set_ptt
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_ptt_defaults_off(
+    handler: RigctldHandler, mock_radio: AsyncMock
+) -> None:
+    resp = await handler.execute(get_cmd("get_ptt"))
+    assert resp.ok
+    assert resp.values == ["0"]
+
+
+@pytest.mark.asyncio
+async def test_get_ptt_reads_radio_state(
+    handler: RigctldHandler, mock_radio: AsyncMock
+) -> None:
+    state = RadioState()
+    state.ptt = True
+    mock_radio.radio_state = state
+
+    resp = await handler.execute(get_cmd("get_ptt"))
+
+    assert resp.ok
+    assert resp.values == ["1"]
+
+
+@pytest.mark.asyncio
+async def test_get_ptt_projects_state_store_snapshot(
+    mock_radio: AsyncMock,
+) -> None:
+    store = StateStore()
+    mock_radio.state_store = store
+    _apply_store_value(store, "global.tx_state.ptt", True)
+    handler = RigctldHandler(mock_radio, RigctldConfig())
+
+    resp = await handler.execute(get_cmd("get_ptt"))
+
+    assert resp.ok
+    assert resp.values == ["1"]
+
+
+@pytest.mark.asyncio
+async def test_set_ptt_on(handler: RigctldHandler, mock_radio: AsyncMock) -> None:
+    resp = await handler.execute(set_cmd("set_ptt", "1"))
+    assert resp.ok
+    mock_radio.set_ptt.assert_awaited_once_with(True)
+    events = handler._command_service.lifecycle_events()  # noqa: SLF001
+    assert [event.state for event in events[:4]] == [
+        "accepted",
+        "queued",
+        "sent",
+        "acknowledged",
+    ]
+    assert events[0].source == "rigctld"
+    with pytest.raises(KeyError):
+        handler._command_service._state_store.snapshot().field(  # noqa: SLF001
+            "global.tx_state.ptt"
+        )
+    assert handler._command_service.project_pending_values(  # noqa: SLF001
+        source="rigctld",
+        session_id=None,
+        paths=(FieldPath.global_("tx_state", "ptt"),),
+    ) == {FieldPath.global_("tx_state", "ptt"): True}
+
+
+@pytest.mark.asyncio
+async def test_set_ptt_off(handler: RigctldHandler, mock_radio: AsyncMock) -> None:
+    await handler.execute(set_cmd("set_ptt", "1"))
+    resp = await handler.execute(set_cmd("set_ptt", "0"))
+    assert resp.ok
+    mock_radio.set_ptt.assert_awaited_with(False)
+
+
+@pytest.mark.asyncio
+async def test_ptt_state_reflected_in_get(
+    handler: RigctldHandler, mock_radio: AsyncMock
+) -> None:
+    await handler.execute(set_cmd("set_ptt", "1"))
+    resp = await handler.execute(get_cmd("get_ptt"))
+    assert resp.values == ["1"]
+
+    await handler.execute(set_cmd("set_ptt", "0"))
+    resp = await handler.execute(get_cmd("get_ptt"))
+    assert resp.values == ["0"]
+
+
+@pytest.mark.asyncio
+async def test_get_ptt_keeps_optimistic_state_until_radio_state_catches_up(
+    handler: RigctldHandler, mock_radio: AsyncMock
+) -> None:
+    state = RadioState()
+    state.ptt = False
+    mock_radio.radio_state = state
+
+    await handler.execute(set_cmd("set_ptt", "1"))
+    resp = await handler.execute(get_cmd("get_ptt"))
+    assert resp.values == ["1"]
+
+    state.ptt = True
+    resp = await handler.execute(get_cmd("get_ptt"))
+    assert resp.values == ["1"]
+
+
+@pytest.mark.asyncio
+async def test_set_ptt_invalid_arg(
+    handler: RigctldHandler, mock_radio: AsyncMock
+) -> None:
+    resp = await handler.execute(set_cmd("set_ptt", "x"))
+    assert resp.error == HamlibError.EINVAL
+
+
+# ---------------------------------------------------------------------------
+# get_vfo / set_vfo
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_vfo_projects_state_store_active_slot_a(
+    mock_radio: AsyncMock,
+) -> None:
+    store = StateStore()
+    mock_radio.state_store = store
+    _apply_store_value(store, "receiver.main.vfo.active_slot", "A")
+    handler = RigctldHandler(mock_radio, RigctldConfig())
+
+    resp = await handler.execute(get_cmd("get_vfo"))
+
+    assert resp.ok
+    assert resp.values == ["VFOA"]
+
+
+@pytest.mark.asyncio
+async def test_get_vfo_projects_state_store_active_slot(
+    mock_radio: AsyncMock,
+) -> None:
+    store = StateStore()
+    mock_radio.state_store = store
+    _apply_store_value(store, "receiver.main.vfo.active_slot", "B")
+    handler = RigctldHandler(mock_radio, RigctldConfig())
+
+    resp = await handler.execute(get_cmd("get_vfo"))
+
+    assert resp.ok
+    assert resp.values == ["VFOB"]
+
+
+@pytest.mark.asyncio
+async def test_get_vfo_dual_rx_projects_state_store_active_receiver(
+    dual_rx_radio: AsyncMock,
+) -> None:
+    store = StateStore()
+    dual_rx_radio.state_store = store
+    _apply_store_value(store, "global.slow_state.active", "SUB")
+    state = RadioState()
+    state.active = "MAIN"
+    dual_rx_radio.radio_state = state
+    handler = RigctldHandler(dual_rx_radio, RigctldConfig())
+
+    resp = await handler.execute(get_cmd("get_vfo"))
+
+    assert resp.ok
+    assert resp.values == ["VFOB"]
+
+
+@pytest.mark.asyncio
+async def test_set_vfo_accepts_any_name(
+    handler: RigctldHandler, mock_radio: AsyncMock
+) -> None:
+    resp = await handler.execute(set_cmd("set_vfo", "VFOB"))
+    assert resp.ok
+
+
+# ---------------------------------------------------------------------------
+# get_level
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_level_strength(
+    handler: RigctldHandler, mock_radio: AsyncMock
+) -> None:
+    mock_radio.get_s_meter.return_value = 120  # ≈ S9 → 0 dB
+    resp = await handler.execute(get_cmd("get_level", "STRENGTH"))
+    assert resp.ok
+    strength = int(resp.values[0])
+    assert -60 <= strength <= 70  # reasonable dB range
+
+
+@pytest.mark.asyncio
+async def test_get_level_strength_prefers_radio_state(
+    handler: RigctldHandler, mock_radio: AsyncMock
+) -> None:
+    state = RadioState()
+    state.main.freq = 14_074_000
+    state.main.s_meter = 120
+    mock_radio.radio_state = state
+
+    resp = await handler.execute(get_cmd("get_level", "STRENGTH"))
+
+    assert resp.ok
+    assert int(resp.values[0]) == pytest.approx(3, abs=1)
+    mock_radio.get_s_meter.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_get_level_strength_projects_state_store_snapshot(
+    mock_radio: AsyncMock,
+) -> None:
+    store = StateStore()
+    mock_radio.state_store = store
+    _apply_store_value(store, "receiver.0.meters.s_meter", 120)
+    handler = RigctldHandler(mock_radio, RigctldConfig())
+
+    resp = await handler.execute(get_cmd("get_level", "STRENGTH"))
+
+    assert resp.ok
+    assert int(resp.values[0]) == pytest.approx(3, abs=1)
+    mock_radio.get_s_meter.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_get_level_strength_projected_fractional_raw_value_uses_strength_scale(
+    mock_radio: AsyncMock,
+) -> None:
+    store = StateStore()
+    mock_radio.state_store = store
+    _apply_store_value(store, "receiver.0.meters.s_meter", 0.5)
+    handler = RigctldHandler(mock_radio, RigctldConfig())
+
+    resp = await handler.execute(get_cmd("get_level", "STRENGTH"))
+
+    assert resp.ok
+    assert resp.values == ["-54"]
+    mock_radio.get_s_meter.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_get_level_strength_projects_calibrated_state_store_snapshot(
+    mock_radio: AsyncMock,
+) -> None:
+    store = StateStore()
+    mock_radio.state_store = store
+    _apply_store_value(
+        store,
+        "receiver.0.meters.s_meter",
+        0,
+        quality=("confirmed", "calibrated"),
+    )
+    handler = RigctldHandler(mock_radio, RigctldConfig())
+
+    resp = await handler.execute(get_cmd("get_level", "STRENGTH"))
+
+    assert resp.ok
+    assert int(resp.values[0]) == 0
+    mock_radio.get_s_meter.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_get_level_strength_projected_fractional_calibrated_db_is_not_normalized(
+    mock_radio: AsyncMock,
+) -> None:
+    store = StateStore()
+    mock_radio.state_store = store
+    _apply_store_value(
+        store,
+        "receiver.0.meters.s_meter",
+        0.5,
+        quality=("confirmed", "calibrated"),
+    )
+    handler = RigctldHandler(mock_radio, RigctldConfig())
+
+    resp = await handler.execute(get_cmd("get_level", "STRENGTH"))
+
+    assert resp.ok
+    assert resp.values == ["0"]
+    mock_radio.get_s_meter.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_get_level_strength_projected_calibrated_db_float_truncates_to_db(
+    mock_radio: AsyncMock,
+) -> None:
+    store = StateStore()
+    mock_radio.state_store = store
+    _apply_store_value(
+        store,
+        "receiver.0.meters.s_meter",
+        -12.5,
+        quality=("confirmed", "calibrated"),
+    )
+    handler = RigctldHandler(mock_radio, RigctldConfig())
+
+    resp = await handler.execute(get_cmd("get_level", "STRENGTH"))
+
+    assert resp.ok
+    assert resp.values == ["-12"]
+    mock_radio.get_s_meter.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_get_level_strength_s0(
+    handler: RigctldHandler, mock_radio: AsyncMock
+) -> None:
+    mock_radio.get_s_meter.return_value = 0
+    resp = await handler.execute(get_cmd("get_level", "STRENGTH"))
+    assert resp.ok
+    assert int(resp.values[0]) == -54
+
+
+@pytest.mark.asyncio
+async def test_get_level_rfpower(
+    handler: RigctldHandler, mock_radio: AsyncMock
+) -> None:
+    mock_radio.get_rf_power.return_value = 255
+    resp = await handler.execute(get_cmd("get_level", "RFPOWER"))
+    assert resp.ok
+    value = float(resp.values[0])
+    assert abs(value - 1.0) < 0.001
+
+
+@pytest.mark.asyncio
+async def test_get_level_rfpower_prefers_radio_state(
+    handler: RigctldHandler, mock_radio: AsyncMock
+) -> None:
+    state = RadioState()
+    state.main.freq = 14_074_000
+    state.power_level = 128
+    mock_radio.radio_state = state
+
+    resp = await handler.execute(get_cmd("get_level", "RFPOWER"))
+
+    assert resp.ok
+    assert float(resp.values[0]) == pytest.approx(128 / 255.0, rel=1e-6)
+    mock_radio.get_rf_power.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_get_level_af_projects_state_store_snapshot(
+    mock_radio: AsyncMock,
+) -> None:
+    store = StateStore()
+    mock_radio.state_store = store
+    _apply_store_value(store, "receiver.main.operator_controls.af_level", 128 / 255.0)
+    handler = RigctldHandler(mock_radio, RigctldConfig())
+
+    resp = await handler.execute(get_cmd("get_level", "AF"))
+
+    assert resp.ok
+    assert float(resp.values[0]) == pytest.approx(128 / 255.0, rel=1e-6)
+    mock_radio.get_af_level.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("level", "path"),
+    [
+        ("AF", "receiver.main.operator_controls.af_level"),
+        ("RF", "receiver.main.operator_controls.rf_gain"),
+        ("SQL", "receiver.main.operator_controls.squelch"),
+    ],
+)
+async def test_get_level_operator_control_projected_normalized_float_passes_through(
+    mock_radio: AsyncMock,
+    level: str,
+    path: str,
+) -> None:
+    store = StateStore()
+    mock_radio.state_store = store
+    _apply_store_value(store, path, 0.5)
+    handler = RigctldHandler(mock_radio, RigctldConfig())
+
+    resp = await handler.execute(get_cmd("get_level", level))
+
+    assert resp.ok
+    assert resp.values == ["0.500000"]
+
+
+@pytest.mark.asyncio
+async def test_get_level_non_normalized_operator_control_fractional_float_keeps_raw_format(
+    mock_radio: AsyncMock,
+) -> None:
+    store = StateStore()
+    mock_radio.state_store = store
+    _apply_store_value(store, "receiver.main.operator_controls.nb_level", 0.5)
+    handler = RigctldHandler(mock_radio, RigctldConfig())
+
+    resp = await handler.execute(get_cmd("get_level", "NB"))
+
+    assert resp.ok
+    assert resp.values == ["0.000000"]
+
+
+@pytest.mark.asyncio
+async def test_get_level_rfpower_projects_raw_int_state_store_snapshot(
+    mock_radio: AsyncMock,
+) -> None:
+    store = StateStore()
+    mock_radio.state_store = store
+    _apply_store_value(store, "global.operator_controls.power_level", 128)
+    handler = RigctldHandler(mock_radio, RigctldConfig())
+
+    resp = await handler.execute(get_cmd("get_level", "RFPOWER"))
+
+    assert resp.ok
+    assert resp.values == [f"{128 / 255.0:.6f}"]
+    mock_radio.get_rf_power.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("level", "path", "value"),
+    [
+        ("RF", "receiver.main.operator_controls.rf_gain", 0.25),
+        ("SQL", "receiver.main.operator_controls.squelch", 0.75),
+        ("RFPOWER", "global.operator_controls.power_level", 0.5),
+    ],
+)
+async def test_get_level_icom_projected_normalized_float_passes_through(
+    mock_radio: AsyncMock,
+    level: str,
+    path: str,
+    value: float,
+) -> None:
+    store = StateStore()
+    mock_radio.state_store = store
+    _apply_store_value(store, path, value)
+    handler = RigctldHandler(mock_radio, RigctldConfig())
+
+    resp = await handler.execute(get_cmd("get_level", level))
+
+    assert resp.ok
+    assert resp.values == [f"{value:.6f}"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("level", "path", "getter"),
+    [
+        ("RFPOWER_METER", "global.meters.power", "get_power_meter"),
+        ("COMP_METER", "global.meters.comp", "get_comp_meter"),
+        ("ID_METER", "global.meters.id", "get_id_meter"),
+        ("VD_METER", "global.meters.vd", "get_vd_meter"),
+    ],
+)
+async def test_get_level_physical_meter_projected_engineering_value_passes_through(
+    mock_radio: AsyncMock,
+    level: str,
+    path: str,
+    getter: str,
+) -> None:
+    store = StateStore()
+    mock_radio.state_store = store
+    _apply_store_value(store, path, 12.5)
+    getattr(mock_radio, getter).return_value = 255
+    handler = RigctldHandler(mock_radio, RigctldConfig())
+
+    resp = await handler.execute(get_cmd("get_level", level))
+
+    assert resp.ok
+    assert resp.values == ["12.500000"]
+    getattr(mock_radio, getter).assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("level", "path", "getter"),
+    [
+        ("COMP_METER", "global.meters.comp", "get_comp_meter"),
+        ("ID_METER", "global.meters.id", "get_id_meter"),
+        ("VD_METER", "global.meters.vd", "get_vd_meter"),
+    ],
+)
+async def test_get_level_physical_meter_uses_canonical_projected_path(
+    mock_radio: AsyncMock,
+    level: str,
+    path: str,
+    getter: str,
+) -> None:
+    store = StateStore()
+    mock_radio.state_store = store
+    _apply_store_value(store, path, 128)
+    getattr(mock_radio, getter).return_value = 255
+    handler = RigctldHandler(mock_radio, RigctldConfig())
+
+    resp = await handler.execute(get_cmd("get_level", level))
+
+    assert resp.ok
+    assert resp.values == ["128.000000"]
+    getattr(mock_radio, getter).assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("level", "legacy_path", "getter"),
+    [
+        ("COMP_METER", "global.meters.comp_meter", "get_comp_meter"),
+        ("ID_METER", "global.meters.id_meter", "get_id_meter"),
+        ("VD_METER", "global.meters.vd_meter", "get_vd_meter"),
+    ],
+)
+async def test_get_level_physical_meter_ignores_legacy_projected_path_and_falls_back(
+    mock_radio: AsyncMock,
+    level: str,
+    legacy_path: str,
+    getter: str,
+) -> None:
+    store = StateStore()
+    mock_radio.state_store = store
+    _apply_store_value(store, legacy_path, 128)
+    getattr(mock_radio, getter).return_value = 255
+    handler = RigctldHandler(mock_radio, RigctldConfig())
+
+    resp = await handler.execute(get_cmd("get_level", level))
+
+    assert resp.ok
+    assert resp.values == ["255.000000"]
+    getattr(mock_radio, getter).assert_awaited_once_with()
+
+
+@pytest.mark.asyncio
+async def test_get_level_rfpower_zero(
+    handler: RigctldHandler, mock_radio: AsyncMock
+) -> None:
+    mock_radio.get_rf_power.return_value = 0
+    resp = await handler.execute(get_cmd("get_level", "RFPOWER"))
+    assert resp.ok
+    assert float(resp.values[0]) == pytest.approx(0.0)
+
+
+@pytest.mark.asyncio
+async def test_get_level_swr(handler: RigctldHandler, mock_radio: AsyncMock) -> None:
+    # ``get_swr`` is contracted as a calibrated ratio (>= 1.0) — the
+    # rigctld handler now passes the float through without remapping.
+    mock_radio.get_swr.return_value = 1.0
+    resp = await handler.execute(get_cmd("get_level", "SWR"))
+    assert resp.ok
+    assert float(resp.values[0]) == pytest.approx(1.0)
+
+
+@pytest.mark.asyncio
+async def test_get_level_swr_max(
+    handler: RigctldHandler, mock_radio: AsyncMock
+) -> None:
+    mock_radio.get_swr.return_value = 6.0
+    resp = await handler.execute(get_cmd("get_level", "SWR"))
+    assert resp.ok
+    assert float(resp.values[0]) == pytest.approx(6.0)
+
+
+@pytest.mark.asyncio
+async def test_get_level_no_args(
+    handler: RigctldHandler, mock_radio: AsyncMock
+) -> None:
+    resp = await handler.execute(get_cmd("get_level"))
+    assert resp.error == HamlibError.EINVAL
+
+
+@pytest.mark.asyncio
+async def test_get_level_unknown(
+    handler: RigctldHandler, mock_radio: AsyncMock
+) -> None:
+    resp = await handler.execute(get_cmd("get_level", "NOSUCHLEVEL"))
+    assert resp.error == HamlibError.EINVAL
+
+
+# ---------------------------------------------------------------------------
+# get_split_vfo / set_split_vfo
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_split_vfo(handler: RigctldHandler, mock_radio: AsyncMock) -> None:
+    resp = await handler.execute(get_cmd("get_split_vfo"))
+    assert resp.ok
+    assert resp.values[0] == "0"
+    assert resp.values[1] == "VFOA"
+
+
+@pytest.mark.asyncio
+async def test_get_split_vfo_reads_radio_state(
+    handler: RigctldHandler, mock_radio: AsyncMock
+) -> None:
+    state = RadioState()
+    state.split = True
+    mock_radio.radio_state = state
+
+    resp = await handler.execute(get_cmd("get_split_vfo"))
+
+    assert resp.ok
+    assert resp.values == ["1", "VFOA"]
+
+
+@pytest.mark.asyncio
+async def test_get_split_vfo_reads_state_store_split_and_protocol_local_tx_vfo(
+    mock_radio: AsyncMock,
+) -> None:
+    store = StateStore()
+    mock_radio.state_store = store
+    handler = RigctldHandler(mock_radio, RigctldConfig())
+    _apply_store_value(store, "global.tx_state.split", True)
+    _seed_known_rx(store)
+
+    set_resp = await handler.execute(set_cmd("set_split_vfo", "1", "VFOB"))
+    assert set_resp.ok
+
+    get_resp = await handler.execute(get_cmd("get_split_vfo"))
+    assert get_resp.ok
+    assert get_resp.values == ["1", "VFOB"]
+
+
+@pytest.mark.asyncio
+async def test_get_split_vfo_scopes_tx_vfo_by_session_id(
+    dual_rx_handler: RigctldHandler,
+    dual_rx_radio: AsyncMock,
+) -> None:
+    state = RadioState()
+    state.split = True
+    dual_rx_radio.radio_state = state
+
+    set_resp = await dual_rx_handler.execute(
+        set_cmd("set_split_vfo", "1", "VFOB"),
+        session_id="rigctld-client-a",
+    )
+    assert set_resp.ok
+
+    resp_a = await dual_rx_handler.execute(
+        get_cmd("get_split_vfo"),
+        session_id="rigctld-client-a",
+    )
+    resp_b = await dual_rx_handler.execute(
+        get_cmd("get_split_vfo"),
+        session_id="rigctld-client-b",
+    )
+
+    assert resp_a.ok
+    assert resp_a.values == ["1", "VFOB"]
+    assert resp_b.ok
+    assert resp_b.values == ["1", "VFOA"]
+
+
+@pytest.mark.asyncio
+async def test_set_split_vfo(handler: RigctldHandler, mock_radio: AsyncMock) -> None:
+    resp = await handler.execute(set_cmd("set_split_vfo", "0", "VFOA"))
+    assert resp.ok
+
+
+# ---------------------------------------------------------------------------
+# Info / control commands
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_dump_state(handler: RigctldHandler, mock_radio: AsyncMock) -> None:
+    resp = await handler.execute(get_cmd("dump_state"))
+    assert resp.ok
+    lines = resp.values
+
+    # Protocol 1 retains the positional prefix and adds capability metadata.
+    assert lines[0] == "1"
+    # Line 1: rig model — IC-7610 hamlib model number
+    assert lines[1] == "3078"
+    # Line 2: ITU region
+    assert lines[2] == "1"
+    # Line 3: RX range (7 fields: startf endf modes low_power high_power vfo ant)
+    assert lines[3] == "100000.000000 60000000.000000 0x1ff -1 -1 0x3 0xf"
+    # Line 4: end of RX ranges sentinel
+    assert lines[4] == "0 0 0 0 0 0 0"
+    # Line 5: TX range
+    assert lines[5] == "1800000.000000 60000000.000000 0x1ff 5000 100000 0x3 0xf"
+    # Line 6: end of TX ranges sentinel
+    assert lines[6] == "0 0 0 0 0 0 0"
+    # Line 7: tuning step (modes ts)
+    assert lines[7] == "0x1ff 1"
+    # Line 8: end of tuning steps sentinel
+    assert lines[8] == "0 0"
+    # Lines 9-11: filters (modes width)
+    assert lines[9] == "0x1ff 3000"
+    assert lines[10] == "0x1ff 2400"
+    assert lines[11] == "0x1ff 1800"
+    # Line 12: end of filters sentinel
+    assert lines[12] == "0 0"
+    # Lines 13-16: bare scalars — no 'key: value' prefix
+    assert lines[13] == "9999"  # max_rit
+    assert lines[14] == "9999"  # max_xit
+    assert lines[15] == "0"  # max_ifshift
+    assert lines[16] == "0"  # announces
+    # Lines 17-18: preamp/attenuator — space-separated ints, 0-terminated
+    assert lines[17] == "12 20 0"
+    assert lines[18] == "6 12 18 0"
+    # Lines 19-24: capability bitmasks — bare hex/int, no label prefix
+    assert lines[19] == "0x00011B3E"  # has_get_func
+    assert lines[20] == "0x00011B3E"  # has_set_func
+    assert lines[21] == "0x5401791B"  # has_get_level
+    assert lines[22] == "0x0001791B"  # has_set_level
+    assert lines[23] == "0"  # has_get_parm
+    assert lines[24] == "0"  # has_set_parm
+    assert lines[25:] == ["targetable_vfo=0x3", "done"]
+    assert len(lines) == 27
+
+
+@pytest.mark.asyncio
+async def test_dump_caps_same_as_dump_state(
+    handler: RigctldHandler, mock_radio: AsyncMock
+) -> None:
+    r1 = await handler.execute(get_cmd("dump_state"))
+    r2 = await handler.execute(get_cmd("dump_caps"))
+    assert r1.values == r2.values
+
+
+@pytest.mark.asyncio
+async def test_get_info_names_no_rig_when_the_radio_names_none(
+    handler: RigctldHandler, mock_radio: AsyncMock
+) -> None:
+    """R59/MOR-2425: an unnamed radio is reported unspecified, not IC-7610.
+
+    ``mock_radio.model`` is an auto-generated ``AsyncMock`` attribute rather
+    than a ``str``, so this is the branch that used to hand a hamlib client
+    the name of a rig nobody attached.
+    """
+    resp = await handler.execute(get_cmd("get_info"))
+    assert resp.ok
+    assert resp.values[0] == "Icom unspecified (rigplane)"
+
+
+@pytest.mark.asyncio
+async def test_get_info_uses_runtime_model(config: RigctldConfig) -> None:
+    radio = make_mock_radio()
+    radio.model = "IC-9700"
+    h = RigctldHandler(radio, config)
+    resp = await h.execute(get_cmd("get_info"))
+    assert resp.ok
+    assert "IC-9700" in resp.values[0]
+
+
+@pytest.mark.asyncio
+async def test_chk_vfo(handler: RigctldHandler, mock_radio: AsyncMock) -> None:
+    resp = await handler.execute(get_cmd("chk_vfo"))
+    assert resp.ok
+    assert resp.values == ["0"]
+
+
+@pytest.mark.asyncio
+async def test_get_powerstat(handler: RigctldHandler, mock_radio: AsyncMock) -> None:
+    mock_radio.get_powerstat = AsyncMock(side_effect=AssertionError("must not poll"))
+    resp = await handler.execute(get_cmd("get_powerstat"))
+    assert resp.ok
+    assert resp.values == ["1"]
+    mock_radio.get_powerstat.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_rigctld_get_powerstat_is_wsjtx_compatibility_probe(
+    handler: RigctldHandler, mock_radio: AsyncMock
+) -> None:
+    """get_powerstat reports reachable NET rigctl state without CI-V polling."""
+    mock_radio.get_powerstat = AsyncMock(side_effect=IcomTimeoutError("timed out"))
+    resp = await handler.execute(get_cmd("get_powerstat"))
+    assert resp.ok
+    assert resp.values == ["1"]
+    mock_radio.get_powerstat.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_get_rit_missing_store_without_readback_returns_eio(
+    handler: RigctldHandler, mock_radio: AsyncMock
+) -> None:
+    resp = await handler.execute(get_cmd("get_rit"))
+    assert resp.error == HamlibError.EIO
+
+
+@pytest.mark.asyncio
+async def test_get_rit_missing_store_reads_backend_and_records_observation(
+    mock_radio: AsyncMock,
+) -> None:
+    mock_radio.get_rit_frequency = AsyncMock(return_value=-125)
+    state = RadioState()
+    state.rit_freq = -250
+    mock_radio.radio_state = state
+    handler = RigctldHandler(mock_radio, RigctldConfig())
+
+    resp = await handler.execute(get_cmd("get_rit"))
+
+    assert resp.ok
+    assert resp.values == ["-125"]
+    field = handler._state_store.snapshot().field(  # noqa: SLF001
+        "global.operator_controls.rit_freq"
+    )
+    assert field.value == -125
+    assert field.source.source == "hamlib_response"
+
+
+@pytest.mark.asyncio
+async def test_get_rit_projects_state_store_before_radio_state(
+    mock_radio: AsyncMock,
+) -> None:
+    store = StateStore()
+    mock_radio.state_store = store
+    _apply_store_value(store, "global.operator_controls.rit_freq", -125)
+    state = RadioState()
+    state.rit_freq = 250
+    mock_radio.radio_state = state
+    handler = RigctldHandler(mock_radio, RigctldConfig())
+
+    resp = await handler.execute(get_cmd("get_rit"))
+
+    assert resp.ok
+    assert resp.values == ["-125"]
+
+
+@pytest.mark.asyncio
+async def test_get_rit_without_vfo_arg_does_not_resolve_active_vfo(
+    mock_radio: AsyncMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = StateStore()
+    mock_radio.state_store = store
+    _apply_store_value(store, "global.operator_controls.rit_freq", -125)
+    handler = RigctldHandler(mock_radio, RigctldConfig())
+
+    def fail_active_vfo_lookup() -> str:
+        raise AssertionError("get_rit should not resolve active VFO")
+
+    monkeypatch.setattr(handler, "_active_vfo_name", fail_active_vfo_lookup)
+
+    resp = await handler.execute(get_cmd("get_rit"))
+
+    assert resp.ok
+    assert resp.values == ["-125"]
+
+
+@pytest.mark.asyncio
+async def test_get_rit_stale_state_store_reads_backend_and_projects_store(
+    mock_radio: AsyncMock,
+) -> None:
+    store = StateStore()
+    rit_path = FieldPath.global_("operator_controls", "rit_freq")
+    scheduler = AcquisitionScheduler(profile=_acquisition_profile(rit_path))
+    model_service = RadioStateModelService(store=store, scheduler=scheduler)
+    mock_radio.state_store = store
+    mock_radio.state_model_service = model_service
+    _apply_store_value(store, "global.operator_controls.rit_freq", -125, max_age=0.25)
+    store.mark_stale_due(now=2.0)
+    mock_radio.get_rit_frequency = AsyncMock(return_value=75)
+    state = RadioState()
+    state.rit_freq = 250
+    mock_radio.radio_state = state
+    handler = RigctldHandler(mock_radio, RigctldConfig(cache_ttl=0.25))
+
+    resp = await handler.execute(get_cmd("get_rit"))
+
+    assert resp.ok
+    assert resp.values == ["75"]
+    requests = scheduler.pending_requests()
+    assert len(requests) == 1
+    assert requests[0].paths == (rit_path,)
+    field = store.snapshot().field("global.operator_controls.rit_freq")
+    assert field.value == 75
+    assert field.source.source == "hamlib_response"
+
+
+@pytest.mark.parametrize("long_cmd", ["get_rit", "get_xit"])
+@pytest.mark.parametrize("prepopulate_stale_store", [False, True])
+@pytest.mark.asyncio
+async def test_get_rit_xit_acquirable_without_readback_returns_eio_and_queues(
+    long_cmd: str,
+    prepopulate_stale_store: bool,
+) -> None:
+    class _NoRitReadbackRadio:
+        capabilities = set(FULL_ICOM_CAPS)
+
+    store = StateStore()
+    rit_path = FieldPath.global_("operator_controls", "rit_freq")
+    scheduler = AcquisitionScheduler(profile=_acquisition_profile(rit_path))
+    model_service = RadioStateModelService(store=store, scheduler=scheduler)
+    if prepopulate_stale_store:
+        _apply_store_value(store, str(rit_path), -125, max_age=0.25)
+        store.mark_stale_due(now=2.0)
+    handler = RigctldHandler(
+        _NoRitReadbackRadio(),
+        RigctldConfig(cache_ttl=0.25),
+        state_store=store,
+        state_model_service=model_service,
+    )
+
+    resp = await handler.execute(get_cmd(long_cmd))
+
+    assert resp.error == HamlibError.EIO
+    requests = scheduler.pending_requests()
+    assert len(requests) == 1
+    assert requests[0].paths == (rit_path,)
+    assert requests[0].priority is AcquisitionPriority.USER
+    assert requests[0].reasons == (f"rigctld.{long_cmd}",)
+
+
+@pytest.mark.asyncio
+async def test_set_rit_calls_radio(
+    handler: RigctldHandler, mock_radio: AsyncMock
+) -> None:
+    mock_radio.set_rit_frequency = AsyncMock()
+    mock_radio.set_rit_status = AsyncMock()
+    resp = await handler.execute(set_cmd("set_rit", "500"))
+    assert resp.ok
+    mock_radio.set_rit_frequency.assert_awaited_once_with(500)
+    mock_radio.set_rit_status.assert_awaited_once_with(True)
+    events = handler._command_service.lifecycle_events()  # noqa: SLF001
+    assert [event.state for event in events[:4]] == [
+        "accepted",
+        "queued",
+        "sent",
+        "acknowledged",
+    ]
+    assert events[0].source == "rigctld"
+
+
+@pytest.mark.asyncio
+async def test_set_rit_projects_pending_offset_and_status_by_session(
+    handler: RigctldHandler,
+    mock_radio: AsyncMock,
+) -> None:
+    mock_radio.set_rit_frequency = AsyncMock()
+    mock_radio.set_rit_status = AsyncMock()
+    paths = (
+        FieldPath.global_("operator_controls", "rit_freq"),
+        FieldPath.global_("tx_state", "rit_on"),
+    )
+    _apply_handler_value(handler, "global.operator_controls.rit_freq", 0)
+
+    resp = await handler.execute(
+        set_cmd("set_rit", "500"),
+        session_id="rigctld-client-a",
+    )
+
+    assert resp.ok
+    assert handler._command_service.project_pending_values(  # noqa: SLF001
+        source="rigctld",
+        session_id="rigctld-client-a",
+        paths=paths,
+    ) == {paths[0]: 500, paths[1]: True}
+    assert (
+        handler._command_service.project_pending_values(  # noqa: SLF001
+            source="rigctld",
+            session_id="rigctld-client-b",
+            paths=paths,
+        )
+        == {}
+    )
+    client_a = await handler.execute(
+        get_cmd("get_rit"),
+        session_id="rigctld-client-a",
+    )
+    client_b = await handler.execute(
+        get_cmd("get_rit"),
+        session_id="rigctld-client-b",
+    )
+    assert client_a.values == ["500"]
+    assert client_b.values == ["0"]
+
+
+@pytest.mark.asyncio
+async def test_set_rit_zero_disables(
+    handler: RigctldHandler, mock_radio: AsyncMock
+) -> None:
+    mock_radio.set_rit_frequency = AsyncMock()
+    mock_radio.set_rit_status = AsyncMock()
+    resp = await handler.execute(set_cmd("set_rit", "0"))
+    assert resp.ok
+    mock_radio.set_rit_frequency.assert_awaited_once_with(0)
+    mock_radio.set_rit_status.assert_awaited_once_with(False)
+
+
+@pytest.mark.asyncio
+async def test_set_rit_negative_hz(
+    handler: RigctldHandler, mock_radio: AsyncMock
+) -> None:
+    mock_radio.set_rit_frequency = AsyncMock()
+    mock_radio.set_rit_status = AsyncMock()
+    resp = await handler.execute(set_cmd("set_rit", "-250"))
+    assert resp.ok
+    mock_radio.set_rit_frequency.assert_awaited_once_with(-250)
+    mock_radio.set_rit_status.assert_awaited_once_with(True)
+
+
+@pytest.mark.asyncio
+async def test_set_rit_missing_arg_returns_einval(
+    handler: RigctldHandler, mock_radio: AsyncMock
+) -> None:
+    resp = await handler.execute(set_cmd("set_rit"))
+    assert resp.error == HamlibError.EINVAL
+
+
+@pytest.mark.asyncio
+async def test_set_rit_invalid_arg_returns_einval(
+    handler: RigctldHandler, mock_radio: AsyncMock
+) -> None:
+    resp = await handler.execute(set_cmd("set_rit", "bad"))
+    assert resp.error == HamlibError.EINVAL
+
+
+@pytest.mark.asyncio
+async def test_set_rit_no_cap_returns_enimpl(
+    mock_radio: AsyncMock, config: RigctldConfig
+) -> None:
+    mock_radio.capabilities = set()
+    h = RigctldHandler(mock_radio, config)
+    resp = await h.execute(set_cmd("set_rit", "100"))
+    assert resp.error == HamlibError.ENIMPL
+
+
+@pytest.mark.asyncio
+async def test_get_xit_missing_store_reads_backend_and_records_observation(
+    mock_radio: AsyncMock,
+) -> None:
+    mock_radio.get_rit_frequency = AsyncMock(return_value=175)
+    state = RadioState()
+    state.rit_freq = 300
+    mock_radio.radio_state = state
+    handler = RigctldHandler(mock_radio, RigctldConfig())
+
+    resp = await handler.execute(get_cmd("get_xit"))
+    assert resp.ok
+    assert resp.values == ["175"]
+    field = handler._state_store.snapshot().field(  # noqa: SLF001
+        "global.operator_controls.rit_freq"
+    )
+    assert field.value == 175
+    assert field.source.source == "hamlib_response"
+
+
+@pytest.mark.asyncio
+async def test_get_xit_projects_shared_rit_store_offset_before_radio_state(
+    mock_radio: AsyncMock,
+) -> None:
+    store = StateStore()
+    mock_radio.state_store = store
+    _apply_store_value(store, "global.operator_controls.rit_freq", 175)
+    state = RadioState()
+    state.rit_freq = -300
+    mock_radio.radio_state = state
+    handler = RigctldHandler(mock_radio, RigctldConfig())
+
+    resp = await handler.execute(get_cmd("get_xit"))
+
+    assert resp.ok
+    assert resp.values == ["175"]
+
+
+@pytest.mark.asyncio
+async def test_get_xit_without_vfo_arg_does_not_resolve_active_vfo(
+    mock_radio: AsyncMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = StateStore()
+    mock_radio.state_store = store
+    _apply_store_value(store, "global.operator_controls.rit_freq", 175)
+    handler = RigctldHandler(mock_radio, RigctldConfig())
+
+    def fail_active_vfo_lookup() -> str:
+        raise AssertionError("get_xit should not resolve active VFO")
+
+    monkeypatch.setattr(handler, "_active_vfo_name", fail_active_vfo_lookup)
+
+    resp = await handler.execute(get_cmd("get_xit"))
+
+    assert resp.ok
+    assert resp.values == ["175"]
+
+
+@pytest.mark.asyncio
+async def test_get_xit_stale_state_store_reads_backend_and_projects_store(
+    mock_radio: AsyncMock,
+) -> None:
+    store = StateStore()
+    rit_path = FieldPath.global_("operator_controls", "rit_freq")
+    scheduler = AcquisitionScheduler(profile=_acquisition_profile(rit_path))
+    model_service = RadioStateModelService(store=store, scheduler=scheduler)
+    mock_radio.state_store = store
+    mock_radio.state_model_service = model_service
+    _apply_store_value(store, "global.operator_controls.rit_freq", 175, max_age=0.25)
+    store.mark_stale_due(now=2.0)
+    mock_radio.get_rit_frequency = AsyncMock(return_value=-50)
+    state = RadioState()
+    state.rit_freq = 300
+    mock_radio.radio_state = state
+    handler = RigctldHandler(mock_radio, RigctldConfig(cache_ttl=0.25))
+
+    resp = await handler.execute(get_cmd("get_xit"))
+
+    assert resp.ok
+    assert resp.values == ["-50"]
+    requests = scheduler.pending_requests()
+    assert len(requests) == 1
+    assert requests[0].paths == (rit_path,)
+    field = store.snapshot().field("global.operator_controls.rit_freq")
+    assert field.value == -50
+    assert field.source.source == "hamlib_response"
+
+
+@pytest.mark.asyncio
+async def test_get_xit_missing_store_without_readback_returns_eio(
+    handler: RigctldHandler, mock_radio: AsyncMock
+) -> None:
+    resp = await handler.execute(get_cmd("get_xit"))
+    assert resp.error == HamlibError.EIO
+
+
+@pytest.mark.asyncio
+async def test_set_xit_calls_radio(
+    handler: RigctldHandler, mock_radio: AsyncMock
+) -> None:
+    mock_radio.set_rit_frequency = AsyncMock()
+    mock_radio.set_rit_tx_status = AsyncMock()
+    resp = await handler.execute(set_cmd("set_xit", "750"))
+    assert resp.ok
+    mock_radio.set_rit_frequency.assert_awaited_once_with(750)
+    mock_radio.set_rit_tx_status.assert_awaited_once_with(True)
+    events = handler._command_service.lifecycle_events()  # noqa: SLF001
+    assert [event.state for event in events[:4]] == [
+        "accepted",
+        "queued",
+        "sent",
+        "acknowledged",
+    ]
+    assert events[0].source == "rigctld"
+
+
+@pytest.mark.asyncio
+async def test_set_xit_projects_pending_offset_and_status_by_session(
+    handler: RigctldHandler,
+    mock_radio: AsyncMock,
+) -> None:
+    mock_radio.set_rit_frequency = AsyncMock()
+    mock_radio.set_rit_tx_status = AsyncMock()
+    paths = (
+        FieldPath.global_("operator_controls", "rit_freq"),
+        FieldPath.global_("tx_state", "rit_tx"),
+    )
+    _apply_handler_value(handler, "global.operator_controls.rit_freq", 0)
+
+    resp = await handler.execute(
+        set_cmd("set_xit", "750"),
+        session_id="rigctld-client-a",
+    )
+
+    assert resp.ok
+    assert handler._command_service.project_pending_values(  # noqa: SLF001
+        source="rigctld",
+        session_id="rigctld-client-a",
+        paths=paths,
+    ) == {paths[0]: 750, paths[1]: True}
+    assert (
+        handler._command_service.project_pending_values(  # noqa: SLF001
+            source="rigctld",
+            session_id="rigctld-client-b",
+            paths=paths,
+        )
+        == {}
+    )
+    client_a = await handler.execute(
+        get_cmd("get_xit"),
+        session_id="rigctld-client-a",
+    )
+    client_b = await handler.execute(
+        get_cmd("get_xit"),
+        session_id="rigctld-client-b",
+    )
+    assert client_a.values == ["750"]
+    assert client_b.values == ["0"]
+
+
+@pytest.mark.asyncio
+async def test_set_xit_zero_disables(
+    handler: RigctldHandler, mock_radio: AsyncMock
+) -> None:
+    mock_radio.set_rit_frequency = AsyncMock()
+    mock_radio.set_rit_tx_status = AsyncMock()
+    resp = await handler.execute(set_cmd("set_xit", "0"))
+    assert resp.ok
+    mock_radio.set_rit_frequency.assert_awaited_once_with(0)
+    mock_radio.set_rit_tx_status.assert_awaited_once_with(False)
+
+
+@pytest.mark.asyncio
+async def test_set_xit_missing_arg_returns_einval(
+    handler: RigctldHandler, mock_radio: AsyncMock
+) -> None:
+    resp = await handler.execute(set_cmd("set_xit"))
+    assert resp.error == HamlibError.EINVAL
+
+
+@pytest.mark.asyncio
+async def test_set_xit_no_cap_returns_enimpl(
+    mock_radio: AsyncMock, config: RigctldConfig
+) -> None:
+    mock_radio.capabilities = set()
+    h = RigctldHandler(mock_radio, config)
+    resp = await h.execute(set_cmd("set_xit", "100"))
+    assert resp.error == HamlibError.ENIMPL
+
+
+@pytest.mark.asyncio
+async def test_quit_returns_ok_with_echo(
+    handler: RigctldHandler, mock_radio: AsyncMock
+) -> None:
+    resp = await handler.execute(get_cmd("quit"))
+    assert resp.ok
+    assert resp.cmd_echo == "quit"
+
+
+# ---------------------------------------------------------------------------
+# Unknown command
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_unknown_command_returns_enimpl(
+    handler: RigctldHandler, mock_radio: AsyncMock
+) -> None:
+    cmd = RigctldCommand(short_cmd="?", long_cmd="totally_unknown_cmd")
+    resp = await handler.execute(cmd)
+    assert resp.error == HamlibError.ENIMPL
+
+
+# ---------------------------------------------------------------------------
+# Read-only mode
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_read_only_rejects_set_freq(mock_radio: AsyncMock) -> None:
+    h = RigctldHandler(mock_radio, RigctldConfig(read_only=True))
+    resp = await h.execute(set_cmd("set_freq", "14074000"))
+    assert resp.error == HamlibError.EACCESS
+    mock_radio.set_freq.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_read_only_rejects_set_mode(mock_radio: AsyncMock) -> None:
+    h = RigctldHandler(mock_radio, RigctldConfig(read_only=True))
+    resp = await h.execute(set_cmd("set_mode", "USB"))
+    assert resp.error == HamlibError.EACCESS
+
+
+@pytest.mark.asyncio
+async def test_read_only_rejects_set_ptt(mock_radio: AsyncMock) -> None:
+    h = RigctldHandler(mock_radio, RigctldConfig(read_only=True))
+    resp = await h.execute(set_cmd("set_ptt", "1"))
+    assert resp.error == HamlibError.EACCESS
+    mock_radio.set_ptt.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_read_only_allows_get_freq(mock_radio: AsyncMock) -> None:
+    h = RigctldHandler(mock_radio, RigctldConfig(read_only=True))
+    mock_radio.get_freq.return_value = 14_074_000
+    resp = await h.execute(get_cmd("get_freq"))
+    assert resp.ok
+
+
+@pytest.mark.asyncio
+async def test_read_only_allows_get_mode(mock_radio: AsyncMock) -> None:
+    h = RigctldHandler(mock_radio, RigctldConfig(read_only=True))
+    mock_radio.get_mode_info.return_value = (Mode.USB, None)
+    resp = await h.execute(get_cmd("get_mode"))
+    assert resp.ok
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("read_only", [True, False])
+@pytest.mark.parametrize("command", ["w", r"\send_raw"])
+@pytest.mark.parametrize(
+    "frame",
+    ["FE FE 98 E0 00 00 40 07 14 FD", "FE FE 98 E0 03 FD"],
+    ids=["raw-write", "raw-read"],
+)
+async def test_read_only_raw_passthrough(
+    mock_radio: AsyncMock, read_only: bool, command: str, frame: str
+) -> None:
+    store = StateStore()
+    _seed_known_rx(store)
+    h = RigctldHandler(
+        mock_radio, RigctldConfig(read_only=read_only), state_store=store
+    )
+    mock_radio._send_civ_raw = AsyncMock(return_value=None)
+    cmd = parse_line(f"{command} {frame}".encode("ascii"))
+    assert isinstance(cmd, RigctldCommand)
+    assert not cmd.is_set
+
+    resp = await h.execute(cmd)
+
+    if read_only:
+        assert resp.error == HamlibError.EACCESS
+        assert format_response(cmd, resp, ClientSession()) == b"RPRT -22\n"
+        mock_radio._send_civ_raw.assert_not_called()
+    else:
+        assert resp.ok
+        mock_radio._send_civ_raw.assert_awaited_once_with(bytes.fromhex(frame))
+
+
+# ---------------------------------------------------------------------------
+# Exception translation
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_connection_error_becomes_eio(
+    handler: RigctldHandler, mock_radio: AsyncMock
+) -> None:
+    mock_radio.get_freq.side_effect = IcomConnectionError("lost")
+    resp = await handler.execute(get_cmd("get_freq"))
+    assert resp.error == HamlibError.EIO
+
+
+@pytest.mark.asyncio
+async def test_timeout_error_becomes_etimeout(
+    handler: RigctldHandler, mock_radio: AsyncMock
+) -> None:
+    mock_radio.get_freq.side_effect = IcomTimeoutError("timeout")
+    resp = await handler.execute(get_cmd("get_freq"))
+    assert resp.error == HamlibError.ETIMEOUT
+
+
+@pytest.mark.asyncio
+async def test_builtin_timeout_error_becomes_etimeout(
+    handler: RigctldHandler, mock_radio: AsyncMock
+) -> None:
+    mock_radio.get_freq.side_effect = TimeoutError("timeout")
+    resp = await handler.execute(get_cmd("get_freq"))
+    assert resp.error == HamlibError.ETIMEOUT
+
+
+@pytest.mark.asyncio
+async def test_value_error_becomes_einval(
+    handler: RigctldHandler, mock_radio: AsyncMock
+) -> None:
+    mock_radio.get_freq.side_effect = ValueError("bad value")
+    resp = await handler.execute(get_cmd("get_freq"))
+    assert resp.error == HamlibError.EINVAL
+
+
+@pytest.mark.asyncio
+async def test_unexpected_exception_becomes_einternal(
+    handler: RigctldHandler, mock_radio: AsyncMock
+) -> None:
+    mock_radio.get_freq.side_effect = RuntimeError("unexpected")
+    resp = await handler.execute(get_cmd("get_freq"))
+    assert resp.error == HamlibError.EINTERNAL
+
+
+@pytest.mark.asyncio
+async def test_radio_refused_get_freq_answers_erjcted(
+    handler: RigctldHandler,
+    mock_radio: AsyncMock,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A CI-V read the radio positively refuses (NAK) answers RPRT -9.
+
+    ``CommandRejectedError`` is the radio refusing the command — not an
+    internal failure — so the client must read ERJCTED and no ERROR-level
+    "Internal error" record may be emitted.
+    """
+    mock_radio.get_freq.side_effect = CommandRejectedError(
+        "CI-V command 0x03 refused (NAK)"
+    )
+    with caplog.at_level(logging.DEBUG, logger="rigplane.rigctld.handler"):
+        resp = await handler.execute(get_cmd("get_freq"))
+
+    assert resp.error == HamlibError.ERJCTED
+    assert format_response(get_cmd("get_freq"), resp, ClientSession()) == b"RPRT -9\n"
+    assert not any(
+        record.levelno >= logging.ERROR and "Internal error" in record.getMessage()
+        for record in caplog.records
+    )
+
+
+@pytest.mark.asyncio
+async def test_unexpected_error_on_get_freq_still_answers_einternal(
+    handler: RigctldHandler,
+    mock_radio: AsyncMock,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Pin: an unexpected RuntimeError from the same read stays EINTERNAL.
+
+    The narrow ``CommandRejectedError`` mapping must not swallow genuine
+    bugs: a ``RuntimeError`` still answers RPRT -7 and still logs the
+    ERROR-level "Internal error" traceback record.
+    """
+    mock_radio.get_freq.side_effect = RuntimeError("unexpected")
+    with caplog.at_level(logging.DEBUG, logger="rigplane.rigctld.handler"):
+        resp = await handler.execute(get_cmd("get_freq"))
+
+    assert resp.error == HamlibError.EINTERNAL
+    assert any(
+        record.levelno >= logging.ERROR and "Internal error" in record.getMessage()
+        for record in caplog.records
+    )
+
+
+@pytest.mark.asyncio
+async def test_connection_error_on_set_freq_becomes_eio(
+    handler: RigctldHandler, mock_radio: AsyncMock
+) -> None:
+    mock_radio.set_freq.side_effect = IcomConnectionError("lost")
+    resp = await handler.execute(set_cmd("set_freq", "14074000"))
+    assert resp.error == HamlibError.EIO
+
+
+@pytest.mark.asyncio
+async def test_timeout_error_on_set_ptt_becomes_etimeout(
+    handler: RigctldHandler, mock_radio: AsyncMock
+) -> None:
+    mock_radio.set_ptt.side_effect = IcomTimeoutError("timeout")
+    resp = await handler.execute(set_cmd("set_ptt", "1"))
+    assert resp.error == HamlibError.ETIMEOUT
+
+
+# ---------------------------------------------------------------------------
+# Passband / filter mapping helpers (unit tests)
+# ---------------------------------------------------------------------------
+
+
+def test_passband_to_filter_zero_gives_none() -> None:
+    from rigplane.rigctld.handler import _passband_to_filter
+
+    assert _passband_to_filter(0) is None
+
+
+def test_passband_to_filter_negative_gives_none() -> None:
+    from rigplane.rigctld.handler import _passband_to_filter
+
+    assert _passband_to_filter(-1) is None
+
+
+def test_passband_to_filter_wide_gives_fil1() -> None:
+    from rigplane.rigctld.handler import _passband_to_filter
+
+    assert _passband_to_filter(3000) == 1
+
+
+def test_passband_to_filter_medium_gives_fil2() -> None:
+    from rigplane.rigctld.handler import _passband_to_filter
+
+    assert _passband_to_filter(2400) == 2
+
+
+def test_passband_to_filter_narrow_gives_fil3() -> None:
+    from rigplane.rigctld.handler import _passband_to_filter
+
+    assert _passband_to_filter(1800) == 3
+
+
+def test_filter_to_passband_none_gives_zero() -> None:
+    from rigplane.rigctld.handler import _filter_to_passband
+
+    assert _filter_to_passband(None) == 0
+
+
+def test_filter_to_passband_fil1() -> None:
+    from rigplane.rigctld.handler import _filter_to_passband
+
+    assert _filter_to_passband(1) == 3000
+
+
+def test_filter_to_passband_fil2() -> None:
+    from rigplane.rigctld.handler import _filter_to_passband
+
+    assert _filter_to_passband(2) == 2400
+
+
+def test_filter_to_passband_fil3() -> None:
+    from rigplane.rigctld.handler import _filter_to_passband
+
+    assert _filter_to_passband(3) == 1800
+    assert _filter_to_passband(3) == 1800
+
+
+# ---------------------------------------------------------------------------
+# get_level — new levels (AF, RF, NR, NB, COMP, MICGAIN, MONITOR_GAIN,
+#              KEYSPD, CWPITCH, PREAMP, ATT, RFPOWER_METER, COMP_METER,
+#              ID_METER, VD_METER)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_level_af(handler: RigctldHandler, mock_radio: AsyncMock) -> None:
+    mock_radio.get_af_level = AsyncMock(return_value=128)
+    resp = await handler.execute(get_cmd("get_level", "AF"))
+    assert resp.ok
+    assert float(resp.values[0]) == pytest.approx(128 / 255.0, rel=1e-6)
+
+
+@pytest.mark.asyncio
+async def test_get_level_rf_gain(
+    handler: RigctldHandler, mock_radio: AsyncMock
+) -> None:
+    mock_radio.get_rf_gain = AsyncMock(return_value=255)
+    resp = await handler.execute(get_cmd("get_level", "RF"))
+    assert resp.ok
+    assert float(resp.values[0]) == pytest.approx(1.0)
+
+
+@pytest.mark.asyncio
+async def test_rigctld_get_level_sql_icom(
+    handler: RigctldHandler, mock_radio: AsyncMock
+) -> None:
+    """get_level SQL on Icom uses LevelsCapable.get_squelch — no AttributeError (issue #1093)."""
+    mock_radio.get_squelch = AsyncMock(return_value=128)
+    resp = await handler.execute(get_cmd("get_level", "SQL"))
+    assert resp.ok
+    assert float(resp.values[0]) == pytest.approx(128 / 255.0, rel=1e-6)
+    mock_radio.get_squelch.assert_awaited_once_with()
+
+
+@pytest.mark.asyncio
+async def test_get_level_nr(handler: RigctldHandler, mock_radio: AsyncMock) -> None:
+    mock_radio.get_nr_level = AsyncMock(return_value=0)
+    resp = await handler.execute(get_cmd("get_level", "NR"))
+    assert resp.ok
+    assert float(resp.values[0]) == pytest.approx(0.0)
+
+
+@pytest.mark.asyncio
+async def test_get_level_nb(handler: RigctldHandler, mock_radio: AsyncMock) -> None:
+    mock_radio.get_nb_level = AsyncMock(return_value=51)  # 51/255 ≈ 0.2
+    resp = await handler.execute(get_cmd("get_level", "NB"))
+    assert resp.ok
+    assert float(resp.values[0]) == pytest.approx(51 / 255.0, rel=1e-5)
+
+
+@pytest.mark.asyncio
+async def test_get_level_comp(handler: RigctldHandler, mock_radio: AsyncMock) -> None:
+    mock_radio.get_compressor_level = AsyncMock(return_value=255)
+    resp = await handler.execute(get_cmd("get_level", "COMP"))
+    assert resp.ok
+    assert float(resp.values[0]) == pytest.approx(1.0)
+
+
+@pytest.mark.asyncio
+async def test_get_level_micgain(
+    handler: RigctldHandler, mock_radio: AsyncMock
+) -> None:
+    mock_radio.get_mic_gain = AsyncMock(return_value=0)
+    resp = await handler.execute(get_cmd("get_level", "MICGAIN"))
+    assert resp.ok
+    assert float(resp.values[0]) == pytest.approx(0.0)
+
+
+@pytest.mark.asyncio
+async def test_get_level_monitor_gain(
+    handler: RigctldHandler, mock_radio: AsyncMock
+) -> None:
+    mock_radio.get_monitor_gain = AsyncMock(return_value=128)
+    resp = await handler.execute(get_cmd("get_level", "MONITOR_GAIN"))
+    assert resp.ok
+    assert float(resp.values[0]) == pytest.approx(128 / 255.0, rel=1e-5)
+
+
+@pytest.mark.asyncio
+async def test_get_level_keyspd(handler: RigctldHandler, mock_radio: AsyncMock) -> None:
+    mock_radio.get_key_speed = AsyncMock(return_value=20)
+    resp = await handler.execute(get_cmd("get_level", "KEYSPD"))
+    assert resp.ok
+    assert resp.values[0] == "20"
+
+
+@pytest.mark.asyncio
+async def test_get_level_cwpitch(
+    handler: RigctldHandler, mock_radio: AsyncMock
+) -> None:
+    mock_radio.get_cw_pitch = AsyncMock(return_value=600)
+    resp = await handler.execute(get_cmd("get_level", "CWPITCH"))
+    assert resp.ok
+    assert resp.values[0] == "600"
+
+
+@pytest.mark.asyncio
+async def test_get_level_preamp_off(
+    handler: RigctldHandler, mock_radio: AsyncMock
+) -> None:
+    mock_radio.get_preamp = AsyncMock(return_value=0)
+    resp = await handler.execute(get_cmd("get_level", "PREAMP"))
+    assert resp.ok
+    assert resp.values[0] == "0"
+
+
+@pytest.mark.asyncio
+async def test_get_level_preamp_1(
+    handler: RigctldHandler, mock_radio: AsyncMock
+) -> None:
+    mock_radio.get_preamp = AsyncMock(return_value=1)
+    resp = await handler.execute(get_cmd("get_level", "PREAMP"))
+    assert resp.ok
+    assert resp.values[0] == "12"
+
+
+@pytest.mark.asyncio
+async def test_get_level_preamp_2(
+    handler: RigctldHandler, mock_radio: AsyncMock
+) -> None:
+    mock_radio.get_preamp = AsyncMock(return_value=2)
+    resp = await handler.execute(get_cmd("get_level", "PREAMP"))
+    assert resp.ok
+    assert resp.values[0] == "20"
+
+
+@pytest.mark.asyncio
+async def test_get_level_preamp_combination_unavailable_records_no_sample(
+    mock_radio: AsyncMock, config: RigctldConfig
+) -> None:
+    mock_radio.profile = resolve_radio_profile(model="IC-9700")
+    mock_radio.get_preamp = AsyncMock(spec=IcomRadio.get_preamp, return_value=3)
+    store = StateStore()
+    handler = RigctldHandler(mock_radio, config, state_store=store)
+
+    resp = await handler.execute(get_cmd("get_level", "PREAMP"))
+
+    assert mock_radio.get_preamp.await_count == 1
+    assert resp.error == HamlibError.ENAVAIL
+    assert resp.values == []
+    with pytest.raises(KeyError):
+        store.snapshot().field("receiver.main.operator_controls.preamp")
+
+
+@pytest.mark.asyncio
+async def test_get_level_preamp_ic9700_ingress_combination_is_unavailable() -> None:
+    radio = IcomRadio("192.168.1.100", model="IC-9700")
+    frame = CivFrame(
+        to_addr=CONTROLLER_ADDR,
+        from_addr=radio.profile.civ_addr,
+        command=0x16,
+        sub=0x02,
+        data=b"\x03",
+        receiver=0,
+    )
+    radio._civ_runtime._update_state_cache_from_frame(frame)  # noqa: SLF001
+    store = radio._state_store  # noqa: SLF001
+    observed = store.snapshot().field("receiver.0.operator_controls.preamp")
+    assert observed.value == 3
+    handler = RigctldHandler(radio, RigctldConfig(), state_store=store)
+
+    with mock.patch.object(
+        radio, "get_preamp", AsyncMock(spec=IcomRadio.get_preamp)
+    ) as read:
+        resp = await handler.execute(get_cmd("get_level", "PREAMP"))
+
+    assert resp.error == HamlibError.ENAVAIL
+    assert resp.values == []
+    read.assert_not_awaited()
+    assert store.snapshot().field("receiver.0.operator_controls.preamp") == observed
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model", ["IC-7300", "IC-9700"])
+@pytest.mark.parametrize("index,db", [(1, 12), (2, 20)])
+async def test_get_level_preamp_cached_native_index_returns_db(
+    mock_radio: AsyncMock, config: RigctldConfig, model: str, index: int, db: int
+) -> None:
+    mock_radio.profile = resolve_radio_profile(model=model)
+    mock_radio.get_preamp = AsyncMock(spec=IcomRadio.get_preamp)
+    store = StateStore()
+    _apply_store_value(store, "receiver.main.operator_controls.preamp", index)
+    handler = RigctldHandler(mock_radio, config, state_store=store)
+
+    resp = await handler.execute(get_cmd("get_level", "PREAMP"))
+
+    assert resp.ok
+    assert resp.values == [str(db)]
+    mock_radio.get_preamp.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("index", [True, "1", -1])
+async def test_get_level_preamp_live_invalid_index_is_unavailable(
+    mock_radio: AsyncMock, config: RigctldConfig, index: object
+) -> None:
+    mock_radio.get_preamp = AsyncMock(spec=IcomRadio.get_preamp, return_value=index)
+    store = StateStore()
+    handler = RigctldHandler(mock_radio, config, state_store=store)
+
+    resp = await handler.execute(get_cmd("get_level", "PREAMP"))
+
+    assert resp.error == HamlibError.ENAVAIL
+    assert resp.values == []
+    mock_radio.get_preamp.assert_awaited_once()
+    with pytest.raises(KeyError):
+        store.snapshot().field("receiver.main.operator_controls.preamp")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model", ["IC-7300", "IC-9700"])
+@pytest.mark.parametrize("index,db", [(0, 0), (1, 12), (2, 20)])
+async def test_get_level_preamp_representable_values_unchanged(
+    mock_radio: AsyncMock, config: RigctldConfig, model: str, index: int, db: int
+) -> None:
+    mock_radio.profile = resolve_radio_profile(model=model)
+    mock_radio.get_preamp = AsyncMock(spec=IcomRadio.get_preamp, return_value=index)
+    store = StateStore()
+    handler = RigctldHandler(mock_radio, config, state_store=store)
+
+    resp = await handler.execute(get_cmd("get_level", "PREAMP"))
+
+    assert mock_radio.get_preamp.await_count == 1
+    assert resp.ok
+    assert resp.values == [str(db)]
+    observed = store.snapshot().field("receiver.main.operator_controls.preamp")
+    assert observed.value == index
+    assert observed.source.source == "hamlib_response"
+    cached = await handler.execute(get_cmd("get_level", "PREAMP"))
+    assert cached.ok
+    assert cached.values == [str(db)]
+    mock_radio.get_preamp.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_get_level_att_off(
+    handler: RigctldHandler, mock_radio: AsyncMock
+) -> None:
+    mock_radio.get_attenuator_level = AsyncMock(return_value=0)
+    resp = await handler.execute(get_cmd("get_level", "ATT"))
+    assert resp.ok
+    assert resp.values[0] == "0"
+
+
+@pytest.mark.asyncio
+async def test_get_level_att_18db(
+    handler: RigctldHandler, mock_radio: AsyncMock
+) -> None:
+    mock_radio.get_attenuator_level = AsyncMock(return_value=18)
+    resp = await handler.execute(get_cmd("get_level", "ATT"))
+    assert resp.ok
+    assert resp.values[0] == "18"
+
+
+@pytest.mark.asyncio
+async def test_get_level_rfpower_meter(
+    handler: RigctldHandler, mock_radio: AsyncMock
+) -> None:
+    mock_radio.get_power_meter = AsyncMock(return_value=255)
+    resp = await handler.execute(get_cmd("get_level", "RFPOWER_METER"))
+    assert resp.ok
+    assert float(resp.values[0]) == pytest.approx(255.0)
+
+
+@pytest.mark.asyncio
+async def test_get_level_comp_meter(
+    handler: RigctldHandler, mock_radio: AsyncMock
+) -> None:
+    mock_radio.get_comp_meter = AsyncMock(return_value=128)
+    resp = await handler.execute(get_cmd("get_level", "COMP_METER"))
+    assert resp.ok
+    assert float(resp.values[0]) == pytest.approx(128.0)
+
+
+@pytest.mark.asyncio
+async def test_get_level_id_meter(
+    handler: RigctldHandler, mock_radio: AsyncMock
+) -> None:
+    mock_radio.get_id_meter = AsyncMock(return_value=0)
+    resp = await handler.execute(get_cmd("get_level", "ID_METER"))
+    assert resp.ok
+    assert float(resp.values[0]) == pytest.approx(0.0)
+
+
+@pytest.mark.asyncio
+async def test_get_level_vd_meter(
+    handler: RigctldHandler, mock_radio: AsyncMock
+) -> None:
+    mock_radio.get_vd_meter = AsyncMock(return_value=200)
+    resp = await handler.execute(get_cmd("get_level", "VD_METER"))
+    assert resp.ok
+    assert float(resp.values[0]) == pytest.approx(200.0)
+
+
+# ---------------------------------------------------------------------------
+# set_level (L command)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_set_level_af(handler: RigctldHandler, mock_radio: AsyncMock) -> None:
+    resp = await handler.execute(set_cmd("set_level", "AF", "0.500000"))
+    assert resp.ok
+    mock_radio.set_af_level.assert_awaited_once_with(128)
+
+
+@pytest.mark.asyncio
+async def test_set_level_rf(handler: RigctldHandler, mock_radio: AsyncMock) -> None:
+    resp = await handler.execute(set_cmd("set_level", "RF", "1.000000"))
+    assert resp.ok
+    mock_radio.set_rf_gain.assert_awaited_once_with(255)
+
+
+@pytest.mark.asyncio
+async def test_set_level_nr(handler: RigctldHandler, mock_radio: AsyncMock) -> None:
+    resp = await handler.execute(set_cmd("set_level", "NR", "0.000000"))
+    assert resp.ok
+    mock_radio.set_nr_level.assert_awaited_once_with(0)
+
+
+@pytest.mark.asyncio
+async def test_rigctld_set_level_sql_icom(
+    handler: RigctldHandler, mock_radio: AsyncMock
+) -> None:
+    """set_level SQL on Icom dispatches to set_squelch — symmetric to #1093
+    get-side fix (#1118 get_squelch). (#1163)"""
+    mock_radio.set_squelch = AsyncMock()
+    resp = await handler.execute(set_cmd("set_level", "SQL", "0.500000"))
+    assert resp.ok
+    # 0.5 * 255 = 127.5, rounds to 128 (banker's rounding: round-half-to-even)
+    mock_radio.set_squelch.assert_awaited_once_with(128)
+
+
+@pytest.mark.asyncio
+async def test_set_level_nb(handler: RigctldHandler, mock_radio: AsyncMock) -> None:
+    resp = await handler.execute(set_cmd("set_level", "NB", "0.200000"))
+    assert resp.ok
+    mock_radio.set_nb_level.assert_awaited_once_with(51)
+
+
+@pytest.mark.asyncio
+async def test_set_level_notchf_icom_no_attribute_error(
+    handler: RigctldHandler, mock_radio: AsyncMock
+) -> None:
+    """rigctld smoke (#1102, closes P0-03 from #1091): set_level NOTCHF on
+    an Icom-typed radio must not raise AttributeError. The Icom fallback
+    path has no NOTCHF case, so the handler is expected to return EINVAL —
+    crucially, without crashing on a Yaesu-only attribute."""
+    resp = await handler.execute(set_cmd("set_level", "NOTCHF", "1500"))
+    assert resp.error == HamlibError.EINVAL
+
+
+@pytest.mark.asyncio
+async def test_set_level_comp(handler: RigctldHandler, mock_radio: AsyncMock) -> None:
+    resp = await handler.execute(set_cmd("set_level", "COMP", "1.0"))
+    assert resp.ok
+    mock_radio.set_compressor_level.assert_awaited_once_with(255)
+
+
+@pytest.mark.asyncio
+async def test_set_level_micgain(
+    handler: RigctldHandler, mock_radio: AsyncMock
+) -> None:
+    resp = await handler.execute(set_cmd("set_level", "MICGAIN", "0.0"))
+    assert resp.ok
+    mock_radio.set_mic_gain.assert_awaited_once_with(0)
+
+
+@pytest.mark.asyncio
+async def test_set_level_keyspd(handler: RigctldHandler, mock_radio: AsyncMock) -> None:
+    resp = await handler.execute(set_cmd("set_level", "KEYSPD", "25"))
+    assert resp.ok
+    mock_radio.set_key_speed.assert_awaited_once_with(25)
+
+
+@pytest.mark.asyncio
+async def test_set_level_cwpitch(
+    handler: RigctldHandler, mock_radio: AsyncMock
+) -> None:
+    resp = await handler.execute(set_cmd("set_level", "CWPITCH", "700"))
+    assert resp.ok
+    mock_radio.set_cw_pitch.assert_awaited_once_with(700)
+
+
+@pytest.mark.asyncio
+async def test_set_level_preamp_off(
+    handler: RigctldHandler, mock_radio: AsyncMock
+) -> None:
+    resp = await handler.execute(set_cmd("set_level", "PREAMP", "0"))
+    assert resp.ok
+    mock_radio.set_preamp.assert_awaited_once_with(0)
+
+
+@pytest.mark.asyncio
+async def test_set_level_preamp_12db(
+    handler: RigctldHandler, mock_radio: AsyncMock
+) -> None:
+    resp = await handler.execute(set_cmd("set_level", "PREAMP", "12"))
+    assert resp.ok
+    mock_radio.set_preamp.assert_awaited_once_with(1)
+
+
+@pytest.mark.asyncio
+async def test_set_level_preamp_20db(
+    handler: RigctldHandler, mock_radio: AsyncMock
+) -> None:
+    resp = await handler.execute(set_cmd("set_level", "PREAMP", "20"))
+    assert resp.ok
+    mock_radio.set_preamp.assert_awaited_once_with(2)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model", ["IC-7300", "IC-9700"])
+@pytest.mark.parametrize("db,index", [(12, 1), (20, 2)])
+async def test_set_level_preamp_pending_native_index_returns_db(
+    mock_radio: AsyncMock, config: RigctldConfig, model: str, db: int, index: int
+) -> None:
+    mock_radio.profile = resolve_radio_profile(model=model)
+    mock_radio.set_preamp = AsyncMock(spec=IcomRadio.set_preamp)
+    mock_radio.get_preamp = AsyncMock(spec=IcomRadio.get_preamp, return_value=0)
+    store = StateStore()
+    path = FieldPath.receiver("0", "operator_controls", "preamp")
+    _apply_store_value(store, str(path), 0)
+    _seed_known_rx(store)
+    handler = RigctldHandler(mock_radio, config, state_store=store)
+    session_id = "preamp-client"
+    write = parse_line(f"L PREAMP {db}".encode("ascii"))
+    read = parse_line(b"l PREAMP")
+
+    assert (await handler.execute(write, session_id=session_id)).ok
+    resp = await handler.execute(read, session_id=session_id)
+
+    assert resp.ok
+    assert resp.values == [str(db)]
+    mock_radio.set_preamp.assert_awaited_once_with(index)
+    mock_radio.get_preamp.assert_not_awaited()
+    service = handler._command_service  # noqa: SLF001
+    overlays = service.pending_overlays(
+        source="rigctld", session_id=session_id, path=path
+    )
+    assert len(overlays) == 1
+    assert overlays[0].value == index
+    expectations = service.readback_expectations(
+        source="rigctld", session_id=session_id, command_id=overlays[0].command_id
+    )
+    assert [(item.path, item.value) for item in expectations] == [(path, index)]
+    assert store.snapshot().field(path).value == 0
+
+
+@pytest.mark.asyncio
+async def test_set_level_preamp_out_of_domain_returns_einval_not_a_write(
+    handler: RigctldHandler, mock_radio: AsyncMock
+) -> None:
+    """MOR-1523 R1: this legacy Icom fallback path (used whenever
+    ``create_routing()`` returns ``None`` — every Icom radio, since none of
+    them implement ``RigctldRoutable``) snaps ``L PREAMP 20`` to the nearest
+    of the hardcoded ``_PREAMP_IDX_TO_DB = [0, 12, 20]`` table (idx=2), then
+    calls ``radio.set_preamp(2)`` unconditionally — it has no idea whether
+    the connected profile's declared ``[preamp] values`` domain actually
+    includes 2. An X6200 declares only ``[0, 1]`` (no second preamp stage);
+    MOR-1523's new ``IcomRadio.set_preamp()`` validation seat now raises
+    ``ValueError`` for that radio's idx=2, and this test proves the raise
+    reaches the rigctl client as ``RPRT`` ``EINVAL`` (via the handler's
+    top-level ``except ValueError`` mapping) instead of the byte silently
+    reaching the transport, which is what happened before this PR."""
+    mock_radio.set_preamp = AsyncMock(
+        side_effect=ValueError("Preamp level must be one of [0, 1] for X6200, got 2")
+    )
+    resp = await handler.execute(set_cmd("set_level", "PREAMP", "20"))
+    assert not resp.ok
+    assert resp.error == HamlibError.EINVAL
+    mock_radio.set_preamp.assert_awaited_once_with(2)
+
+
+@pytest.mark.asyncio
+async def test_set_level_att(handler: RigctldHandler, mock_radio: AsyncMock) -> None:
+    resp = await handler.execute(set_cmd("set_level", "ATT", "18"))
+    assert resp.ok
+    mock_radio.set_attenuator_level.assert_awaited_once_with(18)
+
+
+class _IcomProfileAttRadio:
+    """Icom-path double whose attenuator validates like ``CoreRadio``.
+
+    ``attenuator_db_steps`` delegates to a real :class:`IcomRadio` built
+    from the shipping rig TOML, and ``set_attenuator_level`` refuses any
+    dB the profile does not declare — the same gate
+    ``CoreRadio.set_attenuator_level`` applies before its CI-V write.
+    """
+
+    def __init__(self, model: str) -> None:
+        self._icom = IcomRadio("192.168.1.100", model=model)
+        self.att_calls: list[int] = []
+
+    def attenuator_db_steps(self) -> tuple[int, ...] | None:
+        return self._icom.attenuator_db_steps()
+
+    async def set_attenuator_level(self, db: int, receiver: int = 0) -> None:
+        steps = self._icom.attenuator_db_steps()
+        if steps is None or isinstance(db, bool) or db not in steps:
+            raise IcomCommandError(
+                f"Attenuator level must be one of {sorted(steps or ())} dB (got {db})"
+            )
+        self.att_calls.append(db)
+
+
+def _att_handler(radio: object) -> RigctldHandler:
+    return RigctldHandler(radio, RigctldConfig())
+
+
+@pytest.mark.asyncio
+async def test_set_level_att_ic7610_on_profile_passes_through() -> None:
+    """A dB the IC-7610 profile declares reaches the radio unchanged."""
+    radio = _IcomProfileAttRadio("IC-7610")
+    resp = await _att_handler(radio).execute(set_cmd("set_level", "ATT", "15"))
+    assert resp.ok
+    assert radio.att_calls == [15]
+
+
+@pytest.mark.asyncio
+async def test_set_level_att_ic7300_tie_snaps_up() -> None:
+    """10 dB is equidistant between the IC-7300's two legal steps; ties snap up."""
+    radio = _IcomProfileAttRadio("IC-7300")
+    resp = await _att_handler(radio).execute(set_cmd("set_level", "ATT", "10"))
+    assert resp.ok
+    assert radio.att_calls == [20]
+
+
+@pytest.mark.asyncio
+async def test_set_level_att_ic7610_snaps_to_nearest_step() -> None:
+    radio = _IcomProfileAttRadio("IC-7610")
+    resp = await _att_handler(radio).execute(set_cmd("set_level", "ATT", "10"))
+    assert resp.ok
+    assert radio.att_calls == [9]
+
+
+@pytest.mark.asyncio
+async def test_set_level_att_ic7610_between_steps_snaps_to_nearest() -> None:
+    """16 dB sits between the IC-7610's 15 and 18 steps: 15 is nearer."""
+    radio = _IcomProfileAttRadio("IC-7610")
+    resp = await _att_handler(radio).execute(set_cmd("set_level", "ATT", "16"))
+    assert resp.ok
+    assert radio.att_calls == [15]
+
+
+@pytest.mark.asyncio
+async def test_set_level_att_ic7300_snaps_to_20() -> None:
+    radio = _IcomProfileAttRadio("IC-7300")
+    resp = await _att_handler(radio).execute(set_cmd("set_level", "ATT", "15"))
+    assert resp.ok
+    assert radio.att_calls == [20]
+
+
+@pytest.mark.asyncio
+async def test_set_level_att_ic7300_snaps_to_0() -> None:
+    radio = _IcomProfileAttRadio("IC-7300")
+    resp = await _att_handler(radio).execute(set_cmd("set_level", "ATT", "5"))
+    assert resp.ok
+    assert radio.att_calls == [0]
+
+
+def _real_att_radio(model: str) -> tuple[IcomRadio, MockTransport]:
+    """A real IcomRadio on a silent transport, for profile-driven ATT tests."""
+    transport = MockTransport()
+    radio = IcomRadio("192.168.1.100", timeout=0.05, model=model)
+    radio._civ_transport = transport
+    radio._ctrl_transport = transport
+    fake_connected(radio)
+    return radio, transport
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model", ["IC-7300", "IC-705"])
+async def test_set_level_att_real_radio_sends_declared_20db(
+    model: str,
+) -> None:
+    """MOR-2100: ``L ATT 20`` on a single-step profile sends the 20 dB frame."""
+    radio, transport = _real_att_radio(model)
+    try:
+        resp = await RigctldHandler(radio, RigctldConfig()).execute(
+            set_cmd("set_level", "ATT", "20")
+        )
+        assert resp.ok
+        assert any(b"\x11\x20\xfd" in pkt for pkt in transport.sent_packets)
+    finally:
+        radio._connected = False
+
+
+@pytest.mark.asyncio
+async def test_set_level_att_real_radio_ic7610_exact_and_snap() -> None:
+    """MOR-2100: IC-7610 sends 18 dB as-is; 20 dB snaps to the declared 21."""
+    radio, transport = _real_att_radio("IC-7610")
+    try:
+        handler = RigctldHandler(radio, RigctldConfig())
+        assert (await handler.execute(set_cmd("set_level", "ATT", "18"))).ok
+        assert any(b"\x11\x18\xfd" in pkt for pkt in transport.sent_packets)
+        transport.sent_packets.clear()
+        assert (await handler.execute(set_cmd("set_level", "ATT", "20"))).ok
+        assert any(b"\x11\x21\xfd" in pkt for pkt in transport.sent_packets)
+        assert all(b"\x11\x20\xfd" not in pkt for pkt in transport.sent_packets)
+    finally:
+        radio._connected = False
+
+
+@pytest.mark.asyncio
+async def test_get_level_att_profile_radio_passes_db_through() -> None:
+    radio = _IcomProfileAttRadio("IC-7610")
+
+    async def _get_att(receiver: int = 0) -> int:
+        return 15
+
+    radio.get_attenuator_level = _get_att
+    resp = await _att_handler(radio).execute(get_cmd("get_level", "ATT"))
+    assert resp.ok
+    assert resp.values[0] == "15"
+
+
+@pytest.mark.asyncio
+async def test_set_level_att_no_published_steps_forwards_unsnapped() -> None:
+    """A radio publishing no attenuator steps gets the rounded dB as-is."""
+
+    class _NoStepsRadio:
+        def __init__(self) -> None:
+            self.att_calls: list[int] = []
+
+        async def set_attenuator_level(self, db: int, receiver: int = 0) -> None:
+            self.att_calls.append(db)
+
+    radio = _NoStepsRadio()
+    resp = await _att_handler(radio).execute(set_cmd("set_level", "ATT", "15"))
+    assert resp.ok
+    assert radio.att_calls == [15]
+
+
+@pytest.mark.asyncio
+async def test_set_level_rfpower(
+    handler: RigctldHandler, mock_radio: AsyncMock
+) -> None:
+    resp = await handler.execute(set_cmd("set_level", "RFPOWER", "1.0"))
+    assert resp.ok
+    mock_radio.set_rf_power.assert_awaited_once_with(255)
+
+
+@pytest.mark.asyncio
+async def test_set_level_rfpower_half_unchanged(
+    handler: RigctldHandler, mock_radio: AsyncMock
+) -> None:
+    resp = await handler.execute(set_cmd("set_level", "RFPOWER", "0.5"))
+    assert resp.ok
+    # round(0.5 * 255) == 128 — same scaled write as origin/main (MOR-2480).
+    mock_radio.set_rf_power.assert_awaited_once_with(128)
+
+
+@pytest.mark.asyncio
+async def test_set_level_rfpower_out_of_range_rejected(
+    handler: RigctldHandler, mock_radio: AsyncMock
+) -> None:
+    """RFPOWER lives on hamlib's normalized 0.0-1.0 domain (MOR-2480).
+
+    An out-of-range value answers EINVAL with no radio call, instead of
+    scaling to an off-band raw level (round(1.5 * 255) == 382).
+    """
+    for bad in ("1.5", "-0.1"):
+        resp = await handler.execute(set_cmd("set_level", "RFPOWER", bad))
+        assert resp.error == HamlibError.EINVAL, bad
+    mock_radio.set_rf_power.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_set_level_no_args(
+    handler: RigctldHandler, mock_radio: AsyncMock
+) -> None:
+    resp = await handler.execute(set_cmd("set_level"))
+    assert resp.error == HamlibError.EINVAL
+
+
+@pytest.mark.asyncio
+async def test_set_level_unknown(
+    handler: RigctldHandler, mock_radio: AsyncMock
+) -> None:
+    resp = await handler.execute(set_cmd("set_level", "NOSUCHLEVEL", "1.0"))
+    assert resp.error == HamlibError.EINVAL
+
+
+@pytest.mark.asyncio
+async def test_set_level_invalid_value(
+    handler: RigctldHandler, mock_radio: AsyncMock
+) -> None:
+    resp = await handler.execute(set_cmd("set_level", "AF", "notafloat"))
+    assert resp.error == HamlibError.EINVAL
+
+
+# ---------------------------------------------------------------------------
+# get_func / set_func (u/U commands)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_func_nb_off(handler: RigctldHandler, mock_radio: AsyncMock) -> None:
+    mock_radio.get_nb = AsyncMock(return_value=False)
+    resp = await handler.execute(get_cmd("get_func", "NB"))
+    assert resp.ok
+    assert resp.values[0] == "0"
+
+
+@pytest.mark.asyncio
+async def test_get_func_projects_state_store_snapshot(
+    mock_radio: AsyncMock,
+) -> None:
+    store = StateStore()
+    mock_radio.state_store = store
+    _apply_store_value(store, "receiver.main.operator_toggles.nb", True)
+    handler = RigctldHandler(mock_radio, RigctldConfig())
+
+    resp = await handler.execute(get_cmd("get_func", "NB"))
+
+    assert resp.ok
+    assert resp.values == ["1"]
+    mock_radio.get_nb.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_get_func_nb_on(handler: RigctldHandler, mock_radio: AsyncMock) -> None:
+    mock_radio.get_nb = AsyncMock(return_value=True)
+    resp = await handler.execute(get_cmd("get_func", "NB"))
+    assert resp.ok
+    assert resp.values[0] == "1"
+
+
+@pytest.mark.asyncio
+async def test_get_func_nr(handler: RigctldHandler, mock_radio: AsyncMock) -> None:
+    mock_radio.get_nr = AsyncMock(return_value=True)
+    resp = await handler.execute(get_cmd("get_func", "NR"))
+    assert resp.ok
+    assert resp.values[0] == "1"
+
+
+@pytest.mark.asyncio
+async def test_get_func_comp(handler: RigctldHandler, mock_radio: AsyncMock) -> None:
+    mock_radio.get_compressor = AsyncMock(return_value=False)
+    resp = await handler.execute(get_cmd("get_func", "COMP"))
+    assert resp.ok
+    assert resp.values[0] == "0"
+
+
+@pytest.mark.asyncio
+async def test_get_func_vox(handler: RigctldHandler, mock_radio: AsyncMock) -> None:
+    mock_radio.get_vox = AsyncMock(return_value=True)
+    resp = await handler.execute(get_cmd("get_func", "VOX"))
+    assert resp.ok
+    assert resp.values[0] == "1"
+
+
+@pytest.mark.asyncio
+async def test_get_func_tone(handler: RigctldHandler, mock_radio: AsyncMock) -> None:
+    mock_radio.get_repeater_tone = AsyncMock(return_value=False)
+    resp = await handler.execute(get_cmd("get_func", "TONE"))
+    assert resp.ok
+    assert resp.values[0] == "0"
+
+
+@pytest.mark.asyncio
+async def test_get_func_tsql(handler: RigctldHandler, mock_radio: AsyncMock) -> None:
+    mock_radio.get_repeater_tsql = AsyncMock(return_value=True)
+    resp = await handler.execute(get_cmd("get_func", "TSQL"))
+    assert resp.ok
+    assert resp.values[0] == "1"
+
+
+@pytest.mark.asyncio
+async def test_get_func_anf(handler: RigctldHandler, mock_radio: AsyncMock) -> None:
+    mock_radio.get_auto_notch = AsyncMock(return_value=False)
+    resp = await handler.execute(get_cmd("get_func", "ANF"))
+    assert resp.ok
+    assert resp.values[0] == "0"
+
+
+@pytest.mark.asyncio
+async def test_get_func_lock(handler: RigctldHandler, mock_radio: AsyncMock) -> None:
+    mock_radio.get_dial_lock = AsyncMock(return_value=True)
+    resp = await handler.execute(get_cmd("get_func", "LOCK"))
+    assert resp.ok
+    assert resp.values[0] == "1"
+
+
+@pytest.mark.asyncio
+async def test_rigctld_get_func_lock_icom(config: RigctldConfig) -> None:
+    """get_func LOCK on Icom backend uses canonical get_dial_lock (issue #1092).
+
+    Icom radios implement only the canonical SystemControlCapable name
+    (get_dial_lock); they do NOT expose get_lock. A spec'd mock that lacks
+    get_lock would raise AttributeError if routing called the wrong method.
+    """
+
+    class _IcomLikeRadio:
+        backend_id = "icom7610"
+
+        async def get_dial_lock(self) -> bool:
+            return True
+
+    handler = RigctldHandler(_IcomLikeRadio(), config)
+    resp = await handler.execute(get_cmd("get_func", "LOCK"))
+    assert resp.ok
+    assert resp.values[0] == "1"
+
+
+@pytest.mark.asyncio
+async def test_rigctld_set_func_lock_icom(config: RigctldConfig) -> None:
+    """set_func LOCK 1 on Icom backend uses canonical set_dial_lock (issue #1092)."""
+
+    calls: list[bool] = []
+
+    class _IcomLikeRadio:
+        backend_id = "icom7610"
+
+        async def set_dial_lock(self, on: bool) -> None:
+            calls.append(on)
+
+    handler = RigctldHandler(_IcomLikeRadio(), config)
+    resp = await handler.execute(set_cmd("set_func", "LOCK", "1"))
+    assert resp.ok
+    assert calls == [True]
+
+
+@pytest.mark.asyncio
+async def test_get_func_mon(handler: RigctldHandler, mock_radio: AsyncMock) -> None:
+    mock_radio.get_monitor = AsyncMock(return_value=False)
+    resp = await handler.execute(get_cmd("get_func", "MON"))
+    assert resp.ok
+    assert resp.values[0] == "0"
+
+
+@pytest.mark.asyncio
+async def test_get_func_apf_off(handler: RigctldHandler, mock_radio: AsyncMock) -> None:
+    mock_radio.get_audio_peak_filter = AsyncMock(return_value=0)
+    resp = await handler.execute(get_cmd("get_func", "APF"))
+    assert resp.ok
+    assert resp.values[0] == "0"
+
+
+@pytest.mark.asyncio
+async def test_get_func_apf_on(handler: RigctldHandler, mock_radio: AsyncMock) -> None:
+    mock_radio.get_audio_peak_filter = AsyncMock(return_value=1)
+    resp = await handler.execute(get_cmd("get_func", "APF"))
+    assert resp.ok
+    assert resp.values[0] == "1"
+
+
+@pytest.mark.asyncio
+async def test_get_func_no_args(handler: RigctldHandler, mock_radio: AsyncMock) -> None:
+    resp = await handler.execute(get_cmd("get_func"))
+    assert resp.error == HamlibError.EINVAL
+
+
+@pytest.mark.asyncio
+async def test_get_func_unknown(handler: RigctldHandler, mock_radio: AsyncMock) -> None:
+    resp = await handler.execute(get_cmd("get_func", "NOSUCHFUNC"))
+    assert resp.error == HamlibError.EINVAL
+
+
+@pytest.mark.asyncio
+async def test_set_func_nb_on(handler: RigctldHandler, mock_radio: AsyncMock) -> None:
+    resp = await handler.execute(set_cmd("set_func", "NB", "1"))
+    assert resp.ok
+    mock_radio.set_nb.assert_awaited_once_with(True)
+
+
+@pytest.mark.asyncio
+async def test_set_func_nb_off(handler: RigctldHandler, mock_radio: AsyncMock) -> None:
+    resp = await handler.execute(set_cmd("set_func", "NB", "0"))
+    assert resp.ok
+    mock_radio.set_nb.assert_awaited_once_with(False)
+
+
+@pytest.mark.asyncio
+async def test_set_func_nr(handler: RigctldHandler, mock_radio: AsyncMock) -> None:
+    resp = await handler.execute(set_cmd("set_func", "NR", "1"))
+    assert resp.ok
+    mock_radio.set_nr.assert_awaited_once_with(True)
+
+
+@pytest.mark.asyncio
+async def test_set_func_comp(handler: RigctldHandler, mock_radio: AsyncMock) -> None:
+    resp = await handler.execute(set_cmd("set_func", "COMP", "0"))
+    assert resp.ok
+    mock_radio.set_compressor.assert_awaited_once_with(False)
+
+
+@pytest.mark.asyncio
+async def test_set_func_vox(handler: RigctldHandler, mock_radio: AsyncMock) -> None:
+    resp = await handler.execute(set_cmd("set_func", "VOX", "1"))
+    assert resp.ok
+    mock_radio.set_vox.assert_awaited_once_with(True)
+
+
+@pytest.mark.asyncio
+async def test_set_func_tone(handler: RigctldHandler, mock_radio: AsyncMock) -> None:
+    resp = await handler.execute(set_cmd("set_func", "TONE", "1"))
+    assert resp.ok
+    mock_radio.set_repeater_tone.assert_awaited_once_with(True)
+
+
+@pytest.mark.asyncio
+async def test_set_func_tsql(handler: RigctldHandler, mock_radio: AsyncMock) -> None:
+    resp = await handler.execute(set_cmd("set_func", "TSQL", "0"))
+    assert resp.ok
+    mock_radio.set_repeater_tsql.assert_awaited_once_with(False)
+
+
+@pytest.mark.asyncio
+async def test_set_func_anf(handler: RigctldHandler, mock_radio: AsyncMock) -> None:
+    resp = await handler.execute(set_cmd("set_func", "ANF", "1"))
+    assert resp.ok
+    mock_radio.set_auto_notch.assert_awaited_once_with(True)
+
+
+@pytest.mark.asyncio
+async def test_set_func_lock(handler: RigctldHandler, mock_radio: AsyncMock) -> None:
+    resp = await handler.execute(set_cmd("set_func", "LOCK", "0"))
+    assert resp.ok
+    mock_radio.set_dial_lock.assert_awaited_once_with(False)
+
+
+@pytest.mark.asyncio
+async def test_set_func_mon(handler: RigctldHandler, mock_radio: AsyncMock) -> None:
+    resp = await handler.execute(set_cmd("set_func", "MON", "1"))
+    assert resp.ok
+    mock_radio.set_monitor.assert_awaited_once_with(True)
+
+
+@pytest.mark.asyncio
+async def test_set_func_apf_on(handler: RigctldHandler, mock_radio: AsyncMock) -> None:
+    resp = await handler.execute(set_cmd("set_func", "APF", "1"))
+    assert resp.ok
+    mock_radio.set_audio_peak_filter.assert_awaited_once_with(1)
+
+
+@pytest.mark.asyncio
+async def test_set_func_apf_off(handler: RigctldHandler, mock_radio: AsyncMock) -> None:
+    resp = await handler.execute(set_cmd("set_func", "APF", "0"))
+    assert resp.ok
+    mock_radio.set_audio_peak_filter.assert_awaited_once_with(0)
+
+
+@pytest.mark.asyncio
+async def test_set_func_no_args(handler: RigctldHandler, mock_radio: AsyncMock) -> None:
+    resp = await handler.execute(set_cmd("set_func"))
+    assert resp.error == HamlibError.EINVAL
+
+
+@pytest.mark.asyncio
+async def test_set_func_unknown(handler: RigctldHandler, mock_radio: AsyncMock) -> None:
+    resp = await handler.execute(set_cmd("set_func", "NOSUCHFUNC", "1"))
+    assert resp.error == HamlibError.EINVAL
+
+
+@pytest.mark.asyncio
+async def test_set_func_invalid_value(
+    handler: RigctldHandler, mock_radio: AsyncMock
+) -> None:
+    resp = await handler.execute(set_cmd("set_func", "NB", "notanint"))
+    assert resp.error == HamlibError.EINVAL
+
+
+# ---------------------------------------------------------------------------
+# send_raw ('w' command) — raw CI-V passthrough
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_send_raw_space_separated_hex(
+    handler: RigctldHandler, mock_radio: AsyncMock
+) -> None:
+    """Space-separated hex tokens are parsed and sent as raw bytes."""
+    response = CivFrame(
+        to_addr=0xE0, from_addr=0x98, command=0x03, data=b"\x00\x60\x00\x00\x00"
+    )
+    mock_radio._send_civ_raw = AsyncMock(return_value=response)
+
+    resp = await handler.execute(
+        get_cmd("send_raw", "FE", "FE", "98", "E0", "03", "FD")
+    )
+
+    assert resp.ok
+    mock_radio._send_civ_raw.assert_awaited_once_with(b"\xfe\xfe\x98\xe0\x03\xfd")
+
+
+@pytest.mark.asyncio
+async def test_send_raw_backslash_escaped_hex(
+    handler: RigctldHandler, mock_radio: AsyncMock
+) -> None:
+    """Backslash-escaped single-arg hex is parsed and sent as raw bytes."""
+    response = CivFrame(to_addr=0xE0, from_addr=0x98, command=0x03, data=b"")
+    mock_radio._send_civ_raw = AsyncMock(return_value=response)
+
+    resp = await handler.execute(get_cmd("send_raw", "\\xFE\\xFE\\x98\\xE0\\x03\\xFD"))
+
+    assert resp.ok
+    mock_radio._send_civ_raw.assert_awaited_once_with(b"\xfe\xfe\x98\xe0\x03\xfd")
+
+
+@pytest.mark.asyncio
+async def test_send_raw_returns_hex_response(
+    handler: RigctldHandler, mock_radio: AsyncMock
+) -> None:
+    """Response CivFrame bytes are returned as space-separated uppercase hex."""
+    response = CivFrame(
+        to_addr=0xE0, from_addr=0x98, command=0x03, data=b"\x00\x60\x00\x00\x00"
+    )
+    mock_radio._send_civ_raw = AsyncMock(return_value=response)
+
+    resp = await handler.execute(
+        get_cmd("send_raw", "FE", "FE", "98", "E0", "03", "FD")
+    )
+
+    assert resp.ok
+    assert resp.values == ["FE FE E0 98 03 00 60 00 00 00 FD"]
+    events = handler._command_service.lifecycle_events()  # noqa: SLF001
+    assert [event.state for event in events[:4]] == [
+        "accepted",
+        "queued",
+        "sent",
+        "acknowledged",
+    ]
+    assert events[0].command_id.startswith("rigctld-send-raw-")
+    assert events[0].source == "rigctld"
+
+
+@pytest.mark.asyncio
+async def test_send_raw_icom_timeout_answers_etimeout(
+    handler: RigctldHandler, mock_radio: AsyncMock
+) -> None:
+    """A raw frame the radio never answered is reported as a timeout.
+
+    Until MOR-1882 this answered ``RPRT 0`` with an empty value list: the
+    client was told its raw write had succeeded when the only thing known
+    about it is that no reply ever came.
+    """
+    mock_radio._send_civ_raw = AsyncMock(side_effect=IcomTimeoutError("timeout"))
+
+    resp = await handler.execute(
+        get_cmd("send_raw", "FE", "FE", "98", "E0", "03", "FD")
+    )
+
+    assert resp.error is HamlibError.ETIMEOUT
+    assert resp.values == []
+    states = [e.state for e in handler._command_service.lifecycle_events()]  # noqa: SLF001
+    assert states[-1] == "timed_out"
+
+
+@pytest.mark.asyncio
+async def test_send_raw_asyncio_timeout_answers_etimeout(
+    handler: RigctldHandler, mock_radio: AsyncMock
+) -> None:
+    """asyncio.TimeoutError is reported the same way as the backend timeout."""
+    mock_radio._send_civ_raw = AsyncMock(side_effect=asyncio.TimeoutError())
+
+    resp = await handler.execute(
+        get_cmd("send_raw", "FE", "FE", "98", "E0", "03", "FD")
+    )
+
+    assert resp.error is HamlibError.ETIMEOUT
+    assert resp.values == []
+
+
+@pytest.mark.asyncio
+async def test_send_raw_none_response_returns_empty(
+    handler: RigctldHandler, mock_radio: AsyncMock
+) -> None:
+    """None response (fire-and-forget or no response) returns empty ok."""
+    mock_radio._send_civ_raw = AsyncMock(return_value=None)
+
+    resp = await handler.execute(
+        get_cmd("send_raw", "FE", "FE", "98", "E0", "17", "FD")
+    )
+
+    assert resp.ok
+    assert resp.values == []
+
+
+@pytest.mark.asyncio
+async def test_send_raw_no_args_returns_einval(
+    handler: RigctldHandler, mock_radio: AsyncMock
+) -> None:
+    """Missing args returns EINVAL."""
+    resp = await handler.execute(get_cmd("send_raw"))
+    assert resp.error == HamlibError.EINVAL
+
+
+@pytest.mark.asyncio
+async def test_send_raw_invalid_hex_returns_einval(
+    handler: RigctldHandler, mock_radio: AsyncMock
+) -> None:
+    """Malformed hex token returns EINVAL."""
+    resp = await handler.execute(get_cmd("send_raw", "GG"))
+    assert resp.error == HamlibError.EINVAL
+
+
+@pytest.mark.asyncio
+async def test_send_raw_no_send_civ_raw_returns_enimpl(config: RigctldConfig) -> None:
+    """Radio without _send_civ_raw attribute returns ENIMPL."""
+
+    class _NoRawRadio:
+        pass
+
+    handler = RigctldHandler(_NoRawRadio(), config)
+    resp = await handler.execute(
+        get_cmd("send_raw", "FE", "FE", "98", "E0", "03", "FD")
+    )
+    assert resp.error == HamlibError.ENIMPL
+
+
+# ---------------------------------------------------------------------------
+# Yaesu-specific level/func routing
+# ---------------------------------------------------------------------------
+
+from rigplane.backends.yaesu_cat.radio import YaesuCatRadio  # noqa: E402
+from rigplane.rigctld.routing import YaesuRouting  # noqa: E402
+
+
+class _FakeYaesuRadio(YaesuCatRadio):  # type: ignore[misc]
+    """A YaesuCatRadio subclass that bypasses __init__ for testing."""
+
+    def __init__(self) -> None:
+        # Skip real __init__ — we only need isinstance() to pass
+        pass
+
+
+@pytest.fixture
+def yaesu_radio() -> AsyncMock:
+    """AsyncMock of a Yaesu CAT radio with backend_id discriminator.
+
+    The mock is also wired to forward ``rigctld_routing`` to a real
+    :class:`YaesuRouting` so the handler's routing dispatch works
+    end-to-end (``AsyncMock(spec=…)`` would otherwise return a bare
+    MagicMock with non-awaitable ``get_level``/``get_func`` methods).
+    """
+    mock = AsyncMock(spec=_FakeYaesuRadio)
+    mock.backend_id = "yaesu_cat"
+    mock.rigctld_routing = lambda max_power_w=100.0: YaesuRouting(mock, max_power_w)
+    return mock
+
+
+@pytest.fixture
+def yaesu_handler(yaesu_radio: AsyncMock, config: RigctldConfig) -> RigctldHandler:
+    return RigctldHandler(yaesu_radio, config)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("index", [1, 2])
+async def test_yaesu_preamp_read_after_write_preserves_native_index(
+    yaesu_handler: RigctldHandler, yaesu_radio: AsyncMock, index: int
+) -> None:
+    write = parse_line(f"L PREAMP {index}".encode("ascii"))
+    read = parse_line(b"l PREAMP")
+
+    assert (await yaesu_handler.execute(write, session_id="yaesu-preamp")).ok
+    resp = await yaesu_handler.execute(read, session_id="yaesu-preamp")
+
+    assert resp.ok
+    assert resp.values == [str(index)]
+    yaesu_radio.set_preamp.assert_awaited_once_with(index)
+    yaesu_radio.get_preamp.assert_not_awaited()
+
+
+# -- Yaesu get_level ----------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_yaesu_get_level_strength(
+    yaesu_handler: RigctldHandler, yaesu_radio: AsyncMock
+) -> None:
+    yaesu_radio.get_s_meter.return_value = 128
+    resp = await yaesu_handler.execute(get_cmd("get_level", "STRENGTH"))
+    assert resp.ok
+    db = int(resp.values[0])
+    assert -60 <= db <= 70
+    yaesu_radio.get_s_meter.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_yaesu_get_level_rawstr(
+    yaesu_handler: RigctldHandler, yaesu_radio: AsyncMock
+) -> None:
+    yaesu_radio.get_s_meter.return_value = 200
+    resp = await yaesu_handler.execute(get_cmd("get_level", "RAWSTR"))
+    assert resp.ok
+    assert resp.values == ["200"]
+
+
+@pytest.mark.asyncio
+async def test_yaesu_get_level_rfpower(
+    yaesu_handler: RigctldHandler, yaesu_radio: AsyncMock
+) -> None:
+    yaesu_radio.get_rf_power.return_value = 50  # 50 watts
+    resp = await yaesu_handler.execute(get_cmd("get_level", "RFPOWER"))
+    assert resp.ok
+    assert float(resp.values[0]) == pytest.approx(0.5, abs=0.01)
+
+
+@pytest.mark.asyncio
+async def test_yaesu_get_level_swr(
+    yaesu_handler: RigctldHandler, yaesu_radio: AsyncMock
+) -> None:
+    yaesu_radio.get_swr.return_value = 2.5
+    resp = await yaesu_handler.execute(get_cmd("get_level", "SWR"))
+    assert resp.ok
+    assert float(resp.values[0]) == pytest.approx(2.5)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("level", "getter", "value"),
+    [
+        ("COMP_METER", "get_comp_meter", 12.5),
+        ("ID_METER", "get_id_meter", 9.75),
+        ("VD_METER", "get_vd_meter", 13.8),
+    ],
+)
+async def test_yaesu_get_level_physical_meters_pass_through_engineering_units(
+    yaesu_handler: RigctldHandler,
+    yaesu_radio: AsyncMock,
+    level: str,
+    getter: str,
+    value: float,
+) -> None:
+    getattr(yaesu_radio, getter).return_value = value
+
+    resp = await yaesu_handler.execute(get_cmd("get_level", level))
+
+    assert resp.ok
+    assert resp.values == [f"{value:.6f}"]
+
+
+@pytest.mark.asyncio
+async def test_yaesu_get_level_af(
+    yaesu_handler: RigctldHandler, yaesu_radio: AsyncMock
+) -> None:
+    yaesu_radio.get_af_level.return_value = 128
+    resp = await yaesu_handler.execute(get_cmd("get_level", "AF"))
+    assert resp.ok
+    assert float(resp.values[0]) == pytest.approx(128 / 255.0, abs=0.001)
+
+
+@pytest.mark.asyncio
+async def test_yaesu_get_level_af_prefers_state_store(
+    yaesu_radio: AsyncMock,
+) -> None:
+    store = StateStore()
+    _apply_store_value(store, "receiver.main.operator_controls.af_level", 64)
+    yaesu_radio.get_af_level.return_value = 128
+    handler = RigctldHandler(yaesu_radio, RigctldConfig(), state_store=store)
+
+    resp = await handler.execute(get_cmd("get_level", "AF"))
+
+    assert resp.ok
+    assert float(resp.values[0]) == pytest.approx(64 / 255.0, abs=0.001)
+    yaesu_radio.get_af_level.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_yaesu_get_level_strength_projected_fractional_raw_uses_strength_scale(
+    yaesu_radio: AsyncMock,
+) -> None:
+    store = StateStore()
+    _apply_store_value(store, "receiver.main.meters.s_meter", 0.5)
+    yaesu_radio.get_s_meter.return_value = 128
+    handler = RigctldHandler(yaesu_radio, RigctldConfig(), state_store=store)
+
+    resp = await handler.execute(get_cmd("get_level", "STRENGTH"))
+
+    assert resp.ok
+    assert resp.values == ["-54"]
+    yaesu_radio.get_s_meter.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_yaesu_get_level_af_projected_normalized_float_passes_through(
+    yaesu_radio: AsyncMock,
+) -> None:
+    store = StateStore()
+    _apply_store_value(store, "receiver.main.operator_controls.af_level", 0.25)
+    yaesu_radio.get_af_level.return_value = 128
+    handler = RigctldHandler(yaesu_radio, RigctldConfig(), state_store=store)
+
+    resp = await handler.execute(get_cmd("get_level", "AF"))
+
+    assert resp.ok
+    assert resp.values == ["0.250000"]
+    yaesu_radio.get_af_level.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_yaesu_get_level_af_backend_fallback_records_state_store(
+    yaesu_radio: AsyncMock,
+) -> None:
+    store = StateStore()
+    yaesu_radio.get_af_level.return_value = 128
+    handler = RigctldHandler(yaesu_radio, RigctldConfig(), state_store=store)
+
+    resp = await handler.execute(get_cmd("get_level", "AF"))
+
+    assert resp.ok
+    assert float(resp.values[0]) == pytest.approx(128 / 255.0, abs=0.001)
+    field = store.snapshot().field("receiver.main.operator_controls.af_level")
+    assert field.value == 128
+    assert field.source.source == "hamlib_response"
+
+
+@pytest.mark.asyncio
+async def test_routed_handler_readback_uses_request_captured_generation(
+    yaesu_radio: AsyncMock,
+) -> None:
+    store = StateStore()
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def delayed_get_af_level() -> int:
+        started.set()
+        await release.wait()
+        return 128
+
+    yaesu_radio.get_af_level.side_effect = delayed_get_af_level
+    handler = RigctldHandler(yaesu_radio, RigctldConfig(), state_store=store)
+    request = asyncio.create_task(handler.execute(get_cmd("get_level", "AF")))
+    await started.wait()
+    store.begin_provider_generation()
+    before = store.snapshot()
+    release.set()
+    response = await request
+
+    assert response.ok
+    after = store.snapshot()
+    assert after.state_revision == before.state_revision
+    assert after.freshness_revision == before.freshness_revision
+    assert after.observation_seq == before.observation_seq
+    assert after.fields == before.fields
+
+
+@pytest.mark.asyncio
+async def test_yaesu_get_level_af_stale_store_queues_freshness_before_fallback(
+    yaesu_radio: AsyncMock,
+) -> None:
+    store = StateStore()
+    af_path = FieldPath.receiver("main", "operator_controls", "af_level")
+    scheduler = AcquisitionScheduler(profile=_acquisition_profile(af_path))
+    model_service = RadioStateModelService(store=store, scheduler=scheduler)
+    _apply_store_value(
+        store,
+        "receiver.main.operator_controls.af_level",
+        64,
+        max_age=0.25,
+    )
+    store.mark_stale_due(now=2.0)
+    yaesu_radio.get_af_level.return_value = 128
+    handler = RigctldHandler(
+        yaesu_radio,
+        RigctldConfig(cache_ttl=0.25),
+        state_store=store,
+        state_model_service=model_service,
+    )
+
+    resp = await handler.execute(get_cmd("get_level", "AF"))
+
+    assert resp.ok
+    assert float(resp.values[0]) == pytest.approx(128 / 255.0, abs=0.001)
+    requests = scheduler.pending_requests()
+    assert len(requests) == 1
+    assert requests[0].paths == (af_path,)
+    assert requests[0].priority is AcquisitionPriority.USER
+    assert requests[0].reason == "rigctld.get_level.af"
+    field = store.snapshot().field("receiver.main.operator_controls.af_level")
+    assert field.value == 128
+    assert field.source.source == "hamlib_response"
+
+
+@pytest.mark.asyncio
+async def test_yaesu_get_level_micgain(
+    yaesu_handler: RigctldHandler, yaesu_radio: AsyncMock
+) -> None:
+    yaesu_radio.get_mic_gain.return_value = 75  # 0-100 scale
+    resp = await yaesu_handler.execute(get_cmd("get_level", "MICGAIN"))
+    assert resp.ok
+    assert float(resp.values[0]) == pytest.approx(0.75, abs=0.01)
+
+
+@pytest.mark.asyncio
+async def test_yaesu_get_level_nb(
+    yaesu_handler: RigctldHandler, yaesu_radio: AsyncMock
+) -> None:
+    yaesu_radio.get_nb_level.return_value = 5  # 0-10 scale
+    resp = await yaesu_handler.execute(get_cmd("get_level", "NB"))
+    assert resp.ok
+    assert float(resp.values[0]) == pytest.approx(0.5, abs=0.01)
+
+
+@pytest.mark.asyncio
+async def test_yaesu_get_level_nr(
+    yaesu_handler: RigctldHandler, yaesu_radio: AsyncMock
+) -> None:
+    yaesu_radio.get_nr_level.return_value = 8  # 0-15 scale
+    resp = await yaesu_handler.execute(get_cmd("get_level", "NR"))
+    assert resp.ok
+    assert float(resp.values[0]) == pytest.approx(8 / 15.0, abs=0.001)
+
+
+@pytest.mark.asyncio
+async def test_yaesu_get_level_cwpitch(
+    yaesu_handler: RigctldHandler, yaesu_radio: AsyncMock
+) -> None:
+    """Routing passes Hz through; backend converts idx → Hz internally. (#1162)"""
+    yaesu_radio.get_cw_pitch.return_value = 700  # backend returns Hz directly
+    resp = await yaesu_handler.execute(get_cmd("get_level", "CWPITCH"))
+    assert resp.ok
+    assert resp.values == ["700"]
+
+
+@pytest.mark.asyncio
+async def test_yaesu_get_level_keyspd(
+    yaesu_handler: RigctldHandler, yaesu_radio: AsyncMock
+) -> None:
+    yaesu_radio.get_key_speed.return_value = 25
+    resp = await yaesu_handler.execute(get_cmd("get_level", "KEYSPD"))
+    assert resp.ok
+    assert resp.values == ["25"]
+
+
+@pytest.mark.asyncio
+async def test_yaesu_get_level_notchf(
+    yaesu_handler: RigctldHandler, yaesu_radio: AsyncMock
+) -> None:
+    yaesu_radio.get_manual_notch.return_value = (True, 150)
+    resp = await yaesu_handler.execute(get_cmd("get_level", "NOTCHF"))
+    assert resp.ok
+    assert resp.values == ["150"]
+
+
+@pytest.mark.asyncio
+async def test_yaesu_get_level_ifshift(
+    yaesu_handler: RigctldHandler, yaesu_radio: AsyncMock
+) -> None:
+    yaesu_radio.get_if_shift.return_value = -200
+    resp = await yaesu_handler.execute(get_cmd("get_level", "IFSHIFT"))
+    assert resp.ok
+    assert resp.values == ["-200"]
+
+
+@pytest.mark.asyncio
+async def test_yaesu_get_level_monitor_gain(
+    yaesu_handler: RigctldHandler, yaesu_radio: AsyncMock
+) -> None:
+    yaesu_radio.get_monitor_level.return_value = 50  # 0-100
+    resp = await yaesu_handler.execute(get_cmd("get_level", "MONITOR_GAIN"))
+    assert resp.ok
+    assert float(resp.values[0]) == pytest.approx(0.5, abs=0.01)
+
+
+@pytest.mark.asyncio
+async def test_yaesu_get_level_unknown_returns_einval(
+    yaesu_handler: RigctldHandler,
+) -> None:
+    resp = await yaesu_handler.execute(get_cmd("get_level", "PBT_IN"))
+    assert resp.error == HamlibError.EINVAL
+
+
+# -- Yaesu set_level ----------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_yaesu_set_level_rfpower(
+    yaesu_handler: RigctldHandler, yaesu_radio: AsyncMock
+) -> None:
+    resp = await yaesu_handler.execute(set_cmd("set_level", "RFPOWER", "0.5"))
+    assert resp.ok
+    yaesu_radio.set_power.assert_awaited_once_with(50)  # 0.5 * 100W
+
+
+@pytest.mark.asyncio
+async def test_yaesu_set_level_af(
+    yaesu_handler: RigctldHandler, yaesu_radio: AsyncMock
+) -> None:
+    resp = await yaesu_handler.execute(set_cmd("set_level", "AF", "0.5"))
+    assert resp.ok
+    yaesu_radio.set_af_level.assert_awaited_once_with(128)  # 0.5 * 255 rounded
+
+
+@pytest.mark.asyncio
+async def test_yaesu_set_level_micgain(
+    yaesu_handler: RigctldHandler, yaesu_radio: AsyncMock
+) -> None:
+    resp = await yaesu_handler.execute(set_cmd("set_level", "MICGAIN", "0.75"))
+    assert resp.ok
+    yaesu_radio.set_mic_gain.assert_awaited_once_with(75)  # 0.75 * 100
+
+
+@pytest.mark.asyncio
+async def test_yaesu_set_level_nb(
+    yaesu_handler: RigctldHandler, yaesu_radio: AsyncMock
+) -> None:
+    resp = await yaesu_handler.execute(set_cmd("set_level", "NB", "0.5"))
+    assert resp.ok
+    yaesu_radio.set_nb_level.assert_awaited_once_with(5)  # 0.5 * 10
+
+
+@pytest.mark.asyncio
+async def test_yaesu_set_level_nr(
+    yaesu_handler: RigctldHandler, yaesu_radio: AsyncMock
+) -> None:
+    resp = await yaesu_handler.execute(set_cmd("set_level", "NR", "0.5"))
+    assert resp.ok
+    yaesu_radio.set_nr_level.assert_awaited_once_with(8)  # round(0.5 * 15)
+
+
+@pytest.mark.asyncio
+async def test_yaesu_set_level_cwpitch(
+    yaesu_handler: RigctldHandler, yaesu_radio: AsyncMock
+) -> None:
+    """Routing passes Hz through; backend converts Hz → idx internally. (#1162)"""
+    resp = await yaesu_handler.execute(set_cmd("set_level", "CWPITCH", "700"))
+    assert resp.ok
+    yaesu_radio.set_cw_pitch.assert_awaited_once_with(700)  # Hz pass-through
+
+
+@pytest.mark.asyncio
+async def test_yaesu_set_level_keyspd(
+    yaesu_handler: RigctldHandler, yaesu_radio: AsyncMock
+) -> None:
+    resp = await yaesu_handler.execute(set_cmd("set_level", "KEYSPD", "30"))
+    assert resp.ok
+    yaesu_radio.set_key_speed.assert_awaited_once_with(30)
+
+
+@pytest.mark.asyncio
+async def test_yaesu_set_level_notchf(
+    yaesu_handler: RigctldHandler, yaesu_radio: AsyncMock
+) -> None:
+    resp = await yaesu_handler.execute(set_cmd("set_level", "NOTCHF", "150"))
+    assert resp.ok
+    # NOTCHF now routes through the cross-vendor set_notch_filter alias
+    # (closes P0-03 from hotfix epic #1091).
+    yaesu_radio.set_notch_filter.assert_awaited_once_with(150)
+
+
+@pytest.mark.asyncio
+async def test_yaesu_set_level_ifshift(
+    yaesu_handler: RigctldHandler, yaesu_radio: AsyncMock
+) -> None:
+    resp = await yaesu_handler.execute(set_cmd("set_level", "IFSHIFT", "-200"))
+    assert resp.ok
+    yaesu_radio.set_if_shift.assert_awaited_once_with(-200)
+
+
+# -- Yaesu control-domain level routing (MOR-2469) -----------------------------
+
+
+@pytest.fixture
+def domain_yaesu_radio() -> AsyncMock:
+    """Yaesu double whose control-domain surface is the real FTX-1 math.
+
+    Like ``yaesu_radio`` but with ``snap_control_display`` /
+    ``decode_control_raw`` / ``control_display_bounds`` wired to a real
+    :class:`YaesuCatRadio` built from the shipping ``ftx1.toml``, so
+    handler-level exercises hit the actual backend implementation of
+    :class:`~rigplane.core.radio_protocol.ControlDomainCapable`.
+    """
+    from rigplane.rigctld.routing import YaesuRouting
+
+    real = YaesuCatRadio("/dev/null", profile="ftx1")
+    mock = AsyncMock(spec=_FakeYaesuRadio)
+    mock.backend_id = "yaesu_cat"
+    mock.snap_control_display = real.snap_control_display
+    mock.decode_control_raw = real.decode_control_raw
+    mock.control_display_bounds = real.control_display_bounds
+    mock.rigctld_routing = lambda max_power_w=100.0: YaesuRouting(mock, max_power_w)
+    return mock
+
+
+@pytest.fixture
+def domain_yaesu_handler(
+    domain_yaesu_radio: AsyncMock, config: RigctldConfig
+) -> RigctldHandler:
+    return RigctldHandler(domain_yaesu_radio, config)
+
+
+@pytest.mark.asyncio
+async def test_yaesu_set_level_notchf_snaps_hz_to_raw(
+    domain_yaesu_handler: RigctldHandler, domain_yaesu_radio: AsyncMock
+) -> None:
+    """hamlib NOTCHF is Hz; the backend takes the raw code 150 (MOR-2469)."""
+    resp = await domain_yaesu_handler.execute(set_cmd("set_level", "NOTCHF", "1500"))
+    assert resp.ok
+    domain_yaesu_radio.set_notch_filter.assert_awaited_once_with(150)
+
+
+@pytest.mark.asyncio
+async def test_yaesu_set_level_notchf_tie_rounds_up(
+    domain_yaesu_handler: RigctldHandler, domain_yaesu_radio: AsyncMock
+) -> None:
+    resp = await domain_yaesu_handler.execute(set_cmd("set_level", "NOTCHF", "1505"))
+    assert resp.ok
+    domain_yaesu_radio.set_notch_filter.assert_awaited_once_with(151)
+
+
+@pytest.mark.asyncio
+async def test_yaesu_set_level_notchf_out_of_range_einval_no_call(
+    domain_yaesu_handler: RigctldHandler, domain_yaesu_radio: AsyncMock
+) -> None:
+    resp = await domain_yaesu_handler.execute(set_cmd("set_level", "NOTCHF", "3300"))
+    assert resp.error == HamlibError.EINVAL
+    domain_yaesu_radio.set_notch_filter.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_yaesu_set_level_ifshift_snaps_off_lattice(
+    domain_yaesu_handler: RigctldHandler, domain_yaesu_radio: AsyncMock
+) -> None:
+    resp = await domain_yaesu_handler.execute(set_cmd("set_level", "IFSHIFT", "15"))
+    assert resp.ok
+    domain_yaesu_radio.set_if_shift.assert_awaited_once_with(20)
+
+
+@pytest.mark.asyncio
+async def test_yaesu_set_level_cwpitch_snaps_off_lattice(
+    domain_yaesu_handler: RigctldHandler, domain_yaesu_radio: AsyncMock
+) -> None:
+    resp = await domain_yaesu_handler.execute(set_cmd("set_level", "CWPITCH", "301"))
+    assert resp.ok
+    domain_yaesu_radio.set_cw_pitch.assert_awaited_once_with(300)
+
+
+@pytest.mark.asyncio
+async def test_yaesu_set_level_cwpitch_out_of_range_einval_no_call(
+    domain_yaesu_handler: RigctldHandler, domain_yaesu_radio: AsyncMock
+) -> None:
+    """Out-of-range CWPITCH is now EINVAL instead of the old clamp."""
+    resp = await domain_yaesu_handler.execute(set_cmd("set_level", "CWPITCH", "1060"))
+    assert resp.error == HamlibError.EINVAL
+    domain_yaesu_radio.set_cw_pitch.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_yaesu_get_level_notchf_decodes_to_hz(
+    domain_yaesu_handler: RigctldHandler, domain_yaesu_radio: AsyncMock
+) -> None:
+    domain_yaesu_radio.get_manual_notch.return_value = (True, 150)
+    resp = await domain_yaesu_handler.execute(get_cmd("get_level", "NOTCHF"))
+    assert resp.ok
+    assert resp.values == ["1500"]
+
+
+@pytest.mark.asyncio
+async def test_yaesu_get_level_notchf_undecodable_falls_back_to_raw(
+    domain_yaesu_handler: RigctldHandler, domain_yaesu_radio: AsyncMock
+) -> None:
+    domain_yaesu_radio.get_manual_notch.return_value = (True, 0)
+    resp = await domain_yaesu_handler.execute(get_cmd("get_level", "NOTCHF"))
+    assert resp.ok
+    assert resp.values == ["0"]
+
+
+@pytest.mark.asyncio
+async def test_yaesu_set_level_nr_full_maps_onto_domain(
+    domain_yaesu_handler: RigctldHandler, domain_yaesu_radio: AsyncMock
+) -> None:
+    """hamlib NR 1.0 writes the FTX-1 domain max 10, not 15 (MOR-2479)."""
+    resp = await domain_yaesu_handler.execute(set_cmd("set_level", "NR", "1.0"))
+    assert resp.ok
+    domain_yaesu_radio.set_nr_level.assert_awaited_once_with(10)
+
+
+@pytest.mark.asyncio
+async def test_yaesu_set_level_nr_half_maps_onto_domain(
+    domain_yaesu_handler: RigctldHandler, domain_yaesu_radio: AsyncMock
+) -> None:
+    resp = await domain_yaesu_handler.execute(set_cmd("set_level", "NR", "0.5"))
+    assert resp.ok
+    domain_yaesu_radio.set_nr_level.assert_awaited_once_with(5)
+
+
+@pytest.mark.asyncio
+async def test_yaesu_get_level_nr_raw_max_answers_one(
+    domain_yaesu_handler: RigctldHandler, domain_yaesu_radio: AsyncMock
+) -> None:
+    domain_yaesu_radio.get_nr_level.return_value = 10
+    resp = await domain_yaesu_handler.execute(get_cmd("get_level", "NR"))
+    assert resp.ok
+    assert resp.values == ["1.000000"]
+
+
+@pytest.mark.asyncio
+async def test_yaesu_set_level_nb_full_maps_onto_domain(
+    domain_yaesu_handler: RigctldHandler, domain_yaesu_radio: AsyncMock
+) -> None:
+    """hamlib NB 1.0 writes the FTX-1 domain max, not a code constant."""
+    resp = await domain_yaesu_handler.execute(set_cmd("set_level", "NB", "1.0"))
+    assert resp.ok
+    domain_yaesu_radio.set_nb_level.assert_awaited_once_with(10)
+
+
+@pytest.mark.asyncio
+async def test_yaesu_set_level_nb_half_maps_onto_domain(
+    domain_yaesu_handler: RigctldHandler, domain_yaesu_radio: AsyncMock
+) -> None:
+    resp = await domain_yaesu_handler.execute(set_cmd("set_level", "NB", "0.5"))
+    assert resp.ok
+    domain_yaesu_radio.set_nb_level.assert_awaited_once_with(5)
+
+
+@pytest.mark.asyncio
+async def test_yaesu_get_level_nb_raw_max_answers_one(
+    domain_yaesu_handler: RigctldHandler, domain_yaesu_radio: AsyncMock
+) -> None:
+    domain_yaesu_radio.get_nb_level.return_value = 10
+    resp = await domain_yaesu_handler.execute(get_cmd("get_level", "NB"))
+    assert resp.ok
+    assert resp.values == ["1.000000"]
+
+
+@pytest.mark.asyncio
+async def test_icom_path_notchf_cwpitch_unchanged(config: RigctldConfig) -> None:
+    """The built-in Icom routing is untouched by the domain dispatch.
+
+    NOTCHF has no Icom branch → EINVAL without AttributeError;
+    CWPITCH stays a plain rounded Hz passthrough. Companion pins:
+    ``test_set_level_notchf_icom_no_attribute_error`` and
+    ``test_set_level_cwpitch`` above.
+    """
+    radio = make_mock_radio()
+    handler = RigctldHandler(radio, config)
+
+    resp = await handler.execute(set_cmd("set_level", "NOTCHF", "1500"))
+    assert resp.error == HamlibError.EINVAL
+
+    resp = await handler.execute(set_cmd("set_level", "CWPITCH", "700"))
+    assert resp.ok
+    radio.set_cw_pitch.assert_awaited_once_with(700)
+
+
+@pytest.mark.asyncio
+async def test_yaesu_set_level_unknown_returns_einval(
+    yaesu_handler: RigctldHandler,
+) -> None:
+    resp = await yaesu_handler.execute(set_cmd("set_level", "PBT_IN", "0.5"))
+    assert resp.error == HamlibError.EINVAL
+
+
+# -- Yaesu get_func -----------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_yaesu_get_func_vox(
+    yaesu_handler: RigctldHandler, yaesu_radio: AsyncMock
+) -> None:
+    yaesu_radio.get_vox.return_value = True
+    resp = await yaesu_handler.execute(get_cmd("get_func", "VOX"))
+    assert resp.ok
+    assert resp.values == ["1"]
+
+
+@pytest.mark.asyncio
+async def test_yaesu_get_func_tuner(
+    yaesu_handler: RigctldHandler, yaesu_radio: AsyncMock
+) -> None:
+    yaesu_radio.get_tuner_status.return_value = 1  # ON
+    resp = await yaesu_handler.execute(get_cmd("get_func", "TUNER"))
+    assert resp.ok
+    assert resp.values == ["1"]
+
+
+@pytest.mark.asyncio
+async def test_yaesu_get_func_tuner_off(
+    yaesu_handler: RigctldHandler, yaesu_radio: AsyncMock
+) -> None:
+    yaesu_radio.get_tuner_status.return_value = 0  # OFF
+    resp = await yaesu_handler.execute(get_cmd("get_func", "TUNER"))
+    assert resp.ok
+    assert resp.values == ["0"]
+
+
+@pytest.mark.asyncio
+async def test_yaesu_get_func_comp(
+    yaesu_handler: RigctldHandler, yaesu_radio: AsyncMock
+) -> None:
+    yaesu_radio.get_processor.return_value = True
+    resp = await yaesu_handler.execute(get_cmd("get_func", "COMP"))
+    assert resp.ok
+    assert resp.values == ["1"]
+
+
+@pytest.mark.asyncio
+async def test_yaesu_get_func_nb(
+    yaesu_handler: RigctldHandler, yaesu_radio: AsyncMock
+) -> None:
+    yaesu_radio.get_nb_level.return_value = 5  # > 0 means ON
+    resp = await yaesu_handler.execute(get_cmd("get_func", "NB"))
+    assert resp.ok
+    assert resp.values == ["1"]
+
+
+@pytest.mark.asyncio
+async def test_yaesu_get_func_nb_prefers_state_store(
+    yaesu_radio: AsyncMock,
+) -> None:
+    store = StateStore()
+    _apply_store_value(store, "receiver.main.operator_toggles.nb", False)
+    yaesu_radio.get_nb_level.return_value = 5
+    handler = RigctldHandler(yaesu_radio, RigctldConfig(), state_store=store)
+
+    resp = await handler.execute(get_cmd("get_func", "NB"))
+
+    assert resp.ok
+    assert resp.values == ["0"]
+    yaesu_radio.get_nb_level.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_yaesu_get_func_nb_backend_fallback_records_state_store(
+    yaesu_radio: AsyncMock,
+) -> None:
+    store = StateStore()
+    yaesu_radio.get_nb_level.return_value = 5
+    handler = RigctldHandler(yaesu_radio, RigctldConfig(), state_store=store)
+
+    resp = await handler.execute(get_cmd("get_func", "NB"))
+
+    assert resp.ok
+    assert resp.values == ["1"]
+    field = store.snapshot().field("receiver.main.operator_toggles.nb")
+    assert field.value is True
+    assert field.source.source == "hamlib_response"
+
+
+@pytest.mark.asyncio
+async def test_yaesu_get_func_nb_off(
+    yaesu_handler: RigctldHandler, yaesu_radio: AsyncMock
+) -> None:
+    yaesu_radio.get_nb_level.return_value = 0
+    resp = await yaesu_handler.execute(get_cmd("get_func", "NB"))
+    assert resp.ok
+    assert resp.values == ["0"]
+
+
+@pytest.mark.asyncio
+async def test_yaesu_get_func_nr(
+    yaesu_handler: RigctldHandler, yaesu_radio: AsyncMock
+) -> None:
+    yaesu_radio.get_nr_level.return_value = 3
+    resp = await yaesu_handler.execute(get_cmd("get_func", "NR"))
+    assert resp.ok
+    assert resp.values == ["1"]
+
+
+def _seed_store_current(store: StateStore, path: str, value: object) -> None:
+    """Feed an observation at a nonzero provider generation (post-connect).
+
+    Mirrors a live store after ``connect``: the generation is begun first,
+    then the observation is bound to it (``apply_current``), never applied
+    at generation 0. A second call joins the same window — beginning
+    another generation would retire the earlier seed's observation.
+    """
+    if store.provider_generation == 0:
+        store.begin_provider_generation()
+    store.apply_current(
+        Observation(
+            path=FieldPath.parse(path),
+            value=value,
+            source=SourceMetadata(source="test", provider="tests"),
+            timestamp_monotonic=1.0,
+            quality=("confirmed",),
+        )
+    )
+
+
+@pytest.mark.asyncio
+async def test_yaesu_get_func_tone(
+    yaesu_handler: RigctldHandler, yaesu_radio: AsyncMock
+) -> None:
+    yaesu_radio.get_repeater_tone.return_value = True
+    resp = await yaesu_handler.execute(get_cmd("get_func", "TONE"))
+    assert resp.ok
+    assert resp.values == ["1"]
+
+
+@pytest.mark.asyncio
+async def test_yaesu_get_func_tsql(
+    yaesu_handler: RigctldHandler, yaesu_radio: AsyncMock
+) -> None:
+    yaesu_radio.get_repeater_tsql.return_value = False
+    resp = await yaesu_handler.execute(get_cmd("get_func", "TSQL"))
+    assert resp.ok
+    assert resp.values == ["0"]
+
+
+@pytest.mark.asyncio
+async def test_yaesu_get_func_tone_prefers_state_store(
+    yaesu_radio: AsyncMock,
+) -> None:
+    store = StateStore()
+    _seed_store_current(store, "receiver.main.operator_toggles.repeater_tone", True)
+    yaesu_radio.get_repeater_tone.return_value = False
+    handler = RigctldHandler(yaesu_radio, RigctldConfig(), state_store=store)
+
+    resp = await handler.execute(get_cmd("get_func", "TONE"))
+
+    assert resp.ok
+    assert resp.values == ["1"]
+    yaesu_radio.get_repeater_tone.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_yaesu_get_func_tsql_prefers_state_store(
+    yaesu_radio: AsyncMock,
+) -> None:
+    store = StateStore()
+    _seed_store_current(store, "receiver.main.operator_toggles.repeater_tsql", True)
+    yaesu_radio.get_repeater_tsql.return_value = False
+    handler = RigctldHandler(yaesu_radio, RigctldConfig(), state_store=store)
+
+    resp = await handler.execute(get_cmd("get_func", "TSQL"))
+
+    assert resp.ok
+    assert resp.values == ["1"]
+    yaesu_radio.get_repeater_tsql.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_yaesu_get_func_tone_backend_fallback_records_state_store(
+    yaesu_radio: AsyncMock,
+) -> None:
+    store = StateStore()
+    yaesu_radio.get_repeater_tone.return_value = True
+    handler = RigctldHandler(yaesu_radio, RigctldConfig(), state_store=store)
+
+    resp = await handler.execute(get_cmd("get_func", "TONE"))
+
+    assert resp.ok
+    assert resp.values == ["1"]
+    field = store.snapshot().field("receiver.main.operator_toggles.repeater_tone")
+    assert field.value is True
+    assert field.source.source == "hamlib_response"
+
+
+@pytest.mark.asyncio
+async def test_yaesu_get_func_tone_not_known_answers_enavail(
+    yaesu_radio: AsyncMock,
+) -> None:
+    """MOR-2572: an observed None (FTX-1 CT codes 3/4/5 — DCS / PR FREQ /
+    REV TONE) has no bool to report. The routed Yaesu ``get_func`` must
+    answer ENAVAIL instead of bool(None)=0, and must not fall through to a
+    live read that would record an invented False over the published None."""
+    store = StateStore()
+    _seed_store_current(store, "receiver.main.operator_toggles.repeater_tone", None)
+    handler = RigctldHandler(yaesu_radio, RigctldConfig(), state_store=store)
+
+    resp = await handler.execute(get_cmd("get_func", "TONE"))
+
+    assert resp.error == HamlibError.ENAVAIL
+    yaesu_radio.get_repeater_tone.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_yaesu_get_func_tone_empty_store_ct_dcs_answers_enavail() -> None:
+    """MOR-2572 fix round: with NOTHING seeded — the first ``get_func`` after
+    connect, before the poller has recorded the field — the routed
+    projection misses and the live fallback reaches the radio getters. With
+    the radio in DCS (CT code 3) the getters refuse, and the answer is
+    ENAVAIL for both TONE and TSQL with NOTHING recorded in the store: an
+    observed False would light the repeater strip OFF while the radio is in
+    DCS."""
+    radio, ct, _writes = _real_ftx1_ct_radio()
+    ct[0] = 3  # MAIN in DCS
+    store = StateStore()
+    handler = RigctldHandler(radio, RigctldConfig(), state_store=store)
+
+    for func in ("TONE", "TSQL"):
+        resp = await handler.execute(get_cmd("get_func", func))
+        assert resp.error == HamlibError.ENAVAIL
+
+    # The live CT read happened (the fallback really reached the radio)...
+    radio._transport.query.assert_awaited_with("CT0;")  # noqa: SLF001
+    # ...but no value — in particular no invented False — was recorded.
+    snapshot = store.snapshot()
+    with pytest.raises(KeyError):
+        snapshot.field("receiver.main.operator_toggles.repeater_tone")
+    with pytest.raises(KeyError):
+        snapshot.field("receiver.main.operator_toggles.repeater_tsql")
+
+
+@pytest.mark.asyncio
+async def test_yaesu_get_func_tsql_not_known_on_sub_answers_enavail() -> None:
+    """MOR-2572, SUB receiver: the routed VFOB projection holds the same
+    None contract (an observed None on the SUB path answers ENAVAIL, with
+    no live CT read that would invent False over it)."""
+    radio, _ct, _writes = _real_ftx1_ct_radio()
+    store = StateStore()
+    _seed_store_current(store, "receiver.sub.operator_toggles.repeater_tsql", None)
+    handler = RigctldHandler(radio, RigctldConfig(), state_store=store)
+
+    resp = await handler.execute(_vfo_func_cmd("get_func", "VFOB", "TSQL"))
+
+    assert resp.error == HamlibError.ENAVAIL
+    radio._transport.query.assert_not_awaited()  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+async def test_get_func_tone_not_known_answers_enavail(
+    mock_radio: AsyncMock, config: RigctldConfig
+) -> None:
+    """MOR-2572, non-routed (built-in) path: the same observed-None contract
+    — ENAVAIL, never bool(None)=0, never a live read that invents False."""
+    store = StateStore()
+    _seed_store_current(store, "receiver.main.operator_toggles.repeater_tone", None)
+    handler = RigctldHandler(mock_radio, config, state_store=store)
+
+    resp = await handler.execute(get_cmd("get_func", "TONE"))
+
+    assert resp.error == HamlibError.ENAVAIL
+    mock_radio.get_repeater_tone.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_yaesu_get_func_lock(
+    yaesu_handler: RigctldHandler, yaesu_radio: AsyncMock
+) -> None:
+    yaesu_radio.get_dial_lock.return_value = True
+    resp = await yaesu_handler.execute(get_cmd("get_func", "LOCK"))
+    assert resp.ok
+    assert resp.values == ["1"]
+
+
+@pytest.mark.asyncio
+async def test_yaesu_get_func_split(
+    yaesu_handler: RigctldHandler, yaesu_radio: AsyncMock
+) -> None:
+    yaesu_radio.get_split.return_value = True
+    resp = await yaesu_handler.execute(get_cmd("get_func", "SPLIT"))
+    assert resp.ok
+    assert resp.values == ["1"]
+
+
+@pytest.mark.asyncio
+async def test_yaesu_get_func_agc(
+    yaesu_handler: RigctldHandler, yaesu_radio: AsyncMock
+) -> None:
+    yaesu_radio.get_agc.return_value = 3  # SLOW, > 0 means active
+    resp = await yaesu_handler.execute(get_cmd("get_func", "AGC"))
+    assert resp.ok
+    assert resp.values == ["1"]
+
+
+@pytest.mark.asyncio
+async def test_yaesu_get_func_mon(
+    yaesu_handler: RigctldHandler, yaesu_radio: AsyncMock
+) -> None:
+    resp = await yaesu_handler.execute(get_cmd("get_func", "MON"))
+    assert resp.error == HamlibError.EINVAL
+
+
+@pytest.mark.asyncio
+async def test_yaesu_get_func_unknown_returns_einval(
+    yaesu_handler: RigctldHandler,
+) -> None:
+    resp = await yaesu_handler.execute(get_cmd("get_func", "APF"))
+    assert resp.error == HamlibError.EINVAL
+
+
+# -- Yaesu set_func -----------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_yaesu_set_func_vox(
+    yaesu_handler: RigctldHandler, yaesu_radio: AsyncMock
+) -> None:
+    resp = await yaesu_handler.execute(set_cmd("set_func", "VOX", "1"))
+    assert resp.ok
+    yaesu_radio.set_vox.assert_awaited_once_with(True)
+
+
+@pytest.mark.asyncio
+async def test_yaesu_set_func_tuner(
+    yaesu_handler: RigctldHandler, yaesu_radio: AsyncMock
+) -> None:
+    resp = await yaesu_handler.execute(set_cmd("set_func", "TUNER", "1"))
+    assert resp.ok
+    yaesu_radio.set_tuner_status.assert_awaited_once_with(1)
+
+
+@pytest.mark.asyncio
+async def test_rigctld_state_tune_icom(
+    yaesu_handler: RigctldHandler, yaesu_radio: AsyncMock
+) -> None:
+    """get_func TUNER must call canonical get_tuner_status (not get_tuner).
+
+    The canonical SystemControlCapable name is implemented on both Icom
+    and Yaesu backends — using it here keeps the rigctld layer compatible
+    with both without raising AttributeError on the Icom path.
+    Refs #1094.
+    """
+    yaesu_radio.get_tuner_status.return_value = 2  # tuning in progress
+    resp = await yaesu_handler.execute(get_cmd("get_func", "TUNER"))
+    assert resp.ok
+    assert resp.values == ["1"]
+    yaesu_radio.get_tuner_status.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_rigctld_set_func_tune_icom(
+    yaesu_handler: RigctldHandler, yaesu_radio: AsyncMock
+) -> None:
+    """set_func TUNER 1 must call canonical set_tuner_status (not set_tuner).
+
+    The canonical SystemControlCapable name is implemented on both Icom
+    and Yaesu backends — using it here keeps the rigctld layer compatible
+    with both without raising AttributeError on the Icom path.
+    Refs #1094.
+    """
+    resp = await yaesu_handler.execute(set_cmd("set_func", "TUNER", "1"))
+    assert resp.ok
+    yaesu_radio.set_tuner_status.assert_awaited_once_with(1)
+
+
+@pytest.mark.asyncio
+async def test_yaesu_set_func_comp(
+    yaesu_handler: RigctldHandler, yaesu_radio: AsyncMock
+) -> None:
+    resp = await yaesu_handler.execute(set_cmd("set_func", "COMP", "1"))
+    assert resp.ok
+    yaesu_radio.set_processor.assert_awaited_once_with(True)
+
+
+@pytest.mark.asyncio
+async def test_yaesu_set_func_nb(
+    yaesu_handler: RigctldHandler, yaesu_radio: AsyncMock
+) -> None:
+    resp = await yaesu_handler.execute(set_cmd("set_func", "NB", "1"))
+    assert resp.ok
+    yaesu_radio.set_nb.assert_awaited_once_with(True)
+
+
+@pytest.mark.asyncio
+async def test_yaesu_set_func_nr(
+    yaesu_handler: RigctldHandler, yaesu_radio: AsyncMock
+) -> None:
+    resp = await yaesu_handler.execute(set_cmd("set_func", "NR", "0"))
+    assert resp.ok
+    yaesu_radio.set_nr.assert_awaited_once_with(False)
+
+
+@pytest.mark.asyncio
+async def test_yaesu_set_func_tone(
+    yaesu_handler: RigctldHandler, yaesu_radio: AsyncMock
+) -> None:
+    resp = await yaesu_handler.execute(set_cmd("set_func", "TONE", "1"))
+    assert resp.ok
+    yaesu_radio.set_repeater_tone.assert_awaited_once_with(True, receiver=0)
+
+
+@pytest.mark.asyncio
+async def test_yaesu_set_func_tsql(
+    yaesu_handler: RigctldHandler, yaesu_radio: AsyncMock
+) -> None:
+    resp = await yaesu_handler.execute(set_cmd("set_func", "TSQL", "0"))
+    assert resp.ok
+    yaesu_radio.set_repeater_tsql.assert_awaited_once_with(False, receiver=0)
+
+
+@pytest.mark.asyncio
+async def test_yaesu_set_func_tsql_refused_answers_rprt_minus_9(
+    yaesu_handler: RigctldHandler, yaesu_radio: AsyncMock
+) -> None:
+    """U TSQL 1 from OFF asks for the pair CT cannot represent (tone off,
+    tsql on); the backend refuses with ValueError and the client reads the
+    rig's rejection, RPRT -9 (ERJCTED)."""
+    yaesu_radio.set_repeater_tsql.side_effect = ValueError(
+        "tone squelch cannot be on while the repeater tone is off "
+        "(CT has no code for encode-off/decode-on)"
+    )
+    resp = await yaesu_handler.execute(set_cmd("set_func", "TSQL", "1"))
+    assert resp.error == HamlibError.ERJCTED
+
+
+@pytest.mark.asyncio
+async def test_yaesu_set_func_tone_refused_over_dcs_answers_rprt_minus_9(
+    yaesu_handler: RigctldHandler, yaesu_radio: AsyncMock
+) -> None:
+    """A toggle over CT code 3/4/5 (DCS / PR FREQ / REV TONE) is refused by
+    the backend; the client reads RPRT -9, not a success."""
+    yaesu_radio.set_repeater_tone.side_effect = ValueError(
+        "cannot express a CTCSS toggle over CT code 3 "
+        "(DCS/PR FREQ/REV TONE); refusing to overwrite it"
+    )
+    resp = await yaesu_handler.execute(set_cmd("set_func", "TONE", "1"))
+    assert resp.error == HamlibError.ERJCTED
+
+
+# -- Yaesu TONE/TSQL receiver routing + read-after-write (MOR-2111 round 2) ----
+
+
+def _real_ftx1_ct_radio():
+    """A real YaesuCatRadio (shipping ftx1.toml) over a scripted CT register."""
+    radio = YaesuCatRadio("/dev/null", profile="ftx1")
+    radio._transport._connected = True  # noqa: SLF001
+    ct = {0: 0, 1: 0}
+    writes: list[str] = []
+
+    async def query(cmd, *args, **kwargs):
+        return f"CT{cmd[2]}{ct[int(cmd[2])]}"
+
+    async def write(cmd, *args, **kwargs):
+        writes.append(cmd)
+        ct[int(cmd[2])] = int(cmd[3])
+
+    radio._transport.query = AsyncMock(side_effect=query)  # noqa: SLF001
+    radio._transport.write = AsyncMock(side_effect=write)  # noqa: SLF001
+    return radio, ct, writes
+
+
+def _vfo_func_cmd(long_cmd: str, vfo_arg: str | None, *args: str) -> RigctldCommand:
+    return RigctldCommand(
+        short_cmd="",
+        long_cmd=long_cmd,
+        args=tuple(args),
+        is_set=long_cmd.startswith("set"),
+        vfo_arg=vfo_arg,
+    )
+
+
+@pytest.mark.asyncio
+async def test_yaesu_set_func_tone_receiver_routing() -> None:
+    """U VFOB TONE 1 writes the SUB CT select; no-VFO/VFOA write MAIN's."""
+    for vfo_arg, frame in ((None, "CT01;"), ("VFOA", "CT01;"), ("VFOB", "CT11;")):
+        radio, _ct, writes = _real_ftx1_ct_radio()
+        handler = RigctldHandler(radio, RigctldConfig())
+        resp = await handler.execute(_vfo_func_cmd("set_func", vfo_arg, "TONE", "1"))
+        assert resp.ok
+        assert writes == [frame], vfo_arg
+
+
+@pytest.mark.asyncio
+async def test_yaesu_get_func_tsql_vfob_reads_sub_receiver() -> None:
+    """u VFOB TSQL answers the SUB receiver's CT select, not MAIN's."""
+    radio, ct, _writes = _real_ftx1_ct_radio()
+    ct[1] = 2  # SUB in TSQL; MAIN off
+    handler = RigctldHandler(radio, RigctldConfig())
+    resp = await handler.execute(_vfo_func_cmd("get_func", "VFOB", "TSQL"))
+    assert resp.ok
+    assert resp.values == ["1"]
+
+
+@pytest.mark.asyncio
+async def test_yaesu_get_func_tsql_vfob_uses_sub_state_path() -> None:
+    """u VFOB TSQL projects through receiver.sub (store generation >= 1):
+    with MAIN and SUB seeded different values it answers SUB's value with
+    no live read, and when SUB has nothing projected the live read's
+    sample is recorded on the sub path, never MAIN's."""
+    radio, ct, _writes = _real_ftx1_ct_radio()
+    ct[1] = 2  # SUB in TSQL; MAIN off
+    store = StateStore()
+    _seed_store_current(store, "receiver.main.operator_toggles.repeater_tsql", False)
+    _seed_store_current(store, "receiver.sub.operator_toggles.repeater_tsql", True)
+    handler = RigctldHandler(radio, RigctldConfig(), state_store=store)
+    resp = await handler.execute(_vfo_func_cmd("get_func", "VFOB", "TSQL"))
+    assert resp.ok
+    assert resp.values == ["1"]  # SUB's value, not MAIN's
+    radio._transport.query.assert_not_awaited()  # noqa: SLF001
+
+    radio_live, ct_live, _writes_live = _real_ftx1_ct_radio()
+    ct_live[1] = 2
+    store_live = StateStore()
+    _seed_store_current(
+        store_live, "receiver.main.operator_toggles.repeater_tsql", False
+    )
+    handler_live = RigctldHandler(radio_live, RigctldConfig(), state_store=store_live)
+    resp_live = await handler_live.execute(_vfo_func_cmd("get_func", "VFOB", "TSQL"))
+    assert resp_live.ok
+    assert resp_live.values == ["1"]
+    field = store_live.snapshot().field("receiver.sub.operator_toggles.repeater_tsql")
+    assert field.value is True
+    assert field.source.source == "hamlib_response"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("active", "frame"), [("SUB", "CT11;"), ("MAIN", "CT01;")])
+async def test_yaesu_tone_no_vfo_arg_follows_active_receiver(
+    active: str, frame: str
+) -> None:
+    """With no VFO token, ``U TONE 1`` writes the ACTIVE receiver's CT
+    select (CT11; on SUB, CT01; on MAIN) and the read-back answers the
+    pending value on that same receiver — never split (MOR-2111 R4)."""
+    radio, _ct, writes = _real_ftx1_ct_radio()
+    store = StateStore()
+    _seed_store_current(store, "global.slow_state.active", active)
+    handler = RigctldHandler(radio, RigctldConfig(), state_store=store)
+
+    assert (await handler.execute(_vfo_func_cmd("set_func", None, "TONE", "1"))).ok
+    assert writes == [frame], active
+
+    resp = await handler.execute(_vfo_func_cmd("get_func", None, "TONE"))
+    assert resp.ok
+    assert resp.values == ["1"]
+
+
+@pytest.mark.asyncio
+async def test_yaesu_tsql_no_vfo_arg_sub_active_names_sub_stored_or_live() -> None:
+    """SUB active, no VFO token: ``u TSQL`` answers SUB whether the value
+    comes from stored state (no live read) or from a live CT read — with
+    MAIN and SUB holding different CT codes (MOR-2111 R4)."""
+    radio, ct, _writes = _real_ftx1_ct_radio()
+    ct[0], ct[1] = 0, 0  # live: both off — only the stored SUB value says on
+    store = StateStore()
+    _seed_store_current(store, "global.slow_state.active", "SUB")
+    _seed_store_current(store, "receiver.sub.operator_toggles.repeater_tsql", True)
+    handler = RigctldHandler(radio, RigctldConfig(), state_store=store)
+    resp = await handler.execute(_vfo_func_cmd("get_func", None, "TSQL"))
+    assert resp.ok
+    assert resp.values == ["1"]
+    radio._transport.query.assert_not_awaited()  # noqa: SLF001
+
+    radio_live, ct_live, _writes_live = _real_ftx1_ct_radio()
+    ct_live[0], ct_live[1] = 0, 2  # live: MAIN off, SUB in TSQL
+    store_live = StateStore()
+    _seed_store_current(store_live, "global.slow_state.active", "SUB")
+    handler_live = RigctldHandler(radio_live, RigctldConfig(), state_store=store_live)
+    resp_live = await handler_live.execute(_vfo_func_cmd("get_func", None, "TSQL"))
+    assert resp_live.ok
+    assert resp_live.values == ["1"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("kind", "name", "getter", "raw", "expected"),
+    [
+        ("func", "NB", "get_nb_level", 5, ["1"]),
+        ("func", "NR", "get_nr_level", 3, ["1"]),
+        ("level", "SQL", "get_squelch", 128, ["0.501961"]),
+    ],
+)
+async def test_yaesu_routing_ignores_vfo_for_nb_nr_and_levels(
+    yaesu_radio: AsyncMock,
+    kind: str,
+    name: str,
+    getter: str,
+    raw: int,
+    expected: list[str],
+) -> None:
+    """YaesuRouting ignores ``vfo`` for NB, NR and levels: a VFOB label
+    reads the radio-global value with no receiver kwarg (MOR-2111 R4)."""
+
+    live_getter = getattr(yaesu_radio, getter)
+    live_getter.return_value = raw
+    routing = YaesuRouting(yaesu_radio, 100.0)
+    resp = await getattr(routing, f"get_{kind}")(name, vfo="VFOB")
+    assert resp.ok
+    assert resp.values == expected
+    live_getter.assert_awaited_once_with()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("func", "path"),
+    [
+        ("TONE", "receiver.main.operator_toggles.repeater_tone"),
+        ("TSQL", "receiver.main.operator_toggles.repeater_tsql"),
+    ],
+)
+async def test_yaesu_func_read_after_write_uses_pending_value(
+    yaesu_radio: AsyncMock, func: str, path: str
+) -> None:
+    """A read straight after a TONE/TSQL write answers the pending value:
+    the write records it on the same repeater_* path the read projects."""
+    store = StateStore()
+    _seed_store_current(store, path, False)
+    yaesu_radio.get_repeater_tone.return_value = True
+    yaesu_radio.get_repeater_tsql.return_value = True
+    handler = RigctldHandler(yaesu_radio, RigctldConfig(), state_store=store)
+    assert (await handler.execute(set_cmd("set_func", func, "1"))).ok
+    resp = await handler.execute(get_cmd("get_func", func))
+    assert resp.ok
+    assert resp.values == ["1"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("func", ["TONE", "TSQL"])
+async def test_icom_func_read_after_write_uses_pending_value(
+    mock_radio: AsyncMock, func: str
+) -> None:
+    """The non-routed (Icom) path keeps write target and read projection on
+    the same operator_toggles.repeater_* path too — the pending value must
+    answer the read without consulting the live radio."""
+    store = StateStore()
+    name = "repeater_tone" if func == "TONE" else "repeater_tsql"
+    _seed_store_current(store, f"receiver.main.operator_toggles.{name}", False)
+    live_getter = getattr(mock_radio, f"get_{name}")
+    live_getter.return_value = False
+    handler = RigctldHandler(mock_radio, RigctldConfig(), state_store=store)
+    assert (await handler.execute(set_cmd("set_func", func, "1"))).ok
+    resp = await handler.execute(get_cmd("get_func", func))
+    assert resp.ok
+    assert resp.values == ["1"]
+    live_getter.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_yaesu_set_func_lock(
+    yaesu_handler: RigctldHandler, yaesu_radio: AsyncMock
+) -> None:
+    resp = await yaesu_handler.execute(set_cmd("set_func", "LOCK", "1"))
+    assert resp.ok
+    yaesu_radio.set_dial_lock.assert_awaited_once_with(True)
+
+
+@pytest.mark.asyncio
+async def test_yaesu_set_func_split(
+    yaesu_handler: RigctldHandler, yaesu_radio: AsyncMock
+) -> None:
+    resp = await yaesu_handler.execute(set_cmd("set_func", "SPLIT", "1"))
+    assert resp.ok
+    yaesu_radio.set_split.assert_awaited_once_with(True)
+
+
+@pytest.mark.asyncio
+async def test_yaesu_set_func_agc_on(
+    yaesu_handler: RigctldHandler, yaesu_radio: AsyncMock
+) -> None:
+    resp = await yaesu_handler.execute(set_cmd("set_func", "AGC", "1"))
+    assert resp.ok
+    yaesu_radio.set_agc.assert_awaited_once_with(1)  # ON → FAST
+
+
+@pytest.mark.asyncio
+async def test_yaesu_set_func_agc_off(
+    yaesu_handler: RigctldHandler, yaesu_radio: AsyncMock
+) -> None:
+    resp = await yaesu_handler.execute(set_cmd("set_func", "AGC", "0"))
+    assert resp.ok
+    yaesu_radio.set_agc.assert_awaited_once_with(0)
+
+
+@pytest.mark.asyncio
+async def test_yaesu_set_func_mon(
+    yaesu_handler: RigctldHandler, yaesu_radio: AsyncMock
+) -> None:
+    resp = await yaesu_handler.execute(set_cmd("set_func", "MON", "1"))
+    assert resp.error == HamlibError.EINVAL
+
+
+@pytest.mark.asyncio
+async def test_yaesu_set_func_unknown_returns_einval(
+    yaesu_handler: RigctldHandler,
+) -> None:
+    resp = await yaesu_handler.execute(set_cmd("set_func", "APF", "1"))
+    assert resp.error == HamlibError.EINVAL
+
+
+# -- Yaesu dump_state / get_info ----------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_yaesu_dump_state(
+    yaesu_handler: RigctldHandler, yaesu_radio: AsyncMock
+) -> None:
+    # Rig model now comes from the radio's TOML config via
+    # `hamlib_model_id` (closes #441) — mock it explicitly.
+    yaesu_radio.hamlib_model_id = 2028
+    resp = await yaesu_handler.execute(get_cmd("dump_state"))
+    assert resp.ok
+    assert resp.values[1] == "2028"  # Yaesu rig model (from TOML config)
+
+
+@pytest.mark.asyncio
+async def test_yaesu_dump_state_declares_tone_tsql_func_bits(
+    yaesu_handler: RigctldHandler, yaesu_radio: AsyncMock
+) -> None:
+    """has_get_func / has_set_func carry RIG_FUNC_TONE(0x10) | TSQL(0x20)."""
+    yaesu_radio.hamlib_model_id = 2028
+    resp = await yaesu_handler.execute(get_cmd("dump_state"))
+    assert resp.ok
+    assert resp.values[19] == "0x00051A3E"  # has_get_func
+    assert resp.values[20] == "0x00051A3E"  # has_set_func
+
+
+async def test_yaesu_dump_state_honors_toml_model_id(
+    yaesu_handler: RigctldHandler, yaesu_radio: AsyncMock
+) -> None:
+    """Non-default rig model from TOML appears in dump_state (closes #441)."""
+    yaesu_radio.hamlib_model_id = 1042  # RIG_MODEL_FTDX101D (example)
+    resp = await yaesu_handler.execute(get_cmd("dump_state"))
+    assert resp.ok
+    assert resp.values[1] == "1042"
+
+
+@pytest.mark.asyncio
+async def test_yaesu_get_info(
+    yaesu_handler: RigctldHandler, yaesu_radio: AsyncMock
+) -> None:
+    yaesu_radio.model = "FTDX10"
+    resp = await yaesu_handler.execute(get_cmd("get_info"))
+    assert resp.ok
+    assert "Yaesu" in resp.values[0]
+    assert "FTDX10" in resp.values[0]
+
+
+# -- Verify Icom routing is NOT broken ----------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_icom_get_level_still_works(
+    handler: RigctldHandler, mock_radio: AsyncMock
+) -> None:
+    """Ensure adding Yaesu branches didn't break Icom routing."""
+    mock_radio.get_s_meter.return_value = 120
+    resp = await handler.execute(get_cmd("get_level", "STRENGTH"))
+    assert resp.ok
+
+
+@pytest.mark.asyncio
+async def test_icom_get_func_still_works(
+    handler: RigctldHandler, mock_radio: AsyncMock
+) -> None:
+    """Ensure adding Yaesu branches didn't break Icom func routing."""
+    mock_radio.get_vox.return_value = True
+    resp = await handler.execute(get_cmd("get_func", "VOX"))
+    assert resp.ok
+    assert resp.values == ["1"]
+
+
+@pytest.mark.asyncio
+async def test_icom_dump_state_unchanged(
+    handler: RigctldHandler,
+) -> None:
+    resp = await handler.execute(get_cmd("dump_state"))
+    assert resp.ok
+    assert resp.values[1] == "3078"  # IC-7610 model
+
+
+# ---------------------------------------------------------------------------
+# Profile-aware VFO protocol (issue #722)
+# ---------------------------------------------------------------------------
+
+
+class _FakeProfile:
+    """Minimal stand-in for ``rigplane.profiles.RadioProfile`` for tests."""
+
+    def __init__(self, *, receiver_count: int, vfo_scheme: str) -> None:
+        self.model = "IC-7300" if receiver_count == 1 else "IC-7610"
+        self.receiver_count = receiver_count
+        self.vfo_scheme = vfo_scheme
+
+    def supports_receiver(self, receiver: int) -> bool:
+        return 0 <= receiver < self.receiver_count
+
+
+@pytest.fixture
+def dual_rx_radio() -> AsyncMock:
+    """IC-7610-style radio mock: dual-RX profile, main/sub VFO scheme."""
+    radio = make_mock_radio()
+    radio.capabilities = set(FULL_ICOM_CAPS)
+    radio.profile = _FakeProfile(receiver_count=2, vfo_scheme="main_sub")
+    return radio
+
+
+@pytest.fixture
+def dual_rx_handler(dual_rx_radio: AsyncMock, config: RigctldConfig) -> RigctldHandler:
+    return RigctldHandler(dual_rx_radio, config)
+
+
+@pytest.fixture
+def single_rx_radio() -> AsyncMock:
+    """IC-7300-style radio mock: single-RX profile, A/B VFO scheme."""
+    radio = make_mock_radio()
+    radio.capabilities = set(FULL_ICOM_CAPS)
+    radio.profile = _FakeProfile(receiver_count=1, vfo_scheme="ab")
+    return radio
+
+
+@pytest.fixture
+def single_rx_handler(
+    single_rx_radio: AsyncMock, config: RigctldConfig
+) -> RigctldHandler:
+    return RigctldHandler(single_rx_radio, config)
+
+
+# -- chk_vfo ------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_chk_vfo_returns_1_for_dual_rx(
+    dual_rx_handler: RigctldHandler,
+) -> None:
+    """``chk_vfo`` returns ``"1"`` for dual-RX profiles (issue #1346).
+
+    Re-enabled in Variant A 5/5 after the full ``vfo_opt`` stack landed:
+    parser support (#1343), per-VFO routing for freq/mode/PTT (#1344),
+    per-VFO split/RIT/level/func (#1345). Variant B's unconditional
+    ``"0"`` (PR #1340) is now correctly superseded for dual-RX models.
+    """
+    resp = await dual_rx_handler.execute(get_cmd("chk_vfo"))
+    assert resp.ok
+    assert resp.values == ["1"]
+
+
+@pytest.mark.asyncio
+async def test_chk_vfo_returns_0_for_single_rx(
+    single_rx_handler: RigctldHandler,
+) -> None:
+    """``chk_vfo`` stays ``"0"`` on single-RX profiles (issue #1346).
+
+    Single-receiver radios (IC-7300, IC-705, …) do not need ``vfo_opt``
+    advertising — their A/B VFO scheme is handled by the bare-form
+    Hamlib path. Avoids needlessly forcing VFO tokenisation on clients
+    that were happy without it.
+    """
+    resp = await single_rx_handler.execute(get_cmd("chk_vfo"))
+    assert resp.ok
+    assert resp.values == ["0"]
+
+
+# -- get_vfo projects StateStore active VFO ------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_vfo_dual_rx_main_is_vfoa(
+    dual_rx_radio: AsyncMock,
+) -> None:
+    store = StateStore()
+    dual_rx_radio.state_store = store
+    _apply_store_value(store, "global.slow_state.active", "MAIN")
+    state = RadioState()
+    state.active = "SUB"
+    dual_rx_radio.radio_state = state
+    dual_rx_handler = RigctldHandler(dual_rx_radio, RigctldConfig())
+
+    resp = await dual_rx_handler.execute(get_cmd("get_vfo"))
+
+    assert resp.values == ["VFOA"]
+
+
+@pytest.mark.asyncio
+async def test_get_vfo_dual_rx_sub_is_vfob(
+    dual_rx_radio: AsyncMock,
+) -> None:
+    store = StateStore()
+    dual_rx_radio.state_store = store
+    _apply_store_value(store, "global.slow_state.active", "SUB")
+    state = RadioState()
+    state.active = "MAIN"
+    dual_rx_radio.radio_state = state
+    dual_rx_handler = RigctldHandler(dual_rx_radio, RigctldConfig())
+
+    resp = await dual_rx_handler.execute(get_cmd("get_vfo"))
+
+    assert resp.values == ["VFOB"]
+
+
+@pytest.mark.asyncio
+async def test_get_vfo_dual_rx_missing_active_receiver_returns_default(
+    dual_rx_radio: AsyncMock,
+) -> None:
+    # When the active-VFO projection is not fresh, get_vfo no longer returns
+    # RPRT -6 (EIO) — that made WSJT-X surface OOB / freq 0.000.000 on first
+    # connect. It now returns the default active VFO so the CAT client proceeds
+    # and a later poll corrects it. The active_receiver projection is absent
+    # here (only the unrelated active_slot is seeded), so the default applies.
+    # (MOR-895, pro#1200; OOB rel. #1199.)
+    store = StateStore()
+    dual_rx_radio.state_store = store
+    _apply_store_value(store, "receiver.main.vfo.active_slot", "B")
+    state = RadioState()
+    state.active = "MAIN"
+    dual_rx_radio.radio_state = state
+    handler = RigctldHandler(dual_rx_radio, RigctldConfig())
+
+    resp = await handler.execute(get_cmd("get_vfo"))
+
+    assert resp.error == HamlibError.OK
+    assert resp.values == ["VFOA"]
+
+
+@pytest.mark.asyncio
+async def test_get_vfo_dual_rx_stale_active_receiver_returns_default(
+    dual_rx_radio: AsyncMock,
+) -> None:
+    # A stale active-VFO projection no longer yields EIO; get_vfo answers with
+    # the default active VFO (first-connect tolerance, MOR-895/pro#1200) while
+    # still enqueuing a freshness request so the next poll is accurate.
+    store = StateStore()
+    active_path = FieldPath.global_("slow_state", "active")
+    scheduler = AcquisitionScheduler(profile=_acquisition_profile(active_path))
+    model_service = RadioStateModelService(store=store, scheduler=scheduler)
+    dual_rx_radio.state_store = store
+    dual_rx_radio.state_model_service = model_service
+    _apply_store_value(store, "global.slow_state.active", "SUB", max_age=0.25)
+    store.mark_stale_due(now=2.0)
+    state = RadioState()
+    state.active = "MAIN"
+    dual_rx_radio.radio_state = state
+    handler = RigctldHandler(dual_rx_radio, RigctldConfig(cache_ttl=0.25))
+
+    resp = await handler.execute(get_cmd("get_vfo"))
+
+    assert resp.error == HamlibError.OK
+    assert resp.values == ["VFOA"]
+    requests = scheduler.pending_requests()
+    assert len(requests) == 1
+    assert requests[0].paths == (active_path,)
+
+
+@pytest.mark.asyncio
+async def test_get_vfo_first_connect_returns_valid_vfo_not_eio(
+    dual_rx_radio: AsyncMock,
+) -> None:
+    """Regression (MOR-895, pro#1200; OOB rel. #1199): on a CAT client's first
+    connect the active-VFO projection is not fresh yet, but the profile DOES
+    advertise VFO capability. get_vfo must answer with a valid VFO name (the
+    default active VFO) instead of ``RPRT -6`` (EIO) — WSJT-X surfaces EIO as
+    "Rig Control Error" / OOB / freq 0.000.000.
+
+    At HEAD 72ba9a4 this returned ``HamlibError.EIO`` (no projection, no
+    radio_state). The fix returns ``VFOA``.
+    """
+    store = StateStore()
+    dual_rx_radio.state_store = store
+    # No active/active_slot seeded => projection is absent (not fresh).
+    # No radio_state => the default helper falls back to VFOA.
+    dual_rx_radio.radio_state = None
+    handler = RigctldHandler(dual_rx_radio, RigctldConfig())
+
+    # Capability IS advertised (dual-RX profile), so this is the VFO path.
+    chk = await handler.execute(get_cmd("chk_vfo"))
+    assert chk.values == ["1"]  # chk_vfo contract preserved.
+
+    resp = await handler.execute(get_cmd("get_vfo"))
+
+    assert resp.error == HamlibError.OK
+    assert resp.error != HamlibError.EIO
+    assert resp.values == ["VFOA"]
+
+
+@pytest.mark.asyncio
+async def test_get_vfo_single_rx_reflects_slot_b(
+    single_rx_radio: AsyncMock,
+) -> None:
+    store = StateStore()
+    single_rx_radio.state_store = store
+    _apply_store_value(store, "receiver.main.vfo.active_slot", "B")
+    state = RadioState()
+    state.main.active_slot = "A"
+    single_rx_radio.radio_state = state
+    single_rx_handler = RigctldHandler(single_rx_radio, RigctldConfig())
+
+    resp = await single_rx_handler.execute(get_cmd("get_vfo"))
+
+    assert resp.values == ["VFOB"]
+
+
+@pytest.mark.asyncio
+async def test_get_vfo_single_rx_missing_active_slot_returns_default(
+    single_rx_radio: AsyncMock,
+) -> None:
+    # Single-RX with no fresh active_slot projection: get_vfo no longer returns
+    # EIO. It answers with the default active VFO (here state.main.active_slot
+    # == "B" -> VFOB via _active_vfo_name's documented fallback) so a CAT client
+    # connecting before the first poll proceeds instead of seeing OOB.
+    # (MOR-895, pro#1200; OOB rel. #1199.)
+    state = RadioState()
+    state.main.active_slot = "B"
+    single_rx_radio.radio_state = state
+    handler = RigctldHandler(single_rx_radio, RigctldConfig())
+
+    resp = await handler.execute(get_cmd("get_vfo"))
+
+    assert resp.error == HamlibError.OK
+    assert resp.values == ["VFOB"]
+
+
+# -- set_vfo sends correct CI-V selection -------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_set_vfo_dual_rx_vfob_selects_sub(
+    dual_rx_handler: RigctldHandler, dual_rx_radio: AsyncMock
+) -> None:
+    resp = await dual_rx_handler.execute(set_cmd("set_vfo", "VFOB"))
+    assert resp.ok
+    # Issue #1172: dual-RX VFOB → ``select_receiver("SUB")`` (CI-V
+    # 0x07 0xD1).  No fallback through legacy ``set_vfo`` overload.
+    dual_rx_radio.select_receiver.assert_awaited_once_with("SUB")
+    dual_rx_radio.set_vfo.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_set_vfo_dual_rx_vfoa_selects_main(
+    dual_rx_handler: RigctldHandler, dual_rx_radio: AsyncMock
+) -> None:
+    resp = await dual_rx_handler.execute(set_cmd("set_vfo", "VFOA"))
+    assert resp.ok
+    dual_rx_radio.select_receiver.assert_awaited_once_with("MAIN")
+    dual_rx_radio.set_vfo.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_set_vfo_dual_rx_projects_pending_active_receiver_by_session(
+    dual_rx_radio: AsyncMock,
+) -> None:
+    store = StateStore()
+    dual_rx_radio.state_store = store
+    state = RadioState()
+    state.active = "MAIN"
+    dual_rx_radio.radio_state = state
+    handler = RigctldHandler(dual_rx_radio, RigctldConfig())
+    path = FieldPath.global_("slow_state", "active")
+    _apply_store_value(store, "global.slow_state.active", "MAIN")
+    _seed_known_rx(store)
+
+    resp = await handler.execute(
+        set_cmd("set_vfo", "VFOB"),
+        session_id="rigctld-client-a",
+    )
+
+    assert resp.ok
+    assert handler._command_service.project_pending_values(  # noqa: SLF001
+        source="rigctld",
+        session_id="rigctld-client-a",
+        paths=(path,),
+    ) == {path: "SUB"}
+    assert (
+        handler._command_service.project_pending_values(  # noqa: SLF001
+            source="rigctld",
+            session_id="rigctld-client-b",
+            paths=(path,),
+        )
+        == {}
+    )
+    client_a = await handler.execute(
+        get_cmd("get_vfo"),
+        session_id="rigctld-client-a",
+    )
+    client_b = await handler.execute(
+        get_cmd("get_vfo"),
+        session_id="rigctld-client-b",
+    )
+    assert client_a.values == ["VFOB"]
+    assert client_b.values == ["VFOA"]
+
+
+@pytest.mark.asyncio
+async def test_set_vfo_single_rx_vfob_selects_slot_b(
+    single_rx_handler: RigctldHandler, single_rx_radio: AsyncMock
+) -> None:
+    resp = await single_rx_handler.execute(set_cmd("set_vfo", "VFOB"))
+    assert resp.ok
+    # Issue #1172: single-RX VFOB → ``set_vfo_slot("B")`` (CI-V
+    # 0x07 0x01).  No fallback through legacy ``set_vfo`` overload.
+    single_rx_radio.set_vfo_slot.assert_awaited_once_with("B")
+    single_rx_radio.set_vfo.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_set_vfo_single_rx_vfoa_selects_slot_a(
+    single_rx_handler: RigctldHandler, single_rx_radio: AsyncMock
+) -> None:
+    resp = await single_rx_handler.execute(set_cmd("set_vfo", "VFOA"))
+    assert resp.ok
+    single_rx_radio.set_vfo_slot.assert_awaited_once_with("A")
+    single_rx_radio.set_vfo.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_set_vfo_unknown_name_is_backward_compat_ok(
+    dual_rx_handler: RigctldHandler, dual_rx_radio: AsyncMock
+) -> None:
+    # Unknown VFO names from legacy clients should be silently accepted,
+    # never sent to the radio.
+    resp = await dual_rx_handler.execute(set_cmd("set_vfo", "VFO-C"))
+    assert resp.ok
+    dual_rx_radio.set_vfo.assert_not_awaited()
+    dual_rx_radio.select_receiver.assert_not_awaited()
+    dual_rx_radio.set_vfo_slot.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_set_vfo_no_args_returns_einval(
+    dual_rx_handler: RigctldHandler,
+) -> None:
+    resp = await dual_rx_handler.execute(set_cmd("set_vfo"))
+    assert resp.error == HamlibError.EINVAL
+
+
+@pytest.mark.asyncio
+async def test_set_vfo_dual_rx_rejected_select_answers_erjcted(
+    dual_rx_handler: RigctldHandler,
+    dual_rx_radio: AsyncMock,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A dual-RX radio that rejects the VFO select answers RPRT -9 (MOR-2621).
+
+    ``CommandError`` from ``select_receiver`` is the radio refusing the
+    select — not an internal failure — so the client must read ERJCTED
+    and no ERROR-level "Internal error" record may be emitted.
+    """
+    dual_rx_radio.select_receiver.side_effect = IcomCommandError(
+        "Radio rejected VFO select SUB"
+    )
+    with caplog.at_level(logging.DEBUG, logger="rigplane.rigctld.handler"):
+        resp = await dual_rx_handler.execute(set_cmd("set_vfo", "VFOB"))
+
+    assert resp.error == HamlibError.ERJCTED
+    assert (
+        format_response(set_cmd("set_vfo", "VFOB"), resp, ClientSession())
+        == b"RPRT -9\n"
+    )
+    assert not any(
+        record.levelno >= logging.ERROR and "Internal error" in record.getMessage()
+        for record in caplog.records
+    )
+
+
+@pytest.mark.asyncio
+async def test_set_vfo_single_rx_rejected_slot_answers_erjcted(
+    single_rx_handler: RigctldHandler,
+    single_rx_radio: AsyncMock,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A single-RX radio that rejects the VFO slot answers RPRT -9 (MOR-2621).
+
+    Same contract as the dual-RX case, for ``set_vfo_slot``: a
+    ``CommandError`` refusal maps to ERJCTED with no "Internal error" log.
+    """
+    single_rx_radio.set_vfo_slot.side_effect = IcomCommandError(
+        "Radio rejected VFO select B"
+    )
+    with caplog.at_level(logging.DEBUG, logger="rigplane.rigctld.handler"):
+        resp = await single_rx_handler.execute(set_cmd("set_vfo", "VFOB"))
+
+    assert resp.error == HamlibError.ERJCTED
+    assert (
+        format_response(set_cmd("set_vfo", "VFOB"), resp, ClientSession())
+        == b"RPRT -9\n"
+    )
+    assert not any(
+        record.levelno >= logging.ERROR and "Internal error" in record.getMessage()
+        for record in caplog.records
+    )
+
+
+# -- legacy backend fallback (issue #1189) ------------------------------------
+
+
+@pytest.fixture
+def legacy_dual_rx_radio() -> AsyncMock:
+    """Legacy dual-RX backend lacking ReceiverBankCapable / VfoSlotCapable.
+
+    Issue #1189: backends predating #1170/#1172 (e.g. ``SerialMockRadio``,
+    3rd-party ``Radio`` implementers) only expose the legacy ``set_vfo``
+    overload.  ``_cmd_set_vfo`` must fall back to it instead of returning
+    a silent ``RPRT 0``.
+    """
+    radio = AsyncMock(spec_set=["capabilities", "profile", "set_vfo"])
+    radio.capabilities = set(FULL_ICOM_CAPS)
+    radio.profile = _FakeProfile(receiver_count=2, vfo_scheme="main_sub")
+    radio.set_vfo = AsyncMock()
+    return radio
+
+
+@pytest.fixture
+def legacy_single_rx_radio() -> AsyncMock:
+    """Legacy single-RX backend lacking VfoSlotCapable."""
+    radio = AsyncMock(spec_set=["capabilities", "profile", "set_vfo"])
+    radio.capabilities = set(FULL_ICOM_CAPS)
+    radio.profile = _FakeProfile(receiver_count=1, vfo_scheme="ab")
+    radio.set_vfo = AsyncMock()
+    return radio
+
+
+@pytest.fixture
+def legacy_no_vfo_radio() -> AsyncMock:
+    """Backend with no VFO support at all — neither new nor legacy methods."""
+    radio = AsyncMock(spec_set=["capabilities", "profile"])
+    radio.capabilities = set(FULL_ICOM_CAPS)
+    radio.profile = _FakeProfile(receiver_count=2, vfo_scheme="main_sub")
+    return radio
+
+
+@pytest.mark.asyncio
+async def test_set_vfo_legacy_dual_rx_falls_back_to_set_vfo(
+    legacy_dual_rx_radio: AsyncMock, config: RigctldConfig
+) -> None:
+    handler = RigctldHandler(legacy_dual_rx_radio, config)
+    resp = await handler.execute(set_cmd("set_vfo", "VFOB"))
+    assert resp.ok
+    # Legacy overload receives MAIN/SUB on dual-RX (matches pre-#1187 mapping).
+    legacy_dual_rx_radio.set_vfo.assert_awaited_once_with("SUB")
+
+
+@pytest.mark.asyncio
+async def test_set_vfo_legacy_dual_rx_vfoa_falls_back_to_set_vfo(
+    legacy_dual_rx_radio: AsyncMock, config: RigctldConfig
+) -> None:
+    handler = RigctldHandler(legacy_dual_rx_radio, config)
+    resp = await handler.execute(set_cmd("set_vfo", "VFOA"))
+    assert resp.ok
+    legacy_dual_rx_radio.set_vfo.assert_awaited_once_with("MAIN")
+
+
+@pytest.mark.asyncio
+async def test_set_vfo_legacy_single_rx_falls_back_to_set_vfo(
+    legacy_single_rx_radio: AsyncMock, config: RigctldConfig
+) -> None:
+    handler = RigctldHandler(legacy_single_rx_radio, config)
+    resp = await handler.execute(set_cmd("set_vfo", "VFOB"))
+    assert resp.ok
+    # Legacy overload receives A/B on single-RX.
+    legacy_single_rx_radio.set_vfo.assert_awaited_once_with("B")
+
+
+@pytest.mark.asyncio
+async def test_set_vfo_no_capability_returns_enavail(
+    legacy_no_vfo_radio: AsyncMock, config: RigctldConfig
+) -> None:
+    # Backend without select_receiver / set_vfo_slot / set_vfo:
+    # rigctld must surface ENAVAIL rather than silent RPRT 0 success.
+    handler = RigctldHandler(legacy_no_vfo_radio, config)
+    resp = await handler.execute(set_cmd("set_vfo", "VFOA"))
+    assert resp.error == HamlibError.ENAVAIL
+
+
+# -- set_split_vfo ------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_set_split_vfo_dual_rx_arms_split_without_receiver_switch(
+    dual_rx_handler: RigctldHandler, dual_rx_radio: AsyncMock
+) -> None:
+    resp = await dual_rx_handler.execute(set_cmd("set_split_vfo", "1", "VFOB"))
+    assert resp.ok
+    dual_rx_radio.set_split.assert_awaited_once_with(True)
+    dual_rx_radio.set_vfo.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_set_split_vfo_dual_rx_disables_does_not_switch_receiver(
+    dual_rx_handler: RigctldHandler, dual_rx_radio: AsyncMock
+) -> None:
+    resp = await dual_rx_handler.execute(set_cmd("set_split_vfo", "0", "VFOA"))
+    assert resp.ok
+    dual_rx_radio.set_split.assert_awaited_once_with(False)
+    dual_rx_radio.set_vfo.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "followup_error",
+    [
+        IcomConnectionError("lost"),
+        IcomTimeoutError("timeout"),
+        RuntimeError("boom"),
+        CommandRejectedError("CI-V command 0x07 refused (NAK)"),
+    ],
+    ids=["connection_error", "timeout", "unexpected_error", "radio_refusal"],
+)
+async def test_set_split_vfo_does_not_roll_back_via_set_vfo(
+    dual_rx_handler: RigctldHandler,
+    dual_rx_radio: AsyncMock,
+    followup_error: Exception,
+) -> None:
+    """``S 1 VFOB`` only arms split via ``set_split(True)`` and succeeds.
+
+    The legacy production rollback was removed (MOR-3754): S must never
+    move the operator's RX selection, so the handler issues no follow-up
+    ``set_vfo`` — even a backend whose ``set_vfo`` raises (connection
+    error, timeout, unexpected error, radio refusal) cannot affect the
+    RPRT 0 success, and no rollback ``set_split(False)`` runs.
+    """
+    dual_rx_radio.set_vfo.side_effect = followup_error
+
+    resp = await dual_rx_handler.execute(set_cmd("set_split_vfo", "1", "VFOB"))
+
+    assert resp.ok
+    dual_rx_radio.set_split.assert_awaited_once_with(True)
+    dual_rx_radio.set_vfo.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_get_split_vfo_dual_rx_returns_tracked_tx_vfo(
+    dual_rx_handler: RigctldHandler, dual_rx_radio: AsyncMock
+) -> None:
+    """``s`` returns the TX_VFO label set by the most recent ``S`` command.
+
+    Issue #1345 (research finding #2 in #1319): the prior implementation
+    returned ``self._active_vfo_name()`` here, but the Hamlib protocol
+    expects the TX_VFO that the client itself selected via ``S`` — not
+    the active receiver. After #1345 the handler tracks the requested
+    TX VFO in ``_split_tx_vfo`` (handler-local Hamlib-protocol state).
+    """
+    # Drive the handler through ``S 1 VFOB`` so the TX VFO is recorded.
+    set_resp = await dual_rx_handler.execute(set_cmd("set_split_vfo", "1", "VFOB"))
+    assert set_resp.ok
+    state = RadioState()
+    state.split = True
+    state.active = "SUB"
+    dual_rx_radio.radio_state = state
+    resp = await dual_rx_handler.execute(get_cmd("get_split_vfo"))
+    assert resp.ok
+    assert resp.values == ["1", "VFOB"]
+
+
+# ---------------------------------------------------------------------------
+# Yaesu routing — ATT level (issue #1105 regression guard)
+# ---------------------------------------------------------------------------
+
+
+def _yaesu_handler(get_attenuator_value: bool) -> RigctldHandler:
+    """Build a handler with a Yaesu-tagged radio so create_routing returns YaesuRouting."""
+    from rigplane.rigctld.routing import YaesuRouting
+
+    radio = AsyncMock(spec=_FakeYaesuRadio)
+    radio.backend_id = "yaesu_cat"
+    radio.capabilities = set()
+    radio.get_attenuator = AsyncMock(return_value=get_attenuator_value)
+    radio.rigctld_routing = lambda max_power_w=100.0: YaesuRouting(radio, max_power_w)
+    return RigctldHandler(radio, RigctldConfig())
+
+
+@pytest.mark.asyncio
+async def test_yaesu_routing_get_level_att_on_returns_one() -> None:
+    """get_level ATT returns "1" for True — bool must be cast to int (#1105)."""
+    handler = _yaesu_handler(get_attenuator_value=True)
+    resp = await handler.execute(get_cmd("get_level", "ATT"))
+    assert resp.ok
+    assert resp.values == ["1"]
+
+
+@pytest.mark.asyncio
+async def test_yaesu_routing_get_level_att_off_returns_zero() -> None:
+    """get_level ATT returns "0" for False — bool must be cast to int (#1105)."""
+    handler = _yaesu_handler(get_attenuator_value=False)
+    resp = await handler.execute(get_cmd("get_level", "ATT"))
+    assert resp.ok
+    assert resp.values == ["0"]
+
+
+# ---------------------------------------------------------------------------
+# Per-VFO routing for f/F, m/M, t/T (issue #1344, Variant A 3/5)
+# ---------------------------------------------------------------------------
+
+
+def _vfo_get_cmd(long_cmd: str, vfo_arg: str | None, *args: str) -> RigctldCommand:
+    """``RigctldCommand`` with an explicit ``vfo_arg`` (chk_vfo=1 path)."""
+    return RigctldCommand(
+        short_cmd="",
+        long_cmd=long_cmd,
+        args=tuple(args),
+        is_set=False,
+        vfo_arg=vfo_arg,
+    )
+
+
+def _vfo_set_cmd(long_cmd: str, vfo_arg: str | None, *args: str) -> RigctldCommand:
+    return RigctldCommand(
+        short_cmd="",
+        long_cmd=long_cmd,
+        args=tuple(args),
+        is_set=True,
+        vfo_arg=vfo_arg,
+    )
+
+
+def _dual_rx_state(
+    *,
+    main_freq: int = 14_250_000,
+    sub_freq: int = 7_100_000,
+    main_mode: str = "USB",
+    sub_mode: str = "CW",
+    main_filter: int | None = 1,
+    sub_filter: int | None = 2,
+) -> RadioState:
+    """Build a populated RadioState with distinct MAIN / SUB values."""
+    state = RadioState()
+    state.main.freq = main_freq
+    state.main.mode = main_mode
+    state.main.filter = main_filter
+    state.sub.freq = sub_freq
+    state.sub.mode = sub_mode
+    state.sub.filter = sub_filter
+    return state
+
+
+class TestPerVfoRoutingFreq:
+    """`f`/`F` per-VFO routing under chk_vfo=1 (issue #1344)."""
+
+    @pytest.mark.asyncio
+    async def test_dual_rx_get_freq_vfoa_returns_main(
+        self, dual_rx_handler: RigctldHandler, dual_rx_radio: AsyncMock
+    ) -> None:
+        dual_rx_radio.radio_state = _dual_rx_state()
+        resp = await dual_rx_handler.execute(_vfo_get_cmd("get_freq", "VFOA"))
+        assert resp.ok
+        assert resp.values == ["14250000"]
+
+    @pytest.mark.asyncio
+    async def test_dual_rx_get_freq_vfob_returns_sub(
+        self, dual_rx_handler: RigctldHandler, dual_rx_radio: AsyncMock
+    ) -> None:
+        dual_rx_radio.radio_state = _dual_rx_state()
+        resp = await dual_rx_handler.execute(_vfo_get_cmd("get_freq", "VFOB"))
+        assert resp.ok
+        assert resp.values == ["7100000"]
+
+    @pytest.mark.asyncio
+    async def test_dual_rx_get_freq_vfob_projects_state_store_receiver_1(
+        self, dual_rx_radio: AsyncMock
+    ) -> None:
+        store = StateStore()
+        dual_rx_radio.state_store = store
+        _apply_store_value(store, "receiver.sub.active.freq_mode.freq_hz", 7_100_000)
+        handler = RigctldHandler(dual_rx_radio, RigctldConfig())
+
+        resp = await handler.execute(_vfo_get_cmd("get_freq", "VFOB"))
+
+        assert resp.ok
+        assert resp.values == ["7100000"]
+        dual_rx_radio.get_freq.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_dual_rx_get_freq_vfob_projects_numeric_active_receiver_1(
+        self, dual_rx_radio: AsyncMock
+    ) -> None:
+        store = StateStore()
+        dual_rx_radio.state_store = store
+        _apply_store_value(store, "receiver.1.active.freq_mode.freq_hz", 7_100_000)
+        dual_rx_radio.radio_state = _dual_rx_state(sub_freq=7_200_000)
+        handler = RigctldHandler(dual_rx_radio, RigctldConfig())
+
+        resp = await handler.execute(_vfo_get_cmd("get_freq", "VFOB"))
+
+        assert resp.ok
+        assert resp.values == ["7100000"]
+        dual_rx_radio.get_freq.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_dual_rx_get_freq_currvfo_follows_active(
+        self, dual_rx_handler: RigctldHandler, dual_rx_radio: AsyncMock
+    ) -> None:
+        state = _dual_rx_state()
+        state.active = "SUB"
+        dual_rx_radio.radio_state = state
+        resp = await dual_rx_handler.execute(_vfo_get_cmd("get_freq", "currVFO"))
+        assert resp.ok
+        assert resp.values == ["7100000"]
+
+    @pytest.mark.asyncio
+    async def test_dual_rx_get_freq_no_arg_uses_legacy_main_path(
+        self, dual_rx_handler: RigctldHandler, dual_rx_radio: AsyncMock
+    ) -> None:
+        # Without a VFO arg the active VFO is MAIN by default (state.active),
+        # so behaviour matches the pre-#1344 single-VFO path: MAIN freq.
+        dual_rx_radio.radio_state = _dual_rx_state()
+        resp = await dual_rx_handler.execute(_vfo_get_cmd("get_freq", None))
+        assert resp.ok
+        assert resp.values == ["14250000"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("vfo_arg", [None, "currVFO"])
+    async def test_dual_rx_get_freq_ignores_main_active_slot_projection(
+        self, dual_rx_radio: AsyncMock, vfo_arg: str | None
+    ) -> None:
+        store = StateStore()
+        dual_rx_radio.state_store = store
+        _apply_store_value(store, "receiver.main.vfo.active_slot", "B")
+        state = _dual_rx_state(main_freq=14_250_000, sub_freq=7_100_000)
+        state.active = "MAIN"
+        dual_rx_radio.radio_state = state
+        handler = RigctldHandler(dual_rx_radio, RigctldConfig())
+
+        resp = await handler.execute(_vfo_get_cmd("get_freq", vfo_arg))
+
+        assert resp.ok
+        assert resp.values == ["14250000"]
+
+    @pytest.mark.asyncio
+    async def test_single_rx_get_freq_vfob_returns_evfo(
+        self, single_rx_handler: RigctldHandler, single_rx_radio: AsyncMock
+    ) -> None:
+        # A single-receiver profile cannot satisfy a VFOB request — Hamlib's
+        # chk_vfo=1 path expects EVFO so the client falls back gracefully.
+        single_rx_radio.radio_state = RadioState()
+        resp = await single_rx_handler.execute(_vfo_get_cmd("get_freq", "VFOB"))
+        assert resp.error == HamlibError.EVFO
+
+    @pytest.mark.asyncio
+    async def test_dual_rx_set_freq_vfoa_routes_to_main(
+        self, dual_rx_handler: RigctldHandler, dual_rx_radio: AsyncMock
+    ) -> None:
+        resp = await dual_rx_handler.execute(
+            _vfo_set_cmd("set_freq", "VFOA", "14080000")
+        )
+        assert resp.ok
+        dual_rx_radio.set_freq.assert_awaited_once_with(14_080_000, receiver=0)
+
+    @pytest.mark.asyncio
+    async def test_dual_rx_set_freq_vfob_routes_to_sub(
+        self, dual_rx_handler: RigctldHandler, dual_rx_radio: AsyncMock
+    ) -> None:
+        resp = await dual_rx_handler.execute(
+            _vfo_set_cmd("set_freq", "VFOB", "7080000")
+        )
+        assert resp.ok
+        dual_rx_radio.set_freq.assert_awaited_once_with(7_080_000, receiver=1)
+
+    @pytest.mark.asyncio
+    async def test_single_rx_set_freq_vfob_returns_evfo(
+        self, single_rx_handler: RigctldHandler, single_rx_radio: AsyncMock
+    ) -> None:
+        resp = await single_rx_handler.execute(
+            _vfo_set_cmd("set_freq", "VFOB", "7080000")
+        )
+        assert resp.error == HamlibError.EVFO
+        single_rx_radio.set_freq.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_single_rx_set_mode_vfob_returns_evfo_mor2484(
+        self, single_rx_handler: RigctldHandler, single_rx_radio: AsyncMock
+    ) -> None:
+        """MOR-2484: the rigctld path refuses the SUB/VFO B receiver on a
+        single-RX profile (IC-7300 style) with EVFO — the same meaning as
+        the web enqueue gate's refusal, via the VFO-name seat
+        (``_resolve_target_vfo``)."""
+        resp = await single_rx_handler.execute(
+            _vfo_set_cmd("set_mode", "VFOB", "USB", "2400")
+        )
+        assert resp.error == HamlibError.EVFO
+        single_rx_radio.set_mode.assert_not_awaited()
+
+    def test_single_rx_vfob_refusal_uses_runtime_seat_mor2484(
+        self, single_rx_handler: RigctldHandler
+    ) -> None:
+        """MOR-2484: the VFOB refusal goes through the runtime seat
+        (``require_receiver_for_profile``), so the protocol-local
+        ``ValueError`` carries the seat's receiver message verbatim —
+        the same meaning as the web enqueue gate's refusal (pinned in
+        ``tests/test_web_capability_guards.py::TestReceiverValidationSeat``);
+        the rigctld caller keeps mapping it to ``EVFO``."""
+        from rigplane.core.exceptions import CommandError
+        from rigplane.runtime._dual_rx_runtime import require_receiver_for_profile
+
+        profile = single_rx_handler._radio.profile  # noqa: SLF001
+        with pytest.raises(CommandError) as seat_exc:
+            require_receiver_for_profile(profile, 1, operation="rigctld vfo routing")
+        with pytest.raises(ValueError) as local_exc:
+            single_rx_handler._resolve_target_vfo("VFOB")  # noqa: SLF001
+        assert str(local_exc.value) == str(seat_exc.value)
+
+    def test_dual_rx_vfob_admitted_through_runtime_seat_mor2484(
+        self, dual_rx_handler: RigctldHandler
+    ) -> None:
+        """MOR-2484: a dual-RX profile admits VFOB — the seat returns
+        and the protocol-local parsing resolves to the SUB target."""
+        assert dual_rx_handler._resolve_target_vfo("VFOB") == "VFOB"  # noqa: SLF001
+
+    @pytest.mark.asyncio
+    async def test_dual_rx_get_freq_unknown_vfo_arg_returns_evfo(
+        self, dual_rx_handler: RigctldHandler, dual_rx_radio: AsyncMock
+    ) -> None:
+        dual_rx_radio.radio_state = _dual_rx_state()
+        resp = await dual_rx_handler.execute(_vfo_get_cmd("get_freq", "VFOC"))
+        assert resp.error == HamlibError.EVFO
+
+
+class TestPerVfoRoutingMode:
+    """`m`/`M` per-VFO routing under chk_vfo=1 (issue #1344)."""
+
+    @pytest.mark.asyncio
+    async def test_dual_rx_get_mode_vfoa_returns_main(
+        self, dual_rx_handler: RigctldHandler, dual_rx_radio: AsyncMock
+    ) -> None:
+        dual_rx_radio.radio_state = _dual_rx_state()
+        resp = await dual_rx_handler.execute(_vfo_get_cmd("get_mode", "VFOA"))
+        assert resp.ok
+        # MAIN: USB, filter 1 → 3000 Hz passband.
+        assert resp.values == ["USB", "3000"]
+
+    @pytest.mark.asyncio
+    async def test_dual_rx_get_mode_vfob_returns_sub(
+        self, dual_rx_handler: RigctldHandler, dual_rx_radio: AsyncMock
+    ) -> None:
+        dual_rx_radio.radio_state = _dual_rx_state()
+        resp = await dual_rx_handler.execute(_vfo_get_cmd("get_mode", "VFOB"))
+        assert resp.ok
+        # SUB: CW, filter 2 → 2400 Hz passband.
+        assert resp.values == ["CW", "2400"]
+
+    @pytest.mark.asyncio
+    async def test_dual_rx_get_mode_vfob_projects_state_store_receiver_1(
+        self, dual_rx_radio: AsyncMock
+    ) -> None:
+        store = StateStore()
+        dual_rx_radio.state_store = store
+        _apply_store_value(store, "receiver.sub.active.freq_mode.mode", "CW")
+        # filter_width=Hz, filter_num=NUMBER (2 -> 2400). (MOR-895.)
+        _apply_store_value(store, "receiver.sub.active.freq_mode.filter_width", 2400)
+        _apply_store_value(store, "receiver.sub.active.freq_mode.filter_num", 2)
+        _apply_store_value(store, "receiver.sub.active.freq_mode.data_mode", False)
+        handler = RigctldHandler(dual_rx_radio, RigctldConfig())
+
+        resp = await handler.execute(_vfo_get_cmd("get_mode", "VFOB"))
+
+        assert resp.ok
+        assert resp.values == ["CW", "2400"]
+
+    @pytest.mark.asyncio
+    async def test_dual_rx_get_mode_vfob_projects_numeric_active_receiver_1(
+        self, dual_rx_radio: AsyncMock
+    ) -> None:
+        store = StateStore()
+        dual_rx_radio.state_store = store
+        _apply_store_value(store, "receiver.1.active.freq_mode.mode", "USB")
+        # filter_width=Hz, filter_num=NUMBER (2 -> 2400). (MOR-895.)
+        _apply_store_value(store, "receiver.1.active.freq_mode.filter_width", 2400)
+        _apply_store_value(store, "receiver.1.active.freq_mode.filter_num", 2)
+        _apply_store_value(store, "receiver.1.active.freq_mode.data_mode", True)
+        state = _dual_rx_state(sub_mode="CW", sub_filter=3)
+        state.sub.data_mode = False
+        dual_rx_radio.radio_state = state
+        handler = RigctldHandler(dual_rx_radio, RigctldConfig())
+
+        resp = await handler.execute(_vfo_get_cmd("get_mode", "VFOB"))
+
+        assert resp.ok
+        assert resp.values == ["PKTUSB", "2400"]
+        dual_rx_radio.get_mode.assert_not_awaited()
+        dual_rx_radio.get_data_mode.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_single_rx_get_mode_vfob_returns_evfo(
+        self, single_rx_handler: RigctldHandler, single_rx_radio: AsyncMock
+    ) -> None:
+        single_rx_radio.radio_state = RadioState()
+        resp = await single_rx_handler.execute(_vfo_get_cmd("get_mode", "VFOB"))
+        assert resp.error == HamlibError.EVFO
+
+    @pytest.mark.asyncio
+    async def test_dual_rx_set_mode_vfoa_routes_to_main(
+        self, dual_rx_handler: RigctldHandler, dual_rx_radio: AsyncMock
+    ) -> None:
+        dual_rx_radio.get_data_mode.return_value = False
+        resp = await dual_rx_handler.execute(
+            _vfo_set_cmd("set_mode", "VFOA", "USB", "2400")
+        )
+        assert resp.ok
+        # MAIN path: ``set_mode`` called WITHOUT receiver kwarg (legacy default).
+        dual_rx_radio.set_mode.assert_awaited_once_with("USB", filter_width=2)
+
+    @pytest.mark.asyncio
+    async def test_dual_rx_set_mode_vfob_routes_to_sub(
+        self, dual_rx_handler: RigctldHandler, dual_rx_radio: AsyncMock
+    ) -> None:
+        resp = await dual_rx_handler.execute(
+            _vfo_set_cmd("set_mode", "VFOB", "CW", "1800")
+        )
+        assert resp.ok
+        # SUB path uses receiver=1 explicitly; passband 1800 Hz → filter 3.
+        dual_rx_radio.set_mode.assert_awaited_once_with(
+            "CW", filter_width=3, receiver=1
+        )
+
+    @pytest.mark.asyncio
+    async def test_single_rx_set_mode_vfob_returns_evfo(
+        self, single_rx_handler: RigctldHandler, single_rx_radio: AsyncMock
+    ) -> None:
+        resp = await single_rx_handler.execute(
+            _vfo_set_cmd("set_mode", "VFOB", "USB", "2400")
+        )
+        assert resp.error == HamlibError.EVFO
+        single_rx_radio.set_mode.assert_not_awaited()
+
+
+class TestPerVfoRoutingPtt:
+    """`t`/`T` per-VFO routing under chk_vfo=1 (issue #1344).
+
+    The Icom radio exposes a single global PTT state, so the answer for
+    ``t VFOA`` and ``t VFOB`` is the same once the request is accepted.
+    The VFO arg is validated only against the profile (single-RX rejects
+    VFOB with EVFO; dual-RX accepts both).
+    """
+
+    @pytest.mark.asyncio
+    async def test_dual_rx_get_ptt_vfoa(
+        self, dual_rx_handler: RigctldHandler, dual_rx_radio: AsyncMock
+    ) -> None:
+        state = RadioState()
+        state.ptt = True
+        dual_rx_radio.radio_state = state
+        resp = await dual_rx_handler.execute(_vfo_get_cmd("get_ptt", "VFOA"))
+        assert resp.ok
+        assert resp.values == ["1"]
+
+    @pytest.mark.asyncio
+    async def test_dual_rx_get_ptt_vfob_returns_global_ptt(
+        self, dual_rx_handler: RigctldHandler, dual_rx_radio: AsyncMock
+    ) -> None:
+        # Radio PTT is global — VFOB query returns the same global state.
+        state = RadioState()
+        state.ptt = True
+        dual_rx_radio.radio_state = state
+        resp = await dual_rx_handler.execute(_vfo_get_cmd("get_ptt", "VFOB"))
+        assert resp.ok
+        assert resp.values == ["1"]
+
+    @pytest.mark.asyncio
+    async def test_single_rx_get_ptt_vfob_returns_evfo(
+        self, single_rx_handler: RigctldHandler, single_rx_radio: AsyncMock
+    ) -> None:
+        single_rx_radio.radio_state = RadioState()
+        resp = await single_rx_handler.execute(_vfo_get_cmd("get_ptt", "VFOB"))
+        assert resp.error == HamlibError.EVFO
+
+    @pytest.mark.asyncio
+    async def test_dual_rx_set_ptt_vfob_keys_radio_pt_t(
+        self, dual_rx_handler: RigctldHandler, dual_rx_radio: AsyncMock
+    ) -> None:
+        # ``T VFOB 1`` is honoured: Hamlib expects per-VFO PTT but Icom only
+        # has one PTT path — pragmatic choice is to key it regardless.
+        resp = await dual_rx_handler.execute(_vfo_set_cmd("set_ptt", "VFOB", "1"))
+        assert resp.ok
+        dual_rx_radio.set_ptt.assert_awaited_once_with(True)
+
+    @pytest.mark.asyncio
+    async def test_single_rx_set_ptt_vfob_returns_evfo(
+        self, single_rx_handler: RigctldHandler, single_rx_radio: AsyncMock
+    ) -> None:
+        resp = await single_rx_handler.execute(_vfo_set_cmd("set_ptt", "VFOB", "1"))
+        assert resp.error == HamlibError.EVFO
+        single_rx_radio.set_ptt.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# Per-VFO routing for s/S, j, l/L, u/U (issue #1345, Variant A 4/5)
+# ---------------------------------------------------------------------------
+
+
+class TestPerVfoSplit:
+    """`s`/`S` per-VFO routing under chk_vfo=1 (issue #1345).
+
+    Split is a Hamlib-protocol concept — the handler tracks the requested
+    TX_VFO label in handler-local state (``_split_tx_vfo``), set by the
+    most recent ``S`` command and returned by ``s``. This fixes a standing
+    bug (research finding #2 in #1319) where ``s`` previously returned
+    the active receiver label rather than the TX_VFO.
+    """
+
+    @pytest.mark.asyncio
+    async def test_get_split_vfo_default_tx_vfo_is_vfoa(
+        self, dual_rx_handler: RigctldHandler, dual_rx_radio: AsyncMock
+    ) -> None:
+        # No prior S command — the default Hamlib TX_VFO label is VFOA.
+        state = RadioState()
+        state.split = False
+        dual_rx_radio.radio_state = state
+        resp = await dual_rx_handler.execute(_vfo_get_cmd("get_split_vfo", "VFOA"))
+        assert resp.ok
+        assert resp.values == ["0", "VFOA"]
+
+    @pytest.mark.asyncio
+    async def test_set_split_vfo_records_tx_vfo_for_get(
+        self, dual_rx_handler: RigctldHandler, dual_rx_radio: AsyncMock
+    ) -> None:
+        # ``S VFOA 1 VFOB`` — split on, TX VFO = VFOB.  The follow-up
+        # ``s`` request must return the recorded TX VFO label, not the
+        # active receiver.
+        set_resp = await dual_rx_handler.execute(
+            _vfo_set_cmd("set_split_vfo", "VFOA", "1", "VFOB")
+        )
+        assert set_resp.ok
+        dual_rx_radio.set_split.assert_awaited_once_with(True)
+
+        state = RadioState()
+        state.split = True
+        state.active = "MAIN"  # active receiver is MAIN — TX_VFO is still VFOB
+        dual_rx_radio.radio_state = state
+        get_resp = await dual_rx_handler.execute(_vfo_get_cmd("get_split_vfo", "VFOA"))
+        assert get_resp.ok
+        assert get_resp.values == ["1", "VFOB"]
+
+    @pytest.mark.asyncio
+    async def test_get_split_vfo_unknown_vfo_arg_returns_evfo(
+        self, dual_rx_handler: RigctldHandler, dual_rx_radio: AsyncMock
+    ) -> None:
+        resp = await dual_rx_handler.execute(_vfo_get_cmd("get_split_vfo", "VFOC"))
+        assert resp.error == HamlibError.EVFO
+
+    @pytest.mark.asyncio
+    async def test_get_split_vfo_single_rx_vfob_returns_evfo(
+        self, single_rx_handler: RigctldHandler, single_rx_radio: AsyncMock
+    ) -> None:
+        single_rx_radio.radio_state = RadioState()
+        resp = await single_rx_handler.execute(_vfo_get_cmd("get_split_vfo", "VFOB"))
+        assert resp.error == HamlibError.EVFO
+
+    @pytest.mark.asyncio
+    async def test_set_split_vfo_single_rx_vfob_returns_evfo(
+        self, single_rx_handler: RigctldHandler, single_rx_radio: AsyncMock
+    ) -> None:
+        resp = await single_rx_handler.execute(
+            _vfo_set_cmd("set_split_vfo", "VFOB", "1", "VFOA")
+        )
+        assert resp.error == HamlibError.EVFO
+        single_rx_radio.set_split.assert_not_awaited()
+
+
+class TestPerVfoRit:
+    """`j` (get_rit) per-VFO routing (issue #1345).
+
+    Most Icom radios expose a single global RIT register (CI-V 0x21 0x00),
+    so the answer is the same for VFOA / VFOB.  Hamlib clients tolerate
+    this. The VFO arg is validated only for profile compatibility.
+    """
+
+    @pytest.mark.asyncio
+    async def test_get_rit_vfoa_returns_global_rit(
+        self, dual_rx_radio: AsyncMock
+    ) -> None:
+        store = StateStore()
+        dual_rx_radio.state_store = store
+        _apply_store_value(store, "global.operator_controls.rit_freq", 250)
+        state = RadioState()
+        state.rit_freq = -250
+        dual_rx_radio.radio_state = state
+        dual_rx_handler = RigctldHandler(dual_rx_radio, RigctldConfig())
+
+        resp = await dual_rx_handler.execute(_vfo_get_cmd("get_rit", "VFOA"))
+
+        assert resp.ok
+        assert resp.values == ["250"]
+
+    @pytest.mark.asyncio
+    async def test_get_rit_vfob_returns_same_global_rit(
+        self, dual_rx_radio: AsyncMock
+    ) -> None:
+        # Per-VFO RIT is not modelled in RadioState — VFOB returns the
+        # same global value as VFOA. Documented limitation.
+        store = StateStore()
+        dual_rx_radio.state_store = store
+        _apply_store_value(store, "global.operator_controls.rit_freq", 250)
+        state = RadioState()
+        state.rit_freq = -250
+        dual_rx_radio.radio_state = state
+        dual_rx_handler = RigctldHandler(dual_rx_radio, RigctldConfig())
+
+        resp = await dual_rx_handler.execute(_vfo_get_cmd("get_rit", "VFOB"))
+
+        assert resp.ok
+        assert resp.values == ["250"]
+
+    @pytest.mark.asyncio
+    async def test_get_rit_single_rx_vfob_returns_evfo(
+        self, single_rx_handler: RigctldHandler, single_rx_radio: AsyncMock
+    ) -> None:
+        single_rx_radio.radio_state = RadioState()
+        resp = await single_rx_handler.execute(_vfo_get_cmd("get_rit", "VFOB"))
+        assert resp.error == HamlibError.EVFO
+
+
+class TestPerVfoLevel:
+    """`l`/`L` per-VFO routing (issue #1345).
+
+    Per-receiver levels (STRENGTH, NB, NR) route via ``receiver=`` kwarg.
+    Radio-global levels (RFPOWER, MICGAIN, etc.) ignore the VFO arg but
+    still validate it against the profile.
+    """
+
+    @pytest.mark.asyncio
+    async def test_get_strength_vfoa_reads_main(
+        self, dual_rx_handler: RigctldHandler, dual_rx_radio: AsyncMock
+    ) -> None:
+        state = RadioState()
+        state.main.freq = 14_250_000
+        state.main.s_meter = 120  # S9
+        state.sub.s_meter = 60  # different value to detect mis-routing
+        dual_rx_radio.radio_state = state
+        resp = await dual_rx_handler.execute(
+            _vfo_get_cmd("get_level", "VFOA", "STRENGTH")
+        )
+        assert resp.ok
+        # 120 / 241 * 114 - 54 ≈ 2.78 → rounds to 3
+        assert resp.values == [str(round((120 / 241.0) * 114.0 - 54.0))]
+
+    @pytest.mark.asyncio
+    async def test_get_strength_vfob_reads_sub(
+        self, dual_rx_handler: RigctldHandler, dual_rx_radio: AsyncMock
+    ) -> None:
+        state = RadioState()
+        state.main.freq = 14_250_000
+        state.main.s_meter = 120
+        state.sub.s_meter = 60
+        dual_rx_radio.radio_state = state
+        resp = await dual_rx_handler.execute(
+            _vfo_get_cmd("get_level", "VFOB", "STRENGTH")
+        )
+        assert resp.ok
+        assert resp.values == [str(round((60 / 241.0) * 114.0 - 54.0))]
+
+    @pytest.mark.asyncio
+    async def test_get_rfpower_ignores_vfo_arg(
+        self, dual_rx_handler: RigctldHandler, dual_rx_radio: AsyncMock
+    ) -> None:
+        # RFPOWER is radio-global — VFOB request must succeed and return
+        # the global value, not error out (defeating vfo_opt).
+        state = RadioState()
+        state.main.freq = 14_250_000
+        state.power_level = 128
+        dual_rx_radio.radio_state = state
+        resp = await dual_rx_handler.execute(
+            _vfo_get_cmd("get_level", "VFOB", "RFPOWER")
+        )
+        assert resp.ok
+        assert resp.values == [f"{128 / 255.0:.6f}"]
+
+    @pytest.mark.asyncio
+    async def test_get_nb_level_vfob_routes_to_sub(
+        self, dual_rx_handler: RigctldHandler, dual_rx_radio: AsyncMock
+    ) -> None:
+        dual_rx_radio.get_nb_level = AsyncMock(return_value=120)
+        resp = await dual_rx_handler.execute(_vfo_get_cmd("get_level", "VFOB", "NB"))
+        assert resp.ok
+        dual_rx_radio.get_nb_level.assert_awaited_once_with(receiver=1)
+
+    @pytest.mark.asyncio
+    async def test_get_nb_level_vfoa_no_receiver_kwarg(
+        self, dual_rx_handler: RigctldHandler, dual_rx_radio: AsyncMock
+    ) -> None:
+        dual_rx_radio.get_nb_level = AsyncMock(return_value=120)
+        resp = await dual_rx_handler.execute(_vfo_get_cmd("get_level", "VFOA", "NB"))
+        assert resp.ok
+        # MAIN path: legacy call without receiver kwarg.
+        dual_rx_radio.get_nb_level.assert_awaited_once_with()
+
+    @pytest.mark.asyncio
+    async def test_get_level_unknown_vfo_arg_returns_evfo(
+        self, dual_rx_handler: RigctldHandler, dual_rx_radio: AsyncMock
+    ) -> None:
+        resp = await dual_rx_handler.execute(
+            _vfo_get_cmd("get_level", "VFOC", "STRENGTH")
+        )
+        assert resp.error == HamlibError.EVFO
+
+    @pytest.mark.asyncio
+    async def test_get_strength_single_rx_vfob_returns_evfo(
+        self, single_rx_handler: RigctldHandler, single_rx_radio: AsyncMock
+    ) -> None:
+        single_rx_radio.radio_state = RadioState()
+        resp = await single_rx_handler.execute(
+            _vfo_get_cmd("get_level", "VFOB", "STRENGTH")
+        )
+        assert resp.error == HamlibError.EVFO
+
+    @pytest.mark.asyncio
+    async def test_set_rfpower_ignores_vfo_arg(
+        self, dual_rx_handler: RigctldHandler, dual_rx_radio: AsyncMock
+    ) -> None:
+        resp = await dual_rx_handler.execute(
+            _vfo_set_cmd("set_level", "VFOB", "RFPOWER", "0.5")
+        )
+        assert resp.ok
+        # RFPOWER is global — call without receiver kwarg.
+        dual_rx_radio.set_rf_power.assert_awaited_once_with(round(0.5 * 255))
+
+    @pytest.mark.asyncio
+    async def test_set_nb_level_vfob_routes_to_sub(
+        self, dual_rx_handler: RigctldHandler, dual_rx_radio: AsyncMock
+    ) -> None:
+        resp = await dual_rx_handler.execute(
+            _vfo_set_cmd("set_level", "VFOB", "NB", "0.5")
+        )
+        assert resp.ok
+        dual_rx_radio.set_nb_level.assert_awaited_once_with(
+            round(0.5 * 255), receiver=1
+        )
+
+    @pytest.mark.asyncio
+    async def test_set_level_single_rx_vfob_returns_evfo(
+        self, single_rx_handler: RigctldHandler, single_rx_radio: AsyncMock
+    ) -> None:
+        resp = await single_rx_handler.execute(
+            _vfo_set_cmd("set_level", "VFOB", "RFPOWER", "0.5")
+        )
+        assert resp.error == HamlibError.EVFO
+        single_rx_radio.set_rf_power.assert_not_awaited()
+
+
+class TestPerVfoFunc:
+    """`u`/`U` per-VFO routing (issue #1345).
+
+    Per-receiver funcs (NB, NR) route via ``receiver=`` kwarg.  Radio-
+    global funcs (VOX, TUNER, COMP, etc.) ignore the VFO arg.
+    """
+
+    @pytest.mark.asyncio
+    async def test_get_nb_vfob_routes_to_sub(
+        self, dual_rx_handler: RigctldHandler, dual_rx_radio: AsyncMock
+    ) -> None:
+        dual_rx_radio.get_nb = AsyncMock(return_value=True)
+        resp = await dual_rx_handler.execute(_vfo_get_cmd("get_func", "VFOB", "NB"))
+        assert resp.ok
+        dual_rx_radio.get_nb.assert_awaited_once_with(receiver=1)
+
+    @pytest.mark.asyncio
+    async def test_get_nb_vfoa_no_receiver_kwarg(
+        self, dual_rx_handler: RigctldHandler, dual_rx_radio: AsyncMock
+    ) -> None:
+        dual_rx_radio.get_nb = AsyncMock(return_value=True)
+        resp = await dual_rx_handler.execute(_vfo_get_cmd("get_func", "VFOA", "NB"))
+        assert resp.ok
+        dual_rx_radio.get_nb.assert_awaited_once_with()
+
+    @pytest.mark.asyncio
+    async def test_get_vox_ignores_vfo_arg(
+        self, dual_rx_handler: RigctldHandler, dual_rx_radio: AsyncMock
+    ) -> None:
+        # VOX is radio-global.
+        dual_rx_radio.get_vox = AsyncMock(return_value=True)
+        resp = await dual_rx_handler.execute(_vfo_get_cmd("get_func", "VFOB", "VOX"))
+        assert resp.ok
+        dual_rx_radio.get_vox.assert_awaited_once_with()
+
+    @pytest.mark.asyncio
+    async def test_set_nb_vfob_routes_to_sub(
+        self, dual_rx_handler: RigctldHandler, dual_rx_radio: AsyncMock
+    ) -> None:
+        resp = await dual_rx_handler.execute(
+            _vfo_set_cmd("set_func", "VFOB", "NB", "1")
+        )
+        assert resp.ok
+        dual_rx_radio.set_nb.assert_awaited_once_with(True, receiver=1)
+
+    @pytest.mark.asyncio
+    async def test_set_vox_ignores_vfo_arg(
+        self, dual_rx_handler: RigctldHandler, dual_rx_radio: AsyncMock
+    ) -> None:
+        resp = await dual_rx_handler.execute(
+            _vfo_set_cmd("set_func", "VFOB", "VOX", "1")
+        )
+        assert resp.ok
+        # VOX is global — no receiver kwarg.
+        dual_rx_radio.set_vox.assert_awaited_once_with(True)
+
+    @pytest.mark.asyncio
+    async def test_get_func_unknown_vfo_arg_returns_evfo(
+        self, dual_rx_handler: RigctldHandler, dual_rx_radio: AsyncMock
+    ) -> None:
+        resp = await dual_rx_handler.execute(_vfo_get_cmd("get_func", "VFOC", "NB"))
+        assert resp.error == HamlibError.EVFO
+
+    @pytest.mark.asyncio
+    async def test_set_func_single_rx_vfob_returns_evfo(
+        self, single_rx_handler: RigctldHandler, single_rx_radio: AsyncMock
+    ) -> None:
+        resp = await single_rx_handler.execute(
+            _vfo_set_cmd("set_func", "VFOB", "NB", "1")
+        )
+        assert resp.error == HamlibError.EVFO
+        single_rx_radio.set_nb.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# Issue #1354 — single-RX active_slot="B" must not route to receiver=1
+# ---------------------------------------------------------------------------
+#
+# Regression introduced by #1344 (per-VFO routing). When the active slot on
+# a single-receiver radio is "B", ``_active_vfo_name()`` returns "VFOB" —
+# which is correct for the get_vfo question. But the per-VFO routing then
+# treated VFOB as ``receiver=1``, i.e. the SUB receiver of a *dual-RX*
+# rig, which does not exist on a single-RX backend. Slot selection on
+# single-RX is via ``set_vfo_slot`` and lives on the same ``receiver=0``.
+
+
+class TestSingleRxActiveSlotBRouting:
+    """Bare ``F``/``M``/``T`` on single-RX with active_slot="B" routes to
+    receiver=0 (issue #1354). Without a VFO arg the handler may legitimately
+    resolve target to VFOB via the active-slot mirror, but the I/O kwarg
+    must still target the single available receiver (receiver=0)."""
+
+    @pytest.mark.asyncio
+    async def test_set_freq_no_vfo_arg_routes_to_receiver_0(
+        self, single_rx_handler: RigctldHandler, single_rx_radio: AsyncMock
+    ) -> None:
+        state = RadioState()
+        state.main.active_slot = "B"
+        single_rx_radio.radio_state = state
+
+        resp = await single_rx_handler.execute(
+            _vfo_set_cmd("set_freq", None, "14074000")
+        )
+
+        assert resp.ok
+        single_rx_radio.set_freq.assert_awaited_once_with(14_074_000, receiver=0)
+
+    @pytest.mark.asyncio
+    async def test_set_mode_no_vfo_arg_routes_to_receiver_0(
+        self, single_rx_handler: RigctldHandler, single_rx_radio: AsyncMock
+    ) -> None:
+        single_rx_radio.get_data_mode.return_value = False
+        state = RadioState()
+        state.main.active_slot = "B"
+        single_rx_radio.radio_state = state
+
+        resp = await single_rx_handler.execute(
+            _vfo_set_cmd("set_mode", None, "USB", "2400")
+        )
+
+        assert resp.ok
+        # MAIN path: ``set_mode`` called WITHOUT a receiver kwarg (legacy
+        # default == receiver=0). Critically, NOT ``receiver=1``.
+        single_rx_radio.set_mode.assert_awaited_once_with("USB", filter_width=2)
+
+    @pytest.mark.asyncio
+    async def test_set_ptt_no_vfo_arg_keys_radio(
+        self, single_rx_handler: RigctldHandler, single_rx_radio: AsyncMock
+    ) -> None:
+        # PTT is global on the Icom CI-V — no receiver kwarg is involved.
+        # Regression-guard: bare ``T 1`` under active_slot="B" on single-RX
+        # must succeed (not EVFO) and reach the radio.
+        state = RadioState()
+        state.main.active_slot = "B"
+        single_rx_radio.radio_state = state
+
+        resp = await single_rx_handler.execute(_vfo_set_cmd("set_ptt", None, "1"))
+
+        assert resp.ok
+        single_rx_radio.set_ptt.assert_awaited_once_with(True)
+
+    @pytest.mark.asyncio
+    async def test_get_freq_no_vfo_arg_reads_main_path(
+        self, single_rx_handler: RigctldHandler, single_rx_radio: AsyncMock
+    ) -> None:
+        # The single-RX MAIN slot mirror is wfview's contract — main.freq
+        # always reflects the *currently selected* slot (A or B) on a
+        # single-RX backend (see SerialMockRadio). So the legacy MAIN path
+        # is correct even when active_slot="B" — what we must NOT do is
+        # branch into the SUB-state read intended for dual-RX VFOB.
+        state = RadioState()
+        state.main.active_slot = "B"
+        state.main.freq = 14_074_000
+        # state.sub.freq stays 0 to detect mis-routing through SUB.
+        single_rx_radio.radio_state = state
+
+        resp = await single_rx_handler.execute(_vfo_get_cmd("get_freq", None))
+
+        assert resp.ok
+        assert resp.values == ["14074000"]
+
+    @pytest.mark.asyncio
+    async def test_dual_rx_vfob_still_routes_to_receiver_1(
+        self, dual_rx_handler: RigctldHandler, dual_rx_radio: AsyncMock
+    ) -> None:
+        # Dual-RX path is unchanged: explicit ``F VFOB <freq>`` still
+        # uses receiver=1. This guards against the helper accidentally
+        # collapsing dual-RX routing to receiver=0.
+        resp = await dual_rx_handler.execute(
+            _vfo_set_cmd("set_freq", "VFOB", "7080000")
+        )
+
+        assert resp.ok
+        dual_rx_radio.set_freq.assert_awaited_once_with(7_080_000, receiver=1)
+
+
+# ---------------------------------------------------------------------------
+# Issue #1355 — explicit VFOB get with no radio_state must not fall through
+# ---------------------------------------------------------------------------
+#
+# When ``chk_vfo=1`` and a client sends ``f VFOB`` / ``m VFOB`` against a
+# backend whose ``radio_state`` is ``None``, the handler used to silently
+# fall through to the MAIN read path and return MAIN data labelled as
+# VFOB. That is a contract violation. After #1355 the handler returns
+# ``ENIMPL`` for *explicit* VFOB requests so the client surfaces the
+# failure rather than acting on wrong data. Implicit/legacy paths
+# (``vfo_arg is None`` / ``"currVFO"``) keep the forgiving MAIN
+# fall-through.
+
+
+class TestExplicitVfobNoStateReturnsEnimpl:
+    @pytest.mark.asyncio
+    async def test_get_freq_explicit_vfob_no_state_returns_enimpl(
+        self, dual_rx_handler: RigctldHandler, dual_rx_radio: AsyncMock
+    ) -> None:
+        # Dual-RX profile but no RadioState wired up.
+        dual_rx_radio.radio_state = None
+
+        resp = await dual_rx_handler.execute(_vfo_get_cmd("get_freq", "VFOB"))
+
+        assert resp.error == HamlibError.ENIMPL
+        # Critically, the handler must NOT call ``get_freq()`` and return
+        # MAIN data labelled as VFOB.
+        dual_rx_radio.get_freq.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_get_mode_explicit_vfob_no_state_returns_enimpl(
+        self, dual_rx_handler: RigctldHandler, dual_rx_radio: AsyncMock
+    ) -> None:
+        dual_rx_radio.radio_state = None
+
+        resp = await dual_rx_handler.execute(_vfo_get_cmd("get_mode", "VFOB"))
+
+        assert resp.error == HamlibError.ENIMPL
+        dual_rx_radio.get_mode.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# Regression: read-only get_mode must not clobber the canonical StateStore
+# (MOR-895 / rigplane-pro#1200). A WSJT-X ``get_mode`` poll used to write the
+# RadioState filter NUMBER into the Hz-typed ``filter_width`` key and a bool
+# into the int-typed ``data_mode`` key, overwriting the correct CI-V
+# 0x26 / 0x1A observations and blanking DATA mode + collapsing the IF width.
+# ---------------------------------------------------------------------------
+
+
+def _seed_civ_canonical_state(store: StateStore) -> None:
+    """Seed the canonical CI-V state the web UI reads.
+
+    Mirrors what ``runtime/_civ_rx`` produces for a USB / D2 / FIL1 / 3200 Hz
+    radio: 0x26 answer ``00 01 02 01`` -> mode=USB, data_mode=2, filter_num=1;
+    0x1A/03 answer -> filter_width=3200 Hz.
+    """
+    _apply_store_value(store, "receiver.main.active.freq_mode.mode", "USB", max_age=1.0)
+    _apply_store_value(
+        store, "receiver.main.active.freq_mode.data_mode", 2, max_age=1.0
+    )
+    _apply_store_value(
+        store, "receiver.main.active.freq_mode.filter_num", 1, max_age=1.0
+    )
+    _apply_store_value(
+        store, "receiver.main.active.freq_mode.filter_width", 3200, max_age=1.0
+    )
+
+
+def _assert_canonical_state_intact(store: StateStore) -> None:
+    snapshot = store.snapshot()
+    mode = snapshot.field("receiver.main.active.freq_mode.mode")
+    data_mode = snapshot.field("receiver.main.active.freq_mode.data_mode")
+    filter_width = snapshot.field("receiver.main.active.freq_mode.filter_width")
+    filter_num = snapshot.field("receiver.main.active.freq_mode.filter_num")
+
+    assert mode.value == "USB"
+    # data_mode must stay the int sub-mode, never a bool.
+    assert data_mode.value == 2
+    assert not isinstance(data_mode.value, bool)
+    # filter_width must stay Hz (3200), never a filter number (1/2/3).
+    assert filter_width.value == 3200
+    assert filter_num.value == 1
+
+
+@pytest.mark.asyncio
+async def test_get_mode_does_not_clobber_canonical_state_store() -> None:
+    """A read-only get_mode must not overwrite CI-V state with display types.
+
+    The store is seeded with the correct CI-V values, then those fields are
+    aged STALE so the projection misses and ``_cmd_get_mode`` falls into the
+    RadioState compatibility branch — the path that used to clobber the store.
+    """
+    radio = make_mock_radio()
+    radio.capabilities = set(FULL_ICOM_CAPS)
+    store = StateStore()
+    radio.state_store = store
+    _seed_civ_canonical_state(store)
+    # Age the freq_mode fields so the get_mode projection misses and the
+    # RadioState fallback branch (the historical clobber site) is exercised.
+    store.mark_stale_due(now=1000.0)
+
+    # RadioState mirror reflects the same physical radio: USB / D2 / FIL1.
+    state = RadioState()
+    state.main.freq = 14_074_000
+    state.main.mode = "USB"
+    state.main.filter = 1  # filter NUMBER
+    state.main.data_mode = 2  # int sub-mode
+    radio.radio_state = state
+
+    handler = RigctldHandler(radio, RigctldConfig())
+
+    resp = await handler.execute(get_cmd("get_mode"))
+
+    # Response value WSJT-X reads stays correct (D2 -> PKTUSB).
+    assert resp.ok
+    assert resp.values[0] == "PKTUSB"
+
+    # Canonical store is untouched by the read.
+    _assert_canonical_state_intact(store)
+
+
+@pytest.mark.asyncio
+async def test_set_mode_does_not_clobber_filter_width_with_filter_number() -> None:
+    """set_mode PKTUSB must not promote a filter NUMBER into ``filter_width``."""
+    radio = _ContractModeRadio(mode="USB", filter_width=1, data_mode=True)
+    store = StateStore()
+    _seed_civ_canonical_state(store)
+    _seed_known_rx(store)
+
+    handler = RigctldHandler(radio, RigctldConfig(), state_store=store)
+
+    resp = await handler.execute(set_cmd("set_mode", "PKTUSB", "0"))
+    assert resp.ok
+
+    # The canonical Hz filter_width / int data_mode are not overwritten with
+    # the rigctld filter number / bool.
+    _assert_canonical_state_intact(store)
+
+
+@pytest.mark.asyncio
+async def test_get_mode_emits_no_bool_data_mode_or_number_filter_width() -> None:
+    """Negative: no Observation from get_mode carries a bad type/unit.
+
+    Captures every Observation applied to the canonical store during a
+    get_mode poll and asserts none puts a ``bool`` into the ``data_mode`` path
+    nor a filter NUMBER into the ``filter_width`` path.
+    """
+    radio = make_mock_radio()
+    radio.capabilities = set(FULL_ICOM_CAPS)
+    store = StateStore()
+    radio.state_store = store
+    _seed_civ_canonical_state(store)
+    store.mark_stale_due(now=1000.0)
+
+    state = RadioState()
+    state.main.freq = 14_074_000
+    state.main.mode = "USB"
+    state.main.filter = 1
+    state.main.data_mode = 2
+    radio.radio_state = state
+
+    handler = RigctldHandler(radio, RigctldConfig())
+
+    captured: list[Observation] = []
+    original_apply = StateStore.apply
+
+    def _spy_apply(self: StateStore, observation: Observation):  # type: ignore[no-untyped-def]
+        captured.append(observation)
+        return original_apply(self, observation)
+
+    with mock.patch.object(StateStore, "apply", _spy_apply):
+        await handler.execute(get_cmd("get_mode"))
+
+    for obs in captured:
+        name = obs.path.name
+        if name == "data_mode":
+            assert not isinstance(obs.value, bool), (
+                f"get_mode wrote a bool into data_mode: {obs.value!r}"
+            )
+        if name == "filter_width":
+            assert obs.value not in (1, 2, 3), (
+                f"get_mode wrote a filter NUMBER into filter_width: {obs.value!r}"
+            )
+
+
+# ---------------------------------------------------------------------------
+# MOR-2823: FM legacy filter-width cache must not hold the raw 1A 03 index
+# ---------------------------------------------------------------------------
+
+
+def _fm_legacy_cache_radio() -> tuple[IcomRadio, MockTransport]:
+    """IC-7300 on a silent transport, in FM with FIL2 selected.
+
+    The mode cache is primed directly (``update_mode``), so no CI-V frame
+    has flowed and the StateStore holds no observation yet — the state in
+    which ``\\m`` answers from the mode-cache fallback path.
+    """
+    transport = MockTransport()
+    radio = IcomRadio("192.168.1.100", timeout=0.05, model="IC-7300")
+    radio._ctrl_transport = transport  # type: ignore[attr-defined]
+    radio._civ_transport = transport  # type: ignore[attr-defined]
+    fake_connected(radio)
+    radio.state_cache.update_mode("FM", 2)
+    radio._radio_state.main.mode = "FM"  # type: ignore[attr-defined]
+    return radio, transport
+
+
+def _fm_width_answer(radio: IcomRadio) -> CivFrame:
+    """A 1A 03 answer in FM whose BCD payload decodes to raw index 0."""
+    return CivFrame(
+        to_addr=CONTROLLER_ADDR,
+        from_addr=radio._radio_addr,  # type: ignore[attr-defined]
+        command=0x1A,
+        sub=0x03,
+        data=bytes([0x00]),
+    )
+
+
+@pytest.mark.asyncio
+async def test_get_mode_before_first_observation_reports_no_fm_raw_index() -> None:
+    """MOR-2823: before the first observation, ``\\m`` in FM reports the
+    handler table's passband for the selected slot, never a raw 1A 03 index.
+
+    The passband comes from ``_FILTER_TO_PASSBAND`` in
+    ``rigctld/handler.py`` — not from the profile (MOR-2838 tracks making
+    that table profile- or state-driven). With FIL2 selected the table
+    answers ``FM 2400``. Before the fix the legacy ``_state_cache``
+    fallback held the raw BCD index 0 from a FM ``1A 03`` answer, and that
+    index reached ``_filter_to_passband`` as a filter number, answering
+    ``FM 0``.
+    """
+    radio, _transport = _fm_legacy_cache_radio()
+    radio._civ_runtime._update_state_cache_from_frame(  # noqa: SLF001
+        _fm_width_answer(radio)
+    )
+
+    handler = RigctldHandler(radio, RigctldConfig())
+    resp = await handler.execute(get_cmd("get_mode"))
+
+    assert resp.ok
+    assert resp.values == ["FM", "2400"]
+
+
+def test_fm_legacy_cache_holds_no_raw_index() -> None:
+    """MOR-2823: the legacy cache itself keeps no raw index in FM.
+
+    After a FM ``1A 03`` answer, ``_state_cache.filter_width`` still holds
+    the mode cache's filter number (2), not the raw BCD index the answer
+    decodes to (0) — a fixed-width mode's index maps to no Hz (MOR-2503).
+    """
+    radio, _transport = _fm_legacy_cache_radio()
+    radio._civ_runtime._update_state_cache_from_frame(  # noqa: SLF001
+        _fm_width_answer(radio)
+    )
+
+    assert radio.state_cache.filter_width != 0

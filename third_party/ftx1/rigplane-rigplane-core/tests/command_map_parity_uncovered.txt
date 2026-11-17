@@ -1,0 +1,286 @@
+# What tests/test_command_map_parity.py could NOT compare, and how
+# much it did. Tab separated, six row kinds:
+#   census        <name>              <count>
+#   cat-only      <profile>           <commands, every one of them CAT>
+#   gap           <command name>      <profiles whose map omits it>
+#   noargs        <module>:<builder>  no probe value satisfied its OTHER
+#                                     required arguments (cmd_map still
+#                                     optional there -- a genuinely
+#                                     unsynthesisable case)
+#   requires-map  <module>:<builder>  cmd_map has no default (MOR-2006
+#                                     Steps 5..N migrated it) -- this
+#                                     file's cmd_map=None probe can never
+#                                     be accepted, whatever else is tried
+#   unpinned      <module>:<builder>  no compared builder reaches it
+# A 'gap' row means that profile's CommandMap holds no CI-V entry
+# for the command, so the cmd_map branch raises KeyError and there
+# is no frame to compare. Two causes land a command here: the rig
+# TOML does not define it, or it defines it as a CAT command, which
+# profiles/rig_loader.py: RigConfig.to_command_map drops. A
+# 'cat-only' profile has no CI-V command at all -- every command its
+# TOML defines is CAT, so its CommandMap is empty and every lookup
+# against it raises, whether or not the TOML names that command.
+# Read the gap rows as a follow-up worklist only for the profiles
+# they name that have no 'cat-only' row.
+# 'sites_compared' counts dual-implementation sites statically
+# reachable from a builder that was compared, not sites observed to
+# execute. Every number here is re-measured and asserted by that
+# test. Regenerate, do not edit.
+census	builders_compared	0
+census	cat_only_profiles	2
+census	dual_implementation_sites	0
+census	frames_diverged	0
+census	frames_identical	0
+census	hardcode_only_builders	0
+census	profile_builder_map_gaps	0
+census	profiles	12
+census	public_builders	246
+census	sites_compared	0
+cat-only	FT-991A	73
+cat-only	FTX-1	131
+requires-map	antenna.py:get_antenna_1
+requires-map	antenna.py:get_antenna_2
+requires-map	antenna.py:get_rx_antenna_ant1
+requires-map	antenna.py:get_rx_antenna_ant2
+requires-map	antenna.py:set_antenna_1
+requires-map	antenna.py:set_antenna_2
+requires-map	antenna.py:set_rx_antenna_ant1
+requires-map	antenna.py:set_rx_antenna_ant2
+requires-map	config.py:get_acc1_mod_level
+requires-map	config.py:get_civ_output_ant
+requires-map	config.py:get_civ_transceive
+requires-map	config.py:get_data1_mod_input
+requires-map	config.py:get_data2_mod_input
+requires-map	config.py:get_data3_mod_input
+requires-map	config.py:get_data_off_mod_input
+requires-map	config.py:get_lan_mod_level
+requires-map	config.py:get_usb_mod_level
+requires-map	config.py:set_acc1_mod_level
+requires-map	config.py:set_civ_output_ant
+requires-map	config.py:set_civ_transceive
+requires-map	config.py:set_data1_mod_input
+requires-map	config.py:set_data2_mod_input
+requires-map	config.py:set_data3_mod_input
+requires-map	config.py:set_data_off_mod_input
+requires-map	config.py:set_lan_mod_level
+requires-map	config.py:set_usb_mod_level
+requires-map	cw.py:send_cw
+requires-map	cw.py:stop_cw
+requires-map	dsp.py:get_af_mute
+requires-map	dsp.py:get_agc
+requires-map	dsp.py:get_attenuator
+requires-map	dsp.py:get_audio_peak_filter
+requires-map	dsp.py:get_auto_notch
+requires-map	dsp.py:get_break_in
+requires-map	dsp.py:get_compressor
+requires-map	dsp.py:get_dial_lock
+requires-map	dsp.py:get_digisel
+requires-map	dsp.py:get_ip_plus
+requires-map	dsp.py:get_manual_notch
+requires-map	dsp.py:get_manual_notch_width
+requires-map	dsp.py:get_monitor
+requires-map	dsp.py:get_nb
+requires-map	dsp.py:get_nr
+requires-map	dsp.py:get_preamp
+requires-map	dsp.py:get_twin_peak_filter
+requires-map	dsp.py:get_vox
+requires-map	dsp.py:set_af_mute
+requires-map	dsp.py:set_agc
+requires-map	dsp.py:set_attenuator_level
+requires-map	dsp.py:set_audio_peak_filter
+requires-map	dsp.py:set_auto_notch
+requires-map	dsp.py:set_break_in
+requires-map	dsp.py:set_compressor
+requires-map	dsp.py:set_dial_lock
+requires-map	dsp.py:set_digisel
+requires-map	dsp.py:set_ip_plus
+requires-map	dsp.py:set_manual_notch
+requires-map	dsp.py:set_manual_notch_width
+requires-map	dsp.py:set_monitor
+requires-map	dsp.py:set_nb
+requires-map	dsp.py:set_nr
+requires-map	dsp.py:set_preamp
+requires-map	dsp.py:set_twin_peak_filter
+requires-map	dsp.py:set_vox
+requires-map	freq.py:get_freq
+requires-map	freq.py:get_selected_freq
+requires-map	freq.py:get_selected_mode
+requires-map	freq.py:get_unselected_freq
+requires-map	freq.py:get_unselected_mode
+requires-map	freq.py:set_freq
+requires-map	freq.py:set_selected_mode
+requires-map	levels.py:get_af_level
+requires-map	levels.py:get_anti_vox_gain
+requires-map	levels.py:get_apf_type_level
+requires-map	levels.py:get_break_in_delay
+requires-map	levels.py:get_compressor_level
+requires-map	levels.py:get_cw_pitch
+requires-map	levels.py:get_dash_ratio
+requires-map	levels.py:get_digisel_shift
+requires-map	levels.py:get_drive_gain
+requires-map	levels.py:get_key_speed
+requires-map	levels.py:get_mic_gain
+requires-map	levels.py:get_monitor_gain
+requires-map	levels.py:get_nb_depth
+requires-map	levels.py:get_nb_level
+requires-map	levels.py:get_nb_width
+requires-map	levels.py:get_notch_filter
+requires-map	levels.py:get_nr_level
+requires-map	levels.py:get_pbt_inner
+requires-map	levels.py:get_pbt_outer
+requires-map	levels.py:get_ref_adjust
+requires-map	levels.py:get_rf_gain
+requires-map	levels.py:get_rf_power
+requires-map	levels.py:get_squelch
+requires-map	levels.py:get_vox_delay
+requires-map	levels.py:get_vox_gain
+requires-map	levels.py:set_af_level
+requires-map	levels.py:set_anti_vox_gain
+requires-map	levels.py:set_apf_type_level
+requires-map	levels.py:set_break_in_delay
+requires-map	levels.py:set_compressor_level
+requires-map	levels.py:set_cw_pitch
+requires-map	levels.py:set_dash_ratio
+requires-map	levels.py:set_digisel_shift
+requires-map	levels.py:set_drive_gain
+requires-map	levels.py:set_key_speed
+requires-map	levels.py:set_mic_gain
+requires-map	levels.py:set_monitor_gain
+requires-map	levels.py:set_nb_depth
+requires-map	levels.py:set_nb_level
+requires-map	levels.py:set_nb_width
+requires-map	levels.py:set_notch_filter
+requires-map	levels.py:set_nr_level
+requires-map	levels.py:set_pbt_inner
+requires-map	levels.py:set_pbt_outer
+requires-map	levels.py:set_ref_adjust
+requires-map	levels.py:set_rf_gain
+requires-map	levels.py:set_rf_power
+requires-map	levels.py:set_squelch
+requires-map	levels.py:set_vox_delay
+requires-map	levels.py:set_vox_gain
+requires-map	memory.py:build_memory_clear
+requires-map	memory.py:build_memory_contents_get
+requires-map	memory.py:build_memory_contents_set
+requires-map	memory.py:build_memory_entry_read
+requires-map	memory.py:build_memory_group_set
+requires-map	memory.py:build_memory_mode_get
+requires-map	memory.py:build_memory_mode_select
+requires-map	memory.py:build_memory_mode_set
+requires-map	memory.py:build_memory_to_vfo
+requires-map	memory.py:build_memory_write
+requires-map	memory.py:get_bsr
+requires-map	memory.py:set_bsr
+requires-map	meters.py:get_alc
+requires-map	meters.py:get_comp_meter
+requires-map	meters.py:get_id_meter
+requires-map	meters.py:get_overflow_status
+requires-map	meters.py:get_power_meter
+requires-map	meters.py:get_s_meter
+requires-map	meters.py:get_s_meter_sql_status
+requires-map	meters.py:get_swr
+requires-map	meters.py:get_various_squelch
+requires-map	meters.py:get_vd_meter
+requires-map	mode.py:get_agc_time_constant
+requires-map	mode.py:get_data_mode
+requires-map	mode.py:get_filter_shape
+requires-map	mode.py:get_filter_width
+requires-map	mode.py:get_main_sub_tracking
+requires-map	mode.py:get_mode
+requires-map	mode.py:get_ssb_tx_bandwidth
+requires-map	mode.py:set_agc_time_constant
+requires-map	mode.py:set_data_mode
+requires-map	mode.py:set_filter_shape
+requires-map	mode.py:set_filter_width
+requires-map	mode.py:set_main_sub_tracking
+requires-map	mode.py:set_mode
+requires-map	mode.py:set_ssb_tx_bandwidth
+requires-map	power.py:get_powerstat
+requires-map	power.py:power_off
+requires-map	power.py:power_on
+requires-map	ptt.py:ptt_off
+requires-map	ptt.py:ptt_on
+requires-map	scope.py:get_scope_center_type
+requires-map	scope.py:get_scope_data_output_enabled
+requires-map	scope.py:get_scope_during_tx
+requires-map	scope.py:get_scope_edge
+requires-map	scope.py:get_scope_enabled
+requires-map	scope.py:get_scope_fixed_edge
+requires-map	scope.py:get_scope_hold
+requires-map	scope.py:get_scope_main_sub
+requires-map	scope.py:get_scope_mode
+requires-map	scope.py:get_scope_rbw
+requires-map	scope.py:get_scope_ref
+requires-map	scope.py:get_scope_single_dual
+requires-map	scope.py:get_scope_span
+requires-map	scope.py:get_scope_speed
+requires-map	scope.py:get_scope_vbw
+requires-map	scope.py:scope_data_output
+requires-map	scope.py:scope_main_sub
+requires-map	scope.py:scope_off
+requires-map	scope.py:scope_on
+requires-map	scope.py:scope_set_center_type
+requires-map	scope.py:scope_set_during_tx
+requires-map	scope.py:scope_set_edge
+requires-map	scope.py:scope_set_fixed_edge
+requires-map	scope.py:scope_set_hold
+requires-map	scope.py:scope_set_mode
+requires-map	scope.py:scope_set_rbw
+requires-map	scope.py:scope_set_ref
+requires-map	scope.py:scope_set_span
+requires-map	scope.py:scope_set_speed
+requires-map	scope.py:scope_set_vbw
+requires-map	scope.py:scope_single_dual
+requires-map	speech.py:get_speech
+requires-map	system.py:get_band_edge_freq
+requires-map	system.py:get_rit_frequency
+requires-map	system.py:get_rit_status
+requires-map	system.py:get_rit_tx_status
+requires-map	system.py:get_system_date
+requires-map	system.py:get_system_time
+requires-map	system.py:get_transceiver_id
+requires-map	system.py:get_tuner_status
+requires-map	system.py:get_utc_offset
+requires-map	system.py:get_xfc_status
+requires-map	system.py:set_rit_frequency
+requires-map	system.py:set_rit_status
+requires-map	system.py:set_rit_tx_status
+requires-map	system.py:set_system_date
+requires-map	system.py:set_system_time
+requires-map	system.py:set_tuner_status
+requires-map	system.py:set_utc_offset
+requires-map	system.py:set_xfc_status
+requires-map	tone.py:get_repeater_tone
+requires-map	tone.py:get_repeater_tsql
+requires-map	tone.py:get_tone_freq
+requires-map	tone.py:get_tone_squelch_type
+requires-map	tone.py:get_tsql_freq
+requires-map	tone.py:set_repeater_tone
+requires-map	tone.py:set_repeater_tsql
+requires-map	tone.py:set_tone_freq
+requires-map	tone.py:set_tone_squelch_type
+requires-map	tone.py:set_tsql_freq
+requires-map	tx_band.py:get_tx_band_count
+requires-map	tx_band.py:get_tx_band_edge
+requires-map	vfo.py:get_dual_watch
+requires-map	vfo.py:get_main_sub_band
+requires-map	vfo.py:get_quick_dual_watch
+requires-map	vfo.py:get_quick_split
+requires-map	vfo.py:get_repeater_shift
+requires-map	vfo.py:get_split
+requires-map	vfo.py:get_tuning_step
+requires-map	vfo.py:get_vfo
+requires-map	vfo.py:scan_set_df_span
+requires-map	vfo.py:scan_set_resume
+requires-map	vfo.py:scan_start
+requires-map	vfo.py:scan_start_type
+requires-map	vfo.py:scan_stop
+requires-map	vfo.py:set_dual_watch
+requires-map	vfo.py:set_dual_watch_off
+requires-map	vfo.py:set_dual_watch_on
+requires-map	vfo.py:set_quick_dual_watch
+requires-map	vfo.py:set_quick_split
+requires-map	vfo.py:set_repeater_shift
+requires-map	vfo.py:set_split
+requires-map	vfo.py:set_tuning_step
+requires-map	vfo.py:set_vfo

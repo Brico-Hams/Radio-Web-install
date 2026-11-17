@@ -1,0 +1,153 @@
+<script lang="ts">
+  import { getAudioRoutingHandlers, deriveAudioRoutingConfig } from '$lib/runtime/adapters/panel-adapters';
+  import { getReceiverLabel } from '$lib/runtime/adapters/capabilities-adapter';
+
+  type AudioFocus = 'main' | 'sub' | 'both';
+
+  const handlers = getAudioRoutingHandlers();
+
+  const routing = $derived(deriveAudioRoutingConfig());
+  const focus = $derived(routing?.focus);
+  const splitStereo = $derived(routing?.split_stereo);
+  const mainGainDb = $derived(routing?.main_gain_db ?? 0);
+  const subGainDb = $derived(routing?.sub_gain_db ?? 0);
+
+  function setFocus(next: AudioFocus) {
+    handlers.onFocusChange(next);
+  }
+
+  function toggleSplit() {
+    handlers.onSplitStereoChange(!splitStereo);
+  }
+
+  function updateGain(channel: 'main' | 'sub', value: number) {
+    handlers.onChannelGainChange(channel, value);
+  }
+
+  const FOCUS_OPTIONS: Array<{ value: AudioFocus; label: string }> = [
+    { value: 'main', label: getReceiverLabel('MAIN') },
+    { value: 'sub', label: getReceiverLabel('SUB') },
+    { value: 'both', label: 'Both' },
+  ];
+</script>
+
+<div class="audio-routing" aria-label="Audio routing">
+  <div class="focus-row" role="radiogroup" aria-label="Audio focus">
+    {#each FOCUS_OPTIONS as opt (opt.value)}
+      <button
+        type="button"
+        role="radio"
+        aria-checked={focus === opt.value}
+        class:active={focus === opt.value}
+        onclick={() => setFocus(opt.value)}
+      >
+        {opt.label}
+      </button>
+    {/each}
+  </div>
+
+  <button
+    type="button"
+    class="split-toggle"
+    class:active={splitStereo}
+    aria-pressed={splitStereo}
+    onclick={toggleSplit}
+    title="Route MAIN to left channel, SUB to right channel"
+  >
+    Stereo split
+  </button>
+
+  <label class="gain-row">
+    <span class="gain-label">{getReceiverLabel('MAIN')}</span>
+    <input
+      type="range"
+      min="-60"
+      max="12"
+      step="1"
+      aria-label="MAIN gain in decibels"
+      value={mainGainDb}
+      oninput={(e) => updateGain('main', Number((e.target as HTMLInputElement).value))}
+    />
+    <span class="gain-value">{routing?.main_gain_db === undefined ? '' : `${mainGainDb} dB`}</span>
+  </label>
+
+  <label class="gain-row">
+    <span class="gain-label">{getReceiverLabel('SUB')}</span>
+    <input
+      type="range"
+      min="-60"
+      max="12"
+      step="1"
+      aria-label="SUB gain in decibels"
+      value={subGainDb}
+      oninput={(e) => updateGain('sub', Number((e.target as HTMLInputElement).value))}
+    />
+    <span class="gain-value">{routing?.sub_gain_db === undefined ? '' : `${subGainDb} dB`}</span>
+  </label>
+</div>
+
+<style>
+  .audio-routing {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 7px 8px;
+    border-top: 1px solid var(--v2-border-subtle, rgba(255, 255, 255, 0.08));
+  }
+  .focus-row {
+    display: flex;
+    gap: 4px;
+  }
+  .focus-row > button {
+    flex: 1 1 0;
+    min-width: 0;
+    padding: 4px 6px;
+    background: transparent;
+    border: 1px solid var(--v2-border-subtle, rgba(255, 255, 255, 0.15));
+    color: var(--v2-text-primary, #e5e7eb);
+    border-radius: 3px;
+    font-size: 10px;
+    font-family: inherit;
+    cursor: pointer;
+  }
+  .focus-row > button.active {
+    background: var(--v2-accent-cyan-alt, rgba(34, 211, 238, 0.22));
+    border-color: var(--v2-accent-cyan, #22d3ee);
+  }
+  .split-toggle {
+    padding: 4px 8px;
+    background: transparent;
+    border: 1px solid var(--v2-border-subtle, rgba(255, 255, 255, 0.15));
+    color: var(--v2-text-primary, #e5e7eb);
+    border-radius: 3px;
+    font-size: 10px;
+    font-family: inherit;
+    cursor: pointer;
+  }
+  .split-toggle.active {
+    background: var(--v2-accent-cyan-alt, rgba(34, 211, 238, 0.22));
+    border-color: var(--v2-accent-cyan, #22d3ee);
+  }
+  .gain-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 10px;
+  }
+  .gain-label {
+    flex: 0 0 48px;
+    color: var(--v2-text-muted, #9ca3af);
+  }
+  .gain-row input {
+    flex: 1 1 0;
+  }
+  .gain-value {
+    /* MOR-2527: an unread gain renders NO text (unlit), never `—`; the fixed
+       42px slot reserves the readout's width so the row does not shift when
+       the first reading arrives (reachable on the IC-7610 pre-restore). */
+    flex: 0 0 42px;
+    text-align: right;
+    font-family: 'Roboto Mono', monospace;
+    color: var(--v2-text-primary, #e5e7eb);
+  }
+</style>

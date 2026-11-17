@@ -1,0 +1,9 @@
+# Band plan configuration
+
+[settings]
+region = "US"
+
+[layers]
+ham = true
+broadcast = true
+utility = true

@@ -1,0 +1,4427 @@
+"""Unit tests for YaesuCatRadio (mock transport — no real hardware required)."""
+
+from __future__ import annotations
+
+from dataclasses import replace
+from importlib import resources
+from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock, call
+from zipfile import Path as ZipPath
+from zipfile import ZipFile
+
+import pytest
+
+from rigplane.backends.yaesu_cat.radio import FilterWidthReading, YaesuCatRadio
+from rigplane.backends.yaesu_cat import radio as yaesu_radio
+from rigplane.backends.yaesu_cat.parser import CatParseError
+from rigplane.backends.yaesu_cat.transport import CatTimeoutError
+from rigplane.commands.command_spec import AbsentCommandSpec, CatCommandSpec
+from rigplane.exceptions import CommandError
+from rigplane.exceptions import ConnectionError as RadioConnectionError
+from rigplane.profiles import TxPolicy
+from rigplane.rig_loader import load_rig
+from rigplane.types import BreakInMode, RepeaterShiftDirection
+
+# ---------------------------------------------------------------------------
+# Shared fixtures
+# ---------------------------------------------------------------------------
+
+_RIGS_DIR = Path(__file__).parents[1] / "rigs"
+
+
+@pytest.fixture()
+def config():
+    """Load the real ftx1 RigConfig from TOML."""
+    return load_rig(_RIGS_DIR / "ftx1.toml")
+
+
+@pytest.fixture()
+def radio(config):
+    """Return a YaesuCatRadio with mocked transport (not connected)."""
+    r = YaesuCatRadio("/dev/null", profile=config)
+    return r
+
+
+@pytest.fixture()
+def connected_radio(radio):
+    """Return a YaesuCatRadio whose transport reports connected=True."""
+    radio._transport._connected = True
+    return radio
+
+
+# ---------------------------------------------------------------------------
+# Instantiation
+# ---------------------------------------------------------------------------
+
+
+def test_instantiation_with_string_profile():
+    """Can create a radio using the 'ftx1' profile string."""
+    r = YaesuCatRadio("/dev/null", profile="ftx1")
+    assert r.model == "FTX-1"
+    assert not r.connected
+
+
+def test_string_profile_loads_from_non_filesystem_package_resources(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The Yaesu consumer resolves bundled profiles without a source tree."""
+    archive_path = tmp_path / "rigplane.zip"
+    with ZipFile(archive_path, "w") as archive:
+        for name in (
+            "ftx1.toml",
+            "_keyboard-default.toml",
+            "_ctcss_tables_v1.toml",
+        ):
+            archive.writestr(f"rigplane/rigs/{name}", (_RIGS_DIR / name).read_bytes())
+
+    with ZipFile(archive_path) as archive:
+        package_root = ZipPath(archive, "rigplane/")
+        monkeypatch.setattr(resources, "files", lambda package: package_root)
+        monkeypatch.setattr(yaesu_radio, "_RIGS_DIR", tmp_path / "missing-rigs")
+        radio = YaesuCatRadio("/dev/null", profile="ftx1", audio_driver=MagicMock())
+
+    assert radio.model == "FTX-1"
+    assert radio._config.keyboard is not None
+
+
+def test_instantiation_with_rig_config(config):
+    """Can create a radio using an already-loaded RigConfig."""
+    r = YaesuCatRadio("/dev/null", profile=config)
+    assert r.model == "FTX-1"
+
+
+def test_instantiation_requires_profile_mode_codes(config):
+    """MOR-2518: a profile without [modes].codes fails loudly at construction.
+
+    The index-derived fallback produced two-character codes for
+    C4FM-DN/C4FM-VW, which the single-character MD parser cannot carry.
+    """
+    with pytest.raises(ValueError, match=r"\[modes\]\.codes"):
+        YaesuCatRadio("/dev/null", profile=replace(config, mode_codes=None))
+
+
+def test_capabilities_include_expected(config):
+    r = YaesuCatRadio("/dev/null", profile=config)
+    assert "tx" in r.capabilities
+    assert "meters" in r.capabilities
+
+
+def test_mode_map_built_correctly(radio):
+    """Mode codes are 1-based; LSB=1, USB=2, CW-U=3."""
+    assert radio._code_to_mode["1"] == "LSB"
+    assert radio._code_to_mode["2"] == "USB"
+    assert radio._code_to_mode["3"] == "CW-U"
+    assert radio._mode_to_code["LSB"] == "1"
+    assert radio._mode_to_code["USB"] == "2"
+
+
+def test_parsers_compiled_for_key_commands(radio):
+    """Parser cache should have entries for the four core commands."""
+    assert "get_freq" in radio._parsers
+    assert "get_mode" in radio._parsers
+    assert "get_ptt" in radio._parsers
+    assert "get_s_meter" in radio._parsers
+
+
+# ---------------------------------------------------------------------------
+# Lifecycle
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_context_manager_connects_and_disconnects(radio):
+    """__aenter__ calls connect(), __aexit__ calls disconnect()."""
+    radio._transport.connect = AsyncMock()
+    radio._transport.close = AsyncMock()
+    # MOR-3064: connect() probes the identity first; give the mocked
+    # transport an ID answer so the gate completes (the IF seed that
+    # follows is non-fatal and needs no stub of its own).
+    radio._transport.query = AsyncMock(return_value="ID0840")
+
+    async with radio as r:
+        assert r is radio
+        radio._transport.connect.assert_called_once()
+
+    radio._transport.close.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_require_connected_raises_when_not_connected(radio):
+    with pytest.raises(RadioConnectionError):
+        await radio.get_freq()
+
+
+# ---------------------------------------------------------------------------
+# get_freq / set_freq
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_freq_main(connected_radio):
+    connected_radio._transport.query = AsyncMock(return_value="FA014074000")
+    freq = await connected_radio.get_freq(receiver=0)
+    assert freq == 14_074_000
+    connected_radio._transport.query.assert_called_once_with("FA;")
+    assert connected_radio.radio_state.main.freq == 14_074_000
+
+
+@pytest.mark.asyncio
+async def test_get_freq_sub(connected_radio):
+    connected_radio._transport.query = AsyncMock(return_value="FB007074000")
+    freq = await connected_radio.get_freq(receiver=1)
+    assert freq == 7_074_000
+    connected_radio._transport.query.assert_called_once_with("FB;")
+    assert connected_radio.radio_state.sub.freq == 7_074_000
+
+
+@pytest.mark.asyncio
+async def test_set_freq_main(connected_radio):
+    connected_radio._transport.write = AsyncMock()
+    await connected_radio.set_freq(14_074_000, receiver=0)
+    connected_radio._transport.write.assert_called_once_with("FA014074000;")
+    assert connected_radio.radio_state.main.freq == 14_074_000
+
+
+@pytest.mark.asyncio
+async def test_set_freq_sub(connected_radio):
+    connected_radio._transport.write = AsyncMock()
+    await connected_radio.set_freq(7_074_000, receiver=1)
+    connected_radio._transport.write.assert_called_once_with("FB007074000;")
+    assert connected_radio.radio_state.sub.freq == 7_074_000
+
+
+@pytest.mark.asyncio
+async def test_get_freq_roundtrip(connected_radio):
+    """set_freq then get_freq returns same value (via mock)."""
+    connected_radio._transport.write = AsyncMock()
+    connected_radio._transport.query = AsyncMock(return_value="FA021074000")
+
+    await connected_radio.set_freq(21_074_000)
+    freq = await connected_radio.get_freq()
+    assert freq == 21_074_000
+
+
+# ---------------------------------------------------------------------------
+# get_mode / set_mode
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_mode_usb(connected_radio):
+    # Code "2" → USB
+    connected_radio._transport.query = AsyncMock(return_value="MD02")
+    mode, filt = await connected_radio.get_mode(receiver=0)
+    assert mode == "USB"
+    assert filt is None
+    assert connected_radio.radio_state.main.mode == "USB"
+
+
+@pytest.mark.asyncio
+async def test_get_mode_lsb(connected_radio):
+    connected_radio._transport.query = AsyncMock(return_value="MD01")
+    mode, _ = await connected_radio.get_mode()
+    assert mode == "LSB"
+
+
+@pytest.mark.asyncio
+async def test_get_mode_sub_receiver(connected_radio):
+    connected_radio._transport.query = AsyncMock(return_value="MD14")
+    mode, _ = await connected_radio.get_mode(receiver=1)
+    assert mode == "FM"
+    connected_radio._transport.query.assert_called_once_with("MD1;")
+    assert connected_radio.radio_state.sub.mode == "FM"
+
+
+@pytest.mark.asyncio
+async def test_set_mode_usb(connected_radio):
+    connected_radio._transport.query = AsyncMock(return_value="MD02")
+    connected_radio._transport.write = AsyncMock()
+    await connected_radio.set_mode("USB", receiver=0)
+    connected_radio._transport.write.assert_called_once_with("MD02;")
+    assert connected_radio.radio_state.main.mode == "USB"
+
+
+@pytest.mark.asyncio
+async def test_set_mode_sub(connected_radio):
+    connected_radio._transport.query = AsyncMock(return_value="MD11")
+    connected_radio._transport.write = AsyncMock()
+    await connected_radio.set_mode("LSB", receiver=1)
+    connected_radio._transport.write.assert_called_once_with("MD11;")
+    assert connected_radio.radio_state.sub.mode == "LSB"
+
+
+@pytest.mark.asyncio
+async def test_set_mode_unknown_raises(connected_radio):
+    with pytest.raises(CommandError, match="Unknown mode"):
+        await connected_radio.set_mode("INVALID_MODE")
+
+
+@pytest.mark.asyncio
+async def test_get_set_mode_roundtrip(connected_radio):
+    """set_mode("CW-U") then get_mode returns "CW-U"."""
+    connected_radio._transport.write = AsyncMock()
+    connected_radio._transport.query = AsyncMock(return_value="MD03")
+
+    await connected_radio.set_mode("CW-U")
+    mode, _ = await connected_radio.get_mode()
+    assert mode == "CW-U"
+
+
+def test_mode_map_follows_ftx1_manual_alphabet(radio):
+    """MOR-2518: MD P2 codes follow the FTX-1 CAT manual's single-character
+    alphabet: 1-9, then A-F, then H (C4FM-DN) and I (C4FM-VW). The manual
+    marks 0, G and J unused, so they map to no mode.
+    """
+    assert radio._code_to_mode["A"] == "DATA-FM"
+    assert radio._code_to_mode["B"] == "FM-N"
+    assert radio._code_to_mode["C"] == "DATA-U"
+    assert radio._code_to_mode["D"] == "AM-N"
+    assert radio._code_to_mode["E"] == "PSK"
+    assert radio._code_to_mode["F"] == "DATA-FM-N"
+    assert radio._code_to_mode["H"] == "C4FM-DN"
+    assert radio._code_to_mode["I"] == "C4FM-VW"
+    assert radio._mode_to_code["DATA-FM"] == "A"
+    assert radio._mode_to_code["DATA-U"] == "C"
+    assert radio._mode_to_code["AM-N"] == "D"
+    assert radio._mode_to_code["PSK"] == "E"
+    assert radio._mode_to_code["DATA-FM-N"] == "F"
+    assert radio._mode_to_code["C4FM-DN"] == "H"
+    assert radio._mode_to_code["C4FM-VW"] == "I"
+    for unused in ("0", "G", "J"):
+        assert unused not in radio._code_to_mode
+
+
+def test_mode_map_codes_are_single_characters_and_round_trip(radio):
+    """MOR-2518: every profile mode round-trips through a one-character
+    code (the MD answer carries exactly one P2 character)."""
+    for name in radio._config.modes:
+        code = radio._mode_to_code[name]
+        assert len(code) == 1, name
+        assert radio._code_to_mode[code] == name
+
+
+@pytest.mark.asyncio
+async def test_get_mode_data_u(connected_radio):
+    """MOR-473: ``MD0C;`` (hex C = 12) decodes to DATA-U, not UNKNOWN(C)."""
+    connected_radio._transport.query = AsyncMock(return_value="MD0C")
+    mode, _ = await connected_radio.get_mode(receiver=0)
+    assert mode == "DATA-U"
+    assert connected_radio.radio_state.main.mode == "DATA-U"
+
+
+@pytest.mark.asyncio
+async def test_set_mode_data_u(connected_radio):
+    """MOR-473: set_mode("DATA-U") writes the hex code ``MD0C;``."""
+    connected_radio._transport.query = AsyncMock(return_value="MD0C")
+    connected_radio._transport.write = AsyncMock()
+    await connected_radio.set_mode("DATA-U", receiver=0)
+    connected_radio._transport.write.assert_called_once_with("MD0C;")
+    assert connected_radio.radio_state.main.mode == "DATA-U"
+
+
+@pytest.mark.asyncio
+async def test_get_mode_c4fm_dn_main(connected_radio):
+    """MOR-2518: ``MD0H;`` decodes to C4FM-DN (manual: H = C4FM-DN)."""
+    connected_radio._transport.query = AsyncMock(return_value="MD0H")
+    mode, _ = await connected_radio.get_mode(receiver=0)
+    assert mode == "C4FM-DN"
+
+
+@pytest.mark.asyncio
+async def test_read_mode_c4fm_vw_sub(connected_radio):
+    """MOR-2518: ``MD1I;`` decodes to C4FM-VW on SUB (manual: I = C4FM-VW)."""
+    connected_radio._transport.query = AsyncMock(return_value="MD1I")
+    mode, _ = await connected_radio.read_mode(receiver=1)
+    assert mode == "C4FM-VW"
+    connected_radio._transport.query.assert_called_once_with("MD1;")
+
+
+@pytest.mark.asyncio
+async def test_get_mode_data_fm_n(connected_radio):
+    """MOR-2518: ``MD0F;`` decodes to DATA-FM-N (manual: F = DATA-FM-N)."""
+    connected_radio._transport.query = AsyncMock(return_value="MD0F")
+    mode, _ = await connected_radio.get_mode()
+    assert mode == "DATA-FM-N"
+
+
+@pytest.mark.asyncio
+async def test_read_mode_rejects_unused_code(connected_radio):
+    """MOR-2518: the manual's unused code G is rejected with a parse error,
+    not mapped to a neighbour mode name."""
+    connected_radio._transport.query = AsyncMock(return_value="MD0G")
+    with pytest.raises(CatParseError):
+        await connected_radio.read_mode()
+
+
+@pytest.mark.asyncio
+async def test_set_mode_c4fm_dn_writes_md0h(connected_radio):
+    """MOR-2518: set_mode("C4FM-DN") writes the manual's one-character
+    code H, not a two-character index-derived code."""
+    connected_radio._transport.query = AsyncMock(return_value="MD0H")
+    connected_radio._transport.write = AsyncMock()
+    await connected_radio.set_mode("C4FM-DN")
+    connected_radio._transport.write.assert_called_once_with("MD0H;")
+
+
+@pytest.mark.asyncio
+async def test_set_mode_c4fm_vw_sub_writes_md1i(connected_radio):
+    """MOR-2518: set_mode("C4FM-VW", receiver=1) writes ``MD1I;``."""
+    connected_radio._transport.query = AsyncMock(return_value="MD1I")
+    connected_radio._transport.write = AsyncMock()
+    await connected_radio.set_mode("C4FM-VW", receiver=1)
+    connected_radio._transport.write.assert_called_once_with("MD1I;")
+
+
+# ---------------------------------------------------------------------------
+# get_data_mode — derived from the radio's live mode (MOR-2518)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_data_mode_reads_live_mode(connected_radio):
+    """MOR-2518: the DATA flag follows the radio's answer, not the legacy
+    mirror: the stale mirror says LSB while the radio answers DATA-U
+    (``MD0C;``)."""
+    connected_radio._state.main.mode = "LSB"
+    connected_radio._transport.query = AsyncMock(return_value="MD0C")
+    assert await connected_radio.get_data_mode() is True
+    connected_radio._transport.query.assert_called_once_with("MD0;")
+
+
+@pytest.mark.asyncio
+async def test_get_data_mode_false_for_live_voice_mode(connected_radio):
+    """MOR-2518: the stale mirror says DATA-U while the radio answers USB
+    (``MD02;``)."""
+    connected_radio._state.main.mode = "DATA-U"
+    connected_radio._transport.query = AsyncMock(return_value="MD02")
+    assert await connected_radio.get_data_mode() is False
+
+
+# ---------------------------------------------------------------------------
+# Power switch (PS)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_powerstat_on(connected_radio):
+    connected_radio._transport.query = AsyncMock(return_value="PS1")
+    assert await connected_radio.get_powerstat() is True
+
+
+@pytest.mark.asyncio
+async def test_get_powerstat_off(connected_radio):
+    connected_radio._transport.query = AsyncMock(return_value="PS0")
+    assert await connected_radio.get_powerstat() is False
+
+
+@pytest.mark.asyncio
+async def test_set_powerstat_on(connected_radio):
+    connected_radio._transport.write = AsyncMock()
+    await connected_radio.set_powerstat(True)
+    connected_radio._transport.write.assert_called_once_with("PS1;")
+
+
+@pytest.mark.asyncio
+async def test_set_powerstat_off(connected_radio):
+    connected_radio._transport.write = AsyncMock()
+    await connected_radio.set_powerstat(False)
+    connected_radio._transport.write.assert_called_once_with("PS0;")
+
+
+# ---------------------------------------------------------------------------
+# PTT
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_set_ptt_on(connected_radio):
+    """MOR-1941: ``set_ptt`` no longer self-writes the legacy mirror. Our
+    own command is a wire-write outcome, not a ``TxStateReading`` from
+    ``core.tx_observation``. The mirror is left exactly as it was, and only
+    a real read-back (``get_ptt``) may change it.
+    """
+    connected_radio._transport.write = AsyncMock()
+    await connected_radio.set_ptt(True)
+    connected_radio._transport.write.assert_called_once_with("TX1;")
+    assert connected_radio.radio_state.ptt is False
+
+
+@pytest.mark.asyncio
+async def test_set_ptt_off(connected_radio):
+    """MOR-1941: same pin as ``test_set_ptt_on``, other direction. The
+    mirror is seeded away from what the write would have produced, so a
+    reintroduced self-write would flip it and fail this either way.
+    """
+    connected_radio._transport.write = AsyncMock()
+    connected_radio.radio_state.ptt = True
+    await connected_radio.set_ptt(False)
+    connected_radio._transport.write.assert_called_once_with("TX0;")
+    assert connected_radio.radio_state.ptt is True
+
+
+@pytest.mark.asyncio
+async def test_get_ptt_transmitting(connected_radio):
+    """TX1; = RADIO TX off, CAT TX on -> transmitting."""
+    connected_radio._transport.query = AsyncMock(return_value="TX1")
+    ptt = await connected_radio.get_ptt()
+    assert ptt is True
+    assert connected_radio.radio_state.ptt is True
+
+
+@pytest.mark.asyncio
+async def test_get_ptt_receiving(connected_radio):
+    """TX0; = RADIO TX off, CAT TX off -> receiving."""
+    connected_radio._transport.query = AsyncMock(return_value="TX0")
+    ptt = await connected_radio.get_ptt()
+    assert ptt is False
+
+
+@pytest.mark.asyncio
+async def test_get_ptt_transmitting_radio_keyed(connected_radio):
+    """MOR-1905/MOR-1941: TX2; = RADIO TX on, CAT TX off -> transmitting.
+
+    P1=2 means the radio itself keyed the transmitter (front-panel PTT,
+    mic, footswitch, VOX) rather than a CAT command. Reading this as
+    "receiving" is a fail-open inversion of transmit truth. The predicate
+    that decides it is now the profile's ``[tx_policy].tx_state_map``
+    (MOR-1941) rather than an inline ``!= "0"`` comparison; the shipped
+    ftx1 map is ``{"0": "rx", "1": "tx_cat", "2": "tx_other"}``, so the
+    answer here is unchanged, only how it is reached.
+    """
+    connected_radio._transport.query = AsyncMock(return_value="TX2")
+    ptt = await connected_radio.get_ptt()
+    assert ptt is True
+    assert connected_radio.radio_state.ptt is True
+
+
+@pytest.mark.asyncio
+async def test_read_ptt_transmitting_radio_keyed(connected_radio):
+    """MOR-1905/MOR-1941: read_ptt (not just get_ptt) must fail closed on
+    TX2;, now via the ``tx_state_map`` route rather than the inline
+    predicate it replaced.
+    """
+    connected_radio._transport.query = AsyncMock(return_value="TX2")
+    assert await connected_radio.read_ptt() is True
+
+
+@pytest.mark.asyncio
+async def test_get_ptt_unexpected_value_reads_as_transmitting(connected_radio, caplog):
+    """MOR-1905: an unrecognised TX state must fail closed, with a diagnostic."""
+    connected_radio._transport.query = AsyncMock(return_value="TX9")
+    with caplog.at_level("WARNING"):
+        ptt = await connected_radio.get_ptt()
+    assert ptt is True
+    assert any(
+        "TX9" in record.message or "9" in record.message for record in caplog.records
+    )
+
+
+@pytest.mark.asyncio
+async def test_get_ptt_unexpected_value_warns_once_then_demotes_to_debug(
+    connected_radio, caplog
+):
+    """MOR-1905: repeat unrecognised TX states demote to DEBUG (MOR-561 idiom).
+
+    PTT is polled at a fast, unthrottled cadence; without this, a radio
+    stuck on an unrecognised TX state would flood the log at WARNING every
+    cycle. Reuses the existing warn-once-then-DEBUG mechanism instead of
+    new rate-limiting machinery.
+    """
+    connected_radio._transport.query = AsyncMock(return_value="TX9")
+    with caplog.at_level("DEBUG"):
+        await connected_radio.get_ptt()
+        caplog.clear()
+        await connected_radio.get_ptt()
+    assert not any(record.levelname == "WARNING" for record in caplog.records)
+    assert any(record.levelname == "DEBUG" for record in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_read_ptt_falls_back_to_the_legacy_predicate_when_unmeasured(config):
+    """MOR-1941: a profile that ships no ``[tx_policy].tx_state_map`` at
+    all -- every rig this backend has not bench-measured -- must not read
+    as permanently transmitting. ``TxPolicy.is_receiving`` treats an
+    *empty* map exactly like an unmapped value: always not-receiving, so
+    calling it directly here would make an unmeasured radio unwritable to
+    RX. The fallback restores the pre-MOR-1941 ``!= "0"`` predicate
+    instead, because ``"0"`` is the Yaesu CAT protocol's own receive
+    token, not a per-radio measured value -- a vendor-level default, not
+    a hardcoded radio constant.
+
+    ``TX2`` is the value that matters here and the reason this test is not
+    just ``TX0``/``TX1``. This branch is the default for **every** Yaesu
+    rig except the one bench-measured profile -- any user TOML for an
+    FT-991A or FT-710 with the same three-valued ``TX;`` lands on it -- and
+    it holds the one surviving equality predicate in
+    ``_interpret_ptt_token``, so it is the one place MOR-1905 could be
+    written again. A pin over ``TX0`` and ``TX1`` alone cannot see that:
+    both answers are identical under the inversion. Only the radio-keyed
+    value discriminates.
+
+    # MUTATION: in `src/rigplane/backends/yaesu_cat/radio.py`, at :1087
+    # (the fallback branch, NOT the mapped return at :1090 -- MOR-1914
+    # factored the predicate out of `read_ptt` into `_interpret_ptt_token`,
+    # a shared helper `read_transmit_state` also calls, so its row-5
+    # conformance matrix column keeps exercising this same code; `read_ptt`
+    # itself is now a two-line delegate and no longer holds the branch this
+    # comment used to cite -- the citation moves with the code, not the
+    # other way around), change `return state != "0"` to
+    # `return state == "1"` -> the TX2 case below reads a front-panel key
+    # as receiving and goes red. Mutating :1090 instead leaves this row
+    # green: that line serves the mapped path, which an unmeasured profile
+    # never reaches.
+    """
+    cfg = config
+    object.__setattr__(cfg, "tx_policy", TxPolicy())
+    r = YaesuCatRadio("/dev/null", profile=cfg)
+    r._transport._connected = True
+
+    r._transport.query = AsyncMock(return_value="TX0")
+    assert await r.read_ptt() is False
+
+    r._transport.query = AsyncMock(return_value="TX1")
+    assert await r.read_ptt() is True
+
+    # The radio keyed itself -- front panel, mic, footswitch or VOX.
+    r._transport.query = AsyncMock(return_value="TX2")
+    assert await r.read_ptt() is True
+
+    # Unrecognised, and still not receiving: the fallback is a positive
+    # rule with a one-entry map, not an equality test against "1".
+    r._transport.query = AsyncMock(return_value="TX9")
+    assert await r.read_ptt() is True
+
+
+@pytest.mark.asyncio
+async def test_get_powerstat_unexpected_value_stays_two_valued(connected_radio):
+    """MOR-1905 scope pin: PS (power switch) is genuinely two-valued.
+
+    Only the TX answer carries a third "radio keyed it" state; the PTT
+    fail-closed fix must not sweep into other `== "1"` readers like
+    powerstat, which stay a plain equality check.
+    """
+    connected_radio._transport.query = AsyncMock(return_value="PS9")
+    assert await connected_radio.get_powerstat() is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("method_name", "unexpected_response", "expected"),
+    [
+        ("get_auto_notch", "BC09", False),
+        ("get_narrow", "NA09", False),
+        ("get_split", "ST9", False),
+        ("get_processor", "PR09", False),
+        ("get_cw_spot", "CS9", False),
+        ("get_auto_info", "AI9", False),
+        ("get_vox", "VX9", False),
+        ("get_lock", "LK9", False),
+        ("get_break_in", "BI9", BreakInMode.OFF),
+    ],
+)
+async def test_other_state_readers_stay_two_valued(
+    connected_radio, method_name, unexpected_response, expected
+):
+    """MOR-1905 scope pin: the remaining nine `== "1"` readers are genuinely
+    two-valued fields (unlike PTT's three-valued TX) and must stay a plain
+    equality check. An unrecognised code must fall through to the
+    "off"/False branch, not be swept into PTT's fail-closed treatment by a
+    future blanket edit.
+    """
+    connected_radio._transport.query = AsyncMock(return_value=unexpected_response)
+    result = await getattr(connected_radio, method_name)()
+    assert result == expected
+
+
+# ---------------------------------------------------------------------------
+# S-meter
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_s_meter_main(connected_radio):
+    connected_radio._transport.query = AsyncMock(return_value="SM0130")
+    raw = await connected_radio.get_s_meter(receiver=0)
+    assert raw == 130
+    connected_radio._transport.query.assert_called_once_with("SM0;")
+    assert connected_radio.radio_state.main.s_meter == 130
+
+
+@pytest.mark.asyncio
+async def test_get_s_meter_sub(connected_radio):
+    connected_radio._transport.query = AsyncMock(return_value="SM1055")
+    raw = await connected_radio.get_s_meter(receiver=1)
+    assert raw == 55
+    connected_radio._transport.query.assert_called_once_with("SM1;")
+    assert connected_radio.radio_state.sub.s_meter == 55
+
+
+@pytest.mark.asyncio
+async def test_sub_s_meter_accepts_the_echoed_main_side_digit(connected_radio):
+    """Recorded FTX-1 frame pair: ``SM1;`` -> ``SM0052;`` and ``SM0;`` -> ``SM0000;``.
+
+    The radio echoes P1 as ``0`` for the SUB query while the value is the
+    SUB's, so the SUB read attributes the value to the side it queried.
+    """
+    frames = {"SM0;": "SM0000", "SM1;": "SM0052"}
+    connected_radio._transport.query = AsyncMock(side_effect=lambda cmd: frames[cmd])
+
+    assert await connected_radio.get_s_meter(receiver=1) == 52
+    assert await connected_radio.get_s_meter(receiver=0) == 0
+    assert connected_radio.radio_state.sub.s_meter == 52
+    assert connected_radio.radio_state.main.s_meter == 0
+
+
+@pytest.mark.asyncio
+async def test_main_s_meter_rejects_a_sub_side_digit(connected_radio):
+    """The MAIN read stays strict: an ``SM1`` frame is not a MAIN reading."""
+    connected_radio._transport.query = AsyncMock(return_value="SM1052")
+
+    with pytest.raises(CatParseError):
+        await connected_radio.get_s_meter(receiver=0)
+
+
+@pytest.mark.asyncio
+async def test_get_s_meter_zero(connected_radio):
+    connected_radio._transport.query = AsyncMock(return_value="SM0000")
+    raw = await connected_radio.get_s_meter()
+    assert raw == 0
+
+
+@pytest.mark.asyncio
+async def test_get_s_meter_max(connected_radio):
+    connected_radio._transport.query = AsyncMock(return_value="SM0255")
+    raw = await connected_radio.get_s_meter()
+    assert raw == 255
+
+
+# ---------------------------------------------------------------------------
+# Error cases
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_command_not_in_profile_raises(connected_radio):
+    """Accessing a command not in the profile raises CommandError."""
+    with pytest.raises(CommandError, match="not found in profile"):
+        connected_radio._get_spec("nonexistent_command_xyz")
+
+
+@pytest.mark.asyncio
+async def test_transport_timeout_propagates(connected_radio):
+    """CatTimeoutError from transport bubbles up unchanged."""
+    connected_radio._transport.query = AsyncMock(side_effect=CatTimeoutError("timeout"))
+    with pytest.raises(CatTimeoutError):
+        await connected_radio.get_freq()
+
+
+@pytest.mark.asyncio
+async def test_parse_error_propagates(connected_radio):
+    """Malformed response raises CatParseError."""
+    connected_radio._transport.query = AsyncMock(return_value="GARBAGE_RESPONSE")
+    with pytest.raises(CatParseError):
+        await connected_radio.get_freq()
+
+
+def test_radio_state_initially_default(radio):
+    """radio_state is a RadioState with default values."""
+    from rigplane.radio_state import RadioState
+
+    assert isinstance(radio.radio_state, RadioState)
+    assert radio.radio_state.ptt is False
+    assert radio.radio_state.main.freq == 0
+
+
+# ---------------------------------------------------------------------------
+# D1: RX Audio Controls
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_af_level(connected_radio):
+    connected_radio._transport.query = AsyncMock(return_value="AG0128")
+    level = await connected_radio.get_af_level()
+    assert level == 128
+    connected_radio._transport.query.assert_called_once_with("AG0;")
+
+
+@pytest.mark.asyncio
+async def test_set_af_level(connected_radio):
+    connected_radio._transport.write = AsyncMock()
+    await connected_radio.set_af_level(200)
+    connected_radio._transport.write.assert_called_once_with("AG0200;")
+
+
+@pytest.mark.asyncio
+async def test_get_rf_gain(connected_radio):
+    connected_radio._transport.query = AsyncMock(return_value="RG0255")
+    assert await connected_radio.get_rf_gain() == 255
+    connected_radio._transport.query.assert_called_once_with("RG0;")
+
+
+@pytest.mark.asyncio
+async def test_set_squelch(connected_radio):
+    connected_radio._transport.write = AsyncMock()
+    await connected_radio.set_squelch(50)
+    connected_radio._transport.write.assert_called_once_with("SQ0050;")
+
+
+# ---------------------------------------------------------------------------
+# D2: RF Front-End
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_attenuator_off(connected_radio):
+    connected_radio._transport.query = AsyncMock(return_value="RA00")
+    state = await connected_radio.get_attenuator()
+    assert state is False
+    connected_radio._transport.query.assert_called_once_with("RA0;")
+
+
+@pytest.mark.asyncio
+async def test_get_attenuator_on(connected_radio):
+    connected_radio._transport.query = AsyncMock(return_value="RA01")
+    state = await connected_radio.get_attenuator()
+    assert state is True
+    connected_radio._transport.query.assert_called_once_with("RA0;")
+
+
+@pytest.mark.asyncio
+async def test_set_attenuator_on(connected_radio):
+    connected_radio._transport.write = AsyncMock()
+    await connected_radio.set_attenuator(1)
+    connected_radio._transport.write.assert_called_once_with("RA01;")
+
+
+@pytest.mark.asyncio
+async def test_set_attenuator_off(connected_radio):
+    connected_radio._transport.write = AsyncMock()
+    await connected_radio.set_attenuator(0)
+    connected_radio._transport.write.assert_called_once_with("RA00;")
+
+
+@pytest.mark.asyncio
+async def test_set_attenuator_bool_true_coerced_to_int(connected_radio):
+    """MOR-498: callers/validator pass a Python bool; ``str(True)`` would
+    render the malformed ``RA0True;`` and the radio would silently ignore it.
+    The bool must be coerced to int so the CAT write is ``RA01;``."""
+    connected_radio._transport.write = AsyncMock()
+    await connected_radio.set_attenuator(True)
+    connected_radio._transport.write.assert_called_once_with("RA01;")
+
+
+@pytest.mark.asyncio
+async def test_set_attenuator_bool_false_coerced_to_int(connected_radio):
+    """MOR-498: ``set_attenuator(False)`` must render ``RA00;``, not
+    ``RA0False;``."""
+    connected_radio._transport.write = AsyncMock()
+    await connected_radio.set_attenuator(False)
+    connected_radio._transport.write.assert_called_once_with("RA00;")
+
+
+@pytest.mark.asyncio
+async def test_get_preamp(connected_radio):
+    connected_radio._transport.query = AsyncMock(return_value="PA01")
+    assert await connected_radio.get_preamp() == 1
+    connected_radio._transport.query.assert_called_once_with("PA0;")
+
+
+@pytest.mark.asyncio
+async def test_set_preamp(connected_radio):
+    connected_radio._transport.write = AsyncMock()
+    await connected_radio.set_preamp(2)
+    connected_radio._transport.write.assert_called_once_with("PA02;")
+
+
+@pytest.mark.parametrize("level", [-1, 3, 99])
+@pytest.mark.asyncio
+async def test_set_preamp_rejects_out_of_domain_value(connected_radio, level):
+    """MOR-1523: FTX-1 declares preamp levels 0-2 (IPO/AMP1/AMP2) in
+    ``[preamp] values``; a value outside that domain must raise instead of
+    being written to the radio unchecked (mirrors MOR-1522's AGC fix)."""
+    connected_radio._transport.write = AsyncMock()
+    with pytest.raises(CommandError):
+        await connected_radio.set_preamp(level)
+    connected_radio._transport.write.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# D3: DSP (NB/NR/Notch)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_nb_level(connected_radio):
+    connected_radio._transport.query = AsyncMock(return_value="NL0005")
+    assert await connected_radio.get_nb_level() == 5
+    connected_radio._transport.query.assert_called_once_with("NL0;")
+
+
+@pytest.mark.asyncio
+async def test_set_nb_level(connected_radio):
+    connected_radio._transport.write = AsyncMock()
+    await connected_radio.set_nb_level(3)
+    connected_radio._transport.write.assert_called_once_with("NL0003;")
+
+
+# SUB (P1=1) frames and answer values below: bench probe 2026-09-18,
+# MOR-2511 comment 01:22Z -- each SUB form answered its own value with
+# MAIN untouched (NL1003; / RL105; / BC11; / BP10001; / BP11120; /
+# IS10+0200; / NA11;).
+@pytest.mark.asyncio
+async def test_get_nb_level_sub_sends_nl1(connected_radio):
+    connected_radio._transport.query = AsyncMock(return_value="NL1003")
+    assert await connected_radio.get_nb_level(receiver=1) == 3
+    connected_radio._transport.query.assert_called_once_with("NL1;")
+
+
+@pytest.mark.asyncio
+async def test_set_nb_level_sub_sends_nl1(connected_radio):
+    connected_radio._transport.write = AsyncMock()
+    await connected_radio.set_nb_level(3, receiver=1)
+    connected_radio._transport.write.assert_called_once_with("NL1003;")
+
+
+@pytest.mark.asyncio
+async def test_get_nr_level(connected_radio):
+    connected_radio._transport.query = AsyncMock(return_value="RL007")
+    assert await connected_radio.get_nr_level() == 7
+    connected_radio._transport.query.assert_called_once_with("RL0;")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("level", [0, 5, 10])
+async def test_set_nr_level_accepts_domain_values(connected_radio, level):
+    """Values on the profile's nr_level raw domain (0-10, step 1) are
+    encoded as RL0 frames (MOR-2479)."""
+    connected_radio._transport.write = AsyncMock()
+    await connected_radio.set_nr_level(level)
+    connected_radio._transport.write.assert_called_once_with(f"RL0{level:02d};")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("level", [11, 15, -1])
+async def test_set_nr_level_rejects_off_domain_without_cat_write(
+    connected_radio, level
+):
+    """Values outside the profile's nr_level raw domain raise ValueError
+    and never reach the wire (MOR-2479). 15 — the old hamlib ceiling —
+    is off-domain: the FTX-1 manual caps RL at 10."""
+    connected_radio._transport.write = AsyncMock()
+    with pytest.raises(ValueError, match="nr_level must be within 0-10"):
+        await connected_radio.set_nr_level(level)
+    connected_radio._transport.write.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_get_nr_level_sub_sends_rl1(connected_radio):
+    connected_radio._transport.query = AsyncMock(return_value="RL105")
+    assert await connected_radio.get_nr_level(receiver=1) == 5
+    connected_radio._transport.query.assert_called_once_with("RL1;")
+
+
+@pytest.mark.asyncio
+async def test_set_nr_level_sub_sends_rl1(connected_radio):
+    connected_radio._transport.write = AsyncMock()
+    await connected_radio.set_nr_level(5, receiver=1)
+    connected_radio._transport.write.assert_called_once_with("RL105;")
+
+
+@pytest.mark.asyncio
+async def test_get_auto_notch_on(connected_radio):
+    connected_radio._transport.query = AsyncMock(return_value="BC01")
+    assert await connected_radio.get_auto_notch() is True
+
+
+@pytest.mark.asyncio
+async def test_get_auto_notch_off(connected_radio):
+    connected_radio._transport.query = AsyncMock(return_value="BC00")
+    assert await connected_radio.get_auto_notch() is False
+
+
+@pytest.mark.asyncio
+async def test_set_auto_notch(connected_radio):
+    connected_radio._transport.write = AsyncMock()
+    await connected_radio.set_auto_notch(True)
+    connected_radio._transport.write.assert_called_once_with("BC01;")
+
+
+@pytest.mark.asyncio
+async def test_get_auto_notch_sub_sends_bc1(connected_radio):
+    connected_radio._transport.query = AsyncMock(return_value="BC11")
+    assert await connected_radio.get_auto_notch(receiver=1) is True
+    connected_radio._transport.query.assert_called_once_with("BC1;")
+
+
+@pytest.mark.asyncio
+async def test_set_auto_notch_sub_sends_bc1(connected_radio):
+    connected_radio._transport.write = AsyncMock()
+    await connected_radio.set_auto_notch(True, receiver=1)
+    connected_radio._transport.write.assert_called_once_with("BC11;")
+
+
+@pytest.mark.asyncio
+async def test_get_manual_notch(connected_radio):
+    """get_manual_notch calls both BP00 and BP01 queries."""
+    responses = iter(["BP00001", "BP01120"])
+    connected_radio._transport.query = AsyncMock(side_effect=responses)
+    enabled, freq = await connected_radio.get_manual_notch()
+    assert enabled is True
+    assert freq == 120
+
+
+@pytest.mark.asyncio
+async def test_set_manual_notch(connected_radio):
+    connected_radio._transport.write = AsyncMock()
+    await connected_radio.set_manual_notch(True)
+    connected_radio._transport.write.assert_called_once_with("BP00001;")
+
+
+@pytest.mark.asyncio
+async def test_get_manual_notch_sub_sends_bp10(connected_radio):
+    connected_radio._transport.query = AsyncMock(return_value="BP10001")
+    assert await connected_radio.read_manual_notch(receiver=1) is True
+    connected_radio._transport.query.assert_called_once_with("BP10;")
+
+
+@pytest.mark.asyncio
+async def test_set_manual_notch_sub_sends_bp10(connected_radio):
+    connected_radio._transport.write = AsyncMock()
+    await connected_radio.set_manual_notch(True, receiver=1)
+    connected_radio._transport.write.assert_called_once_with("BP10001;")
+
+
+@pytest.mark.asyncio
+async def test_set_manual_notch_freq(connected_radio):
+    connected_radio._transport.write = AsyncMock()
+    await connected_radio.set_manual_notch_freq(80)
+    connected_radio._transport.write.assert_called_once_with("BP01080;")
+
+
+@pytest.mark.asyncio
+async def test_set_notch_filter_delegates_to_manual_notch_freq(connected_radio):
+    """Cross-vendor set_notch_filter alias forwards to BP01 (issue #1102)."""
+    connected_radio._transport.write = AsyncMock()
+    await connected_radio.set_notch_filter(80)
+    connected_radio._transport.write.assert_called_once_with("BP01080;")
+
+
+@pytest.mark.asyncio
+async def test_get_notch_filter_returns_freq_index(connected_radio):
+    """Cross-vendor get_notch_filter alias returns BP01 freq index (issue #1102)."""
+    responses = iter(["BP00001", "BP01120"])
+    connected_radio._transport.query = AsyncMock(side_effect=responses)
+    assert await connected_radio.get_notch_filter() == 120
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("freq", [1, 160, 320])
+async def test_set_manual_notch_freq_accepts_domain_values(connected_radio, freq):
+    """Values on the profile's manual_notch_freq raw domain (1-320, step 1)
+    are encoded as BP01 frames (MOR-1680)."""
+    connected_radio._transport.write = AsyncMock()
+    await connected_radio.set_manual_notch_freq(freq)
+    connected_radio._transport.write.assert_called_once_with(f"BP01{freq:03d};")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("freq", [0, 321])
+async def test_set_manual_notch_freq_rejects_off_domain_without_cat_write(
+    connected_radio, freq
+):
+    """Values outside the profile's manual_notch_freq raw domain raise
+    ValueError and never reach the wire (MOR-1680)."""
+    connected_radio._transport.write = AsyncMock()
+    with pytest.raises(ValueError, match="manual_notch_freq must be within 1-320"):
+        await connected_radio.set_manual_notch_freq(freq)
+    connected_radio._transport.write.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_get_manual_notch_freq_sub_sends_bp11(connected_radio):
+    connected_radio._transport.query = AsyncMock(return_value="BP11120")
+    assert await connected_radio.read_manual_notch_freq(receiver=1) == 120
+    connected_radio._transport.query.assert_called_once_with("BP11;")
+
+
+@pytest.mark.asyncio
+async def test_set_manual_notch_freq_sub_sends_bp11(connected_radio):
+    connected_radio._transport.write = AsyncMock()
+    await connected_radio.set_manual_notch_freq(120, receiver=1)
+    connected_radio._transport.write.assert_called_once_with("BP11120;")
+
+
+# ---------------------------------------------------------------------------
+# D4: Filters
+# ---------------------------------------------------------------------------
+
+# MD0/MD1 hex codes (modes list is 1-based) of the fixed-width FM/AM
+# family modes used by test_fixed_mode_width_read_and_set_refusal.
+_FIXED_MODE_HEX = {
+    "AM-N": "D",
+    "AM": "5",
+    "FM-N": "B",
+    "DATA-FM-N": "F",
+    "FM": "4",
+    "DATA-FM": "A",
+}
+
+
+@pytest.mark.asyncio
+async def test_get_filter_width(connected_radio):
+    """get_filter_width returns Hz (issue #1101): USB code 10 → 1950 Hz.
+
+    2508-C Table 5: USB codes 01-23 count from 300 Hz, so code 10 is
+    1950 Hz (the old zero-based table published 2100 for it)."""
+
+    # The width table is resolved from the radio's CURRENT mode, read fresh via
+    # CAT (MOR-507): get_filter_width issues a mode query (MD0;) then the
+    # filter query (SH0;). Mode code "2" → USB; USB code 10 → 1950 Hz.
+    async def fake_query(cmd: str) -> str:
+        return "MD02" if cmd.startswith("MD") else "SH0010"
+
+    connected_radio._transport.query = AsyncMock(side_effect=fake_query)
+    assert await connected_radio.get_filter_width() == 1950
+    connected_radio._transport.query.assert_any_call("SH0;")
+    connected_radio._transport.query.assert_any_call("MD0;")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("mode_answer", "code_answer", "expected_hz"),
+    [
+        ("MD03", "SH0021", 4000),  # CW-U: Table 5 last code 21 → 4000 Hz
+        ("MD0C", "SH0019", 3200),  # DATA-U: code 19 → 3200 Hz
+        ("MD02", "SH0020", 3000),  # USB: code 20 → 3000 Hz
+        ("MD02", "SH0023", 4000),  # USB: last code 23 → 4000 Hz
+    ],
+)
+async def test_get_filter_width_table5_codes(
+    connected_radio, mode_answer, code_answer, expected_hz
+):
+    """MOR-1679: every Table 5 code decodes at its manual Hz, MAIN."""
+
+    async def fake_query(cmd: str) -> str:
+        return mode_answer if cmd.startswith("MD") else code_answer
+
+    connected_radio._transport.query = AsyncMock(side_effect=fake_query)
+    assert await connected_radio.get_filter_width() == expected_hz
+
+
+@pytest.mark.asyncio
+async def test_get_filter_width_sub(connected_radio):
+    """SUB reads decode through the same table with P1=1 (MOR-1679)."""
+
+    async def fake_query(cmd: str) -> str:
+        return "MD12" if cmd.startswith("MD1") else "SH1010"
+
+    connected_radio._transport.query = AsyncMock(side_effect=fake_query)
+    assert await connected_radio.get_filter_width(receiver=1) == 1950
+
+
+@pytest.mark.asyncio
+async def test_set_filter_width(connected_radio):
+    """set_filter_width takes Hz (issue #1101): 2400 Hz → code 13 on USB."""
+
+    async def fake_query(cmd: str) -> str:
+        return "MD02"  # USB
+
+    connected_radio._transport.query = AsyncMock(side_effect=fake_query)
+    connected_radio._transport.write = AsyncMock()
+    # USB Table 5 code 13 → 2400 Hz; the table is resolved from a fresh
+    # mode query (MD0;), not the legacy mirror.
+    await connected_radio.set_filter_width(2400)
+    connected_radio._transport.query.assert_any_call("MD0;")
+    connected_radio._transport.write.assert_called_once_with("SH0013;")
+
+
+@pytest.mark.asyncio
+async def test_set_filter_width_sub(connected_radio):
+    """SUB writes serialize with P1=1 (MOR-1679): 2400 Hz → SH1013;."""
+
+    async def fake_query(cmd: str) -> str:
+        return "MD12"  # USB
+
+    connected_radio._transport.query = AsyncMock(side_effect=fake_query)
+    connected_radio._transport.write = AsyncMock()
+    await connected_radio.set_filter_width(2400, receiver=1)
+    connected_radio._transport.query.assert_any_call("MD1;")
+    connected_radio._transport.write.assert_called_once_with("SH1013;")
+
+
+@pytest.mark.asyncio
+async def test_set_filter_width_resolves_live_mode_sub(connected_radio):
+    """MOR-1679: SUB width writes use the radio's live mode, not the stale
+    legacy mirror: DATA-U 500 Hz is CW-family code 10 (SH1010;), where the
+    stale-mirror SSB table would send code 02 (100 Hz in DATA-U)."""
+
+    async def fake_query(cmd: str) -> str:
+        return "MD1C"  # DATA-U
+
+    connected_radio._state.sub.mode = "USB"
+    connected_radio._transport.query = AsyncMock(side_effect=fake_query)
+    connected_radio._transport.write = AsyncMock()
+    await connected_radio.set_filter_width(500, receiver=1)
+    connected_radio._transport.query.assert_any_call("MD1;")
+    connected_radio._transport.write.assert_called_once_with("SH1010;")
+
+
+@pytest.mark.asyncio
+async def test_set_filter_width_resolves_live_mode_main(connected_radio):
+    """MOR-1679: MAIN width writes use the live mode: CW-U 4000 Hz is code
+    21 (SH0021;), where the stale-mirror SSB table would send code 23."""
+
+    async def fake_query(cmd: str) -> str:
+        return "MD03"  # CW-U
+
+    connected_radio._state.main.mode = "USB"
+    connected_radio._transport.query = AsyncMock(side_effect=fake_query)
+    connected_radio._transport.write = AsyncMock()
+    await connected_radio.set_filter_width(4000)
+    connected_radio._transport.query.assert_any_call("MD0;")
+    connected_radio._transport.write.assert_called_once_with("SH0021;")
+
+
+@pytest.mark.asyncio
+async def test_set_filter_width_refuses_fixed_live_mode(connected_radio):
+    """MOR-1679: the fixed-mode refusal reads the live mode: the radio
+    answers FM, so 2400 Hz is refused even though the mirror says USB."""
+    connected_radio._state.main.mode = "USB"
+    connected_radio._transport.query = AsyncMock(return_value="MD04")  # FM
+    connected_radio._transport.write = AsyncMock()
+    with pytest.raises(CommandError):
+        await connected_radio.set_filter_width(2400)
+    connected_radio._transport.write.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_set_filter_width_no_false_fixed_refusal(connected_radio):
+    """MOR-1679: a stale FM mirror must not refuse a live USB write."""
+    connected_radio._state.main.mode = "FM"
+    connected_radio._transport.query = AsyncMock(return_value="MD02")  # USB
+    connected_radio._transport.write = AsyncMock()
+    await connected_radio.set_filter_width(2400)
+    connected_radio._transport.write.assert_called_once_with("SH0013;")
+
+
+@pytest.mark.asyncio
+async def test_set_filter_width_refuses_live_mode_without_table(connected_radio):
+    """MOR-1679/MOR-2518: C4FM-DN is readable (``MD0H;``) but has no Table 5
+    width row; refuse instead of sending width_hz as the raw code."""
+    connected_radio._transport.query = AsyncMock(return_value="MD0H")
+    connected_radio._transport.write = AsyncMock()
+    with pytest.raises(CommandError):
+        await connected_radio.set_filter_width(2400)
+    connected_radio._transport.write.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_reset_filter_width_main_sends_the_radio_default_code(connected_radio):
+    """MOR-2535: MAIN reset writes Table 5 code 00 (``SH0000;``) — the
+    radio's own mode-dependent "(Default)". The radio resolves the default
+    itself, so unlike ``set_filter_width`` no mode query precedes the
+    write."""
+    connected_radio._transport.query = AsyncMock()
+    connected_radio._transport.write = AsyncMock()
+    await connected_radio.reset_filter_width()
+    connected_radio._transport.write.assert_called_once_with("SH0000;")
+    connected_radio._transport.query.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_reset_filter_width_sub_sends_sh1000(connected_radio):
+    """MOR-2535: SUB reset serializes with P1=1 (``SH1000;``)."""
+    connected_radio._transport.write = AsyncMock()
+    await connected_radio.reset_filter_width(receiver=1)
+    connected_radio._transport.write.assert_called_once_with("SH1000;")
+
+
+@pytest.mark.asyncio
+async def test_reset_filter_width_refuses_without_profile_code(config):
+    """MOR-2535: a profile with no ``[filters].radio_default_code`` gets the
+    same ``CommandError`` refusal style as ``set_filter_width``'s
+    unsupported paths — nothing reaches the wire."""
+    stripped = replace(config, filter_width_radio_default_code=None)
+    radio = YaesuCatRadio("/dev/null", profile=stripped)
+    radio._transport._connected = True
+    radio._transport.write = AsyncMock()
+    with pytest.raises(CommandError, match="reset_filter_width"):
+        await radio.reset_filter_width()
+    radio._transport.write.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_set_filter_width_raw_index_keeps_non_table_encoding(config):
+    """Encodings other than table_index keep sending width_hz as the raw
+    code (no shipped Yaesu profile uses one; pinned for the compat path)."""
+    raw = YaesuCatRadio(
+        "/dev/null", profile=replace(config, filter_width_encoding="raw_index")
+    )
+    raw._transport._connected = True
+    raw._transport.write = AsyncMock()
+    await raw.set_filter_width(7)
+    raw._transport.write.assert_called_once_with("SH0007;")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("family_mode", "manual_hz"),
+    [
+        (
+            "USB",
+            (
+                300,
+                400,
+                600,
+                850,
+                1100,
+                1200,
+                1500,
+                1650,
+                1800,
+                1950,
+                2100,
+                2250,
+                2400,
+                2450,
+                2500,
+                2600,
+                2700,
+                2800,
+                2900,
+                3000,
+                3200,
+                3500,
+                4000,
+            ),
+        ),
+        (
+            "CW-U",
+            (
+                50,
+                100,
+                150,
+                200,
+                250,
+                300,
+                350,
+                400,
+                450,
+                500,
+                600,
+                800,
+                1200,
+                1400,
+                1700,
+                2000,
+                2400,
+                3000,
+                3200,
+                3500,
+                4000,
+            ),
+        ),
+    ],
+)
+@pytest.mark.parametrize("receiver", [0, 1])
+async def test_filter_width_full_table_round_trip(
+    connected_radio, family_mode, manual_hz, receiver
+):
+    """Every Table 5 code 01..N round-trips to its manual Hz, MAIN and SUB."""
+
+    prefix = "SH1" if receiver else "SH0"
+    mode_code = {"USB": "2", "CW-U": "3"}[family_mode]
+    for code, hz in enumerate(manual_hz, start=1):
+        frame = f"{prefix}{code:03d}"
+
+        async def fake_query(cmd: str, frame=frame, md=f"MD{receiver}{mode_code}"):
+            return md if cmd.startswith("MD") else frame
+
+        connected_radio._transport.query = AsyncMock(side_effect=fake_query)
+        assert (
+            await connected_radio.read_filter_width(receiver, mode=family_mode) == hz
+        ), (family_mode, code)
+        connected_radio._transport.write = AsyncMock()
+        await connected_radio.set_filter_width(hz, receiver=receiver)
+        connected_radio._transport.write.assert_called_once_with(f"{frame};")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("mode", "fixed_hz"),
+    [
+        ("AM-N", 6000),
+        ("AM", 9000),
+        ("FM-N", 9000),
+        ("DATA-FM-N", 9000),
+        ("FM", 16000),
+        ("DATA-FM", 16000),
+    ],
+)
+async def test_fixed_mode_width_read_and_set_refusal(connected_radio, mode, fixed_hz):
+    """MOR-1679: fixed modes read their manual Hz and refuse to set."""
+    md_answer = f"MD0{_FIXED_MODE_HEX[mode]}"
+
+    # Fixed modes answer from the profile manual: read_filter_width
+    # returns rule.defaults[0] before it ever parses the SH code, so no
+    # fed code can change the outcome (MOR-2519). Answer with a code no
+    # Table 5 row has on purpose: a plausible per-mode code would imply
+    # the read depends on it.
+    async def fake_query(cmd: str) -> str:
+        return md_answer if cmd.startswith("MD") else "SH0099"
+
+    connected_radio._transport.query = AsyncMock(side_effect=fake_query)
+    assert await connected_radio.read_filter_width(0, mode=mode) == fixed_hz
+    connected_radio._transport.write = AsyncMock()
+    with pytest.raises(CommandError):
+        await connected_radio.set_filter_width(fixed_hz)
+    connected_radio._transport.write.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_read_filter_width_unavailable_yields_none(connected_radio):
+    """MOR-1679: answers without a Table 5 Hz value never yield a number."""
+    # C4FM-DN has no Table 5 row.
+    connected_radio._transport.query = AsyncMock(return_value="SH0005")
+    assert await connected_radio.read_filter_width(0, mode="C4FM-DN") is None
+    # Code 00 is the mode-dependent "(Default)".
+    connected_radio._transport.query = AsyncMock(return_value="SH0000")
+    assert await connected_radio.read_filter_width(0, mode="USB") is None
+    # A code past the table's last entry.
+    connected_radio._transport.query = AsyncMock(return_value="SH0024")
+    assert await connected_radio.read_filter_width(0, mode="USB") is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("receiver", "mode", "answer", "expected"),
+    [
+        # MOR-3677 bench: the FTX-1 on the Mac mini over USB answers code
+        # 00 in DATA and CW (CAT watch 2026-10-22 09:16:53 EDT: DATA-U
+        # ``MD0C; SH0000; NA00;``; MOR-3693 reads 2026-10-21: CW-U
+        # ``MD03; SH0000;``). A 00 answer is the radio's own default: no
+        # Hz, flag true — on both receivers and in every mode alike.
+        (0, "DATA-U", "SH0000", FilterWidthReading(None, True)),
+        (1, "DATA-U", "SH1000", FilterWidthReading(None, True)),
+        (0, "DATA-L", "SH0000", FilterWidthReading(None, True)),
+        (1, "DATA-L", "SH1000", FilterWidthReading(None, True)),
+        (0, "CW-U", "SH0000", FilterWidthReading(None, True)),
+        (1, "CW-U", "SH1000", FilterWidthReading(None, True)),
+        (0, "CW-L", "SH0000", FilterWidthReading(None, True)),
+        (1, "CW-L", "SH1000", FilterWidthReading(None, True)),
+        # A normal answer: Hz decoded, flag false (USB ``MD02; SH0020;``
+        # from the same watch, 09:17:10 EDT).
+        (0, "USB", "SH0020", FilterWidthReading(3000, False)),
+        (1, "LSB", "SH1020", FilterWidthReading(3000, False)),
+        # No Hz for another reason: no table row (C4FM-DN) or an
+        # out-of-table code — flag false, never mistaken for a default.
+        (0, "C4FM-DN", "SH0005", FilterWidthReading(None, False)),
+        (0, "USB", "SH0024", FilterWidthReading(None, False)),
+        # A fixed-width mode answers from the profile manual whatever the
+        # SH code is — even 00 (fixed wins over the default code).
+        (0, "AM-N", "SH0000", FilterWidthReading(6000, False)),
+    ],
+)
+async def test_read_filter_width_reading_flags_radio_default(
+    connected_radio, receiver, mode, answer, expected
+):
+    """MOR-3677: the width read reports a 00 answer as radio-default."""
+    connected_radio._transport.query = AsyncMock(return_value=answer)
+    assert (
+        await connected_radio.read_filter_width_reading(receiver, mode=mode) == expected
+    )
+
+
+@pytest.mark.asyncio
+async def test_get_if_shift_positive(connected_radio):
+    connected_radio._transport.query = AsyncMock(return_value="IS00+0500")
+    offset = await connected_radio.get_if_shift()
+    assert offset == 500
+
+
+@pytest.mark.asyncio
+async def test_get_if_shift_negative(connected_radio):
+    connected_radio._transport.query = AsyncMock(return_value="IS00-0200")
+    offset = await connected_radio.get_if_shift()
+    assert offset == -200
+
+
+@pytest.mark.asyncio
+async def test_set_if_shift_positive(connected_radio):
+    connected_radio._transport.write = AsyncMock()
+    await connected_radio.set_if_shift(300)
+    connected_radio._transport.write.assert_called_once_with("IS00+0300;")
+
+
+@pytest.mark.asyncio
+async def test_set_if_shift_negative(connected_radio):
+    connected_radio._transport.write = AsyncMock()
+    await connected_radio.set_if_shift(-160)
+    connected_radio._transport.write.assert_called_once_with("IS00-0160;")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("offset", "frame"),
+    [
+        (0, "IS00+0000;"),
+        (20, "IS00+0020;"),
+        (-20, "IS00-0020;"),
+        (1200, "IS00+1200;"),
+        (-1200, "IS00-1200;"),
+    ],
+)
+async def test_set_if_shift_accepts_domain_values(connected_radio, offset, frame):
+    """Values on the profile's if_shift raw domain (-1200..1200, step 20)
+    are encoded as IS00 frames (MOR-1681)."""
+    connected_radio._transport.write = AsyncMock()
+    await connected_radio.set_if_shift(offset)
+    connected_radio._transport.write.assert_called_once_with(frame)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("offset", [25, 1210, -1220])
+async def test_set_if_shift_rejects_off_domain_without_cat_write(
+    connected_radio, offset
+):
+    """Off-range or off-lattice values raise ValueError naming the control
+    and never reach the wire (MOR-1681)."""
+    connected_radio._transport.write = AsyncMock()
+    with pytest.raises(ValueError, match="if_shift must be within -1200-1200"):
+        await connected_radio.set_if_shift(offset)
+    connected_radio._transport.write.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_get_if_shift_sub_sends_is1(connected_radio):
+    connected_radio._transport.query = AsyncMock(return_value="IS10+0200")
+    assert await connected_radio.get_if_shift(receiver=1) == 200
+    connected_radio._transport.query.assert_called_once_with("IS1;")
+
+
+@pytest.mark.asyncio
+async def test_set_if_shift_sub_sends_is1(connected_radio):
+    connected_radio._transport.write = AsyncMock()
+    await connected_radio.set_if_shift(200, receiver=1)
+    connected_radio._transport.write.assert_called_once_with("IS10+0200;")
+
+
+@pytest.mark.asyncio
+async def test_set_if_shift_without_profile_domain_raises(config):
+    """A profile without an if_shift control domain fails honestly instead
+    of passing the value through to the wire (MOR-1681)."""
+    stripped = replace(
+        config,
+        controls={k: v for k, v in (config.controls or {}).items() if k != "if_shift"},
+        _control_domains={
+            k: v for k, v in (config._control_domains or {}).items() if k != "if_shift"
+        },
+    )
+    radio = YaesuCatRadio("/dev/null", profile=stripped)
+    radio._transport._connected = True
+    radio._transport.write = AsyncMock()
+    with pytest.raises(ValueError, match="no normalized control domain for 'if_shift'"):
+        await radio.set_if_shift(0)
+    radio._transport.write.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_get_narrow(connected_radio):
+    connected_radio._transport.query = AsyncMock(return_value="NA01")
+    assert await connected_radio.get_narrow() is True
+
+
+@pytest.mark.asyncio
+async def test_set_narrow(connected_radio):
+    connected_radio._transport.write = AsyncMock()
+    await connected_radio.set_narrow(False)
+    connected_radio._transport.write.assert_called_once_with("NA00;")
+
+
+@pytest.mark.asyncio
+async def test_get_narrow_sub_sends_na1(connected_radio):
+    connected_radio._transport.query = AsyncMock(return_value="NA11")
+    assert await connected_radio.get_narrow(receiver=1) is True
+    connected_radio._transport.query.assert_called_once_with("NA1;")
+
+
+@pytest.mark.asyncio
+async def test_set_narrow_sub_sends_na1(connected_radio):
+    connected_radio._transport.write = AsyncMock()
+    await connected_radio.set_narrow(True, receiver=1)
+    connected_radio._transport.write.assert_called_once_with("NA11;")
+
+
+# ---------------------------------------------------------------------------
+# D5: Split/Dual Watch
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_split_on(connected_radio):
+    connected_radio._transport.query = AsyncMock(return_value="ST1")
+    assert await connected_radio.get_split() is True
+    connected_radio._transport.query.assert_called_once_with("ST;")
+
+
+@pytest.mark.asyncio
+async def test_set_split(connected_radio):
+    connected_radio._transport.write = AsyncMock()
+    await connected_radio.set_split(True)
+    connected_radio._transport.write.assert_called_once_with("ST1;")
+
+
+@pytest.mark.asyncio
+async def test_get_rx_func(connected_radio):
+    connected_radio._transport.query = AsyncMock(return_value="FR00")
+    assert await connected_radio.get_rx_func() == 0
+    connected_radio._transport.query.assert_called_once_with("FR;")
+
+
+@pytest.mark.asyncio
+async def test_get_tx_func(connected_radio):
+    connected_radio._transport.query = AsyncMock(return_value="FT1")
+    assert await connected_radio.get_tx_func() == 1
+    connected_radio._transport.query.assert_called_once_with("FT;")
+
+
+# ---------------------------------------------------------------------------
+# TransceiverBankCapable (FT command / tx_source)
+# ---------------------------------------------------------------------------
+
+
+def test_transceiver_count_ftx1(radio):
+    """FTX-1 exposes two independent transceivers (HF+50, 144+430)."""
+    assert radio.transceiver_count == 2
+
+
+def test_transceiver_count_non_ftx1(radio):
+    """The transceiver count comes from the profile field, not the model id."""
+    object.__setattr__(radio._config, "transceiver_count", 1)
+    assert radio.transceiver_count == 1
+
+
+@pytest.mark.asyncio
+async def test_set_tx_source_main(connected_radio):
+    """set_tx_source(0) writes FT0; (MAIN-side transmitter)."""
+    connected_radio._transport.write = AsyncMock()
+    await connected_radio.set_tx_source(0)
+    connected_radio._transport.write.assert_called_once_with("FT0;")
+
+
+@pytest.mark.asyncio
+async def test_set_tx_source_sub(connected_radio):
+    """set_tx_source(1) writes FT1; (SUB-side transmitter)."""
+    connected_radio._transport.write = AsyncMock()
+    await connected_radio.set_tx_source(1)
+    connected_radio._transport.write.assert_called_once_with("FT1;")
+
+
+@pytest.mark.asyncio
+async def test_set_tx_source_rejects_out_of_range(connected_radio):
+    """set_tx_source rejects xcvr values other than 0 or 1."""
+    connected_radio._transport.write = AsyncMock()
+    with pytest.raises(ValueError):
+        await connected_radio.set_tx_source(2)
+    connected_radio._transport.write.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("xcvr", [-1, 2, 3])
+async def test_set_tx_source_rejects_outside_the_declared_bank(connected_radio, xcvr):
+    """set_tx_source rejects indices outside the declared bank (count=2)."""
+    connected_radio._transport.write = AsyncMock()
+    with pytest.raises(ValueError, match="transceiver_count=2"):
+        await connected_radio.set_tx_source(xcvr)
+    connected_radio._transport.write.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_get_tx_source_sub(connected_radio):
+    """get_tx_source parses FT1; and returns 1 (SUB-side active)."""
+    connected_radio._transport.query = AsyncMock(return_value="FT1")
+    assert await connected_radio.get_tx_source() == 1
+    connected_radio._transport.query.assert_called_once_with("FT;")
+
+
+@pytest.mark.asyncio
+async def test_get_tx_source_main(connected_radio):
+    """get_tx_source parses FT0; and returns 0 (MAIN-side active)."""
+    connected_radio._transport.query = AsyncMock(return_value="FT0")
+    assert await connected_radio.get_tx_source() == 0
+
+
+@pytest.mark.asyncio
+async def test_set_tx_func_writes_identity_ft_bytes(connected_radio):
+    """MOR-4433 PR1: FTX-1 set_tx_func writes FT0;/FT1; (identity map)."""
+    connected_radio._transport.write = AsyncMock()
+    await connected_radio.set_tx_func(0)
+    await connected_radio.set_tx_func(1)
+    assert [c.args[0] for c in connected_radio._transport.write.call_args_list] == [
+        "FT0;",
+        "FT1;",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_get_tx_func_parses_ft_answers(connected_radio):
+    """MOR-4433 PR1: FTX-1 get_tx_func parses FT0;/FT1; to 0/1."""
+    connected_radio._transport.query = AsyncMock(side_effect=["FT1", "FT0"])
+    assert await connected_radio.get_tx_func() == 1
+    assert await connected_radio.get_tx_func() == 0
+
+
+def test_ftx1_tx_func_map_names_main_sub_without_slots(radio):
+    """MOR-4433 PR1: the FTX-1 declares its FT answer map in the profile."""
+    from rigplane.profiles.rig_loader import TxFuncTarget
+
+    assert radio._config.tx_func is not None
+    assert radio._config.tx_func.read_map == {
+        "0": TxFuncTarget(receiver="MAIN", slot=None),
+        "1": TxFuncTarget(receiver="SUB", slot=None),
+    }
+    assert radio._config.tx_func.write_map == {0: "0", 1: "1"}
+    assert radio.profile.tx_func == radio._config.tx_func
+
+
+# ---------------------------------------------------------------------------
+# TransceiverBankCapable (set_cross_band_split)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_set_cross_band_split_rx0_tx1(connected_radio):
+    """set_cross_band_split(rx=0, tx=1) sends FR00;, VS0;, FT1; in order."""
+    connected_radio._transport.write = AsyncMock()
+    await connected_radio.set_cross_band_split(rx_xcvr=0, tx_xcvr=1)
+    assert connected_radio._transport.write.call_args_list == [
+        call("FR00;"),
+        call("VS0;"),
+        call("FT1;"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_set_cross_band_split_rx1_tx0(connected_radio):
+    """set_cross_band_split(rx=1, tx=0) sends FR00;, VS1;, FT0; in order."""
+    connected_radio._transport.write = AsyncMock()
+    await connected_radio.set_cross_band_split(rx_xcvr=1, tx_xcvr=0)
+    assert connected_radio._transport.write.call_args_list == [
+        call("FR00;"),
+        call("VS1;"),
+        call("FT0;"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_set_cross_band_split_rejects_same_xcvr(connected_radio):
+    """set_cross_band_split raises ValueError when rx_xcvr == tx_xcvr."""
+    connected_radio._transport.write = AsyncMock()
+    with pytest.raises(ValueError, match="cross-band split requires different"):
+        await connected_radio.set_cross_band_split(rx_xcvr=0, tx_xcvr=0)
+    connected_radio._transport.write.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_set_cross_band_split_rejects_out_of_range_rx(connected_radio):
+    """set_cross_band_split raises ValueError for rx_xcvr out of range."""
+    connected_radio._transport.write = AsyncMock()
+    with pytest.raises(ValueError, match="rx_xcvr"):
+        await connected_radio.set_cross_band_split(rx_xcvr=2, tx_xcvr=0)
+    connected_radio._transport.write.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_set_cross_band_split_rejects_out_of_range_tx(connected_radio):
+    """set_cross_band_split raises ValueError for tx_xcvr out of range."""
+    connected_radio._transport.write = AsyncMock()
+    with pytest.raises(ValueError, match="tx_xcvr"):
+        await connected_radio.set_cross_band_split(rx_xcvr=0, tx_xcvr=2)
+    connected_radio._transport.write.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# set_dual_watch
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_set_dual_watch_on_sends_fr00(connected_radio):
+    """On the bundled FTX-1 profile, set_dual_watch(True) sends exactly FR00;."""
+    connected_radio._transport.write = AsyncMock()
+    await connected_radio.set_dual_watch(True)
+    assert connected_radio._transport.write.call_args_list == [call("FR00;")]
+
+
+@pytest.mark.asyncio
+async def test_set_dual_watch_off_sends_fr01(connected_radio):
+    """On the bundled FTX-1 profile, set_dual_watch(False) sends exactly FR01;."""
+    connected_radio._transport.write = AsyncMock()
+    await connected_radio.set_dual_watch(False)
+    assert connected_radio._transport.write.call_args_list == [call("FR01;")]
+
+
+@pytest.mark.asyncio
+async def test_set_dual_watch_prefers_a_declared_set_dual_watch_command(config):
+    """A declared ``set_dual_watch`` write is used instead of the FR fallback."""
+    config.commands["set_dual_watch"] = CatCommandSpec(write="DW{state};")
+    radio = YaesuCatRadio("/dev/null", profile=config)
+    radio._transport._connected = True
+    radio._transport.write = AsyncMock()
+    await radio.set_dual_watch(True)
+    await radio.set_dual_watch(False)
+    assert radio._transport.write.call_args_list == [call("DW1;"), call("DW0;")]
+
+
+@pytest.mark.asyncio
+async def test_set_dual_watch_without_either_command_warns_and_writes_nothing(
+    config, caplog
+):
+    """With neither ``set_dual_watch`` nor ``set_rx_func``, nothing is written."""
+    del config.commands["set_rx_func"]
+    radio = YaesuCatRadio("/dev/null", profile=config)
+    radio._transport._connected = True
+    radio._transport.write = AsyncMock()
+    with caplog.at_level("WARNING"):
+        await radio.set_dual_watch(True)
+    radio._transport.write.assert_not_called()
+    assert any(
+        record.levelname == "WARNING" and "set_dual_watch" in record.message
+        for record in caplog.records
+    )
+
+
+@pytest.mark.asyncio
+async def test_get_vfo_select(connected_radio):
+    connected_radio._transport.query = AsyncMock(return_value="VS0")
+    assert await connected_radio.get_vfo_select() == 0
+    connected_radio._transport.query.assert_called_once_with("VS;")
+
+
+@pytest.mark.asyncio
+async def test_vfo_a_to_b(connected_radio):
+    connected_radio._transport.write = AsyncMock()
+    await connected_radio.vfo_a_to_b()
+    connected_radio._transport.write.assert_called_once_with("AB;")
+
+
+@pytest.mark.asyncio
+async def test_vfo_b_to_a(connected_radio):
+    connected_radio._transport.write = AsyncMock()
+    await connected_radio.vfo_b_to_a()
+    connected_radio._transport.write.assert_called_once_with("BA;")
+
+
+# ---------------------------------------------------------------------------
+# D6: TX Stack
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_power(connected_radio):
+    connected_radio._transport.query = AsyncMock(return_value="PC2100")
+    head, watts = await connected_radio.get_power()
+    assert head == 2
+    assert watts == 100
+    connected_radio._transport.query.assert_called_once_with("PC;")
+
+
+@pytest.mark.asyncio
+async def test_set_power(connected_radio):
+    connected_radio._transport.write = AsyncMock()
+    await connected_radio.set_power(50, head=2)
+    connected_radio._transport.write.assert_called_once_with("PC2050;")
+
+
+@pytest.mark.asyncio
+async def test_get_mic_gain(connected_radio):
+    connected_radio._transport.query = AsyncMock(return_value="MG050")
+    assert await connected_radio.get_mic_gain() == 50
+    connected_radio._transport.query.assert_called_once_with("MG;")
+
+
+@pytest.mark.asyncio
+async def test_get_processor(connected_radio):
+    connected_radio._transport.query = AsyncMock(return_value="PR01")
+    assert await connected_radio.get_processor() is True
+
+
+# Monitor (ML) — FTX-1 does not support ML command via CAT (returns ?;)
+
+
+@pytest.mark.asyncio
+async def test_get_monitor_on_raises_not_implemented(connected_radio):
+    with pytest.raises(NotImplementedError, match="Monitor not supported"):
+        await connected_radio.get_monitor_on()
+
+
+@pytest.mark.asyncio
+async def test_set_monitor_on_raises_not_implemented(connected_radio):
+    with pytest.raises(NotImplementedError, match="Monitor not supported"):
+        await connected_radio.set_monitor_on(True)
+
+
+# ---------------------------------------------------------------------------
+# D7: CW
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_keyer_speed(connected_radio):
+    connected_radio._transport.query = AsyncMock(return_value="KS020")
+    assert await connected_radio.get_keyer_speed() == 20
+    connected_radio._transport.query.assert_called_once_with("KS;")
+
+
+@pytest.mark.asyncio
+async def test_set_keyer_speed(connected_radio):
+    connected_radio._transport.write = AsyncMock()
+    await connected_radio.set_keyer_speed(25)
+    connected_radio._transport.write.assert_called_once_with("KS025;")
+
+
+@pytest.mark.asyncio
+async def test_get_key_pitch(connected_radio):
+    connected_radio._transport.query = AsyncMock(return_value="KP30")
+    assert await connected_radio.get_key_pitch() == 30
+    connected_radio._transport.query.assert_called_once_with("KP;")
+
+
+@pytest.mark.asyncio
+async def test_send_cw(connected_radio):
+    connected_radio._transport.write = AsyncMock()
+    await connected_radio.send_cw("0", "CQ DE W1ABC")
+    connected_radio._transport.write.assert_called_once_with("KY0CQ DE W1ABC;")
+
+
+@pytest.mark.asyncio
+async def test_get_break_in_delay(connected_radio):
+    # Transport strips the trailing semicolon; live FTX-1 frame is ``SD09;``.
+    connected_radio._transport.query = AsyncMock(return_value="SD09")
+    assert await connected_radio.get_break_in_delay() == 9
+    connected_radio._transport.query.assert_called_once_with("SD;")
+
+
+@pytest.mark.asyncio
+async def test_set_break_in_delay(connected_radio):
+    connected_radio._transport.write = AsyncMock()
+    await connected_radio.set_break_in_delay(500)
+    connected_radio._transport.write.assert_called_once_with("SD0500;")
+
+
+@pytest.mark.asyncio
+async def test_get_break_in(connected_radio):
+    from rigplane.types import BreakInMode
+
+    connected_radio._transport.query = AsyncMock(return_value="BI1")
+    result = await connected_radio.get_break_in()
+    assert result == BreakInMode.SEMI
+    # IntEnum stays bool-compatible at runtime.
+    assert bool(result) is True
+
+
+@pytest.mark.asyncio
+async def test_get_break_in_off_maps_to_off(connected_radio):
+    from rigplane.types import BreakInMode
+
+    connected_radio._transport.query = AsyncMock(return_value="BI0")
+    result = await connected_radio.get_break_in()
+    assert result == BreakInMode.OFF
+    assert bool(result) is False
+
+
+@pytest.mark.asyncio
+async def test_set_break_in_accepts_break_in_mode(connected_radio):
+    from rigplane.types import BreakInMode
+
+    connected_radio._transport.write = AsyncMock()
+    await connected_radio.set_break_in(BreakInMode.SEMI)
+    connected_radio._transport.write.assert_called_once_with("BI1;")
+
+
+@pytest.mark.asyncio
+async def test_set_break_in_refuses_full_and_writes_nothing(connected_radio):
+    """MOR-2729: FULL (2) is outside the FTX-1 ``[break_in]`` domain (0, 1)."""
+    connected_radio._transport.write = AsyncMock()
+    with pytest.raises(CommandError, match=r"Break-in mode must be one of \[0, 1\]"):
+        await connected_radio.set_break_in(BreakInMode.FULL)
+    connected_radio._transport.write.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_set_break_in_refuses_without_a_declared_domain(config):
+    """MOR-2729: a profile with no ``[break_in]`` domain writes nothing."""
+    stripped = replace(config, break_in_modes=None, break_in_labels=None)
+    radio = YaesuCatRadio("/dev/null", profile=stripped)
+    radio._transport._connected = True
+    radio._transport.write = AsyncMock()
+    with pytest.raises(CommandError, match=r"Break-in mode must be one of \[\]"):
+        await radio.set_break_in(BreakInMode.OFF)
+    radio._transport.write.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_set_break_in_off_maps_to_off(connected_radio):
+    from rigplane.types import BreakInMode
+
+    connected_radio._transport.write = AsyncMock()
+    await connected_radio.set_break_in(BreakInMode.OFF)
+    connected_radio._transport.write.assert_called_once_with("BI0;")
+
+
+@pytest.mark.asyncio
+async def test_set_break_in_accepts_bool_for_backward_compat(connected_radio):
+    connected_radio._transport.write = AsyncMock()
+    await connected_radio.set_break_in(True)
+    connected_radio._transport.write.assert_called_once_with("BI1;")
+    connected_radio._transport.write.reset_mock()
+    await connected_radio.set_break_in(False)
+    connected_radio._transport.write.assert_called_once_with("BI0;")
+
+
+@pytest.mark.asyncio
+async def test_get_cw_spot(connected_radio):
+    connected_radio._transport.query = AsyncMock(return_value="CS0")
+    assert await connected_radio.get_cw_spot() is False
+
+
+# ---------------------------------------------------------------------------
+# D8: Clarifier (RIT/XIT)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_clarifier_both_off(connected_radio):
+    connected_radio._transport.query = AsyncMock(return_value="CF00000000")
+    rx, tx = await connected_radio.get_clarifier()
+    assert rx is False
+    assert tx is False
+    connected_radio._transport.query.assert_called_once_with("CF000;")
+
+
+@pytest.mark.asyncio
+async def test_get_clarifier_rx_on(connected_radio):
+    connected_radio._transport.query = AsyncMock(return_value="CF00010000")
+    rx, tx = await connected_radio.get_clarifier()
+    assert rx is True
+    assert tx is False
+
+
+@pytest.mark.asyncio
+async def test_set_clarifier(connected_radio):
+    connected_radio._transport.write = AsyncMock()
+    await connected_radio.set_clarifier(True, False)
+    connected_radio._transport.write.assert_called_once_with("CF00010000;")
+
+
+@pytest.mark.asyncio
+async def test_get_clarifier_freq_positive(connected_radio):
+    connected_radio._transport.query = AsyncMock(return_value="CF001+0600")
+    assert await connected_radio.get_clarifier_freq() == 600
+    connected_radio._transport.query.assert_called_once_with("CF001;")
+
+
+@pytest.mark.asyncio
+async def test_get_clarifier_freq_negative(connected_radio):
+    connected_radio._transport.query = AsyncMock(return_value="CF001-0400")
+    assert await connected_radio.get_clarifier_freq() == -400
+
+
+@pytest.mark.asyncio
+async def test_set_clarifier_freq(connected_radio):
+    connected_radio._transport.write = AsyncMock()
+    await connected_radio.set_clarifier_freq(-250)
+    connected_radio._transport.write.assert_called_once_with("CF001-0250;")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("receiver", [0, 1])
+async def test_reset_clarifier_is_undeclared_before_transport(
+    connected_radio, receiver
+):
+    connected_radio._transport.write = AsyncMock()
+    connected_radio._transport.query = AsyncMock()
+    with pytest.raises(CommandError, match="reset_clarifier.*not found in profile"):
+        await connected_radio.reset_clarifier(receiver=receiver)
+    assert not connected_radio.supports_command("reset_clarifier")
+    connected_radio._transport.write.assert_not_awaited()
+    connected_radio._transport.query.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# Canonical RIT/XIT surface (RitXitCapable) — delegates to *_clarifier* helpers
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_rit_frequency_delegates(connected_radio):
+    connected_radio._transport.query = AsyncMock(return_value="CF001-0250")
+    assert await connected_radio.get_rit_frequency() == -250
+
+
+@pytest.mark.asyncio
+async def test_set_rit_frequency_delegates(connected_radio):
+    connected_radio._transport.write = AsyncMock()
+    await connected_radio.set_rit_frequency(600)
+    connected_radio._transport.write.assert_called_once_with("CF001+0600;")
+
+
+@pytest.mark.asyncio
+async def test_get_rit_status_returns_rx_bit(connected_radio):
+    connected_radio._transport.query = AsyncMock(return_value="CF00010000")
+    assert await connected_radio.get_rit_status() is True
+
+
+@pytest.mark.asyncio
+async def test_get_rit_tx_status_returns_tx_bit(connected_radio):
+    # CF000 layout: CF000 + {rx:1d} + {tx:1d} + {pad:03d}
+    connected_radio._transport.query = AsyncMock(return_value="CF00001000")
+    assert await connected_radio.get_rit_tx_status() is True
+
+
+@pytest.mark.asyncio
+async def test_set_rit_status_preserves_xit(connected_radio):
+    """P1-02 fix: enabling RIT must not clobber an active XIT bit."""
+    # Rig currently reports RIT=off, XIT=on (CF000 = 0 1 000).
+    connected_radio._transport.query = AsyncMock(return_value="CF00001000")
+    connected_radio._transport.write = AsyncMock()
+
+    await connected_radio.set_rit_status(True)
+
+    # Wire frame must carry RX=1, TX=1 — XIT bit preserved by RMW.
+    connected_radio._transport.write.assert_called_once_with("CF00011000;")
+
+
+@pytest.mark.asyncio
+async def test_set_rit_tx_status_preserves_rit(connected_radio):
+    """P1-02 fix: enabling XIT must not clobber an active RIT bit."""
+    # Rig currently reports RIT=on, XIT=off (CF000 = 1 0 000).
+    connected_radio._transport.query = AsyncMock(return_value="CF00010000")
+    connected_radio._transport.write = AsyncMock()
+
+    await connected_radio.set_rit_tx_status(True)
+
+    # Wire frame must carry RX=1, TX=1 — RIT bit preserved by RMW.
+    connected_radio._transport.write.assert_called_once_with("CF00011000;")
+
+
+@pytest.mark.asyncio
+async def test_set_rit_status_off_preserves_xit(connected_radio):
+    """RMW symmetry: turning RIT off must not flip XIT off too."""
+    # Rig currently reports RIT=on, XIT=on (CF000 = 1 1 000).
+    connected_radio._transport.query = AsyncMock(return_value="CF00011000")
+    connected_radio._transport.write = AsyncMock()
+
+    await connected_radio.set_rit_status(False)
+
+    # XIT must remain set: RX=0, TX=1.
+    connected_radio._transport.write.assert_called_once_with("CF00001000;")
+
+
+# ---------------------------------------------------------------------------
+# APF (Audio Peak Filter, CO02/CO03)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_apf_off(connected_radio):
+    connected_radio._transport.query = AsyncMock(return_value="CO020000")
+    assert await connected_radio.get_apf() is False
+    connected_radio._transport.query.assert_called_once_with("CO02;")
+
+
+@pytest.mark.asyncio
+async def test_get_apf_on(connected_radio):
+    connected_radio._transport.query = AsyncMock(return_value="CO020001")
+    assert await connected_radio.get_apf() is True
+
+
+@pytest.mark.asyncio
+async def test_set_apf_on(connected_radio):
+    connected_radio._transport.write = AsyncMock()
+    await connected_radio.set_apf(True)
+    connected_radio._transport.write.assert_called_once_with("CO020001;")
+
+
+@pytest.mark.asyncio
+async def test_set_apf_off(connected_radio):
+    connected_radio._transport.write = AsyncMock()
+    await connected_radio.set_apf(False)
+    connected_radio._transport.write.assert_called_once_with("CO020000;")
+
+
+@pytest.mark.asyncio
+async def test_get_apf_freq(connected_radio):
+    connected_radio._transport.query = AsyncMock(return_value="CO030128")
+    assert await connected_radio.get_apf_freq() == 128
+    connected_radio._transport.query.assert_called_once_with("CO03;")
+
+
+@pytest.mark.asyncio
+async def test_set_apf_freq(connected_radio):
+    connected_radio._transport.write = AsyncMock()
+    await connected_radio.set_apf_freq(200)
+    connected_radio._transport.write.assert_called_once_with("CO030200;")
+
+
+# ---------------------------------------------------------------------------
+# Canonical APF adapter (DspControlCapable.set_audio_peak_filter)
+# Mode 0/1/2 → Yaesu bool APF (with mode-2 raising clearly)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_set_audio_peak_filter_mode_0_disables_apf(connected_radio):
+    """Mode 0 (off) → CO020000;"""
+    connected_radio._transport.write = AsyncMock()
+    await connected_radio.set_audio_peak_filter(0)
+    connected_radio._transport.write.assert_called_once_with("CO020000;")
+
+
+@pytest.mark.asyncio
+async def test_set_audio_peak_filter_mode_1_enables_apf_only(
+    connected_radio,
+):
+    """Mode 1 (soft) → APF on (CO020001;) only — no implicit freq reset.
+
+    Regression for #1141: an unconditional `set_apf_freq(0)` would clobber
+    any user-tuned APF centre frequency every time APF was toggled on.
+    """
+    connected_radio._transport.write = AsyncMock()
+    await connected_radio.set_audio_peak_filter(1)
+    connected_radio._transport.write.assert_called_once_with("CO020001;")
+
+
+@pytest.mark.asyncio
+async def test_set_audio_peak_filter_mode_1_preserves_freq_across_toggle(
+    connected_radio,
+):
+    """APF centre frequency must survive an off/on toggle (#1141).
+
+    Sequence: enable APF (mode 1) → tune freq → disable (mode 0) →
+    re-enable (mode 1). Only the bool toggles and the explicit freq set
+    must hit the wire; nothing in `set_audio_peak_filter` may overwrite
+    the user-set frequency.
+    """
+    connected_radio._transport.write = AsyncMock()
+    await connected_radio.set_audio_peak_filter(1)
+    await connected_radio.set_apf_freq(200)
+    await connected_radio.set_audio_peak_filter(0)
+    await connected_radio.set_audio_peak_filter(1)
+    sent = [c.args[0] for c in connected_radio._transport.write.await_args_list]
+    assert sent == ["CO020001;", "CO030200;", "CO020000;", "CO020001;"]
+    # Critical: only one CO03 frame — the explicit user one.
+    assert sum(1 for s in sent if s.startswith("CO03")) == 1
+
+
+@pytest.mark.asyncio
+async def test_set_audio_peak_filter_mode_2_raises(connected_radio):
+    """Mode 2 (sharp) → NotImplementedError; Yaesu has no sharp mode."""
+    connected_radio._transport.write = AsyncMock()
+    with pytest.raises(NotImplementedError, match="sharp"):
+        await connected_radio.set_audio_peak_filter(2)
+    connected_radio._transport.write.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# D9: Tone/TSQL
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_sql_type(connected_radio):
+    # MOR-473: the live FTX-1 answers ``CT0;`` with a SINGLE-digit code
+    # ("CT00;"), so the read parse is ``CT0{type};`` (one digit, not two).
+    connected_radio._transport.query = AsyncMock(return_value="CT00")
+    assert await connected_radio.get_sql_type() == 0
+    connected_radio._transport.query.assert_called_once_with("CT0;")
+
+
+@pytest.mark.asyncio
+async def test_get_sql_type_tone(connected_radio):
+    # MOR-473: single-digit "TONE" code (1) parses to int 1.
+    connected_radio._transport.query = AsyncMock(return_value="CT01")
+    assert await connected_radio.get_sql_type() == 1
+    connected_radio._transport.query.assert_called_once_with("CT0;")
+
+
+@pytest.mark.asyncio
+async def test_set_sql_type(connected_radio):
+    connected_radio._transport.write = AsyncMock()
+    await connected_radio.set_sql_type(2)
+    connected_radio._transport.write.assert_called_once_with("CT02;")
+
+
+# -- CT receiver routing (MOR-2111 tone half) --------------------------------
+
+
+@pytest.mark.asyncio
+async def test_read_sql_type_sub_routes_ct1(connected_radio):
+    """``receiver=1`` sends ``CT1;`` and parses the SUB answer (P1=1)."""
+    connected_radio._transport.query = AsyncMock(return_value="CT12")
+    assert await connected_radio.read_sql_type(1) == 2
+    connected_radio._transport.query.assert_called_once_with("CT1;")
+
+
+@pytest.mark.asyncio
+async def test_read_sql_type_rejects_answer_for_other_receiver(connected_radio):
+    connected_radio._transport.query = AsyncMock(return_value="CT11")
+    with pytest.raises(CommandError, match="sql type receiver.*mismatch"):
+        await connected_radio.read_sql_type(0)
+
+
+@pytest.mark.asyncio
+async def test_set_sql_type_sub_writes_ct1(connected_radio):
+    connected_radio._transport.write = AsyncMock()
+    await connected_radio.set_sql_type(2, receiver=1)
+    connected_radio._transport.write.assert_called_once_with("CT12;")
+
+
+@pytest.mark.asyncio
+async def test_read_ctcss_tone_index_sub_routes_cn10(connected_radio):
+    """``receiver=1`` sends ``CN10;`` and parses the SUB answer (P1=1)."""
+    connected_radio._transport.query = AsyncMock(return_value="CN10008")
+    assert await connected_radio.read_ctcss_tone_index(1) == 8
+    connected_radio._transport.query.assert_called_once_with("CN10;")
+
+
+@pytest.mark.asyncio
+async def test_read_ctcss_tone_index_rejects_answer_for_other_receiver(
+    connected_radio,
+):
+    connected_radio._transport.query = AsyncMock(return_value="CN10008")
+    with pytest.raises(CommandError, match="ctcss tone receiver.*mismatch"):
+        await connected_radio.read_ctcss_tone_index(0)
+
+
+# -- CTCSS tone frequency (CN command, MOR-458) -----------------------------
+
+
+@pytest.mark.asyncio
+async def test_read_ctcss_tone_index_main(connected_radio):
+    """MAIN CTCSS tone index read sends ``CN00;`` and parses ``CN00nnn;``.
+
+    CN P1=0 (MAIN) P2=0 (CTCSS); the answer's P3 (000-049) is the tone-chart
+    index. FTX-1_CAT_OM_ENG_2507.
+    """
+    connected_radio._transport.query = AsyncMock(return_value="CN00008")
+    assert await connected_radio.read_ctcss_tone_index() == 8
+    connected_radio._transport.query.assert_called_once_with("CN00;")
+
+
+@pytest.mark.asyncio
+async def test_read_ctcss_tone_index_is_a_pure_read(connected_radio):
+    """``read_ctcss_tone_index`` must not mutate legacy ``radio_state``.
+
+    Pre-seed an impossible combination and confirm the read leaves the
+    state object identity and tone_freq/tsql_freq untouched (MOR-434 pattern).
+    """
+    connected_radio.radio_state.main.tone_freq = 12345
+    connected_radio.radio_state.main.tsql_freq = 54321
+    state_before = connected_radio.radio_state
+
+    connected_radio._transport.query = AsyncMock(return_value="CN00049")
+    assert await connected_radio.read_ctcss_tone_index() == 49
+    assert connected_radio.radio_state is state_before
+    assert connected_radio.radio_state.main.tone_freq == 12345
+    assert connected_radio.radio_state.main.tsql_freq == 54321
+
+
+@pytest.mark.asyncio
+async def test_get_tone_freq_returns_centihz(connected_radio):
+    """``get_tone_freq`` delegates to the index read and maps to centiHz.
+
+    Index 8 -> 88.5 Hz -> 8850 centiHz (Icom MOR-451 convention).
+    """
+    connected_radio._transport.query = AsyncMock(return_value="CN00008")
+    assert await connected_radio.get_tone_freq() == 8850
+
+
+@pytest.mark.asyncio
+async def test_get_tone_freq_sub_reads_cn10(connected_radio):
+    """``receiver=1`` routes the CN read to the SUB side (P1=1)."""
+    connected_radio._transport.query = AsyncMock(return_value="CN10015")
+    assert await connected_radio.get_tone_freq(1) == 11090
+    connected_radio._transport.query.assert_called_once_with("CN10;")
+
+
+@pytest.mark.parametrize(
+    ("answer", "expected_centihz"),
+    [("CN00000", 6700), ("CN00049", 25410)],
+)
+@pytest.mark.asyncio
+async def test_get_tone_freq_boundary_tones_map_exactly(
+    connected_radio, answer: str, expected_centihz: int
+):
+    """The lowest (67.0 Hz) and highest (254.1 Hz) table members map exactly."""
+    connected_radio._transport.query = AsyncMock(return_value=answer)
+    assert await connected_radio.get_tone_freq() == expected_centihz
+
+
+# -- RepeaterControlCapable: tone/TSQL frequency (CN write, MOR-2111) --------
+
+
+@pytest.mark.parametrize(
+    ("freq_centihz", "receiver", "frame"),
+    [
+        (8850, 0, "CN00008;"),
+        (6700, 0, "CN00000;"),
+        (25410, 0, "CN00049;"),
+        (8850, 1, "CN10008;"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_set_tone_freq_writes_cn_frame(
+    connected_radio, freq_centihz: int, receiver: int, frame: str
+):
+    """An exact profile-domain member maps to its own table index and frame."""
+    connected_radio._transport.write = AsyncMock()
+    await connected_radio.set_tone_freq(freq_centihz, receiver=receiver)
+    connected_radio._transport.write.assert_called_once_with(frame)
+
+
+@pytest.mark.asyncio
+async def test_set_tone_freq_refuses_non_member_before_wire(connected_radio):
+    """8800 is absent from ``standard_50``: ValueError before any transport call."""
+    connected_radio._transport.query = AsyncMock()
+    connected_radio._transport.write = AsyncMock()
+    with pytest.raises(ValueError, match="not an exact member"):
+        await connected_radio.set_tone_freq(8800)
+    connected_radio._transport.query.assert_not_awaited()
+    connected_radio._transport.write.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_set_tone_freq_refuses_non_int_before_wire(connected_radio):
+    connected_radio._transport.write = AsyncMock()
+    with pytest.raises(TypeError, match="centiHz"):
+        await connected_radio.set_tone_freq(88.5)  # type: ignore[arg-type]
+    connected_radio._transport.write.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_tsql_freq_is_an_honest_alias_of_tone_freq(connected_radio):
+    """One CN register serves both names: same read frame, same write frame."""
+    connected_radio._transport.query = AsyncMock(return_value="CN10012")
+    connected_radio._transport.write = AsyncMock()
+    assert await connected_radio.get_tsql_freq(
+        1
+    ) == await connected_radio.get_tone_freq(1)
+    await connected_radio.set_tsql_freq(10000, receiver=1)
+    connected_radio._transport.write.assert_called_once_with("CN10012;")
+
+
+@pytest.mark.asyncio
+async def test_get_tone_freq_uses_active_profile_domain(connected_radio):
+    """A provider/model-independent profile tuple controls CN index mapping."""
+    connected_radio._profile_cache = replace(
+        connected_radio.profile,
+        ctcss_tones_centihz=(1234, 5678),
+    )
+    connected_radio._transport.query = AsyncMock(return_value="CN00001")
+
+    assert await connected_radio.get_tone_freq() == 5678
+
+
+# -- RepeaterControlCapable: CT toggle mapping (MOR-2130, write MOR-2111) ----
+
+
+@pytest.mark.parametrize(
+    ("code", "expected_tone", "expected_tsql"),
+    [
+        (0, False, False),
+        (1, True, False),
+        (2, True, True),
+    ],
+)
+@pytest.mark.parametrize("receiver", [0, 1])
+@pytest.mark.asyncio
+async def test_repeater_tone_tsql_derivation_matrix(
+    connected_radio, code: int, expected_tone: bool, expected_tsql: bool, receiver: int
+):
+    """Both getters derive from that receiver's CT read (MOR-2130 mapping)."""
+    connected_radio._transport.query = AsyncMock(return_value=f"CT{receiver}{code}")
+    assert await connected_radio.get_repeater_tone(receiver) is expected_tone
+    assert await connected_radio.get_repeater_tsql(receiver) is expected_tsql
+    connected_radio._transport.query.assert_any_call(f"CT{receiver};")
+
+
+@pytest.mark.parametrize("code", [3, 4, 5])
+@pytest.mark.parametrize("receiver", [0, 1])
+@pytest.mark.asyncio
+async def test_repeater_tone_tsql_refuses_ct_other_modes(
+    connected_radio, code: int, receiver: int
+):
+    """MOR-2572: CT 3/4/5 (DCS / PR FREQ / REV TONE) have no two-boolean
+    pair, so both getters refuse loudly instead of inventing False — the
+    same ValueError the setters raise for the same CT state."""
+    connected_radio._transport.query = AsyncMock(return_value=f"CT{receiver}{code}")
+    for getter in (
+        connected_radio.get_repeater_tone,
+        connected_radio.get_repeater_tsql,
+    ):
+        with pytest.raises(ValueError, match=r"DCS/PR FREQ/REV TONE"):
+            await getter(receiver)
+    connected_radio._transport.query.assert_any_call(f"CT{receiver};")
+
+
+@pytest.mark.parametrize(
+    ("current_code", "on", "target_code"),
+    [
+        # (tone, tsql) target: (F,F)->0, (T,F)->1, (T,T)->2 (MOR-2130).
+        (0, True, 1),  # off -> TONE
+        (1, False, 0),  # TONE -> off (both axes drop together)
+        (1, True, 1),  # TONE -> TONE (idempotent write)
+        (2, True, 2),  # TSQL keeps decode while tone stays on
+    ],
+)
+@pytest.mark.parametrize("receiver", [0, 1])
+@pytest.mark.asyncio
+async def test_set_repeater_tone_read_modify_write(
+    connected_radio, current_code: int, on: bool, target_code: int, receiver: int
+):
+    """The setter reads CT first (RMW), then writes the mapped code."""
+    connected_radio._transport.query = AsyncMock(
+        return_value=f"CT{receiver}{current_code}"
+    )
+    connected_radio._transport.write = AsyncMock()
+    await connected_radio.set_repeater_tone(on, receiver=receiver)
+    connected_radio._transport.query.assert_awaited_once_with(f"CT{receiver};")
+    connected_radio._transport.write.assert_called_once_with(
+        f"CT{receiver}{target_code};"
+    )
+
+
+@pytest.mark.parametrize(
+    ("current_code", "on", "target_code"),
+    [
+        (1, True, 2),  # TONE -> TSQL (decode joins encode)
+        (2, True, 2),  # TSQL -> TSQL (idempotent write)
+        (2, False, 1),  # TSQL -> TONE (decode drops, encode stays)
+        (0, False, 0),  # off -> off (idempotent write)
+    ],
+)
+@pytest.mark.parametrize("receiver", [0, 1])
+@pytest.mark.asyncio
+async def test_set_repeater_tsql_read_modify_write(
+    connected_radio, current_code: int, on: bool, target_code: int, receiver: int
+):
+    connected_radio._transport.query = AsyncMock(
+        return_value=f"CT{receiver}{current_code}"
+    )
+    connected_radio._transport.write = AsyncMock()
+    await connected_radio.set_repeater_tsql(on, receiver=receiver)
+    connected_radio._transport.query.assert_awaited_once_with(f"CT{receiver};")
+    connected_radio._transport.write.assert_called_once_with(
+        f"CT{receiver}{target_code};"
+    )
+
+
+@pytest.mark.parametrize("setter", ["set_repeater_tone", "set_repeater_tsql"])
+@pytest.mark.parametrize("code", [3, 4, 5])
+@pytest.mark.asyncio
+async def test_ct_toggles_refuse_dcs_pr_rev_states(
+    connected_radio, setter: str, code: int
+):
+    """DCS / PR FREQ / REV TONE are refused loudly; nothing is written."""
+    connected_radio._transport.query = AsyncMock(return_value=f"CT0{code}")
+    connected_radio._transport.write = AsyncMock()
+    with pytest.raises(ValueError, match="refusing to overwrite"):
+        await getattr(connected_radio, setter)(True)
+    connected_radio._transport.query.assert_awaited_once_with("CT0;")
+    connected_radio._transport.write.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_set_repeater_tone_false_with_tsql_refuses(connected_radio):
+    """(tone=False, tsql=True) has no CT code — refused, nothing written."""
+    connected_radio._transport.query = AsyncMock(return_value="CT02")
+    connected_radio._transport.write = AsyncMock()
+    with pytest.raises(ValueError, match="encode-off/decode-on"):
+        await connected_radio.set_repeater_tone(False)
+    connected_radio._transport.write.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_set_repeater_tsql_true_without_tone_refuses(connected_radio):
+    """Decode cannot be on while encode is off — refused, nothing written."""
+    connected_radio._transport.query = AsyncMock(return_value="CT00")
+    connected_radio._transport.write = AsyncMock()
+    with pytest.raises(ValueError, match="encode-off/decode-on"):
+        await connected_radio.set_repeater_tsql(True)
+    connected_radio._transport.write.assert_not_awaited()
+
+
+@pytest.mark.parametrize("receiver", [-1, 2, True, False, 0.0, "1"])
+@pytest.mark.asyncio
+async def test_tone_family_rejects_invalid_receiver_before_io(
+    connected_radio, receiver: object
+):
+    """The receiver gate fires before any CT/CN frame is sent (OS precedent)."""
+    connected_radio._transport.query = AsyncMock()
+    connected_radio._transport.write = AsyncMock()
+
+    with pytest.raises((TypeError, ValueError), match="receiver"):
+        await connected_radio.get_tone_freq(receiver)  # type: ignore[arg-type]
+    with pytest.raises((TypeError, ValueError), match="receiver"):
+        await connected_radio.set_tone_freq(8850, receiver=receiver)  # type: ignore[arg-type]
+    with pytest.raises((TypeError, ValueError), match="receiver"):
+        await connected_radio.read_sql_type(receiver)  # type: ignore[arg-type]
+    with pytest.raises((TypeError, ValueError), match="receiver"):
+        await connected_radio.set_sql_type(1, receiver=receiver)  # type: ignore[arg-type]
+    with pytest.raises((TypeError, ValueError), match="receiver"):
+        await connected_radio.set_repeater_tone(True, receiver=receiver)  # type: ignore[arg-type]
+
+    connected_radio._transport.query.assert_not_awaited()
+    connected_radio._transport.write.assert_not_awaited()
+
+
+_TONE_FAMILY_COMMANDS = (
+    "get_repeater_tone",
+    "set_repeater_tone",
+    "get_repeater_tsql",
+    "set_repeater_tsql",
+    "get_tone_freq",
+    "set_tone_freq",
+    "get_tsql_freq",
+    "set_tsql_freq",
+)
+
+
+@pytest.mark.parametrize("command", _TONE_FAMILY_COMMANDS)
+def test_supports_command_tone_family_follows_profile(radio, command: str):
+    """On the stock FTX-1 profile every tone-family name reports True: each
+    is composed from CT/CN profile commands, and all of them are declared
+    there. Which name follows which command is pinned below."""
+    assert radio.supports_command(command) is True
+
+
+def _tone_family_radio(config, commands) -> YaesuCatRadio:
+    """A YaesuCatRadio on the real FTX-1 config with *commands* swapped."""
+    return YaesuCatRadio("/dev/null", profile=replace(config, commands=commands))
+
+
+@pytest.mark.parametrize(
+    ("removed", "expected_false"),
+    [
+        (
+            "get_sql_type",
+            (
+                "get_repeater_tone",
+                "set_repeater_tone",
+                "get_repeater_tsql",
+                "set_repeater_tsql",
+            ),
+        ),
+        ("set_sql_type", ("set_repeater_tone", "set_repeater_tsql")),
+        ("get_ctcss_tone", ("get_tone_freq", "get_tsql_freq")),
+        ("set_ctcss_tone", ("set_tone_freq", "set_tsql_freq")),
+    ],
+)
+def test_supports_command_tone_family_dependency_map(
+    config, removed: str, expected_false: tuple[str, ...]
+):
+    """Removing one CT/CN command flips EXACTLY its dependants to False.
+
+    ``supports_command`` routes each tone-family protocol name to the
+    profile commands it is composed from: the repeater toggles follow the
+    ``CT`` pair (the setters read ``CT`` before writing, so removing only
+    ``set_sql_type`` still flips them), and the tone frequencies follow the
+    ``CN`` pair. Every other name must stay True on the same profile, so an
+    emptied or trimmed dependency list cannot pass unnoticed.
+    """
+    commands = {name: spec for name, spec in config.commands.items() if name != removed}
+    radio = _tone_family_radio(config, commands)
+    for command in _TONE_FAMILY_COMMANDS:
+        expected = command not in expected_false
+        assert radio.supports_command(command) is expected, (
+            f"{command} should report {expected} with {removed} removed"
+        )
+
+
+def test_supports_command_tone_family_declared_absent_refuses(config):
+    """A protocol name declared absent reports False even while every CT/CN
+    command it is composed from is present: the dependency map's first gate
+    is the absence declaration itself."""
+    commands = dict(config.commands)
+    commands["get_repeater_tone"] = AbsentCommandSpec("synthetic test absence")
+    radio = _tone_family_radio(config, commands)
+    assert radio.supports_command("get_repeater_tone") is False
+
+
+# -- Repeater shift (OS command, MOR-2111) ----------------------------------
+
+
+@pytest.mark.parametrize(("receiver", "direction"), [(0, 0), (1, 3)])
+@pytest.mark.asyncio
+async def test_read_repeater_shift_routes_receiver_and_is_pure(
+    connected_radio, receiver: int, direction: int
+):
+    """OS P1 selects MAIN/SUB; a pure read leaves both legacy sides intact."""
+    connected_radio.radio_state.main.repeater_shift = 98
+    connected_radio.radio_state.sub.repeater_shift = 99
+    state_before = connected_radio.radio_state
+    connected_radio._transport.query = AsyncMock(
+        return_value=f"OS{receiver}{direction}"
+    )
+
+    assert await connected_radio.read_repeater_shift(receiver) == direction
+    connected_radio._transport.query.assert_called_once_with(f"OS{receiver};")
+    assert connected_radio.radio_state is state_before
+    assert connected_radio.radio_state.main.repeater_shift == 98
+    assert connected_radio.radio_state.sub.repeater_shift == 99
+
+
+@pytest.mark.asyncio
+async def test_get_repeater_shift_returns_enum_for_sub(connected_radio):
+    connected_radio._transport.query = AsyncMock(return_value="OS13")
+    result = await connected_radio.get_repeater_shift(1)
+    assert result is RepeaterShiftDirection.ARS
+    connected_radio._transport.query.assert_called_once_with("OS1;")
+
+
+@pytest.mark.parametrize("receiver", [-1, 2, True, False, 0.0, "0"])
+@pytest.mark.asyncio
+async def test_repeater_shift_rejects_invalid_receiver_before_io(
+    connected_radio, receiver: object
+):
+    connected_radio._transport.query = AsyncMock()
+    connected_radio._transport.write = AsyncMock()
+
+    with pytest.raises((TypeError, ValueError), match="receiver"):
+        await connected_radio.read_repeater_shift(receiver)  # type: ignore[arg-type]
+    with pytest.raises((TypeError, ValueError), match="receiver"):
+        await connected_radio.set_repeater_shift(0, receiver=receiver)  # type: ignore[arg-type]
+
+    connected_radio._transport.query.assert_not_awaited()
+    connected_radio._transport.write.assert_not_awaited()
+
+
+@pytest.mark.parametrize("direction", [-1, 4, True, False, 1.0, "1"])
+@pytest.mark.asyncio
+async def test_repeater_shift_rejects_invalid_direction_before_io(
+    connected_radio, direction: object
+):
+    connected_radio._transport.write = AsyncMock()
+    with pytest.raises((TypeError, ValueError), match="direction"):
+        await connected_radio.set_repeater_shift(direction)  # type: ignore[arg-type]
+    connected_radio._transport.write.assert_not_awaited()
+
+
+@pytest.mark.parametrize("receiver", [0, 1])
+@pytest.mark.parametrize("direction", list(RepeaterShiftDirection))
+@pytest.mark.asyncio
+async def test_set_repeater_shift_routes_all_values(
+    connected_radio, receiver: int, direction: RepeaterShiftDirection
+):
+    connected_radio._transport.write = AsyncMock()
+    await connected_radio.set_repeater_shift(direction, receiver=receiver)
+    connected_radio._transport.write.assert_called_once_with(
+        f"OS{receiver}{int(direction)};"
+    )
+
+
+@pytest.mark.asyncio
+async def test_read_repeater_shift_rejects_answer_for_other_receiver(connected_radio):
+    connected_radio._transport.query = AsyncMock(return_value="OS12")
+    with pytest.raises(CommandError, match="receiver.*mismatch"):
+        await connected_radio.read_repeater_shift(0)
+
+
+@pytest.mark.parametrize("answer", ["OS04", "OS0X"])
+@pytest.mark.asyncio
+async def test_read_repeater_shift_rejects_invalid_answer_direction(
+    connected_radio, answer: str
+):
+    connected_radio._transport.query = AsyncMock(return_value=answer)
+    with pytest.raises(CommandError, match="direction in answer"):
+        await connected_radio.read_repeater_shift(0)
+
+
+@pytest.mark.parametrize(
+    ("index", "expected_centihz"),
+    [
+        (0, 6700),  # 67.0 Hz
+        (8, 8850),  # 88.5 Hz (default CTCSS tone)
+        (12, 10000),  # 100.0 Hz
+        (15, 11090),  # 110.9 Hz
+        (25, 15670),  # 156.7 Hz
+        (49, 25410),  # 254.1 Hz (highest standard EIA tone)
+    ],
+)
+def test_ctcss_index_to_centihz_matches_chart(index, expected_centihz):
+    """Spot-check CN mapping through the active profile's resolved domain.
+
+    The profile catalog owns the 50-tone EIA domain; the Yaesu provider only
+    applies the CAT CN index to that resolved tuple.
+    """
+    from rigplane.backends.yaesu_cat.radio import _ctcss_index_to_centihz
+
+    profile = load_rig(_RIGS_DIR / "ftx1.toml").to_profile()
+    assert (
+        _ctcss_index_to_centihz(index, domain=profile.ctcss_tones_centihz)
+        == expected_centihz
+    )
+
+
+# ---------------------------------------------------------------------------
+# D10: System
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_id(connected_radio):
+    connected_radio._transport.query = AsyncMock(return_value="ID0840")
+    model_id = await connected_radio.get_id()
+    assert model_id == "0840"
+    connected_radio._transport.query.assert_called_once_with("ID;")
+
+
+@pytest.mark.asyncio
+async def test_get_auto_info(connected_radio):
+    connected_radio._transport.query = AsyncMock(return_value="AI0")
+    assert await connected_radio.get_auto_info() is False
+
+
+@pytest.mark.asyncio
+async def test_set_auto_info(connected_radio):
+    connected_radio._transport.write = AsyncMock()
+    await connected_radio.set_auto_info(True)
+    connected_radio._transport.write.assert_called_once_with("AI1;")
+
+
+@pytest.mark.asyncio
+async def test_get_vox(connected_radio):
+    connected_radio._transport.query = AsyncMock(return_value="VX1")
+    assert await connected_radio.get_vox() is True
+
+
+@pytest.mark.asyncio
+async def test_set_vox(connected_radio):
+    connected_radio._transport.write = AsyncMock()
+    await connected_radio.set_vox(False)
+    connected_radio._transport.write.assert_called_once_with("VX0;")
+
+
+@pytest.mark.asyncio
+async def test_get_lock(connected_radio):
+    connected_radio._transport.query = AsyncMock(return_value="LK0")
+    assert await connected_radio.get_lock() is False
+
+
+@pytest.mark.asyncio
+async def test_set_lock(connected_radio):
+    connected_radio._transport.write = AsyncMock()
+    await connected_radio.set_lock(True)
+    connected_radio._transport.write.assert_called_once_with("LK1;")
+
+
+@pytest.mark.asyncio
+async def test_get_band_not_supported(connected_radio):
+    """FTX-1 does not support BS read (write-only)."""
+    assert not hasattr(connected_radio, "get_band")
+
+
+@pytest.mark.asyncio
+async def test_set_band(connected_radio):
+    connected_radio._transport.write = AsyncMock()
+    await connected_radio.set_band(3)
+    connected_radio._transport.write.assert_called_once_with("BS003;")
+
+
+@pytest.mark.asyncio
+async def test_band_up(connected_radio):
+    connected_radio._transport.write = AsyncMock()
+    await connected_radio.band_up()
+    connected_radio._transport.write.assert_called_once_with("BU0;")
+
+
+@pytest.mark.asyncio
+async def test_band_down(connected_radio):
+    connected_radio._transport.write = AsyncMock()
+    await connected_radio.band_down()
+    connected_radio._transport.write.assert_called_once_with("BD0;")
+
+
+# ---------------------------------------------------------------------------
+# AGC
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_agc(connected_radio):
+    connected_radio._transport.query = AsyncMock(return_value="GT03")
+    assert await connected_radio.get_agc() == 3
+    connected_radio._transport.query.assert_called_once_with("GT0;")
+
+
+@pytest.mark.asyncio
+async def test_set_agc(connected_radio):
+    connected_radio._transport.write = AsyncMock()
+    await connected_radio.set_agc(2)
+    connected_radio._transport.write.assert_called_once_with("GT02;")
+
+
+# SUB (P1=1) frames and answer values below: bench probe 2026-09-18,
+# MOR-2511 comment 01:22Z -- `GT1;` answered SUB's own value (`GT11;`)
+# with MAIN untouched (`GT06;`).
+@pytest.mark.asyncio
+async def test_read_agc_sub_sends_gt1(connected_radio):
+    connected_radio._transport.query = AsyncMock(return_value="GT16")
+    assert await connected_radio.read_agc(1) == 6
+    connected_radio._transport.query.assert_called_once_with("GT1;")
+
+
+@pytest.mark.asyncio
+async def test_set_agc_sub_sends_gt1(connected_radio):
+    connected_radio._transport.write = AsyncMock()
+    await connected_radio.set_agc(1, receiver=1)
+    connected_radio._transport.write.assert_called_once_with("GT11;")
+
+
+@pytest.mark.asyncio
+async def test_set_agc_sub_auto_sends_gt14(connected_radio):
+    connected_radio._transport.write = AsyncMock()
+    await connected_radio.set_agc(4, receiver=1)
+    connected_radio._transport.write.assert_called_once_with("GT14;")
+
+
+@pytest.mark.parametrize("mode", [0, 1, 2, 3])
+@pytest.mark.asyncio
+async def test_set_agc_manual_modes_passthrough(connected_radio, mode):
+    """MOR-498: manual AGC modes 0-3 are sent verbatim as ``GT0{mode};``."""
+    connected_radio._transport.write = AsyncMock()
+    await connected_radio.set_agc(mode)
+    connected_radio._transport.write.assert_called_once_with(f"GT0{mode};")
+
+
+@pytest.mark.asyncio
+async def test_set_agc_auto_sends_gt04(connected_radio):
+    connected_radio._transport.write = AsyncMock()
+    await connected_radio.set_agc(4)
+    connected_radio._transport.write.assert_called_once_with("GT04;")
+
+
+@pytest.mark.parametrize("mode", [-1, 5, 6, 7, 99])
+@pytest.mark.asyncio
+async def test_set_agc_rejects_out_of_domain_value(connected_radio, mode):
+    connected_radio._transport.write = AsyncMock()
+    with pytest.raises(CommandError):
+        await connected_radio.set_agc(mode)
+    connected_radio._transport.write.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Profile property (issue #392)
+# ---------------------------------------------------------------------------
+
+
+def test_profile_property_returns_radio_profile(radio):
+    """YaesuCatRadio.profile returns a RadioProfile instance."""
+    from rigplane.profiles import RadioProfile
+
+    p = radio.profile
+    assert isinstance(p, RadioProfile)
+    assert p.model == "FTX-1"
+
+
+def test_profile_property_nb_nr_controls(radio):
+    """YaesuCatRadio.profile exposes NB/NR as level_is_toggle (FTX-1)."""
+    p = radio.profile
+    assert p.controls["nb"]["style"] == "level_is_toggle"
+    assert p.controls["nr"]["style"] == "level_is_toggle"
+
+
+# ---------------------------------------------------------------------------
+# set_nb / set_nr — level_is_toggle (FTX-1 has no set_nb/set_nr commands)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_set_nb_on_keeps_radio_level(connected_radio):
+    """MOR-2518: NB-on keeps the radio's live level: the stale mirror says 0
+    while the radio answers ``NL0003``, so ``NL0003;`` is written, not the
+    midpoint default."""
+    connected_radio._transport.query = AsyncMock(return_value="NL0003")
+    connected_radio._transport.write = AsyncMock()
+    assert connected_radio._state.main.nb_level == 0
+    await connected_radio.set_nb(True)
+    connected_radio._transport.query.assert_called_once_with("NL0;")
+    connected_radio._transport.write.assert_called_once_with("NL0003;")
+
+
+@pytest.mark.asyncio
+async def test_set_nb_on_uses_default_when_radio_level_zero(connected_radio):
+    """MOR-2518: the radio answers ``NL0000`` (off), so the midpoint default
+    5 is written."""
+    connected_radio._transport.query = AsyncMock(return_value="NL0000")
+    connected_radio._transport.write = AsyncMock()
+    await connected_radio.set_nb(True)
+    connected_radio._transport.write.assert_called_once_with("NL0005;")
+
+
+@pytest.mark.asyncio
+async def test_set_nb_sub_reads_and_writes_sub(connected_radio):
+    """MOR-2518: SUB reads ``NL1;``, not MAIN's mirror: the MAIN mirror says
+    9 while the radio answers ``NL1004``, so ``NL1004;`` is written."""
+    connected_radio._state.main.nb_level = 9
+    connected_radio._transport.query = AsyncMock(return_value="NL1004")
+    connected_radio._transport.write = AsyncMock()
+    await connected_radio.set_nb(True, receiver=1)
+    connected_radio._transport.query.assert_called_once_with("NL1;")
+    connected_radio._transport.write.assert_called_once_with("NL1004;")
+
+
+@pytest.mark.asyncio
+async def test_set_nb_off_sends_level_zero(connected_radio):
+    """set_nb(False) sends level 0 (= OFF for FTX-1)."""
+    connected_radio._transport.query = AsyncMock(return_value="NL0005")
+    connected_radio._transport.write = AsyncMock()
+    connected_radio._state.main.nb_level = 5
+    await connected_radio.set_nb(False)
+    connected_radio._transport.write.assert_called_once_with("NL0000;")
+
+
+@pytest.mark.asyncio
+async def test_set_nr_on_keeps_radio_level(connected_radio):
+    """MOR-2518: NR-on keeps the radio's live level: the stale mirror says 0
+    while the radio answers ``RL004``, so ``RL004;`` is written."""
+    connected_radio._transport.query = AsyncMock(return_value="RL004")
+    connected_radio._transport.write = AsyncMock()
+    assert connected_radio._state.main.nr_level == 0
+    await connected_radio.set_nr(True)
+    connected_radio._transport.query.assert_called_once_with("RL0;")
+    connected_radio._transport.write.assert_called_once_with("RL004;")
+
+
+@pytest.mark.asyncio
+async def test_set_nr_on_uses_default_when_radio_level_zero(connected_radio):
+    """MOR-2518: the radio answers ``RL000`` (off), so the midpoint default
+    5 is written. The NR range is 0-10 per the FTX-1 CAT OM (MOR-695)."""
+    connected_radio._transport.query = AsyncMock(return_value="RL000")
+    connected_radio._transport.write = AsyncMock()
+    await connected_radio.set_nr(True)
+    connected_radio._transport.write.assert_called_once_with("RL005;")
+
+
+@pytest.mark.asyncio
+async def test_set_nr_sub_reads_and_writes_sub(connected_radio):
+    """MOR-2518: SUB reads ``RL1;``: the MAIN mirror says 7 while the radio
+    answers ``RL102`` (RL level is two digits), so ``RL102;`` is written."""
+    connected_radio._state.main.nr_level = 7
+    connected_radio._transport.query = AsyncMock(return_value="RL102")
+    connected_radio._transport.write = AsyncMock()
+    await connected_radio.set_nr(True, receiver=1)
+    connected_radio._transport.query.assert_called_once_with("RL1;")
+    connected_radio._transport.write.assert_called_once_with("RL102;")
+
+
+@pytest.mark.asyncio
+async def test_set_nr_off_sends_level_zero(connected_radio):
+    """set_nr(False) sends level 0 (= OFF for FTX-1)."""
+    connected_radio._transport.query = AsyncMock(return_value="RL007")
+    connected_radio._transport.write = AsyncMock()
+    connected_radio._state.main.nr_level = 7
+    await connected_radio.set_nr(False)
+    connected_radio._transport.write.assert_called_once_with("RL000;")
+
+
+@pytest.mark.asyncio
+async def test_set_nb_off_then_on_restores_operator_level(connected_radio):
+    """MOR-2632: level 3, then off, then on writes ``NL0003;`` on the on
+    step. Off reads the live level before writing 0 and remembers it; the
+    on step's own read sees 0, so the remembered 3 is written, not the
+    midpoint default 5."""
+    connected_radio._transport.write = AsyncMock()
+    connected_radio._transport.query = AsyncMock(return_value="NL0003")
+    await connected_radio.set_nb(False)
+    connected_radio._transport.query = AsyncMock(return_value="NL0000")
+    await connected_radio.set_nb(True)
+    assert connected_radio._transport.write.call_args_list == [
+        call("NL0000;"),
+        call("NL0003;"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_set_nr_off_then_on_restores_operator_level(connected_radio):
+    """MOR-2632: level 3, then off, then on writes ``RL003;`` on the on
+    step, not the midpoint default ``RL005;``."""
+    connected_radio._transport.write = AsyncMock()
+    connected_radio._transport.query = AsyncMock(return_value="RL003")
+    await connected_radio.set_nr(False)
+    connected_radio._transport.query = AsyncMock(return_value="RL000")
+    await connected_radio.set_nr(True)
+    assert connected_radio._transport.write.call_args_list == [
+        call("RL000;"),
+        call("RL003;"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_set_nb_sub_off_then_on_does_not_use_main_memory(connected_radio):
+    """MOR-2632: SUB's off/on cycle writes ``NL1003;``. MAIN's remembered
+    level (9) must not leak onto SUB."""
+    connected_radio._transport.write = AsyncMock()
+    connected_radio._transport.query = AsyncMock(return_value="NL0009")
+    await connected_radio.set_nb(False)
+    connected_radio._transport.query = AsyncMock(return_value="NL1003")
+    await connected_radio.set_nb(False, receiver=1)
+    connected_radio._transport.query = AsyncMock(return_value="NL1000")
+    await connected_radio.set_nb(True, receiver=1)
+    assert connected_radio._transport.write.call_args_list == [
+        call("NL0000;"),
+        call("NL1000;"),
+        call("NL1003;"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_set_nb_on_after_off_from_zero_uses_default(connected_radio):
+    """MOR-2632: off from a live level of 0 remembers nothing, so the
+    following on still writes the midpoint default 5."""
+    connected_radio._transport.write = AsyncMock()
+    connected_radio._transport.query = AsyncMock(return_value="NL0000")
+    await connected_radio.set_nb(False)
+    await connected_radio.set_nb(True)
+    assert connected_radio._transport.write.call_args_list == [
+        call("NL0000;"),
+        call("NL0005;"),
+    ]
+
+
+# ---------------------------------------------------------------------------
+# AdvancedControlCapable aliases
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_cw_pitch_returns_hz_from_idx(connected_radio):
+    """get_cw_pitch maps idx (0-75) → Hz via 300 + idx * 10. (#1162)"""
+    connected_radio._transport.query = AsyncMock(return_value="KP25")
+    # idx 25 → 300 + 25*10 = 550 Hz
+    assert await connected_radio.get_cw_pitch() == 550
+    connected_radio._transport.query.assert_called_once_with("KP;")
+
+
+@pytest.mark.asyncio
+async def test_set_cw_pitch_accepts_hz(connected_radio):
+    """set_cw_pitch maps Hz → idx via (Hz - 300) // 10. (#1162)"""
+    connected_radio._transport.write = AsyncMock()
+    # 700 Hz → idx 40
+    await connected_radio.set_cw_pitch(700)
+    connected_radio._transport.write.assert_called_once_with("KP40;")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "hz, idx",
+    [(300, 0), (700, 40), (1050, 75)],
+)
+async def test_cw_pitch_round_trip_hz_idx(connected_radio, hz, idx):
+    """Boundary + middle round-trips: get returns Hz, set sends idx. (#1162)"""
+    connected_radio._transport.query = AsyncMock(return_value=f"KP{idx:02d}")
+    assert await connected_radio.get_cw_pitch() == hz
+
+    connected_radio._transport.write = AsyncMock()
+    await connected_radio.set_cw_pitch(hz)
+    connected_radio._transport.write.assert_called_once_with(f"KP{idx:02d};")
+
+
+@pytest.mark.asyncio
+async def test_set_cw_pitch_rejects_out_of_range(connected_radio):
+    """Hz outside 300-1050 raises ValueError. (#1162)"""
+    connected_radio._transport.write = AsyncMock()
+    with pytest.raises(ValueError, match="300-1050"):
+        await connected_radio.set_cw_pitch(299)
+    with pytest.raises(ValueError, match="300-1050"):
+        await connected_radio.set_cw_pitch(1051)
+    connected_radio._transport.write.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("hz", [305, 705])
+async def test_set_cw_pitch_rejects_off_lattice_without_cat_write(connected_radio, hz):
+    """In-range but off-lattice Hz values are rejected, not silently
+    floored to the nearest index (MOR-1682)."""
+    connected_radio._transport.write = AsyncMock()
+    with pytest.raises(ValueError, match="cw_pitch must be within 300-1050"):
+        await connected_radio.set_cw_pitch(hz)
+    connected_radio._transport.write.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("hz", [290, 1060])
+async def test_set_cw_pitch_rejects_domain_edges_without_cat_write(connected_radio, hz):
+    """Out-of-domain Hz values from the profile's cw_pitch domain raise
+    ValueError and never reach the wire (MOR-1682)."""
+    connected_radio._transport.write = AsyncMock()
+    with pytest.raises(ValueError, match="cw_pitch must be within 300-1050"):
+        await connected_radio.set_cw_pitch(hz)
+    connected_radio._transport.write.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_get_key_pitch_still_returns_idx(connected_radio):
+    """Yaesu-named get_key_pitch keeps idx contract (no break). (#1162)"""
+    connected_radio._transport.query = AsyncMock(return_value="KP40")
+    assert await connected_radio.get_key_pitch() == 40
+
+
+# ---------------------------------------------------------------------------
+# ControlDomainCapable surface (MOR-2469)
+# ---------------------------------------------------------------------------
+
+
+def test_snap_control_display_notch_hz_to_raw(radio):
+    """1500 Hz snaps to the raw code 150 on the FTX-1 notch domain."""
+    assert radio.snap_control_display("manual_notch_freq", "1500") == 150
+
+
+def test_snap_control_display_notch_tie_rounds_up(radio):
+    """1505 Hz is exactly between 1500 and 1510 — nearest_ties_up → 1510."""
+    assert radio.snap_control_display("manual_notch_freq", "1505") == 151
+
+
+@pytest.mark.parametrize("display", ["5", "3300", "-10"])
+def test_snap_control_display_notch_out_of_range_raises(radio, display):
+    with pytest.raises(ValueError, match="manual_notch_freq"):
+        radio.snap_control_display("manual_notch_freq", display)
+
+
+@pytest.mark.parametrize(
+    ("display", "raw"),
+    [("15", 20), ("-10", 0), ("-15", -20), ("1195", 1200)],
+)
+def test_snap_control_display_if_shift(radio, display, raw):
+    """Signed IF-shift snapping; ties (±10, ±15 when step is 20) round up."""
+    assert radio.snap_control_display("if_shift", display) == raw
+
+
+def test_snap_control_display_if_shift_out_of_range_raises(radio):
+    with pytest.raises(ValueError, match="if_shift"):
+        radio.snap_control_display("if_shift", "1210")
+    with pytest.raises(ValueError, match="if_shift"):
+        radio.snap_control_display("if_shift", "-1210")
+
+
+@pytest.mark.parametrize(
+    ("display", "raw"),
+    [("301", 300), ("305", 310), ("700", 700), ("1050", 1050), ("300", 300)],
+)
+def test_snap_control_display_cw_pitch(radio, display, raw):
+    assert radio.snap_control_display("cw_pitch", display) == raw
+
+
+def test_snap_control_display_cw_pitch_out_of_range_raises(radio):
+    with pytest.raises(ValueError, match="cw_pitch"):
+        radio.snap_control_display("cw_pitch", "1060")
+    with pytest.raises(ValueError, match="cw_pitch"):
+        radio.snap_control_display("cw_pitch", "299")
+
+
+def test_snap_control_display_no_domain_returns_none(radio):
+    assert radio.snap_control_display("no_such_control", "100") is None
+
+
+def test_snap_control_display_non_canonical_display_returns_none(radio):
+    """A domain exists but the display string is not a canonical decimal."""
+    assert radio.snap_control_display("cw_pitch", "07") is None
+    assert radio.snap_control_display("cw_pitch", "300.0") is None
+
+
+def test_decode_control_raw_notch_linear(radio):
+    assert radio.decode_control_raw("manual_notch_freq", 1) == "10"
+    assert radio.decode_control_raw("manual_notch_freq", 150) == "1500"
+    assert radio.decode_control_raw("manual_notch_freq", 320) == "3200"
+
+
+def test_decode_control_raw_if_shift_identity(radio):
+    assert radio.decode_control_raw("if_shift", -1200) == "-1200"
+    assert radio.decode_control_raw("if_shift", 0) == "0"
+
+
+def test_decode_control_raw_off_lattice_returns_none(radio):
+    assert radio.decode_control_raw("if_shift", 10) is None
+    assert radio.decode_control_raw("cw_pitch", 301) is None
+
+
+def test_decode_control_raw_out_of_range_returns_none(radio):
+    assert radio.decode_control_raw("manual_notch_freq", 0) is None
+    assert radio.decode_control_raw("manual_notch_freq", 321) is None
+
+
+def test_decode_control_raw_no_domain_returns_none(radio):
+    assert radio.decode_control_raw("no_such_control", 100) is None
+
+
+def test_control_display_bounds_nr_level(radio):
+    """The FTX-1 publishes nr_level as an identity 0-10 domain (MOR-2479)."""
+    assert radio.control_display_bounds("nr_level") == ("0", "10")
+
+
+def test_control_display_bounds_other_domains(radio):
+    assert radio.control_display_bounds("cw_pitch") == ("300", "1050")
+    assert radio.control_display_bounds("manual_notch_freq") == ("10", "3200")
+
+
+def test_control_display_bounds_no_domain_returns_none(radio):
+    assert radio.control_display_bounds("no_such_control") is None
+
+
+def test_control_domain_capable_isinstance(radio):
+    from rigplane.core.radio_protocol import ControlDomainCapable
+
+    assert isinstance(radio, ControlDomainCapable)
+
+
+@pytest.mark.asyncio
+async def test_set_key_pitch_still_takes_idx(connected_radio):
+    """Yaesu-named set_key_pitch keeps idx contract (no break). (#1162)"""
+    connected_radio._transport.write = AsyncMock()
+    await connected_radio.set_key_pitch(40)
+    connected_radio._transport.write.assert_called_once_with("KP40;")
+
+
+@pytest.mark.asyncio
+async def test_get_dial_lock_delegates_to_get_lock(connected_radio):
+    connected_radio._transport.query = AsyncMock(return_value="LK1")
+    assert await connected_radio.get_dial_lock() is True
+    connected_radio._transport.query.assert_called_once_with("LK;")
+
+
+@pytest.mark.asyncio
+async def test_set_dial_lock_delegates_to_set_lock(connected_radio):
+    connected_radio._transport.write = AsyncMock()
+    await connected_radio.set_dial_lock(True)
+    connected_radio._transport.write.assert_called_once_with("LK1;")
+
+
+@pytest.mark.asyncio
+async def test_get_compressor_delegates_to_get_processor(connected_radio):
+    """Yaesu get_compressor alias mirrors set_compressor → set_processor (issue #1097)."""
+    connected_radio._transport.query = AsyncMock(return_value="PR01")
+    assert await connected_radio.get_compressor() is True
+    connected_radio._transport.query.assert_called_once_with("PR0;")
+
+
+@pytest.mark.asyncio
+async def test_compressor_round_trip(connected_radio):
+    """Round-trip get→set→get works through the Icom-spelled protocol surface."""
+    connected_radio._transport.write = AsyncMock()
+    connected_radio._transport.query = AsyncMock(side_effect=["PR00", "PR01"])
+
+    before = await connected_radio.get_compressor()
+    await connected_radio.set_compressor(True)
+    after = await connected_radio.get_compressor()
+
+    assert before is False
+    assert after is True
+    connected_radio._transport.write.assert_called_once_with("PR01;")
+
+
+@pytest.mark.asyncio
+async def test_set_compressor_delegates_to_set_processor(connected_radio):
+    connected_radio._transport.write = AsyncMock()
+    await connected_radio.set_compressor(True)
+    connected_radio._transport.write.assert_called_once_with("PR01;")
+
+
+@pytest.mark.asyncio
+async def test_set_compressor_off_delegates_to_set_processor(connected_radio):
+    connected_radio._transport.write = AsyncMock()
+    await connected_radio.set_compressor(False)
+    connected_radio._transport.write.assert_called_once_with("PR00;")
+
+
+@pytest.mark.asyncio
+async def test_get_tuner_status_reads_atu(connected_radio):
+    connected_radio._transport.query = AsyncMock(return_value="AC001")
+    result = await connected_radio.get_tuner_status()
+    assert isinstance(result, int)
+
+
+@pytest.mark.asyncio
+async def test_set_tuner_status_acquires_atu_route(connected_radio):
+    connected_radio._transport.query = AsyncMock(return_value="AC101")
+    connected_radio._transport.write = AsyncMock()
+    await connected_radio.set_tuner_status(1)
+    connected_radio._transport.write.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_shipped_profile_refuses_send_cw_text_before_any_write(connected_radio):
+    # MOR-3678: the shipped FTX-1 profile disables typed CW text; the old
+    # "KY <text>;" keyboard frames were not valid FTX-1 CAT. The KM + KY
+    # path is covered in tests/test_ftx1_send_cw_text_wire.py.
+    connected_radio._transport.write = AsyncMock()
+    with pytest.raises(RuntimeError, match="does not support sending CW text"):
+        await connected_radio.send_cw_text("CQ CQ DE W1AW")
+    connected_radio._transport.write.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_stop_cw_text_stops_keyer_playback(connected_radio):
+    # KY P1 P2 with P2 0 = STOP (CAT manual 2508-C printed p.18).
+    connected_radio._transport.write = AsyncMock()
+    await connected_radio.stop_cw_text()
+    connected_radio._transport.write.assert_called_once_with("KY00;")
+
+
+# ---------------------------------------------------------------------------
+# RM Meters (COMP, ALC, Power, SWR, ID, VDD)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_read_meter_comp_zero(connected_radio):
+    connected_radio._transport.query = AsyncMock(return_value="RM3000000")
+    val = await connected_radio.get_comp_meter()
+    assert val == 0
+    connected_radio._transport.query.assert_called_once_with("RM3;")
+
+
+@pytest.mark.asyncio
+async def test_read_meter_comp_fifty(connected_radio):
+    connected_radio._transport.query = AsyncMock(return_value="RM3050000")
+    val = await connected_radio.get_comp_meter()
+    assert val == 50
+
+
+@pytest.mark.asyncio
+async def test_read_meter_id(connected_radio):
+    connected_radio._transport.query = AsyncMock(return_value="RM7003000")
+    val = await connected_radio.get_id_meter()
+    assert val == 3
+    connected_radio._transport.query.assert_called_once_with("RM7;")
+
+
+@pytest.mark.asyncio
+async def test_read_meter_vd(connected_radio):
+    connected_radio._transport.query = AsyncMock(return_value="RM8005000")
+    val = await connected_radio.get_vd_meter()
+    assert val == 5
+    connected_radio._transport.query.assert_called_once_with("RM8;")
+
+
+@pytest.mark.asyncio
+async def test_read_meter_alc(connected_radio):
+    connected_radio._transport.query = AsyncMock(return_value="RM4080000")
+    val = await connected_radio.get_alc_meter()
+    assert val == 80
+    connected_radio._transport.query.assert_called_once_with("RM4;")
+
+
+@pytest.mark.asyncio
+async def test_read_meter_power(connected_radio):
+    connected_radio._transport.query = AsyncMock(return_value="RM5200000")
+    val = await connected_radio.get_power_meter()
+    assert val == 200
+    connected_radio._transport.query.assert_called_once_with("RM5;")
+
+
+@pytest.mark.asyncio
+async def test_read_meter_malformed_response_raises(connected_radio):
+    """A short/malformed RM reply fails the profile's parse template.
+
+    CatParseError is a ValueError subclass, so this stays in the same
+    exception family the old hand-rolled check raised.
+    """
+    connected_radio._transport.query = AsyncMock(return_value="RM00")
+    with pytest.raises(CatParseError):
+        await connected_radio.get_comp_meter()
+
+
+@pytest.mark.asyncio
+async def test_get_swr_zero_returns_one(connected_radio):
+    connected_radio._transport.query = AsyncMock(return_value="RM6000000")
+    swr = await connected_radio.get_swr()
+    assert swr == 1.0
+    connected_radio._transport.query.assert_called_once_with("RM6;")
+
+
+@pytest.mark.asyncio
+async def test_get_swr_mid_value(connected_radio):
+    # Post-#440: interpolates the TOML calibration table.
+    # Calibration points: (96 → 2.0), (160 → 3.0); raw=120 interpolates
+    # linearly between them.
+    connected_radio._transport.query = AsyncMock(return_value="RM6120000")
+    swr = await connected_radio.get_swr()
+    t = (120 - 96) / (160 - 96)
+    expected = 2.0 + t * (3.0 - 2.0)
+    assert abs(swr - expected) < 0.01
+
+
+@pytest.mark.asyncio
+async def test_get_swr_max(connected_radio):
+    # Post-#440: raw=255 pins to the last calibration point (5.0+),
+    # replacing the legacy linear endpoint of 9.9.
+    connected_radio._transport.query = AsyncMock(return_value="RM6255000")
+    swr = await connected_radio.get_swr()
+    assert abs(swr - 5.0) < 0.01
+
+
+@pytest.mark.asyncio
+async def test_get_swr_calibration_endpoints(connected_radio):
+    """SWR calibration points from TOML are honored exactly (closes #440)."""
+    for raw_val, expected in [(48, 1.5), (96, 2.0), (160, 3.0)]:
+        connected_radio._transport.query = AsyncMock(
+            return_value=f"RM6{raw_val:03d}000"
+        )
+        swr = await connected_radio.get_swr()
+        assert abs(swr - expected) < 0.01, (
+            f"raw={raw_val} expected SWR {expected}, got {swr:.3f}"
+        )
+
+
+@pytest.mark.asyncio
+async def test_get_rf_power_delegates_to_get_power(connected_radio):
+    connected_radio._transport.query = AsyncMock(return_value="PC2005")
+    watts = await connected_radio.get_rf_power()
+    assert watts == 5
+
+
+# ---------------------------------------------------------------------------
+# Processor level (PL command) — bug #549
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_processor_level_parses_3_digit(connected_radio):
+    """PL command returns 3-digit level; get_processor_level parses it."""
+    connected_radio._transport.query = AsyncMock(return_value="PL045")
+    level = await connected_radio.get_processor_level()
+    assert level == 45
+    connected_radio._transport.query.assert_called_once_with("PL;")
+
+
+@pytest.mark.asyncio
+async def test_set_processor_level_sends_3_digit(connected_radio):
+    """set_processor_level(75) sends exactly 'PL075;' — no drive parameter."""
+    connected_radio._transport.write = AsyncMock()
+    await connected_radio.set_processor_level(75)
+    connected_radio._transport.write.assert_called_once_with("PL075;")
+
+
+@pytest.mark.asyncio
+async def test_get_processor_level_no_last_drive_gain_attribute(connected_radio):
+    """After get_processor_level, no _last_drive_gain attribute should exist."""
+    connected_radio._transport.query = AsyncMock(return_value="PL050")
+    await connected_radio.get_processor_level()
+    assert not hasattr(connected_radio, "_last_drive_gain")
+
+
+@pytest.mark.asyncio
+async def test_set_compressor_level_delegates_to_set_processor_level(connected_radio):
+    """set_compressor_level is a thin alias for set_processor_level (issue #1098)."""
+    connected_radio._transport.write = AsyncMock()
+    await connected_radio.set_compressor_level(75)
+    connected_radio._transport.write.assert_called_once_with("PL075;")
+
+
+@pytest.mark.asyncio
+async def test_get_compressor_level_delegates_to_get_processor_level(connected_radio):
+    """get_compressor_level is a thin alias for get_processor_level (issue #1098)."""
+    connected_radio._transport.query = AsyncMock(return_value="PL045")
+    level = await connected_radio.get_compressor_level()
+    assert level == 45
+    connected_radio._transport.query.assert_called_once_with("PL;")
+
+
+@pytest.mark.asyncio
+async def test_compressor_level_round_trip(connected_radio):
+    """Round-trip set→get reports the value just written (was 0 before #1098)."""
+    connected_radio._transport.write = AsyncMock()
+    connected_radio._transport.query = AsyncMock(return_value="PL060")
+    await connected_radio.set_compressor_level(60)
+    level = await connected_radio.get_compressor_level()
+    assert level == 60
+    connected_radio._transport.write.assert_called_once_with("PL060;")
+    connected_radio._transport.query.assert_called_once_with("PL;")
+
+
+# ---------------------------------------------------------------------------
+# Bug #550: capabilities must not advertise unimplemented features
+# ---------------------------------------------------------------------------
+
+
+class TestCapabilitiesNoFalseAdvertising:
+    """Verify that features raising NotImplementedError are NOT in capabilities."""
+
+    def test_repeater_tone_in_capabilities(self, radio):
+        """MOR-2111: the CT-backed tone surface is implemented; the tag advertises it."""
+        assert "repeater_tone" in radio.capabilities
+
+    def test_tsql_in_capabilities(self, radio):
+        """MOR-2111: same CT register carries TSQL; the tag advertises it."""
+        assert "tsql" in radio.capabilities
+
+    def test_data_mode_not_in_capabilities(self, radio):
+        assert "data_mode" not in radio.capabilities
+
+    def test_scan_not_in_capabilities(self, radio):
+        assert "scan" not in radio.capabilities
+
+    def test_real_capabilities_still_present(self, radio):
+        """Regression: removing false caps must not break real ones."""
+        for cap in ("audio", "dual_rx", "compressor", "meters", "tx", "cw"):
+            assert cap in radio.capabilities, f"{cap!r} should be in capabilities"
+
+
+# ---------------------------------------------------------------------------
+# SUB receiver level routing (#562)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_af_level_main_sends_ag0(connected_radio):
+    connected_radio._transport.query = AsyncMock(return_value="AG0128")
+    level = await connected_radio.get_af_level(0)
+    assert level == 128
+    connected_radio._transport.query.assert_called_once_with("AG0;")
+
+
+@pytest.mark.asyncio
+async def test_get_af_level_sub_sends_ag1(connected_radio):
+    connected_radio._transport.query = AsyncMock(return_value="AG1200")
+    level = await connected_radio.get_af_level(1)
+    assert level == 200
+    connected_radio._transport.query.assert_called_once_with("AG1;")
+
+
+@pytest.mark.asyncio
+async def test_set_af_level_sub_sends_ag1(connected_radio):
+    connected_radio._transport.write = AsyncMock()
+    await connected_radio.set_af_level(150, receiver=1)
+    connected_radio._transport.write.assert_called_once_with("AG1150;")
+
+
+@pytest.mark.asyncio
+async def test_get_rf_gain_sub_sends_rg1(connected_radio):
+    connected_radio._transport.query = AsyncMock(return_value="RG1180")
+    level = await connected_radio.get_rf_gain(1)
+    assert level == 180
+    connected_radio._transport.query.assert_called_once_with("RG1;")
+
+
+@pytest.mark.asyncio
+async def test_get_squelch_sub_sends_sq1(connected_radio):
+    connected_radio._transport.query = AsyncMock(return_value="SQ1050")
+    level = await connected_radio.get_squelch(1)
+    assert level == 50
+    connected_radio._transport.query.assert_called_once_with("SQ1;")
+
+
+@pytest.mark.asyncio
+async def test_set_rf_gain_sub_sends_rg1(connected_radio):
+    connected_radio._transport.write = AsyncMock()
+    await connected_radio.set_rf_gain(180, receiver=1)
+    connected_radio._transport.write.assert_called_once_with("RG1180;")
+
+
+@pytest.mark.asyncio
+async def test_set_squelch_sub_sends_sq1(connected_radio):
+    connected_radio._transport.write = AsyncMock()
+    await connected_radio.set_squelch(50, receiver=1)
+    connected_radio._transport.write.assert_called_once_with("SQ1050;")
+
+
+# ---------------------------------------------------------------------------
+# IF Bulk Query
+# ---------------------------------------------------------------------------
+
+
+class TestIFBulkQuery:
+    """Tests for get_if_status() — Yaesu IF; composite response.
+
+    Frames below are built from the profile's ``get_if_status`` parse
+    template — chan(5) + freq(9) + sign(1) + offset(4) + rx(1) + tx(1) +
+    mode(1) + vfo(1) + tone(1) + fixed "00" + shift(1) — the layout from the
+    CAT manual (FTX-1_CAT_OM_ENG_2508-C), bench-verified 2026-08-29. The
+    baseline frame ``IF00000014228000+000000200003`` is the bench FTX-1's
+    answer with the transport-stripped trailing ``;`` removed.
+    """
+
+    MEASURED_FRAME = "IF00000014228000+000000200003"
+
+    @pytest.mark.asyncio
+    async def test_get_if_status_parses_all_fields(self, connected_radio):
+        """The measured frame parses into freq, mode, RIT/XIT, VFO."""
+        connected_radio._transport.query = AsyncMock(return_value=self.MEASURED_FRAME)
+
+        result = await connected_radio.get_if_status()
+
+        assert result["freq"] == 14_228_000
+        assert result["mode"] == "USB"  # code "2"
+        assert result["rit_offset"] == 0
+        assert result["rit_on"] is False
+        assert result["xit_on"] is False
+        assert result["vfo"] == 0
+        assert "tx" not in result
+        assert "split" not in result
+
+    @pytest.mark.asyncio
+    async def test_get_if_status_rejects_unassigned_mode_code(self, connected_radio):
+        """MOR-2518: an IF; frame carrying the manual's unused mode code G
+        raises CatParseError instead of producing a placeholder mode name."""
+        # MEASURED_FRAME with the P6 mode character ("2" → USB) changed to
+        # the unused "G".
+        response = "IF00000014228000+000000G00003"
+        connected_radio._transport.query = AsyncMock(return_value=response)
+        with pytest.raises(CatParseError):
+            await connected_radio.get_if_status()
+
+    @pytest.mark.asyncio
+    async def test_get_if_status_populates_state(self, connected_radio):
+        """get_if_status() must update radio_state atomically."""
+        connected_radio._transport.query = AsyncMock(return_value=self.MEASURED_FRAME)
+
+        await connected_radio.get_if_status()
+
+        st = connected_radio.radio_state
+        assert st.main.freq == 14_228_000
+        assert st.main.mode == "USB"
+        assert st.rit_freq == 0
+        assert st.rit_on is False
+        assert st.rit_tx is False
+
+    @pytest.mark.asyncio
+    async def test_get_if_status_rit_and_xit_active(self, connected_radio):
+        """RX CLAR (P4) / TX CLAR (P5) digits map to rit_on/xit_on."""
+        # Same frame as MEASURED_FRAME with P4=1, P5=1 (rx/tx clarifier on).
+        response = "IF00000014228000+000011200003"
+        connected_radio._transport.query = AsyncMock(return_value=response)
+
+        result = await connected_radio.get_if_status()
+
+        assert result["rit_on"] is True
+        assert result["xit_on"] is True
+        assert connected_radio.radio_state.rit_on is True
+        assert connected_radio.radio_state.rit_tx is True
+
+    @pytest.mark.asyncio
+    async def test_get_if_status_rit_and_xit_are_not_interchangeable(
+        self, connected_radio
+    ):
+        """P4 (RX CLAR) and P5 (TX CLAR) must map to rit_on/xit_on without
+        being swapped.
+
+        Every other frame in this class has P4 == P5 (both "0" or both
+        "1"), so a swap of the ``{rx}``/``{tx}`` parse fields or of the
+        ``rit_on``/``xit_on`` assignment would stay green against them.
+        This frame is the bench-measured baseline with only body position
+        19 changed from "0" to "1" (P4="1", P5="0": RX CLAR on, TX CLAR
+        off), so it discriminates a swap in either direction.
+        """
+        response = "IF00000014228000+000010200003"
+        connected_radio._transport.query = AsyncMock(return_value=response)
+
+        result = await connected_radio.get_if_status()
+
+        assert result["rit_on"] is True
+        assert result["xit_on"] is False
+        assert connected_radio.radio_state.rit_on is True
+        assert connected_radio.radio_state.rit_tx is False
+
+    @pytest.mark.asyncio
+    async def test_get_if_status_does_not_write_ptt_or_split(self, connected_radio):
+        """MOR-2011: the IF response has no PTT or split field, so
+        get_if_status() must not touch radio_state.ptt / radio_state.split.
+        PTT and split truth come from the separate TX;/ST; commands.
+        """
+        connected_radio.radio_state.ptt = True  # sentinel
+        connected_radio.radio_state.split = True  # sentinel
+        connected_radio._transport.query = AsyncMock(return_value=self.MEASURED_FRAME)
+
+        await connected_radio.get_if_status()
+
+        assert connected_radio.radio_state.ptt is True  # unchanged
+        assert connected_radio.radio_state.split is True  # unchanged
+
+    @pytest.mark.asyncio
+    async def test_get_if_status_malformed_response_raises(self, connected_radio):
+        """A frame that doesn't match the IF template raises CatParseError.
+
+        CatParseError is a ValueError subclass (same family the profile's
+        other template-parsed reads raise for a mismatched frame).
+        """
+        connected_radio._transport.query = AsyncMock(return_value="IF00")
+
+        with pytest.raises(CatParseError):
+            await connected_radio.get_if_status()
+
+    @pytest.mark.asyncio
+    async def test_connect_calls_if_status(self, radio):
+        """connect() should seed state after the requested model answers."""
+        radio._transport.connect = AsyncMock()
+        radio._transport._connected = True
+        radio._transport.query = AsyncMock(
+            side_effect=["ID0840", "IF00000014074000+000000200003"]
+        )
+
+        await radio.connect()
+
+        assert radio._transport.query.call_args_list == [call("ID;"), call("IF;")]
+        assert radio.radio_state.main.freq == 14_074_000
+
+    @pytest.mark.asyncio
+    async def test_connect_succeeds_if_if_query_fails(self, radio):
+        """connect() must not fail if IF; query times out or errors."""
+        radio._transport.connect = AsyncMock()
+        radio._transport._connected = True
+        radio._transport.query = AsyncMock(side_effect=["ID0840", Exception("timeout")])
+
+        await radio.connect()  # should not raise
+
+        assert radio.connected
+
+
+# ---------------------------------------------------------------------------
+# MOR-2011: get_meter / get_if_status route the read command through the
+# profile, not a hardcoded literal.
+# ---------------------------------------------------------------------------
+
+
+class TestProfileSourcedCommands:
+    """Pins that go red if either read command regresses to a literal.
+
+    Each pin swaps the profile's ``read`` template for a sentinel before
+    the radio is constructed (parsers compile once in ``__init__``), then
+    asserts the transport received the sentinel-formatted command rather
+    than the real ``RM{type};`` / ``IF;`` wire text. A hardcoded
+    ``f"RM{meter_type};"`` or literal ``"IF;"`` in the implementation would
+    still send the real command and fail these assertions.
+    """
+
+    @pytest.mark.asyncio
+    async def test_get_meter_read_command_is_profile_sourced(self, config):
+        config.commands["get_meter"] = replace(
+            config.commands["get_meter"], read="XM{type};"
+        )
+        radio = YaesuCatRadio("/dev/null", profile=config)
+        radio._transport._connected = True
+        radio._transport.query = AsyncMock(return_value="RM6000000")
+
+        await radio.read_swr_meter()
+
+        radio._transport.query.assert_called_once_with("XM6;")
+
+    @pytest.mark.asyncio
+    async def test_get_if_status_read_command_is_profile_sourced(self, config):
+        config.commands["get_if_status"] = replace(
+            config.commands["get_if_status"], read="XF;"
+        )
+        radio = YaesuCatRadio("/dev/null", profile=config)
+        radio._transport._connected = True
+        radio._transport.query = AsyncMock(return_value="IF00000014228000+000000200003")
+
+        await radio.get_if_status()
+
+        radio._transport.query.assert_called_once_with("XF;")
+
+    @pytest.mark.asyncio
+    async def test_get_meter_missing_from_profile_raises_command_error(self, config):
+        del config.commands["get_meter"]
+        radio = YaesuCatRadio("/dev/null", profile=config)
+        radio._transport._connected = True
+
+        with pytest.raises(CommandError):
+            await radio.read_comp_meter()
+
+    @pytest.mark.asyncio
+    async def test_get_if_status_missing_from_profile_raises_command_error(
+        self, config
+    ):
+        del config.commands["get_if_status"]
+        radio = YaesuCatRadio("/dev/null", profile=config)
+        radio._transport._connected = True
+
+        with pytest.raises(CommandError):
+            await radio.get_if_status()
+
+
+# ---------------------------------------------------------------------------
+# ReceiverBankCapable / VfoSlotCapable (#1171)
+# ---------------------------------------------------------------------------
+
+
+from rigplane.backends.yaesu_cat.parser import CatCommandParser  # noqa: E402
+from rigplane.radio_protocol import (  # noqa: E402
+    ReceiverBankCapable,
+    VfoSlotCapable,
+)
+
+
+@pytest.fixture()
+def single_rx_radio(config):
+    """YaesuCatRadio mutated to model a single-RX Yaesu CAT rig.
+
+    Lab599 TX-500 (Kenwood CAT) and FT-710 / FT-991A (Yaesu CAT, no
+    in-tree TOML yet) all expose a single receiver with VFO A/B routed
+    via ``FR;`` (``FR0;`` = VFO-A, ``FR1;`` = VFO-B).  We model that by
+    cloning the FTX-1 config and overriding ``receiver_count``,
+    ``vfo_scheme`` and the ``set_vfo_select`` / ``get_vfo_select``
+    command templates to point at ``FR;`` instead of ``VS;``.
+    """
+    cfg = config
+    new_commands = dict(cfg.commands)
+    new_commands["get_vfo_select"] = CatCommandSpec(read="FR;", parse="FR{vfo};")
+    new_commands["set_vfo_select"] = CatCommandSpec(write="FR{vfo};")
+    object.__setattr__(cfg, "commands", new_commands)
+    object.__setattr__(cfg, "receiver_count", 1)
+    object.__setattr__(cfg, "vfo_scheme", "ab")
+    r = YaesuCatRadio("/dev/null", profile=cfg)
+    # Rebuild parser cache so the swapped templates take effect.
+    r._parsers["get_vfo_select"] = CatCommandParser("FR{vfo};")
+    r._transport._connected = True
+    return r
+
+
+def test_receiver_count_ftx1(radio):
+    """FTX-1 profile reports receiver_count == 2 (MAIN + SUB)."""
+    assert radio.receiver_count == 2
+
+
+def test_receiver_count_single_rx(single_rx_radio):
+    """Single-RX synthetic profile reports receiver_count == 1."""
+    assert single_rx_radio.receiver_count == 1
+
+
+def test_protocol_satisfaction_receiver_bank(radio):
+    """YaesuCatRadio satisfies ReceiverBankCapable on FTX-1."""
+    assert isinstance(radio, ReceiverBankCapable)
+
+
+def test_protocol_satisfaction_vfo_slot(radio):
+    """YaesuCatRadio satisfies VfoSlotCapable on FTX-1."""
+    assert isinstance(radio, VfoSlotCapable)
+
+
+def test_protocol_satisfaction_single_rx(single_rx_radio):
+    """Single-RX YaesuCatRadio satisfies both protocols."""
+    assert isinstance(single_rx_radio, ReceiverBankCapable)
+    assert isinstance(single_rx_radio, VfoSlotCapable)
+
+
+# -- ReceiverBankCapable.select_receiver / get_active_receiver -------------
+
+
+@pytest.mark.asyncio
+async def test_select_receiver_main_writes_vs0(connected_radio):
+    """select_receiver(0) on dual-RX FTX-1 emits VS0;."""
+    connected_radio._transport.write = AsyncMock()
+    await connected_radio.select_receiver(0)
+    connected_radio._transport.write.assert_called_once_with("VS0;")
+
+
+@pytest.mark.asyncio
+async def test_select_receiver_sub_writes_vs1(connected_radio):
+    """select_receiver(1) on dual-RX FTX-1 emits VS1;."""
+    connected_radio._transport.write = AsyncMock()
+    await connected_radio.select_receiver(1)
+    connected_radio._transport.write.assert_called_once_with("VS1;")
+
+
+@pytest.mark.asyncio
+async def test_select_receiver_by_name_main(connected_radio):
+    """select_receiver('main') normalizes to index 0 → VS0;."""
+    connected_radio._transport.write = AsyncMock()
+    await connected_radio.select_receiver("main")
+    connected_radio._transport.write.assert_called_once_with("VS0;")
+
+
+@pytest.mark.asyncio
+async def test_select_receiver_by_name_sub_case_insensitive(connected_radio):
+    """select_receiver('SUB') is case-insensitive → VS1;."""
+    connected_radio._transport.write = AsyncMock()
+    await connected_radio.select_receiver("SUB")
+    connected_radio._transport.write.assert_called_once_with("VS1;")
+
+
+@pytest.mark.asyncio
+async def test_select_receiver_unknown_name_raises(connected_radio):
+    connected_radio._transport.write = AsyncMock()
+    with pytest.raises(ValueError, match="unknown receiver name"):
+        await connected_radio.select_receiver("tertiary")
+    connected_radio._transport.write.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_select_receiver_out_of_range_raises(connected_radio):
+    connected_radio._transport.write = AsyncMock()
+    with pytest.raises(ValueError, match="out of range"):
+        await connected_radio.select_receiver(2)
+    connected_radio._transport.write.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_select_receiver_single_rx_zero_is_noop(single_rx_radio):
+    """On single-RX rigs select_receiver(0) is a no-op (no wire traffic)."""
+    single_rx_radio._transport.write = AsyncMock()
+    await single_rx_radio.select_receiver(0)
+    single_rx_radio._transport.write.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_select_receiver_single_rx_nonzero_raises(single_rx_radio):
+    single_rx_radio._transport.write = AsyncMock()
+    with pytest.raises(ValueError, match="out of range"):
+        await single_rx_radio.select_receiver(1)
+    single_rx_radio._transport.write.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_get_active_receiver_dual_rx(connected_radio):
+    """get_active_receiver parses VS1; → 1 on dual-RX FTX-1."""
+    connected_radio._transport.query = AsyncMock(return_value="VS1")
+    assert await connected_radio.get_active_receiver() == 1
+    connected_radio._transport.query.assert_called_once_with("VS;")
+
+
+@pytest.mark.asyncio
+async def test_get_active_receiver_single_rx_returns_zero(single_rx_radio):
+    """Single-RX returns 0 without wire traffic."""
+    single_rx_radio._transport.query = AsyncMock()
+    assert await single_rx_radio.get_active_receiver() == 0
+    single_rx_radio._transport.query.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_select_receiver_roundtrip_dual_rx(connected_radio):
+    """select_receiver(1) → get_active_receiver returns 1 (mocked)."""
+    connected_radio._transport.write = AsyncMock()
+    connected_radio._transport.query = AsyncMock(return_value="VS1")
+    await connected_radio.select_receiver(1)
+    assert await connected_radio.get_active_receiver() == 1
+
+
+# -- VfoSlotCapable on FTX-1 (ab_shared scheme — A/B raises) -----------------
+#
+# The FTX-1 has no per-receiver A/B pair; the MAIN/SUB receiver operations
+# (MOR-2531) are tested in their own section below.
+
+
+@pytest.mark.asyncio
+async def test_get_vfo_slot_raises_on_ftx1(connected_radio):
+    """FTX-1 has no per-receiver A/B; get_vfo_slot raises NotImplementedError."""
+    with pytest.raises(NotImplementedError, match="ab_shared"):
+        await connected_radio.get_vfo_slot()
+
+
+@pytest.mark.asyncio
+async def test_set_vfo_slot_raises_on_ftx1(connected_radio):
+    with pytest.raises(NotImplementedError, match="ab_shared"):
+        await connected_radio.set_vfo_slot("A")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("receiver", [0, 1])
+async def test_swap_vfo_ab_raises_on_ftx1(connected_radio, receiver):
+    """FTX-1 AB;/BA; copy MAIN↔SUB, not A↔B; swap_vfo_ab raises for either
+    receiver index and never writes."""
+    connected_radio._transport.write = AsyncMock()
+    with pytest.raises(NotImplementedError, match="no symmetric"):
+        await connected_radio.swap_vfo_ab(receiver)
+    connected_radio._transport.write.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("receiver", [0, 1])
+async def test_equalize_vfo_ab_raises_on_ftx1(connected_radio, receiver):
+    connected_radio._transport.write = AsyncMock()
+    with pytest.raises(NotImplementedError, match="no per-receiver"):
+        await connected_radio.equalize_vfo_ab(receiver)
+    connected_radio._transport.write.assert_not_called()
+
+
+# -- MAIN/SUB receiver operations on FTX-1 (MOR-2531) ------------------------
+#
+# SV;/AB; are radio-global (no receiver parameter): swap_main_sub exchanges
+# the MAIN/SUB sides, equalize_main_sub copies MAIN into SUB.
+
+
+@pytest.mark.asyncio
+async def test_swap_main_sub_writes_sv_on_ftx1(connected_radio):
+    """FTX-1 M⇄S is the native SV; command (OM 2508-C), swapping MAIN/SUB."""
+    connected_radio._transport.write = AsyncMock()
+    await connected_radio.swap_main_sub()
+    connected_radio._transport.write.assert_called_once_with("SV;")
+
+
+@pytest.mark.asyncio
+async def test_equalize_main_sub_writes_ab_on_ftx1(connected_radio):
+    """FTX-1 M=S copies MAIN into SUB with the native AB; command (OM 2508-C)."""
+    connected_radio._transport.write = AsyncMock()
+    await connected_radio.equalize_main_sub()
+    connected_radio._transport.write.assert_called_once_with("AB;")
+
+
+@pytest.mark.asyncio
+async def test_swap_main_sub_raises_command_error_without_the_command(config):
+    """A profile with no vfo_swap command refuses before any write."""
+    del config.commands["vfo_swap"]
+    radio = YaesuCatRadio("/dev/null", profile=config)
+    radio._transport._connected = True
+    radio._transport.write = AsyncMock()
+    with pytest.raises(CommandError, match="vfo_swap"):
+        await radio.swap_main_sub()
+    radio._transport.write.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_equalize_main_sub_raises_command_error_without_the_command(config):
+    """A profile with no vfo_equalize command refuses before any write."""
+    del config.commands["vfo_equalize"]
+    radio = YaesuCatRadio("/dev/null", profile=config)
+    radio._transport._connected = True
+    radio._transport.write = AsyncMock()
+    with pytest.raises(CommandError, match="vfo_equalize"):
+        await radio.equalize_main_sub()
+    radio._transport.write.assert_not_called()
+
+
+def test_ftx1_profile_declares_the_vfo_primitive_capabilities(config):
+    """The loaded FTX-1 profile carries the vfo_swap/vfo_equalize tags."""
+    profile = config.to_profile()
+    assert "vfo_swap" in profile.capabilities
+    assert "vfo_equalize" in profile.capabilities
+    assert profile.supports_command("vfo_swap")
+    assert profile.supports_command("vfo_equalize")
+
+
+# -- VfoSlotCapable on single-RX (FR; scheme — works) ----------------------
+
+
+@pytest.mark.asyncio
+async def test_set_vfo_slot_a_writes_fr0(single_rx_radio):
+    """set_vfo_slot('A') emits FR0; on a single-RX rig."""
+    single_rx_radio._transport.write = AsyncMock()
+    await single_rx_radio.set_vfo_slot("A")
+    single_rx_radio._transport.write.assert_called_once_with("FR0;")
+
+
+@pytest.mark.asyncio
+async def test_set_vfo_slot_b_writes_fr1(single_rx_radio):
+    """set_vfo_slot('B') emits FR1;."""
+    single_rx_radio._transport.write = AsyncMock()
+    await single_rx_radio.set_vfo_slot("B")
+    single_rx_radio._transport.write.assert_called_once_with("FR1;")
+
+
+@pytest.mark.asyncio
+async def test_set_vfo_slot_case_insensitive(single_rx_radio):
+    """Lower-case slot names are accepted."""
+    single_rx_radio._transport.write = AsyncMock()
+    await single_rx_radio.set_vfo_slot("b")
+    single_rx_radio._transport.write.assert_called_once_with("FR1;")
+
+
+@pytest.mark.asyncio
+async def test_set_vfo_slot_invalid_raises(single_rx_radio):
+    single_rx_radio._transport.write = AsyncMock()
+    with pytest.raises(ValueError, match="slot must be 'A' or 'B'"):
+        await single_rx_radio.set_vfo_slot("C")
+    single_rx_radio._transport.write.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_get_vfo_slot_a(single_rx_radio):
+    """get_vfo_slot reads FR; → 'A' when radio reports FR0;."""
+    single_rx_radio._transport.query = AsyncMock(return_value="FR0")
+    assert await single_rx_radio.get_vfo_slot() == "A"
+    single_rx_radio._transport.query.assert_called_once_with("FR;")
+
+
+@pytest.mark.asyncio
+async def test_get_vfo_slot_b(single_rx_radio):
+    single_rx_radio._transport.query = AsyncMock(return_value="FR1")
+    assert await single_rx_radio.get_vfo_slot() == "B"
+
+
+@pytest.mark.asyncio
+async def test_set_get_vfo_slot_roundtrip(single_rx_radio):
+    """set_vfo_slot('B') then get_vfo_slot returns 'B' (mocked)."""
+    single_rx_radio._transport.write = AsyncMock()
+    single_rx_radio._transport.query = AsyncMock(return_value="FR1")
+    await single_rx_radio.set_vfo_slot("B")
+    assert await single_rx_radio.get_vfo_slot() == "B"
+
+
+@pytest.mark.asyncio
+async def test_swap_vfo_ab_writes_profile_command_on_single_rx(single_rx_radio):
+    """A single-RX ``ab`` profile that declares ``vfo_swap`` swaps A/B through
+    it (data-driven, MOR-4427); the profile-less case raises, see FTX-1."""
+    single_rx_radio._transport.write = AsyncMock()
+    await single_rx_radio.swap_vfo_ab()
+    single_rx_radio._transport.write.assert_called_once_with("SV;")
+
+
+@pytest.mark.asyncio
+async def test_equalize_vfo_ab_raises_on_single_rx(single_rx_radio):
+    with pytest.raises(NotImplementedError, match="no per-receiver"):
+        await single_rx_radio.equalize_vfo_ab()
+
+
+@pytest.mark.asyncio
+async def test_set_vfo_slot_rejects_bad_receiver_index(single_rx_radio):
+    single_rx_radio._transport.write = AsyncMock()
+    with pytest.raises(ValueError, match="out of range"):
+        await single_rx_radio.set_vfo_slot("A", receiver=1)
+    single_rx_radio._transport.write.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_get_vfo_slot_rejects_bad_receiver_index(single_rx_radio):
+    with pytest.raises(ValueError, match="out of range"):
+        await single_rx_radio.get_vfo_slot(receiver=1)
+
+
+# ---------------------------------------------------------------------------
+# get_manual_notch_freq (standalone freq getter — MSMA-31)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_manual_notch_freq_returns_int(connected_radio):
+    """get_manual_notch_freq queries BP01 and returns the freq index as int."""
+    connected_radio._transport.query = AsyncMock(return_value="BP01080")
+    freq = await connected_radio.get_manual_notch_freq()
+    assert freq == 80
+    assert isinstance(freq, int)
+    connected_radio._transport.query.assert_called_once_with("BP01;")
+
+
+@pytest.mark.asyncio
+async def test_get_manual_notch_freq_zero(connected_radio):
+    """get_manual_notch_freq handles zero value."""
+    connected_radio._transport.query = AsyncMock(return_value="BP01000")
+    assert await connected_radio.get_manual_notch_freq() == 0
+
+
+@pytest.mark.asyncio
+async def test_get_manual_notch_freq_max(connected_radio):
+    """get_manual_notch_freq handles max value (255)."""
+    connected_radio._transport.query = AsyncMock(return_value="BP01255")
+    assert await connected_radio.get_manual_notch_freq() == 255
+
+
+@pytest.mark.asyncio
+async def test_get_manual_notch_freq_independent_of_get_manual_notch(connected_radio):
+    """get_manual_notch_freq issues a single BP01 query (not BP00+BP01 like get_manual_notch)."""
+    connected_radio._transport.query = AsyncMock(return_value="BP01120")
+    await connected_radio.get_manual_notch_freq()
+    assert connected_radio._transport.query.call_count == 1
+
+
+# ---------------------------------------------------------------------------
+# get_meter — unified dispatcher (MSMA-31)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_meter_smeter_string(connected_radio):
+    """get_meter('smeter') routes to get_s_meter on main receiver."""
+    connected_radio._transport.query = AsyncMock(return_value="SM0042")
+    val = await connected_radio.get_meter("smeter")
+    assert val == 42
+    connected_radio._transport.query.assert_called_once_with("SM0;")
+
+
+@pytest.mark.asyncio
+async def test_get_meter_smeter_sub_receiver(connected_radio):
+    """get_meter('smeter', receiver=1) routes to get_s_meter_sub."""
+    connected_radio._transport.query = AsyncMock(return_value="SM1015")
+    val = await connected_radio.get_meter("smeter", receiver=1)
+    assert val == 15
+    connected_radio._transport.query.assert_called_once_with("SM1;")
+
+
+@pytest.mark.asyncio
+async def test_get_meter_comp_string(connected_radio):
+    """get_meter('comp') routes to get_comp_meter (RM3)."""
+    connected_radio._transport.query = AsyncMock(return_value="RM3050000")
+    val = await connected_radio.get_meter("comp")
+    assert val == 50
+    connected_radio._transport.query.assert_called_once_with("RM3;")
+
+
+@pytest.mark.asyncio
+async def test_get_meter_alc_string(connected_radio):
+    """get_meter('alc') routes to get_alc_meter (RM4)."""
+    connected_radio._transport.query = AsyncMock(return_value="RM4080000")
+    val = await connected_radio.get_meter("alc")
+    assert val == 80
+    connected_radio._transport.query.assert_called_once_with("RM4;")
+
+
+@pytest.mark.asyncio
+async def test_get_meter_power_string(connected_radio):
+    """get_meter('power') routes to get_power_meter (RM5)."""
+    connected_radio._transport.query = AsyncMock(return_value="RM5200000")
+    val = await connected_radio.get_meter("power")
+    assert val == 200
+    connected_radio._transport.query.assert_called_once_with("RM5;")
+
+
+@pytest.mark.asyncio
+async def test_get_meter_swr_string(connected_radio):
+    """get_meter('swr') routes to get_swr_meter (RM6 raw, not interpolated)."""
+    connected_radio._transport.query = AsyncMock(return_value="RM6120000")
+    val = await connected_radio.get_meter("swr")
+    assert val == 120
+    connected_radio._transport.query.assert_called_once_with("RM6;")
+
+
+@pytest.mark.asyncio
+async def test_get_meter_current_string(connected_radio):
+    """get_meter('id') routes to get_id_meter (RM7)."""
+    connected_radio._transport.query = AsyncMock(return_value="RM7003000")
+    val = await connected_radio.get_meter("id")
+    assert val == 3
+    connected_radio._transport.query.assert_called_once_with("RM7;")
+
+
+@pytest.mark.asyncio
+async def test_get_meter_voltage_string(connected_radio):
+    """get_meter('vd') routes to get_vd_meter (RM8)."""
+    connected_radio._transport.query = AsyncMock(return_value="RM8005000")
+    val = await connected_radio.get_meter("vd")
+    assert val == 5
+    connected_radio._transport.query.assert_called_once_with("RM8;")
+
+
+@pytest.mark.asyncio
+async def test_get_meter_accepts_meter_type_enum(connected_radio):
+    """get_meter also accepts a MeterType enum value."""
+    from rigplane.meter_cal import MeterType
+
+    connected_radio._transport.query = AsyncMock(return_value="SM0100")
+    val = await connected_radio.get_meter(MeterType.SMETER)
+    assert val == 100
+
+
+@pytest.mark.asyncio
+async def test_get_meter_unknown_type_raises(connected_radio):
+    """get_meter raises ValueError for an unrecognised meter type string."""
+    with pytest.raises(ValueError, match="Unknown meter type"):
+        await connected_radio.get_meter("no_such_meter")
+
+
+# ---------------------------------------------------------------------------
+# MOR-2111 PR-B2 — tone descriptor admission with the profile tags on
+# ---------------------------------------------------------------------------
+
+from rigplane.backends.yaesu_cat.poller import YaesuCatPoller  # noqa: E402
+from rigplane.core.command_dispatch import prepare_command_intent  # noqa: E402
+
+_TONE_ADMISSION_CASES = [
+    ("set_repeater_tone", {"on": True}),
+    ("set_repeater_tsql", {"on": True}),
+    ("set_tone_freq", {"freq": 8850}),
+    ("set_tsql_freq", {"freq": 8850}),
+]
+
+
+class TestToneDescriptorAdmission:
+    """With the FTX-1 profile tags on, ``prepare_command_intent`` admits all
+    four tone names on both receivers.
+
+    These go red the moment ``repeater_tone``/``tsql`` is removed from
+    ``rigs/ftx1.toml``: the ``required_capability`` gate then refuses the
+    family before any radio call.
+    """
+
+    @pytest.mark.parametrize("receiver", [0, 1])
+    @pytest.mark.parametrize(("name", "params"), _TONE_ADMISSION_CASES)
+    def test_prepare_command_intent_admits_tone_family(
+        self, radio, name, params, receiver
+    ):
+        intent = prepare_command_intent(
+            radio, name, {**params, "receiver": receiver}, source="http"
+        )
+        assert intent.name == name
+        assert intent.params["receiver"] == receiver
+
+
+def _poller_for(radio) -> YaesuCatPoller:
+    """A YaesuCatPoller bound to ``radio`` (mirrors the MOR-2161 drain)."""
+    poller = YaesuCatPoller.__new__(YaesuCatPoller)
+    poller._radio = radio
+    poller._managed_tx_authority = None
+    return poller
+
+
+class TestToneDescriptorFrames:
+    """The Yaesu poller executing a tone intent writes the exact CT/CN frame."""
+
+    @pytest.mark.asyncio
+    async def test_set_repeater_tone_main_writes_ct01(self, connected_radio):
+        connected_radio._transport.query = AsyncMock(return_value="CT00")
+        connected_radio._transport.write = AsyncMock()
+        intent = prepare_command_intent(
+            connected_radio, "set_repeater_tone", {"on": True}, source="http"
+        )
+        await _poller_for(connected_radio)._execute_command(intent)
+        connected_radio._transport.query.assert_called_once_with("CT0;")
+        connected_radio._transport.write.assert_called_once_with("CT01;")
+
+    @pytest.mark.asyncio
+    async def test_set_repeater_tone_sub_writes_ct11(self, connected_radio):
+        connected_radio._transport.query = AsyncMock(return_value="CT10")
+        connected_radio._transport.write = AsyncMock()
+        intent = prepare_command_intent(
+            connected_radio,
+            "set_repeater_tone",
+            {"on": True, "receiver": 1},
+            source="http",
+        )
+        await _poller_for(connected_radio)._execute_command(intent)
+        connected_radio._transport.query.assert_called_once_with("CT1;")
+        connected_radio._transport.write.assert_called_once_with("CT11;")
+
+    @pytest.mark.asyncio
+    async def test_set_repeater_tsql_from_tone_writes_ct02(self, connected_radio):
+        connected_radio._transport.query = AsyncMock(return_value="CT01")
+        connected_radio._transport.write = AsyncMock()
+        intent = prepare_command_intent(
+            connected_radio, "set_repeater_tsql", {"on": True}, source="http"
+        )
+        await _poller_for(connected_radio)._execute_command(intent)
+        connected_radio._transport.query.assert_called_once_with("CT0;")
+        connected_radio._transport.write.assert_called_once_with("CT02;")
+
+    @pytest.mark.asyncio
+    async def test_set_tone_freq_main_writes_cn_index(self, connected_radio):
+        connected_radio._transport.write = AsyncMock()
+        intent = prepare_command_intent(
+            connected_radio, "set_tone_freq", {"freq": 8850}, source="http"
+        )
+        await _poller_for(connected_radio)._execute_command(intent)
+        connected_radio._transport.write.assert_called_once_with("CN00008;")
+
+    @pytest.mark.asyncio
+    async def test_set_tsql_freq_sub_writes_cn_index(self, connected_radio):
+        connected_radio._transport.write = AsyncMock()
+        intent = prepare_command_intent(
+            connected_radio,
+            "set_tsql_freq",
+            {"freq": 8850, "receiver": 1},
+            source="http",
+        )
+        await _poller_for(connected_radio)._execute_command(intent)
+        connected_radio._transport.write.assert_called_once_with("CN10008;")
+
+    @pytest.mark.asyncio
+    async def test_set_repeater_tsql_from_off_is_refused_before_the_wire(
+        self, connected_radio
+    ):
+        """(tone off, tsql on) has no CT code: ValueError, no frame written."""
+        connected_radio._transport.query = AsyncMock(return_value="CT00")
+        connected_radio._transport.write = AsyncMock()
+        intent = prepare_command_intent(
+            connected_radio, "set_repeater_tsql", {"on": True}, source="http"
+        )
+        with pytest.raises(ValueError, match="tone squelch"):
+            await _poller_for(connected_radio)._execute_command(intent)
+        connected_radio._transport.write.assert_not_called()

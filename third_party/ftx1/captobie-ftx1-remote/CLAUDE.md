@@ -1,0 +1,3944 @@
+# FTX1Remote
+
+Native Mac/iOS/iPadOS app to remotely control and monitor a Yaesu FTX-1 amateur
+radio transceiver. SwiftUI, shared codebase across platforms. Single-user tool —
+no multi-user auth/permissions needed unless explicitly asked for.
+
+## Why
+
+The radio (Yaesu FTX-1) lives at home, connected via USB. This app lets me
+monitor and control it from my Mac at the desk, or remotely from iOS/iPadOS
+over Tailscale, without needing to be physically near the rig.
+
+## Architecture
+
+- **Mac app = hub/server.** It's the only thing that talks to hardware.
+- **rigctld (hamlib)** runs on the Mac at `localhost:4532` and is the single
+  source of truth for hardware communication — same as the existing
+  `rigctld_control.py` setup it replaces. Do not suggest bridging libhamlib
+  directly into iOS/iPadOS; mobile clients are network clients only. The Mac
+  app also owns launching rigctld itself (`RigctldProcessController`, see
+  `Apps/Mac/` below) rather than requiring it pre-started — on launch it
+  probes the configured port and adopts an already-running, responsive
+  rigctld instead of killing it (another client, e.g. WSJT-X, may be
+  mid-session with it); only an unresponsive/stale one gets killed and
+  replaced.
+- **Bundled rigctld fallback (2026-10-14; build/UI-verified and tested
+  against Hamlib's dummy rig, not yet with the FTX-1 on the Mac's USB or
+  in a notarized build)**: users with a Hamlib older than 4.7 saw "app
+  doesn't work" — the FTX-1 (model 1051) first appears in 4.7, and an
+  older rigctld exits at once. The Mac app ships its own:
+  `Vendor/hamlib/rigctld` (static, universal, links only libSystem,
+  ~21 MB) is copied to `Contents/Helpers/rigctld` by the target's "Embed
+  Helpers" phase (Code Sign On Copy; Hamlib's licences go to
+  `Contents/Resources/Hamlib/`). The Developer ID export signs it with
+  hardened runtime and a timestamp; `release-mac.sh` checks all three
+  before notarizing. Developer ID / web-download build only.
+  - **Selection** (`RigctldBinary.swift`, `rigctld.binaryChoice`):
+    Automatic (default) checks `/opt/homebrew/bin`, `/usr/local/bin`,
+    `/opt/local/bin` on every spawn — first copy with `--version` ≥ 4.7.0
+    *and* the configured model in `-l` wins, else built-in. Probes are off
+    the main actor, 3 s/5 s caps, and skipped when a running rigctld is
+    adopted. Built-in or an explicit path (used as is; the version box
+    warns if too old or missing the model) can be picked instead. The
+    reason is logged ("connection" category) and shown in the version
+    box's "Uses" line. Migration: an old `rigctld.binaryPath` of
+    `/opt/homebrew/bin/rigctld` or `/usr/local/bin/rigctld` reads as
+    Automatic; any other path stays. Debug builds honour a
+    `rigctld.searchPathsOverride` defaults array — the way to test the
+    fallback without uninstalling Homebrew's Hamlib.
+  - **Adoption checks the model**: `\dump_caps` first (answered by
+    rigctld without rig I/O; `RigctldClient.readRigModel`), then, only
+    for a matching model, the raw "FA" rig-link probe. A responsive
+    rigctld for another model fails the start with a message naming it
+    and is never killed or connected to. "FA" can't come first: only a
+    Yaesu answers it, so e.g. WSJT-X's rigctld for an Icom looked stale
+    and was killed (found testing with the dummy rig).
+  - **Licence obligations** (rigctld GPL-2.0+, libhamlib LGPL-2.1+;
+    separate executable over TCP = mere aggregation): ship `COPYING`,
+    `COPYING.LIB`, `LICENSE` (done by the bundle phase); attach the exact
+    Hamlib source tarball and `Scripts/build-rigctld.sh` to every GitHub
+    release that ships it, plus libusb's for the Windows zip
+    (`release-mac.sh` puts all three in the `gh release create` line and,
+    before building, refuses to start unless `releases/hamlib-<ver>.tar.gz`
+    and `releases/libusb-1.0.24.tar.bz2` are there with the right sha256 —
+    Hamlib's from `build-rigctld.sh`'s `DEFAULT_SHA256`); README
+    "Third-party code" entry.
+  - **New Hamlib version**: download `hamlib-X.Y.Z.tar.gz` (the release
+    tarball, not GitHub's "Source code" archives — those need automake/
+    libtool) and check its sha256 against the release page; run
+    `Scripts/build-rigctld.sh <tarball> <sha256>` (update
+    `HAMLIB_VERSION`/`DEFAULT_SHA256` in it); it checks both arches, the
+    26.5 deployment target, libSystem-only linking, the version and model
+    1051. Commit `Vendor/hamlib/`, put the tarball in `releases/`, and
+    update the README entry's version. Keep `DEPLOYMENT_TARGET` in step
+    with the Mac target's `MACOSX_DEPLOYMENT_TARGET`.
+- **Mac app exposes a WebSocket server** that iOS/iPadOS clients connect to.
+  Mobile apps never talk to rigctld directly — except the iPhone/iPad
+  Pi-direct proof of concept (see "Pi-direct proof of concept (iPhone,
+  iPad)" below).
+- **Mac's own local UI calls `HubService` directly** (`hub.send(...)`,
+  bypassing `RigWebSocketClient`/`RigWebSocketServer`) rather than
+  round-tripping through the WebSocket to itself — the original plan was for
+  the Mac's local UI to go through the WebSocket client too, but every
+  feature built so far (Menu grid, Deep Settings) uses the direct-call path,
+  and it works fine since `HubService` still broadcasts every applied
+  command to remote clients regardless of how it was triggered. The
+  WebSocket path exists for remote (iOS/iPad) clients only in practice
+  today.
+- **Views shared across app targets go through a `RigController` protocol**
+  (`Sources/FTX1Core/UI/RigController.swift`), not a concrete type — the Mac
+  drives them with `HubService` (direct rigctld access), mobile clients
+  drive them with `RigClientViewModel` (WebSocket only) or
+  `PiDirectViewModel`. `MenuPageView`, `DeepSettingsView` and the filter
+  views are built this way, generic over `RigController`. When adding another view meant to appear on more than
+  one app target, follow this pattern rather than duplicating the file per
+  target or coupling it to `HubService` directly.
+- **Deep Settings on every route (2026-10-11; Simulator against the
+  real Pi on both iPad routes, then confirmed on a real iPad by the user
+  the same day, both routes)**: `DeepSettingsView` lives in
+  `FTX1Core/UI/` and reads each item through `RigController.
+  readMenuItem(p1:p2:p3:)` (`supportsDeepSettings` gates the six FM-page
+  buttons). `HubService` and `PiDirectViewModel` (with
+  `readsMenuSettings`) read straight over their rigctld link. The hub
+  route has a request/reply pair (the CW keyer's, phase 3 of "iPad CW
+  decoder", is the other), kept *beside*
+  `RigCommand` (it never reaches the rig): the client sends
+  `MenuItemReadRequest` (`type: "read_menu_item"`), and
+  `RigWebSocketServer` answers that client alone with a `MenuItemPush`
+  (`type: "menu_item"`, `value` nil if unreadable), reading off the
+  inbound stream so commands don't wait behind it.
+  `RigClientViewModel.readMenuItem` waits up to 10 s (an older hub never
+  answers), and concurrent reads of one item share one request. Writes are
+  the existing `.setMenuItem`, not transmit-gated on any route (the
+  catalog's `.action` items are never sent). Verified: tab reads on both
+  iPad routes and the Mac, and one write each way (APRS AF MUTE on, read
+  back raw as "EX0601031", then off again). On iOS the sheet's Done
+  button sits on the detail column, since a split view's own toolbar isn't
+  shown there.
+- **Tailscale** handles remote network routing between Mac and mobile devices
+  (already set up and working — don't relitigate this).
+- **State sync is push-based**, not polled. The Mac pushes state changes
+  (VFO, mode, power, SWR, PTT) to connected clients as they happen.
+- **Wire protocol is JSON.** Commands like `{"cmd": "set_freq", "value": ...}`;
+  state pushes follow a similar shape.
+- **Raw CAT passthrough for menu-driven settings.** Most of the FTX-1's menu
+  items (both the numbered MENU grid and the deeper page-3 SET-mode screens)
+  have no hamlib func/level equivalent — they're wired via `RigctldClient`'s
+  raw CAT passthrough (`sendRawCommand`/`getRawBool`/`setRawInt`/etc.),
+  documented in the CAT Operation Reference Manual, not through rigctld's
+  generic get/set verbs. See `Structure` below for where the two menu
+  systems live. One trap: some commands carry an on/off state as a
+  multi-digit field ("BP"'s manual-notch on/off is 000/001, "CO"'s
+  CONTOUR/APF on/off is 0000/0001) — `getRawBool` looks only at the first
+  character after the prefix and would read those as always-off, so such
+  fields go through `getRawInt` (`!= 0`) / `setRawInt(digits:)` with the
+  documented width (see `IFNotch`). The filter commands (`SH`/`IS`/`BP`/
+  `CO`/`NA`) take P1 = the receiver (0 MAIN, 1 SUB; Sub replies hardware-
+  confirmed to mirror Main's shapes, 2026-09-19). The app addresses one
+  side at a time (`RigState.filterSide`, set by `RigCommand.setFilterSide`):
+  `CommandQueue` holds the selected `FilterSide` and builds the mnemonics
+  from it (FIFO, so a switch followed by a control change can't race; a
+  command can also be pinned to a side with `enqueue(_:filterSide:)` — the
+  band-memory width replay is pinned to MAIN), the ten filter fields in
+  `RigState` hold the *selected* side's values, and `HubService` clears and
+  re-reads them on a switch (`refreshFilterState`) and polls only the
+  selected side. Every filter view gates on `RigState.filterMode` (the
+  selected side's mode), not `mode`.
+- **Waterfall/oscilloscope display is audio-derived, not CAT-derived.**
+  `AudioCaptureEngine` (Mac-only) captures audio, runs an FFT to produce
+  both a scrolling waterfall and an oscilloscope trace from the same
+  buffer, with auto-gain (peak-hold-and-decay) rather than a fixed
+  dB/amplitude range, and separately hands the same raw samples out for
+  `HubService`'s APRS decode gate and the Mac→iPad audio relay
+  (`AudioStreamEncoder`/`RigWebSocketServer.broadcastAudio`) — entirely
+  separate from the rig-control data path, no rigctld or wire-protocol
+  involvement. Where the audio actually comes from depends on
+  `RigctldSettings.connectionMode`, same toggle as rig control: `.local`
+  taps a user-selected Mac sound card input (Settings → Audio tab; the
+  rig's own audio out into the Mac, in practice); `.remote` connects to
+  `Pi/ftx1-audiostream.py` over the network via `RemoteAudioStreamClient`
+  instead (see "Audio-over-Pi" below) — both feed the exact same
+  downstream FFT/relay code, which can't tell them apart. The
+  waterfall/oscilloscope display itself is Mac-only either way (not
+  broadcast to mobile clients); only the raw audio is. Since 2026-09-13
+  the same FFT also yields `AudioCaptureFrame.spectrum` (0–4 kHz bins,
+  normalized through the waterfall's auto-gain window), published through
+  `ScopeFrameStore` to the Mac-only `FilterDisplayHost`, which feeds the
+  shared `FilterDisplayView` (the app's Filter Function Display) — same
+  leaf-only observation rule as the scope. While SUB is the selected filter
+  side, `AudioCaptureEngine` also computes a Sub-channel spectrum for that
+  display (`onSubSpectrum` → `ScopeFrameStore.subSpectrum`, enabled only
+  then via `setSubSpectrumEnabled`, with its own auto-gain; the FFT step is
+  shared with Main's path via `fftPowerDb`/`normalizedSpectrum`). Still no
+  Sub waterfall/oscilloscope (see the dual-waterfall decision below).
+- **Scope frames deliberately bypass `HubService`'s `@Published` state.**
+  `AudioCaptureEngine` hands `HubService` a frame ~21 times a second
+  (44100 Hz / 2048-sample chunks); `HubService` stores it in a separate
+  `ScopeFrameStore` (`ObservableObject`, a plain `let` on the hub) that
+  only `ScopeDisplayView` observes. Until 2026-09-09 the frames were
+  `@Published` on `HubService` itself, and since `ObservableObject`
+  invalidation is per object, every frame re-evaluated all of
+  `ContentView` — the 28-button `MenuPageView` grid and two `.segmented`
+  pickers included, whose `NSSegmentedControl` relayout alone pinned the
+  main thread at ~50% of a core in a Release build (~120-200% total in the
+  Debug build Xcode runs, once the Debug-only palette cost below stacked on
+  top). Diagnosed with `sample` on the live process, not by reading code;
+  the same measurement recipe (launch the built app, connect, `top -pid`,
+  `ps -M -p`, `sample <pid> 5`) is the way to check any future "app is hot"
+  report. Three related fixes landed together (commits `a277504`, `e9cc1bb`,
+  `f5401ee`): the store above; `WaterfallBitmap` now keeps one persistent
+  pixel buffer scrolled by a single `memmove` per frame and colors the new
+  row through a precomputed 256-entry `WaterfallPalette.lut` (the old
+  per-pixel `zip(stops, stops.dropFirst())` search allocated per pixel in
+  `-Onone` and cost ~0.75 of a core in Debug, ~nothing in Release); and the
+  scope column's "Off" now really is off — `AudioCaptureEngine.
+  displayEnabled` skips FFT/bitmap/oscilloscope/frame publish entirely
+  while still delivering raw samples to APRS, playback, and the iPad relay
+  (before, "Off" only drew nil and saved no CPU). Measured after all three:
+  Debug ~26% total with the scope on / ~10% off, Release ~22% / ~8%; what's
+  left with the scope on is the genuine live redraw of the scope `Canvas`
+  plus the FFT.
+
+## Remote rigctld (Option A) — in progress
+
+Moving the FTX-1's USB/serial connection off the Mac and onto a headless
+Raspberry Pi 2B on the same Tailscale tailnet, so the Mac doesn't need to be
+physically near the rig. rigctld runs directly on the Pi against the CP210x
+ports; everything else (WebSocket server, `CommandQueue`, state-push to
+iOS/iPad clients) stays on the Mac unchanged. Deliberately minimal — not a
+re-architecture.
+
+- **Both Local (direct USB) and Remote (Pi) stay supported** — implemented —
+  not a one-way migration: the radio's USB cable may be plugged into the Mac
+  or the Pi depending on where/how the operator is using it. Selected by
+  `RigctldSettings.connectionMode` (`.local`/`.remote`). `.remote` adds
+  `RigctldSettings.remoteHost` (a Tailscale MagicDNS hostname; port stays
+  fixed at 4532, not user-configurable). `SettingsView`'s rigctld tab has a
+  mode picker, with the Local fields (binary path, device path, baud rate,
+  PTT port) and the Remote host field shown/hidden based on the selection.
+- **Changing the mode requires an app relaunch to take effect** — implemented
+  — no runtime teardown/rebuild of `RigctldClient`/`CommandQueue` (both are
+  fixed for `HubService`'s lifetime, resolved once in `AppDelegate.init`
+  from `RigctldSettings.connectionMode`/`.remoteHost`). When Done saves a
+  different mode (or, in `.remote`, a different host), Settings offers
+  "Restart Now"/"Later" (2026-09-27, confirmed working by the user; `AppDelegate.relaunch()` waits for the
+  old process to exit, then `open`s the bundle). Everything that runs after
+  launch reads `RigctldSettings.activeConnectionMode`/`.activeRemoteHost`
+  (snapshotted at launch), never the saved values, so "Later" can't mix
+  the two modes in one session.
+- **`RigctldProcessController` stays, but only runs in `.local` mode** —
+  implemented. `HubService.startRigctld()`/`stopRigctld()` branch on
+  `connectionMode`: in `.remote`, they skip `RigctldProcessController`
+  entirely and just connect/disconnect `RigctldClient` against
+  `remoteHost:4532` (the host `AppDelegate` resolved at launch) — the Mac
+  never spawns, adopts, or kills anything in that mode. `.remote` also skips
+  `connectRigctld`'s `isFreshStart` grace period (nothing was "just
+  spawned"). Since `rigctldProcessState` has nothing to report in `.remote`
+  (nothing was ever started), `HubService.isActive` is a new
+  mode-independent flag (true from `startRigctld()` to `stopRigctld()`)
+  driving the connect/disconnect button instead, and `ContentView` hides the
+  process-state label entirely in `.remote` mode.
+- **Timeouts**: plan is a single shared constant (not per-mode) sized for the
+  Tailscale-hop case, since slack time costs nothing in `.local`.
+  `HubService`'s `isFreshStart`/startup-grace-period reconnect logic no
+  longer applies in `.remote` (implemented — see above, there's no "just
+  spawned, still binding its port" case for a rigctld the Mac never
+  started). Still flagged for re-validation on real hardware rather than
+  assumed unchanged: `RigctldClient.sendRawCommand`'s 1s raw-command
+  timeout, and general reconnect-delay tuning over an actual Tailscale hop.
+- **Connection problems by where the fault is (Mac, 2026-11-12; unit-
+  tested, and every case seen in the built app against a fake rigctld on
+  127.0.0.1 and unused hosts — not yet against the real Pi/rig)**: a
+  label next to Connected/Disconnected (`ContentView`'s
+  `ConnectionProblemLabel`, tooltip = what to check) from
+  `HubService.ConnectionState.failed(RigLinkProblem)`
+  (`FTX1Core/Networking/RigLinkProblem.swift`): host not found (red —
+  MagicDNS name doesn't resolve, usually Tailscale off on the Mac), host
+  unreachable (red — connect timed out), rigctld not running (orange —
+  refused), radio not answering (orange), connection lost, other.
+  `RigctldClient.connect` now fails at once on `.waiting` with
+  ECONNREFUSED (`.connectionRefused`) or a DNS error (`.hostNotFound`) —
+  checked: NWConnection reports both immediately but only *waits* on them,
+  so before this everything was a 5 s `.connectTimedOut` — and clears
+  `connection` on failure; a reply timeout whose reconnect fails throws
+  `.connectionLost`. **`.connected` now means the rig answers**, not just
+  TCP: `refreshFastTier` returns false (publishing nothing, skipping the
+  rest of the tier and the slow tier) when "FA" fails, `RigResponseMonitor`
+  reports 3 in a row as `.failed(.rigNotResponding)` (~11 s measured;
+  the frequency lane pauses while not `.connected`), and the first answer
+  sets `.connected` (and re-primes the slow tier). This is the Pi
+  under-voltage case: before, the window kept "Connected" and the last
+  values while every read timed out. A retry keeps showing the last
+  failure rather than flashing "connecting". Not done: the iPad/iPhone
+  Pi-direct route and Windows still show one generic failure.
+- **WSJT-X's "Hamlib NET rigctl" setup has to be pointed at whichever host
+  this app is currently using** (localhost in `.local`, the Pi in
+  `.remote`). This app does not manage that — repoint it manually whenever
+  the mode changes (and the app relaunches).
+- **Status as of 2026-09-07**: mode picker, `HubService`'s local/remote
+  branching, and real-hardware validation against the Pi all working and
+  confirmed by the user — stable connection (no more connect/disconnect
+  cycling) and both VFO A/B reading correctly. Two bugs found and fixed
+  during that validation:
+  `HubService.refreshState()`'s `getFrequency()` read was the one call in
+  the whole poll cycle not wrapped in `try?`, so an occasional bad CAT reply
+  (rare enough over the Mac's old dedicated local link to never surface) was
+  tearing down and reconnecting the whole session instead of just falling
+  back to the last known value like every other field — now fixed the same
+  way as everything else. Also added a `connectionLogger` (`os.Logger`,
+  category "connection") since `connectionState`'s `.failed(String)` wasn't
+  surfaced anywhere before — check Console.app when debugging future
+  connection-loop issues. (The Pi's own `rigctld.service` missing `-o`,
+  causing wrong secondary-VFO reads, was a Pi-config fix, not an app bug —
+  fixed by adding `-o` to the systemd unit's `ExecStart`. The original "no
+  CAT response at all" outage that blocked this validation for most of a day
+  turned out to be a stale hamlib 4.6 pulled in as a Direwolf dependency on
+  the Pi, shadowing the working 4.7 install — also not an app bug.) Still
+  open: the rest of the
+  validation-plan checklist (WSJT-X coexistence, soak testing, timeout
+  re-tuning under sustained real-network conditions).
+- **Hamlib-verb reply timeout (2026-09-29, rig-confirmed by the user the same
+  day, incl. recovery from a Pi rigctld stop/start)**: `RigctldClient.send`/`queryOrError` had no reply timeout
+  (only raw CAT did), so a silent rigctld — or the Pi dropping off
+  Tailscale without closing the TCP connection — held the round-trip lock
+  forever and queued every later command behind it (hit on Windows with a
+  2-line read answered by a 1-line "RPRT -8"; the Mac already routed every
+  multi-line read through `queryOrError`, and the unused, unchecked
+  `query(_:lines:)` is gone). Both now share `sendRawCommand`'s
+  bounded read (`withReplyTimeout`: cancel, reconnect at once, throw) with
+  `hamlibReplyTimeout` = 5 s — longer than Windows' 3 s because the Pi's
+  rigctld may run hamlib's default 1000 ms × 3 retries, and cutting off a
+  reply that's still coming costs a reconnect. Only a timeout reconnects:
+  an error reply, `.connectionLost` or `.notConnected` are rethrown as
+  before, so the hub's own reconnect handling is unchanged. A hamlib
+  timeout logs at notice ("rawcat" category, "no reply in 5.0 seconds —
+  reconnecting"); raw-CAT ones stay at debug, since e.g. "GT0" goes
+  unanswered every poll in C4FM. `readLine` now only tears down the
+  connection it was reading from, so the cancelled read's late error
+  can't close the freshly reconnected one.
+- **Raw CAT sets go out as `W <cmd>; 0` (2026-10-06)**: with `; ;`
+  ("read up to a ';'") rigctld waited out its serial timeout for the
+  answer a set never gets, holding every later command ~2.1 s over the Pi
+  (~300 ms in local mode). `; 0` ("expect 0 bytes") gets an empty `\0`
+  reply in ~55 ms with the set still applied; a rejected set's "?;" is
+  flushed by rigctld, not left for the next read (probed with `nc`-style
+  scripts against the Pi; rig-confirmed by the user the same day on Mac
+  and Windows — filters, MENU grid, V/M). The client reads that empty reply inside the
+  round-trip lock (`sendRawCommandFireAndForget`, Windows'
+  `WriteRawSetAsync`). `writeKeyerMemory`'s lowercase `w` (needed for
+  spaces) has no such option and still takes ~2 s.
+- **Pi under-voltage drops the rig's USB (found 2026-10-02, not fixed —
+  hardware)**: the "sometimes an error" reports traced to the Pi 2B's
+  supply, not the app: `journalctl -k` showed "Undervoltage detected!"
+  and `usb 1-1.2: USB disconnect` (the FTX-1's built-in hub: CP2105 +
+  audio codec) 2–3 times a day since the 2026-09-27 boot, then 13 in a
+  burst that ended in "unable to enumerate USB device"; `vcgencmd
+  get_throttled` = 0x50000. With the rig's USB gone, rigctld still
+  accepts TCP but never answers — so to the app it looks like timeouts
+  (and, in the CW send pane before `RigctldError` got descriptions,
+  "RigctldError error 3" = `rawCommandTimedOut`). Recovery: replug or
+  power-cycle the rig, then restart `rigctld.service`. Fix: a proper
+  5.1 V/2.5 A supply and short cable, or a powered hub for the rig. To
+  check: SSH (`~/.ssh/id_direwolf_monitor`, `captobie@ftx1pi`), then
+  `vcgencmd get_throttled` (want 0x0) and the `journalctl -k` lines
+  above. This is the "rigctld/radio down but the Pi itself is fine" case
+  the planned UI distinction above is about.
+- **Audio-over-Pi (2026-09-07)**: implemented and hardware-confirmed
+  working — waterfall/oscilloscope, iPad relay, and Mac-local playback all
+  functioning against the real Pi. In `.remote` mode, `AudioCaptureEngine`
+  no longer taps a Mac-local sound card — it connects to
+  `Pi/ftx1-audiostream.py` (a small Python + `pyalsaaudio` script, run as
+  its own systemd service on the Pi alongside `rigctld.service`/`direwolf.
+  service`, listening on port 8532) via the new `RemoteAudioStreamClient`
+  (originally Mac-only; in `Sources/FTX1Core/Audio/` since 2026-10-05,
+  shared with the iPhone/iPad Pi-direct proof of concept). This piggybacks on the same
+  `RigctldSettings.connectionMode`/`.remoteHost` the rig-control work
+  already added — deliberately no separate audio setting, since the rig's
+  audio-out cable physically moves with wherever the USB/serial connection
+  is. Python, not Swift, on the Pi side: the Pi is a 32-bit ARMv7 2B, which
+  the official Swift toolchain doesn't support. Raw TCP, not the
+  WebSocket/JSON protocol `RigWebSocketClient` uses — this is a dedicated,
+  audio-only connection separate from the rigctld link, so there's no need
+  for `AudioStreamFormat`'s tag-byte framing (that exists only to
+  disambiguate audio from JSON `RigStatePush` frames on the *shared*
+  Mac→iPad connection). `AudioCaptureEngine.process(buffer:bitmap:gain:)`'s
+  FFT/oscilloscope core was refactored into a shared `process(samples:
+  sampleRate:bitmap:gain:)` entry point so both the local `AVAudioEngine`
+  tap and the new remote network path feed the exact same downstream code
+  — waterfall, oscilloscope, APRS decode gating, and the Mac→iPad relay are
+  all unchanged and can't tell the two sources apart.
+  - **Capture rate: 44100Hz, not 8kHz.** Started at 8kHz (matching
+    `AudioStreamFormat.sampleRate`, the Mac→iPad relay's own separate wire
+    format) as a deliberate low-bandwidth choice, but that left
+    `AFSKDemodulator` too little timing resolution to reliably decode APRS
+    (~6.7 samples/bit at 8kHz vs ~37 at 44100Hz for 1200-baud Bell 202 —
+    confirmed via real APRS heartbeat logs showing `decoded:0` throughout
+    a session with flags detected but never successfully framed). Raised to
+    44100Hz on 2026-09-07 to match Direwolf's own AFSK demodulation rate on
+    this same hardware, already proven to decode real traffic. This is
+    intentionally decoupled from `AudioStreamFormat.sampleRate` (which
+    stays 8kHz, governing only the separate Mac→iPad hop) —
+    `RemoteAudioStreamClient`'s `sampleRate` parameter has its own default
+    now, not inherited from that constant. Raises Pi→Mac bandwidth from
+    ~16KB/s to ~86KB/s, trivial for any real network link. The
+    `Pi/ftx1-audiostream.py` doc comment has the full reasoning.
+  - **Mac-local playback + squelch/volume UI, added 2026-09-07**:
+    `HubService` now owns an `AudioPlaybackEngine` (reused as-is from the
+    existing iPad code — already cross-platform), started/stopped alongside
+    `audioCapture`, fed the same PCM chunks already sent to iPad. New
+    `HubService.audioVolume`/`.squelchThreshold` (persisted via
+    `AudioPlaybackSettings`, shared with iPad though iPad has no UI for
+    them) are bound to two vertical sliders in `ContentView`, positioned
+    right of the Waterfall/Oscilloscope/Off/Mute button column (the
+    waterfall narrows automatically since it already fills remaining
+    space). Added specifically because the default squelch threshold (0.02)
+    left real, quiet-but-legitimate audio gated silent with no way to
+    adjust it on the Mac before this existed.
+  - **Squelch tail (2026-11-06, tested by the user on the rig the same
+    day)**: `SquelchGate`'s hangover after the last quieting dip — also
+    the noise tail after a transmission ends — was a fixed 4 s (user:
+    too long). Now 1.5 s by default and a Settings → Audio slider
+    (0.3–5 s, `AudioPlaybackSettings.squelchHangTime`, live via
+    `HubService.squelchHangTime`, one value for Main and Sub). The iPad/
+    iPhone players read the same key at init, so they get the 1.5 s
+    default too, with no UI. Windows (2026-11-06, tested by the user over
+    the Pi the same day): the same slider in Settings → Audio,
+    applied on Save (that dialog's rule), `AppSettings.SquelchHangSeconds`.
+  - **Device-sharing with Direwolf, two real conflicts hit and fixed**: (1)
+    `Device or resource busy` — Direwolf holds the raw capture device open
+    continuously; fixed via `Pi/asound-ftx1.conf`'s `dsnoop`+`plug` chain
+    (`ftx1_shared`), letting both processes read the same hardware capture
+    at once, each at their own rate. Direwolf's `ADEVICE` needed its
+    two-argument form (`ftx1_shared plughw:1,0`) since `dsnoop` only
+    supports capture, not its playback/TX side. (2) `Permission denied
+    [ftx1_shared]` — `direwolf` and `ftx1audio` are different Unix accounts,
+    and dsnoop's IPC semaphore/shared-memory objects default to permissions
+    that only let the *creating* user attach; fixed via `ipc_perm 0666` in
+    the dsnoop config, plus a Pi reboot to clear stale IPC objects created
+    before that fix existed. Both documented in detail in `Pi/README.md`.
+  - **Concurrency note**: this target builds with `-default-isolation=
+    MainActor`. `process()` and everything it touches (`AutoGainState`,
+    `WaterfallBitmap`, `LockedFloat`, `OscilloscopeRenderer`,
+    `WaterfallPalette`) are explicitly `nonisolated`/`nonisolated(unsafe)`
+    now — they always ran off the main actor in practice (the class's own
+    doc comments already said so), but this was previously unchecked only
+    because `AVAudioEngine`'s tap closure isn't a Sendable-audited API.
+    `RemoteAudioStreamClient`'s use of `actor`/`@Sendable`/`NWConnection`
+    (all properly audited) is what surfaced this gap — worth keeping in
+    mind for any future code added to this file, since the class's default
+    isolation does NOT match what most of it actually needs.
+  - APRS decode confirmed working at the new 44100Hz rate against real
+    traffic (2026-09-07) — the sample-rate fix resolved it.
+  - **Still open**: the audio link (:8532) has no problem label of its
+    own; rig control's (2026-11-12, see "Connection problems by where the
+    fault is") covers rigctld only.
+  - **`RemoteAudioStreamClient`'s "received N bytes so far" heartbeat is
+    scaled to `sampleRate`** (one line per ~30s of audio, commit `fb2221e`)
+    — it was a fixed 32,000-byte threshold left over from 8kHz, which at
+    44.1kHz fired every ~0.37s and buried the rest of this subsystem's
+    Console output. Any future per-chunk diagnostic here should be sized
+    the same way, not with a byte constant.
+  - **Dual Main/Sub audio channels (in progress, started 2026-09-18)**: the
+    FTX-1's USB audio-out is genuinely stereo whenever dual-VFO display is
+    active — Main on the left channel, Sub on the right, confirmed both
+    locally (2026-09-07, Loopback + Audio MIDI Setup on the Mac's own audio
+    device) and directly against the Pi's raw hardware (2026-09-18,
+    `arecord -D hw:1,0 -c 2` plus a channel-swap test that showed the
+    separation tracks VFO reassignment, not a fixed/stuck channel). The
+    app's audio pipeline was mono everywhere, and in `.remote` mode
+    specifically that mono-ness wasn't even clean: `asound-ftx1.conf`'s
+    `ftx1_dsnoop` slave requested `channels 1` against the 2-channel
+    hardware, and that negotiation turned out to *sum* Main+Sub rather than
+    cleanly pick one channel (the user reported hearing two simultaneous
+    signals — NOAA weather radio + APRS bursts — in live "mono" remote
+    audio). **Milestone 1 (Remote mode capture only, complete pending
+    hardware validation)**: `asound-ftx1.conf`'s dsnoop slave now requests
+    `channels 2`; `Pi/ftx1-audiostream.py` sends interleaved-stereo Int16LE
+    (`CHANNELS = 2`); `RemoteAudioStreamClient.swift` de-interleaves it into
+    two parallel `[Float]` streams; `AudioCaptureEngine.beginRemoteCapture()`
+    feeds Main into the exact same `process(samples:sampleRate:bitmap:
+    gain:)` entry point as before (every existing consumer — waterfall,
+    APRS, FT8, Mac-local playback, iPad relay — is unchanged, now fed a
+    genuinely isolated Main channel instead of a possibly-summed one) and
+    logs a throttled Main/Sub RMS comparison via `os.Logger` (subsystem
+    "com.ftx1remote.mac", category "audio-capture") for hardware
+    verification, since nothing consumes Sub yet. Local mode
+    (`AVAudioEngine` tap reading `floatChannelData?[0]`) is untouched.
+    **Real risk flagged, not yet hardware-confirmed**: Direwolf's own APRS
+    capture shares `ftx1_shared` (the `plug` layer over `ftx1_dsnoop`) —
+    moving the dsnoop slave to a real 2-channel source means `plug` now has
+    to actually downmix/select down to whatever Direwolf asks for, instead
+    of trivially passing through a 1-channel source; this is untested ALSA
+    behavior on this setup and needs a real APRS-decode check after
+    deploying (`journalctl -u direwolf -f`), not just "service started." See
+    `Pi/README.md`'s "Updating to stereo (Main/Sub) capture" for the deploy/
+    verify steps. Hardware-confirmed the same day via the RMS log (Main
+    dropping to near-silence while Sub held steady, and both swapping when
+    `swapActiveVFO` was sent) and, separately, that Direwolf's APRS decode
+    survived the `channels 2` change.
+    **Milestone 2 (Sub playback, `.remote` mode only)**: Sub now has its
+    own independent local-playback path on the Mac, mirroring Main's exactly
+    but staying deliberately narrower in scope — capture → encode →
+    playback only, no iPad relay and no APRS/FT8/`AudioRecorder` (those
+    stay Main-only). `AudioCaptureEngine.onSubChannelSamples` is a new
+    closure (mirrors `onAudioSamples`, `.remote`-only, hops to the main
+    actor the same way) feeding a second, fully independent pair —
+    `HubService.subAudioStreamEncoder`/`subAudioPlayback` (own
+    `AudioStreamEncoder`/`AudioPlaybackEngine` instances, not shared with
+    Main's) — with their own persisted settings
+    (`AudioPlaybackSettings.subVolume`/`subSquelchThreshold`/`subIsMuted`,
+    new keys, not shared with iPad). Main's equivalents were renamed for
+    symmetry (`audioVolume`→`mainAudioVolume`, `squelchThreshold`→
+    `mainSquelchThreshold`, `isAudioMuted`→`isMainAudioMuted`,
+    `toggleAudioMuted()`→`toggleMainAudioMuted()`, `audioPlayback`→
+    `mainAudioPlayback`, `audioStreamEncoder`→`mainAudioStreamEncoder`) —
+    confined to `HubService.swift`/`ContentView.swift`, no ripple into
+    iPad (which reaches its own `AudioPlaybackEngine` directly, never
+    through `HubService`). Mute is per-channel as decided (two independent
+    toggles, `isMainAudioMuted`/`isSubAudioMuted`). `ContentView` shows Sub's
+    mute button and SQL/VOL sliders — originally `.remote` mode only, since
+    extended to `.local` too (see "Local mode Main/Sub parity" below). Both
+    playback engines write to the same Mac output device
+    (`AudioOutputSettings.deviceUID`); running two independent
+    `AVAudioEngine` instances against one device simultaneously is ordinary
+    macOS behavior, not new territory.
+    **Deliberately not yet built** (future milestones, each independently
+    committable/testable like the six filter controls were): no
+    `RigController` protocol changes, no FT8 decoding or frequency-gating
+    from the Sub channel. (The Mac→iPad wire-protocol stereo extension
+    originally listed here is done — see "Mac→iPad Sub audio relay"
+    below.)
+    **Dual waterfall/oscilloscope — decided against for now (2026-09-18)**,
+    not just deferred: the FTX-1's own physical display only ever shows a
+    waterfall/scope for the Main VFO, even in dual-VFO mode — there's no
+    rig-side precedent for a Sub-channel one, so adding one here would be
+    inventing a display the actual hardware doesn't have, not achieving
+    parity with it (unlike everything else in this section, which mirrors
+    real rig behavior). Still one shared `ScopeFrameStore`, Main-only.
+    Noted as a possible future enhancement if ever wanted, but not planned
+    — don't pick this up without being asked again.
+  - **Sub-channel APRS decoding (2026-09-18, hardware-confirmed)**: a
+    second, fully independent `APRSDecoder` instance
+    (`HubService.aprsDecoderSub`) is now fed from `onSubChannelSamples`,
+    gated on `rigState.secondaryFrequencyHz` against the same global
+    `APRSSettings` frequency/tolerance the Main gate uses (no separate
+    Sub frequency setting — real use is one calling frequency, parked on
+    whichever VFO). Safe to run alongside the Main decoder since
+    `AFSKDemodulator`/`AX25FrameDecoder` (`Sources/FTX1Core/APRS/`) are
+    value-type structs with no shared state. Decoded stations/messages
+    stay in the single shared `APRSStore` rather than forking into a
+    second store/window set — `APRSStation`/`APRSMessage` gained a
+    `source: APRSSource` (`.main`/`.sub`) field instead, upserted (not
+    part of the upsert key — a station heard on both channels is one row,
+    tagged with whichever channel heard it most recently) and surfaced as
+    a Source column + segmented filter in `APRSStationListView`/
+    `APRSMessageListView`, and as marker tint (blue/orange) in
+    `APRSMapView`. `APRSStation`/`APRSMessage` decode `source` via
+    `decodeIfPresent(...) ?? .main` specifically so pre-existing
+    `aprs-history.json` files (all genuinely Main-only) keep loading
+    rather than getting silently dropped by `APRSPersistence.load()`'s
+    `try?` on a newly-required field. `RigState` gained `aprsSubActive`/
+    `aprsSubLastCallsign` (mirroring the pre-existing Main-only
+    `aprsActive`/`aprsLastCallsign`), computed in `refreshFastTier` against
+    a second, independent `aprsLastCallsignHeardSub` tracker (same 5-second
+    expiry as Main's) and gated on `secondaryFrequencyHz` rather than
+    `frequencyHz`. `RigStatePush` needed no wire-format change since it
+    already serializes the whole `RigState`. The shared `VFODisplayBox`
+    (`Sources/FTX1Core/UI/`) already supported an `aprsActive`/`callsign`
+    indicator — added earlier for Main only, never wired to the SUB box —
+    so both Mac's and iPad's `ContentView` SUB `VFODisplayBox` call sites
+    just needed the same `aprsSubActive ? aprsSubLastCallsign : nil`
+    pattern Main's MAIN box already used.
+  - **APRS list search + filters (2026-10-01, Mac-only, tested in the
+    built app against saved history, not live traffic)**: both list
+    windows have a toolbar `.searchable` field (Stations: callsign +
+    comment; Messages: from/to/text) and a Filter menu beside the Source
+    picker — a heard/received-within window (`APRSHeardWindow`) on both,
+    "With Position Only" on Stations, and on Messages "Addressed to
+    <callsign>" (any SSID of `StationSettings.callsign`, disabled while
+    unset), Hide Bulletins (`BLN…` addressees) and Hide Telemetry
+    Definitions (`PARM.`/`UNIT.`/`EQNS.`/`BITS.` text — most of the real
+    message history turned out to be these). The shared bits (time
+    windows, matching, the Source picker) are in `APRSListFilter.swift`.
+    Filter state is per-window `@State`, not persisted; the time window is
+    only re-checked when the list re-renders (on a new packet).
+  - **Local mode Main/Sub parity (2026-09-18, hardware-confirmed)**:
+    `.local` mode's `AVAudioEngine` tap now extracts a genuine Sub channel
+    too, same as `.remote` already did — `process(buffer:bitmap:gain:)`
+    reads `buffer.floatChannelData[1]` and calls `deliverSubChannelSamples`
+    whenever `buffer.format.channelCount >= 2`. A mono input device just
+    never triggers this — no separate "is Sub actually available" flag
+    anywhere, every downstream consumer (`subAudioPlayback`,
+    `aprsDecoderSub`) is already written to sit idle rather than assume Sub
+    exists. Because `HubService`'s entire Sub-channel wiring (playback,
+    squelch/volume/mute, independent APRS decode/gate) was already keyed
+    off `AudioCaptureEngine.onSubChannelSamples` firing at all — not off
+    `RigctldSettings.connectionMode` — none of that code needed to change;
+    only `AudioCaptureEngine`'s local-tap extraction and `ContentView`'s
+    `.remote`-only UI gates (removed — Sub's mute button and SQL/VOL
+    sliders now always show, same "harmless if inert" reasoning as the
+    playback engine) did.
+    **Real bug hit and fixed during hardware validation**: first pass
+    landed with `installTap(..., format: nil)` unchanged (as `.remote`'s
+    equivalent extraction pattern implied it should stay), and Sub came
+    back silent even with the correct 2-channel device ("FTX-1 Audio", a
+    Rogue Amoeba Loopback device) genuinely selected in Settings — traced
+    with two rounds of diagnostic `os.Logger` lines (device resolution +
+    `AudioUnitSetProperty` status, then `inputFormat(forBus:)` vs.
+    `outputFormat(forBus:)` channel counts) to a real `AVAudioEngine`
+    quirk: `inputNode.inputFormat(forBus: 0)` correctly tracked the
+    switched-to device (2 channels), but `outputFormat(forBus: 0)` — the
+    side `installTap`'s `format: nil` actually binds to — stayed pinned at
+    1 channel, apparently inherited from whatever the engine's graph was
+    originally built against (this Mac's system-default input, the mono
+    built-in mic) and never updated by the `kAudioOutputUnitProperty_
+    CurrentDevice` switch. Fixed by passing `inputNode.inputFormat(forBus:
+    0)` to `installTap` explicitly instead of relying on `nil` —
+    `AVAudioEngine` inserts its own conversion as needed, same as any other
+    explicit tap format. Confirmed fixed: Console showed `channels=2` after
+    the fix (vs. `channels=1` before, both with the identical device
+    selected and `AudioUnitSetProperty` reporting success both times), and
+    the user confirmed Sub audibly independent. Worth remembering for any
+    future `AVAudioEngine` input-device work in this app: `outputFormat
+    (forBus:)`/`format: nil` cannot be trusted to reflect a `CurrentDevice`
+    switch — always read `inputFormat(forBus:)` after `prepare()` and pass
+    it explicitly.
+    **Not yet done**: FT8/AudioRecorder still
+    Main-only in both modes (unchanged scope, not a Local-mode gap), and
+    the "not yet built" list above (`RigController` protocol) applies
+    equally to both modes now.
+  - **Mac→iPad Sub audio relay + mute buttons (2026-09-18, build-verified
+    on iPad Simulator, not yet hardware-tested against a real Mac↔iPad
+    link)**: extends the existing Main-only Mac→iPad audio relay to carry
+    Sub too, and adds mute buttons to iPad's audio controls for the first
+    time (there were none before this, Main included). `AudioStreamFormat`
+    (`Sources/FTX1Core/Audio/`) gained a second tag byte, `subAudioTag =
+    0x01`, alongside the existing `audioTag = 0x00` — two independently-
+    tagged mono 8kHz frame streams, not one interleaved-stereo stream like
+    the Pi's wire format, deliberately: reusing `AudioStreamEncoder`/
+    `AudioPlaybackEngine` twice (both already hardcoded mono) is far lower
+    risk than rewriting either to handle real stereo, and mirrors the
+    capture side's own "two fully parallel mono pipelines" shape. `RigWebSocketServer.broadcastSubAudio(_:)` (Mac) mirrors
+    `broadcastAudio(_:)`; `HubService`'s `onSubChannelSamples` now relays
+    unconditionally, same as the Main tap. `RigWebSocketClient` gained
+    `onSubAudioData`/`setOnSubAudioData` and an `isSubAudioFrame` check in
+    `handle(_:)`, both mirroring the Main equivalents exactly.
+    `RigClientViewModel` (shared by iOS/iPadOS) gained a second
+    `subAudioEngine: AudioPlaybackEngine` instance and
+    `isMainAudioMuted`/`isSubAudioMuted` (`@Published private(set)` +
+    `toggleMainAudioMuted()`/`toggleSubAudioMuted()`, same shape as
+    `HubService`'s Mac-side properties, persisted via the same
+    `AudioPlaybackSettings.isMuted`/`subIsMuted` keys `HubService` already
+    established — each device's `UserDefaults` is independent, per that
+    enum's own doc comment, so this is "same key names," not literal
+    cross-device sync) — mute gates whether `setOnAudioData`/
+    `setOnSubAudioData`'s closures push into the relevant engine, doesn't
+    stop/start it, same reasoning as the Mac-side toggle methods. No
+    `RigController` protocol changes needed: like the Mac's `HubService`
+    audio properties, these are reached directly via the concrete
+    `RigClientViewModel` type from iPad's `ContentView`, never through the
+    protocol.
+    iPad's `ContentView.swift` `audioControls` now renders two
+    `channelAudioControls(...)` columns, Sub-then-Main left-to-right
+    (matching the SUB/MAIN `VFODisplayBox` row above it, same convention as
+    the Mac's own audio-controls row), each with a mute button + volume/
+    squelch sliders; volume/squelch stay `@AppStorage`-bound (renamed
+    `audioVolume`/`audioSquelchThreshold` → `mainAudioVolume`/
+    `mainAudioSquelchThreshold` for symmetry with the new `subAudioVolume`/
+    `subAudioSquelchThreshold`), only mute reaches into `viewModel`.
+    Verified in the iOS Simulator (iPad Pro 11-inch, built via `xcodebuild
+    -scheme FTX1RemoteiPad`, driven via `mcp__Claude_Code_iOS_Simulator__
+    control`): layout renders correctly, both mute buttons toggle
+    independently. Not yet tested against a live Mac connection — that
+    needs a real device or a Mac-side rebuild plus a live WebSocket link,
+    neither available in that verification pass. All three app targets
+    (Mac, iPad, iOS) build clean against the shared `RigClientViewModel`/
+    `AudioStreamFormat` changes.
+
+  - **Swap tracking — audio follows the swap (2026-09-19, hardware-tested,
+    one known gap)**: user-reported bug — after a Main/Sub swap
+    (the app's `SV` swap button, or the rig's front-panel swap) the
+    frequencies/modes followed but the audio did not: the rig's L/R USB
+    channels evidently stay with the physical receiver, so the Main-role
+    audio (waterfall, Main mute/volume/squelch, the Main APRS gate, FT8's
+    dial frequency, the iPad relay) kept playing the *other* VFO's signal.
+    Fix: `HubService.audioChannelsSwapped` (persisted via
+    `AudioPlaybackSettings.channelsSwapped`) tracks the L/R↔Main/Sub
+    parity and is pushed to `AudioCaptureEngine.setChannelsSwapped`, which
+    exchanges the two channels *before* anything downstream sees them, in
+    both the `.local` tap and the `.remote` client closure — so every
+    consumer follows automatically and none needed to change. The flag
+    flips on (1) `applyOptimistically(.swapActiveVFO)`, (2)
+    `trackExternalSwap`, a heuristic for front-panel swaps: both polled
+    frequencies exchange at once relative to the last pair where they
+    differed (baseline reset by app tuning commands; equal-frequency swaps
+    are unobservable; Memory mode included since 2026-09-28 — it used to
+    reset the baseline too, which missed every front-panel swap between a
+    VFO and a memory channel, and the rig was confirmed on the Windows app
+    to keep L/R with the physical receiver for those as well; the fix is
+    rig-confirmed by the user the same day on both Windows and the Mac),
+    and (3) a manual override
+    button (speaker icon next to the swap button, orange while swapped).
+    The rig exposes no readout of the true mapping, hence the heuristic and
+    the override; a swap made while the app wasn't running is why the flag
+    persists across launches. Each flip logs to Console (subsystem
+    "com.ftx1remote.mac", category "audio-routing"), and the `stereo check`
+    line now includes `swapped=`. **Hardware results (user, 2026-09-19)**:
+    dual-VFO swap via the app, dual-VFO swap on the radio, and single-VFO
+    swap on the radio all worked with no intervention. **Single-VFO gap, fixed and confirmed
+    (2026-09-19)**: the app's `SV` swap doesn't move the L/R audio while the
+    rig is in single-receive display (a front-panel swap does, and is
+    caught by `trackExternalSwap`), so `applyOptimistically` skips the flip
+    then. The display mode comes from the raw "FR" (FUNCTION RX) CAT
+    command — 00 dual, 01 single, hardware-confirmed to match the rig —
+    read in the slow tier into `RigState.singleReceive` (`nil` until read,
+    treated as dual); each change logs `FR reply …` under
+    "audio-routing". **Still unverified**: that the mapping really is a simple parity flipped by each
+    swap; that `VS` (active-side select) doesn't move the audio; and how
+    the rig routes audio in single-VFO display while swapped.
+    **V/M after a swap (2026-09-29, rig-confirmed by the user the same day)**:
+    `HubService.lastVFOState` (Main's last VFO-mode frequency/mode,
+    replayed after `.setVFOMemoryMode(memory: false)`) is now cleared by
+    both the app swap (`applyOptimistically(.swapActiveVFO)`, including
+    single-receive display, where `SV` still exchanges the VFOs even though
+    the audio isn't flipped) and a `trackExternalSwap` detection — not by
+    the manual audio override. Before, after a swap the replay put the
+    *other* receiver's VFO on Main (found on the Windows app: a C4FM memory
+    channel swapped onto Main, then V/M tried to restore Sub's old CW
+    frequency). Leaving Memory then sends a bare "VM000" until the next
+    VFO-mode poll relearns it.
+
+## Pi-direct proof of concept (iPhone, iPad) (started 2026-10-05)
+
+A deliberate, contained exception to "mobile apps never talk to rigctld":
+the iPhone app (2026-10-05) and the iPad app (2026-10-06) can connect
+straight to the Pi's rigctld over Tailscale, without the Mac hub (user
+decision). Picked with a "Mac hub / Pi direct" segmented control at the
+top of each app's `ContentView` (`@AppStorage "connectionRoute"`; labelled "Desktop hub / Pi direct" on the iPad since 2026-10-15, raw value still `macHub`);
+switching disconnects the side being left. On the iPad the control is
+hidden while the chosen route is connected (2026-10-09; back on
+disconnect, and during Pi direct's connecting/retrying). The Mac-hub path
+(`RigClientViewModel`, now in each app's `HubControlView`) is unchanged.
+`PiDirectViewModel` and `PiAudioDownsampler` live in `FTX1Core`
+(`Networking/`, `Audio/`; moved out of the iOS target 2026-10-06 when the
+iPad needed them — explicitly `@MainActor public`, since the package
+doesn't have the app targets' MainActor default); each app has its own
+`PiDirectView`. The iPhone/iPad differences are init options:
+`PiDirectViewModel(logSubsystem:playsSubAudio:readsSMeter:)` — the iPhone
+passes `"com.ftx1remote.ios"` and neither option, the iPad
+`"com.ftx1remote.ipad"`, `playsSubAudio: true`, `readsSMeter: true`.
+
+- **Milestone 1, control (2026-10-05, Simulator against the real Pi)**:
+  `PiDirectViewModel` owns a `RigctldClient` (`<piHost>:4532`, host
+  `@AppStorage "piHost"`, default `ftx1pi`) and a `CommandQueue`; polls
+  every 1 s for MAIN frequency ("FA"), MAIN/SUB mode ("MD0"/"MD1"), SUB
+  frequency and PTT, best-effort like `HubService`; only
+  `.connectionLost`/`.notConnected` ends the session (retry after 3 s).
+  Logs under subsystem "com.ftx1remote.ios", category "pi-direct".
+  Accepts only `.setFrequency`/`.setMode`. Verified: connect, live
+  read, mode change confirmed independently with a raw "MD0;" read
+  (USB, then back to CW), Disconnect. Not yet tried on a real iPhone or
+  over cellular; the frequency-entry tune path wasn't exercised.
+- **Receive only, on purpose** (until 2026-10-09, see "iPad transmit
+  audio" below): the Enable Transmit and amateur-band gates live in
+  `HubService.send(_:)`, which this path bypasses. `FTX1Core`'s
+  `TransmitGate` is that gate for this route now. Anything else that
+  transmits here must go through it too.
+- Milestone 1 confirmed on a real iPhone by the user, 2026-10-05.
+- **Milestone 2, Main audio (2026-10-05, Simulator against the real Pi)**:
+  `RemoteAudioStreamClient` moved from the Mac target to
+  `FTX1Core/Audio/` (now `public`, takes a `logSubsystem` — the Mac passes
+  "com.ftx1remote.mac"; cancelling it now also cancels the
+  `NWConnection`, so a stopped client can't sit in the Pi's listen
+  backlog). `PiDirectViewModel` runs one alongside the rigctld link (own
+  retry loop), downsamples the **left** channel with `PiAudioDownsampler`
+  (44.1 kHz float → 8 kHz Int16, one long-lived `AVAudioConverter`) on
+  the client's actor, and pushes into an `AudioPlaybackEngine` on the
+  main actor. `audioState` (off/waiting/playing, "waiting" = no samples
+  for 2 s) is sampled once a second, not published per chunk. Mute and
+  VOL/SQL sliders use the same `AudioPlaybackSettings` keys as the iPad's
+  Main controls (squelch slider inverted the same way). The quieting-
+  based `SquelchGate` stays shut on HF band noise (~0.02 RMS vs the 0.015
+  default), so SQL has to go left to hear SSB/CW. Verified: samples at
+  real-time rate (~21.5 chunks/s), gate opening with SQL left, "waiting"
+  while another client (`nc`) held :8532 with rig control unaffected, and
+  automatic pickup once it let go. Audio confirmed on a real iPhone by
+  the user the same day; not yet tried over cellular. Known gaps: left channel = Main only until a swap (the
+  Mac's `audioChannelsSwapped` isn't ported); no background audio
+  (`UIBackgroundModes`); accepted limit (user decision) — the Pi serves
+  one audio client at a time, so the Mac must not hold the stream.
+- **iPad port (2026-10-06, Simulator against the real Pi; confirmed on a
+  real iPad by the user the same day)**: same model, plus Sub audio — the **right** channel through
+  a second downsampler (each `AVAudioConverter` keeps its own filter
+  state) into a second `AudioPlaybackEngine`, muted via the same
+  `isMuted`/`subIsMuted` keys as the iPad's hub columns (the model's mutes
+  are now `isMainAudioMuted`/`isSubAudioMuted`, and the engines are public
+  `mainAudioEngine`/`subAudioEngine` so the views set VOL/SQL on them
+  directly, as the hub screen does) — and one more read per 1 s tick,
+  `l currVFO STRENGTH`, for the S-meter (5 → 6 rigctld round trips). The
+  iPad `PiDirectView` is a cut-down hub screen: SUB/MAIN `VFODisplayBox`es
+  (MAIN tunable, SUB read-only, no TX/RX tags or memory channel — not
+  polled), `SMeterView` (RX only), Sub + Main `ChannelAudioControls`
+  (pulled out of the hub screen so both share it; its `onChange(initial:
+  true)` also fixed the hub's Sub engine starting on *Main's* volume/
+  squelch, since `AudioPlaybackEngine.init` loads the Main settings), and
+  the segmented mode picker. No PTT, power, band picker, VFO swap (would
+  also break left = Main) or `MenuPageView`. Verified: connect, live
+  frequency/mode/S-meter read, mode change confirmed with a raw "MD0;"
+  read (USB, then back to CW), both channels at ~21.5 chunks/s (Main on
+  14 MHz HF noise gated shut until SQL went left; Sub on a quiet UHF
+  carrier open), per-channel mute and SQL, "waiting" while `nc` held
+  :8532 and automatic pickup after, and switching to "Mac hub" freeing
+  the Pi's audio slot. Note for `nc` checks against the Pi: its rigctld
+  runs with `-o`, so verbs need a VFO argument (`l currVFO STRENGTH`, not
+  `l STRENGTH` — the latter just hangs, read as VFO "STRENGTH").
+- **iPad meters + audio as compact strips (2026-10-09, Simulator against
+  the real Pi; hub screen layout-checked only)**: user request, to save
+  space. Both iPad screens replace the analog `SMeterView` + the two tall
+  `ChannelAudioControls` columns with one `ChannelStrip`
+  (`Apps/iPad/`) under each VFO box: a segmented bar S-meter (S0–S9 in
+  the first 60%, over-S9 red) with an "S7"/"S9+12" readout and a mute
+  icon on the top row, SQL and VOL side by side below — about half the
+  old height. MAIN *and* SUB now have meters: the hub screen uses the
+  `subSmeterDb` the Mac already broadcasts ("RM2"); the Pi-direct model
+  (`readsSMeter`) reads "RM2" too (7 rigctld round trips per tick) and
+  no longer carries either meter forward on a failed read. While
+  transmitting (hub only), MAIN's bar shows the TX meter picked by
+  tapping it (shared `MeterSettings.key`, PO default), with the SWR under
+  the readout; the old standalone "SWR" label is gone. SUB's meter
+  confirmed by the user on HF band noise, and probed against the Pi on a
+  147 MHz FM repeater ("RM2" ~100–108 ≈ S8 with a carrier). On V/UHF FM
+  with no carrier the rig reports exactly 0 ("RM2"/"SM1", STRENGTH -54)
+  even though static is heard — USB audio is unsquelched — so a still
+  SUB bar there is correct. Unclear whether the rig reports SUB's meter
+  in C4FM (one 15 s probe read 0, maybe between transmissions). Not yet
+  tried: the TX display on the rig, a real iPad.
+- **iPhone MAIN S-meter (2026-10-22, Simulator against the real Pi on
+  Pi direct, then confirmed on a real iPhone by the user the same day)**: user request. The iPad
+  strip's meter row moved to `FTX1Core/UI/BarSMeterView.swift` (bar, S
+  readout, TX meter + picker while transmitting); `ChannelStrip` wraps it
+  with the mute/SQL/VOL controls. The iPhone shows it for MAIN under the
+  frequency on both routes (the hub screen's standalone SWR line is gone,
+  as on the iPad), and its `PiDirectViewModel` now passes `readsSMeter:
+  true` — which also reads SUB's unused "RM2". SUB's meter: see below.
+  **Two lines (2026-10-30, Simulator against the real Pi, receive only)**:
+  user request. `BarSMeterView(twoLines: true)` (iPhone only; the iPad's
+  strips are unchanged) is the Mac's Digital style: S on top, the TX
+  meter picked by tapping it underneath (dim until this side transmits;
+  then PO on top — SWR if PO is picked), with no MAIN/SUB label (the
+  screen's selector says which). Tap works on either side, and SUB
+  keeps its own pick (`MeterSettings.subKey`). The TX readings go to the
+  transmitting side (`transmits:`, `RigState.subTransmits`) — though Pi
+  direct on the iPhone doesn't read "FT", so it treats MAIN as TX there.
+  The picker's buttons no longer wrap "COMP" (iPad too).
+- **iPhone MAIN/SUB selector (2026-10-22, Simulator against the real Pi
+  on Pi direct, then confirmed on a real iPhone by the user the same
+  day)**:
+  user request, for space. One side at a time: while the chosen route
+  is connected, the "Mac hub / Pi direct" switch at the top gives way to
+  a MAIN/SUB segmented control (`DisplaySide`, `@AppStorage
+  "iphone.displaySide"`); it comes back on disconnect and during Pi
+  direct's connecting/retrying. `SideDisplay` (iPhone's `ContentView.
+  swift`, both routes) shows the side's frequency (SUB tunes with
+  `.setSecondaryFrequency`), its `BarSMeterView` (SUB: `subSmeterDb`, no
+  TX meter) and mode grid (`.setSecondaryMode`); `FrequencyDisplay` shows
+  dashes for nil/0. On Pi direct the iPhone now passes `playsSubAudio:
+  true`: both channels play, each by its own mute, and the mute/VOL/SQL
+  row shown is the selected side's (same keys as the iPad's). The old
+  SUB/TX status line is gone (MAIN's bar shows TX).
+- **iPhone band/mode/power row (2026-10-30, Simulator against the real
+  Pi on Pi direct, then on a real iPhone by the user the same day)**: user
+  request; tested live by the user). The mode grid gave way to one
+  line of drop-downs under the meter (`ControlRow`, iPhone's
+  `ContentView.swift`, both routes), Power/Band/Mode, each an outlined
+  accent tile (`DropDownTile`): `PowerControl` (popover with a 5–100 W
+  slider, sent on release, and ±1 W steps), then `Menu`s over the shared
+  `BandPicker` and a mode picker, both `.inline` (`BandPicker` no longer
+  fixes its style; the iPad's VFO popover passes `.menu`).
+  MAIN's band is `.setBand`; SUB's goes to the band's default frequency
+  with `.setSecondaryFrequency` (+ a segment's default mode). Power is the
+  rig's one RF POWER, either side. Pi direct takes it through the new
+  `PiDirectViewModel(readsPower:)` (iPhone only; the iPad's
+  `readsMenuSettings` already covers it): `.setPowerLevel` accepted,
+  "RFPOWER" read with the slow reads.
+- **iPad VFO boxes at Mac parity (2026-10-09, Simulator against the real
+  Pi and WPSD hotspot)**: `PiDirectViewModel(readsVFODetails: true)` (iPad
+  only; the iPhone is unchanged) adds the rest of what the Mac's
+  `VFODisplayBox`es show — "VM0"/"MC0"/"MT" and the memory scan ("RI0",
+  "SC" while running, only in Memory mode) every tick; "FR", "ST", "FT"
+  and "VM1"/"MC1"/"MT" every 5th tick (the Mac's slow-tier reads) — and
+  the C4FM callsign/reflector: `WPSDCallsignMonitor`/`WPSDSettings` moved
+  from the Mac target to `FTX1Core/WPSD/` (poll intervals now injected;
+  the Mac passes `PollingSettings`), and the iPad polls the hotspot itself,
+  host from a "WPSD hotspot" field next to the Pi host (`wpsd.host` in the
+  iPad's own defaults; empty = off). Display only: SUB tuning and memory
+  channel set/step stay unsupported on this route, and there's no APRS
+  (user decision — no decoder here). The Simulator can't resolve the bare
+  MagicDNS name "wpsd" for `URLSession` (-1003; `NWConnection` to "ftx1pi"
+  is fine), so test there with the full `wpsd.<tailnet>.ts.net`. Fixed on
+  the way, in the shared box: the indicator line reserved a fixed 14 pt,
+  shorter than iPad's caption2, so a reflector appearing grew the box; it
+  now reserves one hidden caption2 line. Verified: SUB's "CH 1 Pi-STAR",
+  RX/TXRX tags, the reflector, equal box heights. Confirmed on the real
+  iPad by the user the same day, all fields showing.
+- **Remembered hosts (2026-10-15, Simulator-checked; remembering on a
+  real connect not yet tried)**: both iPad screens' host fields are
+  `RecentHostField` (`Apps/iPad/`): while focused, a drop-down of the
+  hosts that route has connected to (newest first, up to 10; keys
+  `hubHost.recent`/`piHost.recent`, newline-separated). A row fills the
+  field without connecting; its ✕ forgets it. A host is remembered when
+  its connection reaches Connected (never in Demo Mode). The drop-down is
+  an overlay, so the field's row needs `.zIndex(1)` to draw over what
+  follows.
+- **iPad cleanup (2026-10-09, build-verified only)**: the Pi-direct
+  screen's audio status line shows only the "Waiting for audio…" warning;
+  "Audio from the Pi"/"Audio off" are gone. (The route switch hiding
+  while connected is noted at the top of this section.)
+- **iPad VFO popover: mode buttons + channel list, MAIN and SUB
+  (2026-10-09; Simulator against the real Pi, display and channel read
+  only — no mode/channel change sent yet)**: user request. Both iPad
+  screens dropped their segmented mode row. Tapping a box's frequency in
+  VFO mode shows `FrequencyEntryView` plus `ModeButtonGrid` (all nine
+  modes, current one filled, popover stays open; on the hub screen's
+  MAIN box also a `BandPicker` menu, `.setBand`, since 2026-10-11; on
+  Pi direct too, without the hub's band memory: a band's default
+  frequency, mode kept, a segment's default mode — both routes
+  rig-confirmed by the user the same day); in Memory mode
+  `MemoryChannelEntryView` plus `MemoryChannelListView` (filterable
+  channel/tag/frequency/mode list from a `MemoryListSnapshot`, current
+  channel highlighted, tap selects through `onSetMemoryChannel` and
+  closes; Refresh; reads once by itself when there's no list yet). All
+  via new defaulted `VFODisplayBox` parameters (`currentMode`/`onSetMode`/
+  `memoryList`/`onRefreshMemoryList`), so the Mac's boxes are unchanged.
+  SUB's mode is the new `RigCommand.setSecondaryMode` (raw "MD1<code>",
+  `RigMode.catModeCode`) — rig-confirmed by the user on Pi direct,
+  2026-10-09. The list: on the
+  hub route the Mac's `MemoryListStore` (moved to `FTX1Core/RigState/`)
+  is pushed as `MemoryListPush` (`type: "memory_list"`, throttled to 1/s,
+  and sent on connect; `RigCommand.refreshMemoryList` asks the Mac to
+  re-read); on Pi direct `PiDirectViewModel.memoryList` is its own store
+  over the same rigctld link, cached on the iPad (277 channels read from
+  the Pi in the Simulator). Pi direct now also accepts SUB frequency/mode
+  and both sides' channel set/step (none transmit), refused while the rig
+  scans (the hub's scan-stop/TX-side restore isn't ported; the boxes
+  aren't editable then either); a SUB channel change forces the next
+  tick's slow reads so the box catches up in ~1 s. Simulator note: the
+  first tap after a relaunch or screenshot is often dropped — tap again
+  before concluding a popover doesn't open.
+  Rig-confirmed by the user the same day: channel picker and the channel
+  list download.
+- **iPad Pi-direct top row: swap, audio swap, V/M (2026-10-09,
+  rig-confirmed by the user the same day: swap both ways with the audio
+  following, V/M in and out of Memory; a front-panel swap not tried
+  yet)**: user request, for testing. Next to Connected, once
+  connected, in this order: V/M (MAIN only), swap (`.swapActiveVFO`, raw
+  "SV") and the speaker override. `PiDirectViewModel` now ports the Mac's audio-routing
+  parity: `audioChannelsSwapped` (same `AudioPlaybackSettings.
+  channelsSwapped` key, this device's own) exchanges the Pi stream's L/R
+  before the downsamplers, flipped by an app swap (not in single-receive
+  display), a front-panel swap (`trackExternalSwap`, same heuristic as the
+  hub) or the speaker button. V/M ports `lastVFOState` (replayed after
+  "VM000"; cleared by any swap). Swap/V/M effects are applied in the
+  queue's `onCommandApplied`, not optimistically, and bump
+  `commandGeneration`, which drops a poll tick that straddled them (else
+  its pre-swap reads would look like a swap back). Both refused while the
+  rig scans. Supersedes "no VFO swap" above. The hub screen's top row
+  matches since 2026-10-11 (live-tested by the user the same day, as
+  were the power-slider, page-picker and band-picker changes): Scan/Skip, V/M, swap
+  (moved up from between the VFO boxes) and the speaker override, which
+  sends the new `RigCommand.setAudioChannelsSwapped` to the Mac's
+  `HubService.audioChannelsSwapped` (echoed as `RigState.
+  audioChannelsSwapped`, `nil` from an older hub = button disabled). Its
+  lock is the Mac's Enable Transmit (display-only until 2026-10-14, now
+  a toggle — see "iPad CW decoder" phase 3); swap/V/M stay enabled
+  while scanning, since the hub stops the scan first.
+
+- **iPad memory scan (2026-10-09, rig-confirmed by the user on Pi direct
+  the same day; the hub route build-verified only)**: user request. `MemoryScanButtons` (`Apps/iPad/`) — the
+  Mac's Scan menu (Scan SUB / Scan MAIN, enabled in that side's Memory
+  mode; "Stop SUB"/"Stop MAIN" while one runs) and Skip — in both
+  screens' top rows (Pi direct: left of V/M; hub: right-aligned after
+  PTT). Hub route: sends `.setMemoryScan` over the wire and `HubService`
+  does the rest; Skip always resumes *upward* (the iPad doesn't know the
+  direction a Mac-started scan used). Pi direct: `PiDirectViewModel.
+  sendMemoryScan` ports the hub's rules — Memory mode only, one side at a
+  time (the other side's scan stopped first), the TX side the scan moved
+  remembered (`txSideBeforeMemoryScan`) and put back with "FT" after an
+  app Stop, dropped after a front-panel stop; state applied in
+  `commandApplied` (bumps `commandGeneration`), with the hub's 1 s grace
+  for a "stopped" RI0 read right after a start. Not ported: the hub's
+  250 ms scan tick, so a pause shows on the 1 s poll; tuning/swap/V/M
+  stay refused while scanning (stop first) instead of stopping the scan.
+  Seen in the Simulator: Scan SUB → rig "SC11;", "FT1;", SUB box SCANNING
+  with MAIN live, button turned into Stop SUB.
+
+- **iPad MENU grid on Pi direct (2026-10-09, Simulator against the real
+  Pi; one write — D-MARKER off/on — confirmed with a raw "SS02" read)**:
+  user request. `PiDirectView` shows the shared `MenuPageView` under the
+  strips; `PiDirectViewModel` conforms to `RigController` (APRS lists
+  and RECORD/PLAY keep the unsupported defaults, as on the hub route;
+  Deep Settings since 2026-10-11, see Architecture). With `readsMenuSettings` (iPad only) it accepts the grid's
+  commands (`isMenuSetting`), applies them optimistically like the hub,
+  and reads their fields 4 per tick round-robin (`menuSettingReads`, the
+  hub's slow-tier reads plus "RFPOWER"; ~9 s per pass). A setting landing
+  bumps `commandGeneration` (optimistically and again once the queue
+  applied it), so a tick that read the old value is dropped. MOX on and
+  ANT TUNE go through `TransmitGate` (this route's lock, amateur bands,
+  not while scanning); `rigState.transmitEnabled` mirrors the lock so the
+  grid greys them out; locking or disconnecting while MOX is on sends
+  "MX0" (no Pi watchdog covers MOX). MIC GAIN reads "—" in CW: the rig
+  answers "MG" with "?;" there (probed), same on the hub. Not ported: the
+  band picker (the hub screen's power slider is gone too, 2026-10-11 —
+  RF POWER in the grid does it). Not yet tried on a real iPad or on air.
+
+## iPad filter controls (2026-10-11, complete)
+
+The Mac's Filter block on the iPad, always visible between the meter
+strips and the MENU grid, on both routes (user decisions). Three steps,
+each committed on its own:
+
+1. **Hub screen, outline only (done 2026-10-11; tested by the user against
+   the Mac hub, portrait and landscape)**: `FilterPanel` (`Apps/iPad/`,
+   generic over `RigController`) places the shared WIDTH/SHIFT/CONTOUR-
+   APF/N/W/NOTCH views, `FilterSideSelector` and `FilterDisplayView`.
+   `ViewThatFits` picks the Mac's single-row layout in landscape, the
+   display with WIDTH/SHIFT beside it in portrait, or all stacked. No
+   wire change: every filter command and field already crossed the
+   WebSocket. `RigClientViewModel` doesn't apply optimistically, so a
+   released SHIFT slider may snap back until the hub's next push.
+2. **Spectrum (done 2026-10-11; rig-tested by the user on the hub route:
+   spectrum under the passband, MAIN/SUB switch, muted side still shown,
+   rotation, Mac waterfall/display unchanged)**: no waterfall/scope and
+   no on/off switch (user decision). `FilterSpectrumStore`
+   (`FTX1Core/Audio/`) runs a 512-point FFT over the last 512 samples of
+   the 8 kHz relay audio on every chunk (~21/s, 15.6 Hz bins; 8 kHz is
+   exactly the display's 0–4 kHz span), selected filter side only, reset
+   on a side switch, only while `FilterPanel` is on screen (enabled on the
+   panel, not the display — each `ViewThatFits` layout has its own
+   display, and on rotation the new one can appear before the old one
+   disappears). `RigClientViewModel` feeds it *before* the mute/transmit
+   checks. The FFT/auto-gain/0–4 kHz code moved out of the Mac's
+   `AudioCaptureEngine` into `FTX1Core/Audio/FilterSpectrum.swift`
+   (`SpectrumFFT`, `SpectrumAutoGain`, `FilterSpectrum`; same constants,
+   now used by both). `SpectrumFFT` scales dB to the 2048-point level, so
+   the auto-gain's −70 dB floor means the same at 512 points (else ~12 dB
+   lower). Unit-tested in `FilterSpectrumTests`.
+3. **Pi direct (done 2026-10-11; rig-tested by the user: every control on
+   MAIN and SUB, spectrum, swap, single-receive fallback)**: the filter
+   reads/apply moved out of `HubService` into `FTX1Core/RigState/
+   FilterStateReads.swift` (`FilterSnapshot`, `FilterStateReads.all`,
+   `RigctldClient.readFilterState`, `RigState.applyFilterSnapshot`/
+   `clearFilterFields`/`applyFilterCommand`, `RigCommand.
+   isFilterSideCommand`) — the hub uses them unchanged in behavior (its
+   NAR re-read stays its own). `PiDirectViewModel(readsFilters: true)`
+   (iPad only) accepts the filter commands (optimistic + `commandGeneration`
+   bump), and ports the hub's rules: a side switch blanks the fields and
+   reads the new side in full, SUB refused in single-receive display and
+   falling back to MAIN if the rig goes there, WIDTH + NAR WIDTH re-read
+   after N/W, full re-read after an app swap. Polling: 3 of the 10 reads
+   per tick, round-robin (~4 s a pass). Its own `filterSpectrum` is fed
+   from the downsampled Pi audio before the mute checks. Seen in the
+   Simulator against the real Pi: SUB in FM answers the notch read with a
+   non-number, shown as "—" (known, see `FilterStateReads`).
+
+## iPad APRS S.LIST/M.LIST (2026-10-14, tested on a real iPad by the user)
+
+User request: the FM page's S.LIST/M.LIST open `APRSListPane`
+(`Apps/iPad/`) *in place of* the filter block and the MENU grid (the
+filter block too since the same day, for more list space), on both
+routes; Close brings them back. Both stay in the hierarchy, hidden under
+the pane (`.aprsListPane(...)` on a VStack of the two), so the grid
+returns on the FM page and the pane gets their exact frame. While
+hidden, `FilterPanel`'s `isActive` is false, which now also turns its
+spectrum FFT off (opacity 0 doesn't fire `onDisappear`). `MenuPageView(onShowAPRSList:)` hands the list kind to
+the iPad; nil (the Mac) still opens the `aprs-*` windows. The pane has the
+Mac windows' columns/filters (S.LIST/M.LIST switch, Source, filter menu,
+search) — no map.
+
+- **Pi direct decodes on the iPad** (`PiDirectViewModel(decodesAPRS:
+  true)`): an `APRSDecoder` per side on the Pi's **44.1 kHz** samples,
+  before the downsamplers, gated per side by `APRSSettings` (this device's
+  own keys; the pane's gear: Decode APRS — off by default, as on the Mac —
+  frequency, Clear History) via a lock-protected `APRSGateFlags` refreshed
+  on every `rigState` change. Into its own `APRSStore`, persisted on the
+  iPad (same `aprs-history.json` name, its own container).
+- **Hub route shows the Mac's lists**, not its own decode: the relayed
+  audio is 8 kHz, too coarse for the demodulator (see Audio-over-Pi).
+  `APRSListPush` (`type: "aprs_list"`, the whole history) is broadcast on
+  change, throttled to one per 2 s, and sent on connect;
+  `RigClientViewModel.aprsList`. Decoding there follows the Mac's
+  Settings → APRS.
+- `APRSDecoder`/`APRSStore`/`APRSPersistence`/`APRSSettings` moved from
+  the Mac target to `FTX1Core/APRS/`, `APRSListFilter` (plus
+  `APRSListKind`, `isBulletin`/`isTelemetryDefinition`) to `FTX1Core/UI/`;
+  the Mac's behavior is unchanged.
+- **VFO box APRS indicator on Pi direct (2026-10-14; the APRS tag seen
+  in the Simulator on 144.390, the decoded callsign not yet)**: the
+  model sets `RigState.aprsActive`/`aprsSubActive` (decoding enabled +
+  on frequency) and the last callsign each side decoded within 5 s,
+  as `HubService.refreshFastTier` does — kept in `aprsLastHeard`,
+  applied at each tick's publish and at once on a decode. The hub
+  route already had it from the Mac (needs the Mac's APRS decoding on).
+
+## iPad transmit audio (2026-10-09, build- and Simulator-checked; not yet on the air)
+
+Hold-to-talk PTT on both iPad screens (`PTTButton`, right of Connected and
+the same size; the hub screen's old full-width PTT is gone). Pressing it
+keys the rig and sends the iPad's microphone to the rig's USB audio input.
+
+- **Keying stays `T currVFO 1`/`0`** (`CommandQueue`'s `.setPTT`, i.e.
+  "TX1"/"TX0"). The CAT manual's `TX` set takes only 0/1; "TX2" is
+  read-only. What the rig transmits is chosen by the per-mode **MOD
+  SOURCE** menu (MIC/USB/BT-or-REAR/AUTO, in the SSB, AM, FM and DATA
+  groups), with **USB MOD GAIN** next to it. The app doesn't touch those:
+  set them to USB, or AUTO if AUTO picks USB on a CAT key (not yet
+  checked on the rig).
+- **iPad side** (`FTX1Core`, iOS-only parts in `#if os(iOS)`):
+  `TXAudioCapture` (an `AVAudioEngine` input tap → `PiAudioDownsampler` →
+  8 kHz Int16 mono, the relay's `AudioStreamFormat`) and
+  `MicrophoneTransmitter` (orders chunks through one `AsyncStream` into a
+  sink). Both models have `startTransmit()`/`stopTransmit()`. The first
+  press only asks for microphone access and keys nothing. The unkey goes
+  out 300 ms after release (`MicrophoneTransmitter.unkeyDelay`) so the
+  tail isn't cut off. Receive playback is muted while keyed.
+  **One shared `.playAndRecord` session, receive kept running
+  (2026-10-16, build-verified; not yet on the iPad)**: `SharedAudioSession`
+  (`FTX1Core/Audio/`) is the session for both receive players and the
+  mic, reference-counted (the last user deactivates). Until then the
+  players used `.playback` and each press stopped both, switched to
+  `.playAndRecord` and started the mic on the main thread; a release did
+  the reverse. On a real iPad Air (4th gen) that was a 3.9 s main-thread
+  hang per press (each player stop deactivated the session under the
+  other's running I/O, ~1 s each, plus ~1 s mic start), so a press was
+  released before the mic ran and sent no frames (`sudo log collect
+  --device-udid …` from the iPad: "Hang detected: 3.89s", the mic engine
+  stopped 3 ms after starting). Now a press only starts the input engine,
+  on `TXAudioCapture`'s own serial queue (`MicrophoneTransmitter.start` is
+  async; a stop during the start runs right after it); receive keeps
+  playing, muted while keyed. The older Simulator note: a first version
+  that held `.playAndRecord` for the whole session saw every Pi-direct
+  connect in the Simulator abort in CoreAudio ("Initialize: RPC timeout.
+  Apparently deadlocked"), but the same abort later hit a `.playback`
+  connect too — its crash report shows the main thread in
+  `AudioPlaybackEngine.start()` → `engine.outputNode`, waiting on iOS's
+  UI-sound renderer, itself stuck in a call to the host Mac's
+  `coreaudiod`. A Simulator/host problem: if it happens, run `sudo
+  killall coreaudiod` on the Mac, then restart the Simulator.
+  Both views release PTT when the scene leaves `.active`.
+- **Key first, then the microphone (2026-10-16, build-verified; not yet
+  re-tried on the iPad)**: `startTransmit()` used to queue the key as a
+  main-actor Task and then start the microphone synchronously (stop
+  receive playback, `.playAndRecord`, input engine — up to ~1 s on a real
+  iPad), so the key went out only after all that: found through the
+  Windows hub, where presses keyed late and short ones sent no audio.
+  Both models now send the key from `micStartTask` (the hub route awaits
+  `client.send`, which also keeps the key ahead of the first 0x02 frame;
+  Pi direct awaits the `CommandQueue` enqueue, whose rigctld round trip
+  runs off the main actor) and start the mic after it; a release before
+  then cancels the mic start, and every stop path cancels it too.
+- **Pi `ftx1_tx` failed whenever a receive client held :8532 (found
+  2026-10-16)**: `journalctl -u ftx1-txaudio` showed "unable to initialize
+  sum ring buffer" / "Invalid argument [ftx1_tx]" on every transmission
+  since the 2026-10-10 reboot (the 2026-10-09 test had no receive client
+  open). Reproduced with `aplay -D ftx1_tx` silence: fine alone, failing
+  with an `nc ftx1pi 8532` open. alsa-lib 1.2.14 shifts the IPC keys (the
+  dsnoop's segment shows as 8620, not 4522) and dmix uses key + 1 for its
+  sum buffer, which landed on the dsnoop's small segment. `asound-ftx1.conf`
+  now uses `ipc_key 4600` for `ftx1_dmix` (tested with the stream open);
+  to install it on the Pi: `/etc/asound.conf` from the repo file, then
+  `sudo systemctl restart ftx1-txaudio`.
+- **Hub route**: the iPad sends `AudioStreamFormat.txAudioTag` (0x02)
+  binary frames on the existing WebSocket. `RigWebSocketServer` puts
+  commands and TX frames through one ordered stream (`Inbound`) so a
+  client's `.setPTT(true)` always lands before its first frame, and
+  forwards frames **only from `pttHolder`**. `HubService.handleTXAudio`
+  drops them unless `rigState.ptt`, then plays them in `.local` mode
+  through a pass-through `AudioPlaybackEngine(squelchEnabled: false)` on
+  Settings → Audio → **Transmit audio output** (`TXAudioOutputSettings`;
+  empty = none, never the system default), or in `.remote` mode forwards
+  them to the Pi (`RemoteTXAudioClient`, one connection per transmission).
+  A 1.5 s silence watchdog unkeys a holder whose audio stops (an iPad
+  suspended mid-press keeps its socket open, so the holder-disconnect
+  unkey wouldn't fire). No `RigCommand`/`RigState` wire change.
+- **Pi direct**: `PiDirectViewModel` accepts `.setPTT`. Keying goes
+  through `TransmitGate` (this iPad's own Enable Transmit,
+  `piDirect.transmitEnabled`, **off by default**, the lock button beside
+  PTT; plus amateur bands on the *transmitting* side, the TXRX rule) and is
+  refused while the rig scans. Unkeying always goes through. Audio goes to
+  the Pi's `ftx1-txaudio.py` through `RemoteTXAudioClient`. On disconnect
+  it unkeys on the rigctld link before tearing it down.
+- **`Pi/ftx1-txaudio.py`** (port 8533, systemd `ftx1-txaudio.service`,
+  ALSA `ftx1_tx` = plug over a dmix, see `Pi/README.md`): plays 8 kHz mono
+  into the codec and never keys. It does **unkey** as a watchdog
+  (`T currVFO 0` to the local rigctld): after a transmission unless the
+  next one connects within 0.5 s, and when a connected client is silent
+  for 1.5 s. pyalsaaudio 0.10 raises "Broken pipe" on an underrun instead
+  of recovering, so the script reopens the device and re-primes. Tested
+  2026-10-09 against `plughw:1,0` with Direwolf stopped (real-time
+  *silence* from the Mac, never a tone: VOX could key the rig). No
+  underruns at real-time pace; unkey after each transmission; none
+  between two transmissions 0.2 s apart; the silence watchdog worked.
+  **Deployed 2026-10-09** (`ftx1-txaudio.service` enabled; backups
+  `/etc/asound.conf.bak-20261009-125011` and `/etc/direwolf.conf.bak-…`;
+  Direwolf's ADEVICE is now `ftx1_shared ftx1_tx`). Checked through the
+  `ftx1_tx` dmix with silence: RUNNING at 48 kHz stereo, a real-time
+  transmission with no underruns, unkey after it, and the silence
+  watchdog. Direwolf was disabled/inactive, so coexistence with it is
+  still untested.
+- Known edge: a re-press landing just as the Pi's 0.5 s grace expires can
+  race its unkey against the new key. It's small, and it shows up as the
+  transmission dropping.
+- **Not yet done**: any on-air test (dummy
+  load first: MOD SOURCE AUTO vs USB, all three paths, tail clipping,
+  backgrounding and Wi-Fi loss while keyed); the iPad hub screen's PTT
+  checked only by build, not on screen (needs a live hub). Windows is
+  out of scope.
+- **iPhone (2026-10-30, Simulator against the real Pi; lock and PTT
+  look only, nothing keyed or sent on the air)**: user request. The same
+  model code on both routes: a full-width hold-to-talk `PTTButton` at the
+  bottom of each screen and a `TransmitLockButton` right of Connected
+  (`Apps/iOS/FTX1RemoteiOS/PTTButton.swift`) — Pi direct's own
+  `piDirect.transmitEnabled`, or on the hub route the hub's Enable
+  Transmit (`.setTransmitEnabled`). The hub screen's old PTT keyed with
+  `.setPTT` and sent no audio; it now goes through `startTransmit`.
+  `NSMicrophoneUsageDescription` added to the iOS target. Release on
+  leaving `.active`, as on the iPad.
+
+## iPad CW decoder (phase 1 decode, 2026-10-14, confirmed on a real iPad; phase 2 sending on Pi direct, transmit-tested by the user; phase 3 sending on the hub route, transmit-tested by the user; CW sent on the air from the iPad, user-confirmed by 2026-10-18)
+
+User request: the Mac's CW decoder on the iPad, in a pane over the filter
+block + MENU grid (the APRS lists' area), opened by a **CW** button at the
+left of the top row's rig buttons, on both routes. Sending comes next
+(phase 2), as its own section under the tuning row, pausing the decoder
+through `CWReceiver.setSenderActive(_:)` as the Mac's `CWSender` does;
+phase 3 is sending on the hub route (needs new wire messages — the
+keyer-memory write and send queue live only in `HubService` today).
+
+- **`FTX1CW`**: a new SPM product/target (Mac + iPad only, like FT8Kit,
+  so the iPhone doesn't carry the Core ML model) with the shared
+  `CWReceiver`/`CWMeterStore`/`CWRigInfo` and the receive controls. It
+  depends on CWKit by URL (`Package.swift`, `upToNextMinor(from: "0.2.1")`
+  — keep it compatible with the Mac target's own Xcode reference to the
+  same repo). CWKit 0.2.1 (cwdecode `021e4d6`) only adds `.iOS(.v18)` to
+  its manifest; the model's ops need iOS 18 / macOS 15, so the package's
+  platforms went up to `"15.0"`/`"18.0"` (string form: tools 5.10 has no
+  `.v15`/`.v18`). The apps are at 26.5 anyway.
+- **Audio**: both view models call `onReceiveAudio` (FTX1Core can't name
+  `CWReceiver`) with every 8 kHz MAIN/SUB chunk, before the mute/transmit
+  checks — the hub relay as received, Pi direct after its downsamplers.
+  The App wires it to the one shared receiver (`ingest(pcm:...)`). 8 kHz
+  is the neural model's own rate, so unlike APRS the hub route loses
+  nothing. Decoding runs only while the pane shows on a connected route
+  (`CWPaneModifier`), which also forwards `CWRigInfo` (TX incl. the iPad's
+  own PTT press, KP pitch, modes). Only the pane observes the receiver,
+  so decoded text never re-renders the screen.
+- iPad leaves out the Mac's WebSDR source, Open Audio File, callsign links
+  and worked-before colors (no logbook on the iPad).
+- Verified in the Simulator: Pi direct and the hub route (Debug Mac app,
+  localhost) both decoding W1AW on 14.047.5 with the neural model loaded
+  on iOS; MAIN/SUB switch with the "not CW" note; Close restoring the
+  grid and the filter spectrum. The Mac's CW window still decodes after
+  the move. Confirmed working on a real iPad by the user, 2026-10-14.
+- **Phase 2, sending on Pi direct (2026-10-14; Simulator against the real
+  Pi with transmit locked first, then a transmit test by the user from
+  the iPad the same day, working)**: `CWSendSection`
+  (`Apps/iPad/`, generic over `RigController` for its rig-reading parts so
+  phase 3 can reuse it) under the tuning row, Pi direct only (the hub
+  screen's `cwPane` has no send section; the pane area grows to ≥780 pt
+  when it has one): keyer WPM stepper, BK-IN, the memory slot, Macros
+  (sheet: macro list plus this iPad's own call/grid — `StationSettings`,
+  since the iPad has no Settings → Station), Clear, Stop, a Their call
+  field for `{CALL}`, macro buttons that fill the line, the send log, the
+  status line and the input. No click-to-fill from the decoded text and
+  no logging on the iPad.
+  - `CWSender`, `CWText`, `CWMacro`, `CWSendItem`, `CWSendBlock` moved
+    from the Mac target to `Sources/FTX1CW/CWSender.swift`. The sender
+    drives a `CWKeyerLink` (rig state + publisher, `cwSendBlock`, ensure
+    TEXT memory, write memory, play/stop "KY0n"): `HubService` on the
+    Mac (same rules as before), `PiDirectViewModel` on the iPad
+    (`PiDirectViewModel+CWKeyerLink.swift` in FTX1CW, since FTX1Core
+    can't name the protocol). The App owns one `CWSender` bound to
+    `piViewModel`; it pauses the decoder (`onActiveChanged` →
+    `setSenderActive`) and is stopped when the lock goes on or the link
+    drops.
+  - Pi direct's gate (`cwSendBlock`): connected, this route's lock
+    (`.transmitBlocked`, which names the lock button), its
+    `transmitBlockReason` (TX-side band, not while scanning), not while
+    PTT is held, MAIN in CW, BK-IN not off. `PiDirectViewModel.send`
+    accepts `.playCWTextMemory` (iPad only, `readsMenuSettings`): a play
+    goes through `transmitBlockReason`, "KY00" always; `writeCWKeyerMemory`/
+    `ensureCWTextMemory` go straight over its rigctld link. Locking or
+    disconnecting after a play this session also sends "KY00"
+    (`cwKeyerUsed`), since the rig would otherwise finish its up-to-50
+    characters on its own. BK-IN and KS come from the existing menu reads
+    (~9 s a pass), so the BK-IN check can lag a front-panel change.
+  - Seen in the Simulator: blocked status naming the lock, a queued line
+    waiting ("Waiting: transmit is locked…") with decoding paused, Stop
+    marking it stopped and resuming decoding, `{MYCALL}` refused while
+    unset, the Macros sheet, BK-IN reading the rig's state. Simulator
+    gotcha found on the way: `simctl spawn … defaults` reads a different
+    domain from the app's own — check `Library/Preferences/<bundle>.plist`
+    in `simctl get_app_container … data` for the real value (it said the
+    lock was open when `defaults` said closed).
+- **Phase 3, sending on the hub route (2026-10-14; transmit-tested by the
+  user the same day)**: the same `CWSendSection` on the hub screen
+  (`CWSendSection<RigClientViewModel>`). The App's one `CWSender` follows
+  the route switch (`ContentView` → `CWSender.use(_:)`, which stops the
+  old route's run first); each route's lock/link changes stop it only
+  while it's the one in use (`isUsing`).
+  - **Wire**: `CWKeyerRequest` (`type: "cw_keyer"`, `id`, `slot`, `text`
+    — no text = make the slot a TEXT memory) and `CWKeyerReply`
+    (`"cw_keyer_reply"`, same `id`, `stored` or `error`), beside
+    `RigCommand` like the menu-read pair: `RigWebSocketServer` answers the
+    asking client alone, off the inbound stream (a write is ~2 s over the
+    Pi; the client waits for the reply before it plays, so order holds).
+    `HubService.remoteCWKeyer` refuses a slot outside 1–5 or text that
+    isn't ≤50 `CWText.allowed` characters before it reaches the rig — a
+    ";" would end the CAT command (`RemoteCWKeyerError`). Playing is the
+    existing `.playCWTextMemory`, so the Mac's Enable Transmit/band gate
+    applies; the server remembers the client that last played
+    (`keyerPlayer`) and sends "KY00" if it drops, as it unkeys a dropped
+    PTT holder. `RigClientViewModel.writeCWKeyerMemory`/
+    `ensureCWTextMemory` wait up to 15 s (`CWKeyerRequestError.noReply`
+    says to update the Mac app — an older hub never answers).
+  - `RigClientViewModel+CWKeyerLink` (FTX1CW): the Mac's own blocks
+    from the pushed state (Mac's Enable Transmit, MAIN in CW, MAIN in an
+    amateur band, BK-IN), plus not while PTT is held on the iPad.
+  - Verified: a scripted WebSocket probe against the Debug Mac app
+    (TEXT check answered; ";" and slot 9 refused by the Mac with their
+    own messages; no keyer write, nothing keyed) and the hub screen in
+    the Simulator with the Mac's Enable Transmit off ("Can't send:
+    transmit is off on the Mac…", BK-IN/WPM from the Mac's state), then
+    the user's own transmit test through the hub, working. Not tried: the
+    Mac's own CW window sending at the same time as the iPad (both use the
+    same keyer slot; not coordinated).
+  - **Hub-screen lock toggles the Mac's Enable Transmit (2026-10-14,
+    user request after the phase 3 test, user decision: lock *and*
+    unlock)**: new `RigCommand.setTransmitEnabled` (`"set_transmit_
+    enabled"`) sets `HubService.transmitEnabled`, the same as the Mac's
+    Settings toggle (incl. its unkey/CW stop when turned off), logged
+    under "connection"; `CommandQueue` ignores it. Fixed with it: a hub
+    running but not yet polling the rig never broadcast, so a client
+    showed `RigState()`'s default — Enable Transmit **on** — whatever the
+    Mac's was; the server is now seeded with the hub's state when it
+    starts. Checked in the Simulator against the Debug Mac app (not
+    connected to the rig): correct locked state on connect, then unlock
+    and relock from the iPad with the Mac's saved setting following
+    (0 → 1 → 0). An older Mac app ignores the command.
+  - **CW keyer coordinator (2026-10-15, user request; scripted
+    two-client probe, then the Mac's CW window and the iPad sending at
+    the same time into a dummy load, tested by the user the same day,
+    working)**: the Mac's CW window and hub
+    clients used the same keyer slot uncoordinated, so one could
+    overwrite the memory or restart the other's message mid-line. Now
+    `RigWebSocketServer` (an actor, it sees every client and command)
+    holds one **keyer lease**: `KeyerHolder` `.mac` or `.client(id)`.
+    `CWSender` takes it before every chunk (`waitForKeyer`, through
+    `CWKeyerLink.acquireCWKeyer`; nil = ours, else who has it — shown as
+    "Waiting: the Mac's CW window is sending") and gives it back after
+    each line and on Stop, so senders take turns line by line. Stop sends
+    "KY00" only while that sender holds the lease, so a device that's
+    only waiting can't cut off the other's message. The server refuses a
+    client's keyer write (`"The keyer isn't yours…"`) and drops its
+    "KY0n" play without the lease; "KY00" always goes through. Released
+    after each line, on the holder's disconnect, or after 30 s with no
+    keyer activity (`keyerLeaseTimeout`; a refresh is any acquire, write
+    or play by the holder). Wire: `CWKeyerRequest.action` (`acquire`/
+    `release`, optional — absent = write/check as before) and
+    `CWKeyerReply.busy`; the Mac's own window goes straight to the actor
+    (`HubService.acquireCWKeyerLease`). Pi direct has no coordinator (its
+    link is always granted) — a Mac in remote mode on the same Pi isn't
+    coordinated with. Probe results: second client busy while the first
+    holds, its write refused, release → granted, holder disconnect →
+    granted.
+  - The Mac's Enable Transmit is **on** when never saved
+    (`RigctldSettings.transmitEnabled`), so for tests save it off first
+    (`defaults write com.ftx1remote.FTX1RemoteMac rigctld.transmitEnabled
+    -bool NO`) and `defaults delete` it afterwards to restore.
+
+## Demo Mode (iPad, 2026-10-15; tested on a real iPad by the user by 2026-10-18)
+
+A "Demo Mode" button on the iPad's Pi direct tab (own line under the Pi
+host / WPSD fields, only while disconnected) runs the Pi-direct screen
+against an in-process simulated Pi, for App Review and anyone without an
+FTX-1, Pi or Mac (user design). Simulate the Pi, not the app:
+`DemoPi` (`FTX1Core/Simulator/`) starts three `NWListener`s on
+127.0.0.1, system-picked ports (`LoopbackListener`; the iOS Simulator
+shares the Mac's loopback, so no fixed 4532 to clash with a real
+rigctld) — rigctld (`SimulatedRigctldServer` over `SimulatedRig`), the
+44.1 kHz stereo stream (`SimulatedAudioServer` + `SimulatedAudioSynth`)
+and a TX audio sink (`SimulatedTXAudioServer`) — and a fresh
+`PiDirectViewModel` connects to them through `PiEndpoint` (host + the
+three ports; the real Pi keeps 4532/8532/8533). Everything downstream is
+the real code; there is no mock `RigController`. While it runs: a yellow
+DEMO banner, "Exit Demo" in place of Connected, the route switch hidden.
+The hub route stays hardware-only.
+
+App Review note: "Tap Pi direct → Demo Mode; the Mac hub route needs our
+free Mac app and a radio".
+
+- **Settings isolation** (`SettingsStore`, `FTX1Core/Settings/`): the
+  persisted settings and files go through it — `AudioPlaybackSettings`
+  (mutes, VOL/SQL, `audio.channelsSwapped`), `APRSSettings`,
+  `StationSettings`, `WPSDSettings`, `HomeFrequency`,
+  `piDirect.transmitEnabled`, the `cw.*` keys (`CWReceiver`/`CWSender`),
+  `aprs-history.json` and `memory-channels.json` (both stores bind their
+  file at init, so a late write can't land elsewhere). `DemoSession`
+  (`Apps/iPad/DemoMode.swift`) points it at a wiped suite
+  (`com.ftx1remote.ipad.demo`) and `tmp/FTX1RemoteDemo/` *before* making
+  the demo's own model, CW receiver and sender (they read settings at
+  init), hands the screen the same suite (`.defaultAppStorage`), and on
+  exit points it back and deletes both. It never writes `piHost`; the
+  real model stays disconnected, so exiting shows the screen as it was.
+  Seeded in the demo only: APRS decoding on, station call DEMO / FN31.
+  Display preferences (theme, button colour, meter choice, step size)
+  are copied in. The transmit lock starts locked.
+- **Rig** (`SimulatedRig`): reply shapes from the app's parsers and
+  read-only probes of the Pi's rigctld (2026-10-15: SH, KM `…};`, RM, DA,
+  SS04, IS, CO, VM/MC, SC, RI0, `m currVFO` all matched). hamlib verbs
+  with VFO args, `W …; ;` reads (`\0`), `W …; 0` sets, lowercase `w` keyer
+  writes (0.4 s, "?;" over 50 chars), `\dump_caps` naming model 1051;
+  unknown raw → "?;". VS/FT one setting and `currVFO` follows it; SV
+  swaps contents while each receiver's L/R audio stays put (not in
+  single-receive display); "VM000" parks MAIN on the channel's values;
+  15 sample channels (2 m/70 cm, 144.390 APRS, NOAA, HF); memory scan
+  ~10 ch/s, pauses on a busy FM channel, resumes 1 s after it clears,
+  any stop stops both, scan moves VS/FT; per-side filter registers, SH
+  per mode; EX dictionary seeded from `DeepSettingsCatalog` (CW memories
+  TEXT, NAR WIDTH 500/1800 Hz); keyer: PTT 3 for the PARIS length at KS,
+  only with BK-IN on and in CW, "KY00" stops; RFPOWER 0.05 (5 W, read
+  ×100 W like the real rig); meters move while keyed (PO follows TX
+  audio in SSB).
+- **World** (`SimulatedWorld`, pure functions of time): practice-text CW
+  beacon on 14.047.5 (18 WPM), a 146.940 repeater up 8 s every 45 s
+  (CW ID + courtesy beep — what the scan stops on), APRS on 144.390
+  every 20–40 s (`APRSBurstEncoder`: AX.25 UI frames, APZFTX via
+  WIDE1-1, Bell 202; DEMO-n calls only, one message to DEMO), HF band
+  noise ~0.02 RMS (so SQL must come down), near-silent V/UHF FM.
+  **The synth keeps its own sample clock** (resyncs only past 0.25 s
+  drift): taking each 20 ms chunk's start from the wall clock made timer
+  jitter overlap/skip a few ms, which CW tolerated and AFSK didn't — APRS
+  never decoded until that was fixed.
+- **TX meters on Pi direct** (same commit series): with `readsSMeter`
+  the model reads the hub's TX meters while the rig reports TX, and the
+  iPad MAIN strip shows PO/SWR — for the real route too.
+- Tests: `SimulatedRigTests` (through the real `RigctldClient`/
+  `CommandQueue`), `SimulatedAudioTests`, `APRSBurstEncoderTests`
+  (round trip through the app's demodulator and `APRSDecoder`, incl.
+  server-like timer jitter).
+- **Verified in the iPad Simulator** (2026-10-15): demo enter/exit with
+  the real prefs and memory-list cache unchanged; tune (+1 kHz) and mode
+  (USB); filter width; MENU grid values; a Deep Settings write (APRS AF
+  MUTE) read back from the rig as "EX0601031"; memory list (15 channels)
+  and a pick; V/M in and out (VFO replayed); Scan MAIN pausing on CH 2
+  and resuming, Stop; swap with the audio parity flipping; CWKit decoding
+  the beacon (~700 Hz, 18 WPM); CW send with the lock open (PTT 3 for
+  ~8 s); PTT hold with PO/SWR on the MAIN strip and the decoder paused;
+  S.LIST filling (DEMO-1/-9, Sub). A normal Pi-direct connect to the real
+  Pi still works. Since tested on a real iPad by the user (by
+  2026-10-18). Not checked: the iPhone (the simulator would work for it;
+  no UI there yet; the iPhone isn't in 1.0).
+- Testing tip: the demo's rigctld is reachable from the Mac while it
+  runs (`lsof -nP -iTCP -sTCP:LISTEN | grep FTX1Remot`, lowest port) —
+  a second client can read the simulated rig's state directly.
+
+## iPad TestFlight prep (2026-10-15; 0.9 build 6 uploaded the same day, build 7 on 2026-10-16 with the PTT key-before-mic fix, build 8 the same day with the shared audio session, build 9 on 2026-10-26 with the CW Monitor sidetone and the 5 W RF POWER floor, build 10 on 2026-11-02 with split, Spanish and German)
+
+App Store/TestFlight requirements on the iPad target: `PrivacyInfo.xcprivacy`
+in `Apps/iPad/FTX1RemoteiPad/` (picked up by the synchronized group as a
+resource) declares the required-reason APIs the app uses — UserDefaults
+(CA92.1) and `ProcessInfo.systemUptime` in the Demo Mode simulator
+(SystemBootTime, 35F9.1); add a category there if a new required-reason API
+(file timestamps, disk space, …) lands in code the iPad links.
+`ITSAppUsesNonExemptEncryption = false` is in `FTX1RemoteiPad-Info.plist`
+(a custom key, so in the plist, not an `INFOPLIST_KEY_*` setting — see the
+Sparkle lesson); `CFBundleDisplayName` "FTX1 Remote" and
+`NSLocalNetworkUsageDescription` are build settings. Bump
+`CURRENT_PROJECT_VERSION` for every upload. Beta review note: "Tap Pi
+direct → Demo Mode"; arbitrary loads are for user-owned Tailscale hosts.
+Upload: archive with `-destination 'generic/platform=iOS'
+-allowProvisioningUpdates` to `build/FTX1RemoteiPad.xcarchive`, then
+`xcodebuild -exportArchive -exportOptionsPlist Scripts/ExportOptions-iOS.plist
+-allowProvisioningUpdates` (method app-store-connect, destination upload —
+the export itself uploads). The Mac's `Scripts/ExportOptions.plist` is
+Developer ID, keep them apart. To archive without uncommitted changes,
+use a `git worktree` whose folder is named `ftx1-remote`: the project
+finds the local package by that name, and any other name fails with
+"Could not resolve package dependencies".
+
+## Straight-key CW (Mac, Local mode, 2026-10-17; rig-tested by the user the same day)
+
+Tools → CW Key (Straight Key until 2026-10-18): the Arduino interface (`cw_keyer/cw_keyer.ino`,
+115200, lines `I`/`D`/`U`/`H`/`S`) keys the rig by RTS/DTR on its second
+USB port (CP2105 "Standard COM Port", CAT-2 — `…C51`, rig-confirmed;
+never rigctld's CAT port). Menu: CW SETTING → MODE CW → PC KEYING = the
+same line, RPTT SELECT OFF. Works with BK-IN on *and* off (rig-tested),
+unlike the keyer memories, which need BK-IN on. Code in `Sources/FTX1Core/CWKey/`: `CWKeyLineAssembler`,
+`CWDeviceClockUnwrapper`, `CWClockSync` (min filter over 2 s — the UNO's
+resonator drifts up to ~0.5%), `CWJitterBuffer` (playout at device time +
+offset + delay, keeps spacing when late, catches up only on spaces >
+0.3 s), `CWKeyingSafety` (every cutoff latches until the operator's next
+key-up), `CWStraightKeyEngine` (pure, fake-clock tested), and macOS-only
+`SerialCWKeySource`/`ModemLineCWKeyer`/`CWKeyingDriver` (user-interactive
+queue, strict dispatch timer; keyer port open only while armed; `HUPCL`
+drops the line if the app dies — only safe with normal polarity). Mac:
+`StraightKeyController` (a `lazy var` on `HubService`, started in
+`start()`, shut down first in `stop()`) gates on Local mode, rig
+connected and `TransmitGate`; Armed is never persisted. Seen with the
+real Arduino: banner 1.6 s after open (UNO reset), heartbeat arrival
+jitter 0–4 ms. Sketch v0.2 (2026-10-17): the user's key chattered ~15 ms in 3–5 ms pieces on closing, past v0.1's 3 ms lockout, keying a broken tail (piezo too); now a change is taken only after 10 ms of contact quiet (a clean edge still passes at once). A re-capture showed no edge under 89 ms; on-air audio confirmed clean by the user the same day.
+
+**Paddle (2026-10-18; tested by the user on the rig in Remote mode the same day: settings, replug resend, Follow, long dah runs not tripping the guard)**: the sketch's own iambic keyer (D2/D3, stereo lead) reports its elements as the same `D`/`U` lines, so paddle and straight key share the whole keying path; the window is **Tools → CW Key** now (window id still `straight-key`). Its Paddle keyer section — speed (or Follow the rig's keyer speed, `RigState.cwSpeedWpm` clamped to the sketch's 5–50), iambic A/B, reverse, interface sidetone (`cw.straightKey.keyer*`/`iambicModeB`/`paddleReversed`/`sidetoneOn`) — goes out as `W`/`MA`/`MB`/`R`/`T` whenever the interface connects or an `S` line disagrees (`StraightKeyController.syncKeyerSettings`, at most one batch a second; the Mac's settings beat a speed pot). `CWFeedbackDetector` exempts a run that looks like keyer output at the `S` line's WPM (marks 1 or 3 dits, gaps 1 dit, ±3 ms) — without that, a dah run at 12–32 WPM tripped it at the Local delay. Known gap: RF in the *paddle* leads makes real keyer elements, and a loop of exactly 2 or 4 dits looks like a held paddle. Long paddle runs (TTTTT) brought back the Pi's CP2105 EPROTO (`cp210x ttyUSB1: failed … -71`, no under-voltage) — RF on the Pi↔rig USB cable; the releaser confirmed key-up each time, and keying stays off until re-armed. Fix is a ferrite on that cable.
+
+**Remote mode (2026-10-17)**: the keying port is the Pi's, so
+`CWRemoteKeyingDriver` forwards the Arduino's lines (device ms untouched)
+as `docs/cw-protocol.md`'s JSON (`cw_hello` carries line/polarity/delay/
+timeouts) over TCP 8534 to `Pi/ftx1-cwkey.py`, which runs the same playout
+and safety in Python (stdlib only; `/dev/serial/by-id/…01C7A9C5-if01-
+port0`; user `ftx1cw` in dialout) — so Tailscale jitter lands before the
+buffer. The Mac only holds a session while armed + key interface
+connected + not blocked; `cw_bye` (sent as the stream's last data, then
+cancel) or a dropped socket keys up at once, silence after the
+heartbeat timeout (Remote default 1 s; Remote playout default 300 ms,
+stored apart from Local's). Tests: `CWRemoteKeyingDriverTests` (fake Pi
+server), `Pi/tests/` (python3 -m unittest), and a scratch cross-check of
+the Swift driver against the real script showed element lengths within
+1–2 ms. **Stuck-key fix (2026-10-17)**: mid-transmission the CP2105 rejected an RTS set (`cp210x ttyUSB2: failed set request 0x7 status: -71`, EPROTO — likely RF on the USB cable), and the old error path just closed the port, trusting HUPCL; the line stayed keyed (user: a tap gave continuous keying). Now every key-up is read back (TIOCMGET) and any failure hands the keyer to a `Releaser` that retries (reopening every 5th try) until the line reads up, even after the session ends; keying stays off for that session, and a new `cw_hello` is refused while a release is pending. `FTX1_CW_LOG_KEYS=1` logs every line change. The Mac's Local path does the same since (`CWKeyer.release`/`reopen`, `CWKeyingDriver`'s releaser, arming refused while releasing); `TIOCMGET` unsupported by a driver (ENOTTY/EINVAL) falls back to unconfirmed key-ups with an error log — not yet checked against the Mac's CP210x driver on the real port. **RF feedback guard (2026-10-17)**: after that fix, one tap still keyed on and on: RF in the key lead made each transmitted element a "press" one loop later (marks ~190 ms every ~310 ms = 300 ms delay + transport), cured by a larger ferrite on the key lead. `CWFeedbackDetector` (Mac, both modes, operator events only) trips on 4 consecutive mark periods steady within 6 ms on both edges and inside [delay, delay + 250 ms]; the engine/remote driver then disarm (Remote: `cw_bye`) with "RF feedback detected". Tested on the real loop data and both real hand-keying captures (no trip at 0.15–0.4 s delays). Known limit: an electronic keyer's dit run is equally steady (matters if the paddle path returns). **Deployed on ftx1pi 2026-10-17** (`ftx1-cwkey.service` enabled, user `ftx1cw`, listening on 8534; the user ran the sudo steps — sudo there needs their password). Rig-tested by the user in Remote mode the same day: keying works and stops when the Mac app disconnects. The hub WebSocket relay from iPad/Windows is still schema only.
+
+## Themes (Mac, 2026-10-26; unit-tested, then tested by the user the same day)
+
+Port of the Windows themes (user request): Settings → Appearance → Theme
+(Auto, Default Light, Default Dark, Glossy Black, Dusty Rose, Icy Mint),
+VFO Digits (Theme Default / SF Mono / Menlo / 7-segment), VFO Digit Color
+(Theme Default or the eight button value colors) and Button Value Color.
+All apply at once, every window.
+
+- **Model** (`FTX1Core/Appearance/ThemeDefinition.swift`, `ThemeTests`):
+  `ThemeDefinition`/`ThemeFill`/`ThemeColor`/`VFOTheme`/`ThemePresets`/
+  `SevenSegmentText`, the Windows model with the same preset hex values
+  (Windows' `ThemeDefinition.cs` and this file must stay in step). One
+  difference: `VFOTheme`'s fields are optional — nil is the Mac box as it
+  always looked (green on black), since the Mac's defaults differ from
+  Windows'. A box whose receiver isn't shown still dims to 45%, themed or
+  not. Font names differ (SF Mono/Menlo for Consolas/Cascadia Mono); the
+  presets' default font is SF Mono. 7-segment with a theme that sets no
+  unlit colour shows the unlit "8"s at 10% (Windows shows none).
+- **Applying** (`ThemeStyling.swift`): every scene root in
+  `FTX1RemoteMacApp` uses `.appTheme()` (in place of the old
+  `.preferredColorScheme`): the theme's light/dark side, `.tint(accent)`,
+  window background (`containerBackground(for: .window)`), and the theme
+  in `\.appTheme` for views that draw their own colours. Every branch is a
+  value, not an `if`, so switching themes never resets a window's state
+  (an `if` around the content would recreate e.g. WebSDR's model). Buttons:
+  `ThemedButtonStyle` (a `PrimitiveButtonStyle`: without a theme it is
+  `.bordered`, `.borderedProminent` while `isOn`, or `.automatic` as the
+  window-wide default — so Default Light/Dark and the iPad look exactly as
+  before) and `ThemedTileButtonStyle`/`ThemedTile` for ContentView's grey
+  tiles. **New buttons** should use these instead of `.bordered`/
+  `.borderedProminent`/a hand-drawn grey tile; captions that used
+  `.foregroundStyle(.secondary)` in the main window use
+  `.themedSecondaryForeground()`. A themed face, unlike the system's
+  bordered button, gives up width to a neighbour — pin it with
+  `.fixedSize()` when it shares a row with a slider (Contour, Notch).
+- **Settings**: `appearance.themeName` (unset = the old `appearance.theme`
+  Light/Dark/Auto, migrated on read), `appearance.vfoDigitFont`,
+  `appearance.vfoDigitColor` (empty = theme's). External `defaults write`s
+  don't reach a running app; relaunch to test that way.
+- **Font**: DSEG7 Classic in `Sources/FTX1Core/Resources/Fonts/` (package
+  resource), registered for the process on first use (`VFODigitFonts`).
+- Not themed, on purpose (as on Windows): TX/RX tags, PTT, meters,
+  Connected/Disconnected. Not themed by limitation: segmented pickers,
+  pop-up menus, the Settings toolbar. The iPad/iPhone don't apply
+  `.appTheme()`, so they're unchanged.
+- **Checked** (built app, disconnected): Default Dark unchanged; Glossy
+  Black, Dusty Rose, Icy Mint + 7-segment + orange digits; Settings →
+  Appearance. Then tested by the user the same day: a live frequency in
+  the 7-segment font, the secondary windows (CW, APRS, WebSDR…) under a
+  theme, and picking from the Settings pop-ups.
+
+## Settings → Mobile (Mac, 2026-10-28; checked in the built app with a test WebSocket client over Tailscale, then confirmed by the user with a real iPhone the same day)
+
+User request, for the iPad public beta: a tab that tells a user what to
+type into the iPad's Desktop hub host field (`MobileSettingsTab.swift`).
+Shows the hub server's state (`HubServerStatus`, a `let` on `HubService`
+— its own object so a client connecting doesn't re-render `ContentView`;
+listening comes from the rebind loop, so it lags up to 3 s; clients from
+`RigWebSocketServer.setOnClientsChanged`, each a `HubClientInfo` with the
+peer IP and connect time), the macOS application firewall
+(`socketfilterfw --getglobalstate`/`--getappblocked`, readable without
+admin), Tailscale (this Mac's 100.64.0.0/10 address, its MagicDNS name by
+reverse lookup — MagicDNS answers PTR for tailnet IPs — plus the short
+name; installed-but-down vs not installed via the app's bundle IDs
+`io.tailscale.ipn.macsys`/`.macos`, with Open Tailscale or a Get
+Tailscale… link to tailscale.com/download) and the Wi-Fi/Ethernet
+addresses (`en*` IPv4, not link-local) plus the `.local` name. Each
+address has a copy button; the same-network section comes before
+Tailscale's, and both Tailscale links go to tailscale.com/download (it
+lists every platform). Re-read every 5 s while the tab shows; client
+names are reverse-looked-up for tailnet IPs only (a LAN PTR lookup can
+stall). Long Texts inside the tab's Form need a max width (the Form
+offers its full width to the trailing column, past the window's edge).
+Not seen: the not-installed and not-connected Tailscale states,
+firewall-on states.
+
+**Windows port (2026-10-28; written in a cloud session without a .NET
+SDK, then built, unit-tested and run on the user's PC the same day, and
+a live connection from a real iPhone tested by the user, working)**: the Windows hub's Settings → Hub tab is
+now **Mobile** (tag still "Hub"), with the same sections under its "Allow
+iPad connections" switch. `Services/Hub/HubConnectionInfo.cs` (OS-free,
+`HubConnectionInfoTests`): tailnet range, MagicDNS names (only `.ts.net`/
+`.tailscale.net` — Windows answers a reverse lookup of its own address
+with its bare computer name), `tailscale status --json` parsing, and
+`FirewallCheck.Evaluate`: per network profile the PC is on (none = judge
+Private + Public), off / block-all / a block rule for this exe (beats
+allow) / an allow rule / no rule yet; rules count for this exe (TCP or
+any, port incl. 8765) or for no program naming 8765 — not services, not
+any-program any-port. `HubNetworkProbe.cs` (Windows): `NetworkInterface`
+(LAN = IPv4 on an interface with an IPv4 gateway, which leaves out
+Hyper-V/WSL switches), `<hostname>.local`, `%ProgramFiles%\Tailscale\
+tailscale.exe status --json --peers=false` for the name (reverse DNS as
+fallback), Windows Firewall through `HNetCfg.FwPolicy2` with `dynamic`
+(reads without admin; any failure shows "—", logged once). Open
+Tailscale starts `tailscale-ipn.exe`. Seen on the PC through UI
+Automation: Ethernet's address and the `.local` name, Tailscale
+Connected with the right IP, MagicDNS and short name (all five copy
+buttons copy the right text), the firewall line "On, allows FTX1
+Remote" (`dynamic` COM reads work — matches `Get-NetFirewallRule`),
+"Listening on port 8765", and a test WebSocket client from the PC's own
+Tailscale IP listed as "desktop (100.127.46.4), since 10:23 AM", then
+None after it closed. A disconnected Wi-Fi and the Surfshark tunnel are
+correctly left out. Fixed on the way: "since {1:t}" failed
+`LocalizationTests.FormattedStringsFormat` (`t` is DateTime-only, the
+test formats with numbers), so the time is passed pre-formatted; the
+copy buttons got an accessible name. Then the user connected a real
+iPhone to the PC's hub, working. Not seen: Tailscale down/missing,
+the firewall-off/blocked states.
+
+**Hub address filter (Mac, 2026-11-01; unit-tested, checked in the built
+app from loopback, the LAN address and a real client on the Pi over
+Tailscale, then tested by the user with an iPad the same day)**: the Mac's hub accepted any address
+that could reach port 8765. `RigWebSocketServer.accept` now cancels a
+connection unless `HubAddressFilter` (`FTX1Core/Networking/`) allows it:
+the Windows hub's list (loopback, Tailscale, the private ranges, link-local
+— keep `HubAddressFilter.cs` in step; `HubAddressFilterTests` has its
+cases). A refusal is a TCP reset before anything is sent, logged under
+"connection". Same known limit as Windows: a client on the same LAN using
+a global IPv6 address is refused, which could catch the `.local` name on an
+IPv6 network (the Mac tested on has none).
+
+**Web pages refused (both hubs, 2026-11-01; Mac checked in the built app with
+a real browser page, `URLSessionWebSocketTask`, raw clients and the Pi over
+Tailscale; Windows written on the Mac without a .NET SDK; then tested by the
+user with an iPad, the Mac and the PC the same day)**: a page in a browser on an allowed machine could open
+`ws://localhost:8765` and send commands, keying included (seen connecting and
+receiving state in the in-app browser, from another port's page). Any
+handshake with an `Origin` header is now refused: browsers always send one,
+and `URLSessionWebSocketTask` (the apps' client) sends none. Mac:
+`setClientRequestHandler` + `HubAddressFilter.isFromWebPage`. **Its `.reject`
+isn't enough by itself**: `NWProtocolWebSocket` writes the 400 and then still
+reports `.ready` and leaves the socket open, so writes reach the client (the
+state and whole memory list did). The handler can't say which connection it
+refused, so an accepted handshake's response carries `X-FTX1-Hub-Accepted`,
+read back from the connection's WebSocket metadata at `.ready`; without it the
+connection is cancelled. Clients now stay in `pendingConnections`, and nothing
+is sent or read, until that check passes. Windows: a 403 in `HubServer`'s
+middleware, after the address check, with `RefusesAWebPageButNotAnApp` in
+`HubTransmitTests`. Both log the refusal. In zsh, `log` is a math builtin:
+call `/usr/bin/log` to read these.
+
+## License-class guardrail (Mac, 2026-10-25; unit-tested, then rig-tested by the user the same day)
+
+Settings → **License** (user request): Off (default — the gate checks the
+amateur bands only, as before), a US class (Extra, Advanced, General,
+Technician, Novice), an ITU Region 1/2/3 allocation, or **Custom**.
+Applies at once, like Enable Transmit.
+
+- **Model** (`FTX1Core/Licensing/`, `TransmitPrivilegesTests`):
+  `PrivilegeProfile` = `PrivilegeSegment`s (Hz range, `TransmitEmission`
+  CW/phone/data, optional `onlyModes`). A transmission passes only if its
+  *occupied spectrum* (`RigMode.occupiedSpectrum`: SSB/DATA-U the rig's
+  default 100–2900 Hz TX BPF, CW ±100 Hz, RTTY ±300, AM ±3 kHz, FM/DATA-FM
+  ±8 kHz, C4FM ±6.25 kHz) fits inside segments allowing its mode;
+  neighbouring segments allowing it merge. C4FM counts as phone, DATA-FM
+  and RTTY as data. Unknown mode = blocked.
+- **US tables** (`PrivilegePresets.swift`): 47 CFR §97.301/§97.305, power
+  limits left out; 60 m = the five channels (USB/CW/DATA-U only); Tech/
+  Novice 28.3–28.5 SSB+CW only; 70 cm 420–450 without Line A. The ITU
+  presets are outer band edges, every mode — a starting point for Custom,
+  not a country's rules (the Settings text says so). Re-check the US 60 m
+  rules if the FCC adopts the WRC-15 band.
+- **Gate**: `TransmitGate.blockReason(transmitEnabled:state:privileges:)`
+  checks the *transmitting* side (TX:SUB/split = SUB's frequency and
+  mode); the amateur-band check stays the outer limit. `HubService.
+  transmitBlockReason` is the one gate for `send(_:)`, the CW sender
+  (`cwSendBlock`), the PTT button (greyed, reason as tooltip) and, via
+  `$activePrivileges`, `StraightKeyController`. Fixed with it:
+  `send(_:)` and `cwSendBlock` used MAIN's frequency even with TX on SUB.
+  The iPad's `RigClientViewModel` pre-check still mirrors the old MAIN rule
+  (the Mac enforces the real one); Pi direct and Windows pass no
+  privileges, unchanged.
+- **Mid-transmission**: with privileges on, `rigState`'s `didSet` re-checks
+  while PTT/MOX is on and unkeys once (CW sender stop, "KY00", MOX off,
+  PTT off) if tuning or a mode change leaves them. Off = no such check.
+- **Custom** (`LicenseSettingsTab`): editable rows (MHz fields commit on
+  Return/blur, CW/Phone/Data boxes), Copy to Custom / Start From a preset,
+  JSON import/export; stored in `license.customProfile`, choice in
+  `license.privileges`. Empty Custom blocks every transmission.
+- **Windows port (2026-10-25; unit-tested, Settings → License checked
+  through UI Automation, then tested live by the user the same day)**: `Models/
+  TransmitPrivileges.cs`/`PrivilegePresets.cs` (Swift stays the source of
+  truth), the gate now on the transmitting side there too, the hub's
+  commands included, and the same mid-transmission unkey after each poll.
+  Applies on Save (that dialog's rule), and exports/imports the Mac's
+  JSON. See `Apps/Windows/README.md`'s "License-class guardrail".
+
+## Windows app (v1 skeleton scaffolded, 2026-09-07)
+
+A Windows app with the same kind of functionality as the Mac app. Talks
+directly to the Pi (rigctld + `ftx1-audiostream.py`), never through the
+Mac's WebSocket hub — the Mac is not required to be running. Since
+2026-09-27 it also has a Local mode (a "Radio:" Remote/Local picker, like
+the Mac's `connectionMode`): the radio's USB on the Windows PC, driven by a
+`rigctld.exe` the app spawns or adopts on `127.0.0.1:4532` via
+`Services/RigctldProcessController.cs`, a port of the Mac's — still
+rigctld-only, never CAT over the serial port directly. Built and run on
+the user's Windows PC 2026-09-27 (.NET 10 SDK; the .NET 5 SDK that PC had
+first can't target net8.0) and hardware-confirmed by the user the
+same day: every item of `Apps/Windows/README.md`'s "Local mode" checklist
+passed (connect, wrong-port and radio-off errors, rigctld cleanup on
+Disconnect/close, adopting a user-started rigctld, PTT). No WebSocket *server* (this app is
+a leaf client only).
+
+**Bundled rigctld (2026-10-14; build/UI-verified with a fake old rigctld
+and Hamlib's dummy rig, not yet on the FTX-1 or from a release zip on a
+PC without Hamlib)** — the Windows port of the Mac's "Bundled rigctld
+fallback" (Architecture above). Hamlib's *official* Windows build of
+4.7.2 (`hamlib-w64-4.7.2.zip`, sha256 checked; no build from source
+here) is vendored by `Apps/Windows/Tools/fetch-rigctld.ps1` into
+`FTX1RemoteWindows/Vendor/hamlib/`: `rigctld.exe`, exactly the DLLs it
+loads (`libhamlib-4`, `libusb-1.0`, `libwinpthread-1` — checked with
+`ldd` and by a copy missing one failing to start) and Hamlib's licence
+files; `.csproj` Content items put them in `<output>\hamlib\` for build
+and publish. `Services/RigctldBinary.cs` ports `RigctldBinary.swift`:
+Automatic (default) = PATH's `rigctld.exe`, `C:\Program Files[ (x86)]\
+hamlib*\bin` (newest first), `C:\Tools\hamlib\bin`, first with
+`--version` ≥ 4.7.0 and the model in `-l`, else built-in; probed only
+when spawning. Settings' rigctld box is a picker (Automatic / Built-in /
+found copies / Browse…). Migration: an empty old `RigctldPath` is
+Automatic, any other path stays explicit — so on the user's PC (saved
+`C:\Tools\hamlib\bin\rigctld.exe`) the explicit choice remains until
+they pick Automatic. Debug builds read `FTX1REMOTE_RIGCTLD_SEARCH_PATHS`
+(`none` = no installed copy; an empty variable is unset on Windows) to
+test the fallback. Adoption now reads `\dump_caps` first
+(`RigctldClient.ReadRigModelAsync`) and refuses — never kills — a
+responsive rigctld for another model. Keep the bundled Hamlib version
+equal to the Mac's: the one source tarball on the combined release is
+the source offer for both. The Windows zip also carries `libusb-1.0.dll`
+(libusb 1.0.24, LGPL), whose source isn't in Hamlib's tarball: each
+release with the Windows zip also gets `libusb-1.0.24.tar.bz2`
+(signature-checked, in the gitignored `releases/` on the Mac and the
+Windows PC; attached by `release-mac.sh`'s `gh release create` line). winpthreads'
+MIT-style licence (mingw-w64 v12.0.0) ships as `COPYING-winpthreads.txt`.
+Details: `Apps/Windows/README.md`, "Bundled rigctld".
+
+**Desktop hub for the iPad (all 6 phases, 2026-10-15–18; each tested from
+a real iPad by the user in Remote mode, Local mode not yet; note
+the iPad sends its JSON as *binary* frames — only a 0x02-tagged binary
+frame is TX audio)**: this app now also
+serves the Mac hub's WebSocket protocol on 8765 (`Services/Hub/`,
+Kestrel), so the iPad's "Desktop hub" route can show its state and,
+since phase 2, drive the rig: `RigCommandWire` parses all 72
+`RigCommand`s, `RigCommandDispatcher` runs them through one FIFO on the
+UI thread via the *same* methods the window's controls use (MainWindow
+through `IHubRigHost`, `MenuGrid`/`FilterPanel` public setters — put a
+new control's action there, not in its click handler), after
+`HubCommandPolicy`'s transmit gate, value checks and memory-scan
+stop-before rule. Since phase 3 it relays MAIN/SUB receive audio
+(`HubAudioEncoder`: WDL sinc resampler to 8 kHz, tapped after the swap
+and before this app's own mute/squelch; per-client ~0.5 s drop-oldest
+audio queue; in Remote mode only while this app's Audio is on). Since
+phase 4 it pushes the memory list (1/s) and APRS history (every 2 s) from
+`MemoryListStore`/`AprsStore` (`HubListWire.cs`, own per-client slots),
+runs `refresh_memory_list` as the Mem List Refresh, and answers
+`read_menu_item` to the asker alone, off the FIFO. Since phase 5
+(tested against a fake Pi on the PC, then into a dummy load from a real
+iPad, 2026-10-17, after the Pi's ALSA ipc_key and the iPad's late key
+were fixed) PTT from the iPad
+keys through the transmit gate, `HubServer` tracks the Mac's PTT holder
+(unkey on its disconnect), the holder's 0x02 frames share the command
+FIFO, and `HubTransmitAudio` sends them to the Pi (`RemoteTxAudioClient`,
+:8533, one connection per transmission) or to Settings → Audio →
+Transmit audio output (`LocalTxAudioPlayer`; None = nothing), with a
+watchdog (first frame within 5 s of the key, then 1.5 s of silence). Since
+phase 6 (2026-10-18, dummy load from a real iPad) `cw_keyer` writes/checks
+the keyer memory off the FIFO (`HubKeyer.cs`: slot 1–5, ≤50
+`CWText.allowed` characters, refused before the rig), with **no keyer
+lease** (acquire always granted — this PC's CW window and an iPad aren't
+coordinated); the last player's disconnect, the lock, hub off and rig
+disconnect send a **confirmed** "KY00" (read PTT, up to 5 tries, then
+`T currVFO 0`, every try logged); a play is refused while something else
+transmits. Known gap: a dropped iPad Wi-Fi is noticed only after ~20 s
+(user decision not to add a stalled-send check). Settings → Mobile (was Hub),
+off by default; only loopback, Tailscale and private addresses are let
+in. This reverses "leaf client only" for this one feature. The wire
+types copy Swift's `RigState`/`RigCommand`; `Apps/Windows/FTX1RemoteWindows.Tests`
+checks them against `Tests/WireFixtures/` and writes
+`Tests/WireFixtures/windows/` for the Mac's `HubWireFixtureTests`.
+Phases, status, differences from the Mac hub and the firewall note: the
+README's "Desktop hub for the iPad".
+
+**The user's Windows test PC** — use these values in any commands given
+for it instead of placeholders: the FTX-1 is on **COM7** (COM4 before 2026-09-28) at **115200**
+baud; hamlib's binaries are in `C:\Tools\hamlib\bin`; the .NET 10 SDK is
+at `C:\Program Files\dotnet\dotnet.exe` (the bare `dotnet` there was an old
+.NET 5 SDK — call it by full path); the repo clone is under the user's
+OneDrive Documents folder (`...\Documents\ftx1-remote`). So e.g. a
+manual rigctld is `.\rigctld.exe -m 1051 -r COM7 -s 115200 -t 4532 -T
+127.0.0.1 -o`, run from `C:\Tools\hamlib\bin`.
+
+C# + WinUI 3,
+MSIX-packaged, lives in this repo at `Apps/Windows/FTX1RemoteWindows/`
+despite sharing no code with the Swift targets (Swift/SwiftUI isn't viable
+on Windows). v1 scope is core rig control (VFO A/B, mode, PTT, power, SWR,
+band); Main/Sub audio playback from the Pi's :8532 stream was added
+2026-09-27 (NAudio; Remote from the Pi's stream, Local from a PC sound-card
+input, tested against a local fake Pi and the real rig's USB audio; swap tracking ported from
+the Mac the same day, which also fixed the Windows ⇄ to send raw "SV"
+instead of hamlib's "V"/VS; the Pi still serves one audio client at a time, so the Windows app
+shows "waiting" while the Mac has the stream; see the README's "Audio"
+section). The Mac's Enable Transmit gate was ported 2026-09-27
+(`Services/TransmitGate.cs`, build-verified, not yet hardware-tested):
+any future transmit-capable control (MOX, CW MESSAGE play, ANT TUNE) must
+pass `TransmitGate.BlockReason` before keying. The order for the rest of
+the Mac-parity work is the "Mac parity plan" section of
+`Apps/Windows/README.md` (all ten steps done; step 3, the MENU grid, has all
+three pages in `Controls/MenuGrid.cs` as of 2026-09-28, spot-tested on the
+rig by the user the same day, all working — CW's PLAY/RECORD were
+placeholders until 2026-10-03, now the Mac's recorder + Recordings window
+(`Services/AudioRecorder.cs`, `Controls/RecordingsWindow.cs`; tested by
+the user the same day, working; see the README's "Recordings"), and
+FM's APRS S.LIST/M.LIST came with APRS decode; step 4, the
+analog Main/Sub meters in `Controls/SMeter.cs`, 2026-09-28, checked
+against a fake rigctld only, not yet on the rig; step 5, the V/M memory
+toggle + channel set/step/tag, 2026-09-29, tested on the rig by the user
+the same day; hamlib-verb reads there now time out after 3 s, since a
+C4FM memory channel's "RPRT -8" mode reply once hung the whole client;
+step 6, the WPSD C4FM callsign/reflector display, 2026-09-29, tested
+against the real hotspot by the user the same day, with C4FM read from
+raw "MD0"/"MD1"; step 7, a Settings dialog with the Mac's tabs
+(`SettingsDialog.xaml`: connection, audio devices, WPSD, HOME
+frequencies, polling, appearance — the connection/audio/WPSD fields moved
+out of the main window), 2026-09-29, UI-tested through UI Automation
+while disconnected, not yet on the rig; step 8, Deep Settings, 2026-09-29
+— `Models/DeepSettingsCatalog.cs` is `DeepSettingsCatalog.swift`
+translated by script and checked item-for-item against it (the Swift file
+stays the source of truth: copy any hardware correction made there), and
+`Controls/DeepSettingsDialog.cs` is the Mac's `DeepSettingsView`, opened
+from the FM page's bottom row; checked against a fake rigctld through UI
+Automation, not yet on the rig; step 9, the Filter rows, 2026-09-30 —
+`Controls/FilterPanel.cs` + `Models/FilterModels.cs`, the Mac's WIDTH/
+SHIFT/CONTOUR-APF/N/W/NOTCH, MAIN/SUB selector and Filter Function
+Display, checked against a fake rigctld through UI Automation, not yet
+on the rig; step 10, the waterfall/oscilloscope, 2026-09-30 —
+`Services/ScopeProcessor.cs` (the Mac's `AudioCaptureEngine` DSP, same
+constants) + `Controls/ScopeDisplay.cs`, between the meters, also feeding
+the Filter display's spectrum, checked against a fake Pi audio stream,
+not yet on real rig audio). The .csproj has to be named when
+building (`dotnet build FTX1RemoteWindows.csproj -r win-x64
+--self-contained`) since Visual Studio added a `.slnx` next to it, and
+a solution build rejects `-r`; Visual Studio's own builds land in
+`bin\x64\Debug\…`, the CLI's in `bin\Debug\…`, so launch the one just
+built).
+APRS decode was ported 2026-10-01 (Main + Sub decoders, S.LIST/M.LIST
+windows, Settings → APRS; the Swift `APRS/` files stay the source of truth
+for the DSP, see the README's "APRS decode"), checked against synthetic
+vectors and a fake Pi stream, then rig-tested by the user the same day in
+Remote mode (MAIN and SUB), working well; Local mode not yet rig-tested.
+The APRS map was added 2026-10-21 (`Controls/AprsMapWindow.cs`, the APRS
+drop-down's Map): Leaflet 1.9.4 (vendored in `Assets/AprsMap/`, BSD-2)
+over OpenStreetMap tiles in WebView2 — the Mac's map stays MapKit.
+Tested by the user the same day, working; see the README's "APRS
+decode".
+The WebSDR window was ported 2026-10-01 (`Controls/WebSdrWindow.cs`,
+`Services/WebSdrFollowModel.cs` + `SdrPageBridge.cs`, WebView2): everything
+the Mac's has, checked against a fake rigctld and public KiwiSDR/WebSDR
+servers, not yet on the rig. The Swift WebSDR files stay the source of
+truth; see the README's "WebSDR window" for the WebView2 differences
+(shared environment, the multiple-downloads permission, Recordings folder).
+OpenWebRX followed 2026-10-02 (profiles, in-place retune, the recorder
+tap), tested against the operator's own server with a fake rigctld, not
+yet on the rig; WebView2 needs no hash-navigation workaround (Chromium
+keeps OpenWebRX's hash updates same-document).
+The CW window was ported 2026-10-03: decode with both of CWKit's decoders
+translated to C# — cwdecode stays the source of truth for both
+(`Services/CwClassicDecoder.cs`, `Services/CwNeuralDecoder.cs`,
+`Services/CwReceiver.cs`, `Controls/CwWindow.cs`), checked against
+CWKit's own tests and golden files in a harness and a fake Pi; and the
+send pane (`Services/CwSender.cs`, `Controls/CwSendPane.cs`,
+`RigctldClient.WriteKeyerMemoryAsync`, a Callsign field in Settings →
+Station), checked against a fake rigctld that models the keyer. None of
+it yet on the rig. The neural model is CWKit's `CWNet.mlmodelc` converted
+to `Assets/CWNet.onnx` (same weights) by `Apps/Windows/Tools/
+cwnet_to_onnx.py` and run with ONNX Runtime: rerun the script with the new
+tag whenever CWKit ships a new model (it checks against the release's
+golden file). The WebSDR window is a third CW source
+(`Services/WebSdrAudioTap.cs`, process-loopback capture of the WebView2
+browser process tree), tested with a local CW page, not yet against a real
+WebSDR; unlike the Mac, a muted WebSDR can't be decoded (Windows has no
+mute that keeps the capture fed — user decision).
+The send pane's Monitor sidetone (the Mac's `CWMonitor`) was ported
+2026-10-22 (`Services/CwMonitor.cs`, `CwSender.Keying`, `CwText.Keying`);
+tested on the air by the user the same day. See the README's
+"CW window".
+CW window logging was ported 2026-10-09 with **HRD Logbook** (Ham Radio
+Deluxe 6.9, on the user's PC) in MacLoggerDX's place: Log QSO pane
+(`Controls/CwLogPane.cs`, Their call moved there from the send pane),
+worked-before colors, Settings → Logbook. QSOs go to HRD as plain ADIF
+text over UDP to its "UDP9/ADIF" receiver (QSO Forwarding, port 2339 on
+that PC, off by default — the user turned it on), **not** WSJT-X's binary
+protocol: HRD's 2237 listener is only its decodes (ALERT) dock and logged
+neither message type. No Lookup button (no outside route found). The log
+is SQLite (`.hrdsql`, `TABLE_HRD_CONTACTS_V07`), read-only. Tested by
+script (one TE5T QSO, logged correctly) and in the built app while
+disconnected; not yet logged from the app on the air. See the README's
+"Logbook — HRD Logbook".
+**Log4OM** was added as a second logbook 2026-10-20 (`Services/
+Log4OmLogbook.cs`; HRD and Log4OM both behind `ILogbookProgram`): the
+same ADIF-over-UDP datagram to a Log4OM "ADIF_MESSAGE" UDP inbound
+connection (2236 on the user's PC), worked-before from its SQLite `Log`
+table (freq in kHz), and a Lookup button through its XML remote control
+(UDP 2241, `SetCallsign`, which replies). Tested against the running
+Log4OM 2.42.1 by script and a harness over the app's own files; the
+built app's Settings tab and Lookup button not yet. See the README's
+"Logbook — Log4OM".
+**Wavelog** was ported 2026-10-25 at the Mac's level (user request): every
+Log QSO also to Wavelog beside HRD/Log4OM, with Retry Wavelog; CAT
+reporting; tuning from Wavelog's spots on 127.0.0.1:54321 — API v2 only,
+token in Windows Credential Manager ("FTX1Remote/Wavelog"; Debug builds
+read `FTX1REMOTE_WAVELOG_TOKEN` first). `Services/Wavelog.cs`,
+`WavelogTuneRequest.cs`, `WavelogTuneListener.cs`, `WavelogRadioReporter.cs`,
+`WavelogToken.cs`, `MainWindow.Wavelog.cs`; the Swift files stay the source
+of truth. Unit-tested (`WavelogTests.cs`), checked in the built app
+against a stand-in server, then tested live by the user the same day
+against their Wavelog with the rig connected, working. See the README's
+"Logbook — Wavelog".
+**S-meter styles** (2026-11-13; unit-tested and built, not yet seen on
+screen): Settings → Appearance → S-meter, the Mac's Lighted / Unlighted /
+Digital (`SMeterStyle`, `AppSettings.SMeterStyle`, applied on Save through
+`SMeter.ApplyStyle()` from `ApplyAppearance` and the MyKiwiSDR window's
+`ApplyTheme`). Unlighted is the analog face on grey paper; Digital is
+`DigitalFace` in `Controls/SMeter.cs`, the Mac's two segmented-bar lines (S on
+top, the picked TX meter below, dim until transmitting; PO/SWR on top while
+keyed), single S line for the MyKiwiSDR meter. Scale/text helpers are
+`BarMeterScale` (`BarMeterScaleTests`). As with the analog needle, only MAIN
+shows TX readings (the Mac's `transmits` for TX:SUB/split isn't ported).
+**Themes** (Settings → Appearance, phase 1 2026-10-26, on the Mac too —
+see "Themes (Mac)";
+unit-tested, then tested by the user the same day incl. a live frequency,
+the secondary windows and Settings): presets Default Light/Dark (the app as before),
+Glossy Black, Dusty Rose and Icy Mint (light, after Visual Studio's Silky
+Pink and Icy Mint), plus VFO-digit font and color overrides (fonts: Consolas,
+Cascadia Mono, 7-segment = bundled DSEG7 Classic, SIL OFL, `Assets/Fonts/`;
+colors: the button value colors' eight).
+`Models/ThemeDefinition.cs` (WinUI-free, `ThemeTests`) is the model;
+`Settings/ThemeEngine.cs` merges the overrides last into the app's
+resources (lightweight styling, every window) and `ApplyTo` flips each
+window root's theme so controls re-read them — a new window's
+`ApplyTheme` must call it, and new main-window captions should use
+`{ThemeResource AppSecondaryTextBrush}`, not "Gray". TX/RX tags, PTT,
+meters and status colours are deliberately not themeable. Phase 2
+(custom themes: edit, save by name, JSON import/export) is planned. See
+the README's "Themes".
+The memory scan (MAIN and SUB, Scan/Skip next to Mem List) was ported
+2026-10-06 (`MainWindow.MemoryScan.cs`, `Models/MemoryScan.cs`), with the
+same read-by-side poll fix as the Mac (the boxes traded places with TX on
+SUB); built and rig-tested by the user on Windows the same day, working.
+See the README's "Memory scan".
+The memory list (Mem List under Waterfall) was ported 2026-10-06
+(`Controls/MemoryListWindow.cs`, `Services/MemoryListStore.cs`,
+`Models/MemoryChannelEntry.cs`). The user built it and tested it on the
+rig the same day, and everything worked. See the README's "Memory list".
+Full plan, protocol/model porting notes, and open items:
+`Apps/Windows/README.md`. `Apps/Windows/FTX1RemoteWindows/` has a
+build-verified (`dotnet build -r win-x64 --self-contained`, not yet
+run against real hardware) unpackaged WinUI 3 skeleton covering the full
+v1 checklist.
+
+## Sparkle updates (Mac only, in progress, 2026-09-22)
+
+Mac-app auto-update via [Sparkle](https://sparkle-project.org). Mac-only —
+iOS/iPadOS ship through the App Store (or TestFlight/sideloading), which
+manage their own updates; Sparkle doesn't apply there and isn't linked into
+those targets.
+
+- **Distribution: Developer ID + notarization, not the Mac App Store.**
+  Team `9MAKNY2JX8` has a paid Apple Developer Program membership, so
+  releases are signed with a "Developer ID Application" certificate and
+  notarized via `notarytool`, not sandboxed/submitted through App Store
+  Connect. `Scripts/ExportOptions.plist` (`method: developer-id`) is the
+  export config; `ENABLE_APP_SANDBOX = NO` on the Mac target (see
+  Architecture above) was already the case for unrelated reasons and is a
+  prerequisite here too — a sandboxed app can't self-replace the way
+  Sparkle needs to without an XPC helper, which this setup deliberately
+  avoids.
+- **Hosting: GitHub Releases**, since the repo (`captobie/ftx1-remote`) is
+  already public. `appcast.xml` lives at the repo root and is committed to
+  `main`; `SUFeedURL` (an `INFOPLIST_KEY_SUFeedURL` build setting on the Mac
+  target only, both Debug/Release configs) points at
+  `raw.githubusercontent.com/captobie/ftx1-remote/main/appcast.xml`. The
+  notarized `.zip` for each version is a GitHub Release asset (not
+  committed to git — `/releases/` and `/build/` are gitignored), referenced
+  from `appcast.xml`'s `<enclosure url>` by its stable release-download URL.
+- **`Scripts/release-mac.sh`** does the whole release: `xcodebuild archive`
+  → export (Developer ID) → zip → `notarytool submit --wait` → staple →
+  re-zip → `generate_appcast` (Sparkle's own tool; finds the EdDSA key in
+  Keychain and signs each appcast entry itself, no key material in the
+  script or repo) → moves the regenerated `appcast.xml` to the repo root.
+  Prints the two manual follow-ups it deliberately doesn't automate:
+  committing/pushing `appcast.xml`, and `gh release create` to upload the
+  zip (kept manual so release notes are always hand-written, not
+  templated). Keep earlier releases' zips in `releases/`: `generate_appcast`
+  builds delta updates from them (upload the `*.delta` files it makes to the
+  new release too). It also re-points every archive it finds at the new
+  `--download-url-prefix` — v0.6's first run rewrote 0.5's link to `v0.6/`
+  — so the script seeds `releases/` with the committed `appcast.xml` and
+  then restores the original URL of every file that appcast already listed.
+  Create the GitHub release *before* pushing `appcast.xml`, or updating
+  clients see the new version while its download still 404s.
+- **`CheckForUpdatesView`/`CheckForUpdatesViewModel`**
+  (`Apps/Mac/FTX1RemoteMac/CheckForUpdatesView.swift`) is Sparkle's own
+  documented SwiftUI pattern — bridges `SPUUpdater.canCheckForUpdates`
+  (KVO, not `@Published`) into a view model so the menu item's disabled
+  state follows it. Wired into `FTX1RemoteMacApp`'s `.commands` via
+  `CommandGroup(after: .appInfo)`. `AppDelegate` owns the
+  `SPUStandardUpdaterController` (`startingUpdater: true` — background
+  checks start automatically on launch, gated by Sparkle's own first-run
+  permission prompt, not app code) alongside `hub`, matching the existing
+  "AppDelegate owns the long-lived services" shape.
+- **Settings → Updates tab (2026-09-29)**: "Automatically check for
+  updates" and "Automatically download and install updates" checkboxes
+  (`UpdaterSettingsViewModel`, a KVO bridge like `CheckForUpdatesViewModel`,
+  so they follow Sparkle's own prompts too) plus a Check for Updates…
+  button. Sparkle stores both settings itself, with no app-side storage. Automatic checks
+  default to on via `SUEnableAutomaticChecks = YES` in
+  `FTX1RemoteMac-Info.plist`, which also skips Sparkle's first-run
+  permission prompt; an install that already answered that prompt keeps
+  its saved choice. Auto-download defaults to off.
+- **Sparkle doesn't start in Debug builds (2026-10-10)**: they share the
+  release app's bundle ID and `UserDefaults`, and every check (manual,
+  scheduled, even a delegate-vetoed one) writes `SULastCheckTime`, which
+  sets the next scheduled check 24 h later (default interval). Xcode Debug
+  runs kept resetting it, so the installed app never checked on its own
+  (user report). Check for Updates… is disabled in Debug; test the update
+  flow with a Release/exported build.
+- **Done since scaffolding, 2026-09-22** (see chat history for the full
+  walkthrough): `generate_keys` run, real public key
+  (`Xu1kV/OxMn0Yx53Wslwdo7zjYDUyiOqjK1a84j33YSk=`) is in
+  `INFOPLIST_KEY_SUPublicEDKey` on both Mac configs; `notarytool
+  store-credentials` done for the `ftx1remote-notary` profile
+  `Scripts/release-mac.sh` expects; Developer ID Application certificate
+  confirmed present in Keychain. **`brew install sparkle` doesn't work —
+  Homebrew disabled that cask 2026-09-01 (fails Gatekeeper) — don't retry
+  it.** Instead `generate_appcast`/`sign_update`/`BinaryDelta` came from
+  Sparkle's own release zip (same one `generate_keys` was extracted from),
+  relocated from `~/Downloads` to
+  `~/Library/Application Support/Sparkle-CLI/Sparkle-2.10.0/` (a stable,
+  non-cleaned-up path), quarantine-cleared, and symlinked into
+  `/opt/homebrew/bin` so they're on PATH for `Scripts/release-mac.sh`.
+- **Sparkle SPM package added 2026-09-22**, with one wrinkle: adding it via
+  Xcode's File → Add Package Dependencies only created the
+  `XCRemoteSwiftPackageReference` at the project level — it did *not*
+  attach the `Sparkle` product to the `FTX1RemoteMac` target (Xcode UI
+  quirk, not user error; the target's `packageProductDependencies` stayed
+  `FTX1Core`/`FT8Kit` only, hence the initial "Unable to resolve module
+  dependency: 'Sparkle'" build failure). Fixed by hand-adding the missing
+  `XCSwiftPackageProductDependency` + `PBXBuildFile` + Frameworks-phase +
+  `packageProductDependencies` entries, mirroring the existing
+  `FTX1Core`/`FT8Kit` pattern exactly (safe to do by hand once the
+  `XCRemoteSwiftPackageReference` itself already exists and just needs
+  wiring to a target — the earlier caution above was about fabricating the
+  package reference/checksum from scratch, which is the part that
+  genuinely needs Xcode). Also needed two explicit imports the project's
+  `MemberImportVisibility` upcoming-feature flag requires: `import Combine`
+  in `CheckForUpdatesView.swift` (for `@Published`) and `import Sparkle` in
+  `FTX1RemoteMacApp.swift` itself (for `.updaterController.updater`), even
+  though both were already transitively visible. `Sparkle.framework`
+  confirmed embedded in the built `.app`'s `Contents/Frameworks/`. Full Mac
+  target build (`xcodebuild ... -scheme FTX1RemoteMac`) green.
+- **First `Scripts/release-mac.sh` run, two real issues hit (2026-09-22):**
+  1. **Keychain kept re-prompting for the Developer ID Application private
+     key during export**, even after entering the correct login password
+     repeatedly. Not a wrong password — it's macOS asking fresh
+     authorization for a signing identity being used from this
+     non-interactive `xcodebuild`-driven path for the first time; clicking
+     **Always Allow** (not just Allow) on the prompt resolved it for that
+     and subsequent runs. If it recurs, the fix is
+     `security set-key-partition-list -S apple-tool:,apple:,codesign: -s
+     ~/Library/Keychains/login.keychain-db`, which grants `codesign`
+     standing access to the key without prompting.
+  2. **Notarization returned `status: Invalid`** (`statusCode: 4000`,
+     `xcrun notarytool log <submission-id> --keychain-profile
+     ftx1remote-notary` showed `"The executable does not have the hardened
+     runtime enabled."` for both architectures) — `ENABLE_HARDENED_RUNTIME`
+     was never set anywhere in `project.pbxproj`. This is a distinct
+     setting from `ENABLE_APP_SANDBOX` (deliberately `NO`, see
+     Architecture above) — Apple requires Hardened Runtime specifically
+     for Developer ID notarization, independent of sandboxing. Fixed by
+     adding `ENABLE_HARDENED_RUNTIME = YES` to the Mac target's Debug and
+     Release configs (iOS/iPad untouched, same scoping approach as the
+     `SUFeedURL`/`SUPublicEDKey` keys above). No entitlements file was
+     needed on top of that — `Sparkle.framework` is embedded via Xcode's
+     own "Embed & Sign" step, which re-signs it under the app's own
+     Developer ID identity, so Hardened Runtime's library-validation
+     requirement (loaded code must share the host app's Team ID) is
+     already satisfied without `com.apple.security.cs.disable-library-
+     validation`. **But** Hardened Runtime also silently denies audio
+     input without `com.apple.security.device.audio-input` — no prompt,
+     `AVCaptureDevice.requestAccess` just returns false — which left
+     `.local` mode with no audio at all in 0.5/0.6 (2026-09-26; `.remote`
+     was unaffected). Fixed with `ENABLE_RESOURCE_ACCESS_AUDIO_INPUT = YES`
+     on the Mac target (Xcode synthesizes the entitlement, same as
+     `ENABLE_USER_SELECTED_FILES`); check with `codesign -d --entitlements
+     - <app>`.
+  3. **`generate_appcast` silently produced an unsigned `<enclosure>`**
+     (no `sparkle:edSignature` at all, no error) even though `sign_update`
+     run standalone against the same zip worked fine and the EdDSA key was
+     confirmed present and matching in Keychain. Root cause:
+     `INFOPLIST_KEY_SUFeedURL`/`INFOPLIST_KEY_SUPublicEDKey` — the build
+     settings the first Sparkle scaffolding pass added — never actually
+     reached the compiled `Info.plist` (`PlistBuddy -c "Print
+     :SUPublicEDKey" .../FTX1RemoteMac.app/Contents/Info.plist` came back
+     empty), so `generate_appcast` correctly saw the app as not requesting
+     signed updates and skipped signing. This target's
+     `GENERATE_INFOPLIST_FILE = YES` is paired with a real physical
+     `INFOPLIST_FILE` (`FTX1RemoteMac-Info.plist`, holding the
+     `NSAppTransportSecurity` exception) — Xcode's `INFOPLIST_KEY_*`
+     build-setting synthesis only merges its own "blessed" keys (the ones
+     with dedicated Xcode Info-tab UI, e.g. `NSMicrophoneUsageDescription`,
+     which *did* make it through) on top of a physical base file; arbitrary
+     custom keys like `SUFeedURL`/`SUPublicEDKey` are silently dropped in
+     that combination. Fixed by moving both keys directly into
+     `FTX1RemoteMac-Info.plist` itself (same file `NSAppTransportSecurity`
+     already lives in) and removing the now-dead
+     `INFOPLIST_KEY_SUFeedURL`/`INFOPLIST_KEY_SUPublicEDKey` build
+     settings from `project.pbxproj` so they don't mislead a future reader
+     into thinking that's the source of truth. **Lesson for any future
+     custom (non-Apple-standard) Info.plist key on this target**: don't
+     add it as an `INFOPLIST_KEY_*` build setting — add it to
+     `FTX1RemoteMac-Info.plist` directly, and verify with
+     `PlistBuddy -c "Print :<Key>" <built .app>/Contents/Info.plist`
+     against the actual built product, not just `-showBuildSettings`
+     (which shows the setting as "set" even when it never reaches the
+     compiled plist).
+
+  Confirmed clean end-to-end after all three fixes: built `Info.plist` has
+  both keys, notarization `status: Accepted`, stapling succeeded, and
+  `appcast.xml`'s `<enclosure>` carries a real `sparkle:edSignature`.
+
+## Digital modes — FT8 (2026-09-14)
+
+First digital mode; FT4 followed (see below). Mac-only, like the waterfall — audio-derived, and the iOS/iPadOS
+targets don't need the extra C dependency this pulls in. Opened via a new
+top-level **Tools** menu bar item (named **Digital** until 2026-09-30) (`CommandMenu`, a genuine sibling of
+File/Edit/View; since 2026-10-01 it also holds the APRS List/Messages/Map
+submenu, moved there from the View menu) → **FT8**, which opens its own `Window(id: "ft8")`, same
+pattern as the APRS windows.
+
+- **Decode engine: vendored `kgoba/ft8_lib` (MIT) + kissfft (BSD-3-Clause)
+  as a C target**, not a from-scratch Swift LDPC/Costas implementation —
+  deliberate: LDPC(174,91) belief-propagation decode and Costas-array sync
+  are the same class of problem WSJT-X spent years maturing, not something
+  worth re-deriving. `Sources/CFT8Lib/` mirrors upstream's `ft8/`/`common/`/
+  `fft/` tree exactly (decode-only subset — no `encode.c`, no
+  PortAudio/WAV demo I/O); `Sources/FT8Kit/` is the Swift wrapper
+  (`FT8Decoder`, `FT8Mode`, `FT8Message`, `FT8CallsignHashStub`), a new SPM
+  product alongside `FTX1Core` in the same `Package.swift`, kept as a
+  *separate* target/product specifically so the iOS/iPadOS builds (which
+  also depend on `FTX1Core`) don't carry it. Licenses preserved at
+  `Sources/CFT8Lib/LICENSE-ft8lib.txt` and
+  `Sources/CFT8Lib/fft/LICENSE-kissfft.txt`; see the repo README's
+  "Third-party code" section.
+  - `CFT8Lib`'s `publicHeadersPath` had to be set to `"."` explicitly —
+    SwiftPM's default C-target convention expects a separate `include/`
+    dir, which upstream's tree doesn't have (headers sit next to their
+    `.c` files, and `common/monitor.c` includes `<ft8/decode.h>`
+    root-relative while `ft8/decode.c` includes `"constants.h"`
+    same-directory — both need the whole target dir on the header path).
+  - `common/monitor.c` hardcodes `#define LOG_LEVEL LOG_INFO` before
+    including its own `debug.h`, so upstream always logs "Block size = …"
+    etc. to stderr on every `monitor_init` (harmless for ft8_lib's own CLI
+    demo, not for a decoder running every 15s here). Silenced via a build
+    flag (`-DLOG_PRINTF(...)=` in `CFT8Lib`'s `cSettings`), not by editing
+    the vendored source.
+  - **12000 Hz mono is the sample rate ft8_lib actually expects**
+    (confirmed by hex-dumping a real reference WAV header, not assumed) —
+    this app captures at 44100 Hz (see Audio-over-Pi above), so
+    `Apps/Mac/FTX1RemoteMac/FT8Resampler.swift` wraps one long-lived
+    `AVAudioConverter`, reused across chunks so its internal filter state
+    doesn't discontinuity at chunk boundaries — validated in
+    `Tests/FT8KitTests/FT8ResampleFidelityTests.swift` by streaming a
+    44100 Hz-upsampled reference vector back through the same
+    resample-in-2048-sample-chunks approach and confirming it still
+    decodes.
+  - `monitor_process()` requires exactly `sample_rate × FT8_SYMBOL_PERIOD`
+    (1920 at 12000 Hz) samples per call — `FT8DecodeCoordinator` buffers
+    resampled audio and slices off exact blocks, remainder carried to the
+    next `ingest` call.
+- **Decode trigger: tied to the Tools/FT8 window's lifecycle, not
+  always-on.** Unlike `APRSDecoder` (always running, gated by VFO
+  frequency matching one configured APRS frequency), FT8 has no single
+  fixed frequency to gate on — `FT8DecodeCoordinator.start()`/`stop()` are
+  called from `FT8ListView`'s `.onAppear`/`.onDisappear`
+  (`HubService.startFT8Decoding()`/`stopFT8Decoding()`), not from
+  `HubService.start()`/`init` the way `aprsDecoder` is wired.
+  `HubService.stop()` also calls `stopFT8Decoding()` as a safety net if
+  the app quits with the window open. `FT8DecodeCoordinator.ingest(...)` is
+  always called from `HubService`'s audio tap (no frequency gate), but
+  it's a cheap no-op whenever not running.
+- **UTC 15-second slot scheduling** — a `DispatchSourceTimer` ticking
+  every ~0.5s detects crossing a `:00/:15/:30/:45` boundary
+  (`Date().timeIntervalSince1970.truncatingRemainder(dividingBy: 15)`
+  wrapping back down), finalizes the just-completed slot's decode, and
+  starts a fresh `FT8Decoder` for the next slot. Assumes the Mac's clock
+  is NTP-synced (same assumption WSJT-X itself makes) — not verified by
+  the app; flagged for the real-hardware validation pass below.
+- **`FT8Spot`** (`Apps/Mac/FTX1RemoteMac/FT8Spot.swift`) carries the
+  frequency (dial-at-slot-start + audio offset), SNR (explicitly
+  doc-commented as ft8_lib's own `score × 0.5` approximation, not a
+  calibrated noise-floor SNR — its own upstream source marks this exact
+  computation `// TODO: compute better approximation of SNR`), and
+  parsed callsign/grid/report fields, plus `reporterCallsign`/
+  `reporterGrid` from the new `StationSettings` (`Sources/FTX1Core/Station/`
+  — the operator's own callsign/grid, which nothing in the app stored
+  before this) — the receiver identity for the PSK Reporter upload
+  below. `FT8Store` (session-only, no disk
+  persistence unlike `APRSStore`) is a separate `ObservableObject`
+  exposed as a plain `let` on `HubService`, same "don't `@Published` it
+  on `HubService` itself" isolation as `ScopeFrameStore`/`APRSStore` —
+  spots arrive in bursts of up to a few dozen per ~15s cycle.
+- **PSK Reporter upload (2026-10-18; spec example datagrams matched
+  byte for byte, uploader checked against a local IPFIX listener, then
+  live-tested by the user the same day: spots on pskreporter.info)**: an "Upload to PSK Reporter" checkbox in
+  the FT8 window (`ft8.pskReporterEnabled`, remembered, off by default —
+  user decision), disabled until Settings → Station has a callsign and
+  grid. `PSKReporterPacket` (`FTX1Core/PSKReporter/`, unit-tested) builds
+  pskdev.html's IPFIX datagrams to `report.pskreporter.info:4739` with
+  the doc's SNR-less 6-field sender descriptor (call, frequency, mode,
+  informationSource 1, locator — empty when the message had none —,
+  time): **no SNR** (user decision; ours is score × 0.5, see above).
+  `PSKReporterUploader` (Mac, `lazy var pskReporter` on `HubService`)
+  runs with the decoder (`start`/`stop` from `startFT8Decoding`/
+  `stopFT8Decoding`); drops hashed `<…>` calls, our own call, dial 0, a
+  "grid" that isn't a 4-character square (RR73), and any slot the rig
+  transmitted in; a call is queued once per hour per band unless it
+  newly carries a grid; sends every 5 min + 0–30 s jitter from start,
+  at once when a full datagram (≤1400 B) is waiting, and on window close.
+  One `NWConnection` (one source port) for the app session, descriptors
+  in its first 3 datagrams and hourly, sequence = reports sent. Logs
+  under "pskreporter". Debug builds: `pskReporter.hostOverride` sends to
+  another host (port 4739) for testing.
+- **Grid field fixes (2026-10-24, unit-tested against hand-packed
+  payloads; confirmed on live traffic by the user the same day)**: ft8_lib calls "RR73" a token only when the sender packed
+  the RR73 report code; packed as a locator (RR73 is a real square) it
+  came back as a grid and showed in the FT8 window's Grid column. And a
+  grid with the R acknowledgement came back as one "R FN42" field.
+  `FT8Decoder.classified` makes the first a token and splits the second
+  into "R" + the grid (`FT8FieldClassificationTests`).
+- **FT4 (2026-11-06; unit-tested, then decoding live traffic over the Pi
+  confirmed by the user the same day)**: Tools → **FT4** opens `Window(id: "ft4")`, the
+  same `FT8ListView` over its own `FT8Store(mode: .ft4)` and
+  `FT8DecodeCoordinator(mode: .ft4)` (7.5 s slots, 576-sample blocks at
+  12 kHz). Both windows can decode the same audio at once; the stores are
+  passed to the view directly (two `FT8Store`s can't share the
+  environment). `HubService.startDigitalDecoding(_:)`/
+  `stopDigitalDecoding(_:)` replace the FT8-only pair. PSK Reporter: one
+  uploader and one toggle for both windows, running while either decodes
+  (`start(_:)`/`stop(_:)` per mode); the once-an-hour key is now call +
+  band + mode, and the mode field says FT4. Names stay FT8-prefixed
+  (`FT8Kit`, `FT8Store`, `FT8ListView`) rather than a rename.
+  **Timing limit**: ft8_lib's candidate search covers time offsets -10…19
+  blocks, which for FT4 is only about −0.5 to +0.9 s around the slot start
+  (FT8: −1.6 to +3 s). FT4 transmits from 0.5 s, so audio arriving more than
+  ~0.4 s late (a slow Pi/Tailscale hop) or a Mac clock that far off loses
+  decodes. Worth checking first if FT4 decodes nothing on air.
+  **Test vector**: ft8_lib ships no FT4 recordings, so
+  `Tests/FT8KitTests/Resources/ft4_synthetic.wav` was made with upstream's
+  `gen_ft8 … -ft4` (four messages mixed with noise, moved to start at
+  0.5 s; recipe in `FT8ReferenceVectorTests`), and upstream's
+  `decode_ft8 -ft4` decodes all four.
+- **Source: MAIN, SUB or MyKiwiSDR (2026-11-14; picker and notes checked
+  in the built app, then FT8 decoding from SUB and from MyKiwiSDR on 20 m
+  tested by the user the same day, working; FT4 from both too, DT
+  +0.2–0.3 s on each)**: user request, to watch a second band while
+  the rig is busy. A segmented picker under each window's status line
+  (`FT8SourceBar` in `FT8ListView.swift`), saved per mode
+  (`ft8.channel`/`ft4.channel`, `FT8Store.channel`; no WebSDR). Both taps
+  call `ingest(samples:sampleRate:channel:)` and the coordinator keeps only
+  the selected source; the Kiwi's frames come through `LocalSDRAudioSource`
+  (consumers `ft8`/`ft4`, wanted while the window decodes with MyKiwiSDR
+  picked). A switch restarts the slot in progress (its audio and dial
+  belong to the old source). The slot's dial is the source's: MAIN's
+  `frequencyHz`, SUB's `secondaryFrequencyHz`, or the Kiwi's
+  (`LocalSDRAudioSource.frequencyHz`, updated on each retune sent).
+  `FT8Spot.channel` shows in a Source column. Notes: SUB with no Sub audio
+  (2 s, `FT8Store.isSubAudioAvailable`) or in single-receive display
+  (incl. split); Kiwi not connected/silent, or not in USB. PSK Reporter
+  reports every source the same (the Kiwi is at the same QTH), and still
+  drops slots the rig transmitted in. FT4's ~0.4 s timing window
+  left room on 20 m; if FT4 ever decodes nothing from the Kiwi, look
+  at DT first.
+- **Windows port (2026-11-14; unit-tested and built, the app starts; the
+  windows not yet opened on screen or used on the air)**: FT8 and FT4 buttons
+  next to RTTY/PSK, source MAIN/SUB/WebSDR/MyKiwiSDR (the Kiwi only while
+  enabled in Settings), PSK Reporter. Same decoder, not a
+  rewrite: `Apps/Windows/Tools/ft8native/build-ft8lib.ps1` builds
+  `Sources/CFT8Lib` with MSVC into `Vendor/ft8/ft8lib.dll` (committed; a flat
+  API in `ft8win.c` carries the decode loop; two VLAs patched to `_alloca` in
+  temp copies, vendored files untouched), P/Invoked by `Services/Ft8/
+  Ft8Decoder.cs`. Reference vectors, PSK Reporter doc datagrams and a 44.1 kHz
+  live-path coordinator test run in the Windows test project. Swift stays the
+  source of truth; see `Apps/Windows/README.md`'s "FT8 / FT4 windows".
+- **Verification status**: `Tests/FT8KitTests/FT8ReferenceVectorTests.swift`
+  passes real off-air FT8 captures (vendored from ft8_lib's own
+  `test/wav/`) through the real wrapper and checks against what ft8_lib's
+  own reference `decode_ft8` demo (built standalone from the same upstream
+  checkout, to get real ground truth) decodes from the same files — not
+  against the vendored `.txt` truth files verbatim, since those include a
+  couple of weak-signal messages this library's default candidate search
+  doesn't reach either (a library sensitivity limit, not a wrapper bug;
+  see that test file's doc comment). `FT8ResampleFidelityTests.swift`
+  covers the 44100→12000 streaming resample path. The full Mac app target
+  builds clean via `xcodebuild` with `FT8Kit` linked (iOS target
+  unaffected, confirmed by also building it). **Live traffic**: tested by the
+  user on real FT8 traffic and working (by 2026-10-18).
+
+## Digital modes — CW (decode v1 + send v2, 2026-10-02)
+
+Tools → **CW** opens `Window(id: "cw")` (Mac-only): live CW decoding of the
+rig's MAIN or SUB audio, of the WebSDR window's audio or of the MyKiwiSDR
+window's (since 2026-11-10, see "Local SDR" phase 4), plus decoding an
+audio file. The decoders come
+from the user's own CWDecode app (`captobie/cwdecode`, public, MIT) — not
+vendored here.
+
+- **CWKit, a Swift package in the cwdecode repo**, is the source of truth
+  (user decision, 2026-10-02, over absorbing or vendoring): the neural
+  decoder (CNN + CTC Core ML model, `CWNet.mlmodelc`) and the classic one
+  (Goertzel + timing rules), with their Python training/export (`ml/`) and
+  golden tests in the same repo. The Mac target depends on it by git URL,
+  `upToNextMinorVersion` from `0.2.0`, wired into the pbxproj the same way
+  as Sparkle (hand-added, then `xcodebuild -resolvePackageDependencies`).
+  0.2.0 (2026-10-12) retrained the neural model for hand-sent code, low
+  SNR and slow Farnsworth spacing, and stopped the streaming decoder
+  doubling commas; the API is unchanged from 0.1.1.
+  To pick up a retrained model or decoder fix: tag a new CWKit release in
+  cwdecode, then bump/resolve here. The model ships *compiled* in the
+  package (`.copy("Resources/CWNet.mlmodelc")`) because SwiftPM compiles an
+  `.mlpackage` resource's inner `model.mlmodel` instead and fails;
+  cwdecode's `export.py` compiles it with `coremlcompiler`. Built Mac app:
+  `Contents/Resources/CWKit_CWKit.bundle/.../CWNet.mlmodelc`.
+- **`CWReceiver`** (`Sources/FTX1CW/CWReceiver.swift` since 2026-10-14,
+  shared with the iPad — see "iPad CW decoder") is a `lazy var` on
+  `HubService` (its own object, like `ft8Store`), fed by *both* audio taps
+  unconditionally (before the APRS gates); it keeps only the selected
+  channel (`CWAudioChannel`, now a typealias of FTX1Core's
+  `ReceiveAudioChannel`, persisted `cw.channel`) and drops everything
+  while the window is closed (`start()`/`stop()` from `CWWindowView`'s
+  onAppear/onDisappear; `HubService.stop()` also calls `stop()`). MAIN/SUB
+  are roles, so they follow swaps via `audioChannelsSwapped` upstream.
+  Decoding runs on CWKit's `PipelineRunner` queue; the Core ML model loads
+  on the first `start()`, not at launch. Per-chunk meters live in a
+  separate `CWMeterStore` (published at most every 0.1 s, key/element
+  changes at once) so they never re-render the decoded text. Settings are
+  `cw.*` UserDefaults keys. Switching channel flushes the decoder and
+  starts a new line.
+  The WebSDR source is the Mac-only `WebSDRAudioSource` (one tap shared
+  with the RTTY/PSK window since 2026-11-06; `HubService` registers the
+  receiver as a consumer and calls `update()` from its `onSourceChanged`); the meters bar, tuning row and decoder picker are the shared
+  `FTX1CW` views (`CWReceiverControls.swift`).
+- **Open Audio File** (file dialog opens in the Recordings folder) pauses
+  live decoding, decodes into the same text under a "— filename —" header,
+  then live resumes. `pendingFlushes` counts `.finished` events from
+  flushes so only the file's own one ends the file decode (the standalone
+  app clears `isDecodingFile` on any `.finished`, so opening a file while
+  listening ends its "decoding" state early — not fixed there yet).
+- SUB is disabled when no Sub audio has arrived for 2 s (mono input) or the
+  rig is in single-receive display (`RigState.singleReceive`).
+- **WebSDR source (2026-10-02, tested in the built app against a live
+  Kiwi)**: a third picker segment decodes what the WebSDR window is
+  playing, via `WebSDRAudioTap` (Core Audio process tap + private aggregate
+  device, `CATapDescription(stereoMixdownOfProcesses:)`, `muteBehavior
+  .unmuted`) — chosen over per-page JS taps so it works for KiwiSDR,
+  classic WebSDR and OpenWebRX without injecting anything into Kiwi/WebSDR
+  pages. A `WKWebView` plays audio from WebKit's helper processes
+  (`com.apple.WebKit.GPU`, one per app), not this one; they're found by
+  `responsibility_get_pid_responsible_for_pid` (not in the SDK headers,
+  loaded via `dlsym` — if a macOS update drops it, the source just stays at
+  "waiting") matching our PID, and re-resolved every 2 s so a relaunched
+  helper (or connecting after picking the source) is picked up. Runs only
+  while the CW window is open with WebSDR selected. Needs
+  `NSAudioCaptureUsageDescription` (in `FTX1RemoteMac-Info.plist`) and the
+  user's "System Audio Recording" permission, prompted on first use —
+  denied delivers silence. The tap hears the page's *output*, so while it
+  runs the WebSDR window's Mute (and Mute on TX) is moved off the page and
+  onto the tap (`muteBehavior .muted`: speakers silent, tap still fed) via
+  `WebSDRAudioRouting` (a `let` on `HubService`: `WebSDRFollowModel` sets
+  `muteRequested` and mutes the page only while `!captureActive`;
+  `CWReceiver` sets `captureActive` once the tap is attached — already
+  muted, so there's no audible gap — and clears it before stopping the tap,
+  which holds its mute 0.3 s while the page re-mutes). A muted page or a
+  denied permission shows as "WebSDR is silent" (below -80 dBFS for 3 s —
+  a muted Kiwi isn't exact zeros). Tested 2026-10-02: decoding with the
+  window Muted (Kiwi page's own icon unmuted), and the page re-muting on
+  switching the CW source away. Kiwi page audio arrives at 48 kHz
+  stereo here, mixed to mono. Not tried yet: classic WebSDR, OpenWebRX.
+- **Cost**: CWKit measured at ~7% of a core (neural, Debug/-Onone) and ~1%
+  (Release) for 44.1 kHz audio — no vDSP rework needed.
+- **Verified 2026-10-02**: CWKit tests (19, incl. the Python golden checks)
+  via `swift test` in cwdecode; Mac target builds; in the built app, a
+  real CW recording decoded through the window matched CWKit's offline
+  decode exactly; Clear and the Neural/Classic switch work. **Not yet
+  done**: live decoding on the rig (MAIN, SUB, and across a swap).
+- **v2: CW send pane (2026-10-02, tested on the rig into a dummy load by
+  the user)**: `CWSendPane` below the receive pane (`VSplitView`), driven
+  by `CWSender` (a `lazy var` on `HubService`, sibling of `cwReceiver`;
+  in `Sources/FTX1CW/` since 2026-10-14, shared with the iPad — it drives
+  any `CWKeyerLink`, which `HubService+CWKeyerLink.swift` implements with
+  the block rules below, see "iPad CW decoder").
+  Line at a time (Return queues), 6 editable macros that fill the send
+  line rather than send (user decision 2026-10-03, so they can be edited
+  first; appended after a space if the line has text; cursor left at the
+  end via `TextField(text:selection:)`, set after focus since macOS
+  selects the whole field on focus) (`CWMacro`, JSON in
+  `cw.macros`; `{MYCALL}`/`{MYGRID}` from `StationSettings`, `{CALL}` from
+  the pane's "Their call" field (session-only, not persisted); ⌘1–9), Stop (Esc: "KY00" + drop the queue), the
+  rig's keyer speed (`KS`) and BK-IN, and a log of queued/keying/sent
+  lines. Sending is the rig's own keyer, not real-time keying: each ≤50-
+  character chunk is written to one dedicated CW TEXT keyer memory
+  (`cw.keyerSlot`, default 1 — the user's slots 4/5 hold their own
+  messages; slot 1 is overwritten every send) with
+  `RigctldClient.writeKeyerMemory`, then played with the transmit-gated
+  `RigCommand.playCWTextMemory(slot:)` ("KY0n"). `HubService.
+  ensureCWTextMemory` sets the slot's menu type to TEXT (EX 02 02 05+n)
+  once per session. All user-chosen design decisions (dedicated slot,
+  line-based, macros now, pause decoding on TX).
+  - **Rig facts, probed with `nc` against the Pi's rigctld, 2026-10-02**:
+    `W` splits on whitespace, so the write goes through lowercase `w`
+    (whole line), which then waits out rigctld's timeout (~2 s) for a reply
+    a set never gets — `writeKeyerMemory` follows it with a "KM<n>;" read
+    in the same write and returns once that answers (also confirms what was
+    stored). The rig appends the "}" end marker itself; it keeps exactly 50
+    characters and answers "?;" to more (memory unchanged); it keyed every
+    character in `CWText.allowed` (A-Z 0-9 / ? , . = + - ( ) @ :), so
+    `<BT>`/`<AR>`/`<KN>` are sent as `=`/`+`/`(` (other prosigns as their
+    letters); it **only transmits with BK-IN on** (off: a brief mute, no
+    TX, no sidetone), so the pane blocks sending with "Turn On BK-IN"
+    rather than switch it silently; a second "KY" during playback
+    *restarts* the message, so chunks go strictly one after another;
+    "KY00" stops at once; "KM<n>;" alone is a read, so a slot can't be
+    emptied (" " is the closest). PTT reads 3 throughout keying incl. word
+    gaps, with the odd spurious 0.
+  - **Monitor (2026-10-22, tested on the air by the user the same
+    day)**: a switch in the send pane's header (`cw.monitor`, off by
+    default) plays a local sidetone for each chunk on the Mac's audio
+    output (Settings → Audio's device) — with the rig on the Pi there's
+    nothing to hear while the keyer sends. `CWMonitor` (`Sources/FTX1CW/`
+    since 2026-10-23, shared with the iPad; on the Mac a `let` on
+    `HubService`, its own environment object so the pane doesn't observe
+    the hub) renders the chunk from `CWText.keying(of:)` (PARIS timing) at
+    the rig's KS and KP (700 Hz until read) when `CWSender.onKeying` fires
+    at the play command, so it runs a network hop ahead of the rig and
+    ignores the rig's weighting; Stop cuts it off. The CW Key window
+    doesn't use it (the key interface has its own sidetone).
+    **iPad (2026-10-23, tested live on a real iPad by the user the same
+    day)**: a Monitor button at the
+    right end of `CWSendSection`'s Their call/macro row (the header row is
+    full in portrait), both routes. The App owns one monitor fed by its
+    `CWSender.onKeying`; Demo Mode makes its own (`cw.monitor` is copied
+    into the demo suite). On iOS it plays through `SharedAudioSession`,
+    held only while a chunk plays.
+  - **Finish detection** (`CWSender.waitUntilKeyed`): ≥90% of the PARIS-
+    timed duration at the rig's WPM has passed and PTT has read off for
+    ≥1 s; capped at 1.5× + 5 s. Gap between chunks heard as ~1–2 s.
+  - Blocks (queue waits, shown in the pane): not connected, Enable
+    Transmit off, Main not in CW, outside an amateur band, BK-IN off.
+    Turning Enable Transmit off also stops the sender. Closing the window
+    doesn't stop a queued line.
+  - Receive side, same change: decoding pauses while the sender runs or
+    the rig reports TX (`CWReceiver.isPausedForTransmit`, flushes the
+    decoder first); a "Rig Pitch" button sets the manual tone to the rig's
+    CW pitch (`KP`); a note when the selected receiver isn't in CW.
+    `HubService` forwards only `CWRigInfo` changes (TX, pitch, modes —
+    modes only while connected, since `rigState.mode` is a USB placeholder
+    before the first read).
+  - **Click-to-fill (2026-10-02, user-confirmed)**: callsigns in the
+    committed decoded text are underlined links (`CWCallsigns`: 1–2
+    letters / digit+letter / letter+digit, a digit, 1–4 letters, `/`
+    parts judged on the longest — excludes `5NN`, `599`, `73`, Q-codes;
+    the operator's own call isn't linked, nor the tentative text). A click
+    fills Their call through an `OpenURLAction` on the custom
+    `ftx1-cw-call:` scheme, so the system never sees it. Background
+    (computer-use) clicks don't activate these links — test by hand.
+  - Verified: line, 66-character line (2 chunks, complete, short pause),
+    Stop mid-line (cut off at once), AGN? macro, `{CALL}` missing refused;
+    `CWText` checked in a scratch harness. Not tried: SUB as the TX side
+    (sending always keys whatever the rig transmits on), WebSDR source
+    while sending.
+
+## Digital modes — RTTY/PSK (Mac, 2026-11-06; receive and transmit unit-tested on synthesized signals, files decoded and the send pane checked in the built app while disconnected; nothing on the air yet)
+
+User request. Tools → **RTTY/PSK** opens `Window(id: "digi")`
+(`DigiWindowView`, Mac-only): decodes one RTTY, BPSK31 or BPSK63 signal
+at a time from MAIN, SUB, the WebSDR window's or the MyKiwiSDR window's
+audio (see "Local SDR" phase 4), or from a file.
+One signal at a time with a click-to-tune strip; the PSK browser (see
+below) came on 2026-11-14. Transmit came the same day (see "Transmit"
+below).
+
+- **Our own demodulators, nothing vendored** (`Sources/FTX1Digi/`, a
+  separate product so the iPhone doesn't carry it): fldigi is GPL-3 and
+  would be linked into the MIT app. Everything runs at 8 kHz
+  (`DigiResampler`, one long-lived `AVAudioConverter`); FIRs go through
+  `vDSP_dotpr` (`DecimatingComplexFIR`) so Debug builds stay cheap.
+  - `RTTYDemodulator`: mix to the centre, decimate to 2 kHz, each tone
+    mixed to 0 Hz and low-passed to 0.75 × baud (1 kHz), "optimal ATC"
+    decision (each tone clipped to its own envelope, sliced halfway
+    between the envelopes), framed from the start bit's mark→space edge
+    with each bit integrated over its middle half, dropped unless start =
+    space and stop = mark. The demodulator takes `reverse` literally (off
+    = mark is the lower tone); callers pass the sideband-aware value (see
+    "Polarity" below).
+    Quality = average |m − s|/(m + s) mapped from 0.35…0.7 to 0…1 —
+    noise alone measured 0.2–0.4, RTTY at 0 dB SNR ≥ 0.55 (an SNR-style
+    envelope/noise-floor ratio read ~0.8 on pure noise and was dropped).
+    AFC from each tone arm's phase rotation, ± half the shift around the
+    click. Shift 170/200/425/850, 45.45/50/75 baud, USOS, US-TTY figures.
+  - `PSKDemodulator`: NCO, decimate to 1 kHz then to 16 samples/symbol,
+    symbol timing from the circular centroid of the per-slot average
+    amplitude (BPSK dips at reversals), differential bits (no change = 1),
+    `Varicode` (the G3PLX table; checked code by code against fldigi's
+    `pskvaricode.cxx` when written). One average of `d²/|d|²` gives the
+    quality (its length) and the residual rotation (its angle/2), which
+    de-rotates the decisions and drives AFC (±15 Hz of the click).
+  - Squelch (0…1, default 0.3) gates printing for both modes.
+  - Measured on synthesized white noise (`FTX1DigiTests`): BPSK31 clean
+    to −9 dB SNR in 3 kHz, RTTY 45.45/170 clean to −3 dB; pure noise
+    prints nothing. Real QSB/QRM will be harder.
+- **`DigiReceiver`** (FTX1Digi, `lazy var digiReceiver` on `HubService`)
+  mirrors `CWReceiver`: fed both audio taps unconditionally (before the
+  APRS gates), keeps the selected `ReceiveAudioChannel` only while the
+  window is open, decodes on its own serial queue, pauses (and resets)
+  while the rig transmits (`DigiRigInfo`), SUB disabled with no Sub audio
+  or in single-receive display. Settings are `digi.*` keys, centre saved
+  per mode (defaults RTTY 2210 Hz = 2125/2295 tones, PSK 1000 Hz). The
+  strip rows (~10/s, 2048-point FFT on 8 kHz = 3.9 Hz bins, 0–3 kHz) and
+  readings go to `DigiMeterStore`, observed only by the strip and status
+  line. A file gets its own decoder, so the live one keeps its state;
+  the strip doesn't show the file.
+- **Tuning strip** (`DigiTuningStrip`): reuses the main waterfall's
+  `WaterfallBitmap`/`WaterfallPalette` (made internal for it). A click
+  snaps to the signal: PSK to the strongest bin within 15 Hz, RTTY to
+  the centre with the most energy on both tones within half a shift.
+- **Rig Tones** reads MODE RTTY's MARK FREQUENCY/SHIFT FREQUENCY
+  (EX010514/15) or MODE DATA's PSK TONE (EX010417) and centres there.
+  **Unverified**: that the rig's RTTY mode puts the space tone *above*
+  the mark (centre = mark + shift/2, Reverse off). If decoding needs
+  Reverse there, fix the assumption in `DigiSettingsRow.useRigTones`.
+- **Shared WebSDR tap**: `CWWebSDRSource` became `WebSDRAudioSource`
+  (consumers register `isWanted`/`onSamples`; one tap while any wants it;
+  `WebSDRAudioRouting.captureActive` unchanged), so the CW and RTTY/PSK
+  windows can both decode the WebSDR without fighting over its mute.
+  `CWAudioChannel` moved to FTX1Core as `ReceiveAudioChannel` (typealias
+  kept).
+- **Polarity** (`RTTYSettings.effectiveReverse(upperSideband:)`/
+  `tones(centerHz:upperSideband:)`): normal RTTY puts mark on the higher
+  RF frequency, which is the lower audio tone on LSB / the rig's RTTY
+  mode and the higher one on USB / DATA-U (`RigMode.isUpperSidebandAudio`).
+  Effective reverse = Reverse XOR upper sideband, for the decoder (the
+  selected receiver's mode; WebSDR = as set) and the transmitter (the
+  transmitting side's mode), so Reverse only means "this station sends
+  upside down". `DigiReceiver` rebuilds the RTTY decoder when a sideband
+  change flips it.
+- **Transmit** (user decisions: RTTY as AFSK audio in DATA-U/USB/LSB, not
+  the rig's FSK keying; live typeahead; 3-minute limit):
+  - `RTTYModulator` (phase-continuous AFSK, 0.5 s mark + LTRS lead, LTRS
+    idle, LTRS + 0.2 s mark tail; FIGS again after every space for USOS
+    receivers) and `PSKModulator` (cosine-shaped reversals, 32-symbol
+    reversal preamble and idle, 32-symbol carrier tail) pull characters
+    at each character boundary; round-trip tested through the
+    demodulators (`ModulatorTests`).
+  - `DigiSender` (FTX1Digi, `lazy var digiSender` on `HubService`) over
+    `DigiTransmitLink` (`HubService+DigiTransmitLink.swift`): TX keys
+    (`send(.setPTT(true))`, so the gate and scan stop apply) and sends
+    the box's text as it's typed, idling when it's empty; RX sends the
+    rest + tail, waits for the audio ahead to play out (lead + 0.3 s),
+    then unkeys; Stop unkeys at once and drops unsent text. Audio is
+    generated 20 ms at a time, 250 ms ahead of real time. It goes out on
+    the receiver's tracked frequency (after AFC) with its mode/shift/baud.
+    Stops on: the gate closing, PTT reading off > 1 s (after a 2 s grace),
+    the 3-minute limit, closing the window (acts as RX). Refused while the
+    rig is keyed by anything else, outside DATA-U/USB/LSB, or in Local
+    mode with no Transmit audio output. `DigiSenderTests` (fake link +
+    clock) cover pacing, the drain, Stop, the limit, the gate and PTT loss.
+  - Audio: `HubService.routeTXAudio` (split out of `handleTXAudio`), the
+    iPad microphone's path — Settings → Audio → Transmit audio output in
+    Local mode, the Pi's `ftx1-txaudio` in Remote mode. It doesn't look at
+    `rigState.ptt` (a stray poll mustn't restart the sink); iPad frames
+    are dropped while this sender transmits.
+  - The window: `DigiSendPane` under the receive part (`VSplitView`):
+    TX (⌘T) / RX (⌘R) / Stop (Esc), elapsed vs 3:00, Level (dBFS peak,
+    `digi.txLevelDb`, default −6), Their call, macros (`DigiMacro`,
+    `digi.macros`; `{MYCALL}`/`{MYGRID}`/`{CALL}`, `{TX}` first keys,
+    `{RX}` last returns to receive), and the typeahead box (`NSTextView`:
+    sent text greyed and locked). Sent characters echo into the decoded
+    text in red (`DigiReceiver.runs`, `DigiTextRun`); callsigns in received
+    text fill Their call (`CWCallsigns`, matched on the uppercased text).
+  - MOD SOURCE check: the status line warns when the transmitting mode's
+    MOD SOURCE (DATA EX010413, SSB EX010113) is MIC or Bluetooth.
+- **PSK browser (2026-11-14; unit-tested on synthesized multi-signal
+  audio, then a synthesized five-signal PSK31 file decoded on all five
+  lines in the built app, user-confirmed; not yet on the air)**: user
+  request, like fldigi's signal browser. In BPSK31/BPSK63 a **Browser**
+  checkbox (`digi.psk.browser`, on by default) shows a list above the
+  decoded text: one line per PSK signal in 0.15–2.85 kHz, lowest first
+  (frequency, quality bar, newest ~160 characters), the main decoder's
+  line highlighted; a click moves the main decoder there. Green ticks on
+  the tuning strip mark the channels. `PSKBrowser` (FTX1Digi, inside
+  `DigiDecoder`, so it runs on the decoder's queue and for files too):
+  the strip's FFT rows averaged (rises 0.3, falls 0.6 a row), power summed
+  over ±1 baud, local maxima ≥ 5 dB over the median every 0.5 s each get
+  their own `PSKDemodulator` (AFC ±15 Hz, up to 24); text prints only
+  while that carrier stands above the noise in a recent row (0.5 s hold);
+  channels AFC pulls within half a baud are merged; dropped after 60 s
+  gone (10 s if it printed under 3 characters). Snapshots ~4/s into
+  `PSKBrowserStore` (`DigiReceiver.browser`), observed only by the list
+  and the ticks. Time is counted in samples. Fixed with it, in
+  `PSKDemodulator` (both decoders): the quality average took ~20 symbols
+  to fall when a signal ended, printing most of a second of noise; an
+  amplitude drop to 0.35 of the held level now clears it (a strong
+  carrier's end now prints at most a character). `PSKBrowserTests`: 3
+  signals at −3 dB SNR, 90 Hz apart, BPSK63, noise alone printing
+  nothing, a bare carrier dropped, and 39 s of an 8-signal band in
+  ~0.8 s (Debug `swift test`). Not done: live CPU with many signals,
+  real QRM/QSB, the iPad/Windows.
+- **Log QSO pane (2026-11-14; built and unit-tested, not yet opened in
+  the app or logged a QSO from)**: user request. The CW window's pane,
+  now `QSOLogPane` (`QSOLogPane.swift`, was `CWLogPane`), at the bottom
+  of this window too, on `DigiSender.theirCall` — Their call and Lookup
+  moved there from the send pane's macro row, as in the CW window. Same
+  logbooks, Retry Wavelog and worked-before (the decoded callsigns are
+  colored too, with the CW window's legend; `WorkedStationsStore` runs
+  while either window is open). With `digi:` set the mode is the
+  window's (ADIF RTTY, PSK/PSK31, PSK/PSK63; `DigiMode.adifMode`), not
+  the rig's DATA-U/USB, and the frequency is the signal's:
+  `QSOLogPane.digiFrequencyHz` = the transmitting side's dial + the
+  tracked tone in USB/DATA-U, − it in LSB, the dial as is otherwise (the
+  rig's RTTY mode included — its display isn't known to map to a tone).
+  WSJT-X's "QSO Logged" (MacLoggerDX) has no submode field, so it now
+  carries PSK31/PSK63 as the mode (`WSJTXMessage.qsoLoggedMode`, as
+  WSJT-X does for FT4); the ADIF record keeps PSK + submode, and SSB
+  stays "SSB". Not checked: how MacLoggerDX files "PSK31" from that
+  message.
+- Not yet done: anything on the air — receive (MAIN in RTTY mode and
+  DATA-U, SUB, a swap, WebSDR with the CW window open) and transmit
+  (dummy load first: MOD SOURCE, USB MOD GAIN/ALC at the default level,
+  Local and Remote, start and tail not clipped, another receiver decoding
+  it on DATA-U and LSB, the Pi's 0.5 s re-key grace after a quick
+  RX → TX). Also a CPU check against live audio (the decoder ran ~30 s of
+  audio in ~0.04 s in a Debug `swift test`).
+- **Windows port (2026-11-06; unit-tested and built, the window not yet
+  opened or on the air)**: the **RTTY/PSK** button next to CW —
+  `Services/Digi/` (the DSP translated from `Sources/FTX1Digi/`, which stays
+  the source of truth), `DigiReceiver`, `DigiSender`, `Controls/DigiWindow.cs`,
+  `MainWindow.Digi.cs`. Differences from the Mac: no shared WebSDR tap (the
+  receiver has its own), the sent text is shown above the typeahead box
+  instead of greyed inside it, and Lookup sends only the call. See
+  `Apps/Windows/README.md`'s "RTTY/PSK window".
+
+## APRS transmit (Mac, 2026-11-11; unit-tested, views checked in the built app, tested on the air by the user the same day)
+
+User request. Beacons, messages and acks from the Mac, as Bell 202 audio
+through the same TX audio path as RTTY/PSK (`routeTXAudio`: Settings →
+Audio's Transmit audio output in Local mode, the Pi's `ftx1-txaudio` in
+Remote mode). User decisions: beacon + messages + auto-ack; Beacon Now plus
+an optional interval (off by default); send on whichever receiver is on the
+APRS frequency; position from lat/lon in Settings.
+
+- **FTX1Core/APRS/**: `AX25Encoder` (addresses/paths as typed, UI frame +
+  FCS, flags + bit stuffing, NRZI, continuous-phase AFSK; Demo Mode's
+  `APRSBurstEncoder` now uses it), `APRSOutgoing` (`=` position with
+  ambiguity, `:ADDRESSEE:text{id`, acks, ack/rej/reply-ack `{MM}AA`
+  parsing, `APRSTransmitSettings` — `aprs.tx.*` keys, destination APZFTX),
+  `APRSTransmitter` (`APRSTransmitPlanner`, the `APRSTransmitLink`
+  protocol, the queue), `APRSMessaging` (beacon schedule, outbox, acks).
+  Tests: `APRSTransmitTests` — incl. a packet rendered at 8 kHz, upsampled
+  to 44.1 kHz and decoded by the app's own demodulator.
+- **Receiver choice** (`APRSTransmitPlanner`): MAIN or SUB on
+  `APRSSettings.frequencyHz` ± tolerance in FM or DATA-FM, the current TX
+  side first; SUB not in single-receive display; refused in split or while
+  scanning; then `TransmitGate` judged *as if* that side transmitted. If
+  the other side is needed, `HubService.keyForAPRS` queues "FT" then PTT in
+  one task (not through `send(_:)`, whose gate would judge the side the rig
+  is still on) and `unkeyForAPRS` PTT off then "FT" back.
+- **Switch bug, fixed the same day (found by the user's first beacon,
+  TX on MAIN at 14.093 USB, SUB on 144.390)**: the in-transmission check
+  judged `rigState`'s TX side, still MAIN until "FT1" landed, so the
+  License guardrail stopped the packet at once; and the key ("FT1", "TX1")
+  and unkey ("TX0", "FT0") went out as two independent tasks that
+  interleaved — the rig keyed on MAIN's HF frequency with no audio until
+  the License guard unkeyed it, and SUB was left as the TX side. Now
+  `aprsTransmitBlock(side:)` judges the planned receiver, and
+  `HubService.enqueueAPRSKeying` chains every batch behind the previous
+  one. Remaining small window: a slow-tier "FT" read started before the
+  switch and published after it makes the License guard unkey (a lost
+  beacon, never wrong keying). Rig-confirmed by the user the same day:
+  beacon out on SUB with TX on MAIN (14.093), TX back on MAIN after.
+- **One packet**: wait for a clear channel (no back-to-back flags or
+  decoded frame on that receiver's `APRSDecoder` for 1.5 s, at most 10 s —
+  only works with Decode APRS on; `AX25FrameDecoder.Stats.backToBackFlags`,
+  `APRSDecoder.heardActivity`), 0.1–0.5 s random delay, key, TXDELAY flags
+  (`aprs.tx.txDelayMs`, 400 ms default, covers the CAT key latency) +
+  frame + 3 flags at `aprs.tx.levelDb` (−6 dBFS), paced 250 ms ahead like
+  `DigiSender`, unkey after play-out. Acks jump the queue. Enable Transmit
+  off or the APRS switch off drops everything and unkeys.
+- **Messages**: ids 1…99999 (`aprs.tx.messageCounter`); stored in
+  `APRSStore` as `APRSMessage` with `delivery` (`APRSDelivery`: pending/
+  acked/rejected/failed/cancelled, attempts, note — optional, so older
+  history and iPads decode it). Sent up to 5 times (waits 30/60/120/240/
+  240 s); a blocked attempt doesn't count and is retried 30 s later; fails
+  after 15 min unsent. Pending ones from a previous run are marked failed
+  at launch. An "ackN"/"rejN" or reply-ack from the addressee settles it.
+- **Received** (`HubService.receivedAPRSMessage`): a message to our exact
+  call (SSID included) with an id is acked (`aprs.tx.autoAck`, default on;
+  same sender+id at most every 20 s). Not listed in M.LIST: our own
+  digipeated messages, and acks/rejects to us. `APRSStore.recordMessage`
+  now skips a repeat (same from/to/id/text within 30 min).
+- **UI**: Settings → APRS → Transmit (the tab scrolls in a plain
+  `ScrollView`: as a `.grouped` form it rebuilt itself on every settings
+  write, dropping the cursor out of the field being typed in — the user
+  couldn't enter a position; avoid `.grouped` for Settings tabs that write
+  as you type). Latitude/longitude are text fields ("." or ",") saved
+  whenever they parse; **Use This Mac's Location** (`MacLocation`, Core
+  Location, one fix, 20 s after permission is settled) fills them — the
+  Mac target now has `ENABLE_RESOURCE_ACCESS_LOCATION` and the
+  `NSLocation(WhenInUse)UsageDescription` strings (checked in the built
+  app: a fix arrived and was saved). A bottom
+  bar in S.LIST/M.LIST (Beacon Now, last outcome, next beacon, Sending);
+  Tools → APRS → Beacon Now; M.LIST New Message (compose sheet, 67
+  characters), Status column, right-click Reply / Stop Sending / Send Again;
+  S.LIST right-click Message.
+- **Not done / unverified**: TXDELAY in Local mode; Beacon Now and sending with transmit on; the iPad
+  (no transmit there).
+- **Windows port (2026-11-11; unit-tested and built, then tested on the air by the user the same day, working)**: same behavior and strings (es/de from the Mac's
+  catalogs); `Services/Ax25Encoder.cs`, `AprsOutgoing.cs`, `AprsTransmitter.cs`,
+  `AprsMessaging.cs`, `MainWindow.Aprs.cs`, Settings → APRS → Transmit
+  (applies on Save, no location button). See `Apps/Windows/README.md`'s
+  "APRS transmit". Keep the Swift files as the source of truth.
+
+## Logbook — MacLoggerDX (started 2026-10-07)
+
+Goal: log QSOs made with the CW window, and flag stations already worked.
+Mac-only for now. Step 1 (done, tested in the built app): Settings →
+**Logbook** tab (`LogbookSettings`, `MacLoggerDX.swift`): Logger picker
+(None/MacLoggerDX), the MacLoggerDX log file (auto-detected, Choose…
+override) with a read-only summary, UDP host/port, and whether MacLoggerDX
+is running and listening.
+
+- **Logging goes over WSJT-X's UDP protocol** (user decision, over
+  AppleScript `importADIF`) — step 2, done 2026-10-07: `QSOLogger` (Mac)
+  sends a `LoggedQSO` (`FTX1Core/Logbook/`) as WSJT-X's "QSO Logged" +
+  "Logged ADIF" datagrams (`WSJTXMessage`, `ADIFRecord`; layout from
+  WSJT-X's `Network/NetworkMessage.hpp`, unit-tested in
+  `WSJTXMessageTests`) to UDP 2237, then confirms by finding the QSO in
+  the log file within 5 s (`MacLoggerDX.containsQSO`) — UDP gets no reply.
+  Tested against the user's running MacLoggerDX 6.62 with one QSO (TE5T,
+  logged once, every field right; MacLoggerDX fills in my call/grid
+  itself when they're empty). What the binary's strings show: MacLoggerDX
+  acts on "QSO Logged" when its `wsjt_log_adif` checkbox is off and on
+  "Logged ADIF" when it's on — never both — and checks the sender Id
+  against "WSJT-X"/"JTDX" (Id used: "WSJT-X - FTX1Remote", the form a
+  second named WSJT-X instance uses). **Never send it a Heartbeat with an
+  empty version**: that crashed MacLoggerDX twice (uncaught
+  `substringWithRange:` in `-[WsjtDecoder messageHeartBeat:]`), so
+  `QSOLogger` sends no Heartbeat at all. Only the checkbox-off path is
+  tested.
+- **Reading the log**: SQLite, path in MacLoggerDX's own prefs
+  (`qso_data_source_sql_db_path`, read with `CFPreferencesCopyAppValue`),
+  default `~/Documents/MLDX_Logs/MacLoggerDX.sql`. One table,
+  `qso_table_v008` (code takes the newest `qso_table_v%`), `qso_start` in
+  Unix seconds, `call`/`band_rx`/`mode`/`tx_frequency` (MHz). Read on
+  MacLoggerDX 6.62. Always opened `mode=ro`, never written.
+- **CW window Log QSO pane (step 3, 2026-10-07)**: `CWLogPane`, a third
+  section of the CW window's `VSplitView` (user decision, over a strip in
+  the send pane). "Their call" moved there from the send pane — still
+  `CWSender.theirCall`, so `{CALL}` and click-to-fill are unchanged. RST
+  sent/rcvd (default 599), name, comment; frequency/mode/power from the
+  transmitting side when Log QSO (⌘L) is clicked (SUB's when TX:SUB or
+  split, the VFO boxes' TXRX rule), mode through `ADIFMode` (data modes
+  refused: the rig can't say which one). Time on is set when the call
+  goes from empty to filled (reset button next to it); time off at Log.
+  Fields clear only after MacLoggerDX confirms (user decision).
+  Their call and the send pane's line uppercase as they're typed (user
+  request, `UppercaseEdit` in `CWLogPane.swift`), keeping the cursor
+  in place: worked out from the edit, never by measuring the field's
+  `TextSelection` index against the string — that index can belong to
+  another copy of the string, and `String.distance` trapped (crashed the
+  app) the first time.
+  UI-tested in the built app with the rig disconnected (time on, the
+  not-connected refusal); not yet logged a real QSO from it.
+- **Lookup button (2026-10-07)**, left of Their call: `QSOLogger.lookUp`
+  sends WSJT-X's Status message (`WSJTXMessage.status`) with the call as
+  its DX call — what WSJT-X sends when its DX Call changes, and what
+  makes MacLoggerDX fill its call field from QRZ and show its "<call>
+  Worked <date> on <band> <mode>" line. Tested against the running
+  MacLoggerDX with a scratch sender (W1AW, K6NA) and from the app's
+  button (disconnected refusal). Found by testing: MacLoggerDX only acts
+  on a *changed* DX call (an empty one is sent first, so a repeat lookup
+  works), and **ignores the whole Status at a 0 Hz dial frequency** — so
+  Lookup needs the rig connected; it fills MacLoggerDX's MHz/band/mode
+  from the transmitting side too. The lookup shows up a few seconds
+  later (QRZ). Status parsing has no `substringWithRange:` (checked in
+  the disassembly) unlike the Heartbeat that crashed it.
+- **Worked-before (2026-10-07)**: `WorkedStations` (`FTX1Core/Logbook/`,
+  unit-tested) indexes the log by base call — the longest `/` part, the
+  later one on a tie (K6NA/P, VP2E/K6NA → K6NA; so W1AW/0 counts as
+  W1AW) — and answers this band / other band / never, bands compared
+  case-insensitively ("40M" in the log, "40m" in `BandPlan`).
+  `WorkedStationsStore` (`lazy var` on `HubService`, runs while the CW
+  window is open) builds it from `MacLoggerDX.readWorkedQSOs`, re-reads
+  when the log file's date changes (checked every 5 s; MacLoggerDX's
+  `journal_mode` is `delete`, so a new QSO changes the main file) and
+  right after Log QSO confirms, and tracks the transmitting side's band
+  (`RigState.transmitter`, shared with the Log pane). Shown as colors on
+  the decoded callsigns (green this band, orange other band, link blue
+  never — user decision: call then band, mode ignored) with a legend,
+  and as a "Worked N× · last … · new on <band>" / "New station" line
+  next to Their call. The legend has its own row under the decoded text
+  (a `VStack`; an overlay covered the newest line, and a `safeAreaInset`
+  left the last lines unscrollable). **Every file access to the log runs off the main
+  actor**: it's in ~/Documents, and the first access blocks on macOS's
+  Documents-folder permission prompt — a `FileManager` date check on the
+  main thread froze the whole app until the prompt was answered (also
+  re-asked after Debug rebuilds). Tested in the built app with a
+  synthesized CW recording (K6NA, JJ0PKS, W1AW/0 orange with no band
+  known; JA1XYZ, ZL2AB blue) and the pane lines; the green/this-band
+  case only in unit tests so far (needs the rig connected).
+
+- **Wavelog as a second logbook (2026-10-24; API v2, tested against a
+  throwaway Wavelog 3.2.4 in Docker — v2's QSO/station code is identical
+  in the user's 3.2.3 — then confirmed by the user with a live QSO from
+  the CW window's Log pane, 2026-10-25)**: user request — every Log QSO also goes to Wavelog, beside
+  whichever Logger is primary (also works with None). **API v2, not v1**
+  (user decision; v2 is in every release since 3.1.0): the token goes in
+  an `Authorization: Bearer wl2_…` header (never the URL or body), can be
+  scoped to just `qso:write` + `station:read`, and duplicates come back
+  as a count. v1 keys ("wl…" without "2_") don't work with v2 — Settings
+  says so. Settings → Logbook → Wavelog (`WavelogSettingsSection`):
+  on/off, URL, API token (login keychain, `WavelogToken` — user
+  decision), station location picker (`GET api/v2/station`), Test = the
+  API's dry run (`dryrun: true`: token, scope and location checked,
+  nothing written). `Wavelog` (`FTX1Core/Logbook/`, `WavelogTests`) posts
+  our `ADIFRecord` to `POST index.php/api/v2/qso` (`import_type: "adif"`);
+  shapes read from `Api_v2.php`/`Api_v2_response.php`/`api_v2/
+  Qso_resource.php` (master): `{"data": {parsed, imported, skipped,
+  messages}}` — `skipped` = duplicate (imported with skip-duplicates, so
+  resending is safe); `{"error": {code, message}}` otherwise; the rate
+  limiter's 429 still uses v1's `{status, reason}`. Unlike v1, v2 doesn't
+  refuse a QSO whose station callsign isn't the location's — it files it
+  under the location's callsign (seen in the database), so Settings warns
+  when Settings → Station's call differs. The Logbook tab scrolls now.
+  `QSOLogger.log` sends to both at once (`Outcomes`). The Log pane clears
+  only when both confirm; if MacLoggerDX took it and Wavelog didn't,
+  "Retry Wavelog (<call>)" resends that QSO to Wavelog alone (user
+  decision) and stays until it works or is dismissed (✕). Worked-before
+  and Lookup stay MacLoggerDX-only. Docker test: created, duplicate,
+  dry run, missing scopes (qso:write, station:read), v1 key, revoked
+  token, foreign location, differing call, 404 path, no server; every
+  stored field checked in the database.
+- **Wavelog CAT (2026-10-25; tested against a throwaway Wavelog 3.2.4 in
+  Docker, then live by the user the same day in Local and Remote mode)**: user request — Wavelog's QSO form and
+  bandmap follow the rig, as with WaveLogGate. Settings → Logbook →
+  Wavelog → "Send rig frequency and mode to Wavelog (CAT)" (off by
+  default, independent of QSO logging but the same URL/token) and a
+  Radio name (default "FTX-1"). `WavelogRadioReporter` (Mac, `lazy var
+  wavelogRadio` on `HubService`, `start()`/`stop()` with the hub) posts
+  `Wavelog.reportRadio` to API v2's `POST api/v2/radio` (needs
+  `radio:write`; an upsert by radio name, in 3.2.3's `Radio_resource.php`):
+  the transmitting side's frequency/mode (the Log pane's rule), the other
+  side as `frequency_rx`/`mode_rx` only when it isn't the transmitter, and
+  the RF POWER setting in watts. Modes per Wavelog's `radiohelpers.js`
+  (`Wavelog.catMode`): DATA-U → PKTUSB, DATA-FM and C4FM → FM. Sent on a
+  change (at most every 2 s), every 60 s while unchanged, nothing while
+  the rig is disconnected, 30 s pause after a failure; Settings shows the
+  last outcome, and a change there resends. Docker test: create/update by
+  name, split fields, missing `radio:write`, bad mode, revoked token,
+  404 path, the app's send on connect and the 60 s keep-alive. Debug
+  builds read `logbook.wavelog.tokenOverride` before the keychain (pass it
+  and the URL as launch arguments to test without touching the stored
+  ones — but opening Settings → Logbook then re-fetches the locations and
+  overwrites the saved location name/callsign). If WaveLogGate also runs,
+  quit it or give it another radio name.
+- **Tune the rig from Wavelog (2026-10-25; curl against the Debug app
+  with the rig connected over the Pi, then tested live from Wavelog by
+  the user the same day in Local and Remote mode)**: user
+  request. Wavelog's pages (DX cluster, bandmap, DX waterfall) tune by
+  `fetch`ing `GET <cat_url>/<Hz>/<mode>` from the browser (3.2.3's
+  `assets/js/cat.js`, `performRadioTuning`); `cat_url` is the radio's,
+  `http://127.0.0.1:54321` when unset — WaveLogGate's port, so only one of
+  the two can listen. Settings → Logbook → Wavelog → "Tune the rig from
+  Wavelog" (off by default, `logbook.wavelog.tuneEnabled`) + port
+  (`tunePort`, default 54321). `WavelogTuneListener` (Mac, `lazy var
+  wavelogTuner` on `HubService`) is an `NWListener` on 127.0.0.1 only;
+  `WavelogTuneRequest` (`FTX1Core/Logbook/`, `WavelogTuneRequestTests`)
+  parses the path and maps Wavelog's modes (pkt/dig/pktusb/pktlsb →
+  DATA-U, pktfm → DATA-FM). Only a request whose `Origin` is the Settings
+  Wavelog URL's origin is obeyed (any web page could send the same GET; a
+  browser always sends Origin on a cross-origin fetch, curl needs `-H`);
+  the reply has CORS headers for it and answers Chrome's private-network
+  preflight. `HubService.tuneFromWavelog` follows the WebSDR click-to-tune
+  rules: MAIN (the active side, like every `.setFrequency`), not while
+  transmitting, not in Memory mode, not disconnected — refusals are a 409
+  with the reason, which Wavelog shows only as its generic "not
+  responding" toast; Settings shows the last request. Wavelog sends "rtty"
+  for most digital spots, FT8 included, so those put the rig in RTTY.
+
+## TUNE button (Mac, 2026-11-09; rig-tested by the user with BK-IN on and off)
+
+User request, for an ATU-100 Plus auto-tuner. A **TUNE** button right of the
+mode picker (`TuneTone`, `lazy var tuneTone` on `HubService`; `TuneButton`
+in `ContentView.swift`): switches MAIN to CW, keys PTT (a plain carrier, no
+audio), and on the next press or after 20 s unkeys and restores the previous
+mode (only if the mode is still CW, so an operator change is kept). Queued
+mode-then-key through `send(_:)`, so the transmit gate and scan stop apply;
+the start check judges the gate as CW. Stops on link loss, Enable Transmit
+off, or PTT unreported >1 s after a 2 s grace. Refused while transmitting or
+with TX:SUB (no split). Power is the rig's RF POWER. An earlier version sent
+a 1 kHz tone through `routeTXAudio` in USB; replaced by this at the user's
+request. Button shows a countdown; it's its own observed view so the
+per-second update doesn't re-render `ContentView`.
+
+**Windows (2026-11-11; built, localization tests pass, then tested on the
+rig by the user the same day, working)**: the same button right of the mode
+picker (`MainWindow.Tune.cs`, a DispatcherQueueTimer at 100 ms for the
+countdown and the stop rules), same rules and the same `tune.*` strings,
+through `TransmitGate` judged as CW; disconnect/close unkeys and restores
+the mode. A greyed button is usually the License guardrail (US General
+blocks 14.150–14.225 for CW too), not a bug — the tooltip names the rule.
+See `Apps/Windows/README.md`'s "TUNE button".
+
+## Split (Mac, 2026-10-31; rig-tested by the user the same day)
+
+User request. A **SPLIT** button between TX:MAIN/SUB and the swap button
+(`ContentView.splitButton`) toggles the rig's SPLIT — raw "ST0"/"ST1",
+bare like "TS" (`RigCommand.setSplit`, `"set_split"`). The chevron beside
+it is **quick split** (`HubService.quickSplit(offsetHz:)`): split on,
+then the TX VFO to MAIN + 1/2/3/5/10 kHz or − 1/5 kHz, queued in that
+order as one task. Both refused while PTT/MOX is on or a memory scan runs
+(`canChangeSplit`). Like `.setTXSide`, a split change clears
+`txSideBeforeMemoryScan`.
+
+- **What split is on the FTX-1** (read from the rig in Local mode with
+  the user, 2026-10-31): not "transmit on the SUB receiver". "ST1" turns
+  the dual display off ("FR01"); MAIN receives; the rig transmits from a
+  second VFO that "FB" (and hamlib's `f Sub`) reads — FB equalled FA right
+  after "ST1" — always in **MAIN's mode** (user: changing the mode changes
+  both); "FT" stays 0. The SUB receiver keeps its own state ("OI" =
+  CH 34, 440.400 FM; "VM1"/"MC1"/"MD1" too). "ST0" restores the dual
+  display. So in split `secondaryFrequencyHz` is the TX frequency but
+  `secondaryMode` isn't the TX mode: `RigState.transmitFrequencyHz`/
+  `transmitMode` are the one rule, used by the TX gate, the CW Log pane,
+  Wavelog and the CW Key mode warning.
+- **Left box in split** (`ContentView.subVFOBox`): label SPLIT, "TX" tag,
+  FB's frequency, MAIN's mode, no memory channel; frequency entry sends
+  `.setSecondaryFrequency` (FB) — the first try showed SUB's channel tag
+  and opened the channel picker.
+- After each split write `refreshAfterSplit` reads ST, FT, FR and FB
+  (logged as `After split write: …`, "connection" category) and falls back
+  to the MAIN filter side, as the slow tier does in single receive. In
+  split, `trackExternalSwap` is off (an FB/FA exchange is MAIN's A/B swap,
+  not a receiver swap) and the app's swap leaves the modes alone.
+- Tested on the rig by the user after the TX VFO box landed, working.
+  Not covered by what was reported: the rig's A/B swap in split.
+- **iPad (2026-11-01; both routes in the Simulator against the real rig,
+  SPLIT and quick split, nothing keyed; then tested by the user on live
+  hardware the same day, both routes, working)**: user
+  request. `SplitButtons` (`Apps/iPad/SplitButtons.swift`) between V/M and
+  swap in both top rows, and `SplitVFOBox` in place of the SUB box in split
+  (the Mac's box; the strip under it stays the SUB receiver's). The gates
+  moved to `RigState.canChangeSplit`/`canQuickSplit`. Hub route:
+  `RigClientViewModel.quickSplit` sends `.setSplit(true)` and sends the
+  frequency only once the hub reports split on, since before that "FB" is
+  the SUB receiver: a hub that refused or doesn't know `set_split` must not
+  retune SUB (5 s limit, then nothing). Pi direct (`readsVFODetails`):
+  `.setSplit`, `quickSplit` and `refreshAfterSplit` port the hub's, and
+  `trackExternalSwap`/the app swap's mode exchange stay out of split as on
+  the hub. Demo Mode's `SimulatedRig` models it ("ST1" = "FR01", "FB"/
+  `f Sub` the TX VFO, "SV" exchanges it with MAIN). The extra buttons
+  overflowed the portrait row ("Con-nected"), so its spacing went 12 → 8
+  and Connected/PTT are one line, scaling down if needed. The iPhone has
+  no UI.
+- **Windows (2026-11-01; unit-tested, checked in the built app against a
+  stand-in rigctld, then on the rig over the Pi; keyed and tested on the
+  rig by the user the same day, working)**: the same button, quick split
+  and left box (`MainWindow.Split.cs`); the hub's `set_split` runs the
+  button's method, so it's refused while transmitting or scanning too.
+  `TransmitGate.Transmitter` is the `transmitFrequencyHz`/`transmitMode`
+  rule there. See `Apps/Windows/README.md`'s "Split".
+
+## VFO frequency responsiveness (Mac, 2026-11-01; Local mode measured in the built app against the rig, then the dial confirmed by the user the same day: "feels instant"; Remote measured against the Pi, dial confirmed there by the user the same day too)
+
+User request, after rigplane-core followed the dial with no visible lag.
+It polls too (no AI), over direct serial, every ~250 ms. Two changes, both
+modes.
+
+- **`post_write_delay=10` on rigctld** (the Mac's spawned one, and the Pi's
+  systemd unit, deployed by the user; see `Pi/README.md`): Hamlib's FTX-1
+  backend sets `.post_write_delay = 50`, which is nearly all of a read's
+  ~55 ms; the rig answers in ~5 ms (11,130 raw serial reads, none wrong).
+  11 fast-tier reads took 585 ms at 50, 222 at 20, 117 at 10, 66 at 5, 59 at
+  0. At 0 and 5 a reply occasionally arrives out of step (cause not found;
+  raw serial never did it). A hamlib verb that gets the wrong answer returns
+  RPRT -8 and rigctld closes and reopens the rig, a 1.5 s+ stall; raw reads
+  check the prefix and just fail. 10 ran 27,159 replies clean on the Mac
+  and 16,962 on the Pi with the app polling too (~14 ms a read from the
+  Mac; it was ~52). An adopted rigctld keeps its own setting. Writes, TX and
+  RF at this delay are not soak-tested. In an SSH shell on the Pi `rigctld -V`
+  shows Debian's 4.6.2; the service loads 4.7.2 (`LD_LIBRARY_PATH` in its
+  override.conf), so run `LD_LIBRARY_PATH=/usr/local/lib rigctl -m 1051 -u` to
+  see its real settings. Restarting the service took the full 90 s: the old
+  rigctld ignored SIGTERM and systemd killed it (one occurrence, cause not
+  looked into).
+- **`HubService.frequencyLane`**: a task beside `pollLoop` reads "FA" with
+  at least 50 ms between reads (twice the read's own time if longer, capped
+  at 500 ms, so a rigctld still on the 50 ms delay isn't crowded out),
+  relying on `RigctldClient`'s first-come round-trip lock to
+  slot in between the tiers' reads, and publishes only a change (every
+  `rigState` write re-renders the Mac's window). VFO mode only, not around a
+  memory scan, since a channel's frequency has to appear with its number
+  and tag. `frequencyReadSerial`/`publishedFrequencyRead` stop the fast
+  tier publishing an "FA" older than the lane's. The fast tier keeps its
+  own read: that's what notices a lost link.
+- **Measured** (a second rigctld client stepping "FA", until the lane's debug
+  log under "poll-timing"; 30 steps): median 104 ms, p90 138, max 533 (not
+  explained); 1 of 30 went out through the fast tier instead. Over the Pi:
+  median 103 ms, p90 155, max 181, 30 of 30. The UI's own draw time isn't
+  included. The first connect after a rebuild stalled 9–19 s in the first
+  fast-tier pass (2 of 2; a later launch of the same build took 338 ms, and
+  fresh connections to the Pi's rigctld answer in ~28 ms). Looks like a macOS
+  first-run check on a new binary, not proven.
+- **The 500 ms tick is now really 500 ms** (it took ~1 s before), so meters
+  and mode update twice as often. Cost, Debug build, scope on: 45% of a core,
+  vs 32% with `polling.fastPollMs` at 1000.
+- `f Sub`, `m` and `t` answer from Hamlib's cache (~0.2 ms; a 1 s cache
+  timeout shows in the trace), so SUB's frequency and PTT may lag up to 1 s.
+  Not addressed.
+- **Band picker regression, v0.12 (fixed 2026-11-03; unit-tested, then
+  confirmed in the Debug build by the user the same day)**: with the lane reading every ~50 ms, the fast
+  tier's older "FA" almost never publishes, and it was the only thing fixing
+  `RigState.band` after an optimistic `.setFrequency` (which wrote only the
+  frequency; the lane then saw no change). Writing `RigState.frequencyHz`
+  now sets `band` itself (`didSet`; not in `init` or decoding).
+
+## Local SDR (Mac, phases 0–5, 2026-11-10; tested against the user's KiwiSDR 2, and by the user the same day except phase 5's playback queue and keychain fix, which were measured or checked in the built app)
+
+Shown to the user as **MyKiwiSDR** (menu item and window title, key
+`app.myKiwiSDR`, the same in every language); the code, the window id
+`local-sdr` and the `localSDR.*` keys keep the old name so saved settings
+carry over. Native audio and waterfall from the operator's own KiwiSDR
+(v1.902, on the home LAN, reached over the Tailscale subnet route through
+raspberrypi), unlike the WebSDR window, which embeds the page. Tools →
+**MyKiwiSDR** opens `Window(id: "local-sdr")`. Protocol fixtures are in
+`Tests/KiwiSDRFixtures/`. Sources checked: `jks-prv/KiwiSDR` at v1.902
+(`web/openwebrx/openwebrx.js`, `audio.js`, `web/kiwi/noise_*.js`,
+`rx/rx_sound_cmd.cpp`) and kiwiclient's `kiwi/client.py`. The older
+`Beagle_SDR_GPS` repo stops at v1.711.
+
+- **Protocol** (`FTX1Core/KiwiSDR/KiwiProtocol.swift`): frames open with a
+  3-byte tag: "MSG" (URL-encoded `key=value`), "SND" (flags, sequence, S-meter
+  with dBm = 0.1 × raw − 127, then Int16 BE PCM, 512 samples a frame), "W/F"
+  (x_bin, zoom, flags, sequence, one byte a bin; dBm = byte − 255 + wf_cal).
+  IMA ADPCM is implemented and tested but unused (`compression: false`).
+  `KiwiSDRMode`: USB/LSB/CW/AM/FM (`nbfm`) with the page's default passbands.
+  In CW the sent freq is the dial minus the passband's centre
+  (`freq_dsp_to_car`), so the dial shows the signal.
+- **`KiwiSDRClient`** (actor, one session per instance): auth, "SET AR OK",
+  setup on `sample_rate`, keepalive every second, retune on the open socket.
+  `.ready` needs both `badp=0` and `sample_rate`. badp=1 is "bad password *or*
+  no free channel", so `/status` tells them apart. The password is never
+  logged. **`/status` lags** by 0.1–10 s: poll it, don't read it once. Logs
+  under "kiwisdr".
+- **Live tests** (`KiwiSDRClientLiveTests`, `KiwiWaterfallLiveTests`,
+  `KiwiReceiverLiveTests`, skipped unless `KIWI_LIVE_HOST` and
+  `KIWI_LIVE_PASSWORD_FILE` are set): write the file with `security
+  find-generic-password -s FTX1Remote-KiwiSDR -a kiwi -w`, mode 0600, and
+  delete it after.
+- **Mac** (`LocalSDRModel`, the window's own `@StateObject`; nothing new is
+  `@Published` on `HubService`): explicit connect only, closing the window
+  disconnects, S-meter and waterfall rows go to leaf-observed stores. The
+  address and password are set in **Settings → Devices** (the tab was C4FM
+  until 2026-11-11; it also holds the WPSD hotspot), not in the window,
+  which shows the address and a Settings button (user request). The
+  address is `localSDR.host`; the password is in the login keychain
+  (`LocalSDRPassword`, service "FTX1Remote-KiwiSDR", account "kiwi"),
+  written by the Settings tab on Return, focus loss or leaving the tab, and
+  read at each connect. Keychain calls run off the main actor (the enum is
+  `nonisolated`): each new Debug build makes macOS ask again, and reading on
+  the main actor froze the app until the prompt was answered. Connect waits
+  for the read ("Reading the saved password…"). Mute = volume 0.
+- **S-meter (2026-11-13; checked in the built app while disconnected, both
+  faces — not yet with a live Kiwi)**: the window's meter is the main
+  window's `SMeterView` in Settings → Appearance's style, fed the Kiwi's
+  dBm + 73 (S9 = −73 dBm), with the S units, dBm and ADC overload beside
+  it. `SMeterView(receiveOnly: true)` drops the TX meter picker on tap,
+  and its Digital face is the S line alone (30 pt tall, no aspect ratio).
+  The frequency above it sits in a box of the same width and border, in
+  the VFO boxes' themed digits (`VFODigitsText`, pulled out of
+  `VFODisplayBox`), a size down (26/22/18 pt, `ViewThatFits`) when the
+  font — 7-segment, padded with unlit 8s — is too wide.
+- **Waterfall** (phase 2): a second actor, `KiwiWaterfallClient`, opened with
+  the sound stream's URL timestamp, which is how the Kiwi pairs them, so it
+  takes no extra channel. A waterfall failure leaves the audio playing.
+  Never clears on a retune: tuning inside the span only moves the passband, a
+  pan shifts the history by whole bins (`KiwiWaterfallGeometry.clampStart`), a
+  zoom rescales it. The view is drawn in the *requested* frame with the
+  picture offset to where its rows are, so a drag follows the mouse at once.
+  The image is a layer-backed NSView set from the store's publisher, opaque,
+  in the screen's colour space (with a SwiftUI `Image` per row, layout was most
+  of the CPU; ~18% of a core in Debug, the per-row work ~0.5%). Colours:
+  `KiwiWaterfallAutoRange`, floor = median − 5 dB, ceiling = 95th percentile
+  + 25 and ≥ floor + 40. Click tunes (step by mode), wheel steps, drag pans.
+- **Rig link** (phase 3, `KiwiRigLink`, fake-clock tests): the WebSDR window's
+  rules on the open socket. Follow (rig → Kiwi, debounced 400 ms) and Tune rig
+  (window → rig, at most every 100 ms); after a window tune the rig's values
+  are ignored until they match or 3 s pass, which stops fast scrolling
+  bouncing. Mode mapping is shared with the WebSDR window; RTTY/DATA-FM/C4FM
+  leave the Kiwi's mode alone. Refused toward the rig when disconnected,
+  transmitting or in Memory mode. Mute on TX = playback volume 0 while
+  `rigState.ptt`. `HubService.setMainAudioOverride(_:active:)` mutes the rig's
+  Main playback while the Kiwi or the WebSDR is audible (a set of holders; only
+  undoes a mute it made).
+- **Phase 4, decoder source + recording**: `ReceiveAudioChannel.myKiwiSDR`
+  in the CW and RTTY/PSK windows (the iPad's pickers omit it). Every frame goes
+  to `LocalSDRAudioSource` (a `let` on `HubService`) before the volume/mute,
+  so a muted Kiwi decodes, only while a consumer wants it. Selecting the source
+  never connects. The receivers get the Kiwi's demodulation as a `RigMode` for
+  the "not CW" notes and RTTY polarity. The Kiwi's CW passband centres at
+  500 Hz, not the rig's KP pitch: use Auto-tune, not Rig Pitch. Record writes
+  16-bit mono WAV (the header holds 11998 for 11998.9 Hz, 0.008% slow).
+  `KiwiRecordingSplit`: a new file only after a ≥ 500 Hz retune or mode change
+  has held for 1 s.
+- **Band bar (2026-11-15; unit-tested, checked in the built app against
+  the user's Kiwi at 30 MHz, 7.5 MHz, 0.94 MHz and 117 kHz spans — not
+  yet by the user)**: user request, like the Kiwi page's. A 31 pt strip
+  over the waterfall (`LocalSDRBandBar` in `LocalSDRWaterfallView.swift`).
+  Top line: the bands in view by name (`BandHints`, `FTX1Core/RigState/
+  BandHints.swift`): `BandPlan` + 2200 m/630 m as "40m Amateur", LW/MW/
+  SW meter bands as "31m Broadcast", the HF aeronautical mobile bands
+  ((R) and (OR) joined, "8.8 MHz Aeronautical", RR Appendix 27) and
+  maritime mobile bands ("12 MHz Maritime", Appendix 17, plus 2045–2194
+  kHz around 2182) — added 2026-11-15 at the user's request, unit-tested
+  and built but not yet seen on screen (the new build's keychain prompt
+  was waiting) —, Aircraft/Marine VHF as "VHF Aeronautical/Maritime",
+  CB as is; amateur bands win where they overlap (SW 41m shows from
+  7.3 MHz, SW 75m and aero 3.9 MHz not at all). Second line: the band's US plan once
+  the band covers ≥ 1/3 of the view (`BandHints.showsPlan` — the user
+  suggested "more than the whole band visible = name only"; a third was
+  picked so a whole band's plan can be seen at once: 20 m from ~0.94 MHz,
+  40 m from ~0.47 MHz). `AmateurBandPlan` derives it from
+  `PrivilegePresets`' US tables, so it can't disagree with the License
+  guardrail: usage from the Extra table (CW/data blue, phone orange, all
+  modes purple, CW only, 60 m channels teal), labelled with the lowest
+  class with any privilege there — Technician only when Settings →
+  License is US Technician or Novice (user request), else those parts
+  read General and merge (`segments(for:showsTechnician:)`); Extra-only
+  parts hatched. Third line (2026-11-15, user request; checked in the
+  built app on 80 m only — Follow/Tune rig were on, so no retune to other
+  bands): the ARRL's voluntary plan (`ARRLBandPlan`, arrl.org/band-plan
+  read the same day, 160–10 m; the ARRL lines that repeat the legal
+  CW/phone sub-bands left out; QRP and NCDXF spots from its notes) —
+  ranges as outlined boxes (RTTY/data, packet, DX windows, beacons, 10 m
+  FM/satellite), single frequencies as ticks with a tab label (QRP CW/SSB,
+  SSTV, AM calling, RTTY/Data DX, NCDXF); labels never overlap, a mark
+  whose label doesn't fit is drawn unlabelled. The same line has the
+  usual FT8/FT4/JS8/WSPR/PSK31 dial frequencies as pink ticks (user
+  request; not ARRL, in `ARRLBandPlan.digital`). Ticks are drawn first and
+  labels placed after, by `labelPriority` (FT8, FT4, ARRL spots, then
+  JS8/WSPR/PSK31), never over another label or an already-labelled tick
+  — so at ~0.94 MHz on 80 m only FT8 is labelled (checked in the built
+  app). In a maritime band, zoomed in the same way (`showsPlan` covers
+  maritime hints too), the marker line shows its GMDSS frequencies
+  instead (`GMDSSFrequencies`, RR Appendix 15, assigned frequencies: DSC,
+  voice and NBDP distress in red, NAVTEX 490/518/4209.5 kHz and HF MSI in
+  yellow; plus VHF ch 16/70); an "MF" maritime hint (415–526.5 kHz, cut
+  by 630 m) carries NAVTEX. User request, as groundwork for a possible
+  DSC/NAVTEX decoder; unit-tested and built 2026-11-15, not yet seen on
+  screen. `ARRLBandPlanMarker` is now `BandPlanMarker`. US plan whatever
+  Settings → License says. Labels shorten or vanish when they don't fit.
+- **Passband** (phase 5, `KiwiPassband`, `KiwiPassbandTests`): drag an edge
+  (10 Hz snap, 60 Hz minimum, the Kiwi's narrowest CW preset) or the middle to
+  tune. USB/LSB stay on their sideband, AM/FM keep the carrier inside, CW is
+  symmetric around the dial; a CW passband over 1 kHz raises the audio pitch
+  instead of crossing the carrier. Each mode's last one is in
+  `localSDR.passband.<mode>`. Retunes go out at most every 50 ms.
+- **Follow width** (phase 5, `localSDR.followRigWidth`, off by default;
+  `KiwiPassband(rigFilterOf:)`): MAIN's width and SHIFT through
+  `FilterPassbandModel`'s own rules. CW carries the SHIFT in `cwShiftHz` so the
+  dial stays on the signal. Waits while the rig's filter controls are on SUB. A
+  drag or Reset turns it off; turning it off restores the mode's saved
+  passband. Known: for ~4 s after a rig mode change the width uses the old
+  mode's "SH" index. Unverified by ear whether LSB's SHIFT direction matches the
+  rig (it follows the app's Filter Function Display).
+- **Receiver section** (phase 5, `KiwiReceiverSettings`): AGC, noise blanker
+  (standard, Wild) and noise filter (WDSP, LMS, spectral) on the sound socket,
+  ranges from the page. Setup sends them on every connection, with NB/NR
+  commands only when on, so the defaults match what setup always sent. "SET nb
+  algo"/"SET nr algo" clear the enables, so parameters and enables follow.
+  `KiwiReceiverLiveTests` measures each control's effect on the level. LMS
+  Denoise went silent at manual gain 40 (below one LSB); fine at AGC levels.
+- **Playback queue** (phase 5, `KiwiPlayoutController`/`KiwiPlayoutAdjuster`,
+  fake-clock tests): measured over 36 minutes, the queue grew ~5 ppm (~19 ms
+  an hour, no gaps), and one ~2 s stall left 2.2 s of latency for good. Now
+  on the *player's copy only* (recordings and decoders get every sample): the
+  10 s average 30 ms off target starts ~1 ms crossfaded, waveform-aligned
+  splices at most twice a second until within 10 ms; a backlog (0.5 s floor
+  300 ms over) discards audio not yet queued, in one step with fades; a dry
+  queue resumes behind silence. Target 250 ms. `AudioPlaybackEngine` only
+  gained `playoutStatus()`. Debug builds: launch with
+  `-localSDR.playoutTargetOverride 0.20` to force the splices (they'd
+  otherwise fire about every 2 hours). Debug line every 30 s: "playout:
+  buffered ms …" under "kiwisdr". A forced 2 s freeze was back at 252 ms within
+  30 s. Not exercised: a real network stall with the fix.
+- **Not tried**: a real waterfall-only failure with audio carrying on,
+  `.silent` and a dropped connection on the decoder source.
+- **Windows port (2026-11-11; unit-tested and built, then tested by the user
+  the same day against their Kiwi and rig, working)**: window, waterfall, rig link, receiver controls and Settings →
+  Devices; then the decoder source (CW, RTTY/PSK), Record/Play, Follow width and
+  the playout controller (unit-tested and built, not yet tested on the rig). See
+  `Apps/Windows/README.md`'s "MyKiwiSDR window".
+  **Band bar port (2026-11-15; unit-tested and built, then tested live by the user the same day, working)**: the Mac's
+  three-line bar over the waterfall (`Controls/KiwiBandBar.cs`, redrawn only when
+  start/zoom/width/license choice changes; Technician labels only for Settings →
+  License US Technician/Novice). Tables in `Models/BandHints.cs` (`BandHints`,
+  `AmateurBandPlan` derived from `PrivilegePresets`, `ArrlBandPlan`,
+  `GmdssFrequencies`; Swift stays the source of truth), `BandHintsTests` = the
+  Swift tests case for case; `localSdr.bandBar.*` strings in all five resx.
+  Shapes/`TextBlock`s on a `Canvas`, not Win2D, so band rects are clamped to just
+  outside the bar.
+  **S-meter port (2026-11-13; built, not yet run)**: the window's bar is the
+  main window's analog `SMeter(receiveOnly: true)` (no TX needle, no METER
+  picker; Windows has no digital face or style setting) fed dBm + 73, with
+  S units, dBm and ADC overload beside it; the frequency sits in a 190 px
+  box in the themed VFO digits (`VfoDigits`, now with a shared
+  `Effective()` for the colour/font overrides, also used by `MainWindow`).
+- **Later, not started**: Sub following, iPad. (FT8/FT4 from MyKiwiSDR:
+  see "Digital modes — FT8".)
+
+## Memory list (2026-10-06, rig-confirmed by the user the same day)
+
+A "Mem List" button under the Waterfall button (Mac `ContentView`) opens
+`Window(id: "memory-list")` (`MemoryListView`, Mac-only): the rig's
+programmed memory channels (channel, tag, frequency, mode, shift, tone
+type), searchable, with MAIN/SUB buttons per row. The button for the
+channel a receiver is on is highlighted.
+
+- **Reading**: CAT has no list command, so `MemoryListStore` (a `lazy
+  var` on `HubService`, like `cwSender`; in `FTX1Core/RigState/` since
+  2026-10-09, shared with the iPad — see the Pi-direct section's "iPad VFO
+  popover") reads channel by channel with
+  `RigctldClient.readMemoryChannel` (raw "MR", then "MT" for the tag of a
+  programmed channel). A blank channel answers "MR" with "?;" at once
+  (checked with `nc` against the Pi, 2026-10-06). The scan stops after
+  `blankRunLimit` (100) blank channels in a row, so a gap that long hides
+  the channels after it. The result is cached in
+  `~/Library/Application Support/FTX1Remote/memory-channels.json`. The
+  window shows the cache and re-reads only on Refresh, except the first
+  time it opens with no cache. `MemoryChannelEntry` (`FTX1Core/RigState/`)
+  parses "MR". Field offsets are unit-tested against real answers.
+- **Recall**: `RigCommand.recallMemoryChannel(channel:sub:)` sends
+  "MC<side>" and then "VM<side>11" unless that side already reads
+  VM=11. MC first also covers the undocumented MC-before-VM precondition
+  (see `.setVFOMemoryMode`). The hub reads back afterward rather than
+  guessing: `refreshAfterEnteringMemory` for MAIN (which keeps
+  `lastVFOState`, so V/M still goes back to the VFO) and
+  `refreshMemoryChannel(sub: true)` for SUB. Leaving Memory mode isn't
+  offered from the list. There's still no SUB V/M control in the app.
+- Tested on the rig by the user, 2026-10-06, all working: the scan,
+  recall on MAIN and SUB from VFO mode, a recall while already in Memory
+  mode, and V/M back to the VFO afterward.
+
+## Memory scan (MAIN and SUB, 2026-10-06, rig-confirmed by the user)
+
+The rig's own memory scan on MAIN or SUB, started from the app — not an
+app-side stepper (the rig does ~9–10 channels/s; stepping from the app
+over the Pi would manage ~3–4 even with the poll paused, so an app-side
+scan is only worth building later, for custom scan lists). Under
+Waterfall (`ContentView`): Mem List, Scan, Skip. Scan is a menu (Scan
+SUB / Scan MAIN, each enabled only in that side's Memory mode — user
+decision, one button rather than one per side) that turns into "Stop
+SUB"/"Stop MAIN" while a scan runs; Skip works on whichever side is
+paused. The Mem List toolbar has a MAIN/SUB picker with Scan Down/Up,
+then Skip and Stop Scan while one runs (shown only when they apply).
+
+- **CAT, probed with a scratch script against the Pi first**: raw
+  "SC<side><n>" (side 0 MAIN / 1 SUB; n 0 off, 1 up, 2 down). Bare "SC;"
+  reads back the last command, e.g. "SC11;" — "SC0;"/"SC1;" answer "?;".
+  In Memory mode it's a memory scan; in VFO mode a VFO scan, so
+  `HubService.send` refuses to start one outside that side's Memory mode
+  (and SUB's in single-receive display). "RI0" P7 is the scan state (0
+  stopped, 1 scanning, 2 paused) **for the whole radio**, SUB scans
+  included ("RI1" answers "?;"); P8 the squelch. Parsed by
+  `RadioInformation` (`FTX1Core/RigState/MemoryScan.swift`, unit-tested
+  against real answers). Sending the same "SC<side>1" again while paused
+  resumes past the busy channel — that's Skip. None of the fast tier's
+  reads stop the scan. SCAN RESUME (EX030204) is BUSY on the user's rig.
+- **Both sides can scan at once on the rig, and any stop ("SC00" or
+  "SC10") stops both** — so the app runs one side at a time (user
+  decision): starting one side's scan stops the other first
+  (`RigState.memoryScanSide` says which).
+- **A scan moves the rig's TX/RX side to the scanning side**: "SC11" sets
+  "VS1", "SC01" "VS0". "VS" and "FT" (TX side, the app's TX:MAIN/SUB
+  button) are the same setting — writing either changes both. User
+  decision: the app remembers the TX side from before its scan
+  (`txSideBeforeMemoryScan`, recorded whenever none is remembered yet, so
+  a quick Stop-then-Scan or a side switch keeps the original) and puts it
+  back ("FT0"/"FT1" right after "SC…0") when the app stops the scan —
+  Stop, or a tune/recall that stops it. Not on a stop before something
+  that transmits (that keys the side the display shows as TX now), not
+  after a front-panel stop (mirrors the rig), and not once the operator
+  picks a TX side themselves.
+- **Fixed with this: the fast tier read MAIN/SUB by hamlib's `v`**, which
+  answers "Sub" whenever VS/FT is SUB (TX:SUB, or a SUB scan) — the MAIN
+  box then showed SUB's mode and the SUB box MAIN's frequency. It now
+  reads by side ("FA"/"MD0" for MAIN, `f Sub`/"MD1" for SUB) and no
+  longer sends `v` at all. Still following the active side, unchanged:
+  `.setFrequency` ("F currVFO"), `.setMode` ("M currVFO"),
+  `.stepMemoryChannel` ("CH") and the MAIN S-meter ("l currVFO STRENGTH")
+  — so with TX:SUB those address SUB. The scan's own stop-before rules
+  restore the TX side first, so this doesn't bite during a scan.
+- **`FB`/`f Sub` are unreliable while MAIN sits on a 6 m channel**: they
+  read 0 or a wrong ~51 MHz value in the probes (and `f Sub` a stale
+  cached one). The scan code reads SUB's frequency/mode from the channel's
+  own "MR" entry instead; the regular fast tier still uses `f Sub`
+  (pre-existing, not fixed).
+- **"SC" is an ordinary raw set** (`setRawInt("SC<side>", n, digits:
+  1)`), answered at once since every raw set moved to the `W <cmd>; 0`
+  form the same day (see `sendRawCommandFireAndForget`). Multi-command raw
+  writes (`W A;B; ;`) run only the first command.
+- **Latency handling**: while scanning, the scanning side's channel and
+  frequency samples are random and can even belong to different channels,
+  so `RigState.memoryScan(on:)` hides that box's channel, frequency, mode,
+  callsign and reflector in `VFODisplayBox` (SCAN on the indicator line,
+  SCANNING in the channel box), and `pollLoop` runs `memoryScanTick`
+  instead of the fast/slow tiers: "RI0" every 250 ms, plus the other side
+  kept live — MAIN's "FA"/"MD0" during a SUB scan, SUB's "MC1" (and that
+  channel's "MR" when it changes) during a MAIN scan. On pause/stop,
+  `publishMemoryScanStop` reads the channel (MAIN: MC0/FA/MD0/MT; SUB:
+  MC1/MR/MT), checks the channel number again (retrying if it moved, and
+  re-reading rather than giving up if a command lands mid-read — the
+  TX-side restore right behind the app's own stop did, which left the
+  pre-scan channel/tag next to the new frequency until the slow tier's
+  next pass) and publishes at once. Measured in the app: ~0.65 s (MAIN) / ~0.3 s (SUB,
+  after the "RI0" answer) from the rig pausing to the channel on screen.
+  The fast tier reads "RI0" last, only while either side is in Memory
+  mode (or a scan was last seen running), and drops the scanning side's
+  values that tick if it finds the rig scanning — which is also how a
+  front-panel scan or a BUSY auto-resume is picked up ("SC;" then gives
+  the side). The slow tier's SUB channel/tag step skips its write during
+  a SUB scan.
+- **Stopped before anything that would fight it**
+  (`HubService.memoryScanStop(for:scanSide:)`): tuning, band/mode, swap,
+  CH step and anything transmit-capable stop either side's scan; MAIN's
+  V/M, channel set and recall stop a MAIN scan; SUB's frequency, channel
+  set/step and recall stop a SUB scan. Settings commands leave it running.
+- `RigCommand.setMemoryScan(_:side:)` ("set_memory_scan", value
+  `{direction, side}`) and `RigState.memoryScan`/`memoryScanSide` are on
+  the wire, so the iPad's boxes show SCANNING/SCAN PAUSED too. The iPad
+  has the Scan menu + Skip in its top row since 2026-10-09 (see the
+  Pi-direct section's "iPad memory scan"). Windows port: see `Apps/Windows/README.md`'s
+  "Memory scan".
+- Tested 2026-10-06 in the built app against the rig: MAIN — Scan,
+  display while scanning, pause on busy channels, Skip, Scan Down (rig
+  read "SC02;"), Stop Scan, a Mem List recall while scanning (rig-confirmed
+  by the user). SUB — Scan (TXRX moved to SUB, MAIN box live), pause
+  (CH 100 shown), Skip, switching to a MAIN scan (SUB box caught up to
+  where SUB stopped), a SUB recall from Mem List mid-scan ("SC10", "FT0",
+  then the recall), the Mem List picker's Scan Up + Stop Scan ("SC10",
+  "FT0"), the Scan menu → Scan SUB → Stop SUB (box right after the stop
+  matched the rig), and the boxes under TX:SUB. Not tried: front-panel skip flags
+  (channels 101–114 looked skipped; "MR" has no skip field), a scan
+  started from the front panel.
+## WebSDR follow (KiwiSDR 2026-09-24, classic WebSDR 2026-09-25, OpenWebRX 2026-10-01)
+
+Tools → **WebSDR** opens `Window(id: "websdr-follow")` (Mac-only): an
+embedded KiwiSDR, classic WebSDR or OpenWebRX (`KiwiWebView`, a `WKWebView`
+`NSViewRepresentable`, despite the name) that retunes to follow the rig's
+Main VFO, and (click-to-tune, "Tune rig") tunes the rig when the user tunes
+in the page. Most bullets below were written for the Kiwi; the classic
+WebSDR differences are in their own bullet at the end.
+
+- **Follows `hub.$rigState`**, not a new poll path — the same value every
+  `server.broadcast(rigState)` sends to WebSocket clients (there's no
+  separate publisher; broadcasts are imperative calls after mutating the
+  `@Published` `rigState`). `WebSDRFollowModel` maps it to (frequencyHz,
+  mode), `removeDuplicates`, 400 ms `debounce` — which also absorbs the fast
+  tier's separate frequency/mode writes. Own `ObservableObject`, so it never
+  re-renders `ContentView`.
+- **URL shape verified against a live Kiwi's `kiwisdr.min.js` (v1.578)**:
+  `/?f=<kHz with 2 decimals><mode token>` — the Kiwi's own "copy frequency
+  link" format. Omitting the mode falls back to the Kiwi's stored
+  `last_mode` (live-tested), which is how unmapped modes (RTTY, DATA-FM,
+  C4FM) leave the mode unchanged. Zoom is never sent. DATA-U → `usb`
+  (user decision), FM → `nbfm`. Logic + mapping in `KiwiSDRURLBuilder`.
+- Every retune is a full page reload (Kiwi reconnect, brief audio gap);
+  identical URLs are skipped. Above 30 MHz, not retuned — status line says
+  so. `mediaTypesRequiringUserActionForPlayback = []` + WebKit's default
+  persistent store: confirmed a reload keeps the Kiwi's saved name and
+  shows no click-to-start overlay, and that a Kiwi which rejects a second
+  connection from the same IP accepted the reload (only a genuinely
+  concurrent session, e.g. a browser tab, trips that).
+- **Connect/Disconnect button; the window always opens disconnected** (public
+  Kiwis have few listener slots). Disconnect and window close both set
+  `pageRequest` to nil, which navigates the `WKWebView` to about:blank —
+  that page unload is what closes the Kiwi's WebSockets. Closing the window
+  runs `.onDisappear(perform: model.disconnect)`; `dismantleNSView` does the
+  same unload as a backstop. The `onDisappear` path is the one that
+  matters: SwiftUI reuses the `Window` scene's NSWindow on reopen (same
+  window ID), so dismantling can't be relied on. Verified with `netstat`
+  against the Kiwi's IP (`lsof` can't see WebKit's networking process): 2
+  ESTABLISHED sockets while connected, none after Disconnect or close;
+  minimizing correctly keeps them open.
+- **Station directory ("Stations…" sheet, `KiwiSDRDirectory`/
+  `KiwiSDRDirectoryView`)**: source is `rx.linkfanel.net/kiwisdr_com.js`,
+  the community mirror behind the "dyatlov" receiver map. The official
+  kiwisdr.com/public list is deliberately gated (click-to-show +
+  `x-kiwi-auth` header), so don't imitate it. The file is a JS array that's
+  JSON apart from a trailing comma, ~900 KB, all values strings. Fetched
+  only when the sheet opens with a cache older than 30 min, or on Refresh
+  — never polled; conditional GET + app User-Agent; raw file cached at
+  `~/Library/Application Support/FTX1Remote/kiwisdr_com.js`. Picking a
+  station only fills the host (`WebSDRFollowModel.select`) and never
+  connects (user decision); picking a different one while connected
+  disconnects. A picked station's own `bands` replace the fixed 0–30 MHz
+  check (persisted with the host it belongs to). Those ranges already
+  include `freq_offset`, so converter-fed Kiwis (e.g. 110–142 MHz airband)
+  follow the rig above 30 MHz with `?f=` in displayed kHz — built from the
+  Kiwi's own link code, not yet tried against a real converter Kiwi.
+  Distance sort uses `StationSettings.gridSquare` (`Maidenhead`); with no
+  grid set it sorts by name and shows a hint.
+- **Record/Play (2026-09-24, `KiwiPageBridge`)**: Record drives the
+  Kiwi page's *own* recorder, `toggle_or_set_rec(true/false)` (its "r"
+  key), via `evaluateJavaScript` — the one place the app calls into the
+  page (user decision; it only calls the page's own function, nothing is
+  patched). That recorder captures the decoded 12 kHz Int16 mono audio
+  before the page's volume/mute, and saves by clicking a hidden
+  `<a download>` blob link; `KiwiWebView`'s navigation delegate turns that
+  into a `WKDownload` saved to `AudioRecorder.recordingsDirectory`, named
+  like the rig's recordings plus "KiwiSDR" (`AudioRecorder.
+  newRecordingURL`/`label` are now shared). The name comes from the page's
+  own `freq_displayed_kHz_str_with_freq_offset`/`cur_mode`, so it's right
+  with Follow off too. Saving is async, so anything that would reload or
+  unload the page (retune, Return, Disconnect, window close, picking
+  another station) first stops the recording and waits (≤5 s) for the
+  file; a retune then starts a new file once the reloaded page's audio is
+  running (user decision: one file per frequency). If the Kiwi ends a
+  recording itself (its `owrx_close_cb` on connection close), the file is
+  still saved and the window says so. Play opens the existing Recordings
+  window (`openWindow(id: "recordings")`), same as the CW page's PLAY.
+  Tested against a public Kiwi: Stop and Disconnect both save a playable
+  file, which is listed in Recordings. The retune split (one file per
+  frequency) was hardware-confirmed on the rig by the user, 2026-09-24.
+- **Mute + automatic Main mute (2026-09-25)**: while the Kiwi is audible
+  (connected and not muted by the window's Mute button) the rig's Main
+  Mac playback is muted, so the two don't play over each other; muting the
+  WebSDR, disconnecting or closing the window brings Main back.
+  `HubService.setMainAudioOverride(.webSDR, …)` owns this (shared with
+  the Local SDR window since 2026-11-10, a holder each) and only undoes a
+  mute it made itself (`mainMutedByOverride`): if Main was already muted it's left
+  alone, and pressing Main's own Mute hands control back to the user. The
+  flag is persisted and cleared in `HubService.init` (the WebSDR window
+  always opens disconnected), so a quit mid-session can't leave Main
+  stuck muted — note `didSet` doesn't fire inside `init`, hence the
+  explicit write there. Gates Mac playback only (iPad relay, APRS, FT8,
+  recording unaffected). The Kiwi page is muted via its own
+  `toggle_or_set_mute` (`KiwiPageBridge.setPageMuted`, renamed from
+  `KiwiRecordingBridge`), after the page has applied its initial mute
+  (`muted_until_freq_set`), and via the Kiwi's own `mute=1` URL parameter
+  on each load so it survives retune reloads; `mute=` is kept out of
+  `lastIssuedURL` so toggling never reloads. Kiwi recordings are taken
+  before the page's mute, so muting doesn't silence a recording. Tested
+  against a public Kiwi via the saved settings: each transition, the
+  already-muted case, window close, and quit recovery; confirmed working
+  by the user on the rig, 2026-09-25. Not synced: using
+  the Kiwi page's own speaker icon doesn't update the window's Mute.
+- **Click-to-tune (Kiwi → rig, 2026-09-25, hardware-confirmed by the
+  user on the rig)**: "Tune rig" toggle (persisted, default on, independent
+  of Follow). While a page is loaded, `KiwiPageBridge.readTuning` reads the
+  page's own globals ~4×/s — `freq_displayed_Hz + kiwi.freq_offset_Hz` and
+  `cur_mode`, read-only — and returns nil until `muted_until_freq_set` goes
+  false (the page clears it right after applying its first frequency,
+  whatever its `mute=`). The first settled reading of each page is the
+  baseline and is never sent (so a bare-host page load can't retune the
+  rig); after that, a change that holds for one poll sends
+  `setFrequency` (+ `setMode` when `KiwiSDRURLBuilder.rigMode(forKiwiMode:
+  current:)` maps it — DATA-U stays DATA-U under a Kiwi in USB, and a rig
+  mode with no Kiwi token (RTTY/DATA-FM/C4FM) is never changed). Not sent
+  while transmitting, in Memory mode, or with no rig frequency. Echo
+  suppression in `evaluate`: no reload when the page is already at the
+  rig's frequency/mode family (`kiwiAlreadyAt`; a Kiwi mode with no rig
+  equivalent, IQ/DRM, counts as matching), and for 3 s after a send the
+  rig's not-yet-updated value is ignored (`pendingRigTune`), re-evaluated
+  when that expires. The poll restarts on each page's `didFinish` and
+  stops on every new request/unload. JS read verified against a live Kiwi
+  (v1.902) in a browser: initial `?f=` value, then an in-page tune.
+  Tuning inside the page while recording doesn't split the file (no
+  reload happens).
+- **Hardware-confirmed on the real rig (user, 2026-09-24)**: retunes
+  follow the FTX-1. v1.1 seams are noted in comments: JS-injection retune
+  for the Kiwi, Sub following, further platforms (OpenWebRX),
+  and the range of a hand-typed Kiwi host (only directory picks and
+  favorites carry their own range; a WebSDR learns its range from its page).
+- **Mute on TX (2026-09-26, rig-confirmed by the user)**: a
+  "Mute on TX" toggle (persisted, default on) mutes the page itself while
+  `rigState.ptt` is true (own undebounced `$rigState.map(\.ptt)`
+  subscription), through the same `setPageMuted`/Kiwi `mute=1` paths as
+  Mute (`pageShouldBeMuted` = Mute || TX). It doesn't touch `isMuted` or
+  the rig's Main audio, and the page unmutes by itself after TX. Only as
+  fast as the fast tier sees PTT, so a front-panel/CW-keyed TX mutes after
+  a short delay; app-initiated PTT is applied at once. Testing this found
+  that `getPTT` had never seen a front-panel TX: hamlib reports the
+  FTX-1's TX2 state as `t` = 3 (PTT_ON_DATA), and the check was `== "1"`;
+  any nonzero value now counts (Windows client fixed the same way).
+- **Favorites (2026-09-25, `WebSDRFavorite`/`WebSDRFavoritesView`)**: a
+  star next to the host field adds/removes the current host; the Stations
+  sheet has a star column and a "Favorites only" filter; the toolbar's
+  Favorites menu picks one (checkmark on the current host) and opens
+  "Manage Favorites…" (rename in place, drag to reorder, per-row remove).
+  Picking a favorite goes through the same `select` as a directory pick —
+  fills the host and its saved ranges, never connects. Stored as JSON in
+  `UserDefaults` (`webSDR.favorites`), keyed by a normalized host
+  (`WebSDRFavorite.key`). The last pick is `webSDR.pickedStation` (JSON,
+  replaces the old `stationBands`/`stationBandsHost` pair, migrated on
+  read); it's what lets the star save a directory pick's name/location/
+  ranges. A favorite saved from a typed host is named after the host until
+  the directory loads, then `fillInFavorites` gives it the directory's
+  name/location/ranges (a renamed one keeps its name). Manage's list has no
+  row selection on purpose: in a selectable macOS `List` a click selects
+  the row instead of focusing the name `TextField`. Even unselectable, a
+  `List` row's plain `TextField` only takes clicks on its text, so a
+  clear overlay (present only while not editing) plus a row tap gesture
+  set a `@FocusState` — any click in the row except the trash button
+  edits the name. Done is Escape, not
+  Return, so Return only commits a rename. UI-tested in the built app,
+  2026-09-25.
+- **Classic WebSDR (PA3FWM's software, websdr.org; 2026-09-25)**:
+  `SDRPlatform` (`.kiwiSDR`/`.webSDR`) is stored per station
+  (`WebSDRFavorite.platform`, optional so older saved JSON still loads) and
+  picks the URL builder (`KiwiSDRURLBuilder`/`WebSDRURLBuilder`) and the
+  page JS (`SDRPageBridge`, renamed from `KiwiPageBridge`). Everything was
+  checked against live servers' own `websdr-base.js`/`websdr-sound.js`
+  (Twente, Maasbree), not docs:
+  - First load `?tune=<kHz><mode>`; every later retune is **in place** via
+    the page's own `setfreqtune()` (user decision, the same function as its
+    `postMessage("tune …")` interface): no reload, no reconnect.
+    `WebSDRFollowModel.retuneInPlace` handles this, and while recording
+    saves the file and starts a new one (one file per frequency, user
+    decision, same as Kiwi).
+  - Reads `nominalfreq()` (kHz) + `mode` once `allloadeddone`. Ranges come
+    from the page's `bandinfo` (centerfreq ± samplerate/2, kHz) on the first
+    connect; many WebSDRs are ~200–400 kHz slices. Mute is the page's
+    `#mutecheckbox` + `setmute()`, set once `did_read_settings` (no URL
+    parameter; `bodyonload` resets the checkbox, and audio start applies
+    it). Record is `record_click()`; its stop only leaves a "save" link
+    (`#reccontrol a`), which the bridge clicks, and that save goes through
+    the same `WKDownload` path as the Kiwi's.
+  - **Platform detection from the page**: a host with no known platform is
+    loaded Kiwi-style (`?f=`, ignored by a WebSDR). On `didFinish`,
+    `detectPlatform()` checks the globals (`setfreqtune`+`bandinfo` vs
+    `kiwi`), and `learnStation` records the platform, ranges and page title
+    (quotes stripped) on the pick and any matching favorite. A WebSDR is
+    then retuned in place, so there's no second session and no HTTP probe.
+  - **Directory = websdr.org itself, embedded** (Stations sheet → WebSDR
+    tab, `WebSDROrgBrowserView`). websdr.org's list JSON
+    (`/~~websdrlistk`) opens with "this data may not be re-used in another
+    website or automated system without prior permission –
+    pa3fwm@websdr.org", so the app must never fetch or parse it (user
+    decision). A main-frame navigation off websdr.org /
+    websdr.ewi.utwente.nl:80 (the site's own station links) is cancelled
+    and becomes the pick (`selectWebSDR`), which fills the host and never
+    connects. `target=_blank`/mailto go to the default browser.
+    rx.linkfanel.net mirrors only 3 WebSDRs (`static_rx.js`), so it isn't
+    a usable alternative.
+  - Testing note: WebKit content doesn't show in background (app_*)
+    window captures; use full-screen screenshots to see the pages.
+  - Tested in the built app 2026-09-25: websdr.org tab + pick,
+    connect/detect/learn (Twente, and Maasbree typed by hand), Record →
+    WAV, Disconnect closes the sockets. Rig-confirmed by the user the same
+    day (follow in place, click-to-tune, recording split on retune).
+    Some skins (Maasbree) keep the standard element IDs but hide the
+    checkbox behind their own Mute button, which then won't reflect the
+    app's mute state visually.
+- **OpenWebRX (2026-10-01, `OpenWebRXURLBuilder`, `SDRPlatform.
+  openWebRX`)**: for the operator's own receiver — an RTL-SDR (R820T,
+  ~24–1766 MHz, so VHF/UHF only, no HF) on a second Pi, `raspberrypi`
+  (100.104.255.14, Pi 4B), running the official `jketterl/openwebrx:stable`
+  (v1.2.2) in Docker: Compose file in `~/openwebrx` on that Pi (not
+  `/opt/stacks`, which is root-owned), UI at `http://raspberrypi:8073`,
+  admin user created by the user. Not part of this repo. Everything below
+  was checked against that server's own `receiver.js`/`owrx/*.py`:
+  - Loaded once, **without** a `#freq=` hash, then always tuned in place
+    (`SDRPageBridge.retuneInPlace` → the demodulator panel's `setMode` +
+    the demodulator's `set_offset_frequency`). The page ignores a hash
+    outside the profile the SDR is currently on, and the profile is shared
+    server state, so `pageDidLoad` always retunes an OpenWebRX after load.
+  - **Profiles**: a frequency outside the current profile switches to the
+    first one covering it via the page's own list box +
+    `sdr_profile_changed()`, then retries until the page's restarted
+    demodulator has the new center (≤15 s). Profile ids come from the list
+    box, ranges from `status.json` (center ± samp_rate/2), joined on
+    "<SDR name> <profile name>" — the same string the server builds both
+    from. `status.json` lists every *enabled* SDR, present or not, so a
+    stock config's placeholder Airspy/SDRplay show up as HF coverage the
+    server can't tune (the retune then times out and the status line says
+    so). Remove placeholders in the OpenWebRX settings.
+  - **WebKit reloads on hash changes**: OpenWebRX writes its tuning into
+    `location.hash` on every change, and this WebKit (macOS 27) turns that
+    fragment navigation into a full reload in a new web process ("Process
+    swap due to EnhancedSecurity change" in Console) — every tune in the
+    page reconnected it and dropped the window's Mute. `KiwiWebView`
+    cancels OpenWebRX navigations that differ from the current URL only by
+    the hash; the page works the same, its URL just isn't updated.
+  - Mute is the page's `toggleMute()` (state = the button's `muted` class),
+    no URL parameter. Click-to-tune reads `center_freq + offset` and the
+    modulation (`readTuning`); reads are ignored while an in-place retune
+    (incl. a profile switch) is running. Rig FM ↔ `nfm`; WFM, digital voice
+    and DRM have no rig equivalent. No public directory — the Stations
+    sheet is still KiwiSDR/WebSDR only; type the host or use a favorite.
+  - **Record is app-side (2026-10-01)**, since OpenWebRX has no recorder of
+    its own — the one place the window adds code to a page (user-approved
+    plan; additive only, nothing patched): `SDRPageBridge.start()` connects
+    a `ScriptProcessorNode` to the page's `audioEngine.audioNode` (decoded
+    audio, *before* its volume/mute `gainNode`, so Mute doesn't silence a
+    recording), which posts base64 Int16 blocks to the `ftx1SDRAudio`
+    message handler `KiwiWebView` registers; `SDRAudioFileWriter` writes
+    them as 16-bit mono WAV at the page's `AudioContext` rate (48 kHz,
+    ~5.6 MB/min; not decimated, WFM needs it). The rest of the recording
+    flow (timer, one file per retune, save on Disconnect/close) is the
+    shared one. Tested in the built app: WFM broadcast recorded while
+    Muted (real program audio, not noise), saved on Stop and on
+    Disconnect; one file per retune rig-confirmed by the user the same
+    day.
+  - Tested in the built app 2026-10-01 against the real server with the
+    rig connected on 2m: platform detection + learned name/ranges, follow
+    in place (145.075 FM), profile switch on reconnect (70cm → 2m), Mute,
+    in-page tuning without reload, Disconnect freeing the client slot;
+    click-to-tune rig-confirmed by the user the same day.
+
+## Localization (phase 1, 2026-10-27: English catalogs only; built, Simulator-checked on iPad/iPhone with the double-length pseudolanguage, Mac checked by build and code only)
+
+Groundwork for Spanish and German (Italian and French since phase 3) on the Mac, iPhone and iPad (Windows
+followed the same day, see the last bullet). The app follows the OS
+language; there's no in-app picker (user decision).
+
+**Phase 2 (2026-10-27): es + de in every catalog**, all entries
+(infinitive/impersonal forms, no Sie/du or tú/usted; radio terms
+English); `de`/`es` in the project's `knownRegions`. Built, checker
+clean, iPad Simulator Demo Mode checked in German; not yet reviewed by
+a native speaker — `docs/localization-review.md` lists the judgment
+calls and the shared term choices (rig = Gerät/equipo, Their call =
+Gegenstation/Corresponsal, …). **A new key needs es and de too**, using
+those terms.
+
+**Phase 3 (2026-11-14): it + fr** in every catalog and the Windows resx
+(same conventions; "Settings" = Impostazioni / Réglages on Apple,
+Paramètres on Windows; French no-break spaces before `:` and inside « »,
+narrow ones before `; ? !`); `fr`/`it` in `knownRegions`, `.it`/`.fr` in
+`LocalizationTests`. Built and checker-clean on the Mac, not yet run in
+either language; Windows not built here (no .NET SDK). Not reviewed by a
+native speaker — `docs/localization-review.md` has the it/fr term table.
+**A new key now needs es, de, it and fr.**
+
+- **Every user-facing string is a namespaced key** (`settings.rigctld.
+  restartNow`, `common.cancel`, `cwSender.waitingTheMacCw`), never an
+  English sentence, with its English in the target's
+  `Localizable.xcstrings`: FTX1Core and FTX1CW have their own
+  (`Sources/*/Resources/`, `defaultLocalization: "en"` in
+  Package.swift), and each app target has one. **Package code must pass
+  `bundle: .module`** — `Text("key", bundle: .module)`, or
+  `String(localized: "key", bundle: .module)` for non-`Text` APIs
+  (`Button(String(...))` etc.); without it the lookup searches the app's
+  catalog and shows the raw key. App code uses plain `Text("key")`/
+  `String(localized: "key")`. Interpolations go in the key
+  (`"memoryList.scanRunning \(side)"` → key `memoryList.scanRunning %@`)
+  so a translation can move them; never build a sentence with `+`,
+  `parts.joined` or a spliced-in English noun. Counted strings use the
+  catalog's plural variations (substitutions when there are several
+  arguments). Permission prompts are in each target's
+  `InfoPlist.xcstrings` (only the usage descriptions: a value-less
+  `CFBundleDisplayName` entry there compiles to the key and renamed the
+  app).
+- **Stays English, on purpose** (view layer only is localized): radio
+  terms and rig labels (modes, MAIN/SUB, PTT, V/M, BK-IN, S.LIST, the
+  MENU grid and `DeepSettingsCatalog`), unit-only formats (`"%lld Hz"`),
+  every wire value (`RigCommand` names, raw values, `set_band` segment
+  names), log text and "reason:" strings, HTTP/SQL/ADIF, file names,
+  saved IDs (theme names — `ThemePresets.displayName` is the label —,
+  default CW macro labels). App-target catalogs list the radio terms
+  their views show as don't-translate.
+- **Frequencies never follow the locale** (es/de write "14,074"):
+  everything goes through `FrequencyFormat` (`dotted` "147.380.000",
+  `mhz(_:fractionDigits:)` "14.0740", `mhzField` for MHz text fields).
+- **Hub protocol**: the only human text the hub sent was
+  `CWKeyerReply.error`/`busy`; it now also sends `errorCode`/`busyCode`
+  (`CWKeyerReply.ErrorCode`/`.Holder`), and clients word the message
+  themselves. The English stays on the wire (`wireText`, fixed English,
+  not localized) for older iPads; the Windows hub sends the codes for
+  its own refusals (bad slot/text, not connected) beside that English.
+  Codes are plain strings, so an unknown one falls back to the text.
+- **Checking**: build the three apps with `-derivedDataPath build/l10n`,
+  then `Scripts/check-localization.py` — every namespaced key the
+  compiler extracted (`*.stringsdata`) must be in its catalog with the
+  same number of placeholders, and package lookups must have
+  `bundle: .module`. `xcodebuild` doesn't add new keys to a catalog (the
+  Xcode IDE does, without English for a key-style string): add the
+  English by hand. `STRING_CATALOG_GENERATE_SYMBOLS` is on, so a catalog
+  entry needs a key Swift can name (no pure-format keys like `%lld/%lld`).
+  Layout check: launch with `-NSDoubleLocalizedStrings YES` (Demo Mode
+  on the iPad); a unit-only format then shows garbled ("lld Hz 500 Hz")
+  — that's the pseudolanguage, not a bug.
+- **Windows (2026-10-27; key checks run by script, not yet built or
+  run in Spanish/German on the PC)**: the same es/de wording, ported from
+  the Mac/iPad catalogs. `Apps/Windows/FTX1RemoteWindows/Localization/`:
+  `Strings.resx` (English) + `.es`/`.de` (same keys, sorted), `Loc.S/F/P`
+  in code (`P` = `.one`/`.other`), `{l:Str Key=…}` in XAML. Same
+  namespaced keys and same "stays English" list; `Loc.ApplyNumberFormat`
+  keeps "." as the decimal separator for frequencies (and rigctld
+  parsing). `LocalizationTests` (Windows test project) is the
+  `check-localization.py` there. Debug builds: `FTX1REMOTE_UI_LANGUAGE=
+  es`/`de` to try a language. See `Apps/Windows/README.md`'s
+  "Localization".
+
+## Structure
+
+- `Sources/FTX1Core/` — Swift Package Manager package (target `FTX1Core`,
+  repo root `Package.swift`): platform-agnostic.
+  - `RigState/` — `RigState`/`RigMode` (shared state model), `BandPlan`
+    (band table + frequency lookup), `FilterWidthTable` (CAT manual Table
+    5: the raw "SH" WIDTH index → Hz mapping, keyed by `RigMode` since the
+    same index means a different bandwidth per mode), `IFShift` (the raw
+    "IS" IF SHIFT value space, ±1200 Hz in 20 Hz steps: clamp/snap +
+    label), `IFNotch` (the raw "BP" manual-notch value space, 10-3200 Hz
+    in 10 Hz steps, wire-code ↔ Hz conversion), `FilterPassbandModel` (the
+    Filter Function Display's geometry: passband/notch/contour/APF on a
+    fixed 0–4 kHz span from `RigState`, with per-mode center conventions
+    documented as an illustration, not a CAT readback), `IFContour` (the raw "CO"
+    CONTOUR + APF value spaces — CONTOUR 10-3200 Hz, APF −250…+250 Hz as a
+    0000-0050 code — plus `face(for:)`, which picks CONTOUR or APF for a
+    mode since the manual says they're mutually exclusive: APF CW-only,
+    CONTOUR not in CW), `FilterSide` (MAIN/SUB — the CAT P1 digit the
+    filter commands take; `RigState.filterSide`/`filterMode` say which
+    receiver the filter fields, controls and display currently address).
+  - `Appearance/` — `AppTheme` (the old Light/Dark/Auto, now only
+    read to migrate the Mac's setting; the iPhone and iPad are dark only,
+    `UIUserInterfaceStyle = Dark` + `.preferredColorScheme(.dark)`), `ButtonValueColor` (MENU grid button value color),
+    `ThemeDefinition`/`ThemeStyling` (the Mac's themes, see "Themes
+    (Mac)"), `AppearanceSettings` (the `@AppStorage` keys all of these are
+    read/written through) — shared so any future app target reads
+    the same settings the Mac's Settings sheet writes.
+  - `Station/` — `StationSettings`: the operator's own callsign/grid
+    square, `UserDefaults`-backed same as `AppearanceSettings`. Added for
+    FT8 (`FT8Spot`'s `reporterCallsign`/`reporterGrid`, the PSK Reporter
+    upload's receiver), lives here rather than the Mac app target on the
+    same "future app target will want it too" reasoning as `Appearance/`.
+  - `Networking/` — `WireMessage` (`RigCommand`/`RigStatePush`, the JSON wire
+    protocol), `RigctldClient` (Mac-only, TCP to rigctld, incl. raw CAT
+    passthrough — note `getRawInt` is digit-only, so signed CAT values like
+    "IS" get their own dedicated get/set pair, `getIFShiftHz`/
+    `setIFShiftHz`, following the `getSpectrumScopeLevel` precedent), `RigWebSocketClient` (WS client, used by mobile and — for
+    now — nothing on the Mac side, see above), `RigClientViewModel`
+    (`ObservableObject` wrapping `RigWebSocketClient` for SwiftUI — shared by
+    the iOS and iPad app targets so their connection logic can't drift
+    apart; conforms to `RigController`, see `UI/` below).
+  - `Commands/` — `CommandQueue`, serializes `RigCommand`s into rigctld
+    calls one at a time.
+  - `MenuSettings/` — `DeepSettingsCatalog`/`DeepSettingItem`/
+    `DeepSettingValueType`: the static, table-driven catalog behind the
+    page-3 Deep Settings screens (see below).
+  - `UI/` — SwiftUI views/protocols shared across more than one app target.
+    `RigController` (the protocol `HubService`/`RigClientViewModel`/
+    `PiDirectViewModel` conform to — see Architecture above),
+    `DeepSettingsView` (the page-3 SET-mode screens MenuPageView's FM page
+    opens, see Architecture), `MenuPageView` (the numbered 7×4
+    MENU grid, generic over `RigController`, one hand-written button per
+    item; both iPad screens pass `showsPagePicker: false` since
+    2026-10-11, leaving page changes to the grid's ◀/▶ buttons), `VFODisplayBox` (the dense side-by-side VFO A/B readout used by
+    Mac and iPad), laid out as three fixed rows so nothing can resize the box or
+    move the frequency: (1) tag row — MAIN/SUB, TXRX/RX, then (Memory mode
+    only) a separate "CH n TAG" box, with the mode box at the right edge;
+    (2) reflector/APRS indicator line, height reserved even when empty;
+    (3) decoded callsign on the left (24pt, fixed size, never scaled) and
+    the frequency on the right (36pt, fixed size, never scaled; shows
+    `-- . --- . ---` when nil or 0, i.e. before the first read). Don't add
+    `minimumScaleFactor`/flexible frames to the callsign or frequency — an
+    earlier version did, and a callsign appearing squeezed the tags and
+    shrank the frequency. SUB's memory channel/tag come from
+    `RigState.subVfoMemoryMode`/`subMemoryChannel`/`subMemoryChannelTag`
+    (read via "VM1"/"MC1", display-only; P1=1 addressing hardware-confirmed
+    2026-09-20 when SUB showed "CH 1 Pi-STAR"), `SMeterView` (the analog S/SWR meter face, used by the Mac;
+    the iPad switched to its own bar `ChannelStrip` 2026-10-09), `FilterWidthControl` (IF WIDTH picker + narrower/wider
+    steppers), `IFShiftControl` (IF SHIFT slider + center button,
+    command sent on drag release, not per tick) and `IFNotchControl`
+    (manual-notch on/off button + frequency slider; dragging while off
+    also turns it on), `ContourAPFControl` (one slot that shows CONTOUR
+    or APF depending on mode, same toggle + slider shape) and
+    `NarrowControl` (the N/W narrow on/off button; the only width control that
+    works in AM/FM, and `HubService` re-reads "SH0" right after a NAR
+    write so the Width readout follows within ~2 s — note that in SSB/CW/
+    RTTY/DATA the rig's "SH" index does *not* change with NARROW, the real
+    bandwidth is the mode's NAR WIDTH menu preset, which the slow tier reads
+    via `NarrowWidthPreset` into `RigState.narrowWidthHz` for the display),
+    and `FilterDisplayView`
+    (the Filter Function Display: `Canvas` drawing of `FilterPassbandModel`
+    over an optional normalized spectrum, `[]` on targets without audio) and
+    `FilterSideSelector` (the MAIN/SUB buttons just left of the display
+    that pick which receiver the controls and the display address; SUB is
+    disabled in single-receive display) —
+    all generic
+    over `RigController` like `MenuPageView`, all living in the Mac
+    `ContentView`'s two "Filter" rows under the Band/Mode pickers
+    (WIDTH/SHIFT on the first, CONTOUR-or-APF, N/W and NOTCH on the
+    second, with `FilterDisplayHost` — Mac-only, `Apps/Mac/` — on the right
+    spanning both rows, the `FilterSideSelector` between the two) (the rig
+    keeps these on the MAIN-knob function menu, not the MENU grid, so
+    they're not `MenuPageView` buttons), on the Mac and, since 2026-10-11,
+    the iPad hub screen (`FilterPanel`, see "iPad filter controls"). Only put
+    a view here once it's actually needed on more than one target — `FrequencyDisplay` (iOS's single-VFO readout) stays in the
+    iOS app target since nothing else uses it.
+- `Sources/CFT8Lib/` — vendored decode-only subset of `kgoba/ft8_lib` (MIT)
+  + kissfft (BSD-3-Clause), a separate SPM C target (own `Package.swift`
+  entry, `publicHeadersPath: "."`) — see "Digital modes — FT8" above.
+  Mirrors upstream's `ft8/`/`common/`/`fft/` tree exactly; not hand-edited
+  (build-flag workarounds instead, e.g. the `LOG_PRINTF` no-op — see
+  above) so future re-vendoring from upstream stays a straight file copy.
+- `Sources/FT8Kit/` — Swift wrapper around `CFT8Lib` (`FT8Decoder`,
+  `FT8Mode`, `FT8Message`, `FT8CallsignHashStub`), a separate SPM product
+  from `FTX1Core` specifically so iOS/iPadOS builds don't carry it.
+  `Tests/FT8KitTests/` (reference-vector + resample-fidelity tests, plus
+  vendored WAV fixtures in `Resources/`) is the only automated coverage
+  for the FT8 feature — everything downstream of this (the Mac app's
+  `FT8DecodeCoordinator`/`FT8Resampler`/`FT8Store`/`FT8Spot`/`FT8ListView`)
+  lives in the Xcode-project Mac target, which — like the rest of this
+  project — has no unit test target; verify that layer via hardware
+  validation, same as every other CAT/audio feature.
+- `Sources/FTX1Core/Simulator/` — the iPad Demo Mode's simulated Pi
+  (`DemoPi`, `SimulatedRig`, servers, audio synth, APRS encoder), also
+  usable as a test fixture; `Sources/FTX1Core/Settings/SettingsStore` —
+  where persisted settings live (see "Demo Mode").
+- `Sources/FTX1Digi/` — RTTY/BPSK31/BPSK63 decoding for the Mac's
+  RTTY/PSK window — see "Digital modes — RTTY/PSK" above.
+- `Sources/FTX1CW/` — the CW receiver and sender on CWKit, shared by the
+  Mac and the iPad (separate product so the iPhone doesn't carry it) —
+  see "iPad CW decoder" above.
+- `Apps/Mac/FTX1RemoteMac/` — Mac app target source (canonical location;
+  the Xcode project at `FTX1RemoteMac/FTX1RemoteMac.xcodeproj` points at
+  this directory via a synchronized group, not a separate copy). Owns the
+  rigctld connection and WebSocket server (`HubService`, `RigWebSocketServer`,
+  `RigctldProcessController`), plus `HubService`'s `RigController`
+  conformance (`HubService+RigController.swift`). Also owns the audio-derived
+  waterfall/oscilloscope display (`AudioCaptureEngine`, `ScopeDisplayView`,
+  `AudioInputDevice`/`AudioInputSettings`, and — `.remote`-mode only —
+  the shared `FTX1Core` `RemoteAudioStreamClient`) — Mac-only, see Architecture above. Also owns
+  FT8 decoding (`FT8DecodeCoordinator`, `FT8Resampler`, `FT8Store`,
+  `FT8Spot`, `FT8ListView`) — see "Digital modes — FT8" above. Also
+  owns CW decoding and sending (`CWWindowView`, `WebSDRAudioSource`,
+  `HubService+CWKeyerLink`,
+  `CWSendPane`, `WebSDRAudioTap`, on CWKit) — see "Digital
+  modes — CW" above — and the RTTY/PSK window (`DigiWindowView`,
+  `DigiTuningStrip`, on `FTX1Digi`) — see "Digital modes — RTTY/PSK". Dense
+  multi-pane UI (`ContentView`: VFO, meters, scope display,
+  band/mode selectors all visible at once), `SettingsView` (tabbed sheet:
+  rigctld connection config, Audio input device, Station, Polling —
+  `PollingSettings`, read live by the poll loops, with Restore Defaults —,
+  Appearance),
+  plus two menu systems: `MenuPageView` (shared, see `Sources/FTX1Core/UI/`
+  above) and `DeepSettingsView` (shared too, in `Sources/FTX1Core/UI/`
+  — the page-3 category screens, rendered generically from
+  `DeepSettingsCatalog`).
+- `Apps/iOS/FTX1RemoteiOS/` — iPhone app target. WebSocket client
+  (`RigClientViewModel`/`RigWebSocketClient`, in `HubControlView`), except
+  the receive-only "Pi direct" route (`PiDirectView` over the shared
+  `PiDirectViewModel` — see "Pi-direct proof of concept" above). Focused single-rig-control view (frequency, SWR, PTT, mode grid)
+  — don't try to cram the Mac's dense layout or `MenuPageView` in here
+  without deciding that's actually wanted; iOS still has no menu-grid UI
+  (iPad does — see below), so no Deep Settings either.
+- `Apps/iPad/FTX1RemoteiPad/` — iPad app target, separate from iOS (not a
+  universal/size-classes target — resolved decision, don't relitigate).
+  WebSocket client, same as iOS, except the same receive-only "Pi direct"
+  route (since 2026-10-06: `ContentView` is the Mac hub / Pi direct
+  switch, `HubControlView` the hub screen, `PiDirectView` the Pi-direct
+  one, `ChannelStrip` the per-receiver meter + mute/SQL/VOL strip both
+  use — see "Pi-direct proof of concept" above). The hub screen is a dense
+  layout modeled on the Mac's `ContentView` (VFO A/B side by side via the
+  shared `VFODisplayBox`, PTT — no power slider since 2026-10-11, the MENU grid's RF POWER covers it; the band picker moved into MAIN's frequency popover the same day) plus the shared
+  `MenuPageView` grid, whose FM page opens `DeepSettingsView` on both
+  routes (see Architecture).
+- `Apps/Windows/` — Windows app (C# + WinUI 3, Remote direct to the
+  Pi, or Local via a spawned `rigctld.exe`). `FTX1RemoteWindows/` has a
+  build-verified v1 skeleton (core rig control only; Local mode added
+  after, hardware-confirmed on the user's PC 2026-09-27) — see `Apps/Windows/README.md` for the full plan, porting
+  notes, and the "Windows app" section above. Not built via `xcodebuild`/
+  `swift build` like the other `Apps/*` targets — use `dotnet build`
+  from within `Apps/Windows/FTX1RemoteWindows/` instead.
+- `Pi/` — deployable Pi-side pieces, not part of any Xcode target
+  (`ftx1-audiostream.py`, `ftx1-txaudio.py` (transmit audio, see "iPad
+  transmit audio") + their systemd units + install/verify instructions —
+  see "Audio-over-Pi" above). Nothing here is built by `xcodebuild`/`swift
+  build`; deploy by copying it to the Pi per `Pi/README.md`. `rigctld.
+  service`/`direwolf.service` (the Pi's other two systemd units) aren't
+  tracked here — they were set up directly on the Pi outside this repo.
+
+## Working conventions
+
+- Flag platform-specific UI tradeoffs when relevant instead of picking one
+  silently — Mac/iPhone/iPad genuinely want different layouts here.
+- Background server layer (rigctld connection + WebSocket server) should stay
+  independent of window state — it keeps running whether or not the Mac app's
+  window is open.
+- When in doubt about wire protocol shape or RigState fields, check
+  `Sources/FTX1Core` for the actual Codable types rather than assuming.
+- Don't add high-rate state (anything updated many times a second —
+  audio frames, meter samples) as `@Published` on `HubService`. It's the
+  one object nearly every Mac view observes, so each publish re-renders
+  the whole window; give such state its own small `ObservableObject`
+  observed by exactly the leaf view that draws it (`ScopeFrameStore` is
+  the precedent — see Architecture). Likewise, when adding a per-buffer
+  audio path, remember Xcode runs the Debug build: a loop that's free
+  under `-O` can cost a full core under `-Onone` (the palette lookup did),
+  so prefer table lookups / vDSP over per-sample generic Swift in anything
+  that runs 21+ times a second.
+- When wiring a raw CAT command (numbered MENU button or Deep Settings
+  catalog entry), don't guess mnemonics/addressing from other Yaesu rigs'
+  conventions or trust the CAT manual's printed values at face value —
+  read the manual directly and hardware-test. The manual has been wrong
+  in confirmed, varied ways (see git log / commit messages for `MenuPageView`
+  and `DeepSettingsCatalog.swift`): wrong parameter labels, wrong digit
+  widths, and at least one wrong value *mapping* (not just presentation).
+  It's also occasionally missing features entirely if they postdate the
+  manual's firmware revision (e.g. WIRES-X).
+
+## Commands
+
+- Build/test the shared package: `swift build`, `swift test` (from repo
+  root — `Package.swift` covers only the `FTX1Core` library + test target).
+- Build an app target: `xcodebuild -project
+  FTX1RemoteMac/FTX1RemoteMac.xcodeproj -scheme
+  <FTX1RemoteMac|FTX1RemoteiOS|FTX1RemoteiPad> -destination
+  '<platform=macOS|generic/platform=iOS Simulator>' build` — not
+  `swift build`, which doesn't cover the app targets at all.
+- Run the Mac app: `open` the built `.app` under
+  `~/Library/Developer/Xcode/DerivedData/FTX1RemoteMac-*/Build/Products/Debug/`,
+  or Cmd+R in Xcode.
+- Build the Windows app: from `Apps/Windows/FTX1RemoteWindows/`, `dotnet
+  build -r win-x64 --self-contained` (or open the `.csproj` in Visual
+  Studio). Not part of `Package.swift`/`xcodebuild` at all — separate
+  toolchain, see `Apps/Windows/README.md`.
