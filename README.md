@@ -1,3 +1,7 @@
+<p align="center"><img src="branding/bricohams_horizontal.svg" alt="BricoHams · Radioafición · Hazlo tú mismo" width="420"></p>
+
+<p align="center"><a href="https://bricohams.org">bricohams.org</a> · Anatol EA5KAO · Diego EA5JEF · Pedro Roca Molina</p>
+
 <img src="bricohams-logo.png" alt="Bricohams" width="240" height="89">
 
 <p><a href="README.md">Español</a> · <a href="README.en.md">English (US)</a> · <a href="README.de.md">Deutsch</a> · <a href="README.it.md">Italiano</a> · <a href="README.fr.md">Français</a></p>
