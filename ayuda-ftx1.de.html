@@ -24,7 +24,7 @@
       <nav aria-label="Hilfe"><a href="ayuda-referencias.de.html">Dokumentation und Referenzen</a> · <a href="ayuda-firmwares.de.html">Firmware-Bibliothek</a> · <a href="ayuda-atlas-uv-k5-v3.de.html">Atlas UV-K5 V3</a> · <a href="quansheng.html?lang=de">Quansheng</a> · <a href="opengd77.html?lang=de">OpenGD77</a></nav>
       <nav class="languages" aria-label="Sprache"><a href="ayuda-ftx1.html" hreflang="es" lang="es">Español</a> · <a href="ayuda-ftx1.en.html" hreflang="en-US" lang="en-US">English (US)</a> · <a href="ayuda-ftx1.de.html" hreflang="de" lang="de" aria-current="page">Deutsch</a> · <a href="ayuda-ftx1.it.html" hreflang="it" lang="it">Italiano</a> · <a href="ayuda-ftx1.fr.html" hreflang="fr" lang="fr">Français</a></nav>
     </header>
-    <nav class="panel" aria-label="Inhalt dieser Anleitung"><h2>In dieser Anleitung</h2><ul><li><a href="#requisitos-y-conexion">Voraussetzungen und Verbindung</a></li><li><a href="#memorias">Speicher</a></li><li><a href="#configuracion-del-equipo-menu">Geräteeinstellungen (Menü)</a></li><li><a href="#copia-simulacion-y-escritura">Sicherung, Simulation und Schreiben</a></li><li><a href="#control-remoto-cat">Fernsteuerung (CAT)</a></li><li><a href="#limites">Grenzen</a></li></ul></nav>
+    <nav class="panel" aria-label="Inhalt dieser Anleitung"><h2>In dieser Anleitung</h2><ul><li><a href="#requisitos-y-conexion">Voraussetzungen und Verbindung</a></li><li><a href="#memorias">Speicher</a></li><li><a href="#configuracion-del-equipo-menu">Geräteeinstellungen (Menü)</a></li><li><a href="#copia-simulacion-y-escritura">Sicherung, Simulation und Schreiben</a></li><li><a href="#control-remoto-cat">Fernsteuerung (CAT)</a></li><li><a href="#vfo">VFO</a></li><li><a href="#limites">Grenzen</a></li></ul></nav>
     <article class="panel"><h1 id="guia-yaesu-ftx-1-memorias-y-configuracion">Anleitung Yaesu FTX-1: Speicher und Einstellungen</h1>
 <p>Der Web-Editor FTX-1 Beta liest, bearbeitet, kopiert und schreibt die Speicher und die Menüeinstellungen des Yaesu FTX-1 im Browser, über den USB-CAT-Port und Web Serial. Er verwendet nur die Befehle aus dem offiziellen Yaesu-Handbuch „CAT Operation Reference Manual“ des FTX-1. Er ersetzt weder ADMS noch die Yaesu-Software und sendet keine Daten an Server.</p>
 <h2 id="requisitos-y-conexion">Voraussetzungen und Verbindung</h2>
@@ -73,6 +73,23 @@
 <tr><td><code>PC P1 P2P2P2;</code></td><td>Leistung: 1 = FTX-1-Bedienteil (5-10 W), 2 = SPA-1 (5-100 W); der Bereich stammt aus der Antwort des Funkgeräts</td></tr>
 </tbody></table></div>
 <p>Die Funktionsliste wurde von cat-ftx1 (rzochowski, MIT-Lizenz laut Autor; die LICENSE-Datei fehlt in diesem Repository noch) inspiriert. Es wurde kein Code kopiert.</p>
+<h3 id="controles-de-recepcion-adicionales">Zusätzliche Empfangsregler</h3>
+<p>Ebenfalls pro Seite (MAIN/SUB), nur Empfang, beim Zurücklesen geprüft und bei Werten außerhalb des Bereichs vor dem Senden abgelehnt:</p>
+<div class="table-scroll"><table><thead><tr><th scope="col">Befehl</th><th scope="col">Verwendung</th></tr></thead><tbody>
+<tr><td><code>NL P1 P2P2P2;</code></td><td>Störimpulsunterdrücker NB, 0 (OFF) oder 1-10</td></tr>
+<tr><td><code>RL P1 P2P2;</code></td><td>Rauschminderung DNR, 0 (OFF) oder 1-10</td></tr>
+<tr><td><code>BC P1 P2;</code></td><td>Automatischer Notch, OFF/ON</td></tr>
+<tr><td><code>BP P1 0 P3P3P3;</code></td><td>Manueller Notch OFF/ON (000/001)</td></tr>
+<tr><td><code>BP P1 1 P3P3P3;</code></td><td>Frequenz des manuellen Notch, 001-320 (x10 Hz: 10-3200 Hz)</td></tr>
+<tr><td><code>NA P1 P2;</code></td><td>Schmalfilter (NAR), OFF/ON</td></tr>
+<tr><td><code>CF P1 0 0 P3 P4 000;</code></td><td>Clarifier: Die Webseite aktiviert den Empfangs-Clarifier und lässt den TX-Clarifier aus</td></tr>
+<tr><td><code>CF P1 0 1 P3 P4P4P4P4;</code></td><td>Clarifier-Offset, -9999..+9999 Hz</td></tr>
+<tr><td><code>KS P1P1P1;</code></td><td>CW-Geschwindigkeit, 4-60 WPM (ohne Seite)</td></tr>
+<tr><td><code>LK P1;</code></td><td>Bedienfeldsperre, OFF/ON (ohne Seite)</td></tr>
+</tbody></table></div>
+<p>Im FM-Modus antwortet das Funkgerät auf den manuellen Notch mit einem nicht numerischen Wert (zum Beispiel <code>BP01F35;</code>): Die Webseite wertet ihn als nicht verfügbar und lässt das Feld leer.</p>
+<h2 id="vfo">VFO</h2>
+<p>Das Panel „5. VFO“ (zuerst „VFO lesen“ drücken) setzt die Frequenz von VFO A (<code>FA</code>) und VFO B (<code>FB</code>) zwischen 0.030000 und 470.000000 MHz, die Betriebsart von MAIN (<code>MD0 m</code>, nur die dokumentierten Betriebsarten) und den Split (<code>ST0</code>/<code>ST1</code>). Jede Änderung wird zurückgelesen und verglichen. Nichts davon sendet. Laut Handbuch schaltet <code>ST1</code> die Doppelanzeige aus (<code>FR01</code>).</p>
 <h2 id="limites">Grenzen</h2>
 <ul>
 <li>Nur Speicherkanäle 1-999. PMS, 5 MHz, Notrufkanal und Split-Speicher (<code>MZ</code>) werden nicht bearbeitet.</li>

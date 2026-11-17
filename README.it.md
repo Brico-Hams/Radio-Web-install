@@ -177,6 +177,7 @@ Consulta [funzioni, permessi, compilazione e limiti](docs/i18n/it/ANDROID.md).
 | [docs/DECISIONS.md](docs/i18n/it/DECISIONS.md) | Decisioni architetturali e motivi della scelta di ogni tecnologia |
 | [docs/DEPLOYMENT.md](docs/i18n/it/DEPLOYMENT.md) | Installazione, configurazione, aggiornamento e distribuzioni non supportate |
 | [docs/BRANDING.md](docs/i18n/it/BRANDING.md) | Marchio Bricohams: logo, palette, tipografia e tono |
+| [docs/FTX1-KNOWLEDGE.md](docs/i18n/it/FTX1-KNOWLEDGE.md) | Conoscenze Yaesu FTX-1: comandi CAT e limiti |
 | [AUTHORS.md](AUTHORS.md) | Autori (originale spagnolo) |
 | [ACKNOWLEDGEMENTS.md](ACKNOWLEDGEMENTS.md) | Riconoscimenti, fonti e licenze di terzi (originale spagnolo) |
 | [SUPPORT.md](SUPPORT.md) / [SECURITY.md](SECURITY.md) | Supporto e segnalazione privata di vulnerabilità (originali spagnoli) |

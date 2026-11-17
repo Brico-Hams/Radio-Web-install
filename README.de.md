@@ -127,6 +127,7 @@ Siehe [Funktionen, Berechtigungen, Kompilierung und Grenzen](docs/i18n/de/ANDROI
 | [docs/DECISIONS.md](docs/i18n/de/DECISIONS.md) | Architekturentscheidungen und warum jede Technologie gewählt wurde |
 | [docs/DEPLOYMENT.md](docs/i18n/de/DEPLOYMENT.md) | Installation, Konfiguration, Updates und nicht unterstützte Deployments |
 | [docs/BRANDING.md](docs/i18n/de/BRANDING.md) | Marke Bricohams: Logo, Farbpalette, Typografie und Ton |
+| [docs/FTX1-KNOWLEDGE.md](docs/i18n/de/FTX1-KNOWLEDGE.md) | Yaesu-FTX-1-Wissen: CAT-Befehle und Grenzen |
 
 | [AUTHORS.md](AUTHORS.de.md) | Autoren |
 | [ACKNOWLEDGEMENTS.md](ACKNOWLEDGEMENTS.de.md) | Danksagungen, Quellen und Lizenzen von Dritten |

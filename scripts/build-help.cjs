@@ -20,6 +20,7 @@ const pages = Object.freeze({
   "AYUDA-OPENGD77-MODELOS.md": "ayuda-opengd77-modelos.html",
   "AYUDA-ANYTONE.md": "ayuda-anytone.html",
   "AYUDA-FTX1.md": "ayuda-ftx1.html",
+  "FTX1-KNOWLEDGE.md": "ayuda-ftx1-conocimiento.html",
   "KARINA.md": "ayuda-karina.html",
   "BRICOHAMS-FIRMWARE.md": "ayuda-bricohams.html",
   "ESTADO-ENTREGA.md": "ayuda-entrega.html",

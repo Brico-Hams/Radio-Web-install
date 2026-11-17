@@ -39,7 +39,7 @@ const BASE_FILES = [
   "ayuda-firmwares.html", "ayuda-configuracion.html", "ayuda-quansheng.html",
   "ayuda-opciones-f4hwn.html", "ayuda-presets-f4hwn.html", "ayuda-ardf.html", "ayuda-manual-f4hwn.html",
   "ayuda-opengd77.html", "ayuda-opengd77-modelos.html", "ayuda-karina.html",
-  "ayuda-anytone.html", "ayuda-ftx1.html", "ayuda-referencias.html", "ayuda-arquitectura.html", "ayuda-marca.html",
+  "ayuda-anytone.html", "ayuda-ftx1.html", "ayuda-ftx1-conocimiento.html", "ayuda-referencias.html", "ayuda-arquitectura.html", "ayuda-marca.html",
   "ayuda-decisiones.html", "ayuda-despliegue.html",
   "ayuda-bricohams.html", "ayuda-entrega.html", "ayuda-android.html", "ayuda-tutoriales-android.html", "ayuda-validacion-v3-android.html", "help-docs.css",
   "ayuda-egzumer.html", "ayuda-pack-dim0s.html", "ayuda-atlas-uv-k5-v3.html",
