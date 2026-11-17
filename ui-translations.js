@@ -144,6 +144,18 @@
     ["{0} pases. Solo prevision; no usar para CAT.", "{0} passes. Forecast only; do not use for CAT.", "{0} passages. Prévision uniquement ; ne pas utiliser pour CAT.", "{0} Überflüge. Nur Prognose; nicht für CAT verwenden."],
     ["{0} pases. {1} · {2}. Solo prevision; no usar para CAT.", "{0} passes. {1} · {2}. Forecast only; do not use for CAT.", "{0} passages. {1} · {2}. Prévision uniquement ; ne pas utiliser pour CAT.", "{0} Überflüge. {1} · {2}. Nur Prognose; nicht für CAT verwenden."],
     ["Cargar plantilla de pais", "Load country template", "Charger le modèle du pays", "Ländervorlage laden"],
+    ["Exportar pases a calendario (.ics)", "Export passes to calendar (.ics)", "Exporter les passages vers un calendrier (.ics)", "Überflüge in Kalender exportieren (.ics)"],
+    ["Calendario de pases escrito en el archivo elegido. No incluye tu posicion.", "Pass calendar written to the chosen file. It does not include your position.", "Calendrier des passages écrit dans le fichier choisi. Il n'inclut pas votre position.", "Überflugkalender in die gewählte Datei geschrieben. Er enthält Ihre Position nicht."],
+    ["Descarga del calendario solicitada. Comprueba Descargas. No incluye tu posicion.", "Calendar download requested. Check Downloads. It does not include your position.", "Téléchargement du calendrier demandé. Vérifiez Téléchargements. Il n'inclut pas votre position.", "Kalender-Download angefordert. Prüfen Sie Downloads. Er enthält Ihre Position nicht."],
+    ["Locator de la estacion DX (opcional, 4 a 8 caracteres)", "DX station locator (optional, 4 to 8 characters)", "Locator de la station DX (facultatif, 4 à 8 caractères)", "Locator der DX-Station (optional, 4 bis 8 Zeichen)"],
+    ["Buscar pases mutuos con la estacion DX", "Find mutual passes with the DX station", "Rechercher les passages communs avec la station DX", "Gemeinsame Überflüge mit der DX-Station suchen"],
+    ["Exportar pases a calendario", "Export passes to calendar", "Exporter les passages vers un calendrier", "Überflüge in Kalender exportieren"],
+    ["Buscar pases mutuos", "Find mutual passes", "Rechercher les passages communs", "Gemeinsame Überflüge suchen"],
+    ["Inicio comun UTC", "Common start UTC", "Début commun UTC", "Gemeinsamer Beginn UTC"],
+    ["Fin comun UTC", "Common end UTC", "Fin commune UTC", "Gemeinsames Ende UTC"],
+    ["Elevacion max. aqui", "Max. elevation here", "Élévation max. ici", "Max. Elevation hier"],
+    ["Elevacion max. DX", "Max. elevation DX", "Élévation max. DX", "Max. Elevation DX"],
+    ["{0} pases mutuos con {1} en {2} h. Horas UTC.", "{0} mutual passes with {1} in {2} h. Times in UTC.", "{0} passages communs avec {1} en {2} h. Heures UTC.", "{0} gemeinsame Überflüge mit {1} in {2} h. Zeiten in UTC."],
     ["Actualizar plantilla", "Update template", "Actualiser le modèle", "Vorlage aktualisieren"],
     ["Descargar canales del walkie (copia original)", "Download radio channels (original backup)", "Télécharger les canaux du talkie (sauvegarde originale)", "Funkgerätekanäle herunterladen (Originalsicherung)"],
     ["Selecciona aqui el modelo y autoriza la lectura. Conectar y leer muestra los canales del walkie a la izquierda; Descargar guarda una copia original. Edita, anade canales o arrastra una seleccion antes o despues de otra fila. Prepara las plantillas a la derecha. Solo Escribir modifica la radio y requiere respaldo completo.", "Select the model here and authorize reading. Connect and read shows the radio channels on the left; Download saves an original backup. Edit, add channels, or drag a selection before or after another row. Prepare templates on the right. Only Write changes the radio and requires a complete backup.", "Sélectionnez ici le modèle et autorisez la lecture. Connecter et lire affiche les canaux du talkie à gauche ; Télécharger enregistre une sauvegarde originale. Modifiez, ajoutez des canaux ou glissez une sélection avant ou après une autre ligne. Préparez les modèles à droite. Seule l'écriture modifie la radio et nécessite une sauvegarde complète.", "Hier das Modell auswählen und das Lesen erlauben. Verbinden und Lesen zeigt die Funkgerätekanäle links; Herunterladen speichert eine Originalsicherung. Kanäle bearbeiten, hinzufügen oder eine Auswahl vor bzw. hinter eine andere Zeile ziehen. Vorlagen rechts vorbereiten. Nur Schreiben ändert das Funkgerät und erfordert eine vollständige Sicherung."],
@@ -204,6 +216,36 @@
     ["Cargar canales seleccionados","Load selected channels","Charger les canaux sélectionnés","Ausgewählte Kanäle laden"],
     ["Anadir canal Quansheng local","Add local Quansheng channel","Ajouter un canal Quansheng local","Lokalen Quansheng-Kanal hinzufügen"],
     ["Idioma", "Language", "Langue", "Sprache"],
+    ["Inicio", "Home", "Accueil", "Start"],
+    ["Radios", "Radios", "Radios", "Funkgeräte"],
+    ["Ayuda", "Help", "Aide", "Hilfe"],
+    ["Modelos de radio", "Radio models", "Modèles de radio", "Funkgerätemodelle"],
+    ["Conexion y copias", "Connection and backups", "Connexion et sauvegardes", "Verbindung und Sicherungen"],
+    ["Codeplug", "Codeplug", "Codeplug", "Codeplug"],
+    ["Firmware", "Firmware", "Firmware", "Firmware"],
+    ["Herramientas", "Tools", "Outils", "Werkzeuge"],
+    ["Seguimiento CAT de satelites", "CAT satellite tracking", "Suivi CAT des satellites", "CAT-Satellitenverfolgung"],
+    ["/ Satelites", "/ Satellites", "/ Satellites", "/ Satelliten"],
+    ["/ Radios", "/ Radios", "/ Radios", "/ Funkgeräte"],
+    ["Proximo pase", "Next pass", "Prochain passage", "Nächster Überflug"],
+    ["Calculando el proximo pase...", "Calculating the next pass...", "Calcul du prochain passage...", "Nächster Überflug wird berechnet..."],
+    ["Configura tu ubicacion para ver el proximo pase.", "Set your location to see the next pass.", "Configurez votre position pour voir le prochain passage.", "Lege deinen Standort fest, um den nächsten Überflug zu sehen."],
+    ["Configurar ubicacion", "Set location", "Configurer la position", "Standort festlegen"],
+    ["Ver el pase en Satelites", "View the pass in Satellites", "Voir le passage dans Satellites", "Überflug in Satelliten ansehen"],
+    ["Ir a Satelites", "Go to Satellites", "Aller à Satellites", "Zu Satelliten"],
+    ["Hora de inicio", "Start time", "Heure de début", "Startzeit"],
+    ["Empieza en", "Starts in", "Commence dans", "Beginnt in"],
+    ["Termina en", "Ends in", "Se termine dans", "Endet in"],
+    ["No hay pases de 10 grados o mas en las proximas 24 horas.", "No passes of 10 degrees or more in the next 24 hours.", "Aucun passage de 10 degrés ou plus dans les prochaines 24 heures.", "Keine Überflüge mit 10 Grad oder mehr in den nächsten 24 Stunden."],
+    ["No se pudieron cargar los datos orbitales. Abre Satelites para ver mas detalles.", "The orbital data could not be loaded. Open Satellites for more details.", "Les données orbitales n’ont pas pu être chargées. Ouvrez Satellites pour plus de détails.", "Die Bahndaten konnten nicht geladen werden. Öffne Satelliten für Details."],
+    ["Los datos orbitales tienen {0} de antiguedad y estan caducados. Actualiza la lista en Satelites.", "The orbital data is {0} old and has expired. Update the list in Satellites.", "Les données orbitales datent de {0} et sont périmées. Mettez à jour la liste dans Satellites.", "Die Bahndaten sind {0} alt und abgelaufen. Aktualisiere die Liste in Satelliten."],
+    ["Continuar con {0}", "Continue with {0}", "Continuer avec {0}", "Weiter mit {0}"],
+    ["Elegir otra radio", "Choose another radio", "Choisir une autre radio", "Anderes Funkgerät wählen"],
+    ["Elige tu radio para ver sus herramientas", "Choose your radio to see its tools", "Choisissez votre radio pour voir ses outils", "Wähle dein Funkgerät, um seine Werkzeuge zu sehen"],
+    ["Elegir radio", "Choose radio", "Choisir une radio", "Funkgerät wählen"],
+    ["Elige tu familia de radio y entra en la tarea que necesitas.", "Choose your radio family and go straight to the task you need.", "Choisissez votre famille de radios et accédez à la tâche voulue.", "Wähle deine Gerätefamilie und gehe direkt zur gewünschten Aufgabe."],
+    ["Tareas de {0}", "{0} tasks", "Tâches de {0}", "Aufgaben für {0}"],
+    ["Rojo: escribe en la radio. Azul: prepara datos locales. Discontinuo: edita datos locales. Sin marca: solo consulta.", "Red: writes to the radio. Blue: prepares local data. Dashed: edits local data. No mark: view only.", "Rouge : écrit dans la radio. Bleu : prépare des données locales. Pointillé : modifie des données locales. Sans marque : consultation seule.", "Rot: schreibt ins Funkgerät. Blau: bereitet lokale Daten vor. Gestrichelt: bearbeitet lokale Daten. Ohne Markierung: nur ansehen."],
     ["Saltar al contenido", "Skip to content", "Aller au contenu", "Zum Inhalt springen"],
     ["Bricohams Radio Workspace: inicio", "Bricohams Radio Workspace: home", "Bricohams Radio Workspace : accueil", "Bricohams Radio Workspace: Startseite"],
     ["TU ESTACION", "YOUR STATION", "VOTRE STATION", "DEINE STATION"],
@@ -1566,6 +1608,75 @@ Aplicar|Apply|Appliquer|Anwenden
 Europa|Europe|Europe|Europa
 America|Americas|Amériques|Amerika
 pendiente de fuente|pending source|source en attente|Quelle ausstehend
+Satelites|Satellites|Satellites|Satelliten
+Busca un pase, siguelo y prepara tu radio. Los calculos se hacen en este navegador.|Find a pass, follow it and prepare your radio. Calculations run in this browser.|Trouvez un passage, suivez-le et préparez votre radio. Les calculs se font dans ce navigateur.|Finde einen Überflug, verfolge ihn und bereite dein Funkgerät vor. Die Berechnungen laufen in diesem Browser.
+Ubicacion de la estacion|Station location|Position de la station|Standort der Station
+Altura (m)|Height (m)|Altitude (m)|Höhe (m)
+Locator Maidenhead|Maidenhead locator|Locator Maidenhead|Maidenhead-Locator
+Usar mi ubicacion|Use my location|Utiliser ma position|Meinen Standort verwenden
+Calcular pases|Calculate passes|Calculer les passages|Überflüge berechnen
+Recordar en este navegador|Remember in this browser|Mémoriser dans ce navigateur|In diesem Browser merken
+La posicion se usa solo en este navegador para calcular los pases y no se envia a ningun servidor.|The position is used only in this browser to calculate passes and is not sent to any server.|La position n’est utilisée que dans ce navigateur pour calculer les passages et n’est envoyée à aucun serveur.|Der Standort wird nur in diesem Browser zur Überflugberechnung verwendet und an keinen Server gesendet.
+Datos orbitales|Orbital data|Données orbitales|Bahndaten
+Buscar por nombre o NORAD|Search by name or NORAD|Rechercher par nom ou NORAD|Nach Name oder NORAD suchen
+Pases|Passes|Passages|Überflüge
+Vista|View|Vue|Ansicht
+Radar|Radar|Radar|Radar
+Mapa|Map|Carte|Karte
+Vista del pase|Pass view|Vue du passage|Überflugansicht
+Radar del pase|Pass radar|Radar du passage|Überflug-Radar
+Mapa del pase|Pass map|Carte du passage|Überflug-Karte
+Mapa base no disponible: se muestran solo la cuadricula y la trayectoria.|Base map unavailable: only the grid and the ground track are shown.|Fond de carte indisponible : seuls la grille et la trace au sol sont affichées.|Basiskarte nicht verfügbar: Es werden nur Gitter und Bodenspur angezeigt.
+Datos del pase|Pass data|Données du passage|Überflugdaten
+Selecciona un pase de la lista.|Select a pass from the list.|Sélectionnez un passage dans la liste.|Wähle einen Überflug aus der Liste.
+Posicion actual|Current position|Position actuelle|Aktuelle Position
+Azimut|Azimuth|Azimut|Azimut
+Elevacion|Elevation|Élévation|Elevation
+Distancia|Distance|Distance|Entfernung
+Frecuencias|Frequencies|Fréquences|Frequenzen
+Frecuencias no disponibles en la lista|Frequencies not available in the list|Fréquences non disponibles dans la liste|Frequenzen in der Liste nicht verfügbar
+Seguir con CAT en Quansheng|Follow with CAT on Quansheng|Suivre avec CAT sur Quansheng|Mit CAT am Quansheng verfolgen
+Preparar memorias en OpenGD77|Prepare memories in OpenGD77|Préparer les mémoires dans OpenGD77|Speicher in OpenGD77 vorbereiten
+Exportar estos pases (.ics)|Export these passes (.ics)|Exporter ces passages (.ics)|Diese Überflüge exportieren (.ics)
+Estas acciones solo abren herramientas o descargan un archivo: no transmiten ni escriben en la radio.|These actions only open tools or download a file: they do not transmit or write to the radio.|Ces actions ouvrent seulement des outils ou téléchargent un fichier : elles n’émettent pas et n’écrivent pas dans la radio.|Diese Aktionen öffnen nur Werkzeuge oder laden eine Datei herunter: Sie senden nicht und schreiben nichts ins Funkgerät.
+Ubicacion no valida: latitud de -90 a 90, longitud de -180 a 180 y altura de -500 a 9000 m.|Invalid location: latitude -90 to 90, longitude -180 to 180 and height -500 to 9000 m.|Position non valide : latitude de −90 à 90, longitude de −180 à 180 et altitude de −500 à 9000 m.|Ungültiger Standort: Breitengrad −90 bis 90, Längengrad −180 bis 180 und Höhe −500 bis 9000 m.
+Ubicacion aplicada.|Location applied.|Position appliquée.|Standort übernommen.
+Este navegador no ofrece geolocalizacion. Introduce latitud y longitud o tu locator.|This browser does not offer geolocation. Enter latitude and longitude or your locator.|Ce navigateur n’offre pas la géolocalisation. Saisissez la latitude et la longitude ou votre locator.|Dieser Browser bietet keine Standortbestimmung. Gib Breiten- und Längengrad oder deinen Locator ein.
+Obteniendo ubicacion...|Getting location...|Obtention de la position...|Standort wird ermittelt...
+Permiso de ubicacion denegado. Introduce latitud y longitud o tu locator.|Location permission denied. Enter latitude and longitude or your locator.|Autorisation de localisation refusée. Saisissez la latitude et la longitude ou votre locator.|Standortberechtigung verweigert. Gib Breiten- und Längengrad oder deinen Locator ein.
+Se agoto el tiempo al obtener la ubicacion. Vuelve a intentarlo o introducela a mano.|Timed out while getting the location. Try again or enter it manually.|Délai dépassé lors de l’obtention de la position. Réessayez ou saisissez-la manuellement.|Zeitüberschreitung bei der Standortermittlung. Versuche es erneut oder gib ihn manuell ein.
+Ubicacion no disponible en este dispositivo. Introduce latitud y longitud o tu locator.|Location unavailable on this device. Enter latitude and longitude or your locator.|Position indisponible sur cet appareil. Saisissez la latitude et la longitude ou votre locator.|Standort auf diesem Gerät nicht verfügbar. Gib Breiten- und Längengrad oder deinen Locator ein.
+Indica tu ubicacion para calcular los pases.|Enter your location to calculate passes.|Indiquez votre position pour calculer les passages.|Gib deinen Standort an, um die Überflüge zu berechnen.
+No hay satelites con datos orbitales vigentes.|No satellites with current orbital data.|Aucun satellite avec des données orbitales à jour.|Keine Satelliten mit aktuellen Bahndaten.
+No hay pases con estos filtros.|No passes with these filters.|Aucun passage avec ces filtres.|Keine Überflüge mit diesen Filtern.
+Se muestran los primeros 150 pases.|Showing the first 150 passes.|Affichage des 150 premiers passages.|Die ersten 150 Überflüge werden angezeigt.
+No hay pases que exportar.|There are no passes to export.|Aucun passage à exporter.|Keine Überflüge zum Exportieren.
+Archivo .ics generado.|.ics file generated.|Fichier .ics généré.|.ics-Datei erstellt.
+No se pudo cargar la lista de satelites ni la copia incluida. Comprueba la conexion y recarga la pagina.|Could not load the satellite list or the bundled copy. Check your connection and reload the page.|Impossible de charger la liste des satellites ni la copie incluse. Vérifiez la connexion et rechargez la page.|Satellitenliste und mitgelieferte Kopie konnten nicht geladen werden. Prüfe die Verbindung und lade die Seite neu.
+Datos orbitales caducados: actualiza la lista|Orbital data expired: update the list|Données orbitales périmées : mettez à jour la liste|Bahndaten veraltet: Liste aktualisieren
+Lista de satelites del {0}|Satellite list from {0}|Liste des satellites du {0}|Satellitenliste vom {0}
+Datos orbitales no validos: {0}|Invalid orbital data: {0}|Données orbitales non valides : {0}|Ungültige Bahndaten: {0}
+Estacion y datos orbitales|Station and orbital data|Station et données orbitales|Station und Bahndaten
+Falta la ubicacion|Location missing|Position manquante|Standort fehlt
+Antiguedad: {0}|Age: {0}|Ancienneté : {0}|Alter: {0}
+Lista diaria de satelites|Daily satellite list|Liste quotidienne des satellites|Tägliche Satellitenliste
+Copia incluida con la aplicacion|Copy bundled with the application|Copie incluse avec l’application|Mit der Anwendung mitgelieferte Kopie
+Licencia|License|Licence|Lizenz
+Proximo|Upcoming|À venir|Bevorstehend
+En curso|In progress|En cours|Läuft
+Terminado|Finished|Terminé|Beendet
+AOS en|AOS in|AOS dans|AOS in
+En curso, LOS en|In progress, LOS in|En cours, LOS dans|Läuft, LOS in
+Elev. max.|Max elev.|Élév. max.|Max. Elev.
+Elevacion maxima|Maximum elevation|Élévation maximale|Maximale Elevation
+Estacion|Station|Station|Station
+RX / bajada|RX / downlink|RX / descente|RX / Downlink
+TX / subida|TX / uplink|TX / montée|TX / Uplink
+Sin bajada|No downlink|Pas de descente|Kein Downlink
+Sin subida|No uplink|Pas de montée|Kein Uplink
+Doppler calculado: {0} MHz (sin control de radio)|Calculated Doppler: {0} MHz (no radio control)|Doppler calculé : {0} MHz (sans contrôle de la radio)|Berechneter Doppler: {0} MHz (ohne Funkgerätesteuerung)
+E|E|E|O
+O|W|O|W
 `.trim().split("\n").map(line => line.split("|")));
   root.BricohamsUITranslations = entries;
   if (typeof module === "object" && module.exports) module.exports = entries;

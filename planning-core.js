@@ -299,6 +299,96 @@
     R.assert(start + hours * 3600000 - epoch <= 7 * 86400000, "La ventana supera la validez maxima de siete dias del TLE.");
     return calculatePassWindow(orbital, observer, { start, hours, minimum, record, epoch, sampleSeconds: 5 });
   }
+  function lookAt(orbital, observer, time) {
+    const { record } = validateTLE(orbital, time);
+    return lookFor(record, observer)(time);
+  }
+  function passTrack(orbital, observer, pass, points = 90) {
+    R.assert(Number.isInteger(points) && points >= 2 && points <= 1000, "Numero de puntos de trayectoria no valido.");
+    R.assert(pass && Number.isFinite(pass.aos?.time) && Number.isFinite(pass.los?.time) && pass.los.time > pass.aos.time, "Pase no valido.");
+    const { record } = validateTLE(orbital, pass.aos.time);
+    const look = lookFor(record, observer);
+    const span = pass.los.time - pass.aos.time;
+    return Array.from({ length: points }, (_, index) => {
+      const point = look(index === points - 1 ? pass.los.time : pass.aos.time + span * index / (points - 1));
+      return { time: point.time, azimuth: point.azimuth, elevation: point.elevation, rangeKm: point.rangeKm };
+    });
+  }
+  function subPoint(orbital, time) {
+    const { record } = validateTLE(orbital, time);
+    const date = new Date(time);
+    const state = S.propagate(record, date);
+    R.assert(state && state.position && record.error === 0, "Fallo SGP4: orbita no propagable.");
+    const geodetic = S.eciToGeodetic(state.position, S.gstime(date));
+    const latitude = S.degreesLat(geodetic.latitude), longitude = S.degreesLong(geodetic.longitude);
+    R.assert(Number.isFinite(latitude) && Number.isFinite(longitude), "Prediccion orbital no finita.");
+    return { latitude, longitude, altitudeKm: geodetic.height };
+  }
+  function maidenheadToLatLon(locator) {
+    const text = String(locator ?? "").trim();
+    R.assert(/^[A-R]{2}\d{2}(?:[A-X]{2}(?:\d{2})?)?$/i.test(text), "Locator Maidenhead no valido.");
+    const upper = text.toUpperCase();
+    let longitude = -180 + (upper.charCodeAt(0) - 65) * 20 + Number(upper[2]) * 2;
+    let latitude = -90 + (upper.charCodeAt(1) - 65) * 10 + Number(upper[3]);
+    let cellLon = 2, cellLat = 1;
+    if (upper.length >= 6) {
+      longitude += (upper.charCodeAt(4) - 65) * (5 / 60);
+      latitude += (upper.charCodeAt(5) - 65) * (2.5 / 60);
+      cellLon = 5 / 60; cellLat = 2.5 / 60;
+    }
+    if (upper.length === 8) {
+      longitude += Number(upper[6]) * (5 / 600);
+      latitude += Number(upper[7]) * (2.5 / 600);
+      cellLon = 5 / 600; cellLat = 2.5 / 600;
+    }
+    return { latitude: latitude + cellLat / 2, longitude: longitude + cellLon / 2 };
+  }
+  function icsText(value) {
+    return String(value).replace(/\\/g, "\\\\").replace(/;/g, "\\;").replace(/,/g, "\\,").replace(/\r\n|\r|\n/g, "\\n");
+  }
+  function icsFold(line) {
+    const encoder = new TextEncoder();
+    const parts = [];
+    let current = "", bytes = 0, limit = 75;
+    for (const character of line) {
+      const size = encoder.encode(character).length;
+      if (bytes + size > limit) { parts.push(current); current = ""; bytes = 0; limit = 74; }
+      current += character;
+      bytes += size;
+    }
+    parts.push(current);
+    return parts.join("\r\n ");
+  }
+  function passesToIcs(orbital, prediction, { now = Date.now() } = {}) {
+    R.assert(prediction && Array.isArray(prediction.passes) && prediction.passes.length > 0, "No hay pases que exportar.");
+    const stamp = time => new Date(time).toISOString().replace(/[-:]|\.\d{3}/g, "");
+    const lines = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Bricohams//Radio Workspace//ES", "CALSCALE:GREGORIAN"];
+    for (const pass of prediction.passes) {
+      const elevation = Math.round(pass.maximum.elevation);
+      lines.push("BEGIN:VEVENT",
+        `UID:${orbital.norad}-${pass.aos.time}@bricohams-radio`,
+        `DTSTAMP:${stamp(now)}`,
+        `DTSTART:${stamp(pass.aos.time)}`,
+        `DTEND:${stamp(pass.los.time)}`,
+        `SUMMARY:${icsText(`${orbital.name} max ${elevation}°`)}`,
+        `DESCRIPTION:${icsText(`NORAD ${orbital.norad}\nAOS azimuth ${pass.aos.azimuth.toFixed(0)}°\nMax elevation ${pass.maximum.elevation.toFixed(1)}° at ${new Date(pass.maximum.time).toISOString()}\nLOS azimuth ${pass.los.azimuth.toFixed(0)}°`)}`,
+        "END:VEVENT");
+    }
+    lines.push("END:VCALENDAR");
+    return lines.map(icsFold).join("\r\n") + "\r\n";
+  }
+  function mutualPasses(orbital, observerA, observerB, options = {}) {
+    const a = predictPasses(orbital, observerA, options);
+    const b = predictPasses(orbital, observerB, options);
+    const passes = [];
+    for (const left of a.passes) for (const right of b.passes) {
+      const start = Math.max(left.aos.time, right.aos.time);
+      const end = Math.min(left.los.time, right.los.time);
+      if (end > start) passes.push({ start, end, maxElevationA: left.maximum.elevation, maxElevationB: right.maximum.elevation });
+    }
+    passes.sort((x, y) => x.start - y.start);
+    return { start: a.start, hours: a.hours, minimumElevation: a.minimumElevation, passes };
+  }
   function predictMonthlyPasses(orbital, observer, now = Date.now()) {
     const { record, epoch } = validateTLE(orbital, now);
     R.assert(Number.isFinite(observer.latitude) && Math.abs(observer.latitude) <= 90 &&
@@ -491,6 +581,6 @@
     R.assert(entries.length > 0 && entries.length <= 1024, "Seleccion TG vacia o superior a 1024. Ajusta el prefijo.");
     return { provider: "BrandMeister", entries };
   }
-  Object.assign(R, { norm, asciiName, validMHz, normalizeRepeaters, filterRecords, channelCSV, parseChannelCSV, validateSatellitePlan, validateTLE, validateSatellitesFile, validateSatelliteEntry, pickSatellite, satelliteAgeWarning, predictPasses, predictMonthlyPasses, satelliteChannel, dopplerChannels, catPassTarget, CatPassTracker, csvCell, pmrChannels, bricohamsRepeaterChannels, murciaAirportTemplate, murciaBroadcastTemplate, normalizeTalkgroups });
+  Object.assign(R, { norm, asciiName, validMHz, normalizeRepeaters, filterRecords, channelCSV, parseChannelCSV, validateSatellitePlan, validateTLE, validateSatellitesFile, validateSatelliteEntry, pickSatellite, satelliteAgeWarning, predictPasses, passTrack, subPoint, lookAt, maidenheadToLatLon, passesToIcs, mutualPasses, predictMonthlyPasses, satelliteChannel, dopplerChannels, catPassTarget, CatPassTracker, csvCell, pmrChannels, bricohamsRepeaterChannels, murciaAirportTemplate, murciaBroadcastTemplate, normalizeTalkgroups });
   if (typeof module !== "undefined") module.exports = R;
 })(globalThis);

@@ -65,6 +65,39 @@ function catFixture() {
   };
   return { plan, connector, commands, clock: () => time, setTime: value => { time = value; } };
 }
+test("Maidenhead devuelve el centro de la celda y rechaza locators invalidos", () => {
+  const home = R.maidenheadToLatLon("im98ib");
+  assert.ok(Math.abs(home.latitude - 38.06) < 0.05 && Math.abs(home.longitude + 1.29) < 0.05);
+  const field = R.maidenheadToLatLon("JN18");
+  assert.ok(Math.abs(field.latitude - 48.5) < 1e-9 && Math.abs(field.longitude - 3) < 1e-9);
+  const extended = R.maidenheadToLatLon("IM98ib45");
+  assert.ok(Math.abs(extended.latitude - home.latitude) < 0.05 && Math.abs(extended.longitude - home.longitude) < 0.05);
+  assert.throws(() => R.maidenheadToLatLon("ZZ99"), /Maidenhead/);
+  assert.throws(() => R.maidenheadToLatLon("IM9"), /Maidenhead/);
+});
+test("calendario ICS de pases usa CRLF, lineas plegadas y no filtra la posicion", () => {
+  const prediction = R.predictPasses(orbital, observer, { start, hours: 24, minimum: 10 });
+  const ics = R.passesToIcs({ ...orbital, name: "ISS, con ; nombre muy largo ñ ".repeat(4) }, prediction, { now: start });
+  assert.ok(prediction.passes.length > 0);
+  assert.ok(ics.startsWith("BEGIN:VCALENDAR\r\n") && ics.endsWith("END:VCALENDAR\r\n"));
+  assert.ok(!/(^|[^\r])\n/.test(ics));
+  assert.equal(ics.split("BEGIN:VEVENT").length - 1, prediction.passes.length);
+  for (const line of ics.split("\r\n")) assert.ok(Buffer.byteLength(line) <= 75);
+  assert.ok(!ics.includes("40.4168") && !ics.includes("3.7038"));
+  assert.ok(ics.includes("DTSTAMP:20261019T060000Z"));
+});
+test("pases mutuos coinciden con los propios si el observador es el mismo y se reducen en el hemisferio opuesto", () => {
+  const options = { start, hours: 24, minimum: 10 };
+  const own = R.predictPasses(orbital, observer, options).passes;
+  const same = R.mutualPasses(orbital, observer, observer, options);
+  assert.equal(same.passes.length, own.length);
+  same.passes.forEach((window, index) => {
+    assert.ok(Math.abs(window.start - own[index].aos.time) <= 1 && Math.abs(window.end - own[index].los.time) <= 1);
+    assert.equal(window.maxElevationA, window.maxElevationB);
+  });
+  const far = R.mutualPasses(orbital, observer, { latitude: -40.4168, longitude: 176.2962, height: 0 }, options);
+  assert.ok(far.passes.length < own.length);
+});
 test("CAT de pase calcula Doppler RX con rango SGP4 y valida limites de tiempo/posicion", () => {
   const { plan } = catFixture();
   const time = plan.pass.maximum.time;

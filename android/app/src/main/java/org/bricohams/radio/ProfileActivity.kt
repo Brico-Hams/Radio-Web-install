@@ -422,10 +422,11 @@ class ProfileActivity : LocalizedActivity() {
             message(errorText(error)); return
         }
         when (profile.transport) {
-            // The BLE link is scanned and opened by the RT-950 screen itself.
+            // The BLE link is scanned and opened by the radio's own screen (the RT-S10 gets the read-only probe).
             CatTransport.BLE -> {
                 message(getString(R.string.profile_test_ble))
-                startActivity(Intent(this, Rt950Activity::class.java))
+                val screen = if (profile.radio == ProfileRadio.RTS10) RtS10Activity::class.java else Rt950Activity::class.java
+                startActivity(Intent(this, screen))
             }
             CatTransport.NETWORK -> runNetworkProbe(profile)
             CatTransport.USB_SERIAL, CatTransport.USB_CDC -> chooseUsb(profile)

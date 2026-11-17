@@ -178,6 +178,15 @@ class ProfileTest {
         } finally { controller.pause().stop().destroy() }
     }
 
+    @Test fun rts10SupportsOnlyItsProbeAndPhoneSideTools() {
+        assertEquals(setOf(Tool.RTS10, Tool.SSTV, Tool.LIVE_AUDIO, Tool.ROTOR), ProfileRadio.RTS10.tools)
+        assertFalse(ProfileRadio.RTS10.supports(Tool.RT950))
+        assertFalse(ProfileRadio.RTS10.supports(Tool.CHANNELS))
+        assertFalse(ProfileRadio.RTS10.supports(Tool.RIG_CAT))
+        assertEquals(listOf(CatTransport.BLE), ProfileRadio.RTS10.transports)
+        assertFalse(ProfileRadio.RT950.supports(Tool.RTS10))
+    }
+
     @Test fun capabilityTableGreysOutToolsTheRadioCannotUse() {
         assertFalse(ProfileRadio.FT817.supports(Tool.CHANNELS))
         assertFalse(ProfileRadio.FT817.supports(Tool.DIAGNOSTICS))
@@ -191,11 +200,13 @@ class ProfileTest {
         val controller = Robolectric.buildActivity(MainActivity::class.java).setup()
         try {
             val activity = controller.get()
+            assertTrue(buttons(activity).single { it.text == activity.getString(R.string.home_open_satellites) }.isEnabled)
+            // Radio tools live in the Radio tab since the task-based navigation.
+            assertTrue(buttons(activity).single { it.text == activity.getString(R.string.tab_radio) }.performClick())
             val channels = buttons(activity).single { it.text == activity.getString(R.string.home_open_channels) }
             assertFalse(channels.isEnabled)
             assertTrue(channels.contentDescription.toString().contains(ProfileRadio.FT817.label(activity)))
             assertTrue(buttons(activity).single { it.text == activity.getString(R.string.home_open_rig_cat) }.isEnabled)
-            assertTrue(buttons(activity).single { it.text == activity.getString(R.string.home_open_satellites) }.isEnabled)
         } finally { controller.pause().stop().destroy() }
     }
 }

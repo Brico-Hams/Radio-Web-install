@@ -78,8 +78,8 @@ class LocalizationTest {
         } finally { satellite.pause().stop().destroy() }
     }
 
-    @Test fun spanishIsDefault() = assertLocale("es", "Guardar imagen PNG", "Guardia")
-    @Test fun unsupportedLocaleFallsBackToSpanish() = assertLocale("it", "Guardar imagen PNG", "Guardia")
+    @Test fun spanishIsDefault() = assertLocale("es", "Guardar imagen PNG", "Cuaderno")
+    @Test fun unsupportedLocaleFallsBackToSpanish() = assertLocale("it", "Guardar imagen PNG", "Cuaderno")
     @Test fun englishUs() = assertLocale("en-rUS", "Save PNG image", "Logbook")
     @Test fun french() = assertLocale("fr", "Enregistrer l'image PNG", "Carnet")
     @Test fun german() = assertLocale("de", "PNG-Bild speichern", "Logbuch")

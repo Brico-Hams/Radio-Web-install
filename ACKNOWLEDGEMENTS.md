@@ -36,6 +36,7 @@ Las licencias y avisos originales siguen siendo obligatorios.
 | [frrojas92/rt950_tak_bridge](https://github.com/frrojas92/rt950_tak_bridge) (Fernando Rojas, CA6FEG) | KISS sobre BLE del RT-950 Pro (tramado y desescape de `ffe1`) en `Aprs.kt` | MIT |
 | [lalmonte/radiochat-aprs@9c7b092](https://github.com/lalmonte/radiochat-aprs/tree/9c7b092) y [erkanz/radtel-RT950PRO@51c84d4](https://github.com/erkanz/radtel-RT950PRO/tree/51c84d4) | Solo referencia en `docs/APRS-CHAT-RADIOS.md` y en el aviso de transmisión del RT-950 Pro (escritura KISS sin PTT en algunos firmwares; TX con v0.29 parcheado; límites AX.25 de 182 bytes, 6 repetidores y 127 bytes de información). No se reutiliza código | Sin licencia consultada |
 | [nivingoonesekera/Radtel-RT-950Pro-BLE-bridge-for-CHIRP-and-CPS](https://github.com/nivingoonesekera/Radtel-RT-950Pro-BLE-bridge-for-CHIRP-and-CPS) `ble_bridge.py` | Desbloqueo, ritmo de escritura en fragmentos de 20 bytes y reconexión BLE del RT-950 Pro en `Rt950Ble.kt` | MIT |
+| [OscarWatch · magicbug/OscarWatch-Tracker](https://github.com/magicbug/OscarWatch-Tracker) (© 2026 Peter Goodhall, MM9SQL) | Solo ideas de funciones: exportar pases a calendario `.ics`, pases mutuos con una estación DX por locator y terminador día/noche en el mapa. Se reimplementaron desde cero en Kotlin y JavaScript a partir de RFC 5545 y fórmulas astronómicas estándar; no se copia ni traduce código C#, textos ni recursos | AGPL-3.0-or-later |
 
 ## Dependencias
 

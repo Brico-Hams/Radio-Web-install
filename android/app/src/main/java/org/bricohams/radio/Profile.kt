@@ -16,6 +16,7 @@ enum class Tool(val label: Int, val activity: Class<out Activity>) {
     RIG_CAT(R.string.home_open_rig_cat, RigActivity::class.java),
     UVK5_CAT(R.string.home_open_cat, CatActivity::class.java),
     RT950(R.string.home_open_rt950, Rt950Activity::class.java),
+    RTS10(R.string.home_open_rts10, RtS10Activity::class.java),
     APRS_CHAT(R.string.home_open_aprs_chat, AprsChatActivity::class.java),
     DIAGNOSTICS(R.string.home_open_diagnostics, DiagnosticsActivity::class.java),
     GD77(R.string.home_open_gd77, OpenGd77Activity::class.java),
@@ -62,6 +63,9 @@ enum class ProfileRadio(
     OPENGD77(null, "OpenGD77 (GD-77, DM-1801, RD-5R, MD-UV380, ...)", listOf(CatTransport.USB_CDC), setOf(Tool.GD77)),
     // Rt950Ble / Rt950Activity, AprsChatRadios (BLE KISS link), template profile "rt950pro".
     RT950(null, "Radtel RT-950 Pro", listOf(CatTransport.BLE), setOf(Tool.RT950, Tool.APRS_CHAT, Tool.TEMPLATES)),
+    // The RT-S10 Bluetooth protocol is undocumented: RtS10Activity is a read-only probe (GATT listing and, on request,
+    // the identification handshake only). No channels, no APRS, no templates, no writes.
+    RTS10(null, "Radtel RT-S10 (Bluetooth, experimental)", listOf(CatTransport.BLE), setOf(Tool.RTS10)),
     // Template profile "d878" (ChannelTemplates.profileIds): offline channel export only, no connection.
     D878(null, "AnyTone D878", emptyList(), setOf(Tool.TEMPLATES)),
     // TcpKissLink (KissLink.kt): any radio behind an external KISS TNC reachable over TCP; AprsChatActivity.
