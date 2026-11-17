@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <meta name="description" content="Firmware personnalisé Icom IC-705 et IC-9700 (transverters): aide Bricohams par modèle et version.">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>Firmware personnalisé Icom IC-705 et IC-9700 (transverters) | Bricohams Radio Workspace</title>
+  <link rel="icon" href="bricohams-logo.png" type="image/png">
+  <link rel="stylesheet" href="styles.css">
+  <script src="appearance.js" defer></script>
+  <link rel="stylesheet" href="help-docs.css">
+  <link rel="alternate" hreflang="es" href="ayuda-icom.html">
+  <link rel="alternate" hreflang="en-US" href="ayuda-icom.en.html">
+  <link rel="alternate" hreflang="de" href="ayuda-icom.de.html">
+  <link rel="alternate" hreflang="it" href="ayuda-icom.it.html">
+  <link rel="alternate" hreflang="fr" href="ayuda-icom.fr.html">
+</head>
+<body>
+  <a class="skip" href="#main">Aller au contenu</a>
+  <main id="main" class="firmware-help">
+    <header><a href="index.html?lang=fr"><img src="bricohams-logo.png" alt="Bricohams" width="240" height="89"></a>
+      <nav aria-label="Aide"><a href="ayuda-referencias.fr.html">Documentation et références</a> · <a href="ayuda-firmwares.fr.html">Bibliothèque de firmware</a> · <a href="ayuda-atlas-uv-k5-v3.fr.html">Atlas UV-K5 V3</a> · <a href="quansheng.html?lang=fr">Quansheng</a> · <a href="opengd77.html?lang=fr">OpenGD77</a></nav>
+      <nav class="languages" aria-label="Langue"><a href="ayuda-icom.html" hreflang="es" lang="es">Español</a> · <a href="ayuda-icom.en.html" hreflang="en-US" lang="en-US">English (US)</a> · <a href="ayuda-icom.de.html" hreflang="de" lang="de">Deutsch</a> · <a href="ayuda-icom.it.html" hreflang="it" lang="it">Italiano</a> · <a href="ayuda-icom.fr.html" hreflang="fr" lang="fr" aria-current="page">Français</a></nav>
+    </header>
+    <nav class="panel" aria-label="Contenu de ce guide"><h2>Dans ce guide</h2><ul><li><a href="#que-hace-el-firmware">Ce que fait le firmware</a></li><li><a href="#archivos-admitidos">Fichiers pris en charge</a></li><li><a href="#como-funciona-el-contenedor">Fonctionnement du conteneur</a></li><li><a href="#bootloader-a-b">Bootloader A/B</a></li><li><a href="#instalacion-por-tarjeta-sd">Installation par carte SD</a></li><li><a href="#alternativa-sin-conexion">Alternative hors navigateur</a></li><li><a href="#anadir-una-release-nueva">Ajouter une nouvelle release</a></li><li><a href="#seguridad">Sécurité</a></li><li><a href="#licencia-y-atribucion">Licence et attribution</a></li><li><a href="#donde-esta-en-este-repositorio">Où cela se trouve dans ce dépôt</a></li></ul></nav>
+    <article class="panel"><h1 id="firmware-personalizado-icom-ic-705-e-ic-9700-transversores">Firmware personnalisé Icom IC-705 et IC-9700 (transverters)</h1>
+<p>La page Icom de cette application prépare le firmware personnalisé de Dawid SQ6EMM pour l&#39;Icom IC-705 (E/J, v1.40) et l&#39;IC-9700 (E, v1.50). Il est conçu pour les transverters micro-ondes. Ce n&#39;est pas un produit Icom et il n&#39;est pas affilié à Icom : c&#39;est un projet de la communauté radioamateur sous licence MIT. Bricohams ne l&#39;a testé sur AUCUNE radio.</p>
+<p>Le firmware n&#39;est distribué que sous forme de correctifs. Vous fournissez le fichier <code>.dat</code> officiel d&#39;Icom, le navigateur applique le correctif sur votre ordinateur et vous obtenez un <code>.dat</code> à installer avec la procédure normale de mise à jour par carte SD. Rien n&#39;est envoyé à un serveur et la radio n&#39;est PAS programmée par USB ni par Web Serial.</p>
+<h2 id="que-hace-el-firmware">Ce que fait le firmware</h2>
+<ul>
+<li>Transverters : 8 emplacements (<code>TRV1</code> à <code>TRV8</code>), avec la fréquence RF réelle à l&#39;écran et en CI-V jusqu&#39;à 122 GHz.</li>
+<li>Par transverter : puissance TX maximale, délai TX (jusqu&#39;à 300 ms, tous modes) et, sur l&#39;IC-9700, inhibition du PTT.</li>
+<li>IC-9700 : transverter actif indépendant pour MAIN et SUB, l&#39;échange MAIN/SUB le conserve, et en mode SAT les réglages TX suivent le transverter SUB.</li>
+<li>Échelle du spectre et de la cascade de 10, 6, 3 ou 1 dB par division, avec le plancher de bruit ancré automatiquement.</li>
+<li>IC-705 : plages TX étendues et TX sur 4 m (70 MHz) dans la base E ; la variante J étend 1.6-54, 68-74.8, 118-174 et 400-470 MHz. Émettez uniquement là où votre licence le permet.</li>
+<li>Applications sur carte SD : MENU, SET, Apps.</li>
+<li>Bootloader A/B propre avec repli sur l&#39;autre bloc de firmware.</li>
+<li>L&#39;écran de démarrage indique que le firmware est de Dawid SQ6EMM ; le texte de version de la radio reste officiel.</li>
+</ul>
+<h2 id="archivos-admitidos">Fichiers pris en charge</h2>
+<p>Le navigateur calcule le MD5 du fichier choisi et le compare à cette liste (<code>docs/patches/index.json</code> du projet). Seuls les fichiers officiels non modifiés sont acceptés.</p>
+<div class="table-scroll"><table><thead><tr><th scope="col">Radio</th><th scope="col">Fichier officiel</th><th scope="col">MD5 d&#39;entrée</th><th scope="col">Release</th><th scope="col">MD5 de sortie</th></tr></thead><tbody>
+<tr><td>IC-9700 E 1.50</td><td><code>9700E150.dat</code></td><td><code>6f04fd2248ba39254ed01b30b52ce36a</code></td><td><code>20261113v3</code></td><td><code>51e9d2da39790357f220f3bea3fe4879</code></td></tr>
+<tr><td>IC-705 E 1.40</td><td><code>705E140.dat</code></td><td><code>2c9c1d7f3fc80ef173e01d841cd1248a</code></td><td><code>20261113v1</code></td><td><code>1a4577ca926089198bcdf63155ac7410</code></td></tr>
+<tr><td>IC-705 J 1.40</td><td><code>705J140.dat</code></td><td><code>b605171288db4a74e0992a8f2afcb1c3</code></td><td><code>20261113v1</code></td><td><code>d7a7f87b9b16f262b188fe3735b3682b</code></td></tr>
+</tbody></table></div>
+<p>Le fichier de sortie garde le nom de la release, par exemple <code>9700E150_20261113v3.dat</code>. La page ne propose le téléchargement que si le MD5 du résultat correspond exactement à celui de la build testée par l&#39;auteur.</p>
+<h2 id="como-funciona-el-contenedor">Fonctionnement du conteneur</h2>
+<p>Le fichier <code>.dat</code> d&#39;Icom est un conteneur à plusieurs couches. Le correctif les défait, modifie l&#39;image et les referme :</p>
+<ol>
+<li>Transformation autokey : le contenu est obscurci avec une clé qui dépend des données elles-mêmes et se décode octet par octet.</li>
+<li>Compression LZSS : l&#39;image du firmware est compressée ; on la décompresse pour la corriger puis on la recompresse à la fin.</li>
+<li>Sceau MD5 : le conteneur se termine par le MD5 de son contenu, recalculé après le correctif.</li>
+<li>Bootstrap initial à l&#39;adresse <code>0x10000</code>, où est installé le bootloader A/B propre.</li>
+</ol>
+<p>Le correctif est un fichier JSON avec des opérations du type copier N octets depuis l&#39;adresse X de l&#39;image officielle, plus le nouveau code du projet. Comme il ne contient que des instructions et du code propre, il n&#39;inclut aucun octet du firmware Icom : c&#39;est pourquoi il lui faut votre fichier officiel. Avant de proposer le résultat, la page vérifie que le MD5 d&#39;entrée et celui de sortie sont ceux attendus.</p>
+<h2 id="bootloader-a-b">Bootloader A/B</h2>
+<p>Le firmware conserve deux blocs (A et B). Si le nouveau ne démarre pas ou si vous voulez revenir au précédent, le bootloader permet de choisir l&#39;autre bloc :</p>
+<ul>
+<li>IC-9700 : maintenez POWER enfoncé pendant que vous branchez l&#39;alimentation DC, environ 5 s.</li>
+<li>IC-705 : maintenez POWER enfoncé à la mise sous tension jusqu&#39;à ce que la LED clignote, environ 3 s.</li>
+</ul>
+<p>Conservez toujours le fichier officiel : le réinstaller ramène la radio au firmware d&#39;usine.</p>
+<h2 id="instalacion-por-tarjeta-sd">Installation par carte SD</h2>
+<ol>
+<li>Téléchargez chez Icom le <code>.dat</code> officiel de votre radio et de votre version (voir le tableau) et ne le modifiez pas.</li>
+<li>Sur la page Icom, choisissez ou glissez ce fichier, attendez la reconnaissance et appuyez sur le bouton de préparation du firmware.</li>
+<li>Téléchargez le <code>.dat</code> obtenu lorsque la page confirme que le MD5 correspond.</li>
+<li>Copiez le fichier sur la carte SD en suivant la procédure de mise à jour du firmware du manuel Icom de votre radio.</li>
+<li>Mettez la radio à jour avec cette procédure et attendez la fin sans couper l&#39;alimentation.</li>
+<li>Vérifiez l&#39;écran de démarrage et passez en revue le menu des transverters.</li>
+</ol>
+<h2 id="alternativa-sin-conexion">Alternative hors navigateur</h2>
+<p>Le projet inclut un outil en ligne de commande qui fait la même chose sans navigateur : <code>third_party/icom-custom-firmware/icom_patch.py</code>. Il s&#39;exécute avec Python 3, par exemple <code>python3 icom_patch.py patches/9700E150_20261113v3.json 9700E150.dat 9700E150_20261113v3.dat</code>, depuis le dossier du projet. Le résultat doit avoir le même MD5 de sortie que le tableau. Le test navigateur du projet se lance avec <code>npm run test:icom-upstream</code>.</p>
+<h2 id="anadir-una-release-nueva">Ajouter une nouvelle release</h2>
+<p>Les releases sont déclarées dans <code>releases.json</code> du projet d&#39;origine. Pour en publier une nouvelle, on génère le correctif JSON dans <code>patches/</code> et on régénère l&#39;index avec <code>tools/build_index.py</code>, qui écrit <code>docs/patches/index.json</code>. Ensuite, copiez le correctif et l&#39;index dans <code>third_party/icom-custom-firmware/docs/patches/</code> et ajoutez le nouveau correctif à la liste des fichiers autorisés de <code>server.cjs</code>. Cette copie intégrée ne se modifie pas à la main : elle se met à jour en important un nouveau commit du projet d&#39;origine.</p>
+<h2 id="seguridad">Sécurité</h2>
+<ul>
+<li>C&#39;est un firmware non officiel : il peut rendre la radio inutilisable et peut annuler la garantie Icom.</li>
+<li>Émettez uniquement sur les fréquences et avec les puissances que votre licence autorise. L&#39;IC-705 étend les plages TX et leur bon usage relève de votre responsabilité.</li>
+<li>Vérifiez le délai TX et la puissance de chaque emplacement de transverter avec une charge fictive avant de connecter un transverter ou une antenne.</li>
+<li>Seuls les fichiers officiels non modifiés sont acceptés et la sortie doit correspondre au MD5 testé.</li>
+<li>Conservez le fichier officiel et la carte SD pour revenir en arrière et ne coupez pas l&#39;alimentation pendant la mise à jour.</li>
+</ul>
+<h2 id="licencia-y-atribucion">Licence et attribution</h2>
+<p>Basé sur icom-custom-firmware de Dawid SQ6EMM (licence MIT). Dépôt : <a href="https://github.com/sq6emm/icom-custom-firmware" target="_blank" rel="noopener noreferrer">icom-custom-firmware</a>. Page web du patcheur : <a href="https://sq6emm.github.io/icom-custom-firmware/" target="_blank" rel="noopener noreferrer">web patcher</a>. Fil du forum : <a href="https://mikrofale.cafe/showthread.php?tid=1296" target="_blank" rel="noopener noreferrer">mikrofale.cafe</a>. Le texte de la licence MIT se trouve dans <code>third_party/icom-custom-firmware/LICENSE</code> et est publié avec l&#39;application.</p>
+<h2 id="donde-esta-en-este-repositorio">Où cela se trouve dans ce dépôt</h2>
+<ul>
+<li><code>icom.html</code> et <code>icom-ui.js</code> : la page et sa logique.</li>
+<li><code>third_party/icom-custom-firmware/</code> : copie non modifiée du projet d&#39;origine au commit <code>3d30e461d7bcbd39b782c1823764f305639ee9a8</code>.</li>
+<li><code>third_party/icom-byof/</code> : copie non modifiée de la documentation de rétro-ingénierie au commit <code>a91231f64e8afbe34353994786e8276a3b54f1a9</code>. Plus de détails dans <a href="ayuda-icom-internals.fr.html">ICOM-FIRMWARE-INTERNALS.md</a> et <a href="ayuda-icom-parches.fr.html">ICOM-PATCH-ANALYSIS.md</a>.</li>
+<li><code>tests/icom.test.cjs</code> : tests de la page et des fichiers servis.</li>
+</ul>
+<p>Bricohams n&#39;a PAS testé ce firmware sur une radio réelle. Les tests automatiques ne vérifient que la page et les fichiers publiés ; la validation du correctif est celle de l&#39;auteur d&#39;origine.</p></article>
+    <footer><p class="translation-note">Traduction de l&#39;original espagnol. En cas de divergence, la version espagnole fait foi.</p><p>Document généré à partir du Markdown versionné. Consultez les sources et les limites de chaque guide. <a href="ayuda-firmwares.fr.html">Retour à l&#39;index</a>.</p></footer>
+  </main>
+</body>
+</html>

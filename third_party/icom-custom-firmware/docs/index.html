@@ -1,0 +1,224 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; worker-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+<meta name="referrer" content="no-referrer">
+<meta name="color-scheme" content="light dark">
+<title>Icom Firmware Patcher</title>
+<meta name="description" content="Build a tested IC-705 / IC-9700 transverter firmware from your own official Icom firmware file, entirely in your browser.">
+<link rel="stylesheet" href="style.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%23255fa8'/%3E%3Cpath d='M4 11V5h2l2 3 2-3h2v6' stroke='white' stroke-width='1.6' fill='none'/%3E%3C/svg%3E">
+<script type="module" src="js/app.js"></script>
+</head>
+<body>
+<header class="top">
+  <div class="wrap">
+    <div class="brand">
+      <h1>Icom firmware patcher</h1>
+      <p class="sub">IC-705 / IC-9700 &mdash; build a tested firmware from <em>your own</em> official Icom file, in your browser.</p>
+    </div>
+    <nav class="links">
+      <a href="https://mikrofale.cafe/showthread.php?tid=1296" rel="noopener noreferrer" target="_blank">Discussion forum</a>
+      <a href="https://github.com/sq6emm/icom-custom-firmware#readme" rel="noopener">Project README</a>
+      <a id="translate" href="https://translate.google.com/" rel="noopener noreferrer" target="_blank">Translate this page</a>
+    </nav>
+  </div>
+</header>
+
+<main class="wrap">
+  <section class="notice danger" aria-labelledby="disc-h">
+    <h2 id="disc-h">Read this first</h2>
+    <ul>
+      <li><strong>This is not Icom software.</strong> It is an independent, unofficial project. Icom does not support or endorse it.</li>
+      <li><strong>Use at your own risk.</strong> Installing modified firmware may damage or brick the radio and <strong>may void your warranty</strong>. No warranty of any kind is given.</li>
+      <li><strong>Transmitting is your responsibility.</strong> Transmit only where your licence and national regulations allow.</li>
+      <li><strong>Before connecting a transverter</strong>, verify the TX delay and the output power of each transverter slot with a dummy load (and, ideally, a scope / power meter).</li>
+      <li>Only <strong>official, unmodified</strong> Icom firmware files are accepted as input. The output is offered only if it is byte-identical to the build that was tested.</li>
+      <li><strong>Questions, reports and discussion:</strong> the official place for this project is the forum thread at
+        <a href="https://mikrofale.cafe/showthread.php?tid=1296" rel="noopener noreferrer" target="_blank">mikrofale.cafe &mdash; showthread.php?tid=1296</a>.</li>
+    </ul>
+  </section>
+
+  <section class="card about" aria-labelledby="about-h">
+    <h2 id="about-h">About this firmware</h2>
+    <p>These releases are built for <strong>microwave transverter operation</strong>: the radio works as the IF rig for an
+      external transverter (for example 10, 24, 47, 76 or 122 GHz). It shows and reports the real microwave frequency, and it
+      can adapt its transmit behaviour to each transverter.</p>
+
+    <h3>Transverter support (TRV1&ndash;TRV8)</h3>
+    <ul>
+      <li>Up to eight transverters. For each one you set the RF frequency (on the microwave band) and the IF frequency (the
+        band the radio actually tunes). Select the active transverter in the radio's menu; the settings are kept after power-off.</li>
+      <li>The display shows the real RF frequency, up to 122&nbsp;GHz, in the radio's normal frequency style.</li>
+      <li>CI-V reports and accepts the RF frequency, so logging and control software sees the microwave frequency, not the IF.
+        Above 1.4&nbsp;GHz the CI-V frequency uses the 6-byte format, as on the IC-905.</li>
+      <li><strong>IC-9700:</strong> IF on 2&nbsp;m, 70&nbsp;cm or 23&nbsp;cm. Menu: SET &gt; Transverter.</li>
+    </ul>
+
+    <h3>IC-9700: MAIN / SUB, DUAL watch and SAT mode</h3>
+    <ul>
+      <li>The active transverter is chosen <strong>separately for MAIN and SUB</strong> (SET &gt; Transverter &gt; MAIN Active /
+        SUB Active), e.g. MAIN = 10&nbsp;GHz via 144&nbsp;MHz and SUB = 24&nbsp;GHz via 432&nbsp;MHz. A receiver shows its RF only
+        while its frequency is in that transverter's IF band.</li>
+      <li><strong>DUAL watch:</strong> both readouts show their own RF frequency at the same time.</li>
+      <li><strong>MAIN/SUB exchange:</strong> the transverter selection moves together with the bands, because each
+        transverter is wired to its band's antenna connector.</li>
+      <li><strong>Transmit settings</strong> (power limit, TX delay, PTT inhibit) follow the receiver that transmits:
+        <strong>MAIN Active</strong> in normal operation, <strong>SUB Active in SAT mode</strong> (the IC-9700 transmits on SUB in
+        satellite mode). Switching SAT mode on or off does not swap the selections.</li>
+    </ul>
+
+    <h3>Scope: finer vertical scale</h3>
+    <ul>
+      <li>Scope Set &gt; <strong>Scope dB/div</strong>: 10 (stock), 6, 3 or 1&nbsp;dB per division for the spectrum and the waterfall,
+        to see weak signals. At 6/3/1&nbsp;dB the noise floor is found automatically and placed about one division above the
+        bottom (separately for MAIN and SUB on the IC-9700); REF shifts the picture up or down.</li>
+      <li>The scope data sent over CI-V / LAN / WLAN to PC software is unchanged.</li>
+    </ul>
+
+    <h3>Transmit control per transverter</h3>
+    <ul>
+      <li><strong>Maximum TX power</strong> (100 / 50 / 25 / 10 / 5&nbsp;%). It protects the transverter input from overdrive and never
+        raises power above the radio's own setting.</li>
+      <li><strong>TX delay</strong> up to 300&nbsp;ms in all modes. RF output is held back after the SEND line switches, so the
+        sequencer, coax relays and PA have time to switch before drive is applied.</li>
+      <li><strong>PTT inhibit</strong> (IC-9700). Transmission is blocked completely for a transverter that is used for receive only.</li>
+      <li>When no transverter is active, the radio transmits exactly like the original firmware.</li>
+    </ul>
+
+    <h3>Extended TX frequency ranges (IC-705)</h3>
+    <p>Many microwave transverters use local oscillators whose IF does not fall on the radio's standard amateur-band TX
+      segments, or they use an IF on another band. That is why the IC-705 releases extend the radio's TX ranges, so that such an
+      IF can be used. These ranges exist for driving a transverter. You alone are responsible for transmitting only where your
+      licence and national regulations allow.</p>
+
+    <h3>Safe updates: A/B bootloader</h3>
+    <p>The radio keeps both the new and the previous firmware. If a new version does not work, you can switch back without tools:</p>
+    <ul>
+      <li><strong>IC-9700:</strong> hold POWER while connecting the DC supply (about 5&nbsp;s).</li>
+      <li><strong>IC-705:</strong> hold POWER at power-on until the LED blinks (about 3&nbsp;s).</li>
+    </ul>
+    <p>A slot that is structurally damaged is detected, and the radio falls back to the other slot automatically.</p>
+
+    <h3>Before you connect a transverter</h3>
+    <p>On a dummy load, measure the SEND-to-RF delay (with a scope) and the output power for every transverter slot you plan to use.</p>
+  </section>
+
+  <section class="card" aria-labelledby="step1-h">
+    <h2 id="step1-h"><span class="step">1</span> Choose your official firmware file</h2>
+    <p class="muted">Download the firmware from Icom's website yourself, unzip it, and select the <code>.dat</code> file here.</p>
+    <label id="drop" class="drop" tabindex="0">
+      <input id="file" type="file" accept=".dat,application/octet-stream">
+      <span class="drop-main">Drop the <code>.dat</code> file here or <u>browse</u></span>
+      <span class="drop-hint">The file is read locally and never uploaded.</span>
+    </label>
+    <div id="fileinfo" class="fileinfo" hidden>
+      <dl>
+        <dt>File</dt><dd id="fi-name"></dd>
+        <dt>Size</dt><dd id="fi-size"></dd>
+        <dt>MD5</dt><dd><code id="fi-md5" class="hash">computing&hellip;</code></dd>
+      </dl>
+      <div id="fi-status" class="status"></div>
+    </div>
+  </section>
+
+  <section id="release" class="card" aria-labelledby="step2-h" hidden>
+    <h2 id="step2-h"><span class="step">2</span> Release for this file</h2>
+    <div class="rel-head">
+      <div>
+        <h3 id="rel-title"></h3>
+        <p class="muted" id="rel-meta"></p>
+      </div>
+      <div class="badges" id="rel-badges"></div>
+    </div>
+    <ul id="rel-features" class="features"></ul>
+    <dl class="kv">
+      <dt>Input</dt><dd><span id="rel-in"></span> <code id="rel-in-md5" class="hash"></code></dd>
+      <dt>Expected output MD5</dt><dd><code id="rel-out-md5" class="hash"></code></dd>
+    </dl>
+
+    <div id="warn-wb" class="notice danger" hidden>
+      <h4>Transmission outside the amateur bands</h4>
+      <p>This release <strong>enables transmission outside the amateur radio bands</strong>. You alone are
+      responsible for transmitting only on frequencies, with powers and in modes that your licence and your
+      national regulations allow. Unlicensed or out-of-band transmission may be illegal and can interfere
+      with other services.</p>
+    </div>
+
+    <div id="warn-boot" class="notice warn" hidden>
+      <h4>Includes the custom A/B bootloader</h4>
+      <p>Besides the main firmware, this release replaces the radio's small boot loader (the first 64 KiB of
+      flash) with a custom A/B slot-toggle bootloader. The radio's own SD-card updater writes it
+      <strong>once</strong>, when the update starts. The boot loader exists in a single copy: <strong>if power is
+      lost during that write, the radio will not start and can only be recovered with an external flash
+      programmer</strong> (e.g. CH341A, chip desoldered or clipped). Use a reliable power supply and do not
+      interrupt the update.</p>
+      <p>The firmware keeps two slots (A and B), as Icom's updater already alternates between them. The
+      custom bootloader lets you switch to the other slot (e.g. back to the previous firmware):</p>
+      <ul>
+        <li><strong>IC-9700:</strong> hold <kbd>POWER</kbd> while connecting the DC supply, for about 5 seconds.</li>
+        <li><strong>IC-705:</strong> at power-on keep holding <kbd>POWER</kbd> for about 3 seconds more, until the LED blinks.</li>
+      </ul>
+      <p>Installing any official Icom firmware afterwards restores Icom's own boot loader.</p>
+    </div>
+
+    <label class="accept"><input type="checkbox" id="accept"> I have read the notes above, I use this at my own risk, and I will check TX delay and power on a dummy load before connecting a transverter.</label>
+    <div class="actions">
+      <button id="build" type="button" class="primary" disabled>Build &amp; download</button>
+      <span id="build-hint" class="muted small">Tick the box to enable.</span>
+    </div>
+
+    <div id="progress" class="progress" hidden>
+      <div class="bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span id="bar"></span></div>
+      <div class="prog-line"><span id="stage">Starting&hellip;</span><span id="elapsed" class="muted"></span></div>
+    </div>
+    <div id="result" class="status" hidden></div>
+  </section>
+
+  <section class="card" aria-labelledby="sup-h">
+    <h2 id="sup-h">Supported official files</h2>
+    <p class="muted">Each official file has exactly one current release. Other files (other versions, regions or radios) are refused.</p>
+    <div class="table-wrap">
+      <table id="supported">
+        <thead><tr><th>Radio</th><th>Official file</th><th>Release</th><th>Output MD5</th></tr></thead>
+        <tbody><tr><td colspan="4" class="muted">Loading&hellip;</td></tr></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="card cols" aria-labelledby="how-h">
+    <div>
+      <h2 id="how-h">How it works</h2>
+      <ol>
+        <li>The page computes the MD5 of your file and checks it against the list of official Icom files.</li>
+        <li>It decodes the firmware container (autokey transform + LZSS), exactly like the
+          <a href="https://github.com/sq6emm/ic705-ic9700-ic905-bring-your-own-firmware#readme" rel="noopener">Python tools</a> in the repository.</li>
+        <li>It applies the release's patch file. A patch holds only the project's own code and data, plus
+          references like &ldquo;copy N bytes from address X of the official image&rdquo; &mdash; no Icom firmware is distributed.</li>
+        <li>It re-compresses the image, re-seals the container (MD5) and compares the MD5 of the result with the
+          MD5 of the build that was tested on a radio. Only an identical file is offered for download.</li>
+        <li>Install it with Icom's normal SD-card firmware update procedure, using this file instead of the official one.</li>
+      </ol>
+    </div>
+    <div>
+      <h2>Privacy</h2>
+      <p>Your firmware file is processed <strong>entirely on your computer</strong>, in a background worker in
+      this browser tab. It is never uploaded. The page loads only its own static files (HTML, CSS, scripts
+      and patch descriptions) from this site; it uses no analytics, cookies, external fonts or third-party
+      scripts. The &ldquo;Translate this page&rdquo; link opens Google Translate in a new tab only if you click it.</p>
+      <p>You can also run the same process offline with the repository's
+        <code>icom_patch.py</code>; both produce the same MD5.</p>
+    </div>
+  </section>
+</main>
+
+<footer class="wrap foot">
+  <p>Independent project, not affiliated with Icom Inc. &ldquo;Icom&rdquo;, &ldquo;IC-705&rdquo; and &ldquo;IC-9700&rdquo; are used only to identify compatible equipment.
+  Software provided &ldquo;as is&rdquo;, without warranty, under the MIT licence.
+  <a href="https://github.com/sq6emm/icom-custom-firmware" rel="noopener">Source on GitHub</a>.
+  Discussion and support: <a href="https://mikrofale.cafe/showthread.php?tid=1296" rel="noopener noreferrer" target="_blank">mikrofale.cafe forum thread</a>.</p>
+</footer>
+</body>
+</html>

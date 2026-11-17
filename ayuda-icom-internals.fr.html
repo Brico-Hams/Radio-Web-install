@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <meta name="description" content="Au coeur du firmware Icom modifié (IC-705 / IC-9700): aide Bricohams par modèle et version.">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>Au coeur du firmware Icom modifié (IC-705 / IC-9700) | Bricohams Radio Workspace</title>
+  <link rel="icon" href="bricohams-logo.png" type="image/png">
+  <link rel="stylesheet" href="styles.css">
+  <script src="appearance.js" defer></script>
+  <link rel="stylesheet" href="help-docs.css">
+  <link rel="alternate" hreflang="es" href="ayuda-icom-internals.html">
+  <link rel="alternate" hreflang="en-US" href="ayuda-icom-internals.en.html">
+  <link rel="alternate" hreflang="de" href="ayuda-icom-internals.de.html">
+  <link rel="alternate" hreflang="it" href="ayuda-icom-internals.it.html">
+  <link rel="alternate" hreflang="fr" href="ayuda-icom-internals.fr.html">
+</head>
+<body>
+  <a class="skip" href="#main">Aller au contenu</a>
+  <main id="main" class="firmware-help">
+    <header><a href="index.html?lang=fr"><img src="bricohams-logo.png" alt="Bricohams" width="240" height="89"></a>
+      <nav aria-label="Aide"><a href="ayuda-referencias.fr.html">Documentation et références</a> · <a href="ayuda-firmwares.fr.html">Bibliothèque de firmware</a> · <a href="ayuda-atlas-uv-k5-v3.fr.html">Atlas UV-K5 V3</a> · <a href="quansheng.html?lang=fr">Quansheng</a> · <a href="opengd77.html?lang=fr">OpenGD77</a></nav>
+      <nav class="languages" aria-label="Langue"><a href="ayuda-icom-internals.html" hreflang="es" lang="es">Español</a> · <a href="ayuda-icom-internals.en.html" hreflang="en-US" lang="en-US">English (US)</a> · <a href="ayuda-icom-internals.de.html" hreflang="de" lang="de">Deutsch</a> · <a href="ayuda-icom-internals.it.html" hreflang="it" lang="it">Italiano</a> · <a href="ayuda-icom-internals.fr.html" hreflang="fr" lang="fr" aria-current="page">Français</a></nav>
+    </header>
+    <nav class="panel" aria-label="Contenu de ce guide"><h2>Dans ce guide</h2><ul><li><a href="#1-alcance-y-fuentes">1. Portée et sources</a></li><li><a href="#2-el-contenedor-dat">2. Le conteneur `.dat`</a></li><li><a href="#3-plataforma-y-mapa-de-memoria">3. Plateforme et carte mémoire</a></li><li><a href="#4-mecanismo-de-parcheo">4. Mécanisme de patch</a></li><li><a href="#5-funciones-del-firmware-personalizado">5. Fonctions du firmware personnalisé</a></li><li><a href="#6-comandos-ci-v-no-documentados">6. Commandes CI-V non documentées</a></li><li><a href="#7-tablas-de-frecuencia">7. Tables de fréquences</a></li><li><a href="#8-herramientas-de-ingenieria-inversa">8. Outils de rétro-ingénierie</a></li><li><a href="#9-como-lo-usa-bricohams">9. Comment Bricohams l&#39;utilise</a></li><li><a href="#10-licencia-y-atribucion">10. Licence et attribution</a></li><li><a href="#11-propuestas-de-mejora">11. Propositions d&#39;amélioration</a></li></ul></nav>
+    <article class="panel"><h1 id="interior-del-firmware-icom-modificado-ic-705-ic-9700">Au coeur du firmware Icom modifié (IC-705 / IC-9700)</h1>
+<p>Base de connaissances technique sur le firmware modifié de Dawid SQ6EMM : ce qui est modifié, où et comment. Elle synthétise deux dépôts MIT intégrés sans modification : <code>third_party/icom-custom-firmware/</code> (commit <code>3d30e461d7bcbd39b782c1823764f305639ee9a8</code>) et <code>third_party/icom-byof/</code> (commit <code>a91231f64e8afbe34353994786e8276a3b54f1a9</code>). Chaque fait cite son fichier source. Le détail par adresse de chaque patch est dans <a href="ayuda-icom-parches.fr.html">ICOM-PATCH-ANALYSIS.md</a> et le guide d&#39;utilisation dans <a href="ayuda-icom.fr.html">ICOM-CUSTOM-FIRMWARE.md</a>.</p>
+<h2 id="1-alcance-y-fuentes">1. Portée et sources</h2>
+<div class="table-scroll"><table><thead><tr><th scope="col">Source</th><th scope="col">Contenu</th></tr></thead><tbody>
+<tr><td><code>third_party/icom-byof/IC705_DAT_FORMAT.md</code></td><td>Format du conteneur <code>.dat</code></td></tr>
+<tr><td><code>third_party/icom-byof/IC705_FLASH_LAYOUT.md</code></td><td>Carte de la flash de l&#39;IC-705</td></tr>
+<tr><td><code>third_party/icom-byof/IC9700_FLASH_LAYOUT.md</code></td><td>Carte de la flash et slots A/B de l&#39;IC-9700</td></tr>
+<tr><td><code>third_party/icom-byof/FREQUENCY_RANGES.md</code></td><td>Plans de bande par région</td></tr>
+<tr><td><code>third_party/icom-byof/UNDOCUMENTED_CIV.md</code></td><td>Commandes CI-V non documentées</td></tr>
+<tr><td><code>third_party/icom-custom-firmware/releases.json</code></td><td>Liste des versions et fonctions</td></tr>
+<tr><td><code>third_party/icom-custom-firmware/docs/patches/</code></td><td>Patchs JSON utilisés par le patcheur</td></tr>
+</tbody></table></div>
+<p>Aucun octet d&#39;Icom n&#39;est distribué : les patchs ne contiennent que des octets propres au projet et des références pour copier des octets du firmware officiel fourni par l&#39;utilisateur.</p>
+<h2 id="2-el-contenedor-dat">2. Le conteneur <code>.dat</code></h2>
+<h3 id="2-1-cabecera-y-parametros-por-radio">2.1 En-tête et paramètres par radio</h3>
+<p>Selon <code>third_party/icom-byof/IC705_DAT_FORMAT.md</code>, le fichier commence par la signature <code>44 00 77 55</code>. Sur l&#39;IC-705 l&#39;en-tête fait 0x64 octets (champs f38, f44, f4c, f54 et f5c), contient quatre condensats MD5 et se termine par un pied de 2 octets (<code>40 75</code>). Les paramètres de la transformation dépendent du modèle, selon <code>third_party/icom-byof/README.md</code> :</p>
+<div class="table-scroll"><table><thead><tr><th scope="col">Radio</th><th scope="col">KEY</th><th scope="col">START</th></tr></thead><tbody>
+<tr><td>IC-705</td><td><code>0x19</code></td><td><code>0x64</code></td></tr>
+<tr><td>IC-9700</td><td><code>0x2b</code></td><td><code>0x38</code></td></tr>
+<tr><td>IC-905</td><td><code>0x7f</code></td><td><code>0x88</code></td></tr>
+</tbody></table></div>
+<p>L&#39;IC-905 est signé en RSA-2048 et SHA-256, il ne peut donc pas être reconditionné ; il est seulement documenté.</p>
+<h3 id="2-2-transformacion-autokey">2.2 Transformation autokey</h3>
+<p>Selon <code>third_party/icom-byof/icom_rza1_decode.py</code>, le chiffrement est un autokey octet par octet : <code>plain = stored ^ ((prev_plain + abs_offset - KEY) &amp; 255)</code>. Le compteur démarre à <code>0x4b</code> dans chaque domaine et le remplissage en clair est <code>FF</code>. La clé se retrouve sans la connaître :</p>
+<ul>
+<li><code>deriveKey</code> cherche une suite monotone de 16 octets de pas -1 entre les offsets <code>0x20</code> et <code>0x8000</code> et obtient <code>KEY = (run[0] + s) &amp; 255</code>.</li>
+<li><code>findStart</code> balaie s de <code>0x10</code> à <code>0xFFF</code> avec des fenêtres de <code>0x1000</code> ou <code>0x10000</code>, inverse l&#39;autokey en arrière ancré sur <code>FF</code> et cherche les vecteurs ARM <code>18f09fe5 18f09fe5</code>.</li>
+</ul>
+<p>La version JavaScript se trouve dans <code>third_party/icom-custom-firmware/docs/js/codec.js</code>.</p>
+<h3 id="2-3-compresion-lzss">2.3 Compression LZSS</h3>
+<p>Selon <code>third_party/icom-byof/IC705_DAT_FORMAT.md</code> et <code>third_party/icom-byof/ic_rza1_repack.py</code>, on utilise le LZSS d&#39;Okumura :</p>
+<div class="table-scroll"><table><thead><tr><th scope="col">Paramètre</th><th scope="col">Valeur</th></tr></thead><tbody>
+<tr><td>Fenêtre (anneau)</td><td>4096 octets</td></tr>
+<tr><td>Curseur initial</td><td><code>0xFEE</code></td></tr>
+<tr><td>Drapeaux</td><td>LSB en premier, 1 = littéral, 0 = correspondance de 2 octets</td></tr>
+<tr><td>Index</td><td><code>lo</code> plus les 4 bits de poids fort de <code>hi</code> décalés de 4 positions (<code>(hi &amp; 0xF0) &lt;&lt; 4</code>)</td></tr>
+<tr><td>Longueur</td><td><code>(hi &amp; 15) + 3</code>, soit de 3 à 18</td></tr>
+<tr><td>Fin du flux</td><td>longueur de sortie explicite, pas de marque de fin</td></tr>
+</tbody></table></div>
+<p>La décompression gère le chevauchement (une copie peut lire des octets tout juste écrits). Le compresseur utilise des chaînes de hachage à clé de 3 octets (la plus récente d&#39;abord), <code>max_chain=256</code>, la première plus longue correspondance l&#39;emporte et un appariement paresseux d&#39;un pas est appliqué. Cet ensemble de règles rend le port JS identique bit à bit à celui en Python. La sortie est environ 2 % plus petite que celle d&#39;Icom. Malgré cela, le slot de l&#39;IC-9700 peut grandir jusqu&#39;à environ 1,3 MiB à cause du code ajouté et du réalignement du paquet graphique.</p>
+<h3 id="2-4-sello-md5">2.4 Sceau MD5</h3>
+<p><code>findMd5Region</code> calcule le MD5 de façon incrémentale par pas de <code>0x1000</code> jusqu&#39;à ce que le condensat cumulé soit égal aux 16 octets suivants. Selon <code>third_party/icom-byof/README.md</code>, la région scellée fait <code>0x9c0000</code> octets sur l&#39;IC-705 et <code>0x800000</code> sur l&#39;IC-9700. Après reconditionnement, le sceau doit être recalculé.</p>
+<h3 id="2-5-bootstrap-e-imagen-principal">2.5 Bootstrap et image principale</h3>
+<p>Selon <code>third_party/icom-byof/IC705_DAT_FORMAT.md</code> :</p>
+<div class="table-scroll"><table><thead><tr><th scope="col">Élément</th><th scope="col">Détail</th></tr></thead><tbody>
+<tr><td>Bootstrap</td><td>DAT de <code>0x64</code> à <code>0x10064</code>, mappé sur la flash <code>0x18000000</code>, 0x10000 octets</td></tr>
+<tr><td>Chargeur</td><td>bootstrap <code>+0x4000</code>, longueur <code>0x9bc</code>, copié en RAM <code>0x20004000</code> ; entrée <code>0x20004840</code> ; routine LZSS en <code>0x200044dc</code></td></tr>
+<tr><td>En-tête principal</td><td>DAT <code>0x10064</code> : <code>csz</code> et <code>osz</code> (deux LE32 sur l&#39;IC-9700)</td></tr>
+<tr><td>Flux principal</td><td>commence à <code>0x1006c</code>, se décompresse en RAM <code>0x20005000</code>, entrée <code>0x20005060</code>, ARMv7-A</td></tr>
+<tr><td>Aux1</td><td>se décompresse en RAM <code>0x20000008</code> (Thumb)</td></tr>
+<tr><td>Aux2</td><td>se décompresse en flash <code>0x08000000</code> (Cortex-M)</td></tr>
+</tbody></table></div>
+<p>Sur l&#39;IC-9700 un paquet graphique est chaîné à slot + <code>csz</code> + 8 et se déplace avec le flux principal ; <code>repack</code> le réaligne sur 4 octets et remplit avec <code>FF</code>. Les patchs utilisent deux MD5 par radio : celui du fichier complet (<code>md5</code>) et celui de l&#39;image principale décompressée (<code>main_md5</code>), plus un MD5 propre au bootstrap.</p>
+<p><code>repack(..., new_bootstrap)</code> (dans <code>third_party/icom-byof/ic_rza1_repack.py</code>) exige exactement <code>0x10000</code> octets, l&#39;étiquette de <code>0x4f00</code> à <code>0x4f10</code> identique à l&#39;originale et des vecteurs ARM au début. Sinon, l&#39;outil de mise à jour d&#39;Icom prend son chemin hérité et réécrit le slot A.</p>
+<h3 id="2-6-ciclo-decodificar-parchear-reempaquetar">2.6 Cycle : décoder, patcher, reconditionner</h3>
+<ol>
+<li>Décoder : défaire l&#39;autokey, localiser le flux principal et le décompresser.</li>
+<li>Patcher : appliquer les opérations du JSON à l&#39;image principale (et éventuellement au bootstrap).</li>
+<li>Reconditionner : compresser avec le LZSS décrit ci-dessus, rechiffrer et recalculer les MD5.</li>
+</ol>
+<p>Le résultat doit être identique octet pour octet à celui testé sur une radio : le patcheur ne propose le téléchargement que si le MD5 de sortie est égal à <code>output.md5</code> ; sinon il n&#39;écrit rien (selon <code>third_party/icom-custom-firmware/docs/js/patch.js</code>). C&#39;est pourquoi le compresseur doit reproduire exactement l&#39;algorithme, et pourquoi seul un firmware officiel non modifié est accepté en entrée.</p>
+<h2 id="3-plataforma-y-mapa-de-memoria">3. Plateforme et carte mémoire</h2>
+<p>Le processeur est un Renesas RZ/A1H (R7S721001, IC101) avec la flash mappée en XIP à <code>0x18000000</code> (selon <code>third_party/icom-byof/IC705_FLASH_LAYOUT.md</code>).</p>
+<h3 id="3-1-ic-705">3.1 IC-705</h3>
+<p>Flash ISSI IS25LP128 de 16 MiB, RDID <code>9D 60 18</code>, secteurs de 4 KiB. Les premiers <code>0x600000</code> octets de la flash correspondent au corps décodé ; le DSP, le WLAN et les ressources se trouvent au-delà. La taille de l&#39;image principale d&#39;origine est <code>0x376000</code> (<code>output_size</code>) ; les patchs produisent <code>0x386000</code>.</p>
+<h3 id="3-2-ic-9700">3.2 IC-9700</h3>
+<p>Flash S25FL127S de 16 MiB, RDID <code>01 20 18</code>, secteurs de 64 KiB, IC181 (selon <code>third_party/icom-byof/IC9700_FLASH_LAYOUT.md</code>) :</p>
+<div class="table-scroll"><table><thead><tr><th scope="col">Région</th><th scope="col">Offset</th><th scope="col">Notes</th></tr></thead><tbody>
+<tr><td>Bootstrap</td><td><code>0x0</code></td><td>0x10000 octets</td></tr>
+<tr><td>Slot A</td><td><code>0x10000</code></td><td>0x7f0000 octets</td></tr>
+<tr><td>Slot B</td><td><code>0x800000</code></td><td>0x7f0000 octets</td></tr>
+<tr><td>Marqueur</td><td><code>0xff0000</code></td><td>16 octets <code>SX3913 V0.10-000</code> signifie démarrer le slot B</td></tr>
+</tbody></table></div>
+<p>Dans chaque slot apparaissent les offsets +<code>0x3e0000</code>, +<code>0x3e4000</code>, +<code>0x3f0000</code> à <code>0x793000</code> et +<code>0x7e0000</code> / +<code>0x7ec000</code>. Valeurs d&#39;origine de E1.50 : <code>csz</code> <code>0x2145F4</code>, <code>osz</code> <code>0x405334</code>, <code>csz2</code> <code>0x80C2C</code>, <code>osz2</code> <code>0x2675BC</code>. Le chargeur d&#39;origine n&#39;a pas de repli automatique : l&#39;outil de mise à jour SD écrit le slot inactif puis fixe le marqueur.</p>
+<h3 id="3-3-zonas-que-nunca-se-deben-sobrescribir">3.3 Zones à ne jamais écraser</h3>
+<p>Les deux EEPROM GT24C1024 (IC191 et IC192) contiennent les réglages et la calibration. Ce ne sont pas du firmware et elles ne doivent <strong>jamais</strong> être écrasées. L&#39;étiquette du bootstrap de <code>0x4f00</code> à <code>0x4f10</code> ne doit pas non plus être touchée. Les commandes CI-V de service (section 6) peuvent effacer ou dérégler ces données.</p>
+<h2 id="4-mecanismo-de-parcheo">4. Mécanisme de patch</h2>
+<p>Selon <code>third_party/icom-custom-firmware/docs/patches/</code>, chaque patch est un JSON avec <code>name</code>, <code>description</code>, <code>load_address</code>, <code>image_size</code>, <code>input</code>, <code>output</code>, <code>ops</code> et éventuellement <code>bootstrap</code>. Les opérations <code>hex</code> écrivent des octets propres au projet et les opérations <code>copy_from</code> copient <code>len</code> octets du firmware officiel vers une autre position (relocalisation). Les adresses sont absolues : l&#39;image principale est chargée à <code>0x20005000</code> et les opérations du bootstrap sont des décalages depuis son début.</p>
+<p>Schéma observé (chiffres exacts dans <a href="ayuda-icom-parches.fr.html">ICOM-PATCH-ANALYSIS.md</a>) : un patch de vecteur ou de littéral près de <code>0x20005024</code>, de nombreux petits sauts BL ou B de 3 ou 4 octets qui détournent des routines existantes, et du code propre ajouté à la fin de l&#39;image (sur l&#39;IC-9700 l&#39;image passe de <code>0x2040A334</code> à <code>0x2040FE10</code>). Dans le bootstrap, le chargeur patché s&#39;étend au-delà de l&#39;original (qui se termine à <code>+0x49bc</code>) jusqu&#39;à l&#39;étiquette préservée.</p>
+<h2 id="5-funciones-del-firmware-personalizado">5. Fonctions du firmware personnalisé</h2>
+<p>Les fonctions sont listées dans <code>third_party/icom-custom-firmware/releases.json</code>. Les sources ne publient pas le code source du firmware personnalisé, seulement les octets du patch ; quand le comment n&#39;est pas indiqué, on ne l&#39;invente pas.</p>
+<div class="table-scroll"><table><thead><tr><th scope="col">Fonction</th><th scope="col">Ce qu&#39;elle fait</th></tr></thead><tbody>
+<tr><td>TRV1 à TRV8</td><td>Huit transverters avec fréquences RF et FI, conservés après extinction</td></tr>
+<tr><td>Affichage RF</td><td>Affiche la fréquence réelle jusqu&#39;à 122 GHz</td></tr>
+<tr><td>CI-V étendu</td><td>Fréquence de 6 octets au-dessus de 1,4 GHz sur l&#39;IC-9700</td></tr>
+<tr><td>IC-9700 MAIN, SUB, DUAL, SAT</td><td>Les réglages d&#39;émission suivent le récepteur qui émet</td></tr>
+<tr><td>Échelle du scope</td><td>dB/div 10, 6, 3 et 1 avec plancher de bruit automatique</td></tr>
+<tr><td>Limite de puissance</td><td>Maximum par transverter : 100, 50, 25, 10 ou 5 % ; n&#39;augmente jamais la puissance de la radio</td></tr>
+<tr><td>Délai TX</td><td>Jusqu&#39;à 300 ms par transverter</td></tr>
+<tr><td>Inhibition PTT</td><td>Par transverter</td></tr>
+<tr><td>Plages TX de l&#39;IC-705</td><td>Étendues selon <code>third_party/icom-byof/FREQUENCY_RANGES.md</code> (section 7)</td></tr>
+<tr><td>Applications SD</td><td>Incluses dans les versions qui l&#39;indiquent dans <code>releases.json</code></td></tr>
+<tr><td>Bootloader A/B</td><td>Sélecteur de slot (section 5.1)</td></tr>
+</tbody></table></div>
+<h3 id="5-1-bootloader-a-b">5.1 Bootloader A/B</h3>
+<p>Selon <code>third_party/icom-custom-firmware/docs/index.html</code> et son <code>README.md</code>, le firmware garde deux slots (A et B), comme l&#39;outil de mise à jour d&#39;Icom les alterne déjà. Le bootloader personnalisé détecte un slot structurellement endommagé et bascule automatiquement sur l&#39;autre. Combinaisons pour changer de slot :</p>
+<div class="table-scroll"><table><thead><tr><th scope="col">Radio</th><th scope="col">Combinaison</th></tr></thead><tbody>
+<tr><td>IC-9700</td><td>Maintenir POWER en branchant l&#39;alimentation DC, environ 5 s</td></tr>
+<tr><td>IC-705</td><td>Maintenir POWER à l&#39;allumage jusqu&#39;au clignotement de la LED, environ 3 s</td></tr>
+</tbody></table></div>
+<p>Le bootloader n&#39;existe qu&#39;en un seul exemplaire et l&#39;outil de mise à jour SD l&#39;écrit une fois, au début de la mise à jour. <strong>Si l&#39;alimentation est coupée à ce moment, un programmateur de flash peut être nécessaire pour récupérer</strong> (par exemple CH341A). Utilise une alimentation fiable.</p>
+<h2 id="6-comandos-ci-v-no-documentados">6. Commandes CI-V non documentées</h2>
+<p>Selon <code>third_party/icom-byof/UNDOCUMENTED_CIV.md</code>. Adresses par défaut : IC-705 <code>0xA4</code>, IC-9700 <code>0xA2</code>, IC-905 <code>0xAC</code> ; contrôleur <code>0xE0</code>. Les lectures sont sûres ; les écritures et actions peuvent effacer les réglages ou dérégler la radio.</p>
+<div class="table-scroll"><table><thead><tr><th scope="col">Commande</th><th scope="col">Effet</th><th scope="col">Protection</th></tr></thead><tbody>
+<tr><td><code>1A D0</code></td><td>Réinitialisation d&#39;usine, efface tous les réglages</td><td>Sans mot de passe</td></tr>
+<tr><td><code>1A E1</code></td><td>Seconde variante de réinitialisation</td><td>Un octet de données doit valoir 0</td></tr>
+<tr><td><code>1A E0</code></td><td>Entre dans le mode d&#39;alignement d&#39;usine</td><td>Mot de passe du modèle</td></tr>
+<tr><td><code>1A D2</code></td><td>Autotest DV</td><td>Mot de passe du modèle</td></tr>
+<tr><td><code>1A D7</code></td><td>Réglage d&#39;un sous-système secondaire</td><td>Mot de passe du modèle</td></tr>
+<tr><td><code>1A D5</code></td><td>Lit le code de région</td><td>Lecture</td></tr>
+<tr><td><code>1A D6</code></td><td>Lit une mesure de calibration</td><td>Lecture</td></tr>
+<tr><td><code>1A D8</code></td><td>Lit un octet d&#39;état, IC-705 seulement</td><td>Lecture</td></tr>
+<tr><td><code>1A D9</code> et <code>1A DA</code></td><td>Lit la calibration micro-ondes, IC-905 seulement</td><td>Lecture</td></tr>
+<tr><td><code>1A E4</code></td><td>Lit une valeur de service mineure</td><td>Lecture</td></tr>
+<tr><td><code>1A D1</code> et <code>1A D3</code></td><td>Drapeau de mode test et diagnostic, IC-705</td><td>Permission interne</td></tr>
+<tr><td><code>1A E2</code>, <code>1A E3</code>, <code>1A E5</code></td><td>Sous-mode de service, cible et écriture de données</td><td>Écriture</td></tr>
+<tr><td><code>1A E7</code></td><td>Option audio ou DSP, IC-705 et IC-905</td><td>Écriture</td></tr>
+</tbody></table></div>
+<p>Mots de passe d&#39;alignement (<code>E0</code>) : <code>SX-4075 Adjust</code> (IC-705), <code>SX-3913 Adjust</code> (IC-9700), <code>SX-4209 Adjust</code> (IC-905). Sous-commandes présentes par radio : IC-705 D0 à D3, D5 à D8 et E0 à E7 ; IC-9700 D0, D2, D5 à D7 et E0 à E7 ; IC-905 D0, D2, D5 à D7, D9, DA, E0 à E7 et E9.</p>
+<p>Autres : IC-705 <code>0x24</code> et <code>0x28</code> ; IC-9700 <code>0x28 00</code> (rappel de bande), <code>0x1C 02</code>, <code>0x1C 03</code> et <code>0x0D</code> ; l&#39;IC-905 utilise une fréquence BCD de 6 octets à partir de 1,389 GHz.</p>
+<h2 id="7-tablas-de-frecuencia">7. Tables de fréquences</h2>
+<p>Selon <code>third_party/icom-byof/FREQUENCY_RANGES.md</code>. La destination d&#39;usine (matrice de diodes, copiée dans la configuration) choisit un plan de bande qui limite l&#39;émission. Les bandes que tu peux utiliser dépendent de ta licence et de la réglementation.</p>
+<h3 id="7-1-ic-705-5-planes-rx-0-030-a-470-mhz">7.1 IC-705 (5 plans, RX de 0,030 à 470 MHz)</h3>
+<div class="table-scroll"><table><thead><tr><th scope="col">Plan</th><th scope="col">160 m</th><th scope="col">80 m</th><th scope="col">40 m</th><th scope="col">6 m</th><th scope="col">4 m</th><th scope="col">2 m</th><th scope="col">70 cm</th></tr></thead><tbody>
+<tr><td>0</td><td>1,800-2,000</td><td>3,500-4,000</td><td>7,000-7,300</td><td>50,0-54,0</td><td>non</td><td>144-146</td><td>430-440</td></tr>
+<tr><td>1</td><td>1,800-2,000</td><td>3,500-4,000</td><td>7,000-7,300</td><td>50,0-54,0</td><td>non</td><td>144-148</td><td>430-450</td></tr>
+<tr><td>2</td><td>1,810-2,000</td><td>3,500-3,800</td><td>7,000-7,200</td><td>50,0-52,0</td><td>70,000-70,500</td><td>144-146</td><td>430-440</td></tr>
+<tr><td>3</td><td>1,810-1,850</td><td>3,500-3,800</td><td>7,000-7,200</td><td>50,0-52,0</td><td>70,150-70,250</td><td>144-146</td><td>430-440</td></tr>
+<tr><td>4</td><td>1,800-1,825</td><td>3,500-3,540</td><td>7,000-7,100</td><td>50,0-54,0</td><td>non</td><td>144-147</td><td>430-440</td></tr>
+</tbody></table></div>
+<p>L&#39;IC-705 contient un jeu complet de calibration d&#39;usine pour 70 MHz : la bande 4 m est verrouillée par région, pas absente du matériel (plans 2 et 3).</p>
+<h3 id="7-2-ic-9700-9-planes-estrictamente-tribanda">7.2 IC-9700 (9 plans, strictement tri-bande)</h3>
+<div class="table-scroll"><table><thead><tr><th scope="col">Plan</th><th scope="col">2 m</th><th scope="col">70 cm</th><th scope="col">23 cm</th></tr></thead><tbody>
+<tr><td>0</td><td>144-146</td><td>430-440</td><td>1260-1300</td></tr>
+<tr><td>1 et 7</td><td>144-148</td><td>430-450</td><td>1240-1300</td></tr>
+<tr><td>2 et 4</td><td>144-146</td><td>430-440</td><td>1240-1300</td></tr>
+<tr><td>3</td><td>144-146</td><td>430-434 et 435-438</td><td>1240-1245 et 1270-1298</td></tr>
+<tr><td>5</td><td>144-146</td><td>430-432</td><td>1260-1265</td></tr>
+<tr><td>6</td><td>144-146</td><td>430-440</td><td>1260-1300</td></tr>
+<tr><td>8</td><td>144-147</td><td>430-440</td><td>1260-1270</td></tr>
+</tbody></table></div>
+<p>Il n&#39;y a pas de bandes cachées sur l&#39;IC-9700 : les variantes ne changent que les limites de bande. Mécanisme : code de région, table de correspondance des plans, indice de plan et table de limites par plan qui autorise l&#39;émission.</p>
+<h2 id="8-herramientas-de-ingenieria-inversa">8. Outils de rétro-ingénierie</h2>
+<div class="table-scroll"><table><thead><tr><th scope="col">Outil</th><th scope="col">Fonction</th></tr></thead><tbody>
+<tr><td><code>icom_rza1_decode.py</code></td><td>Décodeur de la famille RZ/A1</td></tr>
+<tr><td><code>ic_rza1_repack.py</code></td><td>Reconditionneur du conteneur</td></tr>
+<tr><td><code>ic705_decode.py</code></td><td>Décodage complet de l&#39;IC-705 avec sortie ELF</td></tr>
+<tr><td><code>ic705.py</code></td><td>Décomposer, reconstruire et vérifier (utilise numpy)</td></tr>
+<tr><td><code>ic705_codec.py</code></td><td>Diagnostic LZSS indépendant avec de nombreuses options</td></tr>
+<tr><td><code>extract_streams.py</code></td><td>Analyseur du conteneur</td></tr>
+<tr><td><code>ghidra_scripts/ExportRecovered.java</code></td><td>Exporte le C décompilé après import de l&#39;ELF dans Ghidra</td></tr>
+<tr><td><code>test_ic705_codec.py</code>, <code>test_ic705_decode_real.py</code>, <code>test_repack.py</code></td><td>Tests</td></tr>
+</tbody></table></div>
+<p>Les lignes de commande exactes sont dans <code>third_party/icom-byof/README.md</code>. Dans <code>third_party/icom-custom-firmware/</code>, le patcheur <code>icom_patch.py</code> reproduit une version hors ligne : on lui donne le <code>.dat</code> officiel et le JSON de <code>docs/patches/</code> et il vérifie le MD5 de sortie.</p>
+<p>Pour ajouter une version : créer l&#39;entrée dans <code>releases.json</code>, générer le patch et exécuter <code>tools/build_index.py</code>, qui écrit <code>docs/patches/index.json</code> et copie les patchs actifs. Il existe aussi un patch expérimental dans <code>third_party/icom-byof/patches/9700E150_trv16c.json</code>.</p>
+<h2 id="9-como-lo-usa-bricohams">9. Comment Bricohams l&#39;utilise</h2>
+<p>La page <code>icom.html</code> héberge le patcheur web, servi par le web et par le serveur de bureau (<code>server.cjs</code>). Le navigateur lit ton <code>.dat</code> officiel, applique le patch et ne propose le résultat que si le MD5 correspond. Règles de sécurité : utiliser uniquement son propre firmware officiel, vérifier le délai TX et la puissance sur une charge fictive avant de brancher un transverter, utiliser une alimentation fiable pendant la mise à jour et accepter que l&#39;usage est à ses propres risques et peut annuler la garantie. Voir <a href="ayuda-icom.fr.html">ICOM-CUSTOM-FIRMWARE.md</a>.</p>
+<h2 id="10-licencia-y-atribucion">10. Licence et attribution</h2>
+<p>Les deux dépôts sont MIT, de Dawid SQ6EMM. Dépôts : <code>https://github.com/sq6emm/icom-custom-firmware</code> et <code>https://github.com/sq6emm/ic705-ic9700-ic905-bring-your-own-firmware</code> ; forum : <code>https://mikrofale.cafe/showthread.php?tid=1296</code>. Ils sont intégrés sans modification sous <code>third_party/</code> et cités dans les fichiers ACKNOWLEDGEMENTS.</p>
+<h2 id="11-propuestas-de-mejora">11. Propositions d&#39;amélioration</h2>
+<p>Idées fondées sur la documentation ; ce sont des propositions et rien n&#39;est implémenté :</p>
+<ul>
+<li>Vérifier <code>main_md5</code> dans le navigateur avant d&#39;appliquer le patch, pour donner une erreur plus claire.</li>
+<li>Détecter le slot actif de l&#39;IC-9700 en lisant le marqueur <code>0xff0000</code> d&#39;un dump de flash.</li>
+<li>Ajouter au rapport des patchs une comparaison automatique des régions avec la carte de la flash quand le document le permet.</li>
+<li>Documenter la plage de calibration 4 m de l&#39;IC-705 comme référence, sans activer l&#39;émission.</li>
+</ul></article>
+    <footer><p class="translation-note">Traduction de l&#39;original espagnol. En cas de divergence, la version espagnole fait foi.</p><p>Document généré à partir du Markdown versionné. Consultez les sources et les limites de chaque guide. <a href="ayuda-firmwares.fr.html">Retour à l&#39;index</a>.</p></footer>
+  </main>
+</body>
+</html>

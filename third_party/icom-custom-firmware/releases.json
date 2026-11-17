@@ -1,0 +1,81 @@
+{
+  "_comment": "One current release per official input file. Only entries with status 'active' are published: tools/build_index.py writes them to docs/patches/index.json and copies ONLY their patch JSONs into docs/patches/. 'pending' entries are kept here until the owner releases them.",
+  "releases": [
+    {
+      "input": {
+        "file": "9700E150.dat",
+        "md5": "6f04fd2248ba39254ed01b30b52ce36a",
+        "radio": "IC-9700",
+        "region": "E",
+        "version": "1.50"
+      },
+      "patch": "9700E150_20261113v3.json",
+      "release": "20261113v3",
+      "date": "2026-11-13",
+      "title": "IC-9700 E 1.50 + transverter support (20261113v3)",
+      "features": [
+        "Transverter support: 8 slots (TRV1–TRV8, RF / IF on 2 m, 70 cm or 23 cm), RF shown up to 122 GHz",
+        "Separate active transverter for MAIN and SUB (SET > Transverter > MAIN Active / SUB Active); DUAL watch shows each receiver's own RF",
+        "MAIN/SUB exchange swaps the transverter selection together with the bands",
+        "SAT mode: transmit settings (power cap, TX delay, PTT inhibit) follow SUB Active; normal mode: MAIN Active",
+        "Per-transverter maximum TX power, TX delay (up to 300 ms, all modes) and PTT inhibit",
+        "CI-V frequency read/write in RF terms (6-byte BCD above 1.4 GHz, as IC-905)",
+        "Scope Set > Scope dB/div: 10 / 6 / 3 / 1 dB per division for spectrum and waterfall, noise floor anchored automatically (MAIN and SUB independently)",
+        "SD-card apps: MENU > SET > Apps (\\IC-9700\\Apps\\)",
+        "Custom A/B bootloader: hold POWER while connecting DC (~5 s) to boot the other firmware slot",
+        "Opening screen shows 'customized by Dawid SQ6EMM - 20261113v3'; the radio's version text stays official 1.50"
+      ],
+      "status": "active",
+      "tx_outside_amateur_bands": false
+    },
+    {
+      "input": {
+        "file": "705E140.dat",
+        "md5": "2c9c1d7f3fc80ef173e01d841cd1248a",
+        "radio": "IC-705",
+        "region": "E",
+        "version": "1.40"
+      },
+      "patch": "705E140_20261113v1.json",
+      "release": "20261113v1",
+      "date": "2026-11-13",
+      "title": "IC-705 E 1.40 + transverter support (20261113v1)",
+      "features": [
+        "Transverter support: 8 slots (TRV1–TRV8, RF / IF), RF shown on the display up to 122 GHz",
+        "CI-V frequency read/write in RF terms",
+        "Per-transverter maximum TX power and TX delay (up to 300 ms, all modes)",
+        "Scope Set > Scope dB/div: 10 / 6 / 3 / 1 dB per division for spectrum and waterfall, noise floor anchored automatically",
+        "Custom A/B bootloader: hold POWER at power-on until the LED blinks (~3 s) to boot the other firmware slot",
+        "Opening screen shows 'customized by Dawid SQ6EMM - 20261113v1'; the radio's version text stays official",
+        "SD-card apps: MENU > SET > Apps (\\IC-705\\Apps\\)",
+        "Extended TX ranges and 4 m (70 MHz) TX from the E base build"
+      ],
+      "status": "active",
+      "tx_outside_amateur_bands": true
+    },
+    {
+      "input": {
+        "file": "705J140.dat",
+        "md5": "b605171288db4a74e0992a8f2afcb1c3",
+        "radio": "IC-705",
+        "region": "J",
+        "version": "1.40"
+      },
+      "patch": "705J140_20261113v1.json",
+      "release": "20261113v1",
+      "date": "2026-11-13",
+      "title": "IC-705 J 1.40 + transverter support (20261113v1)",
+      "features": [
+        "Transverter support: 8 slots (TRV1–TRV8, RF / IF), RF shown on the display up to 122 GHz",
+        "CI-V frequency read/write in RF terms",
+        "Per-transverter maximum TX power and TX delay (up to 300 ms, all modes)",
+        "Scope Set > Scope dB/div: 10 / 6 / 3 / 1 dB per division for spectrum and waterfall, noise floor anchored automatically",
+        "Custom A/B bootloader: hold POWER at power-on until the LED blinks (~3 s) to boot the other firmware slot",
+        "Opening screen shows 'customized by Dawid SQ6EMM - 20261113v1'; the radio's version text stays official",
+        "Extended TX ranges: 1.6–54, 68–74.8, 118–174, 400–470 MHz"
+      ],
+      "status": "active",
+      "tx_outside_amateur_bands": true
+    }
+  ]
+}

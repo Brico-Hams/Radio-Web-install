@@ -1,0 +1,102 @@
+{
+  "generated_from": "releases.json",
+  "releases": [
+    {
+      "input": {
+        "file": "9700E150.dat",
+        "md5": "6f04fd2248ba39254ed01b30b52ce36a",
+        "radio": "IC-9700",
+        "region": "E",
+        "version": "1.50"
+      },
+      "release": {
+        "name": "9700E150_20261113v3",
+        "patch_file": "9700E150_20261113v3.json",
+        "patch_sha256": "c3789bb06997d9c1c11f7abcd43235bda127771d27fa20fa888896eaef1fe8e0",
+        "label": "20261113v3",
+        "date": "2026-11-13",
+        "title": "IC-9700 E 1.50 + transverter support (20261113v3)",
+        "description": "IC-9700 E1.50 custom 20261113v3",
+        "features": [
+          "Transverter support: 8 slots (TRV1\u2013TRV8, RF / IF on 2 m, 70 cm or 23 cm), RF shown up to 122 GHz",
+          "Separate active transverter for MAIN and SUB (SET > Transverter > MAIN Active / SUB Active); DUAL watch shows each receiver's own RF",
+          "MAIN/SUB exchange swaps the transverter selection together with the bands",
+          "SAT mode: transmit settings (power cap, TX delay, PTT inhibit) follow SUB Active; normal mode: MAIN Active",
+          "Per-transverter maximum TX power, TX delay (up to 300 ms, all modes) and PTT inhibit",
+          "CI-V frequency read/write in RF terms (6-byte BCD above 1.4 GHz, as IC-905)",
+          "Scope Set > Scope dB/div: 10 / 6 / 3 / 1 dB per division for spectrum and waterfall, noise floor anchored automatically (MAIN and SUB independently)",
+          "SD-card apps: MENU > SET > Apps (\\IC-9700\\Apps\\)",
+          "Custom A/B bootloader: hold POWER while connecting DC (~5 s) to boot the other firmware slot",
+          "Opening screen shows 'customized by Dawid SQ6EMM - 20261113v3'; the radio's version text stays official 1.50"
+        ],
+        "output_md5": "51e9d2da39790357f220f3bea3fe4879",
+        "output_main_md5": "0888e4a1698b463b126eaf802ef32d3a",
+        "bootloader": true,
+        "tx_outside_amateur_bands": false
+      }
+    },
+    {
+      "input": {
+        "file": "705E140.dat",
+        "md5": "2c9c1d7f3fc80ef173e01d841cd1248a",
+        "radio": "IC-705",
+        "region": "E",
+        "version": "1.40"
+      },
+      "release": {
+        "name": "705E140_20261113v1",
+        "patch_file": "705E140_20261113v1.json",
+        "patch_sha256": "c75caf9127d4445f2c0d42434fec885f05999939db7e2d5b286fee4a52a13838",
+        "label": "20261113v1",
+        "date": "2026-11-13",
+        "title": "IC-705 E 1.40 + transverter support (20261113v1)",
+        "description": "IC-705 E1.40 custom 20261113v1",
+        "features": [
+          "Transverter support: 8 slots (TRV1\u2013TRV8, RF / IF), RF shown on the display up to 122 GHz",
+          "CI-V frequency read/write in RF terms",
+          "Per-transverter maximum TX power and TX delay (up to 300 ms, all modes)",
+          "Scope Set > Scope dB/div: 10 / 6 / 3 / 1 dB per division for spectrum and waterfall, noise floor anchored automatically",
+          "Custom A/B bootloader: hold POWER at power-on until the LED blinks (~3 s) to boot the other firmware slot",
+          "Opening screen shows 'customized by Dawid SQ6EMM - 20261113v1'; the radio's version text stays official",
+          "SD-card apps: MENU > SET > Apps (\\IC-705\\Apps\\)",
+          "Extended TX ranges and 4 m (70 MHz) TX from the E base build"
+        ],
+        "output_md5": "1a4577ca926089198bcdf63155ac7410",
+        "output_main_md5": "9b6e3ece0b92845de10f6a17dab9a41f",
+        "bootloader": true,
+        "tx_outside_amateur_bands": true
+      }
+    },
+    {
+      "input": {
+        "file": "705J140.dat",
+        "md5": "b605171288db4a74e0992a8f2afcb1c3",
+        "radio": "IC-705",
+        "region": "J",
+        "version": "1.40"
+      },
+      "release": {
+        "name": "705J140_20261113v1",
+        "patch_file": "705J140_20261113v1.json",
+        "patch_sha256": "df30b16ef6fa1559a50d2ee745523f0ff5c219ccb415b8b371277fdff01997c4",
+        "label": "20261113v1",
+        "date": "2026-11-13",
+        "title": "IC-705 J 1.40 + transverter support (20261113v1)",
+        "description": "IC-705 J1.40 custom 20261113v1",
+        "features": [
+          "Transverter support: 8 slots (TRV1\u2013TRV8, RF / IF), RF shown on the display up to 122 GHz",
+          "CI-V frequency read/write in RF terms",
+          "Per-transverter maximum TX power and TX delay (up to 300 ms, all modes)",
+          "Scope Set > Scope dB/div: 10 / 6 / 3 / 1 dB per division for spectrum and waterfall, noise floor anchored automatically",
+          "Custom A/B bootloader: hold POWER at power-on until the LED blinks (~3 s) to boot the other firmware slot",
+          "Opening screen shows 'customized by Dawid SQ6EMM - 20261113v1'; the radio's version text stays official",
+          "Extended TX ranges: 1.6\u201354, 68\u201374.8, 118\u2013174, 400\u2013470 MHz"
+        ],
+        "output_md5": "d7a7f87b9b16f262b188fe3735b3682b",
+        "output_main_md5": "4502cb1d7bd56a5bbbc428f2349b58d6",
+        "bootloader": true,
+        "tx_outside_amateur_bands": true
+      }
+    }
+  ]
+}

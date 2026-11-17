@@ -1,0 +1,589 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <meta name="description" content="Analyse des correctifs du firmware Icom: aide Bricohams par modèle et version.">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>Analyse des correctifs du firmware Icom | Bricohams Radio Workspace</title>
+  <link rel="icon" href="bricohams-logo.png" type="image/png">
+  <link rel="stylesheet" href="styles.css">
+  <script src="appearance.js" defer></script>
+  <link rel="stylesheet" href="help-docs.css">
+  <link rel="alternate" hreflang="es" href="ayuda-icom-parches.html">
+  <link rel="alternate" hreflang="en-US" href="ayuda-icom-parches.en.html">
+  <link rel="alternate" hreflang="de" href="ayuda-icom-parches.de.html">
+  <link rel="alternate" hreflang="it" href="ayuda-icom-parches.it.html">
+  <link rel="alternate" hreflang="fr" href="ayuda-icom-parches.fr.html">
+</head>
+<body>
+  <a class="skip" href="#main">Aller au contenu</a>
+  <main id="main" class="firmware-help">
+    <header><a href="index.html?lang=fr"><img src="bricohams-logo.png" alt="Bricohams" width="240" height="89"></a>
+      <nav aria-label="Aide"><a href="ayuda-referencias.fr.html">Documentation et références</a> · <a href="ayuda-firmwares.fr.html">Bibliothèque de firmware</a> · <a href="ayuda-atlas-uv-k5-v3.fr.html">Atlas UV-K5 V3</a> · <a href="quansheng.html?lang=fr">Quansheng</a> · <a href="opengd77.html?lang=fr">OpenGD77</a></nav>
+      <nav class="languages" aria-label="Langue"><a href="ayuda-icom-parches.html" hreflang="es" lang="es">Español</a> · <a href="ayuda-icom-parches.en.html" hreflang="en-US" lang="en-US">English (US)</a> · <a href="ayuda-icom-parches.de.html" hreflang="de" lang="de">Deutsch</a> · <a href="ayuda-icom-parches.it.html" hreflang="it" lang="it">Italiano</a> · <a href="ayuda-icom-parches.fr.html" hreflang="fr" lang="fr" aria-current="page">Français</a></nav>
+    </header>
+    <nav class="panel" aria-label="Contenu de ce guide"><h2>Dans ce guide</h2><ul><li><a href="#como-leer-este-informe">Comment lire ce rapport</a></li><li><a href="#resumen-por-parche">Résumé par correctif</a></li><li><a href="#705e140-20261113v1">705E140_20261113v1</a></li><li><a href="#705j140-20261113v1">705J140_20261113v1</a></li><li><a href="#9700e150-20261113v3">9700E150_20261113v3</a></li><li><a href="#9700e150-trv16c">9700E150_trv16c</a></li><li><a href="#comparacion-entre-las-releases">Comparaison entre les releases</a></li><li><a href="#operaciones-identicas-entre-parches-de-la-misma-radio">Opérations identiques entre correctifs de la même radio</a></li><li><a href="#fuentes-del-mapa-de-memoria">Sources de la carte mémoire</a></li></ul></nav>
+    <article class="panel"><p>Document généré par <code>scripts/icom-patch-report.cjs</code> ; ne pas le modifier à la main.</p>
+<h1 id="analisis-de-los-parches-del-firmware-icom">Analyse des correctifs du firmware Icom</h1>
+<p>Ce rapport est calculé à partir des correctifs JSON intégrés dans <code>third_party/icom-custom-firmware/docs/patches/</code> et <code>third_party/icom-byof/patches/</code>. Il indique, adresse par adresse, quels octets chaque correctif modifie. Le contexte (format, mécanisme et fonctions) se trouve dans <a href="ayuda-icom-internals.fr.html">ICOM-FIRMWARE-INTERNALS.md</a> et l&#39;utilisation dans <a href="ayuda-icom.fr.html">ICOM-CUSTOM-FIRMWARE.md</a>.</p>
+<h2 id="como-leer-este-informe">Comment lire ce rapport</h2>
+<ul>
+<li>Les opérations <code>hex</code> écrivent des octets propres au projet (code ou données nouveaux). Les opérations <code>copy_from</code> copient des octets de l&#39;image officielle vers une autre adresse (code officiel déplacé). Aucun octet d&#39;Icom n&#39;est distribué.</li>
+<li>Les adresses de l&#39;image principale sont des adresses RAM absolues (<code>load_address</code>, normalement <code>0x20005000</code>). Celles du bootstrap sont des décalages dans les 64 premiers Kio du conteneur.</li>
+<li>Une région regroupe des opérations séparées de moins de 32 octets ; sa taille est l&#39;intervalle complet, trous compris.</li>
+<li>Type : propre = uniquement des octets <code>hex</code> ; déplacé = uniquement des octets <code>copy_from</code> ; mixte = les deux.</li>
+<li>Chaque bloc de l&#39;histogramme couvre 64 Kio (<code>0x10000</code>) ; la couverture compte les octets distincts touchés, sans répéter ceux qui se chevauchent.</li>
+</ul>
+<h2 id="resumen-por-parche">Résumé par correctif</h2>
+<div class="table-scroll"><table><thead><tr><th scope="col">Correctif</th><th scope="col">Radio</th><th scope="col">Release</th><th scope="col">Adresse de chargement</th><th scope="col">Taille de l&#39;image</th><th scope="col">MD5 d&#39;entrée</th><th scope="col">MD5 de sortie</th><th scope="col">Opérations hex</th><th scope="col">Opérations copy</th><th scope="col">Octets hex</th><th scope="col">Octets copiés</th><th scope="col">Régions</th><th scope="col">Opérations bootstrap</th><th scope="col">Octets bootstrap</th><th scope="col">Régions bootstrap</th></tr></thead><tbody>
+<tr><td><code>705E140_20261113v1</code></td><td>IC-705 E 1.40</td><td><code>20261113v1</code></td><td><code>0x20005000</code></td><td><code>3629056</code></td><td><code>2c9c1d7f3fc80ef173e01d841cd1248a</code></td><td><code>1a4577ca926089198bcdf63155ac7410</code></td><td>729</td><td>1138</td><td>15188</td><td>52097</td><td>109</td><td>20</td><td>1545</td><td>4</td></tr>
+<tr><td><code>705J140_20261113v1</code></td><td>IC-705 J 1.40</td><td><code>20261113v1</code></td><td><code>0x20005000</code></td><td><code>3629056</code></td><td><code>b605171288db4a74e0992a8f2afcb1c3</code></td><td><code>d7a7f87b9b16f262b188fe3735b3682b</code></td><td>796</td><td>1391</td><td>10368</td><td>56319</td><td>109</td><td>20</td><td>1545</td><td>4</td></tr>
+<tr><td><code>9700E150_20261113v3</code></td><td>IC-9700 E 1.50</td><td><code>20261113v3</code></td><td><code>0x20005000</code></td><td><code>4238864</code></td><td><code>6f04fd2248ba39254ed01b30b52ce36a</code></td><td><code>51e9d2da39790357f220f3bea3fe4879</code></td><td>620</td><td>762</td><td>16427</td><td>16093</td><td>77</td><td>23</td><td>1501</td><td>3</td></tr>
+<tr><td><code>9700E150_trv16c</code></td><td>IC-9700 E 1.50</td><td><code>trv16c</code></td><td><code>0x20005000</code></td><td><code>4233936</code></td><td><code>6f04fd2248ba39254ed01b30b52ce36a</code></td><td><code>1a9d78b5a6295b8217d7cbe26c02d728</code></td><td>478</td><td>615</td><td>7111</td><td>14752</td><td>70</td><td>23</td><td>1501</td><td>3</td></tr>
+</tbody></table></div>
+<h2 id="705e140-20261113v1">705E140_20261113v1</h2>
+<h3 id="datos-generales">Données générales</h3>
+<div class="table-scroll"><table><thead><tr><th scope="col">Champ</th><th scope="col">Valeur</th></tr></thead><tbody>
+<tr><td>Fichier du correctif</td><td><code>third_party/icom-custom-firmware/docs/patches/705E140_20261113v1.json</code></td></tr>
+<tr><td>Description</td><td><code>IC-705 E1.40 custom 20261113v1</code></td></tr>
+<tr><td>Radio et version officielle</td><td>IC-705 E 1.40</td></tr>
+<tr><td>Fichier officiel</td><td><code>705E140.dat</code></td></tr>
+<tr><td>Release</td><td><code>20261113v1</code></td></tr>
+<tr><td>Adresse de chargement</td><td><code>0x20005000</code></td></tr>
+<tr><td>Taille de l&#39;image</td><td><code>3629056</code></td></tr>
+<tr><td>Taille de l&#39;image officielle (documentée)</td><td><code>3629056</code></td></tr>
+<tr><td>Croissance par rapport à l&#39;image officielle</td><td><code>0</code></td></tr>
+<tr><td>MD5 d&#39;entrée</td><td><code>2c9c1d7f3fc80ef173e01d841cd1248a</code></td></tr>
+<tr><td>MD5 de l&#39;image principale d&#39;entrée</td><td><code>62fbe39f29bcf0b3cc341b861912047d</code></td></tr>
+<tr><td>MD5 de sortie</td><td><code>1a4577ca926089198bcdf63155ac7410</code></td></tr>
+<tr><td>MD5 de l&#39;image principale de sortie</td><td><code>9b6e3ece0b92845de10f6a17dab9a41f</code></td></tr>
+<tr><td>Opérations hex</td><td>729</td></tr>
+<tr><td>Opérations copy</td><td>1138</td></tr>
+<tr><td>Octets écrits par les opérations hex</td><td>15188</td></tr>
+<tr><td>Octets copiés depuis l&#39;image officielle</td><td>52097</td></tr>
+<tr><td>Régions distinctes (trou inférieur à 32 octets)</td><td>109</td></tr>
+<tr><td>Octets distincts touchés</td><td>67285</td></tr>
+<tr><td>Octets des régions au-dessus de l&#39;image officielle</td><td>0</td></tr>
+</tbody></table></div>
+<h3 id="las-40-regiones-mayores-de-la-imagen-principal">Les 40 plus grandes régions de l&#39;image principale</h3>
+<p>Au maximum 40 régions sont affichées, triées de la plus grande à la plus petite.</p>
+<div class="table-scroll"><table><thead><tr><th scope="col">Début</th><th scope="col">Fin</th><th scope="col">Taille</th><th scope="col">Type</th><th scope="col">Opérations</th><th scope="col">Octets hex</th><th scope="col">Octets copiés</th></tr></thead><tbody>
+<tr><td><code>0x2036a000</code></td><td><code>0x203739a8</code></td><td>39336</td><td>mixte</td><td>735</td><td>1524</td><td>34998</td></tr>
+<tr><td><code>0x20378200</code></td><td><code>0x2037a82b</code></td><td>9771</td><td>mixte</td><td>585</td><td>985</td><td>6306</td></tr>
+<tr><td><code>0x20376000</code></td><td><code>0x203780b8</code></td><td>8376</td><td>mixte</td><td>31</td><td>70</td><td>8306</td></tr>
+<tr><td><code>0x202f6004</code></td><td><code>0x202f7580</code></td><td>5500</td><td>mixte</td><td>195</td><td>3909</td><td>1218</td></tr>
+<tr><td><code>0x20373a00</code></td><td><code>0x20374e2c</code></td><td>5164</td><td>mixte</td><td>30</td><td>5021</td><td>143</td></tr>
+<tr><td><code>0x203756fa</code></td><td><code>0x20375e70</code></td><td>1910</td><td>mixte</td><td>69</td><td>1273</td><td>637</td></tr>
+<tr><td><code>0x20375130</code></td><td><code>0x20375512</code></td><td>994</td><td>mixte</td><td>48</td><td>739</td><td>239</td></tr>
+<tr><td><code>0x2037ac20</code></td><td><code>0x2037aed0</code></td><td>688</td><td>mixte</td><td>24</td><td>399</td><td>25</td></tr>
+<tr><td><code>0x2037a900</code></td><td><code>0x2037aa74</code></td><td>372</td><td>mixte</td><td>18</td><td>263</td><td>68</td></tr>
+<tr><td><code>0x2037ab00</code></td><td><code>0x2037abd4</code></td><td>212</td><td>propre (code ou données nouveaux)</td><td>1</td><td>212</td><td>0</td></tr>
+<tr><td><code>0x20369de0</code></td><td><code>0x20369e90</code></td><td>176</td><td>mixte</td><td>5</td><td>158</td><td>18</td></tr>
+<tr><td><code>0x20375600</code></td><td><code>0x203756a4</code></td><td>164</td><td>mixte</td><td>5</td><td>115</td><td>49</td></tr>
+<tr><td><code>0x2030274c</code></td><td><code>0x203027c1</code></td><td>117</td><td>mixte</td><td>19</td><td>36</td><td>81</td></tr>
+<tr><td><code>0x20369f40</code></td><td><code>0x20369f88</code></td><td>72</td><td>propre (code ou données nouveaux)</td><td>1</td><td>72</td><td>0</td></tr>
+<tr><td><code>0x20149bd0</code></td><td><code>0x20149bf0</code></td><td>32</td><td>propre (code ou données nouveaux)</td><td>2</td><td>16</td><td>0</td></tr>
+<tr><td><code>0x200247d8</code></td><td><code>0x200247f3</code></td><td>27</td><td>propre (code ou données nouveaux)</td><td>1</td><td>27</td><td>0</td></tr>
+<tr><td><code>0x2002841c</code></td><td><code>0x20028437</code></td><td>27</td><td>propre (code ou données nouveaux)</td><td>2</td><td>18</td><td>0</td></tr>
+<tr><td><code>0x200eaa9c</code></td><td><code>0x200eaab0</code></td><td>20</td><td>propre (code ou données nouveaux)</td><td>2</td><td>8</td><td>0</td></tr>
+<tr><td><code>0x200265f4</code></td><td><code>0x20026607</code></td><td>19</td><td>propre (code ou données nouveaux)</td><td>2</td><td>6</td><td>0</td></tr>
+<tr><td><code>0x20005024</code></td><td><code>0x20005033</code></td><td>15</td><td>propre (code ou données nouveaux)</td><td>1</td><td>15</td><td>0</td></tr>
+<tr><td><code>0x20096804</code></td><td><code>0x20096813</code></td><td>15</td><td>propre (code ou données nouveaux)</td><td>2</td><td>6</td><td>0</td></tr>
+<tr><td><code>0x201559b0</code></td><td><code>0x201559bf</code></td><td>15</td><td>propre (code ou données nouveaux)</td><td>2</td><td>6</td><td>0</td></tr>
+<tr><td><code>0x20108348</code></td><td><code>0x20108353</code></td><td>11</td><td>propre (code ou données nouveaux)</td><td>1</td><td>11</td><td>0</td></tr>
+<tr><td><code>0x2031d180</code></td><td><code>0x2031d189</code></td><td>9</td><td>déplacé (octets officiels)</td><td>1</td><td>0</td><td>9</td></tr>
+<tr><td><code>0x202dc9d2</code></td><td><code>0x202dc9da</code></td><td>8</td><td>propre (code ou données nouveaux)</td><td>1</td><td>8</td><td>0</td></tr>
+<tr><td><code>0x202e0524</code></td><td><code>0x202e052c</code></td><td>8</td><td>propre (code ou données nouveaux)</td><td>1</td><td>8</td><td>0</td></tr>
+<tr><td><code>0x2030bb84</code></td><td><code>0x2030bb8c</code></td><td>8</td><td>propre (code ou données nouveaux)</td><td>1</td><td>8</td><td>0</td></tr>
+<tr><td><code>0x20028474</code></td><td><code>0x2002847b</code></td><td>7</td><td>propre (code ou données nouveaux)</td><td>1</td><td>7</td><td>0</td></tr>
+<tr><td><code>0x2014bb14</code></td><td><code>0x2014bb1b</code></td><td>7</td><td>propre (code ou données nouveaux)</td><td>1</td><td>7</td><td>0</td></tr>
+<tr><td><code>0x20301e1c</code></td><td><code>0x20301e23</code></td><td>7</td><td>propre (code ou données nouveaux)</td><td>1</td><td>7</td><td>0</td></tr>
+<tr><td><code>0x203021e8</code></td><td><code>0x203021ef</code></td><td>7</td><td>propre (code ou données nouveaux)</td><td>1</td><td>7</td><td>0</td></tr>
+<tr><td><code>0x2002f288</code></td><td><code>0x2002f28c</code></td><td>4</td><td>propre (code ou données nouveaux)</td><td>1</td><td>4</td><td>0</td></tr>
+<tr><td><code>0x20054ae0</code></td><td><code>0x20054ae4</code></td><td>4</td><td>propre (code ou données nouveaux)</td><td>1</td><td>4</td><td>0</td></tr>
+<tr><td><code>0x2005f3ec</code></td><td><code>0x2005f3f0</code></td><td>4</td><td>propre (code ou données nouveaux)</td><td>1</td><td>4</td><td>0</td></tr>
+<tr><td><code>0x2005ff18</code></td><td><code>0x2005ff1c</code></td><td>4</td><td>propre (code ou données nouveaux)</td><td>1</td><td>4</td><td>0</td></tr>
+<tr><td><code>0x2007d628</code></td><td><code>0x2007d62c</code></td><td>4</td><td>propre (code ou données nouveaux)</td><td>1</td><td>4</td><td>0</td></tr>
+<tr><td><code>0x20095114</code></td><td><code>0x20095118</code></td><td>4</td><td>propre (code ou données nouveaux)</td><td>1</td><td>4</td><td>0</td></tr>
+<tr><td><code>0x20096424</code></td><td><code>0x20096428</code></td><td>4</td><td>propre (code ou données nouveaux)</td><td>1</td><td>4</td><td>0</td></tr>
+<tr><td><code>0x200984d0</code></td><td><code>0x200984d4</code></td><td>4</td><td>propre (code ou données nouveaux)</td><td>1</td><td>4</td><td>0</td></tr>
+<tr><td><code>0x200a3414</code></td><td><code>0x200a3418</code></td><td>4</td><td>propre (code ou données nouveaux)</td><td>1</td><td>4</td><td>0</td></tr>
+</tbody></table></div>
+<h3 id="histograma-por-bloque-de-64-kib">Histogramme par bloc de 64 Kio</h3>
+<div class="table-scroll"><table><thead><tr><th scope="col">Bloc</th><th scope="col">Octets touchés</th><th scope="col">Couverture</th><th scope="col">Régions</th></tr></thead><tbody>
+<tr><td><code>0x20000000</code></td><td>15</td><td>0.02%</td><td>1</td></tr>
+<tr><td><code>0x20010000</code></td><td>3</td><td>0.00%</td><td>1</td></tr>
+<tr><td><code>0x20020000</code></td><td>71</td><td>0.11%</td><td>8</td></tr>
+<tr><td><code>0x20040000</code></td><td>9</td><td>0.01%</td><td>3</td></tr>
+<tr><td><code>0x20050000</code></td><td>18</td><td>0.03%</td><td>5</td></tr>
+<tr><td><code>0x20060000</code></td><td>6</td><td>0.01%</td><td>2</td></tr>
+<tr><td><code>0x20070000</code></td><td>19</td><td>0.03%</td><td>6</td></tr>
+<tr><td><code>0x20080000</code></td><td>3</td><td>0.00%</td><td>1</td></tr>
+<tr><td><code>0x20090000</code></td><td>25</td><td>0.04%</td><td>7</td></tr>
+<tr><td><code>0x200a0000</code></td><td>25</td><td>0.04%</td><td>8</td></tr>
+<tr><td><code>0x200b0000</code></td><td>3</td><td>0.00%</td><td>1</td></tr>
+<tr><td><code>0x200c0000</code></td><td>9</td><td>0.01%</td><td>3</td></tr>
+<tr><td><code>0x200d0000</code></td><td>3</td><td>0.00%</td><td>1</td></tr>
+<tr><td><code>0x200e0000</code></td><td>8</td><td>0.01%</td><td>1</td></tr>
+<tr><td><code>0x200f0000</code></td><td>10</td><td>0.02%</td><td>4</td></tr>
+<tr><td><code>0x20100000</code></td><td>27</td><td>0.04%</td><td>5</td></tr>
+<tr><td><code>0x20140000</code></td><td>30</td><td>0.05%</td><td>4</td></tr>
+<tr><td><code>0x20150000</code></td><td>21</td><td>0.03%</td><td>6</td></tr>
+<tr><td><code>0x20160000</code></td><td>18</td><td>0.03%</td><td>5</td></tr>
+<tr><td><code>0x20170000</code></td><td>18</td><td>0.03%</td><td>6</td></tr>
+<tr><td><code>0x20180000</code></td><td>9</td><td>0.01%</td><td>3</td></tr>
+<tr><td><code>0x20190000</code></td><td>21</td><td>0.03%</td><td>7</td></tr>
+<tr><td><code>0x202d0000</code></td><td>8</td><td>0.01%</td><td>1</td></tr>
+<tr><td><code>0x202e0000</code></td><td>8</td><td>0.01%</td><td>1</td></tr>
+<tr><td><code>0x202f0000</code></td><td>5127</td><td>7.82%</td><td>1</td></tr>
+<tr><td><code>0x20300000</code></td><td>139</td><td>0.21%</td><td>4</td></tr>
+<tr><td><code>0x20310000</code></td><td>9</td><td>0.01%</td><td>1</td></tr>
+<tr><td><code>0x20360000</code></td><td>23756</td><td>36.25%</td><td>4</td></tr>
+<tr><td><code>0x20370000</code></td><td>37867</td><td>57.78%</td><td>10</td></tr>
+</tbody></table></div>
+<h3 id="cruce-con-el-mapa-de-memoria-documentado">Recoupement avec la carte mémoire documentée</h3>
+<div class="table-scroll"><table><thead><tr><th scope="col">Zone</th><th scope="col">Début</th><th scope="col">Fin</th><th scope="col">Source</th><th scope="col">Régions</th><th scope="col">Octets à l&#39;intérieur</th></tr></thead><tbody>
+<tr><td>En-tête de l&#39;image (vecteurs et littéraux) jusqu&#39;au point d&#39;entrée</td><td><code>0x20005000</code></td><td><code>0x20005060</code></td><td><code>third_party/icom-byof/IC705_DAT_FORMAT.md</code>, <code>third_party/icom-byof/IC705_FLASH_LAYOUT.md</code></td><td>1</td><td>15</td></tr>
+<tr><td>Corps de l&#39;image officielle</td><td><code>0x20005060</code></td><td><code>0x2037b000</code></td><td><code>third_party/icom-byof/IC705_DAT_FORMAT.md</code>, <code>third_party/icom-byof/IC705_FLASH_LAYOUT.md</code></td><td>108</td><td>73326</td></tr>
+</tbody></table></div>
+<h3 id="bootstrap-y-bootloader">Bootstrap et bootloader</h3>
+<p>Les adresses sont des décalages dans les 64 Kio du bootstrap (chargeur en RAM à <code>0x20004000</code>).</p>
+<div class="table-scroll"><table><thead><tr><th scope="col">Champ</th><th scope="col">Valeur</th></tr></thead><tbody>
+<tr><td>MD5 du bootstrap d&#39;entrée</td><td><code>9f97d0004c205a5d5bb247578098e153</code></td></tr>
+<tr><td>MD5 du bootstrap de sortie</td><td><code>6194af1bd0dd5d554b6526cf36b2088d</code></td></tr>
+<tr><td>Opérations hex</td><td>12</td></tr>
+<tr><td>Opérations copy</td><td>8</td></tr>
+<tr><td>Octets écrits par les opérations hex</td><td>1472</td></tr>
+<tr><td>Octets copiés depuis l&#39;image officielle</td><td>73</td></tr>
+<tr><td>Régions distinctes (trou inférieur à 32 octets)</td><td>4</td></tr>
+<tr><td>Octets distincts touchés</td><td>1545</td></tr>
+</tbody></table></div>
+<div class="table-scroll"><table><thead><tr><th scope="col">Début</th><th scope="col">Fin</th><th scope="col">Taille</th><th scope="col">Type</th><th scope="col">Opérations</th><th scope="col">Octets hex</th><th scope="col">Octets copiés</th></tr></thead><tbody>
+<tr><td><code>0x49bc</code></td><td><code>0x4ed4</code></td><td>1304</td><td>mixte</td><td>17</td><td>1231</td><td>73</td></tr>
+<tr><td><code>0x1000</code></td><td><code>0x10ec</code></td><td>236</td><td>propre (code ou données nouveaux)</td><td>1</td><td>236</td><td>0</td></tr>
+<tr><td><code>0x4944</code></td><td><code>0x4947</code></td><td>3</td><td>propre (code ou données nouveaux)</td><td>1</td><td>3</td><td>0</td></tr>
+<tr><td><code>0x88</code></td><td><code>0x8a</code></td><td>2</td><td>propre (code ou données nouveaux)</td><td>1</td><td>2</td><td>0</td></tr>
+</tbody></table></div>
+<div class="table-scroll"><table><thead><tr><th scope="col">Zone</th><th scope="col">Début</th><th scope="col">Fin</th><th scope="col">Source</th><th scope="col">Régions</th><th scope="col">Octets à l&#39;intérieur</th></tr></thead><tbody>
+<tr><td>Bootstrap avant le chargeur (vecteurs de démarrage)</td><td><code>0x0</code></td><td><code>0x4000</code></td><td><code>third_party/icom-byof/IC705_DAT_FORMAT.md</code></td><td>2</td><td>238</td></tr>
+<tr><td>Chargeur d&#39;origine (copié en RAM)</td><td><code>0x4000</code></td><td><code>0x49bc</code></td><td><code>third_party/icom-byof/IC705_DAT_FORMAT.md</code></td><td>1</td><td>3</td></tr>
+<tr><td>Au-dessus du chargeur d&#39;origine, avant l&#39;étiquette</td><td><code>0x49bc</code></td><td><code>0x4f00</code></td><td><code>third_party/icom-byof/IC705_DAT_FORMAT.md</code>, <code>third_party/icom-byof/ic_rza1_repack.py</code></td><td>1</td><td>1304</td></tr>
+<tr><td>Étiquette du bootloader (conservée)</td><td><code>0x4f00</code></td><td><code>0x4f10</code></td><td><code>third_party/icom-byof/ic_rza1_repack.py</code></td><td>0</td><td>0</td></tr>
+<tr><td>Reste du bootstrap</td><td><code>0x4f10</code></td><td><code>0x10000</code></td><td><code>third_party/icom-byof/ic_rza1_repack.py</code>, <code>third_party/icom-byof/IC705_DAT_FORMAT.md</code></td><td>0</td><td>0</td></tr>
+</tbody></table></div>
+<h2 id="705j140-20261113v1">705J140_20261113v1</h2>
+<h3 id="datos-generales-1">Données générales</h3>
+<div class="table-scroll"><table><thead><tr><th scope="col">Champ</th><th scope="col">Valeur</th></tr></thead><tbody>
+<tr><td>Fichier du correctif</td><td><code>third_party/icom-custom-firmware/docs/patches/705J140_20261113v1.json</code></td></tr>
+<tr><td>Description</td><td><code>IC-705 J1.40 custom 20261113v1</code></td></tr>
+<tr><td>Radio et version officielle</td><td>IC-705 J 1.40</td></tr>
+<tr><td>Fichier officiel</td><td><code>705J140.dat</code></td></tr>
+<tr><td>Release</td><td><code>20261113v1</code></td></tr>
+<tr><td>Adresse de chargement</td><td><code>0x20005000</code></td></tr>
+<tr><td>Taille de l&#39;image</td><td><code>3629056</code></td></tr>
+<tr><td>Taille de l&#39;image officielle (documentée)</td><td><code>3629056</code></td></tr>
+<tr><td>Croissance par rapport à l&#39;image officielle</td><td><code>0</code></td></tr>
+<tr><td>MD5 d&#39;entrée</td><td><code>b605171288db4a74e0992a8f2afcb1c3</code></td></tr>
+<tr><td>MD5 de l&#39;image principale d&#39;entrée</td><td><code>c8202dfae07bca21b2d28f6015346863</code></td></tr>
+<tr><td>MD5 de sortie</td><td><code>d7a7f87b9b16f262b188fe3735b3682b</code></td></tr>
+<tr><td>MD5 de l&#39;image principale de sortie</td><td><code>4502cb1d7bd56a5bbbc428f2349b58d6</code></td></tr>
+<tr><td>Opérations hex</td><td>796</td></tr>
+<tr><td>Opérations copy</td><td>1391</td></tr>
+<tr><td>Octets écrits par les opérations hex</td><td>10368</td></tr>
+<tr><td>Octets copiés depuis l&#39;image officielle</td><td>56319</td></tr>
+<tr><td>Régions distinctes (trou inférieur à 32 octets)</td><td>109</td></tr>
+<tr><td>Octets distincts touchés</td><td>66687</td></tr>
+<tr><td>Octets des régions au-dessus de l&#39;image officielle</td><td>0</td></tr>
+</tbody></table></div>
+<h3 id="las-40-regiones-mayores-de-la-imagen-principal-1">Les 40 plus grandes régions de l&#39;image principale</h3>
+<p>Au maximum 40 régions sont affichées, triées de la plus grande à la plus petite.</p>
+<div class="table-scroll"><table><thead><tr><th scope="col">Début</th><th scope="col">Fin</th><th scope="col">Taille</th><th scope="col">Type</th><th scope="col">Opérations</th><th scope="col">Octets hex</th><th scope="col">Octets copiés</th></tr></thead><tbody>
+<tr><td><code>0x2036a000</code></td><td><code>0x20375512</code></td><td>46354</td><td>mixte</td><td>1118</td><td>2268</td><td>39556</td></tr>
+<tr><td><code>0x20378200</code></td><td><code>0x2037a811</code></td><td>9745</td><td>mixte</td><td>584</td><td>973</td><td>6300</td></tr>
+<tr><td><code>0x20376000</code></td><td><code>0x2037819c</code></td><td>8604</td><td>mixte</td><td>43</td><td>257</td><td>8347</td></tr>
+<tr><td><code>0x202f5f24</code></td><td><code>0x202f74a0</code></td><td>5500</td><td>mixte</td><td>195</td><td>3910</td><td>1217</td></tr>
+<tr><td><code>0x203756fa</code></td><td><code>0x20375e70</code></td><td>1910</td><td>mixte</td><td>69</td><td>1273</td><td>637</td></tr>
+<tr><td><code>0x2037ac20</code></td><td><code>0x2037aed0</code></td><td>688</td><td>mixte</td><td>24</td><td>399</td><td>25</td></tr>
+<tr><td><code>0x2037a900</code></td><td><code>0x2037aa74</code></td><td>372</td><td>mixte</td><td>18</td><td>263</td><td>68</td></tr>
+<tr><td><code>0x2037ab00</code></td><td><code>0x2037abd4</code></td><td>212</td><td>propre (code ou données nouveaux)</td><td>1</td><td>212</td><td>0</td></tr>
+<tr><td><code>0x20369de0</code></td><td><code>0x20369e90</code></td><td>176</td><td>mixte</td><td>5</td><td>158</td><td>18</td></tr>
+<tr><td><code>0x20375600</code></td><td><code>0x203756a4</code></td><td>164</td><td>mixte</td><td>5</td><td>115</td><td>49</td></tr>
+<tr><td><code>0x2030242c</code></td><td><code>0x20302495</code></td><td>105</td><td>mixte</td><td>17</td><td>33</td><td>72</td></tr>
+<tr><td><code>0x20369f40</code></td><td><code>0x20369f88</code></td><td>72</td><td>propre (code ou données nouveaux)</td><td>1</td><td>72</td><td>0</td></tr>
+<tr><td><code>0x202f5000</code></td><td><code>0x202f5030</code></td><td>48</td><td>mixte</td><td>5</td><td>27</td><td>21</td></tr>
+<tr><td><code>0x20149aec</code></td><td><code>0x20149b0c</code></td><td>32</td><td>propre (code ou données nouveaux)</td><td>2</td><td>16</td><td>0</td></tr>
+<tr><td><code>0x200248cc</code></td><td><code>0x200248e7</code></td><td>27</td><td>propre (code ou données nouveaux)</td><td>1</td><td>27</td><td>0</td></tr>
+<tr><td><code>0x20028510</code></td><td><code>0x2002852b</code></td><td>27</td><td>propre (code ou données nouveaux)</td><td>2</td><td>18</td><td>0</td></tr>
+<tr><td><code>0x200ea9b8</code></td><td><code>0x200ea9cc</code></td><td>20</td><td>propre (code ou données nouveaux)</td><td>2</td><td>8</td><td>0</td></tr>
+<tr><td><code>0x200266e8</code></td><td><code>0x200266fb</code></td><td>19</td><td>propre (code ou données nouveaux)</td><td>2</td><td>6</td><td>0</td></tr>
+<tr><td><code>0x2009689c</code></td><td><code>0x200968ab</code></td><td>15</td><td>propre (code ou données nouveaux)</td><td>2</td><td>6</td><td>0</td></tr>
+<tr><td><code>0x201558cc</code></td><td><code>0x201558db</code></td><td>15</td><td>propre (code ou données nouveaux)</td><td>2</td><td>6</td><td>0</td></tr>
+<tr><td><code>0x20108264</code></td><td><code>0x2010826f</code></td><td>11</td><td>propre (code ou données nouveaux)</td><td>1</td><td>11</td><td>0</td></tr>
+<tr><td><code>0x2031ce60</code></td><td><code>0x2031ce69</code></td><td>9</td><td>déplacé (octets officiels)</td><td>1</td><td>0</td><td>9</td></tr>
+<tr><td><code>0x20098d00</code></td><td><code>0x20098d08</code></td><td>8</td><td>propre (code ou données nouveaux)</td><td>1</td><td>8</td><td>0</td></tr>
+<tr><td><code>0x202dc8f2</code></td><td><code>0x202dc8fa</code></td><td>8</td><td>propre (code ou données nouveaux)</td><td>1</td><td>8</td><td>0</td></tr>
+<tr><td><code>0x202e0444</code></td><td><code>0x202e044c</code></td><td>8</td><td>propre (code ou données nouveaux)</td><td>1</td><td>8</td><td>0</td></tr>
+<tr><td><code>0x2030b864</code></td><td><code>0x2030b86c</code></td><td>8</td><td>propre (code ou données nouveaux)</td><td>1</td><td>8</td><td>0</td></tr>
+<tr><td><code>0x20028568</code></td><td><code>0x2002856f</code></td><td>7</td><td>propre (code ou données nouveaux)</td><td>1</td><td>7</td><td>0</td></tr>
+<tr><td><code>0x2014ba30</code></td><td><code>0x2014ba37</code></td><td>7</td><td>propre (code ou données nouveaux)</td><td>1</td><td>7</td><td>0</td></tr>
+<tr><td><code>0x20301afc</code></td><td><code>0x20301b03</code></td><td>7</td><td>propre (code ou données nouveaux)</td><td>1</td><td>7</td><td>0</td></tr>
+<tr><td><code>0x20301ec8</code></td><td><code>0x20301ecf</code></td><td>7</td><td>propre (code ou données nouveaux)</td><td>1</td><td>7</td><td>0</td></tr>
+<tr><td><code>0x2002f378</code></td><td><code>0x2002f37c</code></td><td>4</td><td>propre (code ou données nouveaux)</td><td>1</td><td>4</td><td>0</td></tr>
+<tr><td><code>0x20054bd0</code></td><td><code>0x20054bd4</code></td><td>4</td><td>propre (code ou données nouveaux)</td><td>1</td><td>4</td><td>0</td></tr>
+<tr><td><code>0x2005f4dc</code></td><td><code>0x2005f4e0</code></td><td>4</td><td>propre (code ou données nouveaux)</td><td>1</td><td>4</td><td>0</td></tr>
+<tr><td><code>0x20060008</code></td><td><code>0x2006000c</code></td><td>4</td><td>propre (code ou données nouveaux)</td><td>1</td><td>4</td><td>0</td></tr>
+<tr><td><code>0x2007d6c0</code></td><td><code>0x2007d6c4</code></td><td>4</td><td>propre (code ou données nouveaux)</td><td>1</td><td>4</td><td>0</td></tr>
+<tr><td><code>0x200951ac</code></td><td><code>0x200951b0</code></td><td>4</td><td>propre (code ou données nouveaux)</td><td>1</td><td>4</td><td>0</td></tr>
+<tr><td><code>0x20098620</code></td><td><code>0x20098624</code></td><td>4</td><td>propre (code ou données nouveaux)</td><td>1</td><td>4</td><td>0</td></tr>
+<tr><td><code>0x2009867c</code></td><td><code>0x20098680</code></td><td>4</td><td>propre (code ou données nouveaux)</td><td>1</td><td>4</td><td>0</td></tr>
+<tr><td><code>0x200a3330</code></td><td><code>0x200a3334</code></td><td>4</td><td>propre (code ou données nouveaux)</td><td>1</td><td>4</td><td>0</td></tr>
+<tr><td><code>0x20104190</code></td><td><code>0x20104194</code></td><td>4</td><td>propre (code ou données nouveaux)</td><td>1</td><td>4</td><td>0</td></tr>
+</tbody></table></div>
+<h3 id="histograma-por-bloque-de-64-kib-1">Histogramme par bloc de 64 Kio</h3>
+<div class="table-scroll"><table><thead><tr><th scope="col">Bloc</th><th scope="col">Octets touchés</th><th scope="col">Couverture</th><th scope="col">Régions</th></tr></thead><tbody>
+<tr><td><code>0x20010000</code></td><td>3</td><td>0.00%</td><td>1</td></tr>
+<tr><td><code>0x20020000</code></td><td>71</td><td>0.11%</td><td>8</td></tr>
+<tr><td><code>0x20040000</code></td><td>9</td><td>0.01%</td><td>3</td></tr>
+<tr><td><code>0x20050000</code></td><td>14</td><td>0.02%</td><td>4</td></tr>
+<tr><td><code>0x20060000</code></td><td>10</td><td>0.02%</td><td>3</td></tr>
+<tr><td><code>0x20070000</code></td><td>19</td><td>0.03%</td><td>6</td></tr>
+<tr><td><code>0x20080000</code></td><td>3</td><td>0.00%</td><td>1</td></tr>
+<tr><td><code>0x20090000</code></td><td>33</td><td>0.05%</td><td>8</td></tr>
+<tr><td><code>0x200a0000</code></td><td>25</td><td>0.04%</td><td>8</td></tr>
+<tr><td><code>0x200b0000</code></td><td>3</td><td>0.00%</td><td>1</td></tr>
+<tr><td><code>0x200c0000</code></td><td>9</td><td>0.01%</td><td>3</td></tr>
+<tr><td><code>0x200d0000</code></td><td>3</td><td>0.00%</td><td>1</td></tr>
+<tr><td><code>0x200e0000</code></td><td>8</td><td>0.01%</td><td>1</td></tr>
+<tr><td><code>0x200f0000</code></td><td>10</td><td>0.02%</td><td>4</td></tr>
+<tr><td><code>0x20100000</code></td><td>27</td><td>0.04%</td><td>5</td></tr>
+<tr><td><code>0x20140000</code></td><td>30</td><td>0.05%</td><td>4</td></tr>
+<tr><td><code>0x20150000</code></td><td>21</td><td>0.03%</td><td>6</td></tr>
+<tr><td><code>0x20160000</code></td><td>18</td><td>0.03%</td><td>5</td></tr>
+<tr><td><code>0x20170000</code></td><td>18</td><td>0.03%</td><td>6</td></tr>
+<tr><td><code>0x20180000</code></td><td>9</td><td>0.01%</td><td>3</td></tr>
+<tr><td><code>0x20190000</code></td><td>21</td><td>0.03%</td><td>7</td></tr>
+<tr><td><code>0x202d0000</code></td><td>8</td><td>0.01%</td><td>1</td></tr>
+<tr><td><code>0x202e0000</code></td><td>8</td><td>0.01%</td><td>1</td></tr>
+<tr><td><code>0x202f0000</code></td><td>5175</td><td>7.90%</td><td>2</td></tr>
+<tr><td><code>0x20300000</code></td><td>130</td><td>0.20%</td><td>5</td></tr>
+<tr><td><code>0x20310000</code></td><td>9</td><td>0.01%</td><td>1</td></tr>
+<tr><td><code>0x20360000</code></td><td>23756</td><td>36.25%</td><td>4</td></tr>
+<tr><td><code>0x20370000</code></td><td>37237</td><td>56.82%</td><td>8</td></tr>
+</tbody></table></div>
+<h3 id="cruce-con-el-mapa-de-memoria-documentado-1">Recoupement avec la carte mémoire documentée</h3>
+<div class="table-scroll"><table><thead><tr><th scope="col">Zone</th><th scope="col">Début</th><th scope="col">Fin</th><th scope="col">Source</th><th scope="col">Régions</th><th scope="col">Octets à l&#39;intérieur</th></tr></thead><tbody>
+<tr><td>En-tête de l&#39;image (vecteurs et littéraux) jusqu&#39;au point d&#39;entrée</td><td><code>0x20005000</code></td><td><code>0x20005060</code></td><td><code>third_party/icom-byof/IC705_DAT_FORMAT.md</code>, <code>third_party/icom-byof/IC705_FLASH_LAYOUT.md</code></td><td>0</td><td>0</td></tr>
+<tr><td>Corps de l&#39;image officielle</td><td><code>0x20005060</code></td><td><code>0x2037b000</code></td><td><code>third_party/icom-byof/IC705_DAT_FORMAT.md</code>, <code>third_party/icom-byof/IC705_FLASH_LAYOUT.md</code></td><td>109</td><td>74435</td></tr>
+</tbody></table></div>
+<h3 id="bootstrap-y-bootloader-1">Bootstrap et bootloader</h3>
+<p>Les adresses sont des décalages dans les 64 Kio du bootstrap (chargeur en RAM à <code>0x20004000</code>).</p>
+<div class="table-scroll"><table><thead><tr><th scope="col">Champ</th><th scope="col">Valeur</th></tr></thead><tbody>
+<tr><td>MD5 du bootstrap d&#39;entrée</td><td><code>9f97d0004c205a5d5bb247578098e153</code></td></tr>
+<tr><td>MD5 du bootstrap de sortie</td><td><code>6194af1bd0dd5d554b6526cf36b2088d</code></td></tr>
+<tr><td>Opérations hex</td><td>12</td></tr>
+<tr><td>Opérations copy</td><td>8</td></tr>
+<tr><td>Octets écrits par les opérations hex</td><td>1472</td></tr>
+<tr><td>Octets copiés depuis l&#39;image officielle</td><td>73</td></tr>
+<tr><td>Régions distinctes (trou inférieur à 32 octets)</td><td>4</td></tr>
+<tr><td>Octets distincts touchés</td><td>1545</td></tr>
+</tbody></table></div>
+<div class="table-scroll"><table><thead><tr><th scope="col">Début</th><th scope="col">Fin</th><th scope="col">Taille</th><th scope="col">Type</th><th scope="col">Opérations</th><th scope="col">Octets hex</th><th scope="col">Octets copiés</th></tr></thead><tbody>
+<tr><td><code>0x49bc</code></td><td><code>0x4ed4</code></td><td>1304</td><td>mixte</td><td>17</td><td>1231</td><td>73</td></tr>
+<tr><td><code>0x1000</code></td><td><code>0x10ec</code></td><td>236</td><td>propre (code ou données nouveaux)</td><td>1</td><td>236</td><td>0</td></tr>
+<tr><td><code>0x4944</code></td><td><code>0x4947</code></td><td>3</td><td>propre (code ou données nouveaux)</td><td>1</td><td>3</td><td>0</td></tr>
+<tr><td><code>0x88</code></td><td><code>0x8a</code></td><td>2</td><td>propre (code ou données nouveaux)</td><td>1</td><td>2</td><td>0</td></tr>
+</tbody></table></div>
+<div class="table-scroll"><table><thead><tr><th scope="col">Zone</th><th scope="col">Début</th><th scope="col">Fin</th><th scope="col">Source</th><th scope="col">Régions</th><th scope="col">Octets à l&#39;intérieur</th></tr></thead><tbody>
+<tr><td>Bootstrap avant le chargeur (vecteurs de démarrage)</td><td><code>0x0</code></td><td><code>0x4000</code></td><td><code>third_party/icom-byof/IC705_DAT_FORMAT.md</code></td><td>2</td><td>238</td></tr>
+<tr><td>Chargeur d&#39;origine (copié en RAM)</td><td><code>0x4000</code></td><td><code>0x49bc</code></td><td><code>third_party/icom-byof/IC705_DAT_FORMAT.md</code></td><td>1</td><td>3</td></tr>
+<tr><td>Au-dessus du chargeur d&#39;origine, avant l&#39;étiquette</td><td><code>0x49bc</code></td><td><code>0x4f00</code></td><td><code>third_party/icom-byof/IC705_DAT_FORMAT.md</code>, <code>third_party/icom-byof/ic_rza1_repack.py</code></td><td>1</td><td>1304</td></tr>
+<tr><td>Étiquette du bootloader (conservée)</td><td><code>0x4f00</code></td><td><code>0x4f10</code></td><td><code>third_party/icom-byof/ic_rza1_repack.py</code></td><td>0</td><td>0</td></tr>
+<tr><td>Reste du bootstrap</td><td><code>0x4f10</code></td><td><code>0x10000</code></td><td><code>third_party/icom-byof/ic_rza1_repack.py</code>, <code>third_party/icom-byof/IC705_DAT_FORMAT.md</code></td><td>0</td><td>0</td></tr>
+</tbody></table></div>
+<h2 id="9700e150-20261113v3">9700E150_20261113v3</h2>
+<h3 id="datos-generales-2">Données générales</h3>
+<div class="table-scroll"><table><thead><tr><th scope="col">Champ</th><th scope="col">Valeur</th></tr></thead><tbody>
+<tr><td>Fichier du correctif</td><td><code>third_party/icom-custom-firmware/docs/patches/9700E150_20261113v3.json</code></td></tr>
+<tr><td>Description</td><td><code>IC-9700 E1.50 custom 20261113v3</code></td></tr>
+<tr><td>Radio et version officielle</td><td>IC-9700 E 1.50</td></tr>
+<tr><td>Fichier officiel</td><td><code>9700E150.dat</code></td></tr>
+<tr><td>Release</td><td><code>20261113v3</code></td></tr>
+<tr><td>Adresse de chargement</td><td><code>0x20005000</code></td></tr>
+<tr><td>Taille de l&#39;image</td><td><code>4238864</code></td></tr>
+<tr><td>Taille de l&#39;image officielle (documentée)</td><td><code>4215604</code></td></tr>
+<tr><td>Croissance par rapport à l&#39;image officielle</td><td><code>23260</code></td></tr>
+<tr><td>MD5 d&#39;entrée</td><td><code>6f04fd2248ba39254ed01b30b52ce36a</code></td></tr>
+<tr><td>MD5 de l&#39;image principale d&#39;entrée</td><td><code>eea365d28c007ce44aded0a37955913f</code></td></tr>
+<tr><td>MD5 de sortie</td><td><code>51e9d2da39790357f220f3bea3fe4879</code></td></tr>
+<tr><td>MD5 de l&#39;image principale de sortie</td><td><code>0888e4a1698b463b126eaf802ef32d3a</code></td></tr>
+<tr><td>Opérations hex</td><td>620</td></tr>
+<tr><td>Opérations copy</td><td>762</td></tr>
+<tr><td>Octets écrits par les opérations hex</td><td>16427</td></tr>
+<tr><td>Octets copiés depuis l&#39;image officielle</td><td>16093</td></tr>
+<tr><td>Régions distinctes (trou inférieur à 32 octets)</td><td>77</td></tr>
+<tr><td>Octets distincts touchés</td><td>32520</td></tr>
+<tr><td>Octets des régions au-dessus de l&#39;image officielle</td><td>21990</td></tr>
+</tbody></table></div>
+<h3 id="las-40-regiones-mayores-de-la-imagen-principal-2">Les 40 plus grandes régions de l&#39;image principale</h3>
+<p>Au maximum 40 régions sont affichées, triées de la plus grande à la plus petite.</p>
+<div class="table-scroll"><table><thead><tr><th scope="col">Début</th><th scope="col">Fin</th><th scope="col">Taille</th><th scope="col">Type</th><th scope="col">Opérations</th><th scope="col">Octets hex</th><th scope="col">Octets copiés</th></tr></thead><tbody>
+<tr><td><code>0x2040d120</code></td><td><code>0x2040f9b4</code></td><td>10388</td><td>mixte</td><td>576</td><td>7555</td><td>2733</td></tr>
+<tr><td><code>0x2040ab74</code></td><td><code>0x2040cf94</code></td><td>9248</td><td>mixte</td><td>524</td><td>1176</td><td>5805</td></tr>
+<tr><td><code>0x2030beb8</code></td><td><code>0x2030d9ff</code></td><td>6983</td><td>mixte</td><td>23</td><td>150</td><td>6833</td></tr>
+<tr><td><code>0x202f6ab8</code></td><td><code>0x202f8350</code></td><td>6296</td><td>mixte</td><td>72</td><td>5951</td><td>345</td></tr>
+<tr><td><code>0x2040a4a8</code></td><td><code>0x2040aafe</code></td><td>1622</td><td>mixte</td><td>75</td><td>778</td><td>203</td></tr>
+<tr><td><code>0x2040fbb1</code></td><td><code>0x2040fe08</code></td><td>599</td><td>mixte</td><td>32</td><td>457</td><td>142</td></tr>
+<tr><td><code>0x2040d025</code></td><td><code>0x2040d074</code></td><td>79</td><td>mixte</td><td>6</td><td>43</td><td>16</td></tr>
+<tr><td><code>0x2040fa08</code></td><td><code>0x2040fa37</code></td><td>47</td><td>mixte</td><td>4</td><td>31</td><td>16</td></tr>
+<tr><td><code>0x201271d4</code></td><td><code>0x201271f4</code></td><td>32</td><td>propre (code ou données nouveaux)</td><td>2</td><td>16</td><td>0</td></tr>
+<tr><td><code>0x20005024</code></td><td><code>0x20005033</code></td><td>15</td><td>propre (code ou données nouveaux)</td><td>1</td><td>15</td><td>0</td></tr>
+<tr><td><code>0x200eb06c</code></td><td><code>0x200eb078</code></td><td>12</td><td>propre (code ou données nouveaux)</td><td>1</td><td>12</td><td>0</td></tr>
+<tr><td><code>0x200d81a0</code></td><td><code>0x200d81a7</code></td><td>7</td><td>propre (code ou données nouveaux)</td><td>1</td><td>7</td><td>0</td></tr>
+<tr><td><code>0x200d9c60</code></td><td><code>0x200d9c67</code></td><td>7</td><td>propre (code ou données nouveaux)</td><td>1</td><td>7</td><td>0</td></tr>
+<tr><td><code>0x203098b4</code></td><td><code>0x203098bb</code></td><td>7</td><td>propre (code ou données nouveaux)</td><td>1</td><td>7</td><td>0</td></tr>
+<tr><td><code>0x20309bcc</code></td><td><code>0x20309bd3</code></td><td>7</td><td>propre (code ou données nouveaux)</td><td>1</td><td>7</td><td>0</td></tr>
+<tr><td><code>0x2040a340</code></td><td><code>0x2040a347</code></td><td>7</td><td>propre (code ou données nouveaux)</td><td>1</td><td>7</td><td>0</td></tr>
+<tr><td><code>0x2000fa58</code></td><td><code>0x2000fa5c</code></td><td>4</td><td>propre (code ou données nouveaux)</td><td>1</td><td>4</td><td>0</td></tr>
+<tr><td><code>0x20025bd4</code></td><td><code>0x20025bd8</code></td><td>4</td><td>propre (code ou données nouveaux)</td><td>1</td><td>4</td><td>0</td></tr>
+<tr><td><code>0x200261b8</code></td><td><code>0x200261bc</code></td><td>4</td><td>propre (code ou données nouveaux)</td><td>1</td><td>4</td><td>0</td></tr>
+<tr><td><code>0x2004d10c</code></td><td><code>0x2004d110</code></td><td>4</td><td>propre (code ou données nouveaux)</td><td>1</td><td>4</td><td>0</td></tr>
+<tr><td><code>0x200535a4</code></td><td><code>0x200535a8</code></td><td>4</td><td>propre (code ou données nouveaux)</td><td>1</td><td>4</td><td>0</td></tr>
+<tr><td><code>0x20081464</code></td><td><code>0x20081468</code></td><td>4</td><td>propre (code ou données nouveaux)</td><td>1</td><td>4</td><td>0</td></tr>
+<tr><td><code>0x20087d00</code></td><td><code>0x20087d04</code></td><td>4</td><td>propre (code ou données nouveaux)</td><td>1</td><td>4</td><td>0</td></tr>
+<tr><td><code>0x200d2be0</code></td><td><code>0x200d2be4</code></td><td>4</td><td>propre (code ou données nouveaux)</td><td>1</td><td>4</td><td>0</td></tr>
+<tr><td><code>0x200d2c18</code></td><td><code>0x200d2c1c</code></td><td>4</td><td>propre (code ou données nouveaux)</td><td>1</td><td>4</td><td>0</td></tr>
+<tr><td><code>0x200d569c</code></td><td><code>0x200d56a0</code></td><td>4</td><td>propre (code ou données nouveaux)</td><td>1</td><td>4</td><td>0</td></tr>
+<tr><td><code>0x200d89d8</code></td><td><code>0x200d89dc</code></td><td>4</td><td>propre (code ou données nouveaux)</td><td>1</td><td>4</td><td>0</td></tr>
+<tr><td><code>0x200d9090</code></td><td><code>0x200d9094</code></td><td>4</td><td>propre (code ou données nouveaux)</td><td>1</td><td>4</td><td>0</td></tr>
+<tr><td><code>0x200eb90c</code></td><td><code>0x200eb910</code></td><td>4</td><td>propre (code ou données nouveaux)</td><td>1</td><td>4</td><td>0</td></tr>
+<tr><td><code>0x200f15f8</code></td><td><code>0x200f15fc</code></td><td>4</td><td>propre (code ou données nouveaux)</td><td>1</td><td>4</td><td>0</td></tr>
+<tr><td><code>0x200f1b38</code></td><td><code>0x200f1b3c</code></td><td>4</td><td>propre (code ou données nouveaux)</td><td>1</td><td>4</td><td>0</td></tr>
+<tr><td><code>0x2011f824</code></td><td><code>0x2011f828</code></td><td>4</td><td>propre (code ou données nouveaux)</td><td>1</td><td>4</td><td>0</td></tr>
+<tr><td><code>0x20127160</code></td><td><code>0x20127164</code></td><td>4</td><td>propre (code ou données nouveaux)</td><td>1</td><td>4</td><td>0</td></tr>
+<tr><td><code>0x2013ed28</code></td><td><code>0x2013ed2c</code></td><td>4</td><td>propre (code ou données nouveaux)</td><td>1</td><td>4</td><td>0</td></tr>
+<tr><td><code>0x2013f974</code></td><td><code>0x2013f978</code></td><td>4</td><td>propre (code ou données nouveaux)</td><td>1</td><td>4</td><td>0</td></tr>
+<tr><td><code>0x2013fa98</code></td><td><code>0x2013fa9c</code></td><td>4</td><td>propre (code ou données nouveaux)</td><td>1</td><td>4</td><td>0</td></tr>
+<tr><td><code>0x2014b5b0</code></td><td><code>0x2014b5b4</code></td><td>4</td><td>propre (code ou données nouveaux)</td><td>1</td><td>4</td><td>0</td></tr>
+<tr><td><code>0x2014bfe8</code></td><td><code>0x2014bfec</code></td><td>4</td><td>propre (code ou données nouveaux)</td><td>1</td><td>4</td><td>0</td></tr>
+<tr><td><code>0x2014c10c</code></td><td><code>0x2014c110</code></td><td>4</td><td>propre (code ou données nouveaux)</td><td>1</td><td>4</td><td>0</td></tr>
+<tr><td><code>0x2014c308</code></td><td><code>0x2014c30c</code></td><td>4</td><td>propre (code ou données nouveaux)</td><td>1</td><td>4</td><td>0</td></tr>
+</tbody></table></div>
+<h3 id="histograma-por-bloque-de-64-kib-2">Histogramme par bloc de 64 Kio</h3>
+<div class="table-scroll"><table><thead><tr><th scope="col">Bloc</th><th scope="col">Octets touchés</th><th scope="col">Couverture</th><th scope="col">Régions</th></tr></thead><tbody>
+<tr><td><code>0x20000000</code></td><td>19</td><td>0.03%</td><td>2</td></tr>
+<tr><td><code>0x20010000</code></td><td>18</td><td>0.03%</td><td>6</td></tr>
+<tr><td><code>0x20020000</code></td><td>8</td><td>0.01%</td><td>2</td></tr>
+<tr><td><code>0x20040000</code></td><td>4</td><td>0.01%</td><td>1</td></tr>
+<tr><td><code>0x20050000</code></td><td>7</td><td>0.01%</td><td>2</td></tr>
+<tr><td><code>0x20060000</code></td><td>12</td><td>0.02%</td><td>4</td></tr>
+<tr><td><code>0x20080000</code></td><td>11</td><td>0.02%</td><td>3</td></tr>
+<tr><td><code>0x20090000</code></td><td>3</td><td>0.00%</td><td>1</td></tr>
+<tr><td><code>0x200a0000</code></td><td>3</td><td>0.00%</td><td>1</td></tr>
+<tr><td><code>0x200b0000</code></td><td>3</td><td>0.00%</td><td>1</td></tr>
+<tr><td><code>0x200d0000</code></td><td>34</td><td>0.05%</td><td>7</td></tr>
+<tr><td><code>0x200e0000</code></td><td>19</td><td>0.03%</td><td>3</td></tr>
+<tr><td><code>0x200f0000</code></td><td>8</td><td>0.01%</td><td>2</td></tr>
+<tr><td><code>0x20110000</code></td><td>4</td><td>0.01%</td><td>1</td></tr>
+<tr><td><code>0x20120000</code></td><td>23</td><td>0.04%</td><td>3</td></tr>
+<tr><td><code>0x20130000</code></td><td>18</td><td>0.03%</td><td>5</td></tr>
+<tr><td><code>0x20140000</code></td><td>20</td><td>0.03%</td><td>5</td></tr>
+<tr><td><code>0x20150000</code></td><td>9</td><td>0.01%</td><td>3</td></tr>
+<tr><td><code>0x20160000</code></td><td>21</td><td>0.03%</td><td>7</td></tr>
+<tr><td><code>0x20170000</code></td><td>21</td><td>0.03%</td><td>7</td></tr>
+<tr><td><code>0x202f0000</code></td><td>6296</td><td>9.61%</td><td>1</td></tr>
+<tr><td><code>0x20300000</code></td><td>6997</td><td>10.68%</td><td>3</td></tr>
+<tr><td><code>0x20400000</code></td><td>18962</td><td>28.93%</td><td>7</td></tr>
+</tbody></table></div>
+<h3 id="cruce-con-el-mapa-de-memoria-documentado-2">Recoupement avec la carte mémoire documentée</h3>
+<div class="table-scroll"><table><thead><tr><th scope="col">Zone</th><th scope="col">Début</th><th scope="col">Fin</th><th scope="col">Source</th><th scope="col">Régions</th><th scope="col">Octets à l&#39;intérieur</th></tr></thead><tbody>
+<tr><td>En-tête de l&#39;image (vecteurs et littéraux) jusqu&#39;au point d&#39;entrée</td><td><code>0x20005000</code></td><td><code>0x20005060</code></td><td><code>third_party/icom-byof/IC705_DAT_FORMAT.md</code>, <code>third_party/icom-byof/IC705_FLASH_LAYOUT.md</code></td><td>1</td><td>15</td></tr>
+<tr><td>Corps de l&#39;image officielle</td><td><code>0x20005060</code></td><td><code>0x2040a334</code></td><td><code>third_party/icom-byof/IC705_DAT_FORMAT.md</code>, <code>third_party/icom-byof/IC9700_FLASH_LAYOUT.md</code></td><td>69</td><td>13559</td></tr>
+<tr><td>Ajouté au-dessus de l&#39;image officielle (code propre)</td><td><code>0x2040a334</code></td><td><code>0x2040fe10</code></td><td><code>third_party/icom-byof/IC705_DAT_FORMAT.md</code>, <code>third_party/icom-byof/IC9700_FLASH_LAYOUT.md</code></td><td>7</td><td>21990</td></tr>
+</tbody></table></div>
+<h3 id="bootstrap-y-bootloader-2">Bootstrap et bootloader</h3>
+<p>Les adresses sont des décalages dans les 64 Kio du bootstrap (chargeur en RAM à <code>0x20004000</code>).</p>
+<div class="table-scroll"><table><thead><tr><th scope="col">Champ</th><th scope="col">Valeur</th></tr></thead><tbody>
+<tr><td>MD5 du bootstrap d&#39;entrée</td><td><code>eec896d4b9a7d254dc8723df4ed4cf16</code></td></tr>
+<tr><td>MD5 du bootstrap de sortie</td><td><code>9fba6f0b672727ecdf5ee6131f8b8999</code></td></tr>
+<tr><td>Opérations hex</td><td>13</td></tr>
+<tr><td>Opérations copy</td><td>10</td></tr>
+<tr><td>Octets écrits par les opérations hex</td><td>1412</td></tr>
+<tr><td>Octets copiés depuis l&#39;image officielle</td><td>89</td></tr>
+<tr><td>Régions distinctes (trou inférieur à 32 octets)</td><td>3</td></tr>
+<tr><td>Octets distincts touchés</td><td>1501</td></tr>
+</tbody></table></div>
+<div class="table-scroll"><table><thead><tr><th scope="col">Début</th><th scope="col">Fin</th><th scope="col">Taille</th><th scope="col">Type</th><th scope="col">Opérations</th><th scope="col">Octets hex</th><th scope="col">Octets copiés</th></tr></thead><tbody>
+<tr><td><code>0x4890</code></td><td><code>0x4e68</code></td><td>1496</td><td>mixte</td><td>21</td><td>1407</td><td>89</td></tr>
+<tr><td><code>0x4840</code></td><td><code>0x4843</code></td><td>3</td><td>propre (code ou données nouveaux)</td><td>1</td><td>3</td><td>0</td></tr>
+<tr><td><code>0x88</code></td><td><code>0x8a</code></td><td>2</td><td>propre (code ou données nouveaux)</td><td>1</td><td>2</td><td>0</td></tr>
+</tbody></table></div>
+<div class="table-scroll"><table><thead><tr><th scope="col">Zone</th><th scope="col">Début</th><th scope="col">Fin</th><th scope="col">Source</th><th scope="col">Régions</th><th scope="col">Octets à l&#39;intérieur</th></tr></thead><tbody>
+<tr><td>Bootstrap avant le chargeur (vecteurs de démarrage)</td><td><code>0x0</code></td><td><code>0x4000</code></td><td><code>third_party/icom-byof/IC9700_FLASH_LAYOUT.md</code></td><td>1</td><td>2</td></tr>
+<tr><td>Chargeur (depuis son début ; longueur non documentée) jusqu&#39;à l&#39;étiquette</td><td><code>0x4000</code></td><td><code>0x4f00</code></td><td><code>third_party/icom-byof/IC9700_FLASH_LAYOUT.md</code>, <code>third_party/icom-byof/ic_rza1_repack.py</code></td><td>2</td><td>1499</td></tr>
+<tr><td>Étiquette du bootloader (conservée)</td><td><code>0x4f00</code></td><td><code>0x4f10</code></td><td><code>third_party/icom-byof/ic_rza1_repack.py</code></td><td>0</td><td>0</td></tr>
+<tr><td>Reste du bootstrap</td><td><code>0x4f10</code></td><td><code>0x10000</code></td><td><code>third_party/icom-byof/ic_rza1_repack.py</code>, <code>third_party/icom-byof/IC705_DAT_FORMAT.md</code></td><td>0</td><td>0</td></tr>
+</tbody></table></div>
+<h2 id="9700e150-trv16c">9700E150_trv16c</h2>
+<h3 id="datos-generales-3">Données générales</h3>
+<div class="table-scroll"><table><thead><tr><th scope="col">Champ</th><th scope="col">Valeur</th></tr></thead><tbody>
+<tr><td>Fichier du correctif</td><td><code>third_party/icom-byof/patches/9700E150_trv16c.json</code></td></tr>
+<tr><td>Description</td><td><code>IC-9700 E1.50 + TRV 1.6c + A/B bootloader 1.5d (as tested)</code></td></tr>
+<tr><td>Radio et version officielle</td><td>IC-9700 E 1.50</td></tr>
+<tr><td>Fichier officiel</td><td><code>9700E150.dat</code></td></tr>
+<tr><td>Release</td><td><code>trv16c</code></td></tr>
+<tr><td>Adresse de chargement</td><td><code>0x20005000</code></td></tr>
+<tr><td>Taille de l&#39;image</td><td><code>4233936</code></td></tr>
+<tr><td>Taille de l&#39;image officielle (documentée)</td><td><code>4215604</code></td></tr>
+<tr><td>Croissance par rapport à l&#39;image officielle</td><td><code>18332</code></td></tr>
+<tr><td>MD5 d&#39;entrée</td><td><code>6f04fd2248ba39254ed01b30b52ce36a</code></td></tr>
+<tr><td>MD5 de l&#39;image principale d&#39;entrée</td><td><code>eea365d28c007ce44aded0a37955913f</code></td></tr>
+<tr><td>MD5 de sortie</td><td><code>1a9d78b5a6295b8217d7cbe26c02d728</code></td></tr>
+<tr><td>MD5 de l&#39;image principale de sortie</td><td><code>297b3c92c67ca326e75ec2982b4088cf</code></td></tr>
+<tr><td>Opérations hex</td><td>478</td></tr>
+<tr><td>Opérations copy</td><td>615</td></tr>
+<tr><td>Octets écrits par les opérations hex</td><td>7111</td></tr>
+<tr><td>Octets copiés depuis l&#39;image officielle</td><td>14752</td></tr>
+<tr><td>Régions distinctes (trou inférieur à 32 octets)</td><td>70</td></tr>
+<tr><td>Octets distincts touchés</td><td>21863</td></tr>
+<tr><td>Octets des régions au-dessus de l&#39;image officielle</td><td>17581</td></tr>
+</tbody></table></div>
+<h3 id="las-40-regiones-mayores-de-la-imagen-principal-3">Les 40 plus grandes régions de l&#39;image principale</h3>
+<p>Au maximum 40 régions sont affichées, triées de la plus grande à la plus petite.</p>
+<div class="table-scroll"><table><thead><tr><th scope="col">Début</th><th scope="col">Fin</th><th scope="col">Taille</th><th scope="col">Type</th><th scope="col">Opérations</th><th scope="col">Octets hex</th><th scope="col">Octets copiés</th></tr></thead><tbody>
+<tr><td><code>0x2040aafc</code></td><td><code>0x2040cef4</code></td><td>9208</td><td>mixte</td><td>522</td><td>1163</td><td>5799</td></tr>
+<tr><td><code>0x2030beb8</code></td><td><code>0x2030d9e8</code></td><td>6960</td><td>mixte</td><td>21</td><td>136</td><td>6824</td></tr>
+<tr><td><code>0x2040d080</code></td><td><code>0x2040eac8</code></td><td>6728</td><td>mixte</td><td>404</td><td>4818</td><td>1910</td></tr>
+<tr><td><code>0x2040a4a8</code></td><td><code>0x2040aabf</code></td><td>1559</td><td>mixte</td><td>75</td><td>713</td><td>203</td></tr>
+<tr><td><code>0x2040cf85</code></td><td><code>0x2040cfd4</code></td><td>79</td><td>mixte</td><td>6</td><td>43</td><td>16</td></tr>
+<tr><td><code>0x200eb06c</code></td><td><code>0x200eb078</code></td><td>12</td><td>propre (code ou données nouveaux)</td><td>1</td><td>12</td><td>0</td></tr>
+<tr><td><code>0x200d81a0</code></td><td><code>0x200d81a7</code></td><td>7</td><td>propre (code ou données nouveaux)</td><td>1</td><td>7</td><td>0</td></tr>
+<tr><td><code>0x200d9c60</code></td><td><code>0x200d9c67</code></td><td>7</td><td>propre (code ou données nouveaux)</td><td>1</td><td>7</td><td>0</td></tr>
+<tr><td><code>0x203098b4</code></td><td><code>0x203098bb</code></td><td>7</td><td>propre (code ou données nouveaux)</td><td>1</td><td>7</td><td>0</td></tr>
+<tr><td><code>0x2040a340</code></td><td><code>0x2040a347</code></td><td>7</td><td>propre (code ou données nouveaux)</td><td>1</td><td>7</td><td>0</td></tr>
+<tr><td><code>0x2000fa58</code></td><td><code>0x2000fa5c</code></td><td>4</td><td>propre (code ou données nouveaux)</td><td>1</td><td>4</td><td>0</td></tr>
+<tr><td><code>0x20025bd4</code></td><td><code>0x20025bd8</code></td><td>4</td><td>propre (code ou données nouveaux)</td><td>1</td><td>4</td><td>0</td></tr>
+<tr><td><code>0x200261b8</code></td><td><code>0x200261bc</code></td><td>4</td><td>propre (code ou données nouveaux)</td><td>1</td><td>4</td><td>0</td></tr>
+<tr><td><code>0x2004d10c</code></td><td><code>0x2004d110</code></td><td>4</td><td>propre (code ou données nouveaux)</td><td>1</td><td>4</td><td>0</td></tr>
+<tr><td><code>0x200535a4</code></td><td><code>0x200535a8</code></td><td>4</td><td>propre (code ou données nouveaux)</td><td>1</td><td>4</td><td>0</td></tr>
+<tr><td><code>0x20081464</code></td><td><code>0x20081468</code></td><td>4</td><td>propre (code ou données nouveaux)</td><td>1</td><td>4</td><td>0</td></tr>
+<tr><td><code>0x20087d00</code></td><td><code>0x20087d04</code></td><td>4</td><td>propre (code ou données nouveaux)</td><td>1</td><td>4</td><td>0</td></tr>
+<tr><td><code>0x200d569c</code></td><td><code>0x200d56a0</code></td><td>4</td><td>propre (code ou données nouveaux)</td><td>1</td><td>4</td><td>0</td></tr>
+<tr><td><code>0x200d89d8</code></td><td><code>0x200d89dc</code></td><td>4</td><td>propre (code ou données nouveaux)</td><td>1</td><td>4</td><td>0</td></tr>
+<tr><td><code>0x200d9090</code></td><td><code>0x200d9094</code></td><td>4</td><td>propre (code ou données nouveaux)</td><td>1</td><td>4</td><td>0</td></tr>
+<tr><td><code>0x200f15f8</code></td><td><code>0x200f15fc</code></td><td>4</td><td>propre (code ou données nouveaux)</td><td>1</td><td>4</td><td>0</td></tr>
+<tr><td><code>0x200f1b38</code></td><td><code>0x200f1b3c</code></td><td>4</td><td>propre (code ou données nouveaux)</td><td>1</td><td>4</td><td>0</td></tr>
+<tr><td><code>0x2011f824</code></td><td><code>0x2011f828</code></td><td>4</td><td>propre (code ou données nouveaux)</td><td>1</td><td>4</td><td>0</td></tr>
+<tr><td><code>0x2013ed28</code></td><td><code>0x2013ed2c</code></td><td>4</td><td>propre (code ou données nouveaux)</td><td>1</td><td>4</td><td>0</td></tr>
+<tr><td><code>0x2013f974</code></td><td><code>0x2013f978</code></td><td>4</td><td>propre (code ou données nouveaux)</td><td>1</td><td>4</td><td>0</td></tr>
+<tr><td><code>0x2013fa98</code></td><td><code>0x2013fa9c</code></td><td>4</td><td>propre (code ou données nouveaux)</td><td>1</td><td>4</td><td>0</td></tr>
+<tr><td><code>0x2014b5b0</code></td><td><code>0x2014b5b4</code></td><td>4</td><td>propre (code ou données nouveaux)</td><td>1</td><td>4</td><td>0</td></tr>
+<tr><td><code>0x2014bfe8</code></td><td><code>0x2014bfec</code></td><td>4</td><td>propre (code ou données nouveaux)</td><td>1</td><td>4</td><td>0</td></tr>
+<tr><td><code>0x2014c10c</code></td><td><code>0x2014c110</code></td><td>4</td><td>propre (code ou données nouveaux)</td><td>1</td><td>4</td><td>0</td></tr>
+<tr><td><code>0x2014c308</code></td><td><code>0x2014c30c</code></td><td>4</td><td>propre (code ou données nouveaux)</td><td>1</td><td>4</td><td>0</td></tr>
+<tr><td><code>0x2014dabc</code></td><td><code>0x2014dac0</code></td><td>4</td><td>propre (code ou données nouveaux)</td><td>1</td><td>4</td><td>0</td></tr>
+<tr><td><code>0x200100b0</code></td><td><code>0x200100b3</code></td><td>3</td><td>propre (code ou données nouveaux)</td><td>1</td><td>3</td><td>0</td></tr>
+<tr><td><code>0x200100d8</code></td><td><code>0x200100db</code></td><td>3</td><td>propre (code ou données nouveaux)</td><td>1</td><td>3</td><td>0</td></tr>
+<tr><td><code>0x20010100</code></td><td><code>0x20010103</code></td><td>3</td><td>propre (code ou données nouveaux)</td><td>1</td><td>3</td><td>0</td></tr>
+<tr><td><code>0x20010128</code></td><td><code>0x2001012b</code></td><td>3</td><td>propre (code ou données nouveaux)</td><td>1</td><td>3</td><td>0</td></tr>
+<tr><td><code>0x2001a240</code></td><td><code>0x2001a243</code></td><td>3</td><td>propre (code ou données nouveaux)</td><td>1</td><td>3</td><td>0</td></tr>
+<tr><td><code>0x2001d67c</code></td><td><code>0x2001d67f</code></td><td>3</td><td>propre (code ou données nouveaux)</td><td>1</td><td>3</td><td>0</td></tr>
+<tr><td><code>0x200520a0</code></td><td><code>0x200520a3</code></td><td>3</td><td>propre (code ou données nouveaux)</td><td>1</td><td>3</td><td>0</td></tr>
+<tr><td><code>0x2006a0ac</code></td><td><code>0x2006a0af</code></td><td>3</td><td>propre (code ou données nouveaux)</td><td>1</td><td>3</td><td>0</td></tr>
+<tr><td><code>0x2006a198</code></td><td><code>0x2006a19b</code></td><td>3</td><td>propre (code ou données nouveaux)</td><td>1</td><td>3</td><td>0</td></tr>
+</tbody></table></div>
+<h3 id="histograma-por-bloque-de-64-kib-3">Histogramme par bloc de 64 Kio</h3>
+<div class="table-scroll"><table><thead><tr><th scope="col">Bloc</th><th scope="col">Octets touchés</th><th scope="col">Couverture</th><th scope="col">Régions</th></tr></thead><tbody>
+<tr><td><code>0x20000000</code></td><td>4</td><td>0.01%</td><td>1</td></tr>
+<tr><td><code>0x20010000</code></td><td>18</td><td>0.03%</td><td>6</td></tr>
+<tr><td><code>0x20020000</code></td><td>8</td><td>0.01%</td><td>2</td></tr>
+<tr><td><code>0x20040000</code></td><td>4</td><td>0.01%</td><td>1</td></tr>
+<tr><td><code>0x20050000</code></td><td>7</td><td>0.01%</td><td>2</td></tr>
+<tr><td><code>0x20060000</code></td><td>12</td><td>0.02%</td><td>4</td></tr>
+<tr><td><code>0x20070000</code></td><td>2</td><td>0.00%</td><td>1</td></tr>
+<tr><td><code>0x20080000</code></td><td>11</td><td>0.02%</td><td>3</td></tr>
+<tr><td><code>0x20090000</code></td><td>5</td><td>0.01%</td><td>2</td></tr>
+<tr><td><code>0x200a0000</code></td><td>3</td><td>0.00%</td><td>1</td></tr>
+<tr><td><code>0x200b0000</code></td><td>3</td><td>0.00%</td><td>1</td></tr>
+<tr><td><code>0x200d0000</code></td><td>26</td><td>0.04%</td><td>5</td></tr>
+<tr><td><code>0x200e0000</code></td><td>15</td><td>0.02%</td><td>2</td></tr>
+<tr><td><code>0x200f0000</code></td><td>10</td><td>0.02%</td><td>3</td></tr>
+<tr><td><code>0x20110000</code></td><td>4</td><td>0.01%</td><td>1</td></tr>
+<tr><td><code>0x20120000</code></td><td>3</td><td>0.00%</td><td>1</td></tr>
+<tr><td><code>0x20130000</code></td><td>18</td><td>0.03%</td><td>5</td></tr>
+<tr><td><code>0x20140000</code></td><td>20</td><td>0.03%</td><td>5</td></tr>
+<tr><td><code>0x20150000</code></td><td>9</td><td>0.01%</td><td>3</td></tr>
+<tr><td><code>0x20160000</code></td><td>21</td><td>0.03%</td><td>7</td></tr>
+<tr><td><code>0x20170000</code></td><td>21</td><td>0.03%</td><td>7</td></tr>
+<tr><td><code>0x20300000</code></td><td>6967</td><td>10.63%</td><td>2</td></tr>
+<tr><td><code>0x20400000</code></td><td>14672</td><td>22.39%</td><td>5</td></tr>
+</tbody></table></div>
+<h3 id="cruce-con-el-mapa-de-memoria-documentado-3">Recoupement avec la carte mémoire documentée</h3>
+<div class="table-scroll"><table><thead><tr><th scope="col">Zone</th><th scope="col">Début</th><th scope="col">Fin</th><th scope="col">Source</th><th scope="col">Régions</th><th scope="col">Octets à l&#39;intérieur</th></tr></thead><tbody>
+<tr><td>En-tête de l&#39;image (vecteurs et littéraux) jusqu&#39;au point d&#39;entrée</td><td><code>0x20005000</code></td><td><code>0x20005060</code></td><td><code>third_party/icom-byof/IC705_DAT_FORMAT.md</code>, <code>third_party/icom-byof/IC705_FLASH_LAYOUT.md</code></td><td>0</td><td>0</td></tr>
+<tr><td>Corps de l&#39;image officielle</td><td><code>0x20005060</code></td><td><code>0x2040a334</code></td><td><code>third_party/icom-byof/IC705_DAT_FORMAT.md</code>, <code>third_party/icom-byof/IC9700_FLASH_LAYOUT.md</code></td><td>65</td><td>7191</td></tr>
+<tr><td>Ajouté au-dessus de l&#39;image officielle (code propre)</td><td><code>0x2040a334</code></td><td><code>0x2040ead0</code></td><td><code>third_party/icom-byof/IC705_DAT_FORMAT.md</code>, <code>third_party/icom-byof/IC9700_FLASH_LAYOUT.md</code></td><td>5</td><td>17581</td></tr>
+</tbody></table></div>
+<h3 id="bootstrap-y-bootloader-3">Bootstrap et bootloader</h3>
+<p>Les adresses sont des décalages dans les 64 Kio du bootstrap (chargeur en RAM à <code>0x20004000</code>).</p>
+<div class="table-scroll"><table><thead><tr><th scope="col">Champ</th><th scope="col">Valeur</th></tr></thead><tbody>
+<tr><td>MD5 du bootstrap d&#39;entrée</td><td><code>eec896d4b9a7d254dc8723df4ed4cf16</code></td></tr>
+<tr><td>MD5 du bootstrap de sortie</td><td><code>9fba6f0b672727ecdf5ee6131f8b8999</code></td></tr>
+<tr><td>Opérations hex</td><td>13</td></tr>
+<tr><td>Opérations copy</td><td>10</td></tr>
+<tr><td>Octets écrits par les opérations hex</td><td>1412</td></tr>
+<tr><td>Octets copiés depuis l&#39;image officielle</td><td>89</td></tr>
+<tr><td>Régions distinctes (trou inférieur à 32 octets)</td><td>3</td></tr>
+<tr><td>Octets distincts touchés</td><td>1501</td></tr>
+</tbody></table></div>
+<div class="table-scroll"><table><thead><tr><th scope="col">Début</th><th scope="col">Fin</th><th scope="col">Taille</th><th scope="col">Type</th><th scope="col">Opérations</th><th scope="col">Octets hex</th><th scope="col">Octets copiés</th></tr></thead><tbody>
+<tr><td><code>0x4890</code></td><td><code>0x4e68</code></td><td>1496</td><td>mixte</td><td>21</td><td>1407</td><td>89</td></tr>
+<tr><td><code>0x4840</code></td><td><code>0x4843</code></td><td>3</td><td>propre (code ou données nouveaux)</td><td>1</td><td>3</td><td>0</td></tr>
+<tr><td><code>0x88</code></td><td><code>0x8a</code></td><td>2</td><td>propre (code ou données nouveaux)</td><td>1</td><td>2</td><td>0</td></tr>
+</tbody></table></div>
+<div class="table-scroll"><table><thead><tr><th scope="col">Zone</th><th scope="col">Début</th><th scope="col">Fin</th><th scope="col">Source</th><th scope="col">Régions</th><th scope="col">Octets à l&#39;intérieur</th></tr></thead><tbody>
+<tr><td>Bootstrap avant le chargeur (vecteurs de démarrage)</td><td><code>0x0</code></td><td><code>0x4000</code></td><td><code>third_party/icom-byof/IC9700_FLASH_LAYOUT.md</code></td><td>1</td><td>2</td></tr>
+<tr><td>Chargeur (depuis son début ; longueur non documentée) jusqu&#39;à l&#39;étiquette</td><td><code>0x4000</code></td><td><code>0x4f00</code></td><td><code>third_party/icom-byof/IC9700_FLASH_LAYOUT.md</code>, <code>third_party/icom-byof/ic_rza1_repack.py</code></td><td>2</td><td>1499</td></tr>
+<tr><td>Étiquette du bootloader (conservée)</td><td><code>0x4f00</code></td><td><code>0x4f10</code></td><td><code>third_party/icom-byof/ic_rza1_repack.py</code></td><td>0</td><td>0</td></tr>
+<tr><td>Reste du bootstrap</td><td><code>0x4f10</code></td><td><code>0x10000</code></td><td><code>third_party/icom-byof/ic_rza1_repack.py</code>, <code>third_party/icom-byof/IC705_DAT_FORMAT.md</code></td><td>0</td><td>0</td></tr>
+</tbody></table></div>
+<h2 id="comparacion-entre-las-releases">Comparaison entre les releases</h2>
+<div class="table-scroll"><table><thead><tr><th scope="col">Mesure</th><th scope="col"><code>705E140_20261113v1</code></th><th scope="col"><code>705J140_20261113v1</code></th><th scope="col"><code>9700E150_20261113v3</code></th></tr></thead><tbody>
+<tr><td>Radio</td><td>IC-705 E 1.40</td><td>IC-705 J 1.40</td><td>IC-9700 E 1.50</td></tr>
+<tr><td>Fichier officiel</td><td><code>705E140.dat</code></td><td><code>705J140.dat</code></td><td><code>9700E150.dat</code></td></tr>
+<tr><td>MD5 d&#39;entrée</td><td><code>2c9c1d7f3fc80ef173e01d841cd1248a</code></td><td><code>b605171288db4a74e0992a8f2afcb1c3</code></td><td><code>6f04fd2248ba39254ed01b30b52ce36a</code></td></tr>
+<tr><td>MD5 de sortie</td><td><code>1a4577ca926089198bcdf63155ac7410</code></td><td><code>d7a7f87b9b16f262b188fe3735b3682b</code></td><td><code>51e9d2da39790357f220f3bea3fe4879</code></td></tr>
+<tr><td>Taille de l&#39;image</td><td><code>3629056</code></td><td><code>3629056</code></td><td><code>4238864</code></td></tr>
+<tr><td>Croissance par rapport à l&#39;image officielle</td><td><code>0</code></td><td><code>0</code></td><td><code>23260</code></td></tr>
+<tr><td>Opérations hex</td><td>729</td><td>796</td><td>620</td></tr>
+<tr><td>Opérations copy</td><td>1138</td><td>1391</td><td>762</td></tr>
+<tr><td>Octets hex</td><td>15188</td><td>10368</td><td>16427</td></tr>
+<tr><td>Octets copiés</td><td>52097</td><td>56319</td><td>16093</td></tr>
+<tr><td>Régions</td><td>109</td><td>109</td><td>77</td></tr>
+<tr><td>Octets au-dessus de l&#39;image officielle</td><td>0</td><td>0</td><td>21990</td></tr>
+<tr><td>Opérations bootstrap</td><td>20</td><td>20</td><td>23</td></tr>
+<tr><td>Octets hex bootstrap</td><td>1472</td><td>1472</td><td>1412</td></tr>
+<tr><td>Octets copiés bootstrap</td><td>73</td><td>73</td><td>89</td></tr>
+<tr><td>Régions bootstrap</td><td>4</td><td>4</td><td>3</td></tr>
+</tbody></table></div>
+<h2 id="operaciones-identicas-entre-parches-de-la-misma-radio">Opérations identiques entre correctifs de la même radio</h2>
+<div class="table-scroll"><table><thead><tr><th scope="col">Correctif A</th><th scope="col">Correctif B</th><th scope="col">Opérations identiques</th><th scope="col">Opérations de A</th><th scope="col">Opérations de B</th><th scope="col">Identiques dans le bootstrap</th><th scope="col">Bootstrap de A</th><th scope="col">Bootstrap de B</th></tr></thead><tbody>
+<tr><td><code>705E140_20261113v1</code></td><td><code>705J140_20261113v1</code></td><td>207</td><td>1867</td><td>2187</td><td>20</td><td>20</td><td>20</td></tr>
+<tr><td><code>9700E150_20261113v3</code></td><td><code>9700E150_trv16c</code></td><td>58</td><td>1382</td><td>1093</td><td>23</td><td>23</td><td>23</td></tr>
+</tbody></table></div>
+<h2 id="fuentes-del-mapa-de-memoria">Sources de la carte mémoire</h2>
+<div class="table-scroll"><table><thead><tr><th scope="col">Donnée</th><th scope="col">Valeur</th><th scope="col">Source</th></tr></thead><tbody>
+<tr><td>Chargeur copié en RAM (décalage dans le bootstrap)</td><td><code>0x4000</code> - <code>0x49bc</code></td><td><code>third_party/icom-byof/IC705_DAT_FORMAT.md</code></td></tr>
+<tr><td>Adresse RAM du chargeur</td><td><code>0x20004000</code></td><td><code>third_party/icom-byof/IC705_DAT_FORMAT.md</code></td></tr>
+<tr><td>Taille du bootstrap</td><td><code>0x10000</code></td><td><code>third_party/icom-byof/IC705_DAT_FORMAT.md</code></td></tr>
+<tr><td>Étiquette du bootloader</td><td><code>0x4f00</code> - <code>0x4f10</code></td><td><code>third_party/icom-byof/ic_rza1_repack.py</code></td></tr>
+<tr><td>Adresse RAM de l&#39;image principale</td><td><code>0x20005000</code></td><td><code>third_party/icom-byof/IC705_DAT_FORMAT.md</code></td></tr>
+<tr><td>Point d&#39;entrée</td><td><code>0x20005060</code></td><td><code>third_party/icom-byof/IC705_FLASH_LAYOUT.md</code></td></tr>
+<tr><td>Taille de l&#39;image officielle IC-705</td><td><code>0x376000</code></td><td><code>third_party/icom-byof/IC705_FLASH_LAYOUT.md</code></td></tr>
+<tr><td>Taille de l&#39;image officielle IC-9700</td><td><code>0x405334</code></td><td><code>third_party/icom-byof/IC9700_FLASH_LAYOUT.md</code></td></tr>
+</tbody></table></div></article>
+    <footer><p class="translation-note">Traduction de l&#39;original espagnol. En cas de divergence, la version espagnole fait foi.</p><p>Document généré à partir du Markdown versionné. Consultez les sources et les limites de chaque guide. <a href="ayuda-firmwares.fr.html">Retour à l&#39;index</a>.</p></footer>
+  </main>
+</body>
+</html>

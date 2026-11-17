@@ -57,6 +57,12 @@ test("los instalables incluyen el catalogo y todos los recursos web permitidos",
     }
     // The signed OTA manifest only exists for the Pages channel; installed copies never self-update the APK.
     if (file === "radicodex-update.json") continue;
+    if (/^third_party\/icom-custom-firmware\//.test(file)) {
+      assert(build.includes("third_party/icom-custom-firmware/docs/js/{worker,md5,codec,patch}.js"));
+      assert(build.includes("third_party/icom-custom-firmware/docs/patches/*.json"));
+      assert(build.includes("third_party/icom-custom-firmware/LICENSE"));
+      continue;
+    }
     if (file === "data/firmware-catalog-fallback.json") {
       assert(build.includes('cp "$root/data/firmware-catalog-fallback.json"'));
       continue;

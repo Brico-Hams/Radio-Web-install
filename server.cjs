@@ -26,7 +26,10 @@ const BASE_FILES = [
   ...generatedTemplateFiles(),
   "anytone.html", "anytone-core.js", "anytone-ui.js",
   "ftx1.html", "ftx1-menu.js", "ftx1-core.js", "ftx1-ui.js",
-  "precompiled-catalog.js", "firmware-signature.js", "quansheng-factory.js", "precompiled/catalog.json", "precompiled/LICENSE.txt",
+  "icom.html", "icom-ui.js",
+  ...["docs/js/worker.js", "docs/js/md5.js", "docs/js/codec.js", "docs/js/patch.js", "docs/patches/index.json",
+    "docs/patches/9700E150_20261113v3.json", "docs/patches/705E140_20261113v1.json", "docs/patches/705J140_20261113v1.json",
+    "LICENSE"].map(file => `third_party/icom-custom-firmware/${file}`),  "precompiled-catalog.js", "firmware-signature.js", "quansheng-factory.js", "precompiled/catalog.json", "precompiled/LICENSE.txt",
   "precompiled/APACHE-2.0.txt", "precompiled/NOTICE.txt", "precompiled/BRICOHAMS-NOTICE.txt",
   "precompiled/apps/catalog.json",
   ...["f4hwn.chirp.v6.1.0.py", "manifest.json", "NOTICE.txt", "COPYING.txt"].map(name => `precompiled/chirp/${name}`),
@@ -39,7 +42,7 @@ const BASE_FILES = [
   "ayuda-firmwares.html", "ayuda-configuracion.html", "ayuda-quansheng.html",
   "ayuda-opciones-f4hwn.html", "ayuda-presets-f4hwn.html", "ayuda-ardf.html", "ayuda-manual-f4hwn.html",
   "ayuda-opengd77.html", "ayuda-opengd77-modelos.html", "ayuda-karina.html",
-  "ayuda-anytone.html", "ayuda-ftx1.html", "ayuda-referencias.html", "ayuda-arquitectura.html", "ayuda-marca.html",
+  "ayuda-anytone.html", "ayuda-ftx1.html", "ayuda-icom.html", "ayuda-icom-internals.html", "ayuda-icom-parches.html", "ayuda-referencias.html", "ayuda-arquitectura.html", "ayuda-marca.html",
   "ayuda-decisiones.html", "ayuda-despliegue.html",
   "ayuda-bricohams.html", "ayuda-entrega.html", "ayuda-android.html", "ayuda-tutoriales-android.html", "ayuda-validacion-v3-android.html", "help-docs.css",
   "ayuda-egzumer.html", "ayuda-pack-dim0s.html", "ayuda-atlas-uv-k5-v3.html",
@@ -222,7 +225,7 @@ return http.createServer(async (request, response) => {
       : path.join(__dirname, name);
     const body = await fs.readFile(filename);
     const type = name.endsWith(".bin") ? "application/octet-stream" : name.endsWith(".json") ? "application/json; charset=utf-8" :
-      name.endsWith(".txt") ? "text/plain; charset=utf-8" : name.endsWith(".png") ? "image/png" : name.endsWith(".jpg") ? "image/jpeg" : name.endsWith(".pdf") ? "application/pdf" : name.endsWith(".svg") ? "image/svg+xml" : `${name.endsWith(".html") ? "text/html" : name.endsWith(".css") ? "text/css" : "text/javascript"}; charset=utf-8`;
+      name.endsWith(".txt") || name.endsWith("/LICENSE") ? "text/plain; charset=utf-8" : name.endsWith(".png") ? "image/png" : name.endsWith(".jpg") ? "image/jpeg" : name.endsWith(".pdf") ? "application/pdf" : name.endsWith(".svg") ? "image/svg+xml" : `${name.endsWith(".html") ? "text/html" : name.endsWith(".css") ? "text/css" : "text/javascript"}; charset=utf-8`;
     if (name.endsWith(".py")) response.setHeader("Content-Disposition", `attachment; filename="${path.basename(name)}"`);
     response.writeHead(200, { "Content-Type": name.endsWith(".py") ? "text/plain; charset=utf-8" : type, "Content-Length": body.length });
     response.end(request.method === "HEAD" ? undefined : body);
