@@ -26901,6 +26901,21 @@
       "notes": "RX only; nominal TX and published tone are reference information, not enabled. Verify local activity, restrictions and licence."
     },
     {
+      "name": "WQ8M",
+      "rx": "439.12500",
+      "tx": "439.12500",
+      "mode": "FM",
+      "colorCode": 0,
+      "timeslot": 1,
+      "talkgroup": 0,
+      "bandwidth": "pending",
+      "broadcastOnly": false,
+      "rxOnly": true,
+      "source": "https://hearham.com/repeaters/177",
+      "zone": "Colorado",
+      "notes": "RX only; nominal TX and published tone are reference information, not enabled. Verify local activity, restrictions and licence."
+    },
+    {
       "name": "AA1VE",
       "rx": "147.25500",
       "tx": "147.85500",
@@ -59988,21 +60003,6 @@
       "rxOnly": true,
       "source": "https://hearham.com/repeaters/1902",
       "zone": "Massachusetts",
-      "notes": "RX only; nominal TX and published tone are reference information, not enabled. Verify local activity, restrictions and licence."
-    },
-    {
-      "name": "AB8Y",
-      "rx": "445.80000",
-      "tx": "445.80000",
-      "mode": "FM",
-      "colorCode": 0,
-      "timeslot": 1,
-      "talkgroup": 0,
-      "bandwidth": "pending",
-      "broadcastOnly": false,
-      "rxOnly": true,
-      "source": "https://hearham.com/repeaters/13399",
-      "zone": "Michigan",
       "notes": "RX only; nominal TX and published tone are reference information, not enabled. Verify local activity, restrictions and licence."
     }
   ]

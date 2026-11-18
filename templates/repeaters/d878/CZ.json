@@ -6,6 +6,36 @@
   "fmBroadcast": false,
   "channels": [
     {
+      "name": "OK0DAS",
+      "rx": "438.30000",
+      "tx": "430.70000",
+      "mode": "FM",
+      "colorCode": 0,
+      "timeslot": 1,
+      "talkgroup": 0,
+      "bandwidth": "pending",
+      "broadcastOnly": false,
+      "rxOnly": true,
+      "source": "https://hearham.com/repeaters/25440",
+      "zone": "Královéhradecký",
+      "notes": "RX only; nominal TX and published tone are reference information, not enabled. Verify local activity, restrictions and licence."
+    },
+    {
+      "name": "OK0BC",
+      "rx": "438.70000",
+      "tx": "431.10000",
+      "mode": "FM",
+      "colorCode": 0,
+      "timeslot": 1,
+      "talkgroup": 0,
+      "bandwidth": "pending",
+      "broadcastOnly": false,
+      "rxOnly": true,
+      "source": "https://hearham.com/repeaters/25442",
+      "zone": "Liberecký",
+      "notes": "RX only; nominal TX and published tone are reference information, not enabled. Verify local activity, restrictions and licence."
+    },
+    {
       "name": "OE4XSB",
       "rx": "438.72500",
       "tx": "431.12500",
