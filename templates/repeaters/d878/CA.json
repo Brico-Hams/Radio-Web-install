@@ -501,21 +501,6 @@
       "notes": "RX only; nominal TX and published tone are reference information, not enabled. Verify local activity, restrictions and licence."
     },
     {
-      "name": "VE6YBP",
-      "rx": "147.27000",
-      "tx": "147.87000",
-      "mode": "FM",
-      "colorCode": 0,
-      "timeslot": 1,
-      "talkgroup": 0,
-      "bandwidth": "pending",
-      "broadcastOnly": false,
-      "rxOnly": true,
-      "source": "https://hearham.com/repeaters/65",
-      "zone": "Alberta",
-      "notes": "RX only; nominal TX and published tone are reference information, not enabled. Verify local activity, restrictions and licence."
-    },
-    {
       "name": "VE6YK",
       "rx": "147.24000",
       "tx": "147.84000",

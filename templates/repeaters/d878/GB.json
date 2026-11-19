@@ -126,6 +126,21 @@
       "notes": "RX only; nominal TX and published tone are reference information, not enabled. Verify local activity, restrictions and licence."
     },
     {
+      "name": "MB7UVX",
+      "rx": "144.80000",
+      "tx": "144.80000",
+      "mode": "FM",
+      "colorCode": 0,
+      "timeslot": 1,
+      "talkgroup": 0,
+      "bandwidth": "pending",
+      "broadcastOnly": false,
+      "rxOnly": true,
+      "source": "https://hearham.com/repeaters/24943",
+      "zone": "Aberdeen",
+      "notes": "RX only; nominal TX and published tone are reference information, not enabled. Verify local activity, restrictions and licence."
+    },
+    {
       "name": "MB7UYF",
       "rx": "144.80000",
       "tx": "144.80000",
@@ -767,6 +782,21 @@
       "broadcastOnly": false,
       "rxOnly": true,
       "source": "https://hearham.com/repeaters/15082",
+      "zone": "Bedford",
+      "notes": "RX only; nominal TX and published tone are reference information, not enabled. Verify local activity, restrictions and licence."
+    },
+    {
+      "name": "MB7ILD",
+      "rx": "430.01250",
+      "tx": "430.01250",
+      "mode": "FM",
+      "colorCode": 0,
+      "timeslot": 1,
+      "talkgroup": 0,
+      "bandwidth": "pending",
+      "broadcastOnly": false,
+      "rxOnly": true,
+      "source": "https://hearham.com/repeaters/25438",
       "zone": "Bedford",
       "notes": "RX only; nominal TX and published tone are reference information, not enabled. Verify local activity, restrictions and licence."
     },
@@ -4952,21 +4982,6 @@
       "broadcastOnly": false,
       "rxOnly": true,
       "source": "https://hearham.com/repeaters/14898",
-      "zone": "Dorset",
-      "notes": "RX only; nominal TX and published tone are reference information, not enabled. Verify local activity, restrictions and licence."
-    },
-    {
-      "name": "MB7ULB",
-      "rx": "439.91250",
-      "tx": "439.91250",
-      "mode": "FM",
-      "colorCode": 0,
-      "timeslot": 1,
-      "talkgroup": 0,
-      "bandwidth": "pending",
-      "broadcastOnly": false,
-      "rxOnly": true,
-      "source": "https://hearham.com/repeaters/23922",
       "zone": "Dorset",
       "notes": "RX only; nominal TX and published tone are reference information, not enabled. Verify local activity, restrictions and licence."
     },
@@ -9876,6 +9891,21 @@
       "notes": "RX only; nominal TX and published tone are reference information, not enabled. Verify local activity, restrictions and licence."
     },
     {
+      "name": "MB7ULB",
+      "rx": "439.91250",
+      "tx": "439.91250",
+      "mode": "FM",
+      "colorCode": 0,
+      "timeslot": 1,
+      "talkgroup": 0,
+      "bandwidth": "pending",
+      "broadcastOnly": false,
+      "rxOnly": true,
+      "source": "https://hearham.com/repeaters/23922",
+      "zone": "Lancashire",
+      "notes": "RX only; nominal TX and published tone are reference information, not enabled. Verify local activity, restrictions and licence."
+    },
+    {
       "name": "MB7ULU",
       "rx": "439.91250",
       "tx": "439.91250",
@@ -14523,6 +14553,21 @@
       "rxOnly": true,
       "source": "https://hearham.com/repeaters/15466",
       "zone": "Plymouth",
+      "notes": "RX only; nominal TX and published tone are reference information, not enabled. Verify local activity, restrictions and licence."
+    },
+    {
+      "name": "G4EBD",
+      "rx": "430.83750",
+      "tx": "438.43750",
+      "mode": "FM",
+      "colorCode": 0,
+      "timeslot": 1,
+      "talkgroup": 0,
+      "bandwidth": "pending",
+      "broadcastOnly": false,
+      "rxOnly": true,
+      "source": "https://hearham.com/repeaters/22849",
+      "zone": "Poole",
       "notes": "RX only; nominal TX and published tone are reference information, not enabled. Verify local activity, restrictions and licence."
     },
     {

@@ -25251,21 +25251,6 @@
       "notes": "RX only; nominal TX and published tone are reference information, not enabled. Verify local activity, restrictions and licence."
     },
     {
-      "name": "AC0KC",
-      "rx": "447.30000",
-      "tx": "442.30000",
-      "mode": "FM",
-      "colorCode": 0,
-      "timeslot": 1,
-      "talkgroup": 0,
-      "bandwidth": "pending",
-      "broadcastOnly": false,
-      "rxOnly": true,
-      "source": "https://hearham.com/repeaters/6801",
-      "zone": "Colorado",
-      "notes": "RX only; nominal TX and published tone are reference information, not enabled. Verify local activity, restrictions and licence."
-    },
-    {
       "name": "AC0KQ",
       "rx": "447.85000",
       "tx": "442.85000",
@@ -50402,6 +50387,21 @@
       "broadcastOnly": false,
       "rxOnly": true,
       "source": "https://hearham.com/repeaters/11959",
+      "zone": "Idaho",
+      "notes": "RX only; nominal TX and published tone are reference information, not enabled. Verify local activity, restrictions and licence."
+    },
+    {
+      "name": "KE7LVH",
+      "rx": "146.48000",
+      "tx": "146.48000",
+      "mode": "FM",
+      "colorCode": 0,
+      "timeslot": 1,
+      "talkgroup": 0,
+      "bandwidth": "pending",
+      "broadcastOnly": false,
+      "rxOnly": true,
+      "source": "https://hearham.com/repeaters/920",
       "zone": "Idaho",
       "notes": "RX only; nominal TX and published tone are reference information, not enabled. Verify local activity, restrictions and licence."
     },
