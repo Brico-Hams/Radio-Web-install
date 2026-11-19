@@ -9,6 +9,7 @@ const https = require("node:https");
 const os = require("node:os");
 const path = require("node:path");
 const { RigctldClient, VFO_NAMES } = require("./rigctld-client.cjs");
+const { catAllowList } = require("./remote-catalog.cjs");
 const remoteTls = require("./remote-tls.cjs");
 const remoteWs = require("./remote-ws.cjs");
 const remoteAudio = require("./remote-audio.cjs");
@@ -38,6 +39,9 @@ const AUDIO_MAX_CLIENTS = 8;
 const AUDIO_TX_RATE = 60;
 const AUDIO_BACKLOG_BYTES = 64 * 1024;
 const AUDIO_FRAME = Object.freeze({ codec: "opus", sampleRate: 48000, channels: 1, frameMs: 20 });
+const SWR_TRIP_MS = 1000;
+const NOTICE_MS = 15_000;
+const TUNE_FAILED = "La radio no ha iniciado la sintonía (revisa el sintonizador/ATAS en el equipo)";
 const STATIC_FILES = Object.freeze({
   "/": ["remote.html", "text/html; charset=utf-8"],
   "/remote.html": ["remote.html", "text/html; charset=utf-8"],
@@ -65,6 +69,9 @@ function loadConfig(dir) {
     rigctldHost: typeof stored.rigctldHost === "string" ? stored.rigctldHost : "127.0.0.1",
     rigctldPort: Number.isInteger(stored.rigctldPort) ? stored.rigctldPort : 4532,
     txLimitSeconds: Number(stored.txLimitSeconds) > 0 ? Number(stored.txLimitSeconds) : 180,
+    // Protection thresholds: SWR ratio for radios that report one, raw 0-255 RM6 value for raw-CAT radios (not calibrated).
+    swrLimit: Number(stored.swrLimit) > 1 ? Number(stored.swrLimit) : undefined,
+    swrRawLimit: Number.isInteger(stored.swrRawLimit) && stored.swrRawLimit >= 1 && stored.swrRawLimit <= 255 ? stored.swrRawLimit : undefined,
     relay: normalizeRelay(stored.relay)
   };
   if (!config.token) {
@@ -168,6 +175,29 @@ function emptyCaps() {
   return { detected: false, model: "", level: {}, func: {}, tune: false };
 }
 
+// Raw CAT reply parsers (Yaesu format). Meter values are 0-255; PC carries the set power in watts.
+function parseRawMeter(reply, cmd) {
+  const match = /^RM(\d)(\d{3})(\d{3});?$/.exec(reply || "");
+  if (!match || `RM${match[1]}` !== cmd) return null;
+  return Math.min(255, Number(match[2]));
+}
+
+function parsePower(reply) {
+  const match = /^PC\d(\d{3});?$/.exec(reply || "");
+  return match ? Number(match[1]) : null;
+}
+
+const round3 = value => Math.round(value * 1000) / 1000;
+const clamp01 = value => Math.max(0, Math.min(1, value));
+
+function meterFraction(key, value, raw) {
+  if (value === null || value === undefined) return null;
+  if (raw) return round3(value / 255);
+  if (key === "swr") return round3(clamp01((value - 1) / 4));
+  if (key === "alc") return round3(clamp01(value));
+  return null;
+}
+
 function createRemoteAgent(options = {}) {
   const configDir = options.configDir || defaultConfigDir();
   const config = loadConfig(configDir);
@@ -178,6 +208,12 @@ function createRemoteAgent(options = {}) {
   const pollMs = options.pollMs ?? 250;
   const host = options.host || "127.0.0.1";
   const radioScope = SCOPES.includes(options.radioScope) ? options.radioScope : "none";
+  const cat = options.radioCat || null;
+  const swrLimit = options.swrLimit ?? config.swrLimit ?? 3;
+  const swrRawLimit = options.swrRawLimit ?? config.swrRawLimit ?? cat?.swrRawLimit ?? 100;
+  const meterMs = options.meterMs ?? 400;
+  const tuneWatchMs = options.tuneWatchMs ?? 3000;
+  const tunePollMs = options.tunePollMs ?? 250;
   const useTls = options.tls ?? !isLoopbackHost(host);
   const identity = useTls ? remoteTls.ensure(configDir) : null;
 
@@ -198,7 +234,9 @@ function createRemoteAgent(options = {}) {
     port: options.rigctldPort ?? config.rigctldPort,
     socketFactory: options.socketFactory,
     reconnectMs: options.reconnectMs,
-    timeoutMs: options.rigTimeoutMs
+    timeoutMs: options.rigTimeoutMs,
+    rawAllow: catAllowList(cat),
+    rawIdleMs: options.rawIdleMs
   });
 
   const rig = {
@@ -212,6 +250,14 @@ function createRemoteAgent(options = {}) {
   const controlStats = {};
   const slowMs = options.slowControlMs ?? 1500;
   let agentTx = false;
+  let tx = null;
+  let swrSince = 0;
+  let swrTripped = false;
+  let meterBusy = false;
+  let meterCycle = 0;
+  let meterTimer = null;
+  let notice = null;
+  const meterOff = new Set();
   let txStart = 0;
   let lastBeat = 0;
   let owner = null;
@@ -243,15 +289,29 @@ function createRemoteAgent(options = {}) {
       funcs: { ...rig.funcs },
       caps: capsView(),
       txSeconds: rig.ptt ? Math.max(0, Math.floor((now() - txStart) / 1000)) : 0,
+      tx: rig.ptt && tx ? { ...tx, fraction: { ...tx.fraction } } : null,
+      txAlert: swrTripped ? "swr" : null,
+      notice: notice && now() - notice.at < NOTICE_MS ? { id: notice.id, text: notice.text } : null,
       operator: !active ? null : owner === clientId ? "me" : "other",
       relay: { configured: Boolean(relayConfig), connected: relayState.connected }
     };
   }
 
+  function setNotice(text) {
+    notice = { id: (notice?.id || 0) + 1, text, at: now() };
+  }
+
   function setRigPtt(on) {
-    if (on && !rig.ptt) txStart = now();
+    if (on && !rig.ptt) {
+      txStart = now();
+      tx = { po: null, swr: null, alc: null, powerSetW: null, source: cat ? "raw" : "hamlib", fraction: { po: null, swr: null, alc: null } };
+      swrSince = 0;
+      swrTripped = false;
+      meterCycle = 0;
+      setImmediate(pollTxMeters);
+    }
     rig.ptt = on;
-    if (!on) { agentTx = false; audio.txRelease?.(); }
+    if (!on) { agentTx = false; tx = null; swrSince = 0; audio.txRelease?.(); }
   }
 
   async function pttOff(reason) {
@@ -261,17 +321,22 @@ function createRemoteAgent(options = {}) {
     catch (error) { log(`T 0 failed: ${error.message}`); }
   }
 
+  // Radios with a raw-CAT tuner override are driven through it, whatever Hamlib reports.
+  const withCatCaps = value => cat?.tuner
+    ? { ...value, func: { ...value.func, TUNER: { get: true, set: true } }, tune: true }
+    : value;
+
   async function detectCaps() {
     if (capsDone) return;
     capsAttempts += 1;
     try {
-      caps = { ...(await client.dumpCaps()), detected: true };
+      caps = withCatCaps({ ...(await client.dumpCaps()), detected: true });
       capsDone = true;
       log(`capacidades: ${Object.keys(caps.level).length} niveles, ${Object.keys(caps.func).length} funciones, tune=${caps.tune}`);
     } catch (error) {
       // A rig that cannot dump its caps simply gets no extra controls; never retry in a loop.
       if (typeof error.code !== "number" && capsAttempts < 2) return;
-      caps = { ...emptyCaps(), detected: true };
+      caps = withCatCaps({ ...emptyCaps(), detected: true });
       capsDone = true;
       log(`dump_caps no disponible: ${error.message}`);
     }
@@ -281,6 +346,7 @@ function createRemoteAgent(options = {}) {
     // Whatever happened while the link was down, make sure the rig is not transmitting.
     client.setPtt(false, { priority: true }).catch(error => log(`T 0 failed: ${error.message}`));
     unreadable.clear();
+    meterOff.clear();
     detectCaps().finally(() => schedulePoll(0));
   });
   client.on("disconnect", () => {
@@ -320,7 +386,102 @@ function createRemoteAgent(options = {}) {
     for (const [name, key] of Object.entries(FUNCS)) {
       if (controlsBusy()) return;
       if (!caps.func[name]?.get || unreadable.has(name)) continue;
+      if (name === "TUNER" && cat?.tuner) { await readControl(name, readCatTuner, value => { rig.funcs[key] = value; }); continue; }
       await readControl(name, () => client.getFunc(name), value => { rig.funcs[key] = value; });
+    }
+  }
+
+  // AC10x: x=1 tuner on, 0 off. Null when the radio refuses or answers something else.
+  async function readCatTuner() {
+    try {
+      const match = /^AC10([01]);?$/.exec(await client.sendRaw(cat.tuner.read, { read: true }) || "");
+      return match ? match[1] === "1" : null;
+    } catch (error) {
+      if (error.code === "rejected") return null;
+      throw error;
+    }
+  }
+
+  function setMeter(key, value) {
+    tx[key] = value;
+    tx.fraction[key] = meterFraction(key, value, Boolean(cat));
+  }
+
+  async function readCatMeters() {
+    for (const key of ["alc", "po", "swr"]) {
+      if (!rig.ptt || !tx) return;
+      if (meterOff.has(key)) continue;
+      const cmd = cat.meters[key];
+      try {
+        const value = parseRawMeter(await client.sendRaw(cmd, { read: true }), cmd);
+        if (!rig.ptt || !tx) return;
+        setMeter(key, value);
+      } catch (error) {
+        if (error.code !== "rejected") throw error;
+        meterOff.add(key);
+        log(`medidor ${key} no disponible: ${error.message}`);
+      }
+    }
+    if (meterCycle % 5 === 0 && rig.ptt && tx) {
+      try {
+        const watts = parsePower(await client.sendRaw(cat.power, { read: true }));
+        if (tx && watts !== null) tx.powerSetW = watts;
+      } catch (error) { if (error.code !== "rejected") throw error; }
+    }
+  }
+
+  // Radios without a raw-CAT override: only the meters Hamlib advertises, shown as they come.
+  async function readHamlibMeters() {
+    for (const [key, name] of [["po", "RFPOWER_METER_WATTS"], ["swr", "SWR"], ["alc", "ALC"]]) {
+      if (!rig.ptt || !tx) return;
+      if (!caps.level[name]?.get || meterOff.has(key)) continue;
+      const value = await client.getLevel(name);
+      if (!rig.ptt || !tx) return;
+      if (value === null) meterOff.add(key); else setMeter(key, round3(value));
+    }
+  }
+
+  async function checkSwr() {
+    const limit = cat ? swrRawLimit : swrLimit;
+    if (!tx || tx.swr === null || !(tx.swr > limit)) { swrSince = 0; return; }
+    const time = now();
+    if (!swrSince) { swrSince = time; return; }
+    if (time - swrSince <= SWR_TRIP_MS) return;
+    swrTripped = true;
+    setNotice("ROE alta: transmisión cortada");
+    await pttOff("ROE alta");
+  }
+
+  // Runs on the same serialized rigctld connection; PTT off keeps queue priority, so it waits for at most one meter read.
+  async function pollTxMeters() {
+    if (meterBusy || !rig.ptt || !tx || closing || !client.connected) return;
+    meterBusy = true;
+    try {
+      if (cat) await readCatMeters(); else await readHamlibMeters();
+      meterCycle += 1;
+      await checkSwr();
+    } catch (error) {
+      if (typeof error.code === "number") log(`rigctld: ${error.message}`);
+    } finally {
+      meterBusy = false;
+    }
+  }
+
+  // After AC103 the radio must report TX1/TX2; an ATAS antenna may never key it.
+  async function tuneKeyed() {
+    let expired = false;
+    const timer = setTimeout(() => { expired = true; }, tuneWatchMs);
+    try {
+      while (!expired && !closing) {
+        try {
+          if (/^TX[12];?$/.test(await client.sendRaw(cat.txState, { read: true }) || "")) return true;
+        } catch (error) { if (error.code !== "rejected") throw error; }
+        if (expired) break;
+        await new Promise(resolve => setTimeout(resolve, tunePollMs));
+      }
+      return false;
+    } finally {
+      clearTimeout(timer);
     }
   }
 
@@ -478,13 +639,21 @@ function createRemoteAgent(options = {}) {
         }
         case "func":
           if (!caps.func[command.name]?.set) return { status: 501, body: { error: "La radio no admite esta funcion." } };
-          await client.setFunc(command.name, command.on);
+          if (command.name === "TUNER" && cat?.tuner) await client.sendRaw(command.on ? cat.tuner.on : cat.tuner.off);
+          else await client.setFunc(command.name, command.on);
           rig.funcs[FUNCS[command.name]] = command.on;
           break;
         case "tune":
           if (!caps.tune) return { status: 501, body: { error: "La radio no admite TUNE." } };
           if (rig.ptt) return { status: 409, body: { error: "Cambio bloqueado durante TX." } };
-          await client.tune();
+          if (cat?.tuner) {
+            await client.sendRaw(cat.tuner.start);
+            if (!(await tuneKeyed())) {
+              log(TUNE_FAILED);
+              setNotice(TUNE_FAILED);
+              return { status: 502, body: { error: TUNE_FAILED } };
+            }
+          } else await client.tune();
           break;
         case "vfo": {
           const name = rigVfoName(command.value === "VFOA" ? "A" : "B");
@@ -844,9 +1013,10 @@ function createRemoteAgent(options = {}) {
     client.start();
     connectRelay();
     watchdog = setInterval(watchTx, 100);
+    meterTimer = setInterval(pollTxMeters, meterMs);
     sseTimer = setInterval(() => { for (const entry of sseClients) pushState(entry); }, 250);
     keepAliveTimer = setInterval(() => { for (const entry of sseClients) entry.response.write(": keep-alive\n\n"); }, 15_000);
-    for (const timer of [watchdog, sseTimer, keepAliveTimer]) timer.unref?.();
+    for (const timer of [watchdog, meterTimer, sseTimer, keepAliveTimer]) timer.unref?.();
     return server.address();
   }
 
@@ -855,6 +1025,7 @@ function createRemoteAgent(options = {}) {
     closing = true;
     clearTimeout(pollTimer);
     clearInterval(watchdog);
+    clearInterval(meterTimer);
     clearInterval(sseTimer);
     clearInterval(keepAliveTimer);
     if (client.connected && (rig.ptt || agentTx)) await pttOff("cierre del agente");
@@ -959,4 +1130,4 @@ if (require.main === module) {
   main().catch(error => { console.error(error.message); process.exit(1); });
 }
 
-module.exports = { createRemoteAgent, parseArgs, validateCommand, MODES };
+module.exports = { createRemoteAgent, parseArgs, validateCommand, parseRawMeter, parsePower, MODES };

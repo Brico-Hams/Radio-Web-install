@@ -55,7 +55,7 @@
           </select>
         </label>
       </div>
-      <div class="smeter">
+      <div id="rx-meters" class="smeter">
         <div id="smeter" class="smeter-bar" role="meter" aria-label="Senal recibida"
              aria-valuemin="0" aria-valuemax="114" aria-valuenow="0" aria-valuetext="--">
           <div id="smeter-fill" class="smeter-fill"></div>
@@ -63,6 +63,24 @@
         <output id="smeter-text" class="smeter-text" aria-live="off">--</output>
         <div id="smeter-scale" class="smeter-scale" aria-hidden="true"></div>
       </div>
+      <div id="tx-meters" class="tx-meters" role="group" aria-label="Medidores de transmisión" hidden>
+        <div class="tx-meter">
+          <span id="txm-po-label">PO</span>
+          <div id="txm-po" class="level-meter" role="meter" aria-labelledby="txm-po-label" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-valuetext="--"><div id="txm-po-fill" class="level-fill"></div></div>
+          <output id="txm-po-text" aria-live="off">--</output>
+        </div>
+        <div class="tx-meter">
+          <span id="txm-swr-label">ROE</span>
+          <div id="txm-swr" class="level-meter" role="meter" aria-labelledby="txm-swr-label" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-valuetext="--"><div id="txm-swr-fill" class="level-fill"></div></div>
+          <output id="txm-swr-text" aria-live="off">--</output>
+        </div>
+        <div class="tx-meter">
+          <span id="txm-alc-label">ALC</span>
+          <div id="txm-alc" class="level-meter" role="meter" aria-labelledby="txm-alc-label" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-valuetext="--"><div id="txm-alc-fill" class="level-fill"></div></div>
+          <output id="txm-alc-text" aria-live="off">--</output>
+        </div>
+      </div>
+      <p id="swr-alert" class="swr-alert" role="alert" hidden>ROE alta</p>
       <p class="hint">Al soltar, perder la conexion o cambiar de pestana se corta la transmision.</p>
     </section>
 
@@ -80,6 +98,8 @@
       <p id="audio-note" class="hint" role="status"></p>
       <label class="slider" for="audio-volume"><span>Volumen local</span><output id="out-audio-volume">80 %</output></label>
       <input id="audio-volume" type="range" min="0" max="100" step="1" value="80">
+      <label class="slider" for="mic-gain"><span>Ganancia de micrófono</span><output id="out-mic-gain">50 %</output></label>
+      <input id="mic-gain" type="range" min="0" max="100" step="1" value="50">
       <div class="meter-row">
         <span id="rx-meter-label">Nivel de recepción</span>
         <div id="rx-meter" class="level-meter" role="meter" aria-labelledby="rx-meter-label" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div id="rx-meter-fill" class="level-fill"></div></div>

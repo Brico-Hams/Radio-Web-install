@@ -10,6 +10,7 @@ const STATUSES = Object.freeze(["tested", "expected", "beta"]);
 const ID = /^[a-z0-9][a-z0-9-]{1,63}$/;
 const HEX4 = /^[0-9A-F]{4}$/;
 const SET_CONF = /^[a-z_]+=[A-Za-z0-9]+(,[a-z_]+=[A-Za-z0-9]+)*$/;
+const CAT_COMMAND = /^[A-Z]{2}[0-9]{0,3}$/;
 
 const isText = value => typeof value === "string" && value.trim() !== "";
 const isModel = value => Number.isInteger(value) && value > 0;
@@ -36,7 +37,31 @@ function validateRadio(radio, where) {
   }
   if (serial.openDelayMs !== undefined && (!Number.isInteger(serial.openDelayMs) || serial.openDelayMs < 0 || serial.openDelayMs > 10_000)) fail("serial.openDelayMs no valido");
   if (serial.setConf !== undefined && (typeof serial.setConf !== "string" || !SET_CONF.test(serial.setConf))) fail("serial.setConf no valido");
+  if (radio.cat !== undefined) validateCat(radio.cat, fail);
   return radio;
+}
+
+// Per-radio raw CAT overrides (Yaesu CAT syntax, without the trailing ";"), sent through rigctld's raw command.
+function validateCat(cat, fail) {
+  if (!cat || typeof cat !== "object" || Array.isArray(cat)) fail("cat no valido");
+  if (cat.protocol !== "yaesu") fail("cat.protocol debe ser \"yaesu\"");
+  const command = (value, name) => { if (typeof value !== "string" || !CAT_COMMAND.test(value)) fail(`cat.${name} no valido`); };
+  if (cat.tuner !== undefined) {
+    if (!cat.tuner || typeof cat.tuner !== "object") fail("cat.tuner no valido");
+    for (const key of ["on", "off", "read", "start"]) command(cat.tuner[key], `tuner.${key}`);
+  }
+  command(cat.txState, "txState");
+  if (!cat.meters || typeof cat.meters !== "object") fail("cat.meters obligatorio");
+  for (const key of ["alc", "po", "swr"]) command(cat.meters[key], `meters.${key}`);
+  command(cat.power, "power");
+  if (!Number.isInteger(cat.swrRawLimit) || cat.swrRawLimit < 1 || cat.swrRawLimit > 255) fail("cat.swrRawLimit debe estar entre 1 y 255");
+}
+
+// Every raw string the agent may send for a radio; nothing else ever reaches the radio.
+function catAllowList(cat) {
+  if (!cat) return [];
+  const list = [cat.txState, cat.power, ...Object.values(cat.meters || {}), ...(cat.tuner ? Object.values(cat.tuner) : [])];
+  return [...new Set(list)];
 }
 
 function validateAccessory(item, where) {
@@ -76,4 +101,4 @@ function loadCatalog(file = FILE) {
 const findRadio = (id, catalog = loadCatalog()) => catalog.radios.find(radio => radio.id === id) || null;
 const findRotor = (id, catalog = loadCatalog()) => catalog.rotors.find(rotor => rotor.id === id) || null;
 
-module.exports = { loadCatalog, validateCatalog, findRadio, findRotor, FILE };
+module.exports = { loadCatalog, validateCatalog, findRadio, findRotor, catAllowList, FILE };

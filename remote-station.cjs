@@ -427,7 +427,7 @@ function createStation(options = {}) {
       agent = createAgent({
         configDir, host: lan ? "0.0.0.0" : "127.0.0.1", port: config.agentPort, tls: lan,
         rigctldHost: plan.agent.rigctldHost, rigctldPort: plan.agent.rigctldPort,
-        radioScope: findRadio(config.radio, catalog)?.scope, relay: config.relay || undefined, audio: config.audio, log
+        radioScope: findRadio(config.radio, catalog)?.scope, radioCat: findRadio(config.radio, catalog)?.cat, relay: config.relay || undefined, audio: config.audio, log
       });
       await agent.start();
       active = config;

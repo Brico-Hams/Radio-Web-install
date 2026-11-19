@@ -1995,6 +1995,13 @@ No se pudo conectar el audio.|Could not connect the audio.|Impossible de connect
 Volumen local|Local volume|Volume local|Lokale Lautstärke
 Nivel de recepción|Receive level|Niveau de réception|Empfangspegel
 Nivel del micrófono|Microphone level|Niveau du microphone|Mikrofonpegel
+Ganancia de micrófono|Microphone gain|Gain du microphone|Mikrofonverstärkung
+Medidores de transmisión|Transmit meters|Indicateurs d’émission|Sendeanzeigen
+PO|PO|PO|PO
+ALC|ALC|ALC|ALC
+ROE alta|High SWR|ROS élevé|Hohes SWR
+La radio no ha iniciado la sintonía (revisa el sintonizador/ATAS en el equipo)|The radio did not start tuning (check the tuner/ATAS on the unit)|La radio n’a pas lancé l’accord (vérifiez le coupleur/ATAS sur l’appareil)|Das Funkgerät hat den Abstimmvorgang nicht gestartet (Tuner/ATAS am Gerät prüfen)
+ROE alta: transmisión cortada|High SWR: transmission cut|ROS élevé : émission coupée|Hohes SWR: Sendung abgebrochen
 Búfer de audio: {0} ms|Audio buffer: {0} ms|Tampon audio : {0} ms|Audiopuffer: {0} ms
 No se pudo acceder al micrófono.|Could not access the microphone.|Impossible d’accéder au microphone.|Zugriff auf das Mikrofon nicht möglich.
 La transmisión de audio no está permitida.|Audio transmission is not allowed.|La transmission audio n’est pas autorisée.|Audioübertragung ist nicht erlaubt.

@@ -46,6 +46,8 @@
   ]);
   const AGC_NAMES = Object.freeze({ 1: "SUPER", 4: "USER", 6: "AUTO" });
   const LEVEL_KEYS = Object.freeze({ AF: "af", RF: "rf", RFPOWER: "rfpower" });
+  const MIC_GAIN_KEY = "bricohams.remote.micgain";
+  const MIC_GAIN_DEFAULT = 50;
   const TABS = Object.freeze(["band", "levels", "log"]);
   const $ = id => document.getElementById(id);
 
@@ -427,6 +429,40 @@
 
   const formatTimer = seconds => `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
 
+  // PO / SWR / ALC while transmitting. Raw-CAT radios report 0-1 fractions (PO labelled with the configured watts);
+  // other radios show Hamlib's values as they come.
+  function txMeterText(key, tx) {
+    const value = tx[key];
+    if (value === null || value === undefined) return "--";
+    if (key === "po") return tx.source === "raw" ? (tx.powerSetW === null ? "--" : `${tx.powerSetW} W`) : `${Math.round(value)} W`;
+    if (key === "swr") return tx.source === "raw" ? `${Math.round(value)}/255` : `${value.toFixed(1)}:1`;
+    return `${Math.round((tx.fraction?.alc ?? 0) * 100)} %`;
+  }
+
+  function renderTxMeters(state) {
+    const active = Boolean(state.ptt);
+    $("rx-meters").hidden = active;
+    $("tx-meters").hidden = !active;
+    const tx = active ? state.tx : null;
+    for (const key of ["po", "swr", "alc"]) {
+      const fraction = tx?.fraction?.[key];
+      const percent = fraction === null || fraction === undefined ? 0 : Math.round(fraction * 100);
+      const text = tx ? txMeterText(key, tx) : "--";
+      $(`txm-${key}-fill`).style.width = `${percent}%`;
+      setAttr($(`txm-${key}`), "aria-valuenow", String(percent));
+      setAttr($(`txm-${key}`), "aria-valuetext", text);
+      setText($(`txm-${key}-text`), text);
+    }
+    const tripped = state.txAlert === "swr";
+    $("swr-alert").hidden = !tripped;
+    if (tripped && view.last.alert !== "swr") addLog("PTT off: ROE alta");
+    view.last.alert = state.txAlert || null;
+    if (state.notice && state.notice.id !== view.noticeId) {
+      view.noticeId = state.notice.id;
+      notify(state.notice.text);
+    }
+  }
+
   function renderSlider(name, state, enabled) {
     const key = LEVEL_KEYS[name];
     const input = $(`lvl-${key}`);
@@ -510,6 +546,7 @@
     meter.setAttribute("aria-valuenow", String(hasSignal ? Math.max(0, Math.min(114, Math.round(state.smeter + 54))) : 0));
     meter.setAttribute("aria-valuetext", smeterText(state.smeter));
     setText($("smeter-text"), smeterText(state.smeter));
+    renderTxMeters(state);
 
     const agc = state.levels?.agc;
     const agcStep = AGC_CYCLE.find(item => item.value === agc);
@@ -621,7 +658,7 @@
   const audio = {
     on: false, ctx: null, ws: null, decoder: null, node: null, gain: null, analyser: null, hello: null, scope: "",
     txSupported: false, encoder: null, mic: null, txSeq: 0, txActive: false, micBuffer: new Float32Array(960), micFill: 0,
-    micTimestamp: 0, micMeterAt: 0, rxSeq: 0, raf: 0, lastDraw: 0, bins: null, fallRow: null, starting: false
+    micTimestamp: 0, micMeterAt: 0, micGain: MIC_GAIN_DEFAULT / 100, rxSeq: 0, raf: 0, lastDraw: 0, bins: null, fallRow: null, starting: false
   };
   const audioNote = text => {
     setText($("audio-note"), text || "");
@@ -832,8 +869,10 @@
     if (!encoder || encoder.state !== "configured" || !audio.txActive) return;
     let sum = 0;
     for (let index = 0; index < frames.length; index++) {
-      audio.micBuffer[audio.micFill++] = frames[index];
-      sum += frames[index] * frames[index];
+      // Gain is applied before the Opus encoder so ALC is not driven into saturation.
+      const sample = Math.max(-1, Math.min(1, frames[index] * audio.micGain));
+      audio.micBuffer[audio.micFill++] = sample;
+      sum += sample * sample;
       if (audio.micFill === audio.micBuffer.length) {
         const pcm = audio.micBuffer.slice();
         audio.micFill = 0;
@@ -916,6 +955,19 @@
 
   function bindAudio() {
     updateAudioButton();
+    let stored = null;
+    try { stored = localStorage.getItem(MIC_GAIN_KEY); } catch { /* storage may be denied */ }
+    const saved = Number(stored);
+    const gain = stored !== null && Number.isFinite(saved) ? Math.max(0, Math.min(100, Math.round(saved))) : MIC_GAIN_DEFAULT;
+    $("mic-gain").value = String(gain);
+    setText($("out-mic-gain"), `${gain} %`);
+    audio.micGain = gain / 100;
+    $("mic-gain").addEventListener("input", event => {
+      const value = Number(event.target.value);
+      setText($("out-mic-gain"), `${value} %`);
+      audio.micGain = value / 100;
+      try { localStorage.setItem(MIC_GAIN_KEY, String(value)); } catch { /* storage may be denied */ }
+    });
     $("audio").addEventListener("click", () => { if (audio.on) stopAudio(); else startAudio(); });
     $("audio-volume").addEventListener("input", event => {
       setText($("out-audio-volume"), `${event.target.value} %`);

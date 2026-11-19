@@ -18,6 +18,11 @@ const GET_LINES = Object.freeze({ f: 1, m: 2, t: 1, l: 1, u: 1, v: 1, s: 2 });
 const LEVEL_NAMES = Object.freeze(["AF", "RF", "RFPOWER", "PREAMP", "ATT", "AGC"]);
 const FUNC_NAMES = Object.freeze(["NB", "NR", "TUNER"]);
 const VFO_NAMES = Object.freeze(["VFOA", "VFOB", "Main", "Sub", "MEM"]);
+// Read-only transmit meters, polled while the PTT is on.
+const METER_NAMES = Object.freeze(["RFPOWER_METER_WATTS", "SWR", "ALC"]);
+// Raw CAT strings: upper-case letters/digits only, and only when the radio entry allows that exact string.
+const RAW_FORMAT = /^[A-Z0-9]{1,8}$/;
+const RAW_IDLE_MS = 300;
 // `\dump_caps` has no fixed length: it ends with a RPRT line, or (older builds) simply goes quiet.
 const BLOCK_IDLE_MS = 250;
 
@@ -46,7 +51,7 @@ function parseCaps(lines) {
       const mode = key.startsWith("get") ? "get" : "set";
       for (const token of splitTokens(rest)) {
         const parsed = /^([A-Z0-9_]+)(?:\((.*)\))?$/.exec(token);
-        const item = parsed && entry(caps.level, LEVEL_NAMES, parsed[1]);
+        const item = parsed && entry(caps.level, [...LEVEL_NAMES, ...METER_NAMES], parsed[1]);
         if (!item) continue;
         item[mode] = true;
         if (parsed[2] && !parsed[2].includes("..")) {
@@ -73,6 +78,8 @@ class RigctldClient extends EventEmitter {
     this.port = options.port || 4532;
     this.timeoutMs = options.timeoutMs ?? 5000;
     this.reconnectMs = options.reconnectMs ?? 3000;
+    this.rawAllow = new Set(options.rawAllow || []);
+    this.rawIdleMs = options.rawIdleMs ?? RAW_IDLE_MS;
     this.socketFactory = options.socketFactory || ((port, host) => net.connect({ port, host }));
     this.connected = false;
     this.socket = null;
@@ -164,13 +171,13 @@ class RigctldClient extends EventEmitter {
 
   // Queue one rigctld command. `priority` jumps ahead of waiting commands (used for PTT off);
   // `block` collects a variable-length reply (`\dump_caps`).
-  send(line, { priority = false, block = false } = {}) {
+  send(line, { priority = false, block = false, raw = false, read = false } = {}) {
     return new Promise((resolve, reject) => {
       if (!this.connected) {
         reject(new RigctldError("rigctld not connected", "disconnected"));
         return;
       }
-      const item = { line, block, expected: GET_LINES[line.split(" ")[0]] || 0, resolve, reject, timer: null, idle: null };
+      const item = { line, block, raw, read, expected: GET_LINES[line.split(" ")[0]] || 0, resolve, reject, timer: null, idle: null };
       if (priority) this.queue.unshift(item); else this.queue.push(item);
       this.pump();
     });
@@ -191,9 +198,47 @@ class RigctldClient extends EventEmitter {
       this.scheduleReconnect();
     }, this.timeoutMs);
     this.socket.write(`${item.line}\n`);
+    // A raw set the radio does not answer must not drop the connection: it just goes quiet.
+    if (item.raw && !item.read) this.armRawIdle(item);
+  }
+
+  armRawIdle(item) {
+    clearTimeout(item.idle);
+    item.idle = setTimeout(() => {
+      if (this.current === item) this.finishRaw(item, this.buffer);
+    }, this.rawIdleMs);
+  }
+
+  // Raw replies end with NUL (e.g. "PC2010;\0"); a rejected command answers "?;".
+  consumeRaw(item) {
+    const report = /^RPRT (-?\d+)\r?\n/.exec(this.buffer);
+    if (report) {
+      this.buffer = this.buffer.slice(report[0].length);
+      const code = Number(report[1]);
+      this.finish(item, code === 0 ? null : new RigctldError(`rigctld error RPRT ${code}`, code), code === 0 ? null : undefined);
+      return;
+    }
+    const end = this.buffer.indexOf("\0");
+    if (end >= 0) {
+      const text = this.buffer.slice(0, end);
+      this.buffer = this.buffer.slice(end + 1);
+      this.finishRaw(item, text);
+      return;
+    }
+    // No terminator seen: whatever arrived counts as the reply once the line goes quiet.
+    this.armRawIdle(item);
+  }
+
+  finishRaw(item, text) {
+    this.buffer = "";
+    const reply = String(text).replace(/[\0\r\n]/g, "").trim();
+    if (reply.startsWith("?")) this.finish(item, new RigctldError("radio rejected the raw command", "rejected"));
+    else this.finish(item, null, reply || null);
   }
 
   consume() {
+    if (!this.current) { this.buffer = ""; return; }
+    if (this.current.raw) { this.consumeRaw(this.current); return; }
     let index;
     while ((index = this.buffer.indexOf("\n")) >= 0) {
       const line = this.buffer.slice(0, index).replace(/\r$/, "");
@@ -305,7 +350,7 @@ class RigctldClient extends EventEmitter {
 
   // Level value, or null when the rig does not support/answer it (RPRT error).
   async getLevel(name) {
-    if (!LEVEL_NAMES.includes(name)) throw new RigctldError(`level "${name}" not allowed`, "invalid");
+    if (!LEVEL_NAMES.includes(name) && !METER_NAMES.includes(name)) throw new RigctldError(`level "${name}" not allowed`, "invalid");
     try {
       const [reply] = await this.send(`l ${name}`);
       const value = Number(reply);
@@ -341,9 +386,18 @@ class RigctldClient extends EventEmitter {
 
   tune() { return this.send("G TUNE"); }
 
+  // Raw CAT through rigctld's `W` command. `read` commands wait for the reply; others resolve with null
+  // after a short silence when the radio does not answer. Rejects with code "rejected" on a "?;" reply.
+  sendRaw(cmd, { priority = false, read = false } = {}) {
+    if (typeof cmd !== "string" || !RAW_FORMAT.test(cmd) || !this.rawAllow.has(cmd)) {
+      return Promise.reject(new RigctldError("raw command not allowed", "invalid"));
+    }
+    return this.send(`W ${cmd}; ;`, { priority, raw: true, read });
+  }
+
   async dumpCaps() {
     return parseCaps(await this.send("\\dump_caps", { block: true }));
   }
 }
 
-module.exports = { RigctldClient, RigctldError, parseCaps, LEVEL_NAMES, FUNC_NAMES, VFO_NAMES };
+module.exports = { RigctldClient, RigctldError, parseCaps, LEVEL_NAMES, FUNC_NAMES, VFO_NAMES, METER_NAMES };
