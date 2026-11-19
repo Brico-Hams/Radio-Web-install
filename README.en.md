@@ -381,12 +381,10 @@ Do not disconnect or close the browser during an operation. Do not connect an ex
 An agent next to the radio controls it over CAT with Hamlib `rigctld` and provides a web console (phone, tablet or PC). `server.cjs` is unchanged and still listens only on `127.0.0.1`.
 
 1. Start `rigctld` with your radio: `rigctld -m <modelo> -r <puerto>` (for example `rigctld -m 1035 -r COM5`; list models with `rigctld -l`). It listens on `127.0.0.1:4532`.
-2. Start the agent: `npm run remote` (options: `--port`, `--rigctld-host`, `--rigctld-port`, `--openwebrx <url>`, `--listen 0.0.0.0` or the `REMOTE_LISTEN` variable for LAN/Tailscale). The first time it generates a random token in `~/.radicodex/remote-agent.json` (it also stores `openwebrxUrl`, the rigctld host/port and `txLimitSeconds`, 180 by default).
+2. Start the agent: `npm run remote` (options: `--port`, `--rigctld-host`, `--rigctld-port`, `--listen 0.0.0.0` or the `REMOTE_LISTEN` variable for LAN/Tailscale). The first time it generates a random token in `~/.radicodex/remote-agent.json` (it also stores the rigctld host/port and `txLimitSeconds`, 180 by default).
 3. Open in the browser the address the agent prints, with the token in the fragment (`https://<ip>:8788/#token=...&fp=...`). The console keeps the token in the session and removes it (together with `fp`) from the address bar.
 
-HTTPS: with `--listen` on a non-local address the agent serves HTTPS by default using a self-signed certificate (ECDSA P-256) stored in `~/.radicodex/remote-agent-tls.pem` (0600; reused, and regenerated if missing, invalid, expiring in under 30 days or the local IPs change). The browser warns about the certificate once; the printed SHA-256 fingerprint `fp` lets you verify it. `--tls` forces HTTPS on loopback too and `--no-tls` forces plain HTTP (with a warning). For the Android app the agent prints the link `radicodex-remote://pair?host=<ip>&port=8788#token=...&fp=...` (token and fingerprint only in the fragment).
-
-Spectrum: with `--openwebrx <url>` the agent serves OpenWebRX under `/sdr/` through the same authenticated origin (HTTP and WebSocket). The first request needs the token and the agent sets the `rs_session` cookie (HttpOnly, SameSite=Strict, Secure with TLS, 12 h) for OpenWebRX's own sub-requests.
+HTTPS: with `--listen` on a non-local address the agent serves HTTPS by default using a self-signed certificate (ECDSA P-256) stored in `~/.radicodex/remote-agent-tls.pem` (0600; reused, and regenerated if missing, invalid, expiring in under 30 days or the local IPs change). The browser warns about the certificate once; the printed SHA-256 fingerprint `fp` lets you verify it. `--tls` forces HTTPS on loopback too and `--no-tls` forces plain HTTP (with a warning). For the Android app the agent prints the link `radicodex-remote://pair` with host, port, token and fingerprint (token and fingerprint only in the fragment).
 
 Relay (no open ports): the agent only makes outgoing connections to a BricoHams relay that you host yourself; clients (browser, Android WebView) come in through the relay at `/s/<id>/`.
 
@@ -401,7 +399,7 @@ relay.example.org {
 }
 ```
 
-3. At the station: `npm run remote -- --relay https://relay.example.org --station ea5kao --station-secret <secret>`. The secret is kept in `~/.radicodex/remote-agent.json` (0600) and never printed. The agent prints `https://relay.example.org/s/ea5kao/#token=...` for the browser and `radicodex-remote://pair?relay=<relay-url>&station=ea5kao#token=...` for Android. The console shows the relay status and `/api/state` exposes it as `relay`.
+3. At the station: `npm run remote -- --relay https://relay.example.org --station ea5kao --station-secret <secret>`. The secret is kept in `~/.radicodex/remote-agent.json` (0600) and never printed. The agent prints `https://relay.example.org/s/ea5kao/#token=...` for the browser and `radicodex-remote://pair` (with relay, station and token) for Android. The console shows the relay status and `/api/state` exposes it as `relay`.
 
 The relay terminates TLS and sees the traffic in clear text: self-host it where you trust it. The agent token still protects control (the relay does not know it) and the agent's TX safety is unchanged.
 

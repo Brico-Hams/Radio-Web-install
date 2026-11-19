@@ -23,24 +23,8 @@
       <span id="relay" class="pill" role="status" aria-live="off">Rel&eacute;: no configurado</span>
       <span id="latency" class="pill lat" role="status" aria-live="off">Latencia: --</span>
       <span id="status" class="pill" role="status" aria-live="polite">Sin conexion</span>
-      <button id="settings-toggle" type="button" class="plain" aria-expanded="false" aria-controls="settings">Ajustes</button>
     </div>
   </header>
-
-  <section id="settings" class="settings" aria-labelledby="settings-title" hidden>
-    <h2 id="settings-title">Ajustes</h2>
-    <form id="sdr-form" class="row" autocomplete="off">
-      <label class="grow">Direccion de OpenWebRX
-        <input id="sdr-url" type="url" inputmode="url" placeholder="http://192.168.1.10:8073/">
-      </label>
-      <button id="sdr-open" type="submit">Abrir</button>
-    </form>
-    <div class="row">
-      <label class="grow">Ancho visible del espectro (kHz)
-        <input id="sdr-span" type="number" inputmode="numeric" min="0" max="100000" step="1" placeholder="0">
-      </label>
-    </div>
-  </section>
 
   <main class="console">
     <p id="notice" class="notice" role="alert" hidden></p>
@@ -82,23 +66,8 @@
     </section>
 
     <section id="spectrum" class="card spectrum" aria-labelledby="spectrum-title">
-      <div class="spectrum-head">
-        <h2 id="spectrum-title">Espectro (OpenWebRX)</h2>
-        <div class="span">
-          <span class="span-item">Inicio <output id="span-lo">--</output></span>
-          <span class="span-item span-centre">Centro <output id="span-mid">--</output></span>
-          <span class="span-item">Fin <output id="span-hi">--</output></span>
-        </div>
-      </div>
-      <div class="frame-wrap">
-        <iframe id="sdr" title="OpenWebRX" sandbox="allow-scripts allow-same-origin allow-forms" referrerpolicy="no-referrer" hidden></iframe>
-        <p id="sdr-empty" class="hint empty">Indica la direccion de OpenWebRX en Ajustes.</p>
-      </div>
-      <div class="spectrum-foot">
-        <button id="follow" type="button" class="toggle" aria-pressed="true">Seguir al equipo</button>
-        <a id="sdr-new" class="btn" href="about:blank" target="_blank" rel="noopener noreferrer" hidden>Abrir en otra pestana</a>
-        <button id="sdr-reload" type="button" disabled>Recargar</button>
-      </div>
+      <h2 id="spectrum-title">Espectro de la radio</h2>
+      <p id="spectrum-note" class="hint empty">Este modelo no ofrece espectro</p>
     </section>
 
     <div class="tabs" role="tablist" aria-label="Paneles de control">

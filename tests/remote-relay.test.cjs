@@ -45,20 +45,6 @@ async function fakeRigctld() {
   return { port: server.address().port, close: () => new Promise(resolve => { for (const socket of sockets) socket.destroy(); server.close(() => resolve()); }) };
 }
 
-async function fakeOpenwebrx() {
-  const sockets = new Set();
-  const server = http.createServer((request, response) => { response.writeHead(200, { "Content-Type": "text/plain" }); response.end(`sdr:${request.url}`); });
-  server.on("connection", socket => { sockets.add(socket); socket.on("close", () => sockets.delete(socket)); });
-  server.on("upgrade", (request, socket) => {
-    sockets.add(socket);
-    socket.on("error", () => {});
-    socket.write("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n");
-    socket.on("data", chunk => socket.write(`echo:${chunk}`));
-  });
-  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
-  return { port: server.address().port, close: () => new Promise(resolve => { for (const socket of sockets) socket.destroy(); server.close(() => resolve()); }) };
-}
-
 // Opens a control channel as an agent would; resolves with the socket or the plain HTTP status.
 const openControl = (port, id, secret) => new Promise((resolve, reject) => {
   const request = http.request({
@@ -169,8 +155,7 @@ test("healthz, unknown station 404, offline station 503, trailing-slash redirect
 test("end to end: agent reaches the relay, console API works through /s/<id>/, auth stays with the agent", async () => {
   const { relay, dataFile, port, cleanup } = await startRelay();
   const secret = addStation(dataFile, "ea5kao");
-  const sdr = await fakeOpenwebrx();
-  const station = await startStation(port, secret, { openwebrxUrl: `http://127.0.0.1:${sdr.port}/` });
+  const station = await startStation(port, secret);
   const { agent } = station;
   try {
     await waitFor(() => relay.connected("ea5kao") && agent.snapshot("x").relay.connected && agent.snapshot("x").freq === 14074000);
@@ -191,12 +176,10 @@ test("end to end: agent reaches the relay, console API works through /s/<id>/, a
     assert.equal(html.status, 200);
     assert.doesNotMatch(html.text, /(?:src|href)="\//);
 
-    // A client cannot forge the forwarded prefix: the relay overwrites it.
-    const forged = await get(port, "/s/ea5kao/sdr/?token=" + agent.token, { "X-Forwarded-Prefix": "/evil" });
+    // The forwarded-prefix header is relay-controlled; the agent only serves relative URLs, so a forged one changes nothing.
+    const forged = await get(port, "/s/ea5kao/remote.html", { "X-Forwarded-Prefix": "/evil" });
     assert.equal(forged.status, 200);
-    const cookie = [].concat(forged.headers["set-cookie"]).find(item => item.startsWith("rs_session="));
-    assert.match(cookie, /Path=\/s\/ea5kao\/sdr\//);
-    assert.equal(forged.text, "sdr:/");
+    assert.doesNotMatch(forged.text, /\/evil/);
 
     // SSE through the relay.
     const event = await new Promise((resolve, reject) => {
@@ -211,21 +194,7 @@ test("end to end: agent reaches the relay, console API works through /s/<id>/, a
       request.on("error", error => { if (error.code !== "ECONNRESET") reject(error); });
     });
     assert.match(event, /"relay":\{"configured":true,"connected":true\}/);
-
-    // WebSocket upgrade through the relay to the /sdr/ proxy.
-    const echoed = await new Promise((resolve, reject) => {
-      const socket = net.connect(port, "127.0.0.1");
-      let text = "";
-      socket.on("error", reject);
-      socket.on("data", chunk => {
-        text += chunk;
-        if (text.startsWith("HTTP/1.1 101") && !socket.sent) { socket.sent = true; socket.write("ping"); }
-        if (text.includes("echo:ping")) { socket.destroy(); resolve(text); }
-      });
-      socket.write(`GET /s/ea5kao/sdr/ws/?token=${agent.token} HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: abc\r\nSec-WebSocket-Version: 13\r\n\r\n`);
-    });
-    assert.match(echoed, /^HTTP\/1\.1 101/);
-  } finally { await station.cleanup(); await sdr.close(); await cleanup(); }
+  } finally { await station.cleanup(); await cleanup(); }
 });
 
 test("keep-alive browser connection: every request is rewritten, none leaks the /s/<id> prefix", async () => {

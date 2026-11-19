@@ -392,12 +392,10 @@ No desconectes ni cierres el navegador durante una operacion. No conectes simult
 Un agente junto a la radio la controla por CAT con Hamlib `rigctld` y ofrece una consola web (movil, tableta o PC). `server.cjs` no cambia y sigue escuchando solo en `127.0.0.1`.
 
 1. Arranca `rigctld` con tu radio: `rigctld -m <modelo> -r <puerto>` (por ejemplo `rigctld -m 1035 -r COM5`; lista de modelos con `rigctld -l`). Escucha en `127.0.0.1:4532`.
-2. Arranca el agente: `npm run remote` (opciones: `--port`, `--rigctld-host`, `--rigctld-port`, `--openwebrx <url>`, `--listen 0.0.0.0` o variable `REMOTE_LISTEN` para LAN/Tailscale). La primera vez genera un token aleatorio en `~/.radicodex/remote-agent.json` (tambien guarda `openwebrxUrl`, host/puerto de rigctld y `txLimitSeconds`, 180 por defecto).
+2. Arranca el agente: `npm run remote` (opciones: `--port`, `--rigctld-host`, `--rigctld-port`, `--listen 0.0.0.0` o variable `REMOTE_LISTEN` para LAN/Tailscale). La primera vez genera un token aleatorio en `~/.radicodex/remote-agent.json` (tambien guarda host/puerto de rigctld y `txLimitSeconds`, 180 por defecto).
 3. Abre en el navegador la direccion que imprime el agente, con el token en el fragmento (`https://<ip>:8788/#token=...&fp=...`). La consola guarda el token en la sesion y lo quita (junto con `fp`) de la barra de direcciones.
 
-HTTPS: con `--listen` en una direccion no local el agente sirve HTTPS por defecto con un certificado autofirmado (ECDSA P-256) guardado en `~/.radicodex/remote-agent-tls.pem` (0600; se reutiliza y se regenera si falta, no es valido, caduca en menos de 30 dias o cambian las IP locales). El navegador avisara una vez del certificado; la huella SHA-256 `fp` impresa permite verificarlo. `--tls` fuerza HTTPS tambien en loopback y `--no-tls` fuerza HTTP plano (con aviso). Para la app Android el agente imprime el enlace `radicodex-remote://pair?host=<ip>&port=8788#token=...&fp=...` (token y huella solo en el fragmento).
-
-Espectro: con `--openwebrx <url>` el agente sirve OpenWebRX en `/sdr/` por el mismo origen autenticado (HTTP y WebSocket). La primera peticion exige el token y el agente fija la cookie `rs_session` (HttpOnly, SameSite=Strict, Secure con TLS, 12 h) para las peticiones internas de OpenWebRX.
+HTTPS: con `--listen` en una direccion no local el agente sirve HTTPS por defecto con un certificado autofirmado (ECDSA P-256) guardado en `~/.radicodex/remote-agent-tls.pem` (0600; se reutiliza y se regenera si falta, no es valido, caduca en menos de 30 dias o cambian las IP locales). El navegador avisara una vez del certificado; la huella SHA-256 `fp` impresa permite verificarlo. `--tls` fuerza HTTPS tambien en loopback y `--no-tls` fuerza HTTP plano (con aviso). Para la app Android el agente imprime el enlace `radicodex-remote://pair` con host, puerto, token y huella (token y huella solo en el fragmento).
 
 Rele (sin abrir puertos): el agente solo hace conexiones salientes a un rele BricoHams que alojas tu mismo; los clientes (navegador, WebView de Android) entran por el rele en `/s/<id>/`.
 
@@ -412,7 +410,7 @@ relay.example.org {
 }
 ```
 
-3. En la estacion: `npm run remote -- --relay https://relay.example.org --station ea5kao --station-secret <secret>`. El secreto queda en `~/.radicodex/remote-agent.json` (0600) y nunca se imprime. El agente imprime `https://relay.example.org/s/ea5kao/#token=...` para el navegador y `radicodex-remote://pair?relay=<relay-url>&station=ea5kao#token=...` para Android. La consola muestra el estado del rele y `/api/state` lo expone en `relay`.
+3. En la estacion: `npm run remote -- --relay https://relay.example.org --station ea5kao --station-secret <secret>`. El secreto queda en `~/.radicodex/remote-agent.json` (0600) y nunca se imprime. El agente imprime `https://relay.example.org/s/ea5kao/#token=...` para el navegador y `radicodex-remote://pair` (con rele, estacion y token) para Android. La consola muestra el estado del rele y `/api/state` lo expone en `relay`.
 
 El rele termina el TLS y ve el trafico en claro: alojalo donde confies. El token del agente sigue protegiendo el control (el rele no lo conoce) y la seguridad de TX del agente no cambia.
 

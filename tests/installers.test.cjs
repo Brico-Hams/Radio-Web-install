@@ -106,6 +106,26 @@ test("los instalables incluyen el catalogo y todos los recursos web permitidos",
   }
 });
 
+test("el .deb incluye la estacion remota con el servicio systemd opcional y sin activarlo", () => {
+  const build = read("scripts/build-installers.sh");
+  const files = build.match(/app_files=\(([\s\S]*?)\n\)/)[1].trim().split(/\s+/);
+  for (const file of ["remote-station.cjs", "remote-catalog.cjs", "remote-agent.cjs", "remote-tls.cjs", "rigctld-client.cjs", "remoto.html", "remoto-ui.js", "remoto.css"]) {
+    assert.ok(files.includes(file), file);
+    assert.ok(fs.existsSync(path.join(root, file)), file);
+  }
+  assert.ok(build.includes('cp "$root/data/remote-station-catalog.json"'));
+  assert.ok(build.includes('"$root/installers/unix/radicodex-station" "$package_root/usr/bin/radicodex-station"'));
+  assert.ok(build.includes('"$root/installers/linux/radicodex-station.service" "$package_root/lib/systemd/system/radicodex-station.service"'));
+  assert.doesNotMatch(build, /systemctl\s+enable|WantedBy.*\n.*ln -s/);
+  assert.doesNotMatch(read("installers/linux/radicodex-station.postinst"), /systemctl|deb-systemd/);
+  const unit = read("installers/linux/radicodex-station.service");
+  for (const line of ["User=radicodex", "Restart=always", "NoNewPrivileges=yes", "ProtectSystem=strict", "ReadWritePaths=/var/lib/radicodex", "ExecStart=/usr/bin/radicodex-station"]) {
+    assert.ok(unit.includes(line), line);
+  }
+  assert.match(unit, /SupplementaryGroups=dialout plugdev/);
+  assert.match(read("installers/unix/radicodex-station"), /remote-station\.cjs" --headless/);
+});
+
 test("Linux y FreeBSD comparten un unico lanzador y Windows reemplaza la app al actualizar", () => {
   const build = read("scripts/build-installers.sh");
   assert.equal(build.match(/installers\/unix\/radicodex"/g).length, 3);

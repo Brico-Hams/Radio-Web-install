@@ -281,12 +281,10 @@ Ne débranchez pas la radio et ne fermez pas le navigateur pendant une opératio
 Un agent placé près de la radio la pilote par CAT avec Hamlib `rigctld` et propose une console web (mobile, tablette ou PC). `server.cjs` ne change pas et écoute toujours uniquement sur `127.0.0.1`.
 
 1. Lancez `rigctld` avec votre radio : `rigctld -m <modelo> -r <puerto>` (par exemple `rigctld -m 1035 -r COM5` ; liste des modèles avec `rigctld -l`). Il écoute sur `127.0.0.1:4532`.
-2. Lancez l’agent : `npm run remote` (options : `--port`, `--rigctld-host`, `--rigctld-port`, `--openwebrx <url>`, `--listen 0.0.0.0` ou la variable `REMOTE_LISTEN` pour LAN/Tailscale). La première fois, il génère un jeton aléatoire dans `~/.radicodex/remote-agent.json` (il y enregistre aussi `openwebrxUrl`, l’hôte/port de rigctld et `txLimitSeconds`, 180 par défaut).
+2. Lancez l’agent : `npm run remote` (options : `--port`, `--rigctld-host`, `--rigctld-port`, `--listen 0.0.0.0` ou la variable `REMOTE_LISTEN` pour LAN/Tailscale). La première fois, il génère un jeton aléatoire dans `~/.radicodex/remote-agent.json` (il y enregistre aussi l’hôte/port de rigctld et `txLimitSeconds`, 180 par défaut).
 3. Ouvrez dans le navigateur l’adresse affichée par l’agent, avec le jeton dans le fragment (`https://<ip>:8788/#token=...&fp=...`). La console conserve le jeton dans la session et le retire (avec `fp`) de la barre d’adresse.
 
-HTTPS : avec `--listen` sur une adresse non locale, l’agent sert HTTPS par défaut avec un certificat auto-signé (ECDSA P-256) stocké dans `~/.radicodex/remote-agent-tls.pem` (0600 ; réutilisé, et régénéré s’il manque, est invalide, expire dans moins de 30 jours ou si les IP locales changent). Le navigateur avertira une fois du certificat ; l’empreinte SHA-256 `fp` affichée permet de le vérifier. `--tls` force HTTPS aussi en loopback et `--no-tls` force le HTTP simple (avec avertissement). Pour l’app Android, l’agent affiche le lien `radicodex-remote://pair?host=<ip>&port=8788#token=...&fp=...` (jeton et empreinte uniquement dans le fragment).
-
-Spectre : avec `--openwebrx <url>`, l’agent sert OpenWebRX sous `/sdr/` via la même origine authentifiée (HTTP et WebSocket). La première requête exige le jeton et l’agent définit le cookie `rs_session` (HttpOnly, SameSite=Strict, Secure avec TLS, 12 h) pour les requêtes internes d’OpenWebRX.
+HTTPS : avec `--listen` sur une adresse non locale, l’agent sert HTTPS par défaut avec un certificat auto-signé (ECDSA P-256) stocké dans `~/.radicodex/remote-agent-tls.pem` (0600 ; réutilisé, et régénéré s’il manque, est invalide, expire dans moins de 30 jours ou si les IP locales changent). Le navigateur avertira une fois du certificat ; l’empreinte SHA-256 `fp` affichée permet de le vérifier. `--tls` force HTTPS aussi en loopback et `--no-tls` force le HTTP simple (avec avertissement). Pour l’app Android, l’agent affiche le lien `radicodex-remote://pair` avec hôte, port, jeton et empreinte (jeton et empreinte uniquement dans le fragment).
 
 Relais (sans port ouvert) : l’agent n’établit que des connexions sortantes vers un relais BricoHams que vous hébergez vous-même ; les clients (navigateur, WebView Android) entrent par le relais sur `/s/<id>/`.
 
@@ -301,7 +299,7 @@ relay.example.org {
 }
 ```
 
-3. À la station : `npm run remote -- --relay https://relay.example.org --station ea5kao --station-secret <secret>`. Le secret reste dans `~/.radicodex/remote-agent.json` (0600) et n’est jamais affiché. L’agent affiche `https://relay.example.org/s/ea5kao/#token=...` pour le navigateur et `radicodex-remote://pair?relay=<relay-url>&station=ea5kao#token=...` pour Android. La console montre l’état du relais et `/api/state` l’expose dans `relay`.
+3. À la station : `npm run remote -- --relay https://relay.example.org --station ea5kao --station-secret <secret>`. Le secret reste dans `~/.radicodex/remote-agent.json` (0600) et n’est jamais affiché. L’agent affiche `https://relay.example.org/s/ea5kao/#token=...` pour le navigateur et `radicodex-remote://pair` (avec relais, station et jeton) pour Android. La console montre l’état du relais et `/api/state` l’expose dans `relay`.
 
 Le relais termine le TLS et voit le trafic en clair : hébergez-le là où vous avez confiance. Le jeton de l’agent protège toujours le contrôle (le relais ne le connaît pas) et la sécurité TX de l’agent ne change pas.
 

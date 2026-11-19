@@ -301,12 +301,10 @@ Trenne während einer Operation nicht den Browser und schließe ihn nicht. Schli
 Ein Agent neben dem Funkgerät steuert es per CAT mit Hamlib `rigctld` und stellt eine Webkonsole bereit (Smartphone, Tablet oder PC). `server.cjs` bleibt unverändert und hört weiterhin nur auf `127.0.0.1`.
 
 1. Starte `rigctld` mit deinem Funkgerät: `rigctld -m <modelo> -r <puerto>` (zum Beispiel `rigctld -m 1035 -r COM5`; Modellliste mit `rigctld -l`). Es hört auf `127.0.0.1:4532`.
-2. Starte den Agenten: `npm run remote` (Optionen: `--port`, `--rigctld-host`, `--rigctld-port`, `--openwebrx <url>`, `--listen 0.0.0.0` oder die Variable `REMOTE_LISTEN` für LAN/Tailscale). Beim ersten Mal erzeugt er ein zufälliges Token in `~/.radicodex/remote-agent.json` (dort stehen auch `openwebrxUrl`, Host/Port von rigctld und `txLimitSeconds`, standardmäßig 180).
+2. Starte den Agenten: `npm run remote` (Optionen: `--port`, `--rigctld-host`, `--rigctld-port`, `--listen 0.0.0.0` oder die Variable `REMOTE_LISTEN` für LAN/Tailscale). Beim ersten Mal erzeugt er ein zufälliges Token in `~/.radicodex/remote-agent.json` (dort stehen auch Host/Port von rigctld und `txLimitSeconds`, standardmäßig 180).
 3. Öffne im Browser die vom Agenten ausgegebene Adresse mit dem Token im Fragment (`https://<ip>:8788/#token=...&fp=...`). Die Konsole speichert das Token in der Sitzung und entfernt es (zusammen mit `fp`) aus der Adressleiste.
 
-HTTPS: Mit `--listen` auf einer nicht lokalen Adresse liefert der Agent standardmäßig HTTPS mit einem selbstsignierten Zertifikat (ECDSA P-256) aus `~/.radicodex/remote-agent-tls.pem` (0600; wiederverwendet und neu erzeugt, wenn es fehlt, ungültig ist, in weniger als 30 Tagen abläuft oder sich die lokalen IPs ändern). Der Browser warnt einmal vor dem Zertifikat; der ausgegebene SHA-256-Fingerabdruck `fp` erlaubt die Prüfung. `--tls` erzwingt HTTPS auch auf Loopback und `--no-tls` erzwingt reines HTTP (mit Warnung). Für die Android-App gibt der Agent den Link `radicodex-remote://pair?host=<ip>&port=8788#token=...&fp=...` aus (Token und Fingerabdruck nur im Fragment).
-
-Spektrum: Mit `--openwebrx <url>` liefert der Agent OpenWebRX unter `/sdr/` über denselben authentifizierten Origin aus (HTTP und WebSocket). Die erste Anfrage braucht das Token, und der Agent setzt das Cookie `rs_session` (HttpOnly, SameSite=Strict, Secure bei TLS, 12 h) für die internen Anfragen von OpenWebRX.
+HTTPS: Mit `--listen` auf einer nicht lokalen Adresse liefert der Agent standardmäßig HTTPS mit einem selbstsignierten Zertifikat (ECDSA P-256) aus `~/.radicodex/remote-agent-tls.pem` (0600; wiederverwendet und neu erzeugt, wenn es fehlt, ungültig ist, in weniger als 30 Tagen abläuft oder sich die lokalen IPs ändern). Der Browser warnt einmal vor dem Zertifikat; der ausgegebene SHA-256-Fingerabdruck `fp` erlaubt die Prüfung. `--tls` erzwingt HTTPS auch auf Loopback und `--no-tls` erzwingt reines HTTP (mit Warnung). Für die Android-App gibt der Agent den Link `radicodex-remote://pair` mit Host, Port, Token und Fingerabdruck aus (Token und Fingerabdruck nur im Fragment).
 
 Relay (ohne offene Ports): Der Agent baut nur ausgehende Verbindungen zu einem BricoHams-Relay auf, das du selbst betreibst; Clients (Browser, Android-WebView) kommen über das Relay unter `/s/<id>/` herein.
 
@@ -321,7 +319,7 @@ relay.example.org {
 }
 ```
 
-3. An der Station: `npm run remote -- --relay https://relay.example.org --station ea5kao --station-secret <secret>`. Das Geheimnis liegt in `~/.radicodex/remote-agent.json` (0600) und wird nie ausgegeben. Der Agent gibt `https://relay.example.org/s/ea5kao/#token=...` für den Browser und `radicodex-remote://pair?relay=<relay-url>&station=ea5kao#token=...` für Android aus. Die Konsole zeigt den Relay-Status, und `/api/state` liefert ihn als `relay`.
+3. An der Station: `npm run remote -- --relay https://relay.example.org --station ea5kao --station-secret <secret>`. Das Geheimnis liegt in `~/.radicodex/remote-agent.json` (0600) und wird nie ausgegeben. Der Agent gibt `https://relay.example.org/s/ea5kao/#token=...` für den Browser und `radicodex-remote://pair` (mit Relay, Station und Token) für Android aus. Die Konsole zeigt den Relay-Status, und `/api/state` liefert ihn als `relay`.
 
 Das Relay beendet TLS und sieht den Verkehr im Klartext: Betreibe es dort, wo du vertraust. Das Agent-Token schützt weiterhin die Steuerung (das Relay kennt es nicht), und die TX-Sicherheit des Agenten bleibt unverändert.
 

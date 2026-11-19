@@ -25,6 +25,8 @@ app_files=(
   ayuda-opengd77.html ayuda-opengd77-modelos.html ayuda-karina.html ayuda-bricohams.html
   ayuda-anytone.html ayuda-ftx1.html ayuda-icom.html ayuda-icom-internals.html ayuda-icom-parches.html ayuda-referencias.html ayuda-arquitectura.html ayuda-marca.html ayuda-ftx1-conocimiento.html
   ayuda-decisiones.html ayuda-despliegue.html
+  remote-station.cjs remote-catalog.cjs remote-agent.cjs remote-tls.cjs rigctld-client.cjs
+  remote.html remote-ui.js remote.css remoto.html remoto-ui.js remoto.css
   ayuda-entrega.html ayuda-android.html ayuda-tutoriales-android.html ayuda-validacion-v3-android.html
   ayuda-egzumer.html ayuda-pack-dim0s.html ayuda-atlas-uv-k5-v3.html
   ayuda-dm32uv.html ayuda-enlaces-comunidad.html ayuda-binarios-terceros.html ayuda-ejemplos.html
@@ -70,6 +72,7 @@ stage_app() {
   fi
   cp "$root/data/firmware-catalog-fallback.json" "$destination/data/firmware-catalog-fallback.json"
   cp "$root/data/world-land-110m.txt" "$destination/data/world-land-110m.txt"
+  cp "$root/data/remote-station-catalog.json" "$destination/data/remote-station-catalog.json"
   mkdir -p "$destination/node_modules"
   cp -R "$root/node_modules/satellite.js" "$destination/node_modules/satellite.js"
   node - "$destination" <<'NODE'
@@ -118,7 +121,11 @@ build_deb() {
   install -m 644 "$work/node-v${node_version}-linux-${node_arch}/LICENSE" "$package_root/opt/radicodex/runtime/node/LICENSE"
   install -D -m 755 "$root/installers/unix/radicodex" "$package_root/usr/bin/radicodex"
   install -D -m 644 "$root/installers/linux/radicodex.desktop" "$package_root/usr/share/applications/radicodex.desktop"
+  # Optional headless station: the unit is shipped but never enabled by the package.
+  install -D -m 755 "$root/installers/unix/radicodex-station" "$package_root/usr/bin/radicodex-station"
+  install -D -m 644 "$root/installers/linux/radicodex-station.service" "$package_root/lib/systemd/system/radicodex-station.service"
   mkdir -p "$package_root/DEBIAN"
+  install -m 755 "$root/installers/linux/radicodex-station.postinst" "$package_root/DEBIAN/postinst"
   cat > "$package_root/DEBIAN/control" <<EOF
 Package: radicodex
 Version: ${version#v}

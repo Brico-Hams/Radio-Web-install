@@ -1881,23 +1881,17 @@ Radio conectada|Radio connected|Radio connectée|Funkgerät verbunden
 Radio sin conexion|Radio offline|Radio hors ligne|Funkgerät offline
 Sin conexion|Offline|Hors ligne|Offline
 Reconectando...|Reconnecting...|Reconnexion...|Verbinde neu...
-Espectro (OpenWebRX)|Spectrum (OpenWebRX)|Spectre (OpenWebRX)|Spektrum (OpenWebRX)
-Seguir al equipo|Follow the rig|Suivre la radio|Funkgerät folgen
-Direccion de OpenWebRX|OpenWebRX address|Adresse d’OpenWebRX|OpenWebRX-Adresse
-Direccion de OpenWebRX no valida.|Invalid OpenWebRX address.|Adresse OpenWebRX non valide.|Ungültige OpenWebRX-Adresse.
-Abrir|Open|Ouvrir|Öffnen
+Espectro de la radio|Radio spectrum|Spectre de la radio|Funkgerät-Spektrum
+Disponible próximamente para este modelo|Coming soon for this model|Bientôt disponible pour ce modèle|Demnächst für dieses Modell verfügbar
+Llegará con el audio remoto (banda de paso)|Coming with remote audio (passband)|Arrivera avec l’audio distant (bande passante)|Kommt mit dem Remote-Audio (Durchlassbereich)
+Este modelo no ofrece espectro|This model offers no spectrum|Ce modèle n’offre pas de spectre|Dieses Modell bietet kein Spektrum
 Token no valido.|Invalid token.|Jeton non valide.|Ungültiges Token.
 Falta el token. Abre la direccion completa que muestra el agente (con #token=...).|Token missing. Open the full address shown by the agent (with #token=...).|Jeton manquant. Ouvrez l’adresse complète affichée par l’agent (avec #token=...).|Token fehlt. Öffne die vollständige vom Agenten angezeigte Adresse (mit #token=...).
 Latencia: --|Latency: --|Latence : --|Latenz: --
 Latencia: Baja ({0} ms)|Latency: Low ({0} ms)|Latence : faible ({0} ms)|Latenz: niedrig ({0} ms)
 Latencia: Media ({0} ms)|Latency: Medium ({0} ms)|Latence : moyenne ({0} ms)|Latenz: mittel ({0} ms)
 Latencia: Alta ({0} ms)|Latency: High ({0} ms)|Latence : élevée ({0} ms)|Latenz: hoch ({0} ms)
-Ancho visible del espectro (kHz)|Visible spectrum width (kHz)|Largeur visible du spectre (kHz)|Sichtbare Spektrumbreite (kHz)
-Centro|Centre|Centre|Mitte
 Fin|End|Fin|Ende
-Indica la direccion de OpenWebRX en Ajustes.|Enter the OpenWebRX address in Settings.|Indiquez l’adresse d’OpenWebRX dans les réglages.|Gib die OpenWebRX-Adresse in den Einstellungen an.
-Abrir en otra pestana|Open in new tab|Ouvrir dans un nouvel onglet|In neuem Tab öffnen
-Recargar|Reload|Recharger|Neu laden
 Paneles de control|Control panels|Panneaux de commande|Bedienfelder
 Niveles|Levels|Niveaux|Pegel
 Registro|Log|Journal|Protokoll
@@ -1948,6 +1942,51 @@ Bloquear PTT y sintonia|Lock PTT and tuning|Verrouiller le PTT et l’accord|PTT
 Sintonia por arrastre|Drag to tune|Accord par glissement|Abstimmen durch Ziehen
 Frecuencia en MHz (o con k, m, Hz)|Frequency in MHz (or with k, m, Hz)|Fréquence en MHz (ou avec k, m, Hz)|Frequenz in MHz (oder mit k, m, Hz)
 Frecuencia no valida.|Invalid frequency.|Fréquence non valide.|Ungültige Frequenz.
+Estacion remota|Remote station|Station distante|Fernstation
+Volver a RadiCodex|Back to RadiCodex|Retour à RadiCodex|Zurück zu RadiCodex
+Activa JavaScript para configurar la estacion remota.|Enable JavaScript to set up the remote station.|Activez JavaScript pour configurer la station distante.|Aktiviere JavaScript, um die Fernstation einzurichten.
+Radio de la estacion|Station radio|Radio de la station|Funkgerät der Station
+Buscar radio|Search radio|Rechercher une radio|Funkgerät suchen
+Enlace|Link|Liaison|Verbindung
+USB / serie|USB / serial|USB / série|USB / seriell
+Red (LAN / WiFi)|Network (LAN / WiFi)|Réseau (LAN / WiFi)|Netzwerk (LAN / WLAN)
+Puerto serie|Serial port|Port série|Serieller Port
+Velocidad (baudios)|Speed (baud)|Vitesse (bauds)|Geschwindigkeit (Baud)
+Direccion de red (equipo:puerto)|Network address (host:port)|Adresse réseau (hôte:port)|Netzwerkadresse (Host:Port)
+Radios USB detectadas|Detected USB radios|Radios USB détectées|Erkannte USB-Funkgeräte
+Buscar de nuevo|Search again|Rechercher à nouveau|Erneut suchen
+No se detecto ninguna radio USB.|No USB radio detected.|Aucune radio USB détectée.|Kein USB-Funkgerät erkannt.
+Usar|Use|Utiliser|Verwenden
+Rotor (opcional)|Rotator (optional)|Rotor (facultatif)|Rotor (optional)
+Rotor|Rotator|Rotor|Rotor
+Sin rotor|No rotator|Sans rotor|Kein Rotor
+Puerto del rotor|Rotator port|Port du rotor|Rotor-Port
+Rele (opcional)|Relay (optional)|Relais (facultatif)|Relais (optional)
+URL del rele|Relay URL|URL du relais|Relais-URL
+Nombre de la estacion|Station name|Nom de la station|Name der Station
+Secreto del rele|Relay secret|Secret du relais|Relais-Geheimnis
+Deja vacio para conservar el secreto guardado.|Leave empty to keep the saved secret.|Laissez vide pour conserver le secret enregistré.|Leer lassen, um das gespeicherte Geheimnis zu behalten.
+Escucha del agente|Agent listening|Écoute de l’agent|Lauschen des Agenten
+Solo este equipo|This computer only|Cet ordinateur uniquement|Nur dieser Computer
+Red local (LAN)|Local network (LAN)|Réseau local (LAN)|Lokales Netzwerk (LAN)
+Guardar configuracion|Save settings|Enregistrer la configuration|Einstellungen speichern
+Iniciar estacion|Start station|Démarrer la station|Station starten
+Detener estacion|Stop station|Arrêter la station|Station stoppen
+Configuracion guardada.|Settings saved.|Configuration enregistrée.|Einstellungen gespeichert.
+Estacion en marcha.|Station running.|Station en marche.|Station läuft.
+Estacion detenida.|Station stopped.|Station arrêtée.|Station gestoppt.
+Activo|Active|Actif|Aktiv
+Parado|Stopped|Arrêté|Gestoppt
+Agente remoto|Remote agent|Agent distant|Fernagent
+Conectado|Connected|Connecté|Verbunden
+Desconectado|Disconnected|Déconnecté|Getrennt
+Rele|Relay|Relais|Relais
+Sin rele|No relay|Sans relais|Kein Relais
+Consola web|Web console|Console web|Web-Konsole
+Enlaces de emparejamiento|Pairing links|Liens d’appairage|Kopplungslinks
+PIN de configuracion|Setup PIN|PIN de configuration|Einrichtungs-PIN
+Entrar|Sign in|Entrer|Anmelden
+Escribe el PIN de configuracion que aparece en la consola de la estacion.|Enter the setup PIN shown on the station console.|Saisissez le PIN de configuration affiché sur la console de la station.|Gib die Einrichtungs-PIN ein, die auf der Konsole der Station angezeigt wird.
 `.trim().split("\n").map(line => line.split("|")));
   root.BricohamsUITranslations = entries;
   if (typeof module === "object" && module.exports) module.exports = entries;

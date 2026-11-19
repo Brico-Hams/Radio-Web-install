@@ -2,20 +2,13 @@
 (() => {
   const TOKEN_KEY = "radicodex.remote.token";
   const CLIENT_KEY = "radicodex.remote.client";
-  const SDR_KEY = "radicodex.remote.sdr";
   const LOCK_KEY = "bricohams.remote.lock";
   const BAND_KEY = "bricohams.remote.band.";
-  const SPAN_KEY = "bricohams.remote.span";
   const FREQ_MIN = 30_000;
   const FREQ_MAX = 3_000_000_000;
   const DIGITS = 10;
   const PX_PER_STEP = 12;
   const LOG_MAX = 50;
-  // Rig mode -> OpenWebRX demodulator name.
-  const SDR_MODES = Object.freeze({
-    USB: "usb", PKTUSB: "usb", RTTY: "usb", LSB: "lsb", PKTLSB: "lsb", CW: "cw", CWR: "cw",
-    AM: "am", FM: "nfm", WFM: "nfm", PKTFM: "nfm"
-  });
   // IARU Region 1 SSB/CW calling areas used until a band has a remembered frequency.
   const BANDS = Object.freeze({
     160: { lo: 1_810_000, hi: 2_000_000, freq: 1_843_000, mode: "LSB" },
@@ -69,7 +62,7 @@
 
   const view = {
     state: null, linkUp: false, ptt: false, wantPtt: false, heartbeat: null, freqLockUntil: 0, freqTarget: null, freqTimer: null,
-    sdrKey: "", sdrBase: "", follow: true, locked: false, editing: false, tuneBusy: false, spanHz: 0,
+    locked: false, editing: false, tuneBusy: false,
     log: [], last: { freq: null, mode: null, ptt: false, txSeconds: 0 }, freqLogTimer: null, bandPending: "", bandTimer: null,
     sliderHold: {}, sliderTimers: {}
   };
@@ -375,18 +368,6 @@
     setText(pill, level.text);
   }
 
-  function formatMhz(hz, digits) {
-    return `${(hz / 1e6).toFixed(digits)} MHz`;
-  }
-
-  function updateSpan(state) {
-    const known = Number.isSafeInteger(state.freq);
-    setText($("span-mid"), known ? formatMhz(state.freq, 4) : "--");
-    const edges = known && view.spanHz > 0;
-    setText($("span-lo"), edges ? formatMhz(Math.max(0, state.freq - view.spanHz / 2), 3) : "--");
-    setText($("span-hi"), edges ? formatMhz(state.freq + view.spanHz / 2, 3) : "--");
-  }
-
   function filterText(passband) {
     if (!Number.isFinite(passband) || passband <= 0) return "--";
     return passband >= 1000 ? `${Number((passband / 1000).toFixed(2))} kHz` : `${passband} Hz`;
@@ -541,13 +522,11 @@
     setPressed($("btn-nr"), Boolean(state.funcs?.nr));
     setPressed($("btn-atu"), Boolean(state.funcs?.tuner));
 
-    updateSpan(state);
     trackLog(state);
     rememberBand(state);
     if (!state.ptt && view.ptt && !view.wantPtt) view.ptt = false;
     updatePttUi();
     refreshControls();
-    followRig(state);
   }
 
   function updatePttUi() {
@@ -620,43 +599,17 @@
     addEventListener("pagehide", pttUp);
   }
 
-  // Spectrum: the OpenWebRX page is framed as-is; following the rig only changes its URL fragment.
-  function sdrHash(state) {
-    const mode = SDR_MODES[state.mode];
-    return mode && Number.isSafeInteger(state.freq) ? `#freq=${state.freq},mod=${mode}` : "";
-  }
+  // The radio's own spectrum is not rendered yet; the panel only says what to expect for this model.
+  const SPECTRUM_TEXT = Object.freeze({
+    civ: "Disponible próximamente para este modelo",
+    smartsdr: "Disponible próximamente para este modelo",
+    sdr: "Disponible próximamente para este modelo",
+    audio: "Llegará con el audio remoto (banda de paso)",
+    none: "Este modelo no ofrece espectro"
+  });
 
-  function setSdrBase(value) {
-    let url;
-    try { url = new URL(value); } catch { notify("Direccion de OpenWebRX no valida."); return false; }
-    if (url.protocol !== "http:" && url.protocol !== "https:") { notify("Direccion de OpenWebRX no valida."); return false; }
-    url.hash = "";
-    view.sdrBase = url.href;
-    view.sdrKey = view.state ? sdrHash(view.state) : "";
-    const frame = $("sdr");
-    frame.hidden = false;
-    frame.src = view.sdrBase + view.sdrKey;
-    $("sdr-empty").hidden = true;
-    $("sdr-reload").disabled = false;
-    const link = $("sdr-new");
-    link.href = frame.src;
-    link.hidden = false;
-    $("sdr-url").value = view.sdrBase;
-    sessionStorage.setItem(SDR_KEY, view.sdrBase);
-    notify("");
-    return true;
-  }
-
-  function followRig(state) {
-    if (!view.sdrBase || !view.follow) return;
-    const hash = sdrHash(state);
-    if (!hash || hash === view.sdrKey) return;
-    clearTimeout(view.followTimer);
-    view.followTimer = setTimeout(() => {
-      view.sdrKey = hash;
-      $("sdr").src = view.sdrBase + hash;
-      $("sdr-new").href = view.sdrBase + hash;
-    }, 300);
+  function showSpectrumPlaceholder(scope) {
+    setText($("spectrum-note"), SPECTRUM_TEXT[scope] || SPECTRUM_TEXT.none);
   }
 
   function setLocked(on) {
@@ -768,34 +721,6 @@
       const button = event.target.closest("button[data-filter]");
       if (button) pickFilter(button);
     });
-    $("follow").addEventListener("click", () => {
-      view.follow = !view.follow;
-      setPressed($("follow"), view.follow);
-      view.sdrKey = "";
-      if (view.state) followRig(view.state);
-    });
-    $("sdr-reload").addEventListener("click", () => {
-      const frame = $("sdr");
-      const target = frame.src;
-      if (!target || target === "about:blank") return;
-      frame.src = "about:blank";
-      setTimeout(() => { frame.src = target; }, 50);
-    });
-    $("sdr-form").addEventListener("submit", event => {
-      event.preventDefault();
-      const span = Number($("sdr-span").value);
-      if (Number.isFinite(span) && span > 0) {
-        view.spanHz = Math.round(span * 1000);
-        write(localStorage, SPAN_KEY, String(span));
-      }
-      if ($("sdr-url").value.trim()) setSdrBase($("sdr-url").value.trim());
-      if (view.state) updateSpan(view.state);
-    });
-    $("settings-toggle").addEventListener("click", () => {
-      const panel = $("settings");
-      panel.hidden = !panel.hidden;
-      $("settings-toggle").setAttribute("aria-expanded", String(!panel.hidden));
-    });
     $("lock").addEventListener("click", () => setLocked(!view.locked));
     bindPtt();
     bindTuner();
@@ -803,18 +728,8 @@
     setLocked(read(sessionStorage, LOCK_KEY) === "1");
     try {
       const config = await api("api/config");
-      let initial = config.openwebrxUrl || sessionStorage.getItem(SDR_KEY) || "";
-      if (config.sdrProxy) {
-        // The Bearer request makes the agent issue the rs_session cookie the framed page and its websocket rely on.
-        const session = await fetch("sdr/", { method: "HEAD", headers: { Authorization: `Bearer ${token}` } }).catch(() => null);
-        if (session?.ok) initial = new URL("sdr/", location.href).href;
-      }
-      if (initial) setSdrBase(initial);
       if (config.callsign) setText($("callsign"), config.callsign);
-      const savedSpan = Number(read(localStorage, SPAN_KEY));
-      const spanHz = config.openwebrxSpanHz || (savedSpan > 0 ? savedSpan * 1000 : 0);
-      view.spanHz = spanHz;
-      if (spanHz) $("sdr-span").value = String(spanHz / 1000);
+      showSpectrumPlaceholder(config.radioScope);
     } catch (error) {
       notify(error.status === 401 ? "Token no valido." : error.message);
       return;

@@ -228,19 +228,22 @@ test("agent shutdown sends T 0", async () => {
 
 test("static files are limited to the console allow-list and carry security headers", async () => {
   const rig = await fakeRigctld();
-  const { call, cleanup } = await startAgent(rig, { openwebrxUrl: "http://sdr.example:8073/#freq=1" });
+  const { call, cleanup } = await startAgent(rig, { radioScope: "audio" });
   try {
     for (const file of ["/remote.html", "/remote-ui.js", "/remote.css"]) {
       const response = await call("GET", file, { token: "" });
       assert.equal(response.status, 200, file);
       assert.equal(response.headers["x-content-type-options"], "nosniff");
       assert.equal(response.headers["referrer-policy"], "no-referrer");
-      assert.match(response.headers["content-security-policy"], /frame-src 'self' http:\/\/sdr\.example:8073;/);
+      assert.match(response.headers["content-security-policy"], /frame-src 'none';/);
     }
     for (const file of ["/server.cjs", "/remote-agent.cjs", "/package.json", "/../server.cjs", "/%2e%2e/server.cjs", "/styles.css"]) {
       assert.equal((await call("GET", file, { token: "" })).status, 404, file);
     }
-    assert.equal((await call("GET", "/api/config")).json.openwebrxUrl, "http://sdr.example:8073/#freq=1");
+    const config = (await call("GET", "/api/config")).json;
+    assert.equal(config.radioScope, "audio");
+    assert.equal(config.openwebrxUrl, undefined);
+    assert.equal(config.sdrProxy, undefined);
   } finally { await cleanup(); await rig.close(); }
 });
 
@@ -457,98 +460,6 @@ test("console assets: logo and locale scripts are served; the page has no inline
   } finally { await cleanup(); await rig.close(); }
 });
 
-async function fakeOpenwebrx() {
-  const seen = [];
-  const sockets = new Set();
-  const server = http.createServer((request, response) => {
-    seen.push({ url: request.url, headers: request.headers });
-    response.writeHead(200, {
-      "Content-Type": "text/plain",
-      "Set-Cookie": "sdr=1; Domain=sdr.example; Path=/",
-      "Content-Security-Policy": "default-src 'self'; frame-ancestors 'none'",
-      "Cache-Control": "max-age=60"
-    });
-    response.end(`sdr:${request.url}`);
-  });
-  server.on("connection", socket => { sockets.add(socket); socket.on("close", () => sockets.delete(socket)); });
-  server.on("upgrade", (request, socket) => {
-    seen.push({ url: request.url, headers: request.headers, upgrade: true });
-    sockets.add(socket);
-    socket.on("error", () => {});
-    socket.write("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n");
-    socket.on("data", chunk => socket.write(`echo:${chunk}`));
-  });
-  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
-  return {
-    seen, port: server.address().port,
-    close: () => new Promise(resolve => { for (const socket of sockets) socket.destroy(); server.close(() => resolve()); })
-  };
-}
-
-test("/sdr/ proxies OpenWebRX only with the token or the rs_session cookie", async () => {
-  const rig = await fakeRigctld();
-  const sdr = await fakeOpenwebrx();
-  const { call, cleanup } = await startAgent(rig, { openwebrxUrl: `http://127.0.0.1:${sdr.port}/` });
-  try {
-    assert.equal((await call("GET", "/api/config")).json.sdrProxy, true);
-    assert.equal((await call("GET", "/sdr/", { token: "" })).status, 401);
-    assert.equal((await call("GET", "/sdr/", { token: "", headers: { Cookie: "rs_session=forged" } })).status, 401);
-
-    const first = await call("GET", "/sdr/static/app.js?x=1", { headers: { Cookie: "sdr=keep" } });
-    assert.equal(first.status, 200);
-    assert.equal(first.text, "sdr:/static/app.js?x=1");
-    const upstream = sdr.seen.at(-1);
-    assert.equal(upstream.headers.host, `127.0.0.1:${sdr.port}`);
-    assert.equal(upstream.headers.authorization, undefined);
-    assert.equal(upstream.headers.cookie, "sdr=keep");
-    assert.equal(first.headers["cache-control"], "max-age=60");
-    assert.match(first.headers["content-security-policy"], /default-src 'self'; frame-ancestors 'self'$/);
-    const cookies = [].concat(first.headers["set-cookie"]);
-    assert.ok(cookies.includes("sdr=1; Path=/"));
-    const session = cookies.find(item => item.startsWith("rs_session="));
-    assert.match(session, /HttpOnly/);
-    assert.match(session, /SameSite=Strict/);
-    assert.doesNotMatch(session, /Secure/);
-
-    const viaCookie = await call("GET", "/sdr/img.png", { token: "", headers: { Cookie: session.split(";")[0] } });
-    assert.equal(viaCookie.status, 200);
-    assert.equal(sdr.seen.at(-1).headers.cookie, undefined);
-  } finally { await cleanup(); await sdr.close(); await rig.close(); }
-});
-
-test("/sdr/ accepts ?token= (stripped upstream) and pipes websocket upgrades", async () => {
-  const rig = await fakeRigctld();
-  const sdr = await fakeOpenwebrx();
-  const { agent, call, cleanup } = await startAgent(rig, { openwebrxUrl: `http://127.0.0.1:${sdr.port}/` });
-  const port = agent.server.address().port;
-  const upgrade = headers => new Promise((resolve, reject) => {
-    const socket = net.connect(port, "127.0.0.1");
-    let text = "";
-    socket.on("error", reject);
-    socket.on("data", chunk => {
-      text += chunk;
-      if (text.startsWith("HTTP/1.1 101") && !text.includes("echo:") && !socket.sent) { socket.sent = true; socket.write("ping"); }
-      if (!text.startsWith("HTTP/1.1 101") && text.includes("\r\n\r\n")) { socket.destroy(); resolve(text); }
-      if (text.includes("echo:ping")) { socket.destroy(); resolve(text); }
-    });
-    socket.write(`GET /sdr/ws/?token=${headers.token}&a=1 HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: abc\r\nSec-WebSocket-Version: 13\r\n${headers.cookie ? `Cookie: ${headers.cookie}\r\n` : ""}\r\n`);
-  });
-  try {
-    const page = await call("GET", `/sdr/?token=${agent.token}`, { token: "" });
-    assert.equal(page.status, 200);
-    assert.equal(sdr.seen.at(-1).url, "/");
-    const cookie = [].concat(page.headers["set-cookie"]).find(item => item.startsWith("rs_session=")).split(";")[0];
-
-    assert.match(await upgrade({ token: "bad" }), /^HTTP\/1\.1 401/);
-    const echoed = await upgrade({ token: "", cookie });
-    assert.match(echoed, /^HTTP\/1\.1 101/);
-    assert.match(echoed, /echo:ping/);
-    const ws = sdr.seen.find(item => item.upgrade);
-    assert.equal(ws.url, "/ws/?a=1");
-    assert.equal(ws.headers.host, `127.0.0.1:${sdr.port}`);
-  } finally { await cleanup(); await sdr.close(); await rig.close(); }
-});
-
 test("agent over TLS answers /api/state when the client trusts the generated certificate", async () => {
   const rig = await fakeRigctld();
   const configDir = fs.mkdtempSync(path.join(os.tmpdir(), "radicodex-agent-tls-"));
@@ -576,16 +487,12 @@ test("agent over TLS answers /api/state when the client trusts the generated cer
   }
 });
 
-test("without a relay the state says so, and a direct client cannot set the cookie prefix", async () => {
+test("without a relay the state says so", async () => {
   const rig = await fakeRigctld();
-  const sdr = await fakeOpenwebrx();
-  const { agent, call, cleanup } = await startAgent(rig, { openwebrxUrl: `http://127.0.0.1:${sdr.port}/` });
+  const { call, cleanup } = await startAgent(rig);
   try {
     assert.deepEqual((await call("GET", "/api/state")).json.relay, { configured: false, connected: false });
-    const page = await call("GET", `/sdr/?token=${agent.token}`, { token: "", headers: { "X-Forwarded-Prefix": "/s/evil" } });
-    assert.match([].concat(page.headers["set-cookie"]).find(item => item.startsWith("rs_session=")), /Path=\/sdr\//);
-    assert.equal((await call("GET", "/sdr", { headers: { "X-Forwarded-Prefix": "/s/evil" } })).headers.location, "/sdr/");
-  } finally { await cleanup(); await sdr.close(); await rig.close(); }
+  } finally { await cleanup(); await rig.close(); }
 });
 
 test("console URLs are relative so the page works under a /s/<id>/ prefix", () => {
