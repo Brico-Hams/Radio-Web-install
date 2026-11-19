@@ -18,4 +18,5 @@
     <string name="remote_detected_relay">Erkannter Modus: BricoHams-Relay\nRelay: %1$s\nStation: %2$s</string>
     <string name="remote_pair_confirm">Speichern und öffnen</string>
     <string name="remote_pair_cancel">Abbrechen</string>
+    <string name="remote_mic_denied">Mikrofon nicht erlaubt: Du kannst nur Audio empfangen.</string>
 </resources>

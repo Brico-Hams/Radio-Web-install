@@ -9,6 +9,7 @@ const net = require("node:net");
 const os = require("node:os");
 const path = require("node:path");
 const tls = require("node:tls");
+const { Transform } = require("node:stream");
 
 const STATION_ID = /^[a-z0-9-]{3,32}$/;
 const SESSION_ID = /^[A-Za-z0-9_-]{16,64}$/;
@@ -171,6 +172,7 @@ function createRelay(options = {}) {
   function readHead(socket, done) {
     let buffer = Buffer.alloc(0);
     const timer = setTimeout(() => { cleanup(); reply(socket, 408, "Request Timeout", page("Tiempo agotado", "No se recibio la peticion completa.")); }, headTimeoutMs);
+    timer.unref?.();
     const cleanup = () => { clearTimeout(timer); socket.off("data", onData); };
     function onData(chunk) {
       buffer = Buffer.concat([buffer, chunk]);
@@ -209,8 +211,9 @@ function createRelay(options = {}) {
     pingTimer = setInterval(() => {
       if (socket.destroyed) return;
       socket.write("PING\n");
-      if (!entry.pongTimer) entry.pongTimer = setTimeout(drop, pongMs);
+      if (!entry.pongTimer) { entry.pongTimer = setTimeout(drop, pongMs); entry.pongTimer.unref?.(); }
     }, pingMs);
+    pingTimer.unref?.();
     socket.on("error", drop);
     socket.on("data", chunk => {
       entry.buffer += chunk.toString("latin1");
@@ -226,17 +229,57 @@ function createRelay(options = {}) {
     socket.resume();
   }
 
-  function pipeSockets(client, data) {
+  // Returns a function that yields only the bytes belonging to the request body (Content-Length or chunked).
+  function bodyForwarder(parsed) {
+    if (/(^|,)\s*chunked\s*$/i.test(headerOf(parsed, "transfer-encoding"))) {
+      let state = "size", remaining = 0, line = "", done = false;
+      return buf => {
+        if (done) return Buffer.alloc(0);
+        let i = 0;
+        while (i < buf.length && !done) {
+          if (state === "data") {
+            const take = Math.min(remaining, buf.length - i);
+            i += take; remaining -= take;
+            if (remaining === 0) state = "crlf";
+          } else if (state === "crlf") {
+            line += String.fromCharCode(buf[i]); i += 1;
+            if (line.length === 2) { line = ""; state = "size"; }
+          } else {
+            const ch = buf[i]; i += 1;
+            line += String.fromCharCode(ch);
+            if (ch !== 10) continue;
+            const text = line.trim(); line = "";
+            if (state === "size") {
+              remaining = parseInt(text.split(";")[0], 16) || 0;
+              state = remaining > 0 ? "data" : "trailer";
+            } else if (text === "") done = true;
+          }
+        }
+        return buf.subarray(0, i);
+      };
+    }
+    let left = Math.max(0, parseInt(headerOf(parsed, "content-length"), 10) || 0);
+    return buf => {
+      const take = buf.subarray(0, left);
+      left -= take.length;
+      return take;
+    };
+  }
+
+  function pipeSockets(client, data, forward) {
     const settle = (from, other) => {
       from.once("close", () => {
         other.end();
         setTimeout(() => other.destroy(), 2000).unref();
       });
     };
-    for (const socket of [client, data]) socket.on("error", () => { client.destroy(); data.destroy(); });
+    // Small realtime frames (WebSocket audio) must not wait for Nagle + delayed ACK on either leg.
+    for (const socket of [client, data]) { socket.setNoDelay(true); socket.on("error", () => { client.destroy(); data.destroy(); }); }
     settle(client, data);
     settle(data, client);
-    client.pipe(data);
+    if (forward) {
+      client.pipe(new Transform({ transform(chunk, enc, cb) { cb(null, forward(chunk)); } })).pipe(data);
+    } else client.pipe(data);
     data.pipe(client);
     client.resume();
   }
@@ -259,7 +302,7 @@ function createRelay(options = {}) {
     pending.delete(sessionId);
     socket.write(`HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: ${UPGRADE}\r\n\r\n`);
     socket.write(session.payload);
-    pipeSockets(session.client, socket);
+    pipeSockets(session.client, socket, session.forward);
   }
 
   // ---- client traffic ----
@@ -272,9 +315,10 @@ function createRelay(options = {}) {
       if (!upgrade && ["connection", "keep-alive", "proxy-connection"].includes(header.lower)) continue;
       lines.push(`${header.name}: ${header.value}`);
     }
-    if (!upgrade) { lines.push("Connection: close"); extra = Buffer.alloc(0); }
+    let forward = null;
+    if (!upgrade) { lines.push("Connection: close"); forward = bodyForwarder(parsed); extra = forward(extra); }
     lines.push(`X-Forwarded-For: ${info.ip}`, `X-Forwarded-Proto: ${info.proto}`, `X-Forwarded-Prefix: /s/${id}`);
-    return Buffer.concat([Buffer.from(`${lines.join("\r\n")}\r\n\r\n`, "latin1"), extra]);
+    return { payload: Buffer.concat([Buffer.from(`${lines.join("\r\n")}\r\n\r\n`, "latin1"), extra]), forward };
   }
 
   function handleClient(socket, parsed, id, rest, extra) {
@@ -284,7 +328,8 @@ function createRelay(options = {}) {
     if (count >= maxSessions) { reply(socket, 503, "Service Unavailable", page("Estaci\u00f3n ocupada", "Demasiadas sesiones abiertas."), { "Retry-After": "5" }); return; }
     sessionCounts.set(id, count + 1);
     const sessionId = crypto.randomBytes(18).toString("base64url");
-    const session = { id, client: socket, payload: buildPayload(parsed, id, clientInfo(socket, parsed), rest, extra), timer: null };
+    const built = buildPayload(parsed, id, clientInfo(socket, parsed), rest, extra);
+    const session = { id, client: socket, payload: built.payload, forward: built.forward, timer: null };
     let released = false;
     const release = () => {
       if (released) return;
@@ -298,6 +343,7 @@ function createRelay(options = {}) {
       release();
       reply(socket, 504, "Gateway Timeout", page("Estaci\u00f3n sin respuesta", "La estaci\u00f3n no abri\u00f3 el canal a tiempo."));
     }, dataWaitMs);
+    session.timer.unref?.();
     pending.set(sessionId, session);
     socket.once("close", release);
     control.socket.write(`OPEN ${sessionId}\n`);
@@ -344,8 +390,11 @@ function createRelay(options = {}) {
   }
 
   async function close() {
+    for (const entry of controls.values()) entry.drop();
+    controls.clear();
     for (const socket of sockets) socket.destroy();
     for (const session of pending.values()) clearTimeout(session.timer);
+    pending.clear();
     await new Promise(resolve => server.close(() => resolve()));
   }
 

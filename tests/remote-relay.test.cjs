@@ -9,6 +9,8 @@ const os = require("node:os");
 const path = require("node:path");
 const { createRelay, addStation, removeStation, listStations } = require("../remote-relay.cjs");
 const { createRemoteAgent } = require("../remote-agent.cjs");
+const { acceptKey } = require("../remote-ws.cjs");
+const { connectWs } = require("./ws-client.cjs");
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function waitFor(check, timeout = 4000) {
@@ -224,6 +226,90 @@ test("keep-alive browser connection: every request is rewritten, none leaks the 
     assert.ok(JSON.parse(state.text));
   } finally { keepAlive.destroy(); await station.cleanup(); await cleanup(); }
 });
+
+test("POST bodies are forwarded through the relay: same chunk, split write, chunked", async () => {
+  const { relay, dataFile, port, cleanup } = await startRelay();
+  const secret = addStation(dataFile, "ea5kao");
+  const station = await startStation(port, secret);
+  const { agent } = station;
+  const body = JSON.stringify({ cmd: "ptt", value: false });
+  const head = extra => `POST /s/ea5kao/api/cmd HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer ${agent.token}\r\nX-Client-Id: c1\r\nContent-Type: application/json\r\n${extra}\r\n`;
+  const send = writes => new Promise((resolve, reject) => {
+    const socket = net.connect(port, "127.0.0.1");
+    let text = "";
+    socket.on("data", chunk => { text += chunk; });
+    socket.on("close", () => resolve(text));
+    socket.on("error", reject);
+    (async () => {
+      for (const [index, part] of writes.entries()) {
+        if (index) await sleep(50);
+        socket.write(part);
+      }
+    })();
+  });
+  try {
+    await waitFor(() => relay.connected("ea5kao") && agent.snapshot("x").relay.connected);
+    const length = `Content-Length: ${Buffer.byteLength(body)}\r\n`;
+    const single = await send([`${head(length)}${body}`]);
+    assert.match(single, /^HTTP\/1\.1 200/);
+    assert.match(single, /"ok":\s*true/);
+    const split = await send([head(length), body]);
+    assert.match(split, /^HTTP\/1\.1 200/);
+    const chunked = await send([`${head("Transfer-Encoding: chunked\r\n")}${body.length.toString(16)}\r\n${body}\r\n0\r\n\r\n`]);
+    assert.match(chunked, /^HTTP\/1\.1 200/);
+  } finally { await station.cleanup(); await cleanup(); }
+}, { timeout: 15000 });
+
+test("WebSocket audio works end to end through the relay (/s/<id>/api/audio)", async () => {
+  const { relay, dataFile, port, cleanup } = await startRelay();
+  const secret = addStation(dataFile, "ea5kao");
+  const subs = new Set();
+  const writes = [];
+  const audioService = {
+    rx: true, tx: true, txReason: "",
+    subscribe: entry => { subs.add(entry); return () => subs.delete(entry); },
+    txWrite: packet => { writes.push(Buffer.from(packet)); return true; }, txRelease() {}, close() {}
+  };
+  const station = await startStation(port, secret, { audioService });
+  const { agent } = station;
+  let client;
+  try {
+    await waitFor(() => relay.connected("ea5kao") && agent.snapshot("x").freq === 14074000);
+    client = await connectWs(port, "/s/ea5kao/api/audio");
+    assert.equal(client.status, 101);
+    assert.equal(client.accept, acceptKey(client.key));
+    client.sendJson({ type: "auth", token: agent.token, cid: "relay-client" });
+    const hello = JSON.parse((await client.next(m => m.text)).text);
+    assert.equal(hello.type, "hello");
+    assert.equal(hello.rx.codec, "opus");
+    await waitFor(() => subs.size === 1);
+    for (const entry of subs) entry.onPacket(Buffer.from([0xf8, 0xff, 0xfe]));
+    const frame = (await client.next(m => m.binary)).binary;
+    assert.equal(frame[0], 1);
+    assert.deepEqual([...frame.subarray(5)], [0xf8, 0xff, 0xfe]);
+
+    const cmd = JSON.stringify({ cmd: "ptt", value: true });
+    const response = await new Promise((resolve, reject) => {
+      const request = http.request({
+        host: "127.0.0.1", port, method: "POST", path: "/s/ea5kao/api/cmd", agent: false,
+        headers: { Authorization: `Bearer ${agent.token}`, "X-Client-Id": "relay-client", "Content-Type": "application/json", "Content-Length": Buffer.byteLength(cmd) }
+      }, reply => { reply.resume(); reply.on("end", () => resolve(reply.statusCode)); });
+      request.on("error", reject);
+      request.end(cmd);
+    });
+    assert.equal(response, 200);
+    client.send(Buffer.from([2, 0, 0, 0, 1, 9, 8, 7]));
+    await waitFor(() => writes.length === 1);
+    assert.deepEqual([...writes[0]], [9, 8, 7]);
+
+    // Bad token through the tunnel is rejected by the agent, not the relay.
+    const bad = await connectWs(port, "/s/ea5kao/api/audio");
+    try {
+      bad.sendJson({ type: "auth", token: "nope", cid: "x" });
+      assert.equal(await bad.waitClose(), 4401);
+    } finally { bad.close(); }
+  } finally { client?.close(); await station.cleanup(); await cleanup(); }
+}, { timeout: 15000 });
 
 test("the agent never prints or exposes the station secret in its links", async () => {
   const { dataFile, port, cleanup } = await startRelay();

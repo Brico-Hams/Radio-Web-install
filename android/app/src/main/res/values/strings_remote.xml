@@ -18,4 +18,5 @@
     <string name="remote_detected_relay">Modo detectado: relé BricoHams\nRelé: %1$s\nEstación: %2$s</string>
     <string name="remote_pair_confirm">Guardar y abrir</string>
     <string name="remote_pair_cancel">Cancelar</string>
+    <string name="remote_mic_denied">Micrófono no autorizado: solo recibirás audio.</string>
 </resources>

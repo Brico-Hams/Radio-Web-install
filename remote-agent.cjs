@@ -10,6 +10,8 @@ const os = require("node:os");
 const path = require("node:path");
 const { RigctldClient, VFO_NAMES } = require("./rigctld-client.cjs");
 const remoteTls = require("./remote-tls.cjs");
+const remoteWs = require("./remote-ws.cjs");
+const remoteAudio = require("./remote-audio.cjs");
 
 const isLoopbackHost = value => value === "localhost" || value === "::1" || /^127\./.test(value);
 
@@ -30,10 +32,18 @@ const CMD_RATE_LIMIT = 20;
 const HEARTBEAT_TIMEOUT_MS = 1000;
 const SLOW_POLL_MS = 10000;
 const CONTROL_IDLE_MS = 30_000;
+const AUDIO_PATH = "/api/audio";
+const AUDIO_AUTH_MS = 5000;
+const AUDIO_MAX_CLIENTS = 8;
+const AUDIO_TX_RATE = 60;
+const AUDIO_BACKLOG_BYTES = 64 * 1024;
+const AUDIO_FRAME = Object.freeze({ codec: "opus", sampleRate: 48000, channels: 1, frameMs: 20 });
 const STATIC_FILES = Object.freeze({
   "/": ["remote.html", "text/html; charset=utf-8"],
   "/remote.html": ["remote.html", "text/html; charset=utf-8"],
   "/remote-ui.js": ["remote-ui.js", "text/javascript; charset=utf-8"],
+  "/remote-audio-core.js": ["remote-audio-core.js", "text/javascript; charset=utf-8"],
+  "/remote-audio-worklet.js": ["remote-audio-worklet.js", "text/javascript; charset=utf-8"],
   "/remote.css": ["remote.css", "text/css; charset=utf-8"],
   "/bricohams-logo.png": ["bricohams-logo.png", "image/png"],
   "/ui-i18n.js": ["ui-i18n.js", "text/javascript; charset=utf-8"],
@@ -178,6 +188,8 @@ function createRemoteAgent(options = {}) {
     writeConfig(configDir, config);
   }
   const relayConfig = config.relay;
+  const audio = options.audioService || remoteAudio.createAudio({ ...options.audio, log });
+  const audioSockets = new Set();
   const relayState = { connected: false };
   const relayBackoff = { min: options.relayBackoffMinMs ?? 1000, max: options.relayBackoffMaxMs ?? 30_000 };
 
@@ -239,7 +251,7 @@ function createRemoteAgent(options = {}) {
   function setRigPtt(on) {
     if (on && !rig.ptt) txStart = now();
     rig.ptt = on;
-    if (!on) agentTx = false;
+    if (!on) { agentTx = false; audio.txRelease?.(); }
   }
 
   async function pttOff(reason) {
@@ -507,7 +519,7 @@ function createRemoteAgent(options = {}) {
     const route = `${request.method} ${url.pathname}`;
     if (route === "GET /api/state") { send(response, 200, snapshot(clientId)); return; }
     if (route === "GET /api/config") {
-      send(response, 200, { callsign: config.callsign, radioScope });
+      send(response, 200, { callsign: config.callsign, radioScope, audio: { rx: Boolean(audio.rx), tx: Boolean(audio.tx) } });
       return;
     }
     if (route === "GET /api/events") {
@@ -582,15 +594,135 @@ function createRemoteAgent(options = {}) {
   // Tunnel sockets carry plain HTTP, so a TLS agent needs a separate plain server for them.
   const tunnelServer = useTls ? http.createServer(requestHandler) : server;
 
+  // ---- audio WebSocket (/api/audio): RX Opus packets out, TX Opus packets in from the PTT owner ----
+  const wsPingMs = options.wsPingMs ?? 10_000;
+
+  function handleAudioSocket(ws, request) {
+    const state = { cid: "", authed: false, rxOn: true, seq: 0, unsubscribe: null, txTimes: [], lastRefusal: 0, lastSeen: now() };
+    const fallbackId = `ip:${request.socket.radicodexTunnel ? String(request.headers["x-forwarded-for"] || "").split(",").pop().trim() || request.socket.remoteAddress : request.socket.remoteAddress}`;
+    audioSockets.add(ws);
+    const authTimer = setTimeout(() => ws.close(4401, "auth"), AUDIO_AUTH_MS);
+    authTimer.unref?.();
+    const pingTimer = setInterval(() => {
+      if (now() - state.lastSeen > wsPingMs * 3) { ws.fail(1001, "timeout"); return; }
+      ws.ping();
+    }, wsPingMs);
+    pingTimer.unref?.();
+
+    const sendJson = value => ws.send(JSON.stringify(value));
+    const refuse = reason => {
+      const time = now();
+      if (time - state.lastRefusal < 1000) return;
+      state.lastRefusal = time;
+      sendJson({ type: "tx_refused", reason });
+    };
+
+    function authenticate(message) {
+      let body;
+      try { body = JSON.parse(message); } catch { body = null; }
+      if (!body || body.type !== "auth" || !tokenMatches(config.token, body.token) || audioSockets.size > AUDIO_MAX_CLIENTS) {
+        ws.close(4401, "auth");
+        return;
+      }
+      clearTimeout(authTimer);
+      state.authed = true;
+      state.cid = typeof body.cid === "string" && /^[\w-]{1,64}$/.test(body.cid) ? body.cid : fallbackId;
+      const hello = { type: "hello" };
+      if (audio.rx) hello.rx = { ...AUDIO_FRAME };
+      if (audio.tx || audio.txReason) {
+        hello.tx = { allowed: Boolean(audio.tx), ...AUDIO_FRAME };
+        if (!audio.tx) hello.tx.reason = audio.txReason;
+      }
+      sendJson(hello);
+      if (audio.rx) subscribeRx();
+    }
+
+    function subscribeRx() {
+      if (state.unsubscribe) return;
+      state.unsubscribe = audio.subscribe({
+        onPacket: packet => {
+          if (!ws.open || ws.socket.writableLength > AUDIO_BACKLOG_BYTES) return;
+          const frame = Buffer.alloc(5 + packet.length);
+          frame[0] = 1;
+          frame.writeUInt32BE(state.seq >>> 0, 1);
+          state.seq = (state.seq + 1) >>> 0;
+          packet.copy(frame, 5);
+          ws.send(frame);
+        },
+        onLevel: rms => { if (ws.open) sendJson({ type: "level", rms }); }
+      });
+    }
+
+    function unsubscribeRx() {
+      state.unsubscribe?.();
+      state.unsubscribe = null;
+    }
+
+    function handleTx(data) {
+      if (data.length < 6) return;
+      const time = now();
+      while (state.txTimes.length && time - state.txTimes[0] >= 1000) state.txTimes.shift();
+      if (state.txTimes.length >= AUDIO_TX_RATE) return;
+      state.txTimes.push(time);
+      if (!audio.tx) { refuse("TX de audio no disponible."); return; }
+      if (owner !== state.cid) { refuse("No tienes el control."); return; }
+      if (!rig.ptt || !agentTx) { refuse("PTT apagado."); return; }
+      lastBeat = time;
+      ownerSeen = time;
+      audio.txWrite(data.subarray(5));
+    }
+
+    ws.on("message", (data, binary) => {
+      state.lastSeen = now();
+      if (!state.authed) {
+        if (binary) ws.close(4401, "auth");
+        else authenticate(data);
+        return;
+      }
+      if (binary) {
+        if (data[0] === 2) handleTx(data);
+        return;
+      }
+      let body;
+      try { body = JSON.parse(data); } catch { return; }
+      if (body?.type === "rx" && typeof body.on === "boolean" && audio.rx) {
+        if (body.on) subscribeRx(); else unsubscribeRx();
+      }
+    });
+    ws.on("pong", () => { state.lastSeen = now(); });
+    ws.on("close", () => {
+      clearTimeout(authTimer);
+      clearInterval(pingTimer);
+      audioSockets.delete(ws);
+      unsubscribeRx();
+      if (state.authed && owner === state.cid && (rig.ptt || agentTx)) pttOff("socket de audio cerrado");
+    });
+  }
+
+  function handleUpgrade(request, socket, head) {
+    let pathname = "";
+    try { pathname = new URL(request.url, "http://agent.local").pathname; } catch { /* rejected below */ }
+    if (pathname !== AUDIO_PATH || closing) {
+      socket.end("HTTP/1.1 404 Not Found\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
+      return;
+    }
+    const ws = remoteWs.acceptUpgrade(request, socket, head, { maxPayload: 4096 });
+    if (ws) handleAudioSocket(ws, request);
+  }
+  server.on("upgrade", handleUpgrade);
+  if (tunnelServer !== server) tunnelServer.on("upgrade", handleUpgrade);
+
   // ---- relay client: outgoing control channel + one data channel per client session ----
   let relayControl = null;
   let relayAttempt = 0;
   let relayRetry = null;
 
+  const relayRequests = new Set();
+
   function relayRequest(pathname) {
     const base = new URL(relayConfig.url);
     const transport = base.protocol === "https:" ? https : http;
-    return transport.request({
+    const request = transport.request({
       host: base.hostname.replace(/^\[|\]$/g, ""),
       port: base.port || (base.protocol === "https:" ? 443 : 80),
       method: "GET",
@@ -598,6 +730,9 @@ function createRemoteAgent(options = {}) {
       agent: false,
       headers: { Authorization: `Bearer ${relayConfig.secret}`, Connection: "Upgrade", Upgrade: RELAY_UPGRADE }
     });
+          relayRequests.add(request);
+          request.on("close", () => relayRequests.delete(request));
+          return request;
   }
 
   function openDataChannel(sessionId) {
@@ -609,6 +744,7 @@ function createRemoteAgent(options = {}) {
     request.on("upgrade", (reply, socket, head) => {
       request.setTimeout(0);
       socket.setTimeout(0);
+      socket.setNoDelay(true);
       socket.on("error", () => {});
       socket.radicodexTunnel = true;
       upgradedSockets.add(socket);
@@ -651,6 +787,7 @@ function createRemoteAgent(options = {}) {
       let buffer = "";
       // The relay pings every 20 s; a silent link means a dead relay or NAT mapping.
       let idle = setTimeout(() => socket.destroy(), 60_000);
+      idle.unref?.();
       const feed = chunk => {
         buffer += chunk.toString("latin1");
         if (buffer.length > 4096) { socket.destroy(); return; }
@@ -660,6 +797,7 @@ function createRemoteAgent(options = {}) {
           buffer = buffer.slice(index + 1);
           clearTimeout(idle);
           idle = setTimeout(() => socket.destroy(), 60_000);
+          idle.unref?.();
           if (line === "PING") socket.write("PONG\n");
           else if (line.startsWith("OPEN ")) openDataChannel(line.slice(5).trim());
         }
@@ -721,6 +859,10 @@ function createRemoteAgent(options = {}) {
     clearInterval(keepAliveTimer);
     if (client.connected && (rig.ptt || agentTx)) await pttOff("cierre del agente");
     client.stop();
+    for (const ws of audioSockets) { ws.fail(1001, "shutdown"); ws.socket.destroy(); }
+    audio.close?.();
+    for (const request of relayRequests) request.destroy();
+    relayRequests.clear();
     for (const entry of sseClients) entry.response.end();
     sseClients.clear();
     for (const socket of upgradedSockets) socket.destroy();
@@ -750,7 +892,7 @@ function parseArgs(argv, env = process.env) {
   const flags = {
     "--listen": "listen", "--port": "port", "--rigctld-host": "rigctldHost", "--rigctld-port": "rigctldPort",
     "--config-dir": "configDir", "--relay": "relayUrl", "--station": "relayStation",
-    "--station-secret": "relaySecret"
+    "--station-secret": "relaySecret", "--audio-input": "audioInput", "--audio-output": "audioOutput"
   };
   for (let i = 0; i < argv.length; i += 1) {
     if (argv[i] === "--tls" || argv[i] === "--no-tls") { args.tls = argv[i] === "--tls"; continue; }
@@ -781,6 +923,7 @@ async function main() {
   const agent = createRemoteAgent({
     host: args.listen, port: args.port, rigctldHost: args.rigctldHost, rigctldPort: args.rigctldPort,
     configDir: args.configDir, tls: args.tls, relay: Object.keys(relay).length ? relay : undefined,
+    audio: { input: args.audioInput || "", output: args.audioOutput || "" },
     log: message => console.log(`[remote] ${message}`)
   });
   const address = await agent.start();

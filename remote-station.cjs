@@ -183,7 +183,22 @@ function validateRelay(value) {
   return { url: url.href.replace(/\/+$/, ""), station: value.station, secret };
 }
 
-const CONFIG_KEYS = ["radio", "link", "port", "baud", "netAddress", "rotor", "relay", "listen", "agentPort"];
+const AUDIO_DEVICE = /^[^\u0000-\u001f\u007f"'`]{0,128}$/;
+
+function validateAudio(value) {
+  if (value === null || value === undefined) return { input: "", output: "" };
+  if (typeof value !== "object" || Array.isArray(value)) throw fail("Audio no valido.");
+  for (const key of Object.keys(value)) if (!["input", "output"].includes(key)) throw fail(`Campo de audio no admitido: ${key}`);
+  const audio = {};
+  for (const key of ["input", "output"]) {
+    const device = value[key] === undefined || value[key] === null ? "" : value[key];
+    if (typeof device !== "string" || !AUDIO_DEVICE.test(device)) throw fail("Nombre de dispositivo de audio no valido (maximo 128 caracteres, sin comillas ni saltos de linea).");
+    audio[key] = device.trim();
+  }
+  return audio;
+}
+
+const CONFIG_KEYS = ["radio", "link", "port", "baud", "netAddress", "rotor", "relay", "listen", "agentPort", "audio"];
 
 // Returns the normalised configuration or throws an error with status 400. Unknown keys are rejected.
 function validateConfig(input, catalog = loadCatalog()) {
@@ -222,6 +237,7 @@ function validateConfig(input, catalog = loadCatalog()) {
     }
   }
   config.relay = validateRelay(input.relay);
+  config.audio = validateAudio(input.audio);
   if (input.listen !== undefined) {
     if (input.listen !== "local" && input.listen !== "lan") throw fail("Modo de escucha no valido (local o lan).");
     config.listen = input.listen;
@@ -411,7 +427,7 @@ function createStation(options = {}) {
       agent = createAgent({
         configDir, host: lan ? "0.0.0.0" : "127.0.0.1", port: config.agentPort, tls: lan,
         rigctldHost: plan.agent.rigctldHost, rigctldPort: plan.agent.rigctldPort,
-        radioScope: findRadio(config.radio, catalog)?.scope, relay: config.relay || undefined, log
+        radioScope: findRadio(config.radio, catalog)?.scope, relay: config.relay || undefined, audio: config.audio, log
       });
       await agent.start();
       active = config;
@@ -476,6 +492,7 @@ function createController(options = {}) {
   const log = options.log || (() => {});
   const station = options.station || createStation({ configDir, catalog, log });
   const detect = options.detect || (() => detectPorts({ catalog }));
+  const listDevices = options.listDevices || (() => require("./remote-audio.cjs").listAudioDevices());
   const mode = options.mode || "desktop";
 
   const readConfig = () => loadStationConfig(configDir, catalog);
@@ -484,6 +501,7 @@ function createController(options = {}) {
     hasConfig() { try { return readConfig() !== null; } catch { return false; } },
     catalog: () => ({ radios: catalog.radios, rotors: catalog.rotors, amplifiers: catalog.amplifiers, hamlibVersion: catalog.hamlibVersion }),
     ports: () => detect(),
+    devices: () => listDevices(),
     status() {
       let config = null;
       let configError = null;
@@ -540,6 +558,7 @@ async function handleRemoteApi(controller, request, response, url, { protocol = 
     "GET /api/remote/status": () => controller.status(),
     "GET /api/remote/catalog": () => controller.catalog(),
     "GET /api/remote/ports": async () => ({ ports: await controller.ports() }),
+    "GET /api/remote/devices": async () => controller.devices(),
     "POST /api/remote/config": body => controller.saveConfig(body),
     "POST /api/remote/start": () => controller.start(),
     "POST /api/remote/stop": () => controller.stop()

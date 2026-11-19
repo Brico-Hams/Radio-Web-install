@@ -553,6 +553,7 @@
       await command({ cmd: "ptt", value: true });
       if (!view.wantPtt) { pttSendOff(); return; }
       setPttUi(true);
+      startTx();
       notify("");
       clearInterval(view.heartbeat);
       view.heartbeat = setInterval(() => {
@@ -578,6 +579,7 @@
     if (!view.wantPtt && !view.ptt) return;
     view.wantPtt = false;
     setPttUi(false);
+    stopTx(false);
     pttSendOff();
   }
 
@@ -604,12 +606,325 @@
     civ: "Disponible próximamente para este modelo",
     smartsdr: "Disponible próximamente para este modelo",
     sdr: "Disponible próximamente para este modelo",
-    audio: "Llegará con el audio remoto (banda de paso)",
+    audio: "Activa el audio para ver el espectro de la banda de paso.",
     none: "Este modelo no ofrece espectro"
   });
 
   function showSpectrumPlaceholder(scope) {
+    audio.scope = scope;
     setText($("spectrum-note"), SPECTRUM_TEXT[scope] || SPECTRUM_TEXT.none);
+    updateScopeVisibility();
+  }
+
+  // ---- Remote audio (RX playback, TX capture, audio-passband waterfall) ----
+  const Core = window.RemoteAudioCore;
+  const audio = {
+    on: false, ctx: null, ws: null, decoder: null, node: null, gain: null, analyser: null, hello: null, scope: "",
+    txSupported: false, encoder: null, mic: null, txSeq: 0, txActive: false, micBuffer: new Float32Array(960), micFill: 0,
+    micTimestamp: 0, micMeterAt: 0, rxSeq: 0, raf: 0, lastDraw: 0, bins: null, fallRow: null, starting: false
+  };
+  const audioNote = text => {
+    setText($("audio-note"), text || "");
+    $("audio-panel").hidden = !audio.on && !text;
+  };
+  const setMeter = (name, percent) => {
+    $(`${name}-meter-fill`).style.width = `${percent}%`;
+    $(name === "rx" ? "rx-meter" : "mic-meter").setAttribute("aria-valuenow", String(percent));
+  };
+
+  function updateAudioButton() {
+    const button = $("audio");
+    setPressed(button, audio.on);
+    const label = audio.on ? "Detener audio de la radio" : "Activar audio de la radio";
+    setAttr(button, "aria-label", label);
+    setAttr(button, "title", label);
+  }
+
+  function updateScopeVisibility() {
+    const show = audio.scope === "audio" && audio.on && Boolean(audio.hello?.rx);
+    $("scope").hidden = !show;
+    $("spectrum-note").hidden = show;
+    if (show) startScope(); else stopScope();
+  }
+
+  function startScope() {
+    if (audio.raf || document.hidden) return;
+    audio.raf = requestAnimationFrame(drawScope);
+  }
+
+  function stopScope() {
+    cancelAnimationFrame(audio.raf);
+    audio.raf = 0;
+  }
+
+  function heat(value) {
+    const t = value / 255;
+    return [Math.round(255 * Math.min(1, Math.max(0, (t - 0.45) * 2.2))), Math.round(255 * Math.min(1, Math.max(0, (t - 0.15) * 1.6))), Math.round(40 + 215 * Math.min(1, t * 2))];
+  }
+
+  function drawScope(now) {
+    audio.raf = 0;
+    if (!audio.on || document.hidden || $("scope").hidden) return;
+    audio.raf = requestAnimationFrame(drawScope);
+    if (now - audio.lastDraw < 40 || !audio.analyser) return;
+    audio.lastDraw = now;
+    const analyser = audio.analyser;
+    if (!audio.bins) audio.bins = new Uint8Array(analyser.frequencyBinCount);
+    analyser.getByteFrequencyData(audio.bins);
+    const span = Core.passbandHz(view.state?.mode);
+    const count = Math.max(2, Math.min(audio.bins.length, Math.floor(span / (analyser.context.sampleRate / analyser.fftSize))));
+    const line = $("scope-line");
+    const fall = $("scope-fall");
+    const lineCtx = line.getContext("2d");
+    const fallCtx = fall.getContext("2d");
+    const { width, height } = line;
+    lineCtx.fillStyle = "#05080A";
+    lineCtx.fillRect(0, 0, width, height);
+    lineCtx.strokeStyle = "#38434C";
+    lineCtx.fillStyle = "#BAC4CC";
+    lineCtx.font = "12px sans-serif";
+    for (let hz = 0; hz <= span; hz += 1000) {
+      const x = Math.min(width - 1, Math.round((hz / span) * width));
+      lineCtx.beginPath();
+      lineCtx.moveTo(x, 0);
+      lineCtx.lineTo(x, height);
+      lineCtx.stroke();
+      lineCtx.fillText(hz ? `${hz / 1000}k` : "0", Math.min(x + 3, width - 24), height - 4);
+    }
+    lineCtx.strokeStyle = "#FFB52E";
+    lineCtx.beginPath();
+    fallCtx.drawImage(fall, 0, 1);
+    if (!audio.fallRow || audio.fallRow.width !== fall.width) audio.fallRow = fallCtx.createImageData(fall.width, 1);
+    for (let x = 0; x < width; x++) {
+      const value = audio.bins[Math.min(count - 1, Math.floor((x / width) * count))];
+      const y = height - 1 - (value / 255) * (height - 2);
+      if (x) lineCtx.lineTo(x, y); else lineCtx.moveTo(x, y);
+      const [r, g, b] = heat(value);
+      const at = x * 4;
+      audio.fallRow.data[at] = r;
+      audio.fallRow.data[at + 1] = g;
+      audio.fallRow.data[at + 2] = b;
+      audio.fallRow.data[at + 3] = 255;
+    }
+    lineCtx.stroke();
+    fallCtx.putImageData(audio.fallRow, 0, 0);
+    const freq = view.state?.freq;
+    setText($("scope-axis"), `${Number.isFinite(freq) ? Core.formatKhz(freq) : "--"} | 0 - ${span} Hz`);
+  }
+
+  function audioSocketUrl() {
+    const url = new URL("api/audio", location.href);
+    url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+    return url.href;
+  }
+
+  function onRxPacket(data) {
+    const frame = Core.parseFrame(data);
+    if (!frame || frame.type !== Core.TYPE_RX || !audio.decoder || audio.decoder.state !== "configured") return;
+    try {
+      audio.decoder.decode(new EncodedAudioChunk({ type: "key", timestamp: audio.rxSeq++ * 20000, data: frame.packet }));
+    } catch { /* corrupt packet: skip */ }
+  }
+
+  function makeDecoder() {
+    const decoder = new AudioDecoder({
+      output: data => {
+        try {
+          const pcm = new Float32Array(data.numberOfFrames);
+          data.copyTo(pcm, { planeIndex: 0, format: "f32-planar" });
+          audio.node?.port.postMessage({ pcm }, [pcm.buffer]);
+        } finally { data.close(); }
+      },
+      error: () => { if (audio.on) { try { audio.decoder?.close(); } catch { /* closed */ } audio.decoder = makeDecoder(); } }
+    });
+    decoder.configure({ codec: "opus", sampleRate: 48000, numberOfChannels: 1 });
+    return decoder;
+  }
+
+  function onAudioMessage(event) {
+    if (typeof event.data !== "string") { onRxPacket(event.data); return; }
+    let message;
+    try { message = JSON.parse(event.data); } catch { return; }
+    if (message.type === "hello") {
+      audio.hello = message;
+      if (!message.rx) { stopAudio(); audioNote("Audio no configurado"); return; }
+      audioNote("");
+      updateScopeVisibility();
+      if (!audio.txSupported) audioNote("Este navegador no permite audio de transmisión");
+    } else if (message.type === "level") {
+      setMeter("rx", Core.rmsToPercent(Number(message.rms)));
+    } else if (message.type === "tx_refused") {
+      audioNote("La transmisión de audio no está permitida.");
+    }
+  }
+
+  async function startAudio() {
+    if (audio.on || audio.starting) return;
+    if (!window.AudioContext || !window.AudioWorkletNode || !window.AudioDecoder) {
+      audioNote("Este navegador no permite audio de transmisión");
+      return;
+    }
+    audio.starting = true;
+    try {
+      audio.txSupported = Boolean(window.AudioEncoder && navigator.mediaDevices?.getUserMedia);
+      const ctx = new AudioContext({ sampleRate: 48000, latencyHint: "interactive" });
+      audio.ctx = ctx;
+      await ctx.resume();
+      await ctx.audioWorklet.addModule("remote-audio-worklet.js");
+      const node = new AudioWorkletNode(ctx, "radio-rx", { numberOfInputs: 0, outputChannelCount: [1], processorOptions: { targetMs: 80, maxMs: 300 } });
+      node.port.onmessage = event => {
+        if (event.data && Number.isFinite(event.data.depthMs)) setAttr($("latency"), "title", `Búfer de audio: ${event.data.depthMs} ms`);
+      };
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 2048;
+      const gain = ctx.createGain();
+      gain.gain.value = Number($("audio-volume").value) / 100;
+      node.connect(analyser);
+      analyser.connect(gain);
+      gain.connect(ctx.destination);
+      Object.assign(audio, { node, analyser, gain, bins: null, hello: null, rxSeq: 0, txSeq: 0 });
+      audio.decoder = makeDecoder();
+      const ws = new WebSocket(audioSocketUrl());
+      ws.binaryType = "arraybuffer";
+      audio.ws = ws;
+      ws.onopen = () => ws.send(JSON.stringify({ type: "auth", token, cid: clientId }));
+      ws.onmessage = onAudioMessage;
+      ws.onclose = () => { if (audio.ws === ws && audio.on) { stopAudio(); audioNote("No se pudo conectar el audio."); } };
+      audio.on = true;
+      updateAudioButton();
+      $("audio-panel").hidden = false;
+      audioNote("");
+      if (view.ptt || view.wantPtt) startTx();
+    } catch {
+      stopAudio();
+      audioNote("No se pudo conectar el audio.");
+    } finally {
+      audio.starting = false;
+    }
+  }
+
+  function stopAudio() {
+    stopTx(true);
+    stopScope();
+    audio.on = false;
+    const { ws, decoder, ctx } = audio;
+    audio.ws = null;
+    audio.decoder = null;
+    audio.node = null;
+    audio.analyser = null;
+    audio.gain = null;
+    audio.ctx = null;
+    audio.hello = null;
+    try { ws?.close(); } catch { /* already closed */ }
+    try { if (decoder && decoder.state !== "closed") decoder.close(); } catch { /* closed */ }
+    try { ctx?.close(); } catch { /* closed */ }
+    setMeter("rx", 0);
+    setAttr($("latency"), "title", "");
+    updateAudioButton();
+    updateScopeVisibility();
+    $("audio-panel").hidden = true;
+  }
+
+  const txAllowed = () => Boolean(audio.on && audio.hello?.tx?.allowed && audio.ws?.readyState === WebSocket.OPEN);
+
+  function sendMicBlock(frames) {
+    const encoder = audio.encoder;
+    if (!encoder || encoder.state !== "configured" || !audio.txActive) return;
+    let sum = 0;
+    for (let index = 0; index < frames.length; index++) {
+      audio.micBuffer[audio.micFill++] = frames[index];
+      sum += frames[index] * frames[index];
+      if (audio.micFill === audio.micBuffer.length) {
+        const pcm = audio.micBuffer.slice();
+        audio.micFill = 0;
+        const data = new AudioData({ format: "f32-planar", sampleRate: 48000, numberOfFrames: pcm.length, numberOfChannels: 1, timestamp: audio.micTimestamp, data: pcm });
+        audio.micTimestamp += 20000;
+        try { encoder.encode(data); } catch { /* encoder closed */ }
+        data.close();
+      }
+    }
+    const now = performance.now();
+    if (now - audio.micMeterAt > 100) {
+      audio.micMeterAt = now;
+      const rms = Math.sqrt(sum / Math.max(1, frames.length));
+      setMeter("mic", Core.rmsToPercent(20 * Math.log10(rms || 1e-6)));
+    }
+  }
+
+  async function ensureMic() {
+    if (audio.mic) return audio.mic;
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+    const source = audio.ctx.createMediaStreamSource(stream);
+    const node = new AudioWorkletNode(audio.ctx, "radio-mic", { numberOfInputs: 1, numberOfOutputs: 0, channelCount: 1, channelCountMode: "explicit" });
+    node.port.onmessage = event => { if (audio.txActive) sendMicBlock(event.data); };
+    source.connect(node);
+    audio.mic = { stream, source, node };
+    return audio.mic;
+  }
+
+  function releaseMic() {
+    const mic = audio.mic;
+    audio.mic = null;
+    if (!mic) return;
+    try { mic.node.port.postMessage({ on: false }); mic.source.disconnect(); } catch { /* gone */ }
+    for (const track of mic.stream.getTracks()) track.stop();
+  }
+
+  async function startTx() {
+    if (audio.txActive || !txAllowed()) return;
+    if (!audio.txSupported) { audioNote("Este navegador no permite audio de transmisión"); return; }
+    audio.txActive = true;
+    try {
+      const mic = await ensureMic();
+      if (!audio.txActive) { releaseMic(); return; }
+      const config = { codec: "opus", sampleRate: 48000, numberOfChannels: 1, bitrate: 24000, opus: { frameDuration: 20000 } };
+      if (!audio.encoder || audio.encoder.state === "closed") {
+        audio.encoder = new AudioEncoder({
+          output: chunk => {
+            if (!audio.txActive || !txAllowed() || chunk.byteLength > Core.MAX_MESSAGE - 5) return;
+            const packet = new Uint8Array(chunk.byteLength);
+            chunk.copyTo(packet);
+            audio.ws.send(Core.buildFrame(Core.TYPE_TX, audio.txSeq++, packet));
+          },
+          error: () => { audio.encoder = null; }
+        });
+        audio.encoder.configure(config);
+      }
+      audio.micFill = 0;
+      audio.micTimestamp = 0;
+      $("mic-row").hidden = false;
+      mic.node.port.postMessage({ on: true });
+      audioNote("");
+    } catch {
+      audio.txActive = false;
+      releaseMic();
+      audioNote(window.AudioEncoder && navigator.mediaDevices?.getUserMedia ? "No se pudo acceder al micrófono." : "Este navegador no permite audio de transmisión");
+    }
+  }
+
+  // `release` also closes the microphone (tab hidden, page hidden, audio stopped).
+  function stopTx(release) {
+    audio.txActive = false;
+    audio.mic?.node.port.postMessage({ on: false });
+    audio.micFill = 0;
+    $("mic-row").hidden = true;
+    setMeter("mic", 0);
+    if (audio.encoder && audio.encoder.state !== "closed") { try { audio.encoder.close(); } catch { /* closed */ } }
+    audio.encoder = null;
+    if (release) releaseMic();
+  }
+
+  function bindAudio() {
+    updateAudioButton();
+    $("audio").addEventListener("click", () => { if (audio.on) stopAudio(); else startAudio(); });
+    $("audio-volume").addEventListener("input", event => {
+      setText($("out-audio-volume"), `${event.target.value} %`);
+      if (audio.gain) audio.gain.gain.value = Number(event.target.value) / 100;
+    });
+    document.addEventListener("visibilitychange", () => {
+      if (document.hidden) { stopTx(true); stopScope(); } else if (audio.on) updateScopeVisibility();
+    });
+    addEventListener("pagehide", () => stopTx(true));
   }
 
   function setLocked(on) {
@@ -723,6 +1038,7 @@
     });
     $("lock").addEventListener("click", () => setLocked(!view.locked));
     bindPtt();
+    bindAudio();
     bindTuner();
     bindLevels();
     setLocked(read(sessionStorage, LOCK_KEY) === "1");

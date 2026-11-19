@@ -1,8 +1,10 @@
 package org.bricohams.radio
 
+import android.Manifest
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.net.http.SslCertificate
 import android.net.http.SslError
@@ -35,7 +37,9 @@ class RemoteShackActivity : LocalizedActivity() {
     private var pending: RemoteTarget? = null
     private var web: WebView? = null
     private var status: TextView? = null
+    private var pendingMic: PermissionRequest? = null
 
+    private companion object { const val MIC_REQUEST = 72 }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
@@ -190,9 +194,39 @@ class RemoteShackActivity : LocalizedActivity() {
             }
         }
         view.webChromeClient = object : WebChromeClient() {
-            override fun onPermissionRequest(request: PermissionRequest) = request.deny()
+            override fun onPermissionRequest(request: PermissionRequest) {
+                val wantsMic = PermissionRequest.RESOURCE_AUDIO_CAPTURE in request.resources
+                if (!wantsMic || !RemoteShack.originMatches(current, request.origin?.toString())) { request.deny(); return }
+                if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+                    request.grant(arrayOf(PermissionRequest.RESOURCE_AUDIO_CAPTURE))
+                    return
+                }
+                pendingMic?.deny()
+                pendingMic = request
+                requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), MIC_REQUEST)
+            }
+
+            override fun onPermissionRequestCanceled(request: PermissionRequest) {
+                if (pendingMic === request) pendingMic = null
+            }
+
             override fun onGeolocationPermissionsShowPrompt(origin: String, callback: GeolocationPermissions.Callback) =
                 callback.invoke(origin, false, false)
+        }
+    }
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode != MIC_REQUEST) return
+        val request = pendingMic ?: return
+        pendingMic = null
+        val target = pairing
+        if (target != null && grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED &&
+            RemoteShack.originMatches(target, request.origin?.toString())) {
+            request.grant(arrayOf(PermissionRequest.RESOURCE_AUDIO_CAPTURE))
+        } else {
+            request.deny()
+            Toast.makeText(this, R.string.remote_mic_denied, Toast.LENGTH_LONG).show()
         }
     }
 

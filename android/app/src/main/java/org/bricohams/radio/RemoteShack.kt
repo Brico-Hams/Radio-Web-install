@@ -38,6 +38,18 @@ data class RemoteRelay(val baseUrl: String, val station: String, override val to
 }
 
 object RemoteShack {
+    /** True only for the https origin of the paired direct host:port or relay host:port (no userinfo, no path beyond "/"). */
+    fun originMatches(target: RemoteTarget, origin: String?): Boolean {
+        val uri = try { java.net.URI(origin ?: return false) } catch (error: java.net.URISyntaxException) { return false }
+        if (uri.scheme != "https" || uri.userInfo != null || uri.rawQuery != null || uri.rawFragment != null) return false
+        if (!uri.rawPath.isNullOrEmpty() && uri.rawPath != "/") return false
+        val host = uri.host ?: return false
+        val port = if (uri.port == -1) 443 else uri.port
+        return when (target) {
+            is RemotePairing -> host.equals(target.host, ignoreCase = true) && port == target.port
+            is RemoteRelay -> host.equals(target.host, ignoreCase = true) && port == target.port
+        }
+    }
     private val TOKEN = Regex("^[A-Za-z0-9_-]{43}$")
     private val STATION = Regex("^[a-z0-9-]{3,32}$")
     private val DNS_NAME = Regex("^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z]([a-z0-9-]{0,61}[a-z0-9])?$")

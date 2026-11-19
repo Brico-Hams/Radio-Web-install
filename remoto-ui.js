@@ -38,12 +38,20 @@
   const startStation = async (api, config) => { await saveConfig(api, config); return api("start", "POST", {}); };
   const stopStation = api => api("stop", "POST", {});
 
+  // Device names for a select; the saved name stays selectable even when the device is not plugged in.
+  function deviceNames(list, current) {
+    const names = (Array.isArray(list) ? list : []).map(item => (typeof item === "string" ? item : item && item.name)).filter(name => typeof name === "string" && name);
+    const unique = [...new Set(names)];
+    if (current && !unique.includes(current)) unique.push(current);
+    return unique;
+  }
+
   if (typeof document === "undefined") {
-    if (typeof module !== "undefined") module.exports = { radioDefaults, show, createApi, saveConfig, startStation, stopStation };
+    if (typeof module !== "undefined") module.exports = { radioDefaults, show, createApi, saveConfig, startStation, stopStation, deviceNames };
     return;
   }
   const main = document.getElementById("rm-main");
-  const state = { catalog: null, status: null, ports: [], pin: sessionStorage.getItem("radicodex-setup-pin") || "", timer: null };
+  const state = { catalog: null, status: null, ports: [], devices: null, audio: { input: "", output: "" }, pin: sessionStorage.getItem("radicodex-setup-pin") || "", timer: null };
   const $ = {};
 
   function el(tag, props, ...children) {
@@ -164,7 +172,32 @@
       config.relay = { url: $.relayUrl.value.trim(), station: $.relayStation.value.trim() };
       if ($.relaySecret.value) config.relay.secret = $.relaySecret.value;
     }
+    config.audio = { input: $.audioIn.value.trim(), output: $.audioOut.value.trim() };
     return config;
+  }
+
+  function audioControl(id, list, current) {
+    const names = deviceNames(list, current);
+    if (!names.length && state.devices && (state.devices.inputs?.length || state.devices.outputs?.length)) {
+      return el("select", { id }, el("option", { value: "", text: "Sin audio" }));
+    }
+    if (!names.length) return el("input", { id, type: "text", autocomplete: "off", spellcheck: "false", value: current || "" });
+    const select = el("select", { id }, el("option", { value: "", text: "Sin audio" }), names.map(name => el("option", { value: name, text: name })));
+    select.value = current || "";
+    return select;
+  }
+
+  function renderAudio() {
+    const devices = state.devices || {};
+    $.audioIn = audioControl("rm-audio-in", devices.inputs, state.audio.input);
+    $.audioOut = audioControl("rm-audio-out", devices.outputs, state.audio.output);
+    $.audioGrid.replaceChildren(field("rm-audio-in", "Entrada de audio de la radio (códec USB)", $.audioIn), field("rm-audio-out", "Salida de audio hacia la radio (códec USB)", $.audioOut));
+  }
+
+  async function loadDevices() {
+    if ($.audioIn) state.audio = { input: $.audioIn.value.trim(), output: $.audioOut.value.trim() };
+    try { state.devices = await api("devices"); } catch (error) { if (error.pinRequired) return pinView(); state.devices = null; }
+    if ($.audioGrid) renderAudio();
   }
 
   function applyConfig(config) {
@@ -183,6 +216,8 @@
     $.relayStation.value = config.relay ? config.relay.station : "";
     $.relaySecret.value = "";
     $.listen.value = config.listen || "local";
+    state.audio = { input: config.audio?.input || "", output: config.audio?.output || "" };
+    renderAudio();
   }
 
   async function run(action, success) {
@@ -255,6 +290,8 @@
     $.start = el("button", { class: "rm-btn rm-btn-primary", type: "button", text: "Iniciar estacion", on: { click: () => run(() => startStation(api, collect()), "Estacion en marcha.") } });
     $.stop = el("button", { class: "rm-btn", type: "button", text: "Detener estacion", on: { click: () => run(() => stopStation(api), "Estacion detenida.") } });
     $.status = el("div", {});
+    $.audioGrid = el("div", { class: "rm-grid" });
+    renderAudio();
 
     const refresh = el("button", { class: "rm-btn", type: "button", text: "Buscar de nuevo", on: { click: loadPorts } });
     main.append(
@@ -273,6 +310,10 @@
       el("section", { class: "rm-card" }, el("h2", { text: "Rele (opcional)" }),
         el("div", { class: "rm-grid" }, field("rm-relay-url", "URL del rele", $.relayUrl), field("rm-relay-station", "Nombre de la estacion", $.relayStation),
           field("rm-relay-secret", "Secreto del rele", $.relaySecret, "Deja vacio para conservar el secreto guardado."))),
+      el("section", { class: "rm-card" }, el("h2", { text: "Audio de la radio" }),
+        $.audioGrid,
+        el("p", { class: "rm-hint", text: "En el Yaesu FTX-1 el códec USB aparece como \"USB Audio Device\" (C-Media 0D8C:0016). Ajusta el origen de modulación USB de la radio según su manual para voz o datos por USB." }),
+        el("div", { class: "rm-row" }, el("button", { class: "rm-btn", type: "button", text: "Buscar de nuevo", on: { click: loadDevices } }))),
       el("section", { class: "rm-card" }, el("h2", { text: "Escucha del agente" }),
         el("div", { class: "rm-grid" }, field("rm-listen", "Escucha del agente", $.listen)),
         el("div", { class: "rm-row" }, $.save, $.start, $.stop), $.msg),
@@ -302,6 +343,7 @@
     if (!state.status.config && state.status.mode === "setup") $.listen.value = "lan";
     renderStatus();
     await loadPorts();
+    await loadDevices();
     clearInterval(state.timer);
     state.timer = setInterval(async () => {
       try { state.status = await api("status"); renderStatus(); } catch { /* next tick */ }

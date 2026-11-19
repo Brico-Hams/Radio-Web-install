@@ -117,6 +117,27 @@ class RemoteShackTest {
         assertTrue(RemoteShack.parseAny("https://10.0.0.5:9443/#token=$token&fp=$fp") is RemotePairing)
     }
 
+    @Test fun micOriginMatchesOnlyPairedTarget() {
+        val direct = RemotePairing("192.168.1.20", 8443, token, fp)
+        assertTrue(RemoteShack.originMatches(direct, "https://192.168.1.20:8443"))
+        assertTrue(RemoteShack.originMatches(direct, "https://192.168.1.20:8443/"))
+        assertFalse(RemoteShack.originMatches(direct, "https://192.168.1.20:9443"))
+        assertFalse(RemoteShack.originMatches(direct, "https://192.168.1.20"))
+        assertFalse(RemoteShack.originMatches(direct, "http://192.168.1.20:8443"))
+        assertFalse(RemoteShack.originMatches(direct, "https://192.168.1.21:8443"))
+        assertFalse(RemoteShack.originMatches(direct, "https://user@192.168.1.20:8443"))
+        assertFalse(RemoteShack.originMatches(direct, "https://192.168.1.20:8443/x"))
+        assertFalse(RemoteShack.originMatches(direct, "https://192.168.1.20:8443.evil.com"))
+        assertFalse(RemoteShack.originMatches(direct, null))
+        assertFalse(RemoteShack.originMatches(direct, ""))
+        assertFalse(RemoteShack.originMatches(direct, "not a url"))
+        val relay = RemoteRelay("https://relay.example.org:8443", "abc", token)
+        assertTrue(RemoteShack.originMatches(relay, "https://Relay.Example.org:8443/"))
+        assertFalse(RemoteShack.originMatches(relay, "https://relay.example.org"))
+        assertFalse(RemoteShack.originMatches(relay, "https://relay.example.org:8443@evil.com"))
+        assertTrue(RemoteShack.originMatches(RemoteRelay("https://relay.example.org", "abc", token), "https://relay.example.org:443"))
+    }
+
     @Test fun relayAllowsOnlyItsOriginAndStationPath() {
         val relay = RemoteRelay("https://relay.example.org:8443", "abc", token)
         assertTrue(relay.allows("https", "relay.example.org", 8443, "/s/abc/app.js", listOf("s", "abc", "app.js")))

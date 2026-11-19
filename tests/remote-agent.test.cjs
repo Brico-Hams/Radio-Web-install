@@ -9,6 +9,7 @@ const os = require("node:os");
 const path = require("node:path");
 const { createRemoteAgent } = require("../remote-agent.cjs");
 const { RigctldClient, RigctldError, parseCaps } = require("../rigctld-client.cjs");
+const { connectWs } = require("./ws-client.cjs");
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function waitFor(check, timeout = 3000) {
@@ -230,7 +231,7 @@ test("static files are limited to the console allow-list and carry security head
   const rig = await fakeRigctld();
   const { call, cleanup } = await startAgent(rig, { radioScope: "audio" });
   try {
-    for (const file of ["/remote.html", "/remote-ui.js", "/remote.css"]) {
+    for (const file of ["/remote.html", "/remote-ui.js", "/remote-audio-core.js", "/remote-audio-worklet.js", "/remote.css"]) {
       const response = await call("GET", file, { token: "" });
       assert.equal(response.status, 200, file);
       assert.equal(response.headers["x-content-type-options"], "nosniff");
@@ -501,3 +502,184 @@ test("console URLs are relative so the page works under a /s/<id>/ prefix", () =
   assert.doesNotMatch(ui, /new URL\(\s*["']\//);
   assert.match(fs.readFileSync(path.join(__dirname, "..", "remote.html"), "utf8"), /id="relay"/);
 });
+
+// ---- audio WebSocket ----
+function fakeAudio({ rx = true, tx = true } = {}) {
+  const subs = new Set();
+  const service = {
+    rx, tx, txReason: tx ? "" : "sin salida", writes: [], released: 0, subs,
+    subscribe(entry) { subs.add(entry); return () => subs.delete(entry); },
+    txWrite(packet) { service.writes.push(Buffer.from(packet)); return true; },
+    txRelease() { service.released += 1; },
+    close() {},
+    packet(bytes) { for (const entry of [...subs]) entry.onPacket(Buffer.from(bytes)); },
+    level(rms) { for (const entry of [...subs]) entry.onLevel(rms); }
+  };
+  return service;
+}
+
+const txFrame = (seq, bytes) => {
+  const head = Buffer.alloc(5);
+  head[0] = 2;
+  head.writeUInt32BE(seq, 1);
+  return Buffer.concat([head, Buffer.from(bytes)]);
+};
+
+async function audioClient(agent, cid, { token = agent.token } = {}) {
+  const client = await connectWs(agent.server.address().port);
+  client.sendJson({ type: "auth", token, cid });
+  return client;
+}
+
+test("audio WebSocket without a valid token closes with 4401 and gets no hello", async () => {
+  const rig = await fakeRigctld();
+  const { agent, cleanup } = await startAgent(rig, { audioService: fakeAudio() });
+  try {
+    const bad = await audioClient(agent, "client-a", { token: "x".repeat(43) });
+    assert.equal(await bad.waitClose(), 4401);
+    assert.equal(bad.messages.length, 0);
+    const first = await connectWs(agent.server.address().port);
+    first.sendJson({ type: "rx", on: true });
+    assert.equal(await first.waitClose(), 4401);
+    const wrongPath = await connectWs(agent.server.address().port, "/api/other").catch(() => ({ status: 404 }));
+    assert.equal(wrongPath.status, 404);
+  } finally { await cleanup(); await rig.close(); }
+});
+
+test("audio hello, /api/config flag, RX broadcast with type+sequence, levels and rx pause", async () => {
+  const rig = await fakeRigctld();
+  const audio = fakeAudio();
+  const { agent, call, cleanup } = await startAgent(rig, { audioService: audio });
+  try {
+    assert.deepEqual((await call("GET", "/api/config")).json.audio, { rx: true, tx: true });
+    const client = await audioClient(agent, "client-a");
+    const hello = JSON.parse((await client.next(m => m.text)).text);
+    assert.equal(hello.type, "hello");
+    assert.deepEqual(hello.rx, { codec: "opus", sampleRate: 48000, channels: 1, frameMs: 20 });
+    assert.deepEqual(hello.tx, { allowed: true, codec: "opus", sampleRate: 48000, channels: 1, frameMs: 20 });
+    audio.packet([0xf8, 1]);
+    audio.packet([0xf8, 2]);
+    const a = (await client.next(m => m.binary)).binary;
+    const b = (await client.next(m => m.binary)).binary;
+    assert.equal(a[0], 1);
+    assert.equal(a.readUInt32BE(1), 0);
+    assert.equal(b.readUInt32BE(1), 1);
+    assert.deepEqual([...b.subarray(5)], [0xf8, 2]);
+    audio.level(-31.5);
+    assert.deepEqual(JSON.parse((await client.next(m => m.text)).text), { type: "level", rms: -31.5 });
+    client.sendJson({ type: "rx", on: false });
+    await waitFor(() => audio.subs.size === 0);
+    client.sendJson({ type: "rx", on: true });
+    await waitFor(() => audio.subs.size === 1);
+    client.close();
+    await waitFor(() => audio.subs.size === 0);
+  } finally { await cleanup(); await rig.close(); }
+});
+
+test("audio hello for an unconfigured service has no rx/tx; a TX-unsupported system reports the reason", async () => {
+  const rig = await fakeRigctld();
+  const blank = fakeAudio({ rx: false, tx: false });
+  blank.txReason = "";
+  const none = await startAgent(rig, { audioService: blank });
+  try {
+    assert.deepEqual((await none.call("GET", "/api/config")).json.audio, { rx: false, tx: false });
+    const empty = await audioClient(none.agent, "client-a");
+    const bare = JSON.parse((await empty.next(m => m.text)).text);
+    assert.deepEqual(bare, { type: "hello" });
+    empty.close();
+  } finally { await none.cleanup(); }
+  const limited = await startAgent(rig, { audioService: fakeAudio({ rx: true, tx: false }) });
+  try {
+    const client = await audioClient(limited.agent, "client-a");
+    const hello = JSON.parse((await client.next(m => m.text)).text);
+    assert.equal(hello.tx.allowed, false);
+    assert.equal(hello.tx.reason, "sin salida");
+    client.close();
+  } finally { await limited.cleanup(); await rig.close(); }
+});
+
+test("TX frames are dropped unless the client owns control AND the PTT is on", async () => {
+  const rig = await fakeRigctld();
+  const audio = fakeAudio();
+  const { agent, call, cleanup } = await startAgent(rig, { audioService: audio });
+  const as = id => ({ headers: { "X-Client-Id": id } });
+  try {
+    const owner = await audioClient(agent, "client-a");
+    const other = await audioClient(agent, "client-b");
+    await owner.next(m => m.text);
+    await other.next(m => m.text);
+    await call("POST", "/api/cmd", { body: { cmd: "freq", value: 7100000 }, ...as("client-a") });
+    owner.send(txFrame(1, [1, 2, 3]));
+    const refusal = JSON.parse((await owner.next(m => m.text)).text);
+    assert.equal(refusal.type, "tx_refused");
+    assert.match(refusal.reason, /PTT/);
+    assert.equal(audio.writes.length, 0);
+
+    await call("POST", "/api/cmd", { body: { cmd: "ptt", value: true }, ...as("client-a") });
+    other.send(txFrame(1, [9, 9]));
+    assert.match(JSON.parse((await other.next(m => m.text)).text).reason, /control/);
+    owner.send(txFrame(2, [4, 5, 6]));
+    await waitFor(() => audio.writes.length === 1);
+    assert.deepEqual([...audio.writes[0]], [4, 5, 6]);
+    assert.equal(audio.writes.length, 1);
+
+    // Refusals are rate limited to one per second.
+    other.send(txFrame(3, [1]));
+    other.send(txFrame(4, [1]));
+    await sleep(100);
+    assert.equal(other.messages.filter(m => m.text).length, 0);
+
+    await call("POST", "/api/cmd", { body: { cmd: "ptt", value: false }, ...as("client-a") });
+    assert.ok(audio.released >= 1);
+    owner.send(txFrame(5, [7]));
+    await sleep(100);
+    assert.equal(audio.writes.length, 1);
+    owner.close();
+    other.close();
+  } finally { await cleanup(); await rig.close(); }
+});
+
+test("TX frames keep the PTT alive like heartbeats", async () => {
+  const rig = await fakeRigctld();
+  const audio = fakeAudio();
+  const { agent, call, cleanup } = await startAgent(rig, { audioService: audio });
+  try {
+    const client = await audioClient(agent, "client-a");
+    await client.next(m => m.text);
+    await call("POST", "/api/cmd", { body: { cmd: "ptt", value: true }, headers: { "X-Client-Id": "client-a" } });
+    const timer = setInterval(() => client.send(txFrame(1, [1, 2])), 100);
+    try { await sleep(1500); } finally { clearInterval(timer); }
+    assert.equal(rig.ptt, 1);
+    client.close();
+  } finally { await cleanup(); await rig.close(); }
+});
+
+test("closing the PTT owner's audio socket sends T 0 immediately", async () => {
+  const rig = await fakeRigctld();
+  const { agent, call, cleanup } = await startAgent(rig, { audioService: fakeAudio(), heartbeatTimeoutMs: 60_000 });
+  try {
+    const client = await audioClient(agent, "client-a");
+    await client.next(m => m.text);
+    await call("POST", "/api/cmd", { body: { cmd: "ptt", value: true }, headers: { "X-Client-Id": "client-a" } });
+    assert.equal(rig.ptt, 1);
+    rig.log.length = 0;
+    client.close();
+    await waitFor(() => rig.log.includes("T 0"));
+    assert.equal(rig.ptt, 0);
+    assert.equal((await call("GET", "/api/state")).json.ptt, false);
+  } finally { await cleanup(); await rig.close(); }
+});
+
+test("a non-owner audio socket closing does not touch the PTT", async () => {
+  const rig = await fakeRigctld();
+  const { agent, call, cleanup } = await startAgent(rig, { audioService: fakeAudio(), heartbeatTimeoutMs: 60_000 });
+  try {
+    const other = await audioClient(agent, "client-b");
+    await other.next(m => m.text);
+    await call("POST", "/api/cmd", { body: { cmd: "ptt", value: true }, headers: { "X-Client-Id": "client-a" } });
+    other.close();
+    await sleep(200);
+    assert.equal(rig.ptt, 1);
+  } finally { await cleanup(); await rig.close(); }
+});
+

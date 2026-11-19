@@ -10,6 +10,7 @@
   <link rel="stylesheet" href="remote.css">
   <script src="ui-translations.js" defer></script>
   <script src="ui-i18n.js" defer></script>
+  <script src="remote-audio-core.js" defer></script>
   <script src="remote-ui.js" defer></script>
 </head>
 <body>
@@ -68,6 +69,26 @@
     <section id="spectrum" class="card spectrum" aria-labelledby="spectrum-title">
       <h2 id="spectrum-title">Espectro de la radio</h2>
       <p id="spectrum-note" class="hint empty">Este modelo no ofrece espectro</p>
+      <div id="scope" class="scope" hidden>
+        <canvas id="scope-line" class="scope-line" width="640" height="90" role="img" aria-label="Espectro de audio de la banda de paso"></canvas>
+        <canvas id="scope-fall" class="scope-fall" width="640" height="160" aria-hidden="true"></canvas>
+        <p id="scope-axis" class="hint scope-axis" aria-live="off"></p>
+      </div>
+
+      <div id="audio-panel" class="audio-panel" role="group" aria-labelledby="audio-title" hidden>
+        <h3 id="audio-title" class="audio-title">Audio de la radio</h3>
+      <p id="audio-note" class="hint" role="status"></p>
+      <label class="slider" for="audio-volume"><span>Volumen local</span><output id="out-audio-volume">80 %</output></label>
+      <input id="audio-volume" type="range" min="0" max="100" step="1" value="80">
+      <div class="meter-row">
+        <span id="rx-meter-label">Nivel de recepción</span>
+        <div id="rx-meter" class="level-meter" role="meter" aria-labelledby="rx-meter-label" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div id="rx-meter-fill" class="level-fill"></div></div>
+      </div>
+      <div id="mic-row" class="meter-row" hidden>
+        <span id="mic-meter-label">Nivel del micrófono</span>
+        <div id="mic-meter" class="level-meter" role="meter" aria-labelledby="mic-meter-label" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div id="mic-meter-fill" class="level-fill"></div></div>
+      </div>
+      </div>
     </section>
 
     <div class="tabs" role="tablist" aria-label="Paneles de control">
@@ -142,8 +163,8 @@
   </main>
 
   <footer class="dock">
-    <span class="audio-wrap" title="Próximamente">
-      <button id="audio" type="button" class="audio" aria-pressed="false" title="Próximamente" disabled>Audio</button>
+    <span class="audio-wrap">
+      <button id="audio" type="button" class="audio" aria-pressed="false" aria-label="Activar audio de la radio" title="Activar audio de la radio">Audio</button>
     </span>
     <button id="ptt" type="button" class="ptt" aria-pressed="false" aria-label="Mantener para transmitir" disabled>
       <span id="ptt-label">Mantener para hablar</span>

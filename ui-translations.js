@@ -1987,6 +1987,24 @@ Enlaces de emparejamiento|Pairing links|Liens d’appairage|Kopplungslinks
 PIN de configuracion|Setup PIN|PIN de configuration|Einrichtungs-PIN
 Entrar|Sign in|Entrer|Anmelden
 Escribe el PIN de configuracion que aparece en la consola de la estacion.|Enter the setup PIN shown on the station console.|Saisissez le PIN de configuration affiché sur la console de la station.|Gib die Einrichtungs-PIN ein, die auf der Konsole der Station angezeigt wird.
+Activar audio de la radio|Turn on radio audio|Activer l’audio de la radio|Funkgerät-Audio einschalten
+Detener audio de la radio|Turn off radio audio|Arrêter l’audio de la radio|Funkgerät-Audio ausschalten
+Audio no configurado|Audio not configured|Audio non configuré|Audio nicht konfiguriert
+Este navegador no permite audio de transmisión|This browser does not support transmit audio|Ce navigateur ne permet pas l’audio d’émission|Dieser Browser unterstützt kein Sendeaudio
+No se pudo conectar el audio.|Could not connect the audio.|Impossible de connecter l’audio.|Audio konnte nicht verbunden werden.
+Volumen local|Local volume|Volume local|Lokale Lautstärke
+Nivel de recepción|Receive level|Niveau de réception|Empfangspegel
+Nivel del micrófono|Microphone level|Niveau du microphone|Mikrofonpegel
+Búfer de audio: {0} ms|Audio buffer: {0} ms|Tampon audio : {0} ms|Audiopuffer: {0} ms
+No se pudo acceder al micrófono.|Could not access the microphone.|Impossible d’accéder au microphone.|Zugriff auf das Mikrofon nicht möglich.
+La transmisión de audio no está permitida.|Audio transmission is not allowed.|La transmission audio n’est pas autorisée.|Audioübertragung ist nicht erlaubt.
+Activa el audio para ver el espectro de la banda de paso.|Turn on audio to see the passband spectrum.|Activez l’audio pour voir le spectre de la bande passante.|Schalte das Audio ein, um das Durchlassbereich-Spektrum zu sehen.
+Espectro de audio de la banda de paso|Passband audio spectrum|Spectre audio de la bande passante|Audiospektrum des Durchlassbereichs
+Audio de la radio|Radio audio|Audio de la radio|Funkgerät-Audio
+Entrada de audio de la radio (códec USB)|Radio audio input (USB codec)|Entrée audio de la radio (codec USB)|Audioeingang des Funkgeräts (USB-Codec)
+Salida de audio hacia la radio (códec USB)|Audio output to the radio (USB codec)|Sortie audio vers la radio (codec USB)|Audioausgang zum Funkgerät (USB-Codec)
+Sin audio|No audio|Sans audio|Kein Audio
+En el Yaesu FTX-1 el códec USB aparece como "USB Audio Device" (C-Media 0D8C:0016). Ajusta el origen de modulación USB de la radio según su manual para voz o datos por USB.|On the Yaesu FTX-1 the USB codec appears as "USB Audio Device" (C-Media 0D8C:0016). Set the radio's USB modulation source per its manual for voice or data over USB.|Sur le Yaesu FTX-1, le codec USB apparaît comme « USB Audio Device » (C-Media 0D8C:0016). Réglez la source de modulation USB de la radio selon son manuel pour la voix ou les données par USB.|Beim Yaesu FTX-1 erscheint der USB-Codec als „USB Audio Device“ (C-Media 0D8C:0016). Stelle die USB-Modulationsquelle des Funkgeräts gemäß Handbuch für Sprache oder Daten über USB ein.
 `.trim().split("\n").map(line => line.split("|")));
   root.BricohamsUITranslations = entries;
   if (typeof module === "object" && module.exports) module.exports = entries;

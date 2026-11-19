@@ -18,7 +18,7 @@ async function withServer(t) {
     stop: async () => { calls.push(["stop"]); running = false; },
     status: () => ({ running, starting: false, error: null, rigctld: { mode: "managed", running }, rotctld: null, agent: { running }, links: null })
   };
-  const controller = createController({ configDir: dir, station: fakeStation, detect: async () => [{ port: "COM7", vid: "10C4", pid: "EA70", radios: ["yaesu-ftx-1"] }] });
+  const controller = createController({ configDir: dir, station: fakeStation, detect: async () => [{ port: "COM7", vid: "10C4", pid: "EA70", radios: ["yaesu-ftx-1"] }], listDevices: async () => ({ inputs: ["Mic"], outputs: ["Spk"] }) });
   const server = createServer(undefined, undefined, undefined, controller);
   server.listen(0, "127.0.0.1");
   await once(server, "listening");
@@ -57,6 +57,7 @@ test("GET /api/remote/status, catalog y ports responden", async t => {
   const catalog = await send("GET", "/api/remote/catalog", { origin: null });
   assert.ok(catalog.json.radios.some(radio => radio.id === "icom-ic-7300" && radio.hamlibModel === 3073));
   assert.equal((await send("GET", "/api/remote/ports", { origin: null })).json.ports[0].port, "COM7");
+  assert.deepEqual((await send("GET", "/api/remote/devices", { origin: null })).json, { inputs: ["Mic"], outputs: ["Spk"] });
   assert.equal((await send("GET", "/api/remote/nada", { origin: null })).status, 404);
 });
 
