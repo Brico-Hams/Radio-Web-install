@@ -1,6 +1,6 @@
 $ErrorActionPreference = "Stop"
 
-$installRoot = Join-Path $env:LOCALAPPDATA "Programs\Bricohams Radio Workspace"
+$installRoot = Join-Path $env:LOCALAPPDATA "Programs\RadiCodex"
 $appSource = Join-Path $PSScriptRoot "app"
 $nodeSource = Join-Path $PSScriptRoot "runtime\node.exe"
 
@@ -19,14 +19,19 @@ Copy-Item -Path $nodeSource -Destination (Join-Path $installRoot "runtime\node.e
 
 $startScript = Join-Path $installRoot "Start.ps1"
 Copy-Item -Path (Join-Path $PSScriptRoot "Start.ps1") -Destination $startScript -Force
-$shortcutPath = Join-Path ([Environment]::GetFolderPath("Programs")) "Bricohams Radio Workspace.lnk"
+$programsDir = [Environment]::GetFolderPath("Programs")
+$shortcutPath = Join-Path $programsDir "RadiCodex.lnk"
 $shell = New-Object -ComObject WScript.Shell
 $shortcut = $shell.CreateShortcut($shortcutPath)
 $shortcut.TargetPath = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
 $shortcut.Arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$startScript`""
 $shortcut.WorkingDirectory = $installRoot
-$shortcut.Description = "Inicia Bricohams Radio Workspace en este equipo"
+$shortcut.Description = "Inicia RadiCodex de BricoHams en este equipo"
 $shortcut.Save()
 
+# Remove the pre-RadiCodex install (it holds no user data).
+Remove-Item -Path (Join-Path $programsDir "Bricohams Radio Workspace.lnk") -Force -ErrorAction SilentlyContinue
+Remove-Item -Path (Join-Path $env:LOCALAPPDATA "Programs\Bricohams Radio Workspace") -Recurse -Force -ErrorAction SilentlyContinue
+
 Write-Output "Instalado en: $installRoot"
-Write-Output "Abre Bricohams Radio Workspace desde el menu Inicio."
+Write-Output "Abre RadiCodex desde el menu Inicio."

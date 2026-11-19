@@ -243,6 +243,6 @@ server.on("error", error => {
   console.error(`Error de servidor: ${error.message}`);
   process.exitCode = 1;
 });
-server.listen(8787, "127.0.0.1", () => console.log("Bricohams Radio Workspace: http://127.0.0.1:8787 (solo equipo local)"));
+server.listen(8787, "127.0.0.1", () => console.log("RadiCodex (BricoHams): http://127.0.0.1:8787 (solo equipo local)"));
 }
 module.exports = { createServer, ALLOWED_FILES };

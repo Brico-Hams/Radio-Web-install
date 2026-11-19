@@ -15,7 +15,7 @@ test("el empaquetado crea artefactos para Debian/Raspberry Pi, Arch, FreeBSD y W
     "build_deb arm64 arm64",
     "build_deb armhf armv7l",
     "arch-source.tar.gz",
-    "sha256sum \"$output/bricohams-radio-workspace-${version#v}-arch-source.tar.gz\"",
+    "sha256sum \"$output/radicodex-${version#v}-arch-source.tar.gz\"",
     "freebsd-amd64.tar.gz",
     "windows-x64.zip",
     "SHASUMS256.txt",
@@ -25,16 +25,29 @@ test("el empaquetado crea artefactos para Debian/Raspberry Pi, Arch, FreeBSD y W
 });
 
 test("los lanzadores locales conservan Node 22+ y el servidor solo local", () => {
-  assert.match(read("installers/unix/bricohams-radio"), /process\.versions\.node/);
+  assert.match(read("installers/unix/radicodex"), /process\.versions\.node/);
   // Node 24+ rejects process.exit(boolean): the version probe must exit with a number.
-  for (const name of ["installers/unix/bricohams-radio", "installers/freebsd/install.sh"]) {
+  for (const name of ["installers/unix/radicodex", "installers/freebsd/install.sh"]) {
     assert.doesNotMatch(read(name), /process\.exit\([^)]*< 22\)/, name);
   }
-  assert.match(read("installers/unix/bricohams-radio"), /127\.0\.0\.1:8787/);
-  assert.doesNotMatch(read("installers/unix/bricohams-radio"), /\/dev\/tcp/);
+  assert.match(read("installers/unix/radicodex"), /127\.0\.0\.1:8787/);
+  assert.match(read("installers/unix/radicodex"), /net\.connect\(8787,"127\.0\.0\.1"/);
+  assert.doesNotMatch(read("installers/unix/radicodex"), /\/dev\/tcp/);
   assert.match(read("installers/freebsd/install.sh"), /pkg install -y node22/);
   assert.match(read("installers/windows/Start.ps1"), /http:\/\/127\.0\.0\.1:8787/);
-  assert.match(read("installers/windows/Install.ps1"), /Programs\\Bricohams Radio Workspace/);
+  assert.match(read("installers/windows/Install.ps1"), /Programs\\RadiCodex/);
+});
+
+test("los paquetes nuevos reemplazan la instalacion con el nombre anterior", () => {
+  const build = read("scripts/build-installers.sh");
+  for (const field of ["Provides", "Replaces", "Conflicts"]) {
+    assert.ok(build.includes(`${field}: bricohams-radio-workspace`), field);
+  }
+  assert.ok(build.includes("replaces=('bricohams-radio-workspace')"));
+  const install = read("installers/windows/Install.ps1");
+  assert.match(install, /Bricohams Radio Workspace\.lnk/);
+  assert.match(install, /Programs\\Bricohams Radio Workspace/);
+  assert.match(read("installers/freebsd/install.sh"), /rm -rf \/usr\/local\/libexec\/bricohams-radio-workspace/);
 });
 test("los instalables incluyen avisos legales, estado de entrega y licencia del runtime incluido", () => {
   const build = read("scripts/build-installers.sh");
@@ -95,13 +108,13 @@ test("los instalables incluyen el catalogo y todos los recursos web permitidos",
 
 test("Linux y FreeBSD comparten un unico lanzador y Windows reemplaza la app al actualizar", () => {
   const build = read("scripts/build-installers.sh");
-  assert.equal(build.match(/installers\/unix\/bricohams-radio"/g).length, 3);
-  assert.ok(!fs.existsSync(path.join(root, "installers/freebsd/bricohams-radio")));
-  const launcher = read("installers/unix/bricohams-radio");
-  for (const dir of ["/opt/bricohams-radio-workspace", "/usr/local/libexec/bricohams-radio-workspace"]) {
+  assert.equal(build.match(/installers\/unix\/radicodex"/g).length, 3);
+  assert.ok(!fs.existsSync(path.join(root, "installers/freebsd/radicodex")));
+  const launcher = read("installers/unix/radicodex");
+  for (const dir of ["/opt/radicodex", "/usr/local/libexec/radicodex"]) {
     assert.ok(launcher.includes(dir), dir);
   }
-  assert.ok(read("installers/freebsd/install.sh").includes("/usr/local/libexec/bricohams-radio-workspace"));
+  assert.ok(read("installers/freebsd/install.sh").includes("/usr/local/libexec/radicodex"));
   assert.match(read("installers/windows/Install.ps1"), /Remove-Item -Path \$appTarget -Recurse -Force/);
   const workflow = read(".github/workflows/release-installers.yml");
   for (const run of workflow.split(/\n\s+run: /).slice(1)) {

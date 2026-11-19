@@ -253,9 +253,9 @@ After installation, to prepare a Quansheng, follow [getting started from 0 to 10
 and consult the [UV-K5 V3 technical atlas](docs/i18n/en/ATLAS-UV-K5-V3.md).
 
 - Windows 11 x64: extract the entire `*-windows-x64.zip`, open PowerShell in that folder, and run `powershell -NoProfile -ExecutionPolicy Bypass -File .\Install.ps1`. Node.js included, no administrator privileges; launch the app from the Start menu.
-- Debian, Ubuntu, and Raspberry Pi OS: check `dpkg --print-architecture`, download **only** the `.deb` for your architecture (amd64, arm64, or armhf), and run `sudo apt install ./nombre-del-paquete.deb`. Node.js included; armhf requires an ARMv7 CPU or later. Open the app from the menu or run `bricohams-radio`.
-- Arch Linux: install `base-devel` and `nodejs` with pacman, extract `*-arch.tar.gz`, review `PKGBUILD`, and run `makepkg -si` as a regular user. Start with `bricohams-radio`.
-- FreeBSD 14 amd64: extract `*-freebsd-amd64.tar.gz`, enter the folder, and run `su -c './install.sh'` (install Node 22 with `pkg` if missing). Start with `bricohams-radio` as a regular user.
+- Debian, Ubuntu, and Raspberry Pi OS: check `dpkg --print-architecture`, download **only** the `.deb` for your architecture (amd64, arm64, or armhf), and run `sudo apt install ./nombre-del-paquete.deb`. Node.js included; armhf requires an ARMv7 CPU or later. Open the app from the menu or run `radicodex`.
+- Arch Linux: install `base-devel` and `nodejs` with pacman, extract `*-arch.tar.gz`, review `PKGBUILD`, and run `makepkg -si` as a regular user. Start with `radicodex`.
+- FreeBSD 14 amd64: extract `*-freebsd-amd64.tar.gz`, enter the folder, and run `su -c './install.sh'` (install Node 22 with `pkg` if missing). Start with `radicodex` as a regular user.
 
 All installers include **Bricohams Quansheng Studio** (UV-K1 / UV-K5 V3 with F4HWN Fusion 6), from the [Brico-Hams/Bricohams-Studio](https://github.com/Brico-Hams/Bricohams-Studio) repository. It opens at <http://127.0.0.1:8787/studio.html> or from the Quansheng workspace. The copy is downloaded when packaging, at the commit and SHA-256 pinned in `studio.lock.json`, and the server checks it again before serving. It is served with its own CSP that only allows its scripts by hash and prevents it from connecting to the network. From source, run `npm run fetch:studio` once. In web mode, the link opens the [public Studio page](https://brico-hams.github.io/Bricohams-Studio/).
 

@@ -262,9 +262,9 @@ Tras instalar, para preparar una Quansheng sigue la [puesta en marcha de 0 a 100
 y consulta el [atlas tecnico UV-K5 V3](docs/ATLAS-UV-K5-V3.md).
 
 - Windows 11 x64: extrae todo `*-windows-x64.zip`, abre PowerShell en esa carpeta y ejecuta `powershell -NoProfile -ExecutionPolicy Bypass -File .\Install.ps1`. Node.js incluido, sin administrador; inicia la app desde el menu Inicio.
-- Debian, Ubuntu y Raspberry Pi OS: consulta `dpkg --print-architecture`, descarga **solo** el `.deb` de tu arquitectura (amd64, arm64 o armhf) y ejecuta `sudo apt install ./nombre-del-paquete.deb`. Node.js incluido; armhf requiere CPU ARMv7 o posterior. Abre la app desde el menu o ejecuta `bricohams-radio`.
-- Arch Linux: instala `base-devel` y `nodejs` con pacman, extrae `*-arch.tar.gz`, revisa `PKGBUILD` y ejecuta `makepkg -si` como usuario normal. Inicia con `bricohams-radio`.
-- FreeBSD 14 amd64: extrae `*-freebsd-amd64.tar.gz`, entra en la carpeta y ejecuta `su -c './install.sh'` (instala Node 22 con `pkg` si falta). Inicia con `bricohams-radio` como usuario normal.
+- Debian, Ubuntu y Raspberry Pi OS: consulta `dpkg --print-architecture`, descarga **solo** el `.deb` de tu arquitectura (amd64, arm64 o armhf) y ejecuta `sudo apt install ./nombre-del-paquete.deb`. Node.js incluido; armhf requiere CPU ARMv7 o posterior. Abre la app desde el menu o ejecuta `radicodex`.
+- Arch Linux: instala `base-devel` y `nodejs` con pacman, extrae `*-arch.tar.gz`, revisa `PKGBUILD` y ejecuta `makepkg -si` como usuario normal. Inicia con `radicodex`.
+- FreeBSD 14 amd64: extrae `*-freebsd-amd64.tar.gz`, entra en la carpeta y ejecuta `su -c './install.sh'` (instala Node 22 con `pkg` si falta). Inicia con `radicodex` como usuario normal.
 
 Todos los instaladores incluyen **Bricohams Quansheng Studio** (UV-K1 / UV-K5 V3 con F4HWN Fusion 6), del repositorio [Brico-Hams/Bricohams-Studio](https://github.com/Brico-Hams/Bricohams-Studio). Se abre en <http://127.0.0.1:8787/studio.html> o desde el espacio Quansheng. La copia se descarga al empaquetar, en el commit y con el SHA-256 fijados en `studio.lock.json`, y el servidor la vuelve a comprobar antes de servirla. Se sirve con una CSP propia que solo admite sus scripts por hash y le impide conectarse a la red. Desde el codigo fuente, ejecuta `npm run fetch:studio` una vez. En modo web, el enlace lleva a la [pagina publica de Studio](https://brico-hams.github.io/Bricohams-Studio/).
 

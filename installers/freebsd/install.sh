@@ -14,8 +14,11 @@ if ! command -v node >/dev/null 2>&1 || ! node -e 'process.exit(Number(process.v
   pkg install -y node22
 fi
 
-install_root=/usr/local/libexec/bricohams-radio-workspace
+install_root=/usr/local/libexec/radicodex
 install -d "$install_root/app"
 cp -R ./app/. "$install_root/app/"
-install -m 755 ./bricohams-radio /usr/local/bin/bricohams-radio
-printf '%s\n' "Instalado. Ejecuta bricohams-radio como usuario normal."
+install -m 755 ./radicodex /usr/local/bin/radicodex
+# Remove the pre-RadiCodex install (it holds no user data).
+if [ -d /usr/local/libexec/bricohams-radio-workspace ]; then rm -rf /usr/local/libexec/bricohams-radio-workspace; fi
+if [ -e /usr/local/bin/bricohams-radio ]; then rm -f /usr/local/bin/bricohams-radio; fi
+printf '%s\n' "Instalado. Ejecuta radicodex como usuario normal."

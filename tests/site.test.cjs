@@ -254,7 +254,7 @@ test("el logotipo conserva exactamente el PNG original de Bricohams Studio", () 
   assert.match(read("app.js"), /class="brand-logo" src="bricohams-logo\.png" alt="Bricohams" width="1200" height="446"/);
   assert.match(read("styles.css"), /\.brand-logo\{[^}]*max-width:100%;height:auto/);
   assert.match(read("scripts/build-installers.sh"), /bricohams-logo\.png/);
-  assert.match(read("installers/linux/bricohams-radio.desktop"), /Icon=.*bricohams-logo\.png/);
+  assert.match(read("installers/linux/radicodex.desktop"), /Icon=.*bricohams-logo\.png/);
   assert.equal(fs.existsSync(path.join(root, "bricohams-logo.svg")), false);
 });
 
