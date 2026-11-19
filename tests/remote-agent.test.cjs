@@ -7,7 +7,7 @@ const net = require("node:net");
 const os = require("node:os");
 const path = require("node:path");
 const { createRemoteAgent } = require("../remote-agent.cjs");
-const { RigctldClient, RigctldError } = require("../rigctld-client.cjs");
+const { RigctldClient, RigctldError, parseCaps } = require("../rigctld-client.cjs");
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function waitFor(check, timeout = 3000) {
@@ -19,8 +19,22 @@ async function waitFor(check, timeout = 3000) {
   assert.fail("waitFor timed out");
 }
 
+const CAPS_LINES = [
+  "Caps dump for model:\t1",
+  "Model name:\t\tFTX-1",
+  "Mfg name:\t\tYaesu",
+  "Get level: AF(0..1/0.01) RF(0..1/0.01) SQL(0..1/0.01) RFPOWER(0..1/0.01) PREAMP(10,20) ATT(12) AGC(0..5/1) STRENGTH(-54..60/1)",
+  "Set level: AF(0..1/0.01) RF(0..1/0.01) RFPOWER(0..1/0.01) PREAMP(10,20) ATT(12) AGC(0..5/1)",
+  "Get functions: FAGC NB COMP VOX TUNER",
+  "Set functions: FAGC NB NR TUNER",
+  "VFO Ops:\t\tCPY XCHG TUNE"
+];
+
 async function fakeRigctld() {
-  const rig = { freq: 14074000, mode: "USB", passband: 2400, ptt: 0, failFreq: false, log: [], sockets: new Set() };
+  const rig = {
+    freq: 14074000, mode: "USB", passband: 2400, ptt: 0, failFreq: false, log: [], sockets: new Set(),
+    levels: { AF: 0.5, RF: 1, RFPOWER: 0.4, PREAMP: 0, ATT: 0, AGC: 2 }, funcs: { NB: 0, NR: 0, TUNER: 0 }, noCaps: false
+  };
   const server = net.createServer(socket => {
     rig.sockets.add(socket);
     socket.on("close", () => rig.sockets.delete(socket));
@@ -38,11 +52,15 @@ async function fakeRigctld() {
         if (command === "f") reply = `${rig.freq}\n`;
         else if (command === "m") reply = `${rig.mode}\n${rig.passband}\n`;
         else if (command === "t") reply = `${rig.ptt}\n`;
-        else if (command === "l") reply = "RPRT -11\n";
+        else if (command === "l") reply = Object.hasOwn(rig.levels, args[0]) ? `${rig.levels[args[0]]}\n` : "RPRT -11\n";
+        else if (command === "L") rig.levels[args[0]] = Number(args[1]);
+        else if (command === "u") reply = Object.hasOwn(rig.funcs, args[0]) ? `${rig.funcs[args[0]]}\n` : "RPRT -11\n";
+        else if (command === "U") rig.funcs[args[0]] = Number(args[1]);
+        else if (command === "\\dump_caps") reply = rig.noCaps ? "RPRT -11\n" : `${CAPS_LINES.join("\n")}\nRPRT 0\n`;
         else if (command === "v") reply = "VFOA\n";
         else if (command === "s") reply = "0\nVFOA\n";
         else if (command === "F") { if (rig.failFreq) reply = "RPRT -1\n"; else rig.freq = Number(args[0]); }
-        else if (command === "M") { rig.mode = args[0]; }
+        else if (command === "M") { rig.mode = args[0]; rig.passband = Number(args[1]); }
         else if (command === "T") rig.ptt = Number(args[0]);
         socket.write(reply);
       }
@@ -247,5 +265,119 @@ test("control expires after 30 s of inactivity (injected clock)", async () => {
     assert.equal((await call("POST", "/api/cmd", { body: { cmd: "freq", value: 7110000 }, ...as("client-b") })).status, 409);
     time += 30_001;
     assert.equal((await call("POST", "/api/cmd", { body: { cmd: "freq", value: 7110000 }, ...as("client-b") })).status, 200);
+  } finally { await cleanup(); await rig.close(); }
+});
+
+test("parseCaps keeps only supported, whitelisted levels/functions and TUNE", () => {
+  const caps = parseCaps([...CAPS_LINES, "Get level: BOGUS(0..1/1) AF(0..1/0.01)"]);
+  assert.equal(caps.model, "Yaesu FTX-1");
+  assert.deepEqual(Object.keys(caps.level).sort(), ["AF", "AGC", "ATT", "PREAMP", "RF", "RFPOWER"]);
+  assert.deepEqual(caps.level.PREAMP, { get: true, set: true, values: [10, 20] });
+  assert.deepEqual(caps.level.ATT.values, [12]);
+  assert.equal(caps.level.AF.values, undefined);
+  assert.deepEqual(caps.func.NB, { get: true, set: true });
+  assert.deepEqual(caps.func.NR, { get: false, set: true });
+  assert.equal(caps.func.VOX, undefined);
+  assert.equal(caps.tune, true);
+  assert.equal(parseCaps(["Caps dump for model: 1"]).tune, false);
+});
+
+test("agent detects caps once and reports levels/functions, null when the rig cannot read them", async () => {
+  const rig = await fakeRigctld();
+  const { call, cleanup } = await startAgent(rig);
+  try {
+    await waitFor(async () => (await call("GET", "/api/state")).json.levels.af === 0.5);
+    const state = (await call("GET", "/api/state")).json;
+    assert.equal(state.caps.detected, true);
+    assert.equal(state.caps.tune, true);
+    assert.deepEqual(state.caps.level.PREAMP.values, [10, 20]);
+    assert.deepEqual(state.levels, { af: 0.5, rf: 1, rfpower: 0.4, preamp: 0, att: 0, agc: 2 });
+    assert.deepEqual(state.funcs, { nb: false, nr: null, tuner: false });
+    assert.equal(rig.log.filter(line => line === "\\dump_caps").length, 1);
+  } finally { await cleanup(); await rig.close(); }
+});
+
+test("level and func commands are validated and applied", async () => {
+  const rig = await fakeRigctld();
+  const { call, cleanup } = await startAgent(rig);
+  const cmd = body => call("POST", "/api/cmd", { body });
+  try {
+    for (const body of [
+      { cmd: "level", name: "STRENGTH", value: 0.5 }, { cmd: "level", name: "AF; T 1", value: 0.5 },
+      { cmd: "level", name: "af", value: 0.5 }, { cmd: "level", value: 0.5 }, { cmd: "level", name: "AF", value: 1.5 },
+      { cmd: "level", name: "AF", value: "0.5" }, { cmd: "level", name: "AF", value: null }, { cmd: "level", name: "RF", value: -0.1 },
+      { cmd: "level", name: "PREAMP", value: 1.5 }, { cmd: "level", name: "AGC", value: 9 },
+      { cmd: "level", name: "AF", value: 0.5, on: true }, { cmd: "func", name: "VOX", on: true },
+      { cmd: "func", name: "NB", on: 1 }, { cmd: "func", name: "NB" }, { cmd: "func", name: "NB", value: true },
+      { cmd: "tune", value: true }, { cmd: "mode", value: "USB", passband: -1 }, { cmd: "mode", value: "USB", passband: "2400" }
+    ]) assert.equal((await cmd(body)).status, 400, JSON.stringify(body));
+    assert.equal((await cmd({ cmd: "level", name: "AF", value: 0.25 })).status, 200);
+    assert.equal(rig.levels.AF, 0.25);
+    assert.equal((await cmd({ cmd: "level", name: "PREAMP", value: 10 })).status, 200);
+    assert.equal(rig.levels.PREAMP, 10);
+    assert.equal((await cmd({ cmd: "level", name: "PREAMP", value: 15 })).status, 400);
+    assert.equal((await cmd({ cmd: "level", name: "ATT", value: 0 })).status, 200);
+    assert.equal((await cmd({ cmd: "level", name: "AGC", value: 5 })).status, 200);
+    assert.equal(rig.levels.AGC, 5);
+    assert.equal((await cmd({ cmd: "func", name: "NB", on: true })).status, 200);
+    assert.equal(rig.funcs.NB, 1);
+    assert.equal((await cmd({ cmd: "func", name: "TUNER", on: true })).status, 200);
+    assert.equal(rig.funcs.TUNER, 1);
+    assert.equal((await cmd({ cmd: "mode", value: "CW", passband: 500 })).status, 200);
+    assert.deepEqual([rig.mode, rig.passband], ["CW", 500]);
+    assert.ok(rig.log.every(line => !line.includes(";")), "nothing injected into rigctld");
+    await waitFor(async () => (await call("GET", "/api/state")).json.levels.af === 0.25);
+    assert.equal((await call("GET", "/api/state")).json.funcs.nb, true);
+  } finally { await cleanup(); await rig.close(); }
+});
+
+test("rig without caps reports null controls and answers 501, without polling them", async () => {
+  const rig = await fakeRigctld();
+  rig.noCaps = true;
+  const { call, cleanup } = await startAgent(rig);
+  const cmd = body => call("POST", "/api/cmd", { body });
+  try {
+    await sleep(400);
+    const state = (await call("GET", "/api/state")).json;
+    assert.equal(state.caps.detected, true);
+    assert.deepEqual(state.caps.level, {});
+    assert.equal(state.caps.tune, false);
+    assert.ok(Object.values(state.levels).every(value => value === null));
+    assert.ok(Object.values(state.funcs).every(value => value === null));
+    assert.equal((await cmd({ cmd: "level", name: "AF", value: 0.2 })).status, 501);
+    assert.equal((await cmd({ cmd: "func", name: "NB", on: true })).status, 501);
+    assert.equal((await cmd({ cmd: "tune" })).status, 501);
+    assert.ok(!rig.log.some(line => /^[lLuUG] /.test(line) && !line.startsWith("l STRENGTH")));
+  } finally { await cleanup(); await rig.close(); }
+});
+
+test("TUNE sends G TUNE, is blocked while another client holds control (409) and during TX", async () => {
+  const rig = await fakeRigctld();
+  const { call, cleanup } = await startAgent(rig);
+  const as = id => ({ headers: { "X-Client-Id": id } });
+  try {
+    assert.equal((await call("POST", "/api/cmd", { body: { cmd: "freq", value: 7100000 }, ...as("client-a") })).status, 200);
+    assert.equal((await call("POST", "/api/cmd", { body: { cmd: "tune" }, ...as("client-b") })).status, 409);
+    assert.ok(!rig.log.includes("G TUNE"));
+    assert.equal((await call("POST", "/api/cmd", { body: { cmd: "tune" }, ...as("client-a") })).status, 200);
+    assert.ok(rig.log.includes("G TUNE"));
+    await call("POST", "/api/cmd", { body: { cmd: "ptt", value: true }, ...as("client-a") });
+    assert.equal((await call("POST", "/api/cmd", { body: { cmd: "tune" }, ...as("client-a") })).status, 409);
+    assert.equal((await call("POST", "/api/cmd", { body: { cmd: "level", name: "RFPOWER", value: 1 }, ...as("client-a") })).status, 409);
+    assert.equal((await call("POST", "/api/cmd", { body: { cmd: "level", name: "AF", value: 0.1 }, ...as("client-a") })).status, 200);
+  } finally { await cleanup(); await rig.close(); }
+});
+
+test("console assets: logo and locale scripts are served; the page has no inline script or style", async () => {
+  const rig = await fakeRigctld();
+  const { call, cleanup } = await startAgent(rig);
+  try {
+    for (const file of ["/bricohams-logo.png", "/ui-i18n.js", "/ui-translations.js"]) {
+      assert.equal((await call("GET", file, { token: "" })).status, 200, file);
+    }
+    const html = fs.readFileSync(path.join(__dirname, "..", "remote.html"), "utf8");
+    assert.doesNotMatch(html, /<script(?![^>]*\bsrc=)/i);
+    assert.doesNotMatch(html, /<style|\sstyle=|\son[a-z]+=/i);
+    assert.match(html, /bricohams-logo\.png/);
   } finally { await cleanup(); await rig.close(); }
 });

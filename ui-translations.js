@@ -1885,6 +1885,66 @@ Direccion de OpenWebRX no valida.|Invalid OpenWebRX address.|Adresse OpenWebRX n
 Abrir|Open|Ouvrir|Öffnen
 Token no valido.|Invalid token.|Jeton non valide.|Ungültiges Token.
 Falta el token. Abre la direccion completa que muestra el agente (con #token=...).|Token missing. Open the full address shown by the agent (with #token=...).|Jeton manquant. Ouvrez l’adresse complète affichée par l’agent (avec #token=...).|Token fehlt. Öffne die vollständige vom Agenten angezeigte Adresse (mit #token=...).
+Latencia: --|Latency: --|Latence : --|Latenz: --
+Latencia: Baja ({0} ms)|Latency: Low ({0} ms)|Latence : faible ({0} ms)|Latenz: niedrig ({0} ms)
+Latencia: Media ({0} ms)|Latency: Medium ({0} ms)|Latence : moyenne ({0} ms)|Latenz: mittel ({0} ms)
+Latencia: Alta ({0} ms)|Latency: High ({0} ms)|Latence : élevée ({0} ms)|Latenz: hoch ({0} ms)
+Ancho visible del espectro (kHz)|Visible spectrum width (kHz)|Largeur visible du spectre (kHz)|Sichtbare Spektrumbreite (kHz)
+Centro|Centre|Centre|Mitte
+Fin|End|Fin|Ende
+Indica la direccion de OpenWebRX en Ajustes.|Enter the OpenWebRX address in Settings.|Indiquez l’adresse d’OpenWebRX dans les réglages.|Gib die OpenWebRX-Adresse in den Einstellungen an.
+Abrir en otra pestana|Open in new tab|Ouvrir dans un nouvel onglet|In neuem Tab öffnen
+Recargar|Reload|Recharger|Neu laden
+Paneles de control|Control panels|Panneaux de commande|Bedienfelder
+Niveles|Levels|Niveaux|Pegel
+Registro|Log|Journal|Protokoll
+Bandas|Bands|Bandes|Bänder
+Filtros|Filters|Filtres|Filter
+Funciones del receptor|Receiver functions|Fonctions du récepteur|Empfängerfunktionen
+Banda 160 m|160 m band|Bande 160 m|160-m-Band
+Banda 80 m|80 m band|Bande 80 m|80-m-Band
+Banda 60 m|60 m band|Bande 60 m|60-m-Band
+Banda 40 m|40 m band|Bande 40 m|40-m-Band
+Banda 30 m|30 m band|Bande 30 m|30-m-Band
+Banda 20 m|20 m band|Bande 20 m|20-m-Band
+Banda 17 m|17 m band|Bande 17 m|17-m-Band
+Banda 15 m|15 m band|Bande 15 m|15-m-Band
+Banda 12 m|12 m band|Bande 12 m|12-m-Band
+Banda 10 m|10 m band|Bande 10 m|10-m-Band
+Banda 6 m|6 m band|Bande 6 m|6-m-Band
+Banda 2 m|2 m band|Bande 2 m|2-m-Band
+Banda 70 cm|70 cm band|Bande 70 cm|70-cm-Band
+Filtro 1|Filter 1|Filtre 1|Filter 1
+Filtro 2|Filter 2|Filtre 2|Filter 2
+Filtro 3|Filter 3|Filtre 3|Filter 3
+Volumen|Volume|Volume|Lautstärke
+Ganancia RF|RF gain|Gain RF|HF-Verstärkung
+Potencia TX|TX power|Puissance TX|Sendeleistung
+Preamplificador|Preamplifier|Préamplificateur|Vorverstärker
+Atenuador|Attenuator|Atténuateur|Abschwächer
+AGC apagado|AGC off|AGC désactivé|AGC aus
+AGC rapido|AGC fast|AGC rapide|AGC schnell
+AGC medio|AGC medium|AGC moyen|AGC mittel
+AGC lento|AGC slow|AGC lent|AGC langsam
+AGC activo|AGC active|AGC actif|AGC aktiv
+Supresor de ruido impulsivo (NB)|Noise blanker (NB)|Réducteur de bruit impulsif (NB)|Störaustaster (NB)
+Reduccion de ruido (NR)|Noise reduction (NR)|Réduction de bruit (NR)|Rauschminderung (NR)
+Acoplador de antena (ATU)|Antenna tuner (ATU)|Boîte d’accord (ATU)|Antennentuner (ATU)
+Sintonizar el acoplador (TUNE)|Tune the antenna tuner (TUNE)|Lancer l’accord (TUNE)|Tuner abstimmen (TUNE)
+Ultimos cambios de esta sesion|Latest changes this session|Derniers changements de cette session|Letzte Änderungen dieser Sitzung
+Sin eventos todavia.|No events yet.|Aucun événement pour l’instant.|Noch keine Ereignisse.
+Modo cambiado a {0}|Mode changed to {0}|Mode changé en {0}|Betriebsart geändert auf {0}
+Sintonizada {0} Hz|Tuned to {0} Hz|Accordé sur {0} Hz|Abgestimmt auf {0} Hz
+TX iniciado|TX started|TX démarré|TX gestartet
+TX terminado ({0} s)|TX ended ({0} s)|TX terminé ({0} s)|TX beendet ({0} s)
+Audio|Audio|Audio|Audio
+Próximamente|Coming soon|Bientôt disponible|Demnächst
+Bloquear|Lock|Verrouiller|Sperren
+Bloqueado|Locked|Verrouillé|Gesperrt
+Bloquear PTT y sintonia|Lock PTT and tuning|Verrouiller le PTT et l’accord|PTT und Abstimmung sperren
+Sintonia por arrastre|Drag to tune|Accord par glissement|Abstimmen durch Ziehen
+Frecuencia en MHz (o con k, m, Hz)|Frequency in MHz (or with k, m, Hz)|Fréquence en MHz (ou avec k, m, Hz)|Frequenz in MHz (oder mit k, m, Hz)
+Frecuencia no valida.|Invalid frequency.|Fréquence non valide.|Ungültige Frequenz.
 `.trim().split("\n").map(line => line.split("|")));
   root.BricohamsUITranslations = entries;
   if (typeof module === "object" && module.exports) module.exports = entries;

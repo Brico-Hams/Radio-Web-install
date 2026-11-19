@@ -13,7 +13,57 @@ class RigctldError extends Error {
 }
 
 // Number of reply lines for each "get" command when the rig answers successfully (errors are a single RPRT line).
-const GET_LINES = Object.freeze({ f: 1, m: 2, t: 1, l: 1, v: 1, s: 2 });
+const GET_LINES = Object.freeze({ f: 1, m: 2, t: 1, l: 1, u: 1, v: 1, s: 2 });
+// Levels/functions the console may touch; anything else is never sent to rigctld.
+const LEVEL_NAMES = Object.freeze(["AF", "RF", "RFPOWER", "PREAMP", "ATT", "AGC"]);
+const FUNC_NAMES = Object.freeze(["NB", "NR", "TUNER"]);
+// `\dump_caps` has no fixed length: it ends with a RPRT line, or (older builds) simply goes quiet.
+const BLOCK_IDLE_MS = 250;
+
+function splitTokens(text) {
+  return text.trim().split(/\s+(?![^(]*\))/).filter(Boolean);
+}
+
+// Parses the output of `\dump_caps` into the capabilities the console cares about.
+function parseCaps(lines) {
+  const caps = { model: "", level: {}, func: {}, tune: false };
+  let maker = "";
+  const entry = (group, names, name) => {
+    if (!names.includes(name)) return null;
+    return (group[name] ||= { get: false, set: false });
+  };
+  for (const raw of lines) {
+    const line = String(raw).trim();
+    const field = /^([A-Za-z ]+?):\s*(.*)$/.exec(line);
+    if (!field) continue;
+    const key = field[1].toLowerCase();
+    const rest = field[2];
+    if (key === "model name") caps.model = rest.replace(/[^\x20-\x7e]/g, "").slice(0, 40);
+    else if (key === "mfg name") maker = rest.replace(/[^\x20-\x7e]/g, "").slice(0, 24);
+    else if (key === "vfo ops" || key === "vfo op") caps.tune = splitTokens(rest).includes("TUNE");
+    else if (key === "get level" || key === "set level") {
+      const mode = key.startsWith("get") ? "get" : "set";
+      for (const token of splitTokens(rest)) {
+        const parsed = /^([A-Z0-9_]+)(?:\((.*)\))?$/.exec(token);
+        const item = parsed && entry(caps.level, LEVEL_NAMES, parsed[1]);
+        if (!item) continue;
+        item[mode] = true;
+        if (parsed[2] && !parsed[2].includes("..")) {
+          const values = parsed[2].split(/[,\s]+/).map(part => Number.parseInt(part, 10)).filter(value => Number.isInteger(value) && value > 0);
+          if (values.length) item.values = [...new Set([...(item.values || []), ...values])];
+        }
+      }
+    } else if (key === "get functions" || key === "set functions") {
+      const mode = key.startsWith("get") ? "get" : "set";
+      for (const token of splitTokens(rest)) {
+        const item = entry(caps.func, FUNC_NAMES, token);
+        if (item) item[mode] = true;
+      }
+    }
+  }
+  caps.model = [maker, caps.model].filter(Boolean).join(" ");
+  return caps;
+}
 
 class RigctldClient extends EventEmitter {
   constructor(options = {}) {
@@ -102,19 +152,21 @@ class RigctldClient extends EventEmitter {
     this.lines = [];
     for (const item of pending) {
       clearTimeout(item.timer);
+      clearTimeout(item.idle);
       item.reject(error);
     }
     if (emit && wasConnected) this.emit("disconnect");
   }
 
-  // Queue one rigctld command. `priority` jumps ahead of waiting commands (used for PTT off).
-  send(line, { priority = false } = {}) {
+  // Queue one rigctld command. `priority` jumps ahead of waiting commands (used for PTT off);
+  // `block` collects a variable-length reply (`\dump_caps`).
+  send(line, { priority = false, block = false } = {}) {
     return new Promise((resolve, reject) => {
       if (!this.connected) {
         reject(new RigctldError("rigctld not connected", "disconnected"));
         return;
       }
-      const item = { line, expected: GET_LINES[line.split(" ")[0]] || 0, resolve, reject, timer: null };
+      const item = { line, block, expected: GET_LINES[line.split(" ")[0]] || 0, resolve, reject, timer: null, idle: null };
       if (priority) this.queue.unshift(item); else this.queue.push(item);
       this.pump();
     });
@@ -160,6 +212,20 @@ class RigctldClient extends EventEmitter {
       const code = Number(report[1]);
       if (code === 0) result = [];
       else error = new RigctldError(`rigctld error RPRT ${code}`, code);
+    } else if (item.block) {
+      const last = /^RPRT (-?\d+)$/.exec(this.lines[this.lines.length - 1]);
+      if (last) {
+        done = true;
+        if (Number(last[1]) === 0) result = this.lines.slice(0, -1);
+        else error = new RigctldError(`rigctld error RPRT ${last[1]}`, Number(last[1]));
+      } else {
+        clearTimeout(item.idle);
+        item.idle = setTimeout(() => {
+          if (this.current !== item) return;
+          this.finish(item, null, this.lines.slice());
+        }, BLOCK_IDLE_MS);
+        return;
+      }
     } else if (item.expected && this.lines.length >= item.expected) {
       done = true;
       result = this.lines.slice();
@@ -168,7 +234,12 @@ class RigctldClient extends EventEmitter {
       error = new RigctldError(`unexpected reply "${first}"`, "protocol");
     }
     if (!done) return;
+    this.finish(item, error, result);
+  }
+
+  finish(item, error, result) {
     clearTimeout(item.timer);
+    clearTimeout(item.idle);
     this.current = null;
     this.lines = [];
     if (error) item.reject(error); else item.resolve(result);
@@ -223,6 +294,48 @@ class RigctldClient extends EventEmitter {
   }
 
   setSplit(on, txVfo = "VFOB") { return this.send(`S ${on ? 1 : 0} ${txVfo}`); }
+
+  // Level value, or null when the rig does not support/answer it (RPRT error).
+  async getLevel(name) {
+    if (!LEVEL_NAMES.includes(name)) throw new RigctldError(`level "${name}" not allowed`, "invalid");
+    try {
+      const [reply] = await this.send(`l ${name}`);
+      const value = Number(reply);
+      return Number.isFinite(value) ? value : null;
+    } catch (error) {
+      if (error instanceof RigctldError && typeof error.code === "number") return null;
+      throw error;
+    }
+  }
+
+  setLevel(name, value) {
+    if (!LEVEL_NAMES.includes(name)) throw new RigctldError(`level "${name}" not allowed`, "invalid");
+    if (typeof value !== "number" || !Number.isFinite(value)) throw new RigctldError("level value must be a number", "invalid");
+    return this.send(`L ${name} ${value}`);
+  }
+
+  async getFunc(name) {
+    if (!FUNC_NAMES.includes(name)) throw new RigctldError(`function "${name}" not allowed`, "invalid");
+    try {
+      const [reply] = await this.send(`u ${name}`);
+      const value = Number(reply);
+      return Number.isFinite(value) ? value > 0 : null;
+    } catch (error) {
+      if (error instanceof RigctldError && typeof error.code === "number") return null;
+      throw error;
+    }
+  }
+
+  setFunc(name, on) {
+    if (!FUNC_NAMES.includes(name)) throw new RigctldError(`function "${name}" not allowed`, "invalid");
+    return this.send(`U ${name} ${on ? 1 : 0}`);
+  }
+
+  tune() { return this.send("G TUNE"); }
+
+  async dumpCaps() {
+    return parseCaps(await this.send("\\dump_caps", { block: true }));
+  }
 }
 
-module.exports = { RigctldClient, RigctldError };
+module.exports = { RigctldClient, RigctldError, parseCaps, LEVEL_NAMES, FUNC_NAMES };

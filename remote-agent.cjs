@@ -10,6 +10,14 @@ const path = require("node:path");
 const { RigctldClient } = require("./rigctld-client.cjs");
 
 const MODES = Object.freeze(["USB", "LSB", "CW", "CWR", "AM", "FM", "WFM", "RTTY", "PKTUSB", "PKTLSB", "PKTFM"]);
+// Level kinds: unit = 0..1 float, steps = 0 (off) or one of the rig's own values, enum = Hamlib AGC enum.
+const LEVELS = Object.freeze({
+  AF: { key: "af", kind: "unit" }, RF: { key: "rf", kind: "unit" }, RFPOWER: { key: "rfpower", kind: "unit" },
+  PREAMP: { key: "preamp", kind: "steps" }, ATT: { key: "att", kind: "steps" }, AGC: { key: "agc", kind: "enum" }
+});
+const FUNCS = Object.freeze({ NB: "nb", NR: "nr", TUNER: "tuner" });
+const AGC_MAX = 6;
+const PASSBAND_MAX = 50_000;
 const FREQ_MIN = 30_000;
 const FREQ_MAX = 3_000_000_000;
 const STEP_MAX = 1_000_000;
@@ -21,7 +29,10 @@ const STATIC_FILES = Object.freeze({
   "/": ["remote.html", "text/html; charset=utf-8"],
   "/remote.html": ["remote.html", "text/html; charset=utf-8"],
   "/remote-ui.js": ["remote-ui.js", "text/javascript; charset=utf-8"],
-  "/remote.css": ["remote.css", "text/css; charset=utf-8"]
+  "/remote.css": ["remote.css", "text/css; charset=utf-8"],
+  "/bricohams-logo.png": ["bricohams-logo.png", "image/png"],
+  "/ui-i18n.js": ["ui-i18n.js", "text/javascript; charset=utf-8"],
+  "/ui-translations.js": ["ui-translations.js", "text/javascript; charset=utf-8"]
 });
 
 const defaultConfigDir = () => path.join(os.homedir(), ".radicodex");
@@ -46,6 +57,8 @@ function loadConfig(dir) {
   const config = {
     token: typeof stored.token === "string" && stored.token.length >= 32 ? stored.token : "",
     openwebrxUrl: typeof stored.openwebrxUrl === "string" ? stored.openwebrxUrl : "",
+    openwebrxSpanHz: Number.isInteger(stored.openwebrxSpanHz) && stored.openwebrxSpanHz > 0 ? stored.openwebrxSpanHz : 0,
+    callsign: typeof stored.callsign === "string" && /^[A-Za-z0-9/]{3,16}$/.test(stored.callsign) ? stored.callsign.toUpperCase() : "",
     rigctldHost: typeof stored.rigctldHost === "string" ? stored.rigctldHost : "127.0.0.1",
     rigctldPort: Number.isInteger(stored.rigctldPort) ? stored.rigctldPort : 4532,
     txLimitSeconds: Number(stored.txLimitSeconds) > 0 ? Number(stored.txLimitSeconds) : 180
@@ -71,19 +84,39 @@ function csp(openwebrxUrl) {
   return `default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-src ${frame}; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`;
 }
 
+// Extra keys each command may carry besides "cmd"; anything else is rejected.
+const COMMAND_KEYS = Object.freeze({ level: ["name", "value"], func: ["name", "on"], tune: [], mode: ["value", "passband"] });
+
 function validateCommand(body, state) {
-  const keys = Object.keys(body || {});
-  if (!body || typeof body !== "object" || Array.isArray(body) || keys.some(key => key !== "cmd" && key !== "value")) {
-    return { error: "Cuerpo no valido." };
-  }
+  if (!body || typeof body !== "object" || Array.isArray(body)) return { error: "Cuerpo no valido." };
+  const allowed = Object.hasOwn(COMMAND_KEYS, body.cmd) ? COMMAND_KEYS[body.cmd] : ["value"];
+  if (Object.keys(body).some(key => key !== "cmd" && !allowed.includes(key))) return { error: "Cuerpo no valido." };
   const { cmd, value } = body;
   switch (cmd) {
     case "freq":
       if (!Number.isSafeInteger(value) || value < FREQ_MIN || value > FREQ_MAX) return { error: "Frecuencia fuera de rango (30 kHz-3 GHz)." };
       return { cmd, value };
-    case "mode":
+    case "mode": {
       if (typeof value !== "string" || !MODES.includes(value)) return { error: "Modo no permitido." };
-      return { cmd, value };
+      const { passband = 0 } = body;
+      if (!Number.isSafeInteger(passband) || passband < 0 || passband > PASSBAND_MAX) return { error: "Ancho de filtro no valido." };
+      return { cmd, value, passband };
+    }
+    case "level": {
+      const spec = typeof body.name === "string" && Object.hasOwn(LEVELS, body.name) ? LEVELS[body.name] : null;
+      if (!spec) return { error: "Nivel no permitido." };
+      if (typeof value !== "number" || !Number.isFinite(value)) return { error: "Valor de nivel no valido." };
+      if (spec.kind === "unit" && (value < 0 || value > 1)) return { error: "El nivel debe estar entre 0 y 1." };
+      if (spec.kind === "steps" && (!Number.isSafeInteger(value) || value < 0 || value > 1000)) return { error: "Valor de nivel no valido." };
+      if (spec.kind === "enum" && (!Number.isSafeInteger(value) || value < 0 || value > AGC_MAX)) return { error: "Valor de AGC no valido." };
+      return { cmd, name: body.name, value: spec.kind === "unit" ? Math.round(value * 1000) / 1000 : value };
+    }
+    case "func":
+      if (typeof body.name !== "string" || !Object.hasOwn(FUNCS, body.name)) return { error: "Funcion no permitida." };
+      if (typeof body.on !== "boolean") return { error: "El estado debe ser booleano." };
+      return { cmd, name: body.name, on: body.on };
+    case "tune":
+      return { cmd };
     case "ptt":
       if (typeof value !== "boolean") return { error: "PTT debe ser booleano." };
       return { cmd, value };
@@ -106,6 +139,14 @@ function validateCommand(body, state) {
   }
 }
 
+function emptyReadings(table) {
+  return Object.fromEntries(Object.values(table).map(item => [typeof item === "string" ? item : item.key, null]));
+}
+
+function emptyCaps() {
+  return { detected: false, model: "", level: {}, func: {}, tune: false };
+}
+
 function createRemoteAgent(options = {}) {
   const configDir = options.configDir || defaultConfigDir();
   const config = loadConfig(configDir);
@@ -126,7 +167,14 @@ function createRemoteAgent(options = {}) {
     timeoutMs: options.rigTimeoutMs
   });
 
-  const rig = { freq: null, mode: null, passband: null, ptt: false, vfo: null, split: false, smeter: null };
+  const rig = {
+    freq: null, mode: null, passband: null, ptt: false, vfo: null, split: false, smeter: null,
+    levels: emptyReadings(LEVELS), funcs: emptyReadings(FUNCS)
+  };
+  let caps = emptyCaps();
+  let capsDone = false;
+  let capsAttempts = 0;
+  const unreadable = new Set();
   let agentTx = false;
   let txStart = 0;
   let lastBeat = 0;
@@ -155,6 +203,9 @@ function createRemoteAgent(options = {}) {
       vfo: rig.vfo,
       split: rig.split,
       smeter: rig.smeter,
+      levels: { ...rig.levels },
+      funcs: { ...rig.funcs },
+      caps,
       txSeconds: rig.ptt ? Math.max(0, Math.floor((now() - txStart) / 1000)) : 0,
       operator: !active ? null : owner === clientId ? "me" : "other"
     };
@@ -173,15 +224,50 @@ function createRemoteAgent(options = {}) {
     catch (error) { log(`T 0 failed: ${error.message}`); }
   }
 
+  async function detectCaps() {
+    if (capsDone) return;
+    capsAttempts += 1;
+    try {
+      caps = { ...(await client.dumpCaps()), detected: true };
+      capsDone = true;
+      log(`capacidades: ${Object.keys(caps.level).length} niveles, ${Object.keys(caps.func).length} funciones, tune=${caps.tune}`);
+    } catch (error) {
+      // A rig that cannot dump its caps simply gets no extra controls; never retry in a loop.
+      if (typeof error.code !== "number" && capsAttempts < 2) return;
+      caps = { ...emptyCaps(), detected: true };
+      capsDone = true;
+      log(`dump_caps no disponible: ${error.message}`);
+    }
+  }
+
   client.on("connect", () => {
     // Whatever happened while the link was down, make sure the rig is not transmitting.
     client.setPtt(false, { priority: true }).catch(error => log(`T 0 failed: ${error.message}`));
-    schedulePoll(0);
+    unreadable.clear();
+    detectCaps().finally(() => schedulePoll(0));
   });
   client.on("disconnect", () => {
     setRigPtt(false);
-    Object.assign(rig, { freq: null, mode: null, passband: null, vfo: null, split: false, smeter: null });
+    Object.assign(rig, {
+      freq: null, mode: null, passband: null, vfo: null, split: false, smeter: null,
+      levels: emptyReadings(LEVELS), funcs: emptyReadings(FUNCS)
+    });
   });
+
+  // Reads every supported level/function once; a read the rig refuses is reported as null and never retried.
+  async function pollControls() {
+    for (const [name, spec] of Object.entries(LEVELS)) {
+      if (!caps.level[name]?.get || unreadable.has(name)) continue;
+      const value = await client.getLevel(name);
+      rig.levels[spec.key] = value === null ? null : spec.kind === "unit" ? Math.round(value * 1000) / 1000 : Math.round(value);
+      if (value === null) unreadable.add(name);
+    }
+    for (const [name, key] of Object.entries(FUNCS)) {
+      if (!caps.func[name]?.get || unreadable.has(name)) continue;
+      rig.funcs[key] = await client.getFunc(name);
+      if (rig.funcs[key] === null) unreadable.add(name);
+    }
+  }
 
   async function pollOnce() {
     if (polling || !client.connected || closing) return;
@@ -199,6 +285,7 @@ function createRemoteAgent(options = {}) {
         try { rig.vfo = await client.getVfo(); } catch (error) { if (typeof error.code !== "number") throw error; }
         try { rig.split = (await client.getSplit()).split; } catch (error) { if (typeof error.code !== "number") throw error; }
       }
+      if (pollCount % 4 === 2 && !rig.ptt) await pollControls();
     } catch (error) {
       if (typeof error.code === "number") log(`rigctld: ${error.message}`);
     } finally {
@@ -287,14 +374,39 @@ function createRemoteAgent(options = {}) {
     if (command.cmd === "ptt" && command.value === true && !client.connected) {
       return { status: 503, body: { error: "Radio sin conexion." } };
     }
-    if (command.cmd !== "ptt" && rig.ptt && agentTx) {
+    const quietDuringTx = command.cmd === "level" && command.name === "AF";
+    if (command.cmd !== "ptt" && !quietDuringTx && rig.ptt && agentTx) {
       return { status: 409, body: { error: "Cambio bloqueado durante TX." } };
     }
     if (!client.connected) return { status: 503, body: { error: "Radio sin conexion." } };
     try {
       switch (command.cmd) {
         case "freq": await client.setFreq(command.value); rig.freq = command.value; break;
-        case "mode": await client.setMode(command.value); rig.mode = command.value; rig.passband = 0; break;
+        case "mode":
+          await client.setMode(command.value, command.passband);
+          rig.mode = command.value;
+          rig.passband = command.passband;
+          break;
+        case "level": {
+          const cap = caps.level[command.name];
+          if (!cap?.set) return { status: 501, body: { error: "La radio no admite este nivel." } };
+          if (LEVELS[command.name].kind === "steps" && command.value !== 0 && !cap.values?.includes(command.value)) {
+            return { status: 400, body: { error: "Valor no admitido por la radio." } };
+          }
+          await client.setLevel(command.name, command.value);
+          rig.levels[LEVELS[command.name].key] = command.value;
+          break;
+        }
+        case "func":
+          if (!caps.func[command.name]?.set) return { status: 501, body: { error: "La radio no admite esta funcion." } };
+          await client.setFunc(command.name, command.on);
+          rig.funcs[FUNCS[command.name]] = command.on;
+          break;
+        case "tune":
+          if (!caps.tune) return { status: 501, body: { error: "La radio no admite TUNE." } };
+          if (rig.ptt) return { status: 409, body: { error: "Cambio bloqueado durante TX." } };
+          await client.tune();
+          break;
         case "vfo": await client.setVfo(command.value); rig.vfo = command.value; break;
         case "split":
           await client.setSplit(command.value, (rig.vfo || "VFOA") === "VFOA" ? "VFOB" : "VFOA");
@@ -322,7 +434,10 @@ function createRemoteAgent(options = {}) {
     const clientId = clientIdOf(request, url);
     const route = `${request.method} ${url.pathname}`;
     if (route === "GET /api/state") { send(response, 200, snapshot(clientId)); return; }
-    if (route === "GET /api/config") { send(response, 200, { openwebrxUrl }); return; }
+    if (route === "GET /api/config") {
+      send(response, 200, { openwebrxUrl, openwebrxSpanHz: config.openwebrxSpanHz, callsign: config.callsign });
+      return;
+    }
     if (route === "GET /api/events") {
       response.writeHead(200, { "Content-Type": "text/event-stream; charset=utf-8", Connection: "keep-alive", "X-Accel-Buffering": "no" });
       const entry = { response, clientId, last: "" };
@@ -333,8 +448,9 @@ function createRemoteAgent(options = {}) {
       return;
     }
     if (route === "POST /api/heartbeat") {
-      if (!claimControl(clientId, { acquire: false })) { send(response, 409, { error: "Otro operador tiene el control." }); return; }
-      if (owner === clientId && rig.ptt && agentTx) lastBeat = now();
+      // Latency probes must not keep an idle operator's control alive; only a held PTT does.
+      if (ownerActive() && owner !== clientId) { send(response, 409, { error: "Otro operador tiene el control." }); return; }
+      if (owner === clientId && rig.ptt && agentTx) { lastBeat = now(); ownerSeen = now(); }
       send(response, 200, { ok: true });
       return;
     }
