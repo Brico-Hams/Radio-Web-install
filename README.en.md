@@ -376,6 +376,16 @@ Do not disconnect or close the browser during an operation. Do not connect an ex
 - Radio and file metadata are displayed as text, not HTML. `eval` is not used.
 - SHA-256 detects accidental corruption; it does not prove firmware authenticity. Use images from a trusted source. No software can guarantee absolute security or recovery from power failures.
 
+## Remote shack (remote CAT control)
+
+An agent next to the radio controls it over CAT with Hamlib `rigctld` and provides a web console (phone, tablet or PC). `server.cjs` is unchanged and still listens only on `127.0.0.1`.
+
+1. Start `rigctld` with your radio: `rigctld -m <modelo> -r <puerto>` (for example `rigctld -m 1035 -r COM5`; list models with `rigctld -l`). It listens on `127.0.0.1:4532`.
+2. Start the agent: `npm run remote` (options: `--port`, `--rigctld-host`, `--rigctld-port`, `--openwebrx <url>`, `--listen 0.0.0.0` or the `REMOTE_LISTEN` variable for LAN/Tailscale). The first time it generates a random token in `~/.radicodex/remote-agent.json` (it also stores `openwebrxUrl`, the rigctld host/port and `txLimitSeconds`, 180 by default).
+3. Open in the browser the address the agent prints, with the token in the fragment (`http://<ip>:8788/#token=...`). The console keeps the token in the session and removes it from the address bar.
+
+Security: the whole API requires the token; only one operator controls the radio at a time (30 s of inactivity releases control); transmission stops automatically if heartbeats are missing for 1 s, when the TX limit is reached, when `rigctld` is lost or when the agent is closed. **Do not open ports on the router (no port forwarding)**: to access it away from home use Tailscale or WireGuard and `--listen` with that network's IP.
+
 ## Tests and validation
 
 ```powershell

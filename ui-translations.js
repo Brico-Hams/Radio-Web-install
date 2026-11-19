@@ -1859,6 +1859,32 @@ Plan de bandas de la region {0}: {1} MHz esta en la banda {2}|Band plan for regi
 Plan de bandas de la region {0}: {1} MHz esta fuera de las bandas|Band plan for region {0}: {1} MHz is outside the bands|Plan de bandes de la région {0} : {1} MHz est hors des bandes|Bandplan der Region {0}: {1} MHz liegt außerhalb der Bänder
 E|E|E|O
 O|W|O|W
+Frecuencia en Hz. Flechas arriba y abajo cambian el digito.|Frequency in Hz. Up and down arrows change the digit.|Fréquence en Hz. Les flèches haut et bas modifient le chiffre.|Frequenz in Hz. Pfeil hoch und runter ändern die Ziffer.
+Bajar un paso|Step down|Descendre d’un pas|Einen Schritt tiefer
+Subir un paso|Step up|Monter d’un pas|Einen Schritt höher
+Paso|Step|Pas|Schritt
+Senal (S-meter)|Signal (S-meter)|Signal (S-mètre)|Signal (S-Meter)
+Senal recibida|Received signal|Signal reçu|Empfangenes Signal
+Transmision|Transmission|Émission|Senden
+Mantener para hablar|Hold to talk|Maintenir pour parler|Zum Sprechen halten
+Mantener para transmitir|Hold to transmit|Maintenir pour émettre|Zum Senden halten
+Transmitiendo...|Transmitting...|Émission en cours...|Sendet...
+Al soltar, perder la conexion o cambiar de pestana se corta la transmision.|Releasing, losing the connection or switching tabs stops the transmission.|Relâcher, perdre la connexion ou changer d’onglet coupe l’émission.|Loslassen, Verbindungsverlust oder Tabwechsel beendet das Senden.
+Sin operador|No operator|Aucun opérateur|Kein Bediener
+Tienes el control|You have control|Vous avez le contrôle|Du hast die Kontrolle
+Otro operador tiene el control|Another operator has control|Un autre opérateur a le contrôle|Ein anderer Bediener hat die Kontrolle
+Otro operador tiene el control.|Another operator has control.|Un autre opérateur a le contrôle.|Ein anderer Bediener hat die Kontrolle.
+Radio conectada|Radio connected|Radio connectée|Funkgerät verbunden
+Radio sin conexion|Radio offline|Radio hors ligne|Funkgerät offline
+Sin conexion|Offline|Hors ligne|Offline
+Reconectando...|Reconnecting...|Reconnexion...|Verbinde neu...
+Espectro (OpenWebRX)|Spectrum (OpenWebRX)|Spectre (OpenWebRX)|Spektrum (OpenWebRX)
+Seguir al equipo|Follow the rig|Suivre la radio|Funkgerät folgen
+Direccion de OpenWebRX|OpenWebRX address|Adresse d’OpenWebRX|OpenWebRX-Adresse
+Direccion de OpenWebRX no valida.|Invalid OpenWebRX address.|Adresse OpenWebRX non valide.|Ungültige OpenWebRX-Adresse.
+Abrir|Open|Ouvrir|Öffnen
+Token no valido.|Invalid token.|Jeton non valide.|Ungültiges Token.
+Falta el token. Abre la direccion completa que muestra el agente (con #token=...).|Token missing. Open the full address shown by the agent (with #token=...).|Jeton manquant. Ouvrez l’adresse complète affichée par l’agent (avec #token=...).|Token fehlt. Öffne die vollständige vom Agenten angezeigte Adresse (mit #token=...).
 `.trim().split("\n").map(line => line.split("|")));
   root.BricohamsUITranslations = entries;
   if (typeof module === "object" && module.exports) module.exports = entries;

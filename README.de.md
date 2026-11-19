@@ -295,6 +295,17 @@ Trenne während einer Operation nicht den Browser und schließe ihn nicht. Schli
 
 - Radio- und Dateimetadaten werden als Text angezeigt, nicht als HTML. `eval` wird nicht verwendet.
 - SHA-256 erkennt zufällige Beschädigungen, zeigt aber nicht die Authentizität der Firmware. Verwende Bilder aus einer vertrauenswürdigen Quelle. Keine Software kann absolute Sicherheit oder Wiederherstellung bei Stromausfällen garantieren.
+
+## Remote shack (CAT-Fernsteuerung)
+
+Ein Agent neben dem Funkgerät steuert es per CAT mit Hamlib `rigctld` und stellt eine Webkonsole bereit (Smartphone, Tablet oder PC). `server.cjs` bleibt unverändert und hört weiterhin nur auf `127.0.0.1`.
+
+1. Starte `rigctld` mit deinem Funkgerät: `rigctld -m <modelo> -r <puerto>` (zum Beispiel `rigctld -m 1035 -r COM5`; Modellliste mit `rigctld -l`). Es hört auf `127.0.0.1:4532`.
+2. Starte den Agenten: `npm run remote` (Optionen: `--port`, `--rigctld-host`, `--rigctld-port`, `--openwebrx <url>`, `--listen 0.0.0.0` oder die Variable `REMOTE_LISTEN` für LAN/Tailscale). Beim ersten Mal erzeugt er ein zufälliges Token in `~/.radicodex/remote-agent.json` (dort stehen auch `openwebrxUrl`, Host/Port von rigctld und `txLimitSeconds`, standardmäßig 180).
+3. Öffne im Browser die vom Agenten ausgegebene Adresse mit dem Token im Fragment (`http://<ip>:8788/#token=...`). Die Konsole speichert das Token in der Sitzung und entfernt es aus der Adressleiste.
+
+Sicherheit: Die gesamte API verlangt das Token; nur ein Bediener steuert das Funkgerät gleichzeitig (30 s Inaktivität geben die Kontrolle frei); das Senden endet automatisch, wenn Heartbeats 1 s lang fehlen, beim Erreichen des TX-Limits, bei Verlust von `rigctld` oder beim Beenden des Agenten. **Öffne keine Ports am Router (kein Port-Forwarding)**: für Zugriff von unterwegs nutze Tailscale oder WireGuard und `--listen` mit der IP dieses Netzes.
+
 ## Tests und Validierung
 
 ```powershell

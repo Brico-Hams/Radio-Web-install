@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="referrer" content="no-referrer">
+  <title>Remote shack - RadiCodex</title>
+  <link rel="stylesheet" href="remote.css">
+  <script src="remote-ui.js" defer></script>
+</head>
+<body>
+  <header class="bar">
+    <h1>Remote shack</h1>
+    <span id="status" class="pill" role="status" aria-live="polite">Sin conexion</span>
+  </header>
+  <main>
+    <p id="notice" class="notice" role="alert" hidden></p>
+
+    <section class="card" aria-labelledby="freq-title">
+      <h2 id="freq-title">Frecuencia</h2>
+      <div id="freq" class="freq" role="group" aria-label="Frecuencia en Hz. Flechas arriba y abajo cambian el digito."></div>
+      <div class="row">
+        <button id="step-down" type="button" class="big" aria-label="Bajar un paso">&minus;</button>
+        <label class="grow">Paso
+          <select id="step">
+            <option value="10">10 Hz</option>
+            <option value="100">100 Hz</option>
+            <option value="1000" selected>1 kHz</option>
+            <option value="5000">5 kHz</option>
+            <option value="10000">10 kHz</option>
+            <option value="12500">12,5 kHz</option>
+            <option value="25000">25 kHz</option>
+            <option value="100000">100 kHz</option>
+          </select>
+        </label>
+        <button id="step-up" type="button" class="big" aria-label="Subir un paso">+</button>
+      </div>
+    </section>
+
+    <section class="card" aria-labelledby="rig-title">
+      <h2 id="rig-title">Radio</h2>
+      <div class="row">
+        <label class="grow">Modo
+          <select id="mode">
+            <option>USB</option><option>LSB</option><option>CW</option><option>CWR</option><option>AM</option>
+            <option>FM</option><option>WFM</option><option>RTTY</option><option>PKTUSB</option><option>PKTLSB</option><option>PKTFM</option>
+          </select>
+        </label>
+      </div>
+      <div class="row" role="group" aria-label="VFO">
+        <button id="vfo-a" type="button" class="toggle" aria-pressed="false">VFO A</button>
+        <button id="vfo-b" type="button" class="toggle" aria-pressed="false">VFO B</button>
+        <button id="split" type="button" class="toggle" aria-pressed="false">Split</button>
+      </div>
+      <label class="meter-label" for="smeter">Senal (S-meter)</label>
+      <div class="row">
+        <meter id="smeter" min="0" max="100" value="0" aria-label="Senal recibida"></meter>
+        <output id="smeter-text" aria-live="off">--</output>
+      </div>
+    </section>
+
+    <section class="card" aria-labelledby="tx-title">
+      <h2 id="tx-title">Transmision</h2>
+      <button id="ptt" type="button" class="ptt" aria-pressed="false" aria-label="Mantener para transmitir" disabled>Mantener para hablar</button>
+      <p class="tx-info">TX: <output id="tx-timer">0 s</output> &middot; <span id="operator">Sin operador</span></p>
+      <p class="hint">Al soltar, perder la conexion o cambiar de pestana se corta la transmision.</p>
+    </section>
+
+    <section class="card" aria-labelledby="spectrum-title">
+      <h2 id="spectrum-title">Espectro (OpenWebRX)</h2>
+      <div class="row">
+        <label class="check"><input id="follow" type="checkbox" checked> Seguir al equipo</label>
+      </div>
+      <form id="sdr-form" class="row" autocomplete="off">
+        <label class="grow">Direccion de OpenWebRX
+          <input id="sdr-url" type="url" inputmode="url" placeholder="http://192.168.1.10:8073/">
+        </label>
+        <button id="sdr-open" type="submit">Abrir</button>
+      </form>
+      <iframe id="sdr" title="OpenWebRX" sandbox="allow-scripts allow-same-origin allow-forms" referrerpolicy="no-referrer" hidden></iframe>
+    </section>
+  </main>
+</body>
+</html>
