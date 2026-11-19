@@ -288,6 +288,23 @@ HTTPS : avec `--listen` sur une adresse non locale, l’agent sert HTTPS par dé
 
 Spectre : avec `--openwebrx <url>`, l’agent sert OpenWebRX sous `/sdr/` via la même origine authentifiée (HTTP et WebSocket). La première requête exige le jeton et l’agent définit le cookie `rs_session` (HttpOnly, SameSite=Strict, Secure avec TLS, 12 h) pour les requêtes internes d’OpenWebRX.
 
+Relais (sans port ouvert) : l’agent n’établit que des connexions sortantes vers un relais BricoHams que vous hébergez vous-même ; les clients (navigateur, WebView Android) entrent par le relais sur `/s/<id>/`.
+
+1. Sur le serveur du relais, enregistrez la station (3 à 32 caractères `[a-z0-9-]`, par exemple votre indicatif en minuscules) : `node remote-relay.cjs add-station ea5kao`. Le secret n’est affiché qu’une fois ; `~/.radicodex/relay.json` (0600, chemin modifiable avec `--data`) n’en conserve que le hachage SHA-256. `remove-station <id>` et `list-stations` existent aussi.
+2. Démarrez le relais avec votre propre certificat (par exemple Let’s Encrypt) : `node remote-relay.cjs serve --port 8443 --cert fullchain.pem --key privkey.pem` ; ou derrière Caddy/nginx en HTTP simple sur `127.0.0.1` : `node remote-relay.cjs serve --behind-proxy` (seulement alors `X-Forwarded-For` est approuvé, et uniquement depuis loopback). Caddyfile :
+
+```
+relay.example.org {
+	reverse_proxy 127.0.0.1:8443 {
+		flush_interval -1
+	}
+}
+```
+
+3. À la station : `npm run remote -- --relay https://relay.example.org --station ea5kao --station-secret <secret>`. Le secret reste dans `~/.radicodex/remote-agent.json` (0600) et n’est jamais affiché. L’agent affiche `https://relay.example.org/s/ea5kao/#token=...` pour le navigateur et `radicodex-remote://pair?relay=<relay-url>&station=ea5kao#token=...` pour Android. La console montre l’état du relais et `/api/state` l’expose dans `relay`.
+
+Le relais termine le TLS et voit le trafic en clair : hébergez-le là où vous avez confiance. Le jeton de l’agent protège toujours le contrôle (le relais ne le connaît pas) et la sécurité TX de l’agent ne change pas.
+
 Sécurité : toute l’API exige le jeton ; un seul opérateur pilote la radio à la fois (30 s d’inactivité libèrent le contrôle) ; l’émission s’arrête automatiquement si les battements manquent pendant 1 s, à l’atteinte de la limite TX, à la perte de `rigctld` ou à la fermeture de l’agent. **N’ouvrez aucun port sur le routeur (pas de redirection de ports)** : pour un accès hors de chez vous, utilisez Tailscale ou WireGuard et `--listen` avec l’IP de ce réseau.
 
 ## Tests et validation

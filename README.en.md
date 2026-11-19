@@ -388,6 +388,23 @@ HTTPS: with `--listen` on a non-local address the agent serves HTTPS by default 
 
 Spectrum: with `--openwebrx <url>` the agent serves OpenWebRX under `/sdr/` through the same authenticated origin (HTTP and WebSocket). The first request needs the token and the agent sets the `rs_session` cookie (HttpOnly, SameSite=Strict, Secure with TLS, 12 h) for OpenWebRX's own sub-requests.
 
+Relay (no open ports): the agent only makes outgoing connections to a BricoHams relay that you host yourself; clients (browser, Android WebView) come in through the relay at `/s/<id>/`.
+
+1. On the relay server register the station (3-32 characters `[a-z0-9-]`, for example your lower-case callsign): `node remote-relay.cjs add-station ea5kao`. It prints the secret only once; `~/.radicodex/relay.json` (0600, change the path with `--data`) stores only its SHA-256 hash. `remove-station <id>` and `list-stations` also exist.
+2. Start the relay with your own certificate (for example Let's Encrypt): `node remote-relay.cjs serve --port 8443 --cert fullchain.pem --key privkey.pem`; or behind Caddy/nginx with plain HTTP on `127.0.0.1`: `node remote-relay.cjs serve --behind-proxy` (only then is `X-Forwarded-For` trusted, and only from loopback). Caddyfile:
+
+```
+relay.example.org {
+	reverse_proxy 127.0.0.1:8443 {
+		flush_interval -1
+	}
+}
+```
+
+3. At the station: `npm run remote -- --relay https://relay.example.org --station ea5kao --station-secret <secret>`. The secret is kept in `~/.radicodex/remote-agent.json` (0600) and never printed. The agent prints `https://relay.example.org/s/ea5kao/#token=...` for the browser and `radicodex-remote://pair?relay=<relay-url>&station=ea5kao#token=...` for Android. The console shows the relay status and `/api/state` exposes it as `relay`.
+
+The relay terminates TLS and sees the traffic in clear text: self-host it where you trust it. The agent token still protects control (the relay does not know it) and the agent's TX safety is unchanged.
+
 Security: the whole API requires the token; only one operator controls the radio at a time (30 s of inactivity releases control); transmission stops automatically if heartbeats are missing for 1 s, when the TX limit is reached, when `rigctld` is lost or when the agent is closed. **Do not open ports on the router (no port forwarding)**: to access it away from home use Tailscale or WireGuard and `--listen` with that network's IP.
 
 ## Tests and validation

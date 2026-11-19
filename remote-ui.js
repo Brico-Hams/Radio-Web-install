@@ -114,7 +114,7 @@
     return body;
   }
 
-  const command = body => api("/api/cmd", { method: "POST", body: JSON.stringify(body) });
+  const command = body => api("api/cmd", { method: "POST", body: JSON.stringify(body) });
 
   async function run(body) {
     try {
@@ -363,7 +363,7 @@
     const started = performance.now();
     let ms = null;
     try {
-      await fetch("/api/heartbeat", {
+      await fetch("api/heartbeat", {
         method: "POST", cache: "no-store", body: "{}",
         headers: { Authorization: `Bearer ${token}`, "X-Client-Id": clientId, "Content-Type": "application/json" }
       });
@@ -488,12 +488,20 @@
     $("btn-tune").disabled = !(tuning && caps.tune) || view.tuneBusy;
   }
 
+  function renderRelay(relay) {
+    const pill = $("relay");
+    const configured = Boolean(relay?.configured);
+    setText(pill, !configured ? "Rel\u00e9: no configurado" : relay.connected ? "Rel\u00e9: conectado" : "Rel\u00e9: desconectado");
+    pill.classList.toggle("on", configured && Boolean(relay.connected));
+  }
+
   function render(state) {
     view.state = state;
     view.linkUp = true;
     const status = $("status");
     setText(status, state.connected ? "Radio conectada" : "Radio sin conexion");
     status.classList.toggle("on", state.connected);
+    renderRelay(state.relay);
     if (Date.now() >= view.freqLockUntil && !view.editing) showFrequency(state.freq);
     const known = Number.isSafeInteger(state.freq);
     $("tuner").setAttribute("aria-valuenow", String(known ? state.freq : FREQ_MIN));
@@ -569,7 +577,7 @@
       notify("");
       clearInterval(view.heartbeat);
       view.heartbeat = setInterval(() => {
-        api("/api/heartbeat", { method: "POST", body: "{}" }).catch(() => {});
+        api("api/heartbeat", { method: "POST", body: "{}" }).catch(() => {});
       }, 250);
     } catch (error) {
       view.wantPtt = false;
@@ -580,7 +588,7 @@
   function pttSendOff() {
     clearInterval(view.heartbeat);
     view.heartbeat = null;
-    fetch("/api/cmd", {
+    fetch("api/cmd", {
       method: "POST", keepalive: true,
       headers: { Authorization: `Bearer ${token}`, "X-Client-Id": clientId, "Content-Type": "application/json" },
       body: JSON.stringify({ cmd: "ptt", value: false })
@@ -725,7 +733,7 @@
   }
 
   function connectEvents() {
-    const source = new EventSource(`/api/events?token=${encodeURIComponent(token)}&cid=${encodeURIComponent(clientId)}`);
+    const source = new EventSource(`api/events?token=${encodeURIComponent(token)}&cid=${encodeURIComponent(clientId)}`);
     source.onmessage = event => { try { render(JSON.parse(event.data)); } catch { /* ignore bad frame */ } };
     source.onerror = () => {
       view.linkUp = false;
@@ -794,12 +802,12 @@
     bindLevels();
     setLocked(read(sessionStorage, LOCK_KEY) === "1");
     try {
-      const config = await api("/api/config");
+      const config = await api("api/config");
       let initial = config.openwebrxUrl || sessionStorage.getItem(SDR_KEY) || "";
       if (config.sdrProxy) {
         // The Bearer request makes the agent issue the rs_session cookie the framed page and its websocket rely on.
-        const session = await fetch("/sdr/", { method: "HEAD", headers: { Authorization: `Bearer ${token}` } }).catch(() => null);
-        if (session?.ok) initial = new URL("/sdr/", location.href).href;
+        const session = await fetch("sdr/", { method: "HEAD", headers: { Authorization: `Bearer ${token}` } }).catch(() => null);
+        if (session?.ok) initial = new URL("sdr/", location.href).href;
       }
       if (initial) setSdrBase(initial);
       if (config.callsign) setText($("callsign"), config.callsign);

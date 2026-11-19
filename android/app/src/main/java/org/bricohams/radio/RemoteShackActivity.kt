@@ -31,7 +31,8 @@ import java.security.cert.X509Certificate
 
 /** Controls a radio through the desktop RadiCodex remote agent: pairing screen, then its web console in a locked-down WebView. */
 class RemoteShackActivity : LocalizedActivity() {
-    private var pairing: RemotePairing? = null
+    private var pairing: RemoteTarget? = null
+    private var pending: RemoteTarget? = null
     private var web: WebView? = null
     private var status: TextView? = null
 
@@ -40,7 +41,7 @@ class RemoteShackActivity : LocalizedActivity() {
         window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
         pairing = RemoteShackStore.load(this)
         val link = intent?.dataString
-        if (link != null && !acceptLink(link)) Toast.makeText(this, R.string.remote_pair_invalid, Toast.LENGTH_LONG).show()
+        if (link != null && !stageLink(link)) Toast.makeText(this, R.string.remote_pair_invalid, Toast.LENGTH_LONG).show()
         render()
     }
 
@@ -48,14 +49,26 @@ class RemoteShackActivity : LocalizedActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         val link = intent.dataString ?: return
-        if (acceptLink(link)) render() else Toast.makeText(this, R.string.remote_pair_invalid, Toast.LENGTH_LONG).show()
+        if (stageLink(link)) render() else Toast.makeText(this, R.string.remote_pair_invalid, Toast.LENGTH_LONG).show()
     }
 
-    private fun acceptLink(link: String): Boolean {
-        val parsed = RemoteShack.parse(link) ?: return false
-        if (!RemoteShackStore.save(this, parsed)) return false
-        pairing = parsed
+    /** Parses a link and holds it for confirmation; nothing is saved until the user confirms the detected mode and target. */
+    private fun stageLink(link: String): Boolean {
+        pending = RemoteShack.parseAny(link) ?: return false
         return true
+    }
+
+    private fun confirmPending() {
+        val parsed = pending ?: return
+        if (!RemoteShackStore.save(this, parsed)) { status?.text = getString(R.string.remote_pair_invalid); return }
+        pairing = parsed
+        pending = null
+        render()
+    }
+
+    private fun describe(target: RemoteTarget): String = when (target) {
+        is RemoteRelay -> getString(R.string.remote_detected_relay, target.hostPort, target.station)
+        is RemotePairing -> getString(R.string.remote_detected_direct, target.host, target.port)
     }
 
     private fun root(): LinearLayout = LinearLayout(this).apply {
@@ -77,13 +90,23 @@ class RemoteShackActivity : LocalizedActivity() {
     private fun render() {
         web?.let { it.stopLoading(); it.destroy() }
         web = null
-        if (pairing == null) pairingScreen() else consoleScreen()
+        if (pairing == null || pending != null) pairingScreen() else consoleScreen()
     }
 
     private fun pairingScreen() {
         val pad = Brand.dp(this, 16)
         val layout = root().apply { setPadding(pad, pad, pad, pad) }
         layout.addView(Brand.heading(this, getString(R.string.remote_title)))
+        val staged = pending
+        if (staged != null) {
+            layout.addView(Brand.text(this, 15f).apply { text = describe(staged); setPadding(0, pad, 0, pad) })
+            layout.addView(BrandUi.primaryButton(this, getString(R.string.remote_pair_confirm)) { confirmPending() })
+            layout.addView(BrandUi.secondaryButton(this, getString(R.string.remote_pair_cancel)) { pending = null; render() })
+            status = Brand.text(this, 14f).apply { setPadding(0, pad, 0, 0) }
+            layout.addView(status)
+            setContentView(layout)
+            return
+        }
         layout.addView(Brand.text(this, 15f).apply { text = getString(R.string.remote_pair_help); setPadding(0, pad, 0, pad) })
         val input = EditText(this).apply {
             hint = getString(R.string.remote_pair_hint)
@@ -93,7 +116,7 @@ class RemoteShackActivity : LocalizedActivity() {
         layout.addView(input)
         layout.addView(BrandUi.secondaryButton(this, getString(R.string.remote_paste)) { paste(input) })
         layout.addView(BrandUi.primaryButton(this, getString(R.string.remote_pair)) {
-            if (acceptLink(input.text.toString())) { input.setText(""); render() }
+            if (stageLink(input.text.toString())) { input.setText(""); render() }
             else status?.text = getString(R.string.remote_pair_invalid)
         })
         status = Brand.text(this, 14f).apply { setPadding(0, pad, 0, 0) }
@@ -127,7 +150,7 @@ class RemoteShackActivity : LocalizedActivity() {
         view.loadUrl(current.consoleUrl)
     }
 
-    private fun configure(view: WebView, current: RemotePairing) {
+    private fun configure(view: WebView, current: RemoteTarget) {
         view.settings.apply {
             javaScriptEnabled = true
             domStorageEnabled = true
@@ -142,6 +165,12 @@ class RemoteShackActivity : LocalizedActivity() {
         }
         view.webViewClient = object : WebViewClient() {
             override fun onReceivedSslError(view: WebView, handler: SslErrorHandler, error: SslError) {
+                // Relay mode relies on system CA validation only: never bypass.
+                if (current !is RemotePairing) {
+                    handler.cancel()
+                    showStatus(getString(R.string.remote_cert_invalid))
+                    return
+                }
                 val seen = error.certificate?.let { x509(it) }?.let { RemoteShack.fingerprintOf(it) }
                 if (seen != null && sameHost(error.url, current) &&
                     MessageDigest.isEqual(seen.toByteArray(), current.fingerprint.toByteArray())) {
@@ -153,7 +182,7 @@ class RemoteShackActivity : LocalizedActivity() {
             }
 
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
-                if (sameHost(request.url.toString(), current)) return false
+                if (allowed(request.url.toString(), current)) return false
                 if (request.url.scheme == "http" || request.url.scheme == "https") {
                     try { startActivity(Intent(Intent.ACTION_VIEW, request.url)) } catch (error: android.content.ActivityNotFoundException) { }
                 }
@@ -164,6 +193,14 @@ class RemoteShackActivity : LocalizedActivity() {
             override fun onPermissionRequest(request: PermissionRequest) = request.deny()
             override fun onGeolocationPermissionsShowPrompt(origin: String, callback: GeolocationPermissions.Callback) =
                 callback.invoke(origin, false, false)
+        }
+    }
+
+    private fun allowed(url: String?, current: RemoteTarget): Boolean = when (current) {
+        is RemotePairing -> sameHost(url, current)
+        is RemoteRelay -> {
+            val uri = try { Uri.parse(url ?: "") } catch (error: RuntimeException) { null }
+            uri != null && current.allows(uri.scheme, uri.host, uri.port, uri.path, uri.pathSegments)
         }
     }
 

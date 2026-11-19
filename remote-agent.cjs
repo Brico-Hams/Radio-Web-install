@@ -72,16 +72,39 @@ function loadConfig(dir) {
     callsign: typeof stored.callsign === "string" && /^[A-Za-z0-9/]{3,16}$/.test(stored.callsign) ? stored.callsign.toUpperCase() : "",
     rigctldHost: typeof stored.rigctldHost === "string" ? stored.rigctldHost : "127.0.0.1",
     rigctldPort: Number.isInteger(stored.rigctldPort) ? stored.rigctldPort : 4532,
-    txLimitSeconds: Number(stored.txLimitSeconds) > 0 ? Number(stored.txLimitSeconds) : 180
+    txLimitSeconds: Number(stored.txLimitSeconds) > 0 ? Number(stored.txLimitSeconds) : 180,
+    relay: normalizeRelay(stored.relay)
   };
   if (!config.token) {
     config.token = crypto.randomBytes(32).toString("base64url");
-    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-    fs.writeFileSync(file, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
-    try { fs.chmodSync(file, 0o600); } catch { /* not supported on every platform */ }
+    writeConfig(dir, config);
   }
   return config;
 }
+
+function writeConfig(dir, config) {
+  const file = path.join(dir, "remote-agent.json");
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  fs.writeFileSync(file, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
+  try { fs.chmodSync(file, 0o600); } catch { /* not supported on every platform */ }
+}
+
+// Returns { url, station, secret } or null. https is required unless the relay is on loopback (tests, local setups).
+function normalizeRelay(value) {
+  if (!value || typeof value !== "object") return null;
+  let url;
+  try { url = new URL(String(value.url)); } catch { return null; }
+  const hostname = url.hostname.replace(/^\[|\]$/g, "");
+  const allowed = url.protocol === "https:" || (url.protocol === "http:" && isLoopbackHost(hostname));
+  if (!allowed || !RELAY_STATION.test(String(value.station)) || typeof value.secret !== "string" || !value.secret) return null;
+  return { url: url.href.replace(/\/+$/, ""), station: String(value.station), secret: value.secret };
+}
+
+// Only a remote client's tunnel may set the prefix; the relay overwrites any client-supplied X-Forwarded-* header.
+const PREFIX_PATTERN = /^(?:\/[A-Za-z0-9._~-]+)+$/;
+const RELAY_STATION = /^[a-z0-9-]{3,32}$/;
+const SESSION_ID = /^[A-Za-z0-9_-]{8,64}$/;
+const RELAY_UPGRADE = "radicodex-tunnel/1";
 
 function tokenMatches(expected, supplied) {
   if (typeof supplied !== "string" || !supplied) return false;
@@ -174,6 +197,16 @@ function createRemoteAgent(options = {}) {
   const sdrTarget = openwebrxUrl ? new URL(openwebrxUrl) : null;
   const sdrSessions = new Map();
 
+  if (options.relay) {
+    const merged = normalizeRelay({ ...config.relay, ...options.relay });
+    if (!merged) throw new Error("Rele no valido: usa --relay <url https>, --station <id> y --station-secret <secreto>.");
+    config.relay = merged;
+    writeConfig(configDir, config);
+  }
+  const relayConfig = config.relay;
+  const relayState = { connected: false };
+  const relayBackoff = { min: options.relayBackoffMinMs ?? 1000, max: options.relayBackoffMaxMs ?? 30_000 };
+
   const client = new RigctldClient({
     host: options.rigctldHost || config.rigctldHost,
     port: options.rigctldPort ?? config.rigctldPort,
@@ -224,7 +257,8 @@ function createRemoteAgent(options = {}) {
       funcs: { ...rig.funcs },
       caps: capsView(),
       txSeconds: rig.ptt ? Math.max(0, Math.floor((now() - txStart) / 1000)) : 0,
-      operator: !active ? null : owner === clientId ? "me" : "other"
+      operator: !active ? null : owner === clientId ? "me" : "other",
+      relay: { configured: Boolean(relayConfig), connected: relayState.connected }
     };
   }
 
@@ -370,7 +404,8 @@ function createRemoteAgent(options = {}) {
 
   function clientIdOf(request, url) {
     const supplied = request.headers["x-client-id"] || url.searchParams.get("cid") || "";
-    return /^[\w-]{1,64}$/.test(supplied) ? supplied : `ip:${request.socket.remoteAddress}`;
+    const forwarded = request.socket.radicodexTunnel ? String(request.headers["x-forwarded-for"] || "").split(",").pop().trim() : "";
+    return /^[\w-]{1,64}$/.test(supplied) ? supplied : `ip:${forwarded || request.socket.remoteAddress}`;
   }
 
   function authorized(request, url) {
@@ -555,6 +590,14 @@ function createRemoteAgent(options = {}) {
 
   const upgradedSockets = new Set();
 
+  const prefixOf = request => {
+    if (!request.socket.radicodexTunnel) return "";
+    const value = String(request.headers["x-forwarded-prefix"] || "").replace(/\/+$/, "");
+    return PREFIX_PATTERN.test(value) ? value : "";
+  };
+  const secureRequest = request => useTls
+    || (request.socket.radicodexTunnel && String(request.headers["x-forwarded-proto"] || "").toLowerCase() === "https");
+
   function sessionCookieOf(request) {
     for (const part of String(request.headers.cookie || "").split(";")) {
       const [key, ...rest] = part.trim().split("=");
@@ -574,8 +617,8 @@ function createRemoteAgent(options = {}) {
     if (!tokenMatches(config.token, supplied)) return { ok: false, cookie: "" };
     const fresh = crypto.randomBytes(32).toString("base64url");
     sdrSessions.set(fresh, time + SESSION_MS);
-    const attrs = ["Path=/sdr/", "HttpOnly", "SameSite=Strict", `Max-Age=${SESSION_MS / 1000}`];
-    if (useTls) attrs.push("Secure");
+    const attrs = [`Path=${prefixOf(request)}/sdr/`, "HttpOnly", "SameSite=Strict", `Max-Age=${SESSION_MS / 1000}`];
+    if (secureRequest(request)) attrs.push("Secure");
     return { ok: true, cookie: `${SESSION_COOKIE}=${fresh}; ${attrs.join("; ")}` };
   }
 
@@ -601,19 +644,19 @@ function createRemoteAgent(options = {}) {
     return headers;
   }
 
-  function rewriteLocation(value) {
-    if (value.startsWith(sdrTarget.origin)) return `/sdr${value.slice(sdrTarget.origin.length)}`;
-    return value.startsWith("/") && !value.startsWith("//") ? `/sdr${value}` : value;
+  function rewriteLocation(value, prefix) {
+    if (value.startsWith(sdrTarget.origin)) return `${prefix}/sdr${value.slice(sdrTarget.origin.length)}`;
+    return value.startsWith("/") && !value.startsWith("//") ? `${prefix}/sdr${value}` : value;
   }
 
-  function proxyResponseHeaders(upstream, cookie) {
+  function proxyResponseHeaders(upstream, cookie, prefix) {
     const listed = String(upstream.headers.connection || "").toLowerCase().split(",").map(item => item.trim());
     const headers = {};
     for (const [key, value] of Object.entries(upstream.headers)) {
       const lower = key.toLowerCase();
       if (HOP_BY_HOP.includes(lower) || listed.includes(lower)) continue;
       if (lower === "set-cookie") headers[key] = value.map(item => item.replace(/;\s*Domain=[^;]*/gi, ""));
-      else if (lower === "location") headers[key] = rewriteLocation(value);
+      else if (lower === "location") headers[key] = rewriteLocation(value, prefix);
       else headers[key] = value;
     }
     const lowerKeys = Object.fromEntries(Object.keys(headers).map(key => [key.toLowerCase(), key]));
@@ -637,7 +680,7 @@ function createRemoteAgent(options = {}) {
 
   function proxySdr(request, response, url) {
     if (url.pathname === "/sdr") {
-      response.writeHead(308, { Location: `${SDR_PREFIX}${url.search}` });
+      response.writeHead(308, { Location: `${prefixOf(request)}${SDR_PREFIX}${url.search}` });
       response.end();
       return;
     }
@@ -653,7 +696,7 @@ function createRemoteAgent(options = {}) {
       path: upstreamPath(url),
       headers: upstreamHeaders(request)
     }, reply => {
-      response.writeHead(reply.statusCode, reply.statusMessage, proxyResponseHeaders(reply, auth.cookie));
+      response.writeHead(reply.statusCode, reply.statusMessage, proxyResponseHeaders(reply, auth.cookie, prefixOf(request)));
       reply.pipe(response);
     });
     upstream.on("error", () => {
@@ -711,6 +754,118 @@ function createRemoteAgent(options = {}) {
   };
   const server = useTls ? https.createServer({ key: identity.key, cert: identity.cert }, requestHandler) : http.createServer(requestHandler);
   server.on("upgrade", proxySdrUpgrade);
+  // Tunnel sockets carry plain HTTP, so a TLS agent needs a separate plain server for them.
+  const tunnelServer = useTls ? http.createServer(requestHandler) : server;
+  if (tunnelServer !== server) tunnelServer.on("upgrade", proxySdrUpgrade);
+
+  // ---- relay client: outgoing control channel + one data channel per client session ----
+  let relayControl = null;
+  let relayAttempt = 0;
+  let relayRetry = null;
+
+  function relayRequest(pathname) {
+    const base = new URL(relayConfig.url);
+    const transport = base.protocol === "https:" ? https : http;
+    return transport.request({
+      host: base.hostname.replace(/^\[|\]$/g, ""),
+      port: base.port || (base.protocol === "https:" ? 443 : 80),
+      method: "GET",
+      path: `${base.pathname.replace(/\/$/, "")}/tunnel/${relayConfig.station}${pathname}`,
+      agent: false,
+      headers: { Authorization: `Bearer ${relayConfig.secret}`, Connection: "Upgrade", Upgrade: RELAY_UPGRADE }
+    });
+  }
+
+  function openDataChannel(sessionId) {
+    if (closing || !SESSION_ID.test(sessionId)) return;
+    const request = relayRequest(`/data/${sessionId}`);
+    request.setTimeout(10_000, () => request.destroy());
+    request.on("error", () => {});
+    request.on("response", reply => { reply.resume(); });
+    request.on("upgrade", (reply, socket, head) => {
+      request.setTimeout(0);
+      socket.setTimeout(0);
+      socket.on("error", () => {});
+      socket.radicodexTunnel = true;
+      upgradedSockets.add(socket);
+      socket.on("close", () => upgradedSockets.delete(socket));
+      if (head?.length) socket.unshift(head);
+      tunnelServer.emit("connection", socket);
+    });
+    request.end();
+  }
+
+  function scheduleRelayRetry() {
+    if (closing || relayRetry) return;
+    const delay = Math.min(relayBackoff.max, relayBackoff.min * 2 ** relayAttempt);
+    relayAttempt += 1;
+    relayRetry = setTimeout(() => { relayRetry = null; connectRelay(); }, delay * (0.8 + Math.random() * 0.4));
+    relayRetry.unref?.();
+  }
+
+  function connectRelay() {
+    if (closing || !relayConfig) return;
+    const request = relayRequest("");
+    let up = false;
+    request.setTimeout(15_000, () => request.destroy());
+    request.on("error", error => { log(`rele: ${error.message}`); if (!up) scheduleRelayRetry(); });
+    request.on("response", reply => {
+      reply.resume();
+      log(reply.statusCode === 401 ? "rele: secreto o estacion no validos" : `rele: respuesta ${reply.statusCode}`);
+    });
+    request.on("close", () => { if (!up) scheduleRelayRetry(); });
+    request.on("upgrade", (reply, socket, head) => {
+      up = true;
+      request.setTimeout(0);
+      socket.setTimeout(0);
+      socket.setKeepAlive(true, 30_000);
+      relayControl?.destroy();
+      relayControl = socket;
+      relayState.connected = true;
+      relayAttempt = 0;
+      log("rele conectado");
+      let buffer = "";
+      // The relay pings every 20 s; a silent link means a dead relay or NAT mapping.
+      let idle = setTimeout(() => socket.destroy(), 60_000);
+      const feed = chunk => {
+        buffer += chunk.toString("latin1");
+        if (buffer.length > 4096) { socket.destroy(); return; }
+        let index;
+        while ((index = buffer.indexOf("\n")) >= 0) {
+          const line = buffer.slice(0, index).trim();
+          buffer = buffer.slice(index + 1);
+          clearTimeout(idle);
+          idle = setTimeout(() => socket.destroy(), 60_000);
+          if (line === "PING") socket.write("PONG\n");
+          else if (line.startsWith("OPEN ")) openDataChannel(line.slice(5).trim());
+        }
+      };
+      socket.on("data", feed);
+      socket.on("error", () => {});
+      socket.once("close", () => {
+        clearTimeout(idle);
+        if (relayControl === socket) {
+          relayControl = null;
+          relayState.connected = false;
+          log("rele desconectado");
+          scheduleRelayRetry();
+        }
+      });
+      if (head?.length) feed(head);
+    });
+    request.end();
+  }
+
+  function relayLinks() {
+    if (!relayConfig) return null;
+    const base = new URL(relayConfig.url);
+    return {
+      url: relayConfig.url,
+      station: relayConfig.station,
+      console: `${base.protocol}//${base.host}/s/${relayConfig.station}/#token=${config.token}`,
+      android: `radicodex-remote://pair?relay=${encodeURIComponent(relayConfig.url)}&station=${relayConfig.station}#token=${config.token}`
+    };
+  }
 
   function pushState(entry, force = false) {
     const text = JSON.stringify(snapshot(entry.clientId));
@@ -725,6 +880,7 @@ function createRemoteAgent(options = {}) {
       server.listen(options.port ?? 8788, host, resolve);
     });
     client.start();
+    connectRelay();
     watchdog = setInterval(watchTx, 100);
     sseTimer = setInterval(() => { for (const entry of sseClients) pushState(entry); }, 250);
     keepAliveTimer = setInterval(() => { for (const entry of sseClients) entry.response.write(": keep-alive\n\n"); }, 15_000);
@@ -744,14 +900,23 @@ function createRemoteAgent(options = {}) {
     for (const entry of sseClients) entry.response.end();
     sseClients.clear();
     for (const socket of upgradedSockets) socket.destroy();
+    clearTimeout(relayRetry);
+    relayControl?.destroy();
+    relayState.connected = false;
     await new Promise(resolve => {
       server.close(() => resolve());
       server.closeAllConnections();
     });
+    if (tunnelServer !== server) {
+      await new Promise(resolve => {
+        tunnelServer.close(() => resolve());
+        tunnelServer.closeAllConnections();
+      });
+    }
   }
 
   return {
-    server, client, token: config.token, config, openwebrxUrl, start, close, snapshot,
+    server, client, token: config.token, config, openwebrxUrl, start, close, snapshot, relayLinks,
     tls: useTls, fingerprint: identity ? identity.fingerprint : ""
   };
 }
@@ -760,7 +925,8 @@ function parseArgs(argv, env = process.env) {
   const args = { listen: env.REMOTE_LISTEN || "127.0.0.1" };
   const flags = {
     "--listen": "listen", "--port": "port", "--rigctld-host": "rigctldHost", "--rigctld-port": "rigctldPort",
-    "--openwebrx": "openwebrxUrl", "--config-dir": "configDir"
+    "--openwebrx": "openwebrxUrl", "--config-dir": "configDir", "--relay": "relayUrl", "--station": "relayStation",
+    "--station-secret": "relaySecret"
   };
   for (let i = 0; i < argv.length; i += 1) {
     if (argv[i] === "--tls" || argv[i] === "--no-tls") { args.tls = argv[i] === "--tls"; continue; }
@@ -784,9 +950,14 @@ function lanAddresses() {
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
+  const relay = {};
+  if (args.relayUrl) relay.url = args.relayUrl;
+  if (args.relayStation) relay.station = args.relayStation;
+  if (args.relaySecret) relay.secret = args.relaySecret;
   const agent = createRemoteAgent({
     host: args.listen, port: args.port, rigctldHost: args.rigctldHost, rigctldPort: args.rigctldPort,
-    openwebrxUrl: args.openwebrxUrl, configDir: args.configDir, tls: args.tls, log: message => console.log(`[remote] ${message}`)
+    openwebrxUrl: args.openwebrxUrl, configDir: args.configDir, tls: args.tls, relay: Object.keys(relay).length ? relay : undefined,
+    log: message => console.log(`[remote] ${message}`)
   });
   const address = await agent.start();
   const hosts = args.listen === "0.0.0.0" || args.listen === "::" ? lanAddresses()
@@ -799,6 +970,12 @@ async function main() {
     console.log(`Android: radicodex-remote://pair?host=${ip}&port=${address.port}${fragment}`);
   }
   if (agent.tls) console.log(`Huella TLS (SHA-256): ${agent.fingerprint}`);
+  const links = agent.relayLinks();
+  if (links) {
+    console.log(`Rele: ${links.url} (estacion ${links.station}, secreto guardado en ${path.join(args.configDir || defaultConfigDir(), "remote-agent.json")})`);
+    console.log(`Consola por rele: ${links.console}`);
+    console.log(`Android por rele: ${links.android}`);
+  }
   if (args.listen === "127.0.0.1") console.log("Solo acceso local. Usa --listen 0.0.0.0 para LAN/Tailscale.");
   let stopping = false;
   const stop = async () => {

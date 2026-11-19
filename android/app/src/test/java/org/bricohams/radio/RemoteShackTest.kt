@@ -5,6 +5,10 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
+import org.robolectric.RuntimeEnvironment
 
 class RemoteShackTest {
     private val token = "AbC-_".repeat(8) + "xyz"
@@ -73,5 +77,80 @@ class RemoteShackTest {
     @Test fun fingerprintIsUppercaseColonSha256() {
         assertEquals("BA:78:16:BF:8F:01:CF:EA:41:41:40:DE:5D:AE:22:23:B0:03:61:A3:96:17:7A:9C:B4:10:FF:61:F2:00:15:AD",
             RemoteShack.fingerprintOf("abc".toByteArray()))
+    }
+
+    private fun relayLink(relay: String = "https%3A%2F%2Frelay.example.org", station: String = "my-shack-1", token: String = this.token) =
+        "radicodex-remote://pair?relay=$relay&station=$station#token=$token"
+
+    @Test fun parsesRelayLink() {
+        val relay = RemoteShack.parseAny(relayLink()) as RemoteRelay
+        assertEquals(RemoteRelay("https://relay.example.org", "my-shack-1", token), relay)
+        assertEquals("https://relay.example.org/s/my-shack-1/#token=$token", relay.consoleUrl)
+        assertFalse(relay.toString().contains(token))
+        val port = RemoteShack.parseAny(relayLink(relay = "https%3A%2F%2FRelay.Example.org%3A8443%2F")) as RemoteRelay
+        assertEquals("https://relay.example.org:8443", port.baseUrl)
+        assertEquals(8443, port.port)
+    }
+
+    @Test fun parsesRelayConsoleUrl() {
+        val relay = RemoteShack.parseAny(" https://relay.example.org:8443/s/abc/#token=$token ") as RemoteRelay
+        assertEquals(RemoteRelay("https://relay.example.org:8443", "abc", token), relay)
+        assertTrue(RemoteShack.parseAny("https://relay.example.org/s/abc/#token=$token") is RemoteRelay)
+    }
+
+    @Test fun rejectsInvalidRelays() {
+        assertNull(RemoteShack.parseAny(relayLink(relay = "http%3A%2F%2Frelay.example.org")))
+        assertNull(RemoteShack.parseAny("http://relay.example.org/s/abc/#token=$token"))
+        for (station in listOf("ab", "a".repeat(33), "ABC", "my_shack", "a.b"))
+            assertNull(station, RemoteShack.parseAny(relayLink(station = station)))
+        assertNull(RemoteShack.parseAny(relayLink(relay = "https%3A%2F%2Frelay.example.org%3Fx%3D1")))
+        assertNull(RemoteShack.parseAny("https://relay.example.org/s/abc/?x=1#token=$token"))
+        assertNull(RemoteShack.parseAny(relayLink(relay = "https%3A%2F%2Fu%40relay.example.org")))
+        assertNull(RemoteShack.parseAny(relayLink(relay = "https%3A%2F%2Frelay.example.org%2Fx")))
+        assertNull(RemoteShack.parseAny(relayLink(relay = "https%3A%2F%2F10.0.0.1")))
+        assertNull(RemoteShack.parseAny(relayLink(token = token.dropLast(1))))
+        assertNull(RemoteShack.parseAny("${relayLink()}&fp=$fp"))
+    }
+
+    @Test fun directLinksStillParseThroughParseAny() {
+        assertTrue(RemoteShack.parseAny(link()) is RemotePairing)
+        assertTrue(RemoteShack.parseAny("https://10.0.0.5:9443/#token=$token&fp=$fp") is RemotePairing)
+    }
+
+    @Test fun relayAllowsOnlyItsOriginAndStationPath() {
+        val relay = RemoteRelay("https://relay.example.org:8443", "abc", token)
+        assertTrue(relay.allows("https", "relay.example.org", 8443, "/s/abc/app.js", listOf("s", "abc", "app.js")))
+        assertFalse(relay.allows("http", "relay.example.org", 8443, "/s/abc/", listOf("s", "abc")))
+        assertFalse(relay.allows("https", "relay.example.org", -1, "/s/abc/", listOf("s", "abc")))
+        assertFalse(relay.allows("https", "other.example.org", 8443, "/s/abc/", listOf("s", "abc")))
+        assertFalse(relay.allows("https", "relay.example.org", 8443, "/s/abcd/", listOf("s", "abcd")))
+        assertFalse(relay.allows("https", "relay.example.org", 8443, "/s/abc/../x/", listOf("s", "abc", "..", "x")))
+    }
+}
+
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [28])
+class RemoteShackStoreTest {
+    private val token = "AbC-_".repeat(8) + "xyz"
+    private val fp = (0 until 32).joinToString(":") { "%02X".format(it * 7) }
+    private val context: android.content.Context get() = RuntimeEnvironment.getApplication()
+
+    @Test fun roundTripsDirectAndRelay() {
+        RemoteShackStore.clear(context)
+        assertNull(RemoteShackStore.load(context))
+        val direct = RemotePairing("192.168.1.20", 8443, token, fp)
+        assertTrue(RemoteShackStore.save(context, direct))
+        assertEquals(direct, RemoteShackStore.load(context))
+        val relay = RemoteRelay("https://relay.example.org", "abc", token)
+        assertTrue(RemoteShackStore.save(context, relay))
+        assertEquals(relay, RemoteShackStore.load(context))
+        assertTrue(RemoteShackStore.save(context, direct))
+        assertEquals(direct, RemoteShackStore.load(context))
+    }
+
+    @Test fun migratesLegacyDirectEntry() {
+        context.getSharedPreferences("remote-shack", android.content.Context.MODE_PRIVATE).edit().clear()
+            .putString("host", "10.0.0.5").putInt("port", 9443).putString("token", token).putString("fp", fp).commit()
+        assertEquals(RemotePairing("10.0.0.5", 9443, token, fp), RemoteShackStore.load(context))
     }
 }

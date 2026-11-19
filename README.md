@@ -399,6 +399,23 @@ HTTPS: con `--listen` en una direccion no local el agente sirve HTTPS por defect
 
 Espectro: con `--openwebrx <url>` el agente sirve OpenWebRX en `/sdr/` por el mismo origen autenticado (HTTP y WebSocket). La primera peticion exige el token y el agente fija la cookie `rs_session` (HttpOnly, SameSite=Strict, Secure con TLS, 12 h) para las peticiones internas de OpenWebRX.
 
+Rele (sin abrir puertos): el agente solo hace conexiones salientes a un rele BricoHams que alojas tu mismo; los clientes (navegador, WebView de Android) entran por el rele en `/s/<id>/`.
+
+1. En el servidor del rele registra la estacion (id de 3-32 caracteres `[a-z0-9-]`, por ejemplo tu indicativo en minusculas): `node remote-relay.cjs add-station ea5kao`. Imprime una sola vez el secreto; en `~/.radicodex/relay.json` (0600, cambia la ruta con `--data`) solo se guarda su hash SHA-256. Tambien existen `remove-station <id>` y `list-stations`.
+2. Arranca el rele con un certificado propio (por ejemplo Let's Encrypt): `node remote-relay.cjs serve --port 8443 --cert fullchain.pem --key privkey.pem`; o detras de Caddy/nginx con HTTP plano en `127.0.0.1`: `node remote-relay.cjs serve --behind-proxy` (solo entonces se confia en `X-Forwarded-For`, y solo desde loopback). Caddyfile:
+
+```
+relay.example.org {
+	reverse_proxy 127.0.0.1:8443 {
+		flush_interval -1
+	}
+}
+```
+
+3. En la estacion: `npm run remote -- --relay https://relay.example.org --station ea5kao --station-secret <secret>`. El secreto queda en `~/.radicodex/remote-agent.json` (0600) y nunca se imprime. El agente imprime `https://relay.example.org/s/ea5kao/#token=...` para el navegador y `radicodex-remote://pair?relay=<relay-url>&station=ea5kao#token=...` para Android. La consola muestra el estado del rele y `/api/state` lo expone en `relay`.
+
+El rele termina el TLS y ve el trafico en claro: alojalo donde confies. El token del agente sigue protegiendo el control (el rele no lo conoce) y la seguridad de TX del agente no cambia.
+
 Seguridad: toda la API exige el token; solo un operador controla la radio a la vez (30 s de inactividad libera el control); la transmision se corta sola si faltan latidos durante 1 s, al llegar al limite de TX, al perder `rigctld` o al cerrar el agente. **No abras puertos en el router (sin port forwarding)**: para acceder fuera de casa usa Tailscale o WireGuard y `--listen` con la IP de esa red.
 
 ## Tests y validacion

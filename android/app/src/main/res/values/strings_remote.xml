@@ -13,4 +13,9 @@
     <string name="remote_reload">Recargar</string>
     <string name="remote_forget">Olvidar emparejamiento</string>
     <string name="remote_cert_mismatch">Certificado no coincide: vuelve a emparejar</string>
+    <string name="remote_cert_invalid">Certificado del relé no válido: conexión rechazada</string>
+    <string name="remote_detected_direct">Modo detectado: directo (red local / Tailscale)\nDestino: %1$s:%2$d</string>
+    <string name="remote_detected_relay">Modo detectado: relé BricoHams\nRelé: %1$s\nEstación: %2$s</string>
+    <string name="remote_pair_confirm">Guardar y abrir</string>
+    <string name="remote_pair_cancel">Cancelar</string>
 </resources>

@@ -308,6 +308,23 @@ HTTPS: Mit `--listen` auf einer nicht lokalen Adresse liefert der Agent standard
 
 Spektrum: Mit `--openwebrx <url>` liefert der Agent OpenWebRX unter `/sdr/` über denselben authentifizierten Origin aus (HTTP und WebSocket). Die erste Anfrage braucht das Token, und der Agent setzt das Cookie `rs_session` (HttpOnly, SameSite=Strict, Secure bei TLS, 12 h) für die internen Anfragen von OpenWebRX.
 
+Relay (ohne offene Ports): Der Agent baut nur ausgehende Verbindungen zu einem BricoHams-Relay auf, das du selbst betreibst; Clients (Browser, Android-WebView) kommen über das Relay unter `/s/<id>/` herein.
+
+1. Registriere die Station auf dem Relay-Server (3–32 Zeichen `[a-z0-9-]`, z. B. dein Rufzeichen in Kleinbuchstaben): `node remote-relay.cjs add-station ea5kao`. Das Geheimnis wird nur einmal ausgegeben; `~/.radicodex/relay.json` (0600, Pfad mit `--data` änderbar) speichert nur dessen SHA-256-Hash. Außerdem gibt es `remove-station <id>` und `list-stations`.
+2. Starte das Relay mit eigenem Zertifikat (z. B. Let's Encrypt): `node remote-relay.cjs serve --port 8443 --cert fullchain.pem --key privkey.pem`; oder hinter Caddy/nginx mit reinem HTTP auf `127.0.0.1`: `node remote-relay.cjs serve --behind-proxy` (nur dann wird `X-Forwarded-For` vertraut, und nur von Loopback). Caddyfile:
+
+```
+relay.example.org {
+	reverse_proxy 127.0.0.1:8443 {
+		flush_interval -1
+	}
+}
+```
+
+3. An der Station: `npm run remote -- --relay https://relay.example.org --station ea5kao --station-secret <secret>`. Das Geheimnis liegt in `~/.radicodex/remote-agent.json` (0600) und wird nie ausgegeben. Der Agent gibt `https://relay.example.org/s/ea5kao/#token=...` für den Browser und `radicodex-remote://pair?relay=<relay-url>&station=ea5kao#token=...` für Android aus. Die Konsole zeigt den Relay-Status, und `/api/state` liefert ihn als `relay`.
+
+Das Relay beendet TLS und sieht den Verkehr im Klartext: Betreibe es dort, wo du vertraust. Das Agent-Token schützt weiterhin die Steuerung (das Relay kennt es nicht), und die TX-Sicherheit des Agenten bleibt unverändert.
+
 Sicherheit: Die gesamte API verlangt das Token; nur ein Bediener steuert das Funkgerät gleichzeitig (30 s Inaktivität geben die Kontrolle frei); das Senden endet automatisch, wenn Heartbeats 1 s lang fehlen, beim Erreichen des TX-Limits, bei Verlust von `rigctld` oder beim Beenden des Agenten. **Öffne keine Ports am Router (kein Port-Forwarding)**: für Zugriff von unterwegs nutze Tailscale oder WireGuard und `--listen` mit der IP dieses Netzes.
 
 ## Tests und Validierung

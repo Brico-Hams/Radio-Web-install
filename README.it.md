@@ -379,6 +379,23 @@ HTTPS: con `--listen` su un indirizzo non locale l’agente serve HTTPS per impo
 
 Spettro: con `--openwebrx <url>` l’agente serve OpenWebRX su `/sdr/` tramite la stessa origine autenticata (HTTP e WebSocket). La prima richiesta richiede il token e l’agente imposta il cookie `rs_session` (HttpOnly, SameSite=Strict, Secure con TLS, 12 h) per le richieste interne di OpenWebRX.
 
+Relay (nessuna porta aperta): l’agente effettua solo connessioni in uscita verso un relay BricoHams che ospiti tu stesso; i client (browser, WebView Android) entrano dal relay su `/s/<id>/`.
+
+1. Sul server del relay registra la stazione (3-32 caratteri `[a-z0-9-]`, ad esempio il tuo nominativo in minuscolo): `node remote-relay.cjs add-station ea5kao`. Il segreto viene mostrato una sola volta; `~/.radicodex/relay.json` (0600, percorso modificabile con `--data`) ne conserva solo l’hash SHA-256. Esistono anche `remove-station <id>` e `list-stations`.
+2. Avvia il relay con un certificato tuo (ad esempio Let’s Encrypt): `node remote-relay.cjs serve --port 8443 --cert fullchain.pem --key privkey.pem`; oppure dietro Caddy/nginx con HTTP semplice su `127.0.0.1`: `node remote-relay.cjs serve --behind-proxy` (solo allora `X-Forwarded-For` è considerato attendibile, e solo da loopback). Caddyfile:
+
+```
+relay.example.org {
+	reverse_proxy 127.0.0.1:8443 {
+		flush_interval -1
+	}
+}
+```
+
+3. Alla stazione: `npm run remote -- --relay https://relay.example.org --station ea5kao --station-secret <secret>`. Il segreto resta in `~/.radicodex/remote-agent.json` (0600) e non viene mai stampato. L’agente stampa `https://relay.example.org/s/ea5kao/#token=...` per il browser e `radicodex-remote://pair?relay=<relay-url>&station=ea5kao#token=...` per Android. La console mostra lo stato del relay e `/api/state` lo espone in `relay`.
+
+Il relay termina il TLS e vede il traffico in chiaro: ospitalo dove ti fidi. Il token dell’agente continua a proteggere il controllo (il relay non lo conosce) e la sicurezza TX dell’agente non cambia.
+
 Sicurezza: tutta l’API richiede il token; un solo operatore controlla la radio alla volta (30 s di inattività liberano il controllo); la trasmissione si interrompe da sola se mancano i heartbeat per 1 s, al raggiungimento del limite TX, alla perdita di `rigctld` o alla chiusura dell’agente. **Non aprire porte sul router (nessun port forwarding)**: per accedere fuori casa usa Tailscale o WireGuard e `--listen` con l’IP di quella rete.
 
 ## Test e convalida

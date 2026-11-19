@@ -1481,6 +1481,9 @@ Soltar PTT|Release PTT|Relâcher le PTT|PTT loslassen
 Transmitir CAT TX|Transmit CAT TX|Émettre CAT TX|CAT-TX senden
 Soltar PTT CAT TX|Release CAT TX PTT|Relâcher le PTT CAT TX|CAT-TX-PTT loslassen
 PTT CAT sin usar.|CAT PTT unused.|PTT CAT inutilisé.|CAT-PTT unbenutzt.
+Relé: no configurado|Relay: not configured|Relais : non configuré|Relay: nicht konfiguriert
+Relé: conectado|Relay: connected|Relais : connecté|Relay: verbunden
+Relé: desconectado|Relay: disconnected|Relais : déconnecté|Relay: getrennt
 Ranuras de firmware|Firmware slots|Emplacements de firmware|Firmware-Slots
 Guarda varios firmwares F4HWN compatibles en la radio y elige uno al arrancar (manten MENU). La escritura solo afecta a la Flash externa; la radio sigue utilizable.|Store several compatible F4HWN firmwares on the radio and choose one at power-on (hold MENU). Writing only affects the external Flash; the radio remains usable.|Enregistrez plusieurs firmwares F4HWN compatibles dans la radio et choisissez-en un au démarrage (maintenez MENU). L’écriture n’affecte que la Flash externe ; la radio reste utilisable.|Speichere mehrere kompatible F4HWN-Firmwares im Funkgerät und wähle beim Start eine aus (MENU halten). Das Schreiben betrifft nur den externen Flash; das Funkgerät bleibt nutzbar.
 Actualizar ranuras|Refresh slots|Actualiser les emplacements|Slots aktualisieren

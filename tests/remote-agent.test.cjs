@@ -575,3 +575,22 @@ test("agent over TLS answers /api/state when the client trusts the generated cer
     await rig.close();
   }
 });
+
+test("without a relay the state says so, and a direct client cannot set the cookie prefix", async () => {
+  const rig = await fakeRigctld();
+  const sdr = await fakeOpenwebrx();
+  const { agent, call, cleanup } = await startAgent(rig, { openwebrxUrl: `http://127.0.0.1:${sdr.port}/` });
+  try {
+    assert.deepEqual((await call("GET", "/api/state")).json.relay, { configured: false, connected: false });
+    const page = await call("GET", `/sdr/?token=${agent.token}`, { token: "", headers: { "X-Forwarded-Prefix": "/s/evil" } });
+    assert.match([].concat(page.headers["set-cookie"]).find(item => item.startsWith("rs_session=")), /Path=\/sdr\//);
+    assert.equal((await call("GET", "/sdr", { headers: { "X-Forwarded-Prefix": "/s/evil" } })).headers.location, "/sdr/");
+  } finally { await cleanup(); await sdr.close(); await rig.close(); }
+});
+
+test("console URLs are relative so the page works under a /s/<id>/ prefix", () => {
+  const ui = fs.readFileSync(path.join(__dirname, "..", "remote-ui.js"), "utf8");
+  assert.doesNotMatch(ui, /(?:fetch|api|EventSource)\(\s*[`"']\//);
+  assert.doesNotMatch(ui, /new URL\(\s*["']\//);
+  assert.match(fs.readFileSync(path.join(__dirname, "..", "remote.html"), "utf8"), /id="relay"/);
+});
