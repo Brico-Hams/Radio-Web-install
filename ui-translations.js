@@ -1703,6 +1703,160 @@ TX / subida|TX / uplink|TX / montée|TX / Uplink
 Sin bajada|No downlink|Pas de descente|Kein Downlink
 Sin subida|No uplink|Pas de montée|Kein Uplink
 Doppler calculado: {0} MHz (sin control de radio)|Calculated Doppler: {0} MHz (no radio control)|Doppler calculé : {0} MHz (sans contrôle de la radio)|Berechneter Doppler: {0} MHz (ohne Funkgerätesteuerung)
+/ Herramientas|/ Tools|/ Outils|/ Werkzeuge
+Herramientas de radio|Radio tools|Outils radio|Funkwerkzeuge
+Calculadoras de radioaficionado. Los calculos se hacen en este navegador.|Amateur radio calculators. Calculations run in this browser.|Calculateurs pour radioamateurs. Les calculs se font dans ce navigateur.|Rechner für den Amateurfunk. Die Berechnungen laufen in diesem Browser.
+Calcular|Calculate|Calculer|Berechnen
+De coordenadas a locator|From coordinates to locator|Des coordonnées au locator|Von Koordinaten zum Locator
+Calcular locator|Calculate locator|Calculer le locator|Locator berechnen
+Locator de 6 caracteres|6-character locator|Locator à 6 caractères|Locator mit 6 Zeichen
+Locator de 8 caracteres|8-character locator|Locator à 8 caractères|Locator mit 8 Zeichen
+De locator a coordenadas|From locator to coordinates|Du locator aux coordonnées|Vom Locator zu Koordinaten
+Calcular coordenadas|Calculate coordinates|Calculer les coordonnées|Koordinaten berechnen
+Distancia y rumbo|Distance and bearing|Distance et cap|Entfernung und Peilung
+Mi locator|My locator|Mon locator|Mein Locator
+Locator de la otra estacion|Other station’s locator|Locator de l’autre station|Locator der Gegenstation
+Calcular distancia|Calculate distance|Calculer la distance|Entfernung berechnen
+Camino corto|Short path|Chemin court|Kurzer Weg
+Camino largo|Long path|Chemin long|Langer Weg
+Rumbo|Bearing|Cap|Peilung
+Rumbo inverso|Reverse bearing|Cap inverse|Gegenpeilung
+ROE (relacion de ondas estacionarias)|SWR (standing wave ratio)|ROS (rapport d’ondes stationnaires)|SWR (Stehwellenverhältnis)
+ROE|SWR|ROS|SWR
+Perdida de retorno|Return loss|Perte de retour|Rückflussdämpfung
+Perdida por desadaptacion|Mismatch loss|Perte par désadaptation|Fehlanpassungsdämpfung
+Potencia reflejada|Reflected power|Puissance réfléchie|Reflektierte Leistung
+Desde potencia directa y reflejada|From forward and reflected power|À partir de la puissance directe et réfléchie|Aus Vorwärts- und Rückwärtsleistung
+Potencia directa (W)|Forward power (W)|Puissance directe (W)|Vorwärtsleistung (W)
+Potencia reflejada (W)|Reflected power (W)|Puissance réfléchie (W)|Rückwärtsleistung (W)
+Calcular ROE|Calculate SWR|Calculer le ROS|SWR berechnen
+Desde el valor de ROE|From the SWR value|À partir de la valeur du ROS|Aus dem SWR-Wert
+ROE (1 o mas)|SWR (1 or more)|ROS (1 ou plus)|SWR (1 oder mehr)
+Calcular desde ROE|Calculate from SWR|Calculer à partir du ROS|Aus SWR berechnen
+Perdida en el cable|Cable loss|Perte dans le câble|Kabeldämpfung
+Cable|Cable|Câble|Kabel
+Otro (dB/100 m)|Other (dB/100 m)|Autre (dB/100 m)|Andere (dB/100 m)
+Atenuacion (dB/100 m)|Attenuation (dB/100 m)|Atténuation (dB/100 m)|Dämpfung (dB/100 m)
+Frecuencia (MHz)|Frequency (MHz)|Fréquence (MHz)|Frequenz (MHz)
+Longitud (m)|Length (m)|Longueur (m)|Länge (m)
+Potencia (W)|Power (W)|Puissance (W)|Leistung (W)
+Calcular perdida|Calculate loss|Calculer la perte|Dämpfung berechnen
+Atenuacion|Attenuation|Atténuation|Dämpfung
+Potencia en la antena|Power at the antenna|Puissance à l’antenne|Leistung an der Antenne
+Eficiencia|Efficiency|Rendement|Wirkungsgrad
+Valores tipicos de catalogo; consulta el fabricante.|Typical catalogue values; check with the manufacturer.|Valeurs typiques du catalogue ; consultez le fabricant.|Typische Katalogwerte; frage den Hersteller.
+Conversion de unidades|Unit conversion|Conversion d’unités|Einheitenumrechnung
+Unidad|Unit|Unité|Einheit
+Convertir|Convert|Convertir|Umrechnen
+Vatios|Watts|Watts|Watt
+PRA (ERP) y PIRE (EIRP)|ERP and EIRP|PAR (ERP) et PIRE (EIRP)|ERP und EIRP
+Potencia del equipo (W)|Transmitter power (W)|Puissance de l’émetteur (W)|Senderleistung (W)
+Perdida del cable (dB)|Cable loss (dB)|Perte du câble (dB)|Kabeldämpfung (dB)
+Ganancia de antena (dBd)|Antenna gain (dBd)|Gain d’antenne (dBd)|Antennengewinn (dBd)
+Calcular PRA|Calculate ERP|Calculer la PAR|ERP berechnen
+PRA (ERP)|ERP|PAR (ERP)|ERP
+PIRE (EIRP)|EIRP|PIRE (EIRP)|EIRP
+Antena|Antenna|Antenne|Antenne
+Calcular longitudes|Calculate lengths|Calculer les longueurs|Längen berechnen
+Factor de velocidad (0,5 a 1)|Velocity factor (0.5 to 1)|Facteur de vitesse (0,5 à 1)|Verkürzungsfaktor (0,5 bis 1)
+Longitud de onda|Wavelength|Longueur d’onde|Wellenlänge
+Dipolo de media onda|Half-wave dipole|Dipôle demi-onde|Halbwellendipol
+Vertical de cuarto de onda|Quarter-wave vertical|Verticale quart d’onde|Viertelwellen-Vertikalantenne
+Plan de bandas|Band plan|Plan de bandes|Bandplan
+Limites segun el Reglamento de Radiocomunicaciones de la UIT; las normas nacionales pueden ser mas estrictas.|Limits per the ITU Radio Regulations; national rules may be narrower.|Limites selon le Règlement des radiocommunications de l’UIT ; les règles nationales peuvent être plus strictes.|Grenzen gemäß ITU-Vollzugsordnung für den Funkdienst; nationale Regeln können enger sein.
+Buscar banda|Find band|Chercher la bande|Band suchen
+Region IARU|IARU region|Région IARU|IARU-Region
+Region 1: Europa, Africa y Oriente Medio|Region 1: Europe, Africa and Middle East|Région 1 : Europe, Afrique et Moyen-Orient|Region 1: Europa, Afrika und Naher Osten
+Region 2: America|Region 2: the Americas|Région 2 : Amériques|Region 2: Amerika
+Region 3: Asia y Pacifico|Region 3: Asia and Pacific|Région 3 : Asie et Pacifique|Region 3: Asien und Pazifik
+Fuera de banda de aficionado|Outside amateur bands|Hors des bandes radioamateur|Außerhalb der Amateurfunkbänder
+Desde (MHz)|From (MHz)|De (MHz)|Von (MHz)
+Hasta (MHz)|To (MHz)|À (MHz)|Bis (MHz)
+Codigo RST|RST code|Code RST|RST-Code
+Cifra|Digit|Chiffre|Ziffer
+Significado|Meaning|Signification|Bedeutung
+Legibilidad (R)|Readability (R)|Lisibilité (R)|Lesbarkeit (R)
+Intensidad de la senal (S)|Signal strength (S)|Force du signal (S)|Signalstärke (S)
+Tono (T, solo CW)|Tone (T, CW only)|Tonalité (T, CW uniquement)|Ton (T, nur CW)
+Ilegible|Unreadable|Illisible|Unlesbar
+Apenas legible, algunas palabras|Barely readable, occasional words distinguishable|À peine lisible, quelques mots distinguables|Kaum lesbar, einzelne Wörter erkennbar
+Legible con dificultad|Readable with considerable difficulty|Lisible avec difficulté|Mit Mühe lesbar
+Legible sin dificultad|Readable with practically no difficulty|Lisible sans difficulté|Ohne Mühe lesbar
+Perfectamente legible|Perfectly readable|Parfaitement lisible|Perfekt lesbar
+Apenas perceptible|Faint, barely perceptible|À peine perceptible|Kaum wahrnehmbar
+Muy debil|Very weak|Très faible|Sehr schwach
+Debil|Weak|Faible|Schwach
+Regular|Fair|Passable|Mäßig
+Bastante buena|Fairly good|Assez bon|Ziemlich gut
+Buena|Good|Bon|Gut
+Moderadamente fuerte|Moderately strong|Moyennement fort|Mäßig stark
+Fuerte|Strong|Fort|Stark
+Extremadamente fuerte|Extremely strong|Extrêmement fort|Extrem stark
+Zumbido de red muy aspero|Very rough mains hum|Ronflement secteur très rugueux|Sehr rauer Netzbrumm
+Zumbido aspero y ancho|Rough, broad hum|Ronflement rugueux et large|Rauer, breiter Brumm
+Tono aspero, rectificacion sin filtrar|Rough tone, unfiltered rectification|Tonalité rugueuse, redressement non filtré|Rauer Ton, ungefilterte Gleichrichtung
+Tono aspero, algo filtrado|Rough tone, some filtering|Tonalité rugueuse, légèrement filtrée|Rauer Ton, etwas gefiltert
+Tono filtrado, muy modulado por rizado|Filtered tone, strongly ripple-modulated|Tonalité filtrée, fortement modulée par l’ondulation|Gefilterter Ton, stark brummmoduliert
+Tono filtrado, ligero rizado|Filtered tone, slight ripple|Tonalité filtrée, légère ondulation|Gefilterter Ton, leichte Welligkeit
+Tono casi puro, rastro de rizado|Near-pure tone, trace of ripple|Tonalité quasi pure, trace d’ondulation|Fast reiner Ton, Spur von Welligkeit
+Tono casi perfecto, ligera modulacion|Near-perfect tone, slight modulation|Tonalité quasi parfaite, légère modulation|Fast perfekter Ton, leichte Modulation
+Tono perfecto, sin rizado|Perfect tone, no ripple|Tonalité parfaite, sans ondulation|Perfekter Ton, keine Welligkeit
+Latitud no valida (-90 a 90).|Invalid latitude (-90 to 90).|Latitude non valide (−90 à 90).|Ungültiger Breitengrad (−90 bis 90).
+Longitud no valida (-180 a 180).|Invalid longitude (-180 to 180).|Longitude non valide (−180 à 180).|Ungültiger Längengrad (−180 bis 180).
+Longitud de locator no valida (4, 6 u 8).|Invalid locator length (4, 6 or 8).|Longueur de locator non valide (4, 6 ou 8).|Ungültige Locator-Länge (4, 6 oder 8).
+Coordenadas no validas.|Invalid coordinates.|Coordonnées non valides.|Ungültige Koordinaten.
+Locator Maidenhead no valido.|Invalid Maidenhead locator.|Locator Maidenhead non valide.|Ungültiger Maidenhead-Locator.
+Introduce potencias validas: directa mayor que 0 y reflejada 0 o mas.|Enter valid powers: forward greater than 0 and reflected 0 or more.|Saisissez des puissances valides : directe supérieure à 0 et réfléchie égale ou supérieure à 0.|Gib gültige Leistungen ein: vorwärts größer als 0 und rückwärts 0 oder mehr.
+La potencia reflejada debe ser menor que la directa.|Reflected power must be lower than forward power.|La puissance réfléchie doit être inférieure à la puissance directe.|Die reflektierte Leistung muss kleiner als die Vorwärtsleistung sein.
+La ROE debe ser un numero igual o mayor que 1.|SWR must be a number equal to or greater than 1.|Le ROS doit être un nombre égal ou supérieur à 1.|Das SWR muss eine Zahl gleich oder größer als 1 sein.
+Cable no reconocido.|Unknown cable.|Câble non reconnu.|Kabel nicht erkannt.
+Frecuencia fuera de la tabla del cable; introduce la atenuacion del fabricante.|Frequency outside the cable table; enter the manufacturer’s attenuation.|Fréquence hors du tableau du câble ; saisissez l’atténuation du fabricant.|Frequenz außerhalb der Kabeltabelle; gib die Dämpfung des Herstellers ein.
+Introduce una longitud valida (0 m o mas).|Enter a valid length (0 m or more).|Saisissez une longueur valide (0 m ou plus).|Gib eine gültige Länge ein (0 m oder mehr).
+Introduce una potencia valida (0 W o mas).|Enter a valid power (0 W or more).|Saisissez une puissance valide (0 W ou plus).|Gib eine gültige Leistung ein (0 W oder mehr).
+Introduce una atenuacion valida (0 dB/100 m o mas).|Enter a valid attenuation (0 dB/100 m or more).|Saisissez une atténuation valide (0 dB/100 m ou plus).|Gib eine gültige Dämpfung ein (0 dB/100 m oder mehr).
+Introduce un valor de potencia valido.|Enter a valid power value.|Saisissez une valeur de puissance valide.|Gib einen gültigen Leistungswert ein.
+Unidad no reconocida.|Unknown unit.|Unité non reconnue.|Einheit nicht erkannt.
+La potencia en W debe ser mayor que 0.|Power in W must be greater than 0.|La puissance en W doit être supérieure à 0.|Die Leistung in W muss größer als 0 sein.
+La potencia debe ser mayor que 0 W.|Power must be greater than 0 W.|La puissance doit être supérieure à 0 W.|Die Leistung muss größer als 0 W sein.
+La perdida del cable debe ser 0 dB o mas.|Cable loss must be 0 dB or more.|La perte du câble doit être de 0 dB ou plus.|Die Kabeldämpfung muss 0 dB oder mehr betragen.
+Introduce una ganancia de antena valida.|Enter a valid antenna gain.|Saisissez un gain d’antenne valide.|Gib einen gültigen Antennengewinn ein.
+Introduce una frecuencia valida mayor que 0 MHz.|Enter a valid frequency greater than 0 MHz.|Saisissez une fréquence valide supérieure à 0 MHz.|Gib eine gültige Frequenz größer als 0 MHz ein.
+El factor de velocidad debe estar entre 0,5 y 1.|The velocity factor must be between 0.5 and 1.|Le facteur de vitesse doit être compris entre 0,5 et 1.|Der Verkürzungsfaktor muss zwischen 0,5 und 1 liegen.
+Region IARU no valida (1, 2 o 3).|Invalid IARU region (1, 2 or 3).|Région IARU non valide (1, 2 ou 3).|Ungültige IARU-Region (1, 2 oder 3).
+/ Estacion / Herramientas de radio|/ Station / Radio tools|/ Station / Outils radio|/ Station / Funkwerkzeuge
+Herramientas de estacion|Station tools|Outils de station|Stationswerkzeuge
+Esta herramienta esta en la app de escritorio RadiCodex y en la app Android.|This tool is in the RadiCodex desktop app and the Android app.|Cet outil se trouve dans l’application de bureau RadiCodex et dans l’application Android.|Dieses Werkzeug gibt es in der RadiCodex-Desktop-App und in der Android-App.
+Convierte coordenadas en locator Maidenhead y al reves.|Converts coordinates to a Maidenhead locator and back.|Convertit des coordonnées en locator Maidenhead et inversement.|Wandelt Koordinaten in einen Maidenhead-Locator um und zurück.
+Distancia por el camino corto y el largo, y el rumbo para orientar la antena.|Distance by the short and long path, and the bearing to aim the antenna.|Distance par le chemin court et le chemin long, et cap pour orienter l’antenne.|Entfernung über den kurzen und langen Weg sowie die Peilung zum Ausrichten der Antenne.
+Cuanto menor es la ROE, menos potencia vuelve al equipo; hasta 1,5 se considera buena.|The lower the SWR, the less power returns to the radio; up to 1.5 is considered good.|Plus le ROS est faible, moins de puissance revient vers l’émetteur ; jusqu’à 1,5 il est jugé bon.|Je niedriger das SWR, desto weniger Leistung kehrt zum Gerät zurück; bis 1,5 gilt als gut.
+Estima la potencia que llega a la antena segun el cable, la frecuencia y la longitud.|Estimates the power reaching the antenna from the cable, frequency and length.|Estime la puissance qui arrive à l’antenne selon le câble, la fréquence et la longueur.|Schätzt die an der Antenne ankommende Leistung je nach Kabel, Frequenz und Länge.
+Convierte entre vatios, dBm y dBW y calcula la PRA y la PIRE.|Converts between watts, dBm and dBW and calculates ERP and EIRP.|Convertit entre watts, dBm et dBW et calcule la PAR et la PIRE.|Rechnet zwischen Watt, dBm und dBW um und berechnet ERP und EIRP.
+Longitud de un dipolo de media onda y de una vertical de cuarto de onda con su factor de velocidad.|Length of a half-wave dipole and a quarter-wave vertical using the velocity factor.|Longueur d’un dipôle demi-onde et d’une verticale quart d’onde avec le facteur de vitesse.|Länge eines Halbwellendipols und einer Viertelwellen-Vertikalantenne mit dem Verkürzungsfaktor.
+Otra estacion|Other station|Autre station|Gegenstation
+Alimentacion|Feed point|Point d’alimentation|Speisepunkt
+Radiales|Radials|Radians|Radials
+Mapa del mundo: introduce dos locators para ver el camino|World map: enter two locators to see the path|Carte du monde : saisissez deux locators pour voir le chemin|Weltkarte: Gib zwei Locators ein, um den Weg zu sehen
+Mapa del camino entre {0} y {1}: {2} km, rumbo {3}|Map of the path between {0} and {1}: {2} km, bearing {3}|Carte du chemin entre {0} et {1} : {2} km, cap {3}|Karte des Weges zwischen {0} und {1}: {2} km, Peilung {3}
+Rosa de los vientos: sin datos|Compass rose: no data|Rose des vents : aucune donnée|Windrose: keine Daten
+Rosa de los vientos: rumbo corto {0}, rumbo largo {1}|Compass rose: short-path bearing {0}, long-path bearing {1}|Rose des vents : cap chemin court {0}, cap chemin long {1}|Windrose: Peilung kurzer Weg {0}, Peilung langer Weg {1}
+Indicador de ROE: sin datos|SWR gauge: no data|Indicateur de ROS : aucune donnée|SWR-Anzeige: keine Daten
+Indicador de ROE: {0}, zona verde (buena)|SWR gauge: {0}, green zone (good)|Indicateur de ROS : {0}, zone verte (bon)|SWR-Anzeige: {0}, grüner Bereich (gut)
+Indicador de ROE: {0}, zona ambar (aceptable)|SWR gauge: {0}, amber zone (acceptable)|Indicateur de ROS : {0}, zone orange (acceptable)|SWR-Anzeige: {0}, gelber Bereich (akzeptabel)
+Indicador de ROE: {0}, zona roja (mala)|SWR gauge: {0}, red zone (poor)|Indicateur de ROS : {0}, zone rouge (mauvais)|SWR-Anzeige: {0}, roter Bereich (schlecht)
+Potencia reflejada: sin datos|Reflected power: no data|Puissance réfléchie : aucune donnée|Reflektierte Leistung: keine Daten
+Potencia reflejada: {0} %|Reflected power: {0} %|Puissance réfléchie : {0} %|Reflektierte Leistung: {0} %
+Curva de atenuacion: elige un cable de la tabla|Attenuation curve: choose a cable from the table|Courbe d’atténuation : choisissez un câble du tableau|Dämpfungskurve: Wähle ein Kabel aus der Tabelle
+Atenuacion de {0} segun la frecuencia: de {1} a {2} dB/100 m|{0} attenuation by frequency: {1} to {2} dB/100 m|Atténuation du {0} selon la fréquence : de {1} à {2} dB/100 m|Dämpfung von {0} nach Frequenz: {1} bis {2} dB/100 m
+Atenuacion de {0} segun la frecuencia: {1} dB/100 m a {2} MHz|{0} attenuation by frequency: {1} dB/100 m at {2} MHz|Atténuation du {0} selon la fréquence : {1} dB/100 m à {2} MHz|Dämpfung von {0} nach Frequenz: {1} dB/100 m bei {2} MHz
+Reparto de potencia: introduce frecuencia, longitud y potencia|Power split: enter frequency, length and power|Répartition de la puissance : saisissez fréquence, longueur et puissance|Leistungsaufteilung: Frequenz, Länge und Leistung eingeben
+Reparto de potencia: {0} W en la antena y {1} W perdidos en el cable|Power split: {0} W at the antenna and {1} W lost in the cable|Répartition de la puissance : {0} W à l’antenne et {1} W perdus dans le câble|Leistungsaufteilung: {0} W an der Antenne und {1} W im Kabel verloren
+Escala de potencia: sin datos|Power scale: no data|Échelle de puissance : aucune donnée|Leistungsskala: keine Daten
+Escala de potencia: {0} dBm|Power scale: {0} dBm|Échelle de puissance : {0} dBm|Leistungsskala: {0} dBm
+Dibujo de antenas: introduce una frecuencia|Antenna drawing: enter a frequency|Schéma des antennes : saisissez une fréquence|Antennenzeichnung: Frequenz eingeben
+Dipolo de media onda de {0} m y vertical de cuarto de onda de {1} m con radiales|Half-wave dipole of {0} m and quarter-wave vertical of {1} m with radials|Dipôle demi-onde de {0} m et verticale quart d’onde de {1} m avec radians|Halbwellendipol von {0} m und Viertelwellen-Vertikalantenne von {1} m mit Radials
+Plan de bandas de la region {0}: {1} bandas, ninguna resaltada|Band plan for region {0}: {1} bands, none highlighted|Plan de bandes de la région {0} : {1} bandes, aucune en surbrillance|Bandplan der Region {0}: {1} Bänder, keines hervorgehoben
+Plan de bandas de la region {0}: {1} MHz esta en la banda {2}|Band plan for region {0}: {1} MHz is in the {2} band|Plan de bandes de la région {0} : {1} MHz est dans la bande {2}|Bandplan der Region {0}: {1} MHz liegt im {2}-Band
+Plan de bandas de la region {0}: {1} MHz esta fuera de las bandas|Band plan for region {0}: {1} MHz is outside the bands|Plan de bandes de la région {0} : {1} MHz est hors des bandes|Bandplan der Region {0}: {1} MHz liegt außerhalb der Bänder
 E|E|E|O
 O|W|O|W
 `.trim().split("\n").map(line => line.split("|")));

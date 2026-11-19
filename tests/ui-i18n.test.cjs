@@ -49,6 +49,10 @@ test("catalog has complete, unique locale tuples and preserves technical safety 
   assert.equal(I.translate("ERROR: Unknown protocol error 0x1234", "de"), "FEHLER: Unknown protocol error 0x1234");
 });
 
+test("catalog keeps the compass row O|W|O|W used by the satellite radar", () => {
+  assert.ok(rows.some(row => row.join("|") === "O|W|O|W"));
+});
+
 test("dynamic catalog messages preserve parameter values and Spanish is lossless", () => {
   assert.equal(I.translate("  Editando EA5KAO.  ", "en-US"), "  Editing EA5KAO.  ");
   assert.equal(I.translate("3 contactos seleccionados (se conservan entre paginas).", "fr"),
@@ -281,6 +285,19 @@ test("DOM switching restores Spanish, retains input state, values and node ident
   assert.equal(button.textContent, "Conectar y respaldar");
   assert.equal(input.getAttribute("placeholder"), "Nombre");
   assert.ok(f.document.body.childNodes.includes(button));
+});
+
+test("text inside translate=\"no\" is left unchanged while plain text is translated", () => {
+  const f = fixture("?lang=fr");
+  const unit = new Node("option"); unit.setAttribute("translate", "no"); unit.textContent = "W";
+  const wrapper = new Node("div"); wrapper.setAttribute("translate", "no");
+  const inner = new Node("span"); inner.textContent = "W"; wrapper.append(inner);
+  const plain = new Node("span"); plain.textContent = "W";
+  f.document.body.append(unit, wrapper, plain);
+  f.context.BricohamsUI.mount(f.document);
+  assert.equal(unit.textContent, "W");
+  assert.equal(inner.textContent, "W");
+  assert.equal(plain.textContent, "O");
 });
 
 test("new DOM content and character changes are localized; native confirmation tokens stay literal", () => {

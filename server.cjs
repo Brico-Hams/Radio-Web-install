@@ -37,6 +37,7 @@ const BASE_FILES = [
   ...["bricohams-ardf", "bricohams-satellite", "bricohams-spectrum", "bricohams-labs", "bricohams-fusion",
     "f4hwn-fusion", "f4hwn-fieldops", "f4hwn-transfer", "f4hwn-labs"].map(id => `precompiled/${id}.bin`),
   "radios.html", "satelites.html", "satellite-ui.js", "satellites.css", "data/world-land-110m.txt",
+  "herramientas.html", "tools-core.js", "tools-ui.js", "tools.css",
   "index.html", "opengd77.html", "quansheng.html", "ayuda.html", "ayuda.en.html", "ayuda.fr.html", "ayuda.de.html", "bricohams-logo.png", "styles.css", "appearance.js", "app.js", "radio-core.js", "ui-i18n.js", "ui-translations.js",
   "transports.js", "quansheng-connector.js", "tk11-connector.js", "tk11-ui.js", "quansheng-channels.js", "quansheng-live.js", "quansheng-tools.js", "gd77-connector.js", "backup-store.js",
   "codeplug-editor.js", "radio-ui.js", "firmware-core.js", "firmware-catalog.js", "planning-core.js", "radioid-csv.js", "planning-ui.js", "satellite.min.js", "runtime-mode.js", "f4hwn-options.js", "custom-firmware-ui.js",
@@ -63,6 +64,8 @@ const BASE_FILES = [
 const ALLOWED_FILES = Object.freeze([...BASE_FILES, ...["en", "de", "it", "fr"].flatMap(lang =>
   BASE_FILES.filter(file => /^ayuda-.+\.html$/.test(file)).map(file => file.replace(/\.html$/, `.${lang}.html`)))]);
 const allowed = new Set(ALLOWED_FILES);
+// Station tools ship only in the desktop app and the Android APK; the GitHub Pages build skips them.
+const DESKTOP_ONLY_FILES = Object.freeze(["herramientas.html", "tools-core.js", "tools-ui.js", "tools.css"]);
 const { verify: verifyStudio } = require("./studio-pin.cjs");
 // Studio is a single self-contained page with inline scripts: it gets its own CSP that only admits those exact
 // scripts (hashes pinned in studio.lock.json) and no network access.
@@ -245,4 +248,4 @@ server.on("error", error => {
 });
 server.listen(8787, "127.0.0.1", () => console.log("RadiCodex (BricoHams): http://127.0.0.1:8787 (solo equipo local)"));
 }
-module.exports = { createServer, ALLOWED_FILES };
+module.exports = { createServer, ALLOWED_FILES, DESKTOP_ONLY_FILES };

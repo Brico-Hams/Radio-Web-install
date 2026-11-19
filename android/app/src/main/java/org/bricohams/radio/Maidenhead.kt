@@ -17,17 +17,23 @@ object Maidenhead {
     private const val LON_CELLS_PER_DEGREE = 12.0
     private const val LAT_CELLS_PER_DEGREE = 24.0
 
-    /** 6-character locator of a position, e.g. IM98ib. Latitude -90..90 and longitude -180..180 (the poles/antimeridian clamp to the last cell). */
-    fun fromLatLon(latitude: Double, longitude: Double): String {
+    /**
+     * Locator of a position with [length] 4, 6 (default, e.g. IM98ib) or 8 characters. Latitude -90..90 and longitude -180..180
+     * (the poles/antimeridian clamp to the last cell).
+     */
+    fun fromLatLon(latitude: Double, longitude: Double, length: Int = 6): String {
         requireUi(latitude.isFinite() && latitude in -90.0..90.0 && longitude.isFinite() && longitude in -180.0..180.0) {
             UiText(R.string.profile_position_invalid)
         }
-        val lon = floor((longitude + 180.0) * LON_CELLS_PER_DEGREE).toInt().coerceIn(0, 4319)
-        val lat = floor((latitude + 90.0) * LAT_CELLS_PER_DEGREE).toInt().coerceIn(0, 4319)
+        requireUi(length == 4 || length == 6 || length == 8) { UiText(R.string.tools_err_locator_length) }
+        // Cells of the 8-character grid: 1/120 degree of longitude and 1/240 degree of latitude.
+        val lon = floor((longitude + 180.0) * LON_CELLS_PER_DEGREE * 10).toInt().coerceIn(0, 43199)
+        val lat = floor((latitude + 90.0) * LAT_CELLS_PER_DEGREE * 10).toInt().coerceIn(0, 43199)
         return buildString {
-            append('A' + lon / 240); append('A' + lat / 240)
-            append('0' + lon % 240 / 24); append('0' + lat % 240 / 24)
-            append('a' + lon % 24); append('a' + lat % 24)
+            append('A' + lon / 2400); append('A' + lat / 2400)
+            append('0' + lon / 240 % 10); append('0' + lat / 240 % 10)
+            if (length >= 6) { append('a' + lon / 10 % 24); append('a' + lat / 10 % 24) }
+            if (length == 8) { append('0' + lon % 10); append('0' + lat % 10) }
         }
     }
 

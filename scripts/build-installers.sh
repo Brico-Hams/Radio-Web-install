@@ -18,6 +18,7 @@ app_files=(
   LICENSE AUTHORS.md ACKNOWLEDGEMENTS.md SUPPORT.md SECURITY.md
   anytone.html anytone-core.js anytone-ui.js
   ftx1.html ftx1-menu.js ftx1-core.js ftx1-ui.js
+  herramientas.html tools-core.js tools-ui.js tools.css
   icom.html icom-ui.js index.html opengd77.html quansheng.html ayuda.html ayuda.en.html ayuda.fr.html ayuda.de.html bricohams-logo.png styles.css satelites.html radios.html satellite-ui.js satellites.css
   ayuda-firmwares.html ayuda-configuracion.html ayuda-quansheng.html help-docs.css
   ayuda-opciones-f4hwn.html ayuda-presets-f4hwn.html ayuda-ardf.html ayuda-manual-f4hwn.html

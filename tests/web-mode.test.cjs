@@ -239,7 +239,7 @@ test("satellites: expired previous entries are dropped, one bad entry does not h
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
-const { ALLOWED_FILES: allowed } = require("../server.cjs");
+const { ALLOWED_FILES: allowed, DESKTOP_ONLY_FILES: desktopOnly } = require("../server.cjs");
 const { build } = require("../scripts/build-pages.cjs");
 const read = name => fs.readFileSync(path.join(__dirname, "..", name), "utf8");
 
@@ -249,7 +249,11 @@ test("pages build copies only the allow-list plus runtime.json and .nojekyll", (
   const files = fs.readdirSync(out, { recursive: true })
     .map(name => name.replace(/\\/g, "/"))
     .filter(name => fs.statSync(path.join(out, name)).isFile()).sort();
-  assert.deepEqual(files, [...allowed, ".nojekyll", "runtime.json"].sort());
+  assert.deepEqual(files, [...allowed.filter(name => !desktopOnly.includes(name)), ".nojekyll", "runtime.json"].sort());
+  for (const name of desktopOnly) {
+    assert.ok(allowed.includes(name), `${name} stays served by the desktop server`);
+    assert.ok(!files.includes(name), `${name} must not be published on GitHub Pages`);
+  }
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(out, "runtime.json"), "utf8")), { mode: "web" });
   fs.rmSync(out, { recursive: true });
 });

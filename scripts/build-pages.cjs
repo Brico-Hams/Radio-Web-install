@@ -1,13 +1,14 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
-const { ALLOWED_FILES } = require("../server.cjs");
+const { ALLOWED_FILES, DESKTOP_ONLY_FILES } = require("../server.cjs");
 
 const root = path.join(__dirname, "..");
 function build(outDir = path.join(root, "dist")) {
   fs.rmSync(outDir, { recursive: true, force: true });
   fs.mkdirSync(outDir, { recursive: true });
   for (const name of ALLOWED_FILES) {
+    if (DESKTOP_ONLY_FILES.includes(name)) continue;
     const source = name === "satellite.min.js"
       ? path.join(path.dirname(require.resolve("satellite.js/package.json")), "dist", name)
       : path.join(root, name);
