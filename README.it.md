@@ -373,7 +373,11 @@ Un agente accanto alla radio la controlla via CAT con Hamlib `rigctld` e offre u
 
 1. Avvia `rigctld` con la tua radio: `rigctld -m <modelo> -r <puerto>` (ad esempio `rigctld -m 1035 -r COM5`; elenco dei modelli con `rigctld -l`). Ascolta su `127.0.0.1:4532`.
 2. Avvia l’agente: `npm run remote` (opzioni: `--port`, `--rigctld-host`, `--rigctld-port`, `--openwebrx <url>`, `--listen 0.0.0.0` o la variabile `REMOTE_LISTEN` per LAN/Tailscale). La prima volta genera un token casuale in `~/.radicodex/remote-agent.json` (salva anche `openwebrxUrl`, host/porta di rigctld e `txLimitSeconds`, 180 per impostazione predefinita).
-3. Apri nel browser l’indirizzo stampato dall’agente, con il token nel frammento (`http://<ip>:8788/#token=...`). La console conserva il token nella sessione e lo rimuove dalla barra degli indirizzi.
+3. Apri nel browser l’indirizzo stampato dall’agente, con il token nel frammento (`https://<ip>:8788/#token=...&fp=...`). La console conserva il token nella sessione e lo rimuove (insieme a `fp`) dalla barra degli indirizzi.
+
+HTTPS: con `--listen` su un indirizzo non locale l’agente serve HTTPS per impostazione predefinita con un certificato autofirmato (ECDSA P-256) salvato in `~/.radicodex/remote-agent-tls.pem` (0600; riutilizzato e rigenerato se manca, non è valido, scade tra meno di 30 giorni o cambiano gli IP locali). Il browser avviserà una volta del certificato; l’impronta SHA-256 `fp` stampata permette di verificarlo. `--tls` forza HTTPS anche su loopback e `--no-tls` forza HTTP semplice (con avviso). Per l’app Android l’agente stampa il link `radicodex-remote://pair?host=<ip>&port=8788#token=...&fp=...` (token e impronta solo nel frammento).
+
+Spettro: con `--openwebrx <url>` l’agente serve OpenWebRX su `/sdr/` tramite la stessa origine autenticata (HTTP e WebSocket). La prima richiesta richiede il token e l’agente imposta il cookie `rs_session` (HttpOnly, SameSite=Strict, Secure con TLS, 12 h) per le richieste interne di OpenWebRX.
 
 Sicurezza: tutta l’API richiede il token; un solo operatore controlla la radio alla volta (30 s di inattività liberano il controllo); la trasmissione si interrompe da sola se mancano i heartbeat per 1 s, al raggiungimento del limite TX, alla perdita di `rigctld` o alla chiusura dell’agente. **Non aprire porte sul router (nessun port forwarding)**: per accedere fuori casa usa Tailscale o WireGuard e `--listen` con l’IP di quella rete.
 

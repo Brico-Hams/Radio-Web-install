@@ -5,9 +5,19 @@
 const crypto = require("node:crypto");
 const fs = require("node:fs");
 const http = require("node:http");
+const https = require("node:https");
+const net = require("node:net");
 const os = require("node:os");
 const path = require("node:path");
-const { RigctldClient } = require("./rigctld-client.cjs");
+const tlsLib = require("node:tls");
+const { RigctldClient, VFO_NAMES } = require("./rigctld-client.cjs");
+const remoteTls = require("./remote-tls.cjs");
+
+const SDR_PREFIX = "/sdr/";
+const SESSION_COOKIE = "rs_session";
+const SESSION_MS = 12 * 3600 * 1000;
+const HOP_BY_HOP = Object.freeze(["connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailer", "transfer-encoding", "upgrade"]);
+const isLoopbackHost = value => value === "localhost" || value === "::1" || /^127\./.test(value);
 
 const MODES = Object.freeze(["USB", "LSB", "CW", "CWR", "AM", "FM", "WFM", "RTTY", "PKTUSB", "PKTLSB", "PKTFM"]);
 // Level kinds: unit = 0..1 float, steps = 0 (off) or one of the rig's own values, enum = Hamlib AGC enum.
@@ -24,6 +34,7 @@ const STEP_MAX = 1_000_000;
 const BODY_LIMIT = 4096;
 const CMD_RATE_LIMIT = 20;
 const HEARTBEAT_TIMEOUT_MS = 1000;
+const SLOW_POLL_MS = 10000;
 const CONTROL_IDLE_MS = 30_000;
 const STATIC_FILES = Object.freeze({
   "/": ["remote.html", "text/html; charset=utf-8"],
@@ -79,8 +90,8 @@ function tokenMatches(expected, supplied) {
 }
 
 function csp(openwebrxUrl) {
-  // With a configured OpenWebRX only its origin may be framed; without one the manual URL field needs http(s).
-  const frame = openwebrxUrl ? new URL(openwebrxUrl).origin : "http: https:";
+  // With a configured OpenWebRX only the proxy and its origin may be framed; without one the manual URL field needs http(s).
+  const frame = openwebrxUrl ? `'self' ${new URL(openwebrxUrl).origin}` : "http: https:";
   return `default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-src ${frame}; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`;
 }
 
@@ -158,6 +169,10 @@ function createRemoteAgent(options = {}) {
   const pollMs = options.pollMs ?? 250;
   const host = options.host || "127.0.0.1";
   const policy = csp(openwebrxUrl);
+  const useTls = options.tls ?? !isLoopbackHost(host);
+  const identity = useTls ? remoteTls.ensure(configDir) : null;
+  const sdrTarget = openwebrxUrl ? new URL(openwebrxUrl) : null;
+  const sdrSessions = new Map();
 
   const client = new RigctldClient({
     host: options.rigctldHost || config.rigctldHost,
@@ -175,6 +190,8 @@ function createRemoteAgent(options = {}) {
   let capsDone = false;
   let capsAttempts = 0;
   const unreadable = new Set();
+  const controlStats = {};
+  const slowMs = options.slowControlMs ?? 1500;
   let agentTx = false;
   let txStart = 0;
   let lastBeat = 0;
@@ -205,7 +222,7 @@ function createRemoteAgent(options = {}) {
       smeter: rig.smeter,
       levels: { ...rig.levels },
       funcs: { ...rig.funcs },
-      caps,
+      caps: capsView(),
       txSeconds: rig.ptt ? Math.max(0, Math.floor((now() - txStart) / 1000)) : 0,
       operator: !active ? null : owner === clientId ? "me" : "other"
     };
@@ -255,19 +272,54 @@ function createRemoteAgent(options = {}) {
   });
 
   // Reads every supported level/function once; a read the rig refuses is reported as null and never retried.
+  // Skipped while transmitting or when a client command is waiting, so it never delays PTT or user actions.
+  const controlsBusy = () => rig.ptt || agentTx || client.pending > 0 || closing || !client.connected;
+
+  // Reads one control. An RPRT error (null) disables it for the session; a slow reply twice in a row
+  // throttles it to SLOW_POLL_MS (and disables it when it also failed).
+  async function readControl(id, read, store) {
+    const stat = (controlStats[id] ||= { slow: 0, last: -Infinity });
+    if (stat.slow >= 2 && now() - stat.last < SLOW_POLL_MS) return;
+    const started = now();
+    const value = await read();
+    const elapsed = now() - started;
+    stat.last = started;
+    stat.slow = elapsed > slowMs ? stat.slow + 1 : 0;
+    store(value);
+    if (value === null) unreadable.add(id);
+  }
+
   async function pollControls() {
     for (const [name, spec] of Object.entries(LEVELS)) {
+      if (controlsBusy()) return;
       if (!caps.level[name]?.get || unreadable.has(name)) continue;
-      const value = await client.getLevel(name);
-      rig.levels[spec.key] = value === null ? null : spec.kind === "unit" ? Math.round(value * 1000) / 1000 : Math.round(value);
-      if (value === null) unreadable.add(name);
+      await readControl(name, () => client.getLevel(name), value => {
+        rig.levels[spec.key] = value === null ? null : spec.kind === "unit" ? Math.round(value * 1000) / 1000 : Math.round(value);
+      });
     }
     for (const [name, key] of Object.entries(FUNCS)) {
+      if (controlsBusy()) return;
       if (!caps.func[name]?.get || unreadable.has(name)) continue;
-      rig.funcs[key] = await client.getFunc(name);
-      if (rig.funcs[key] === null) unreadable.add(name);
+      await readControl(name, () => client.getFunc(name), value => { rig.funcs[key] = value; });
     }
   }
+
+  // Capabilities as shown to the console: controls found unreadable are reported as not gettable.
+  function capsView() {
+    if (!unreadable.size) return caps;
+    const view = { ...caps, level: { ...caps.level }, func: { ...caps.func } };
+    for (const name of unreadable) {
+      if (view.level[name]) view.level[name] = { ...view.level[name], get: false };
+      if (view.func[name]) view.func[name] = { ...view.func[name], get: false };
+    }
+    return view;
+  }
+
+  const rigVfoName = letter => {
+    const named = rig.vfo === "Main" || rig.vfo === "Sub";
+    return named ? (letter === "A" ? "Main" : "Sub") : (letter === "A" ? "VFOA" : "VFOB");
+  };
+  const isFirstVfo = () => !rig.vfo || rig.vfo === "VFOA" || rig.vfo === "Main";
 
   async function pollOnce() {
     if (polling || !client.connected || closing) return;
@@ -282,10 +334,16 @@ function createRemoteAgent(options = {}) {
       if (ptt !== rig.ptt) setRigPtt(ptt);
       rig.smeter = rig.ptt ? null : await client.getStrength();
       if (pollCount % 4 === 1) {
-        try { rig.vfo = await client.getVfo(); } catch (error) { if (typeof error.code !== "number") throw error; }
-        try { rig.split = (await client.getSplit()).split; } catch (error) { if (typeof error.code !== "number") throw error; }
+        try {
+          const vfo = await client.getVfo();
+          if (VFO_NAMES.includes(vfo)) rig.vfo = vfo;
+        } catch (error) { if (typeof error.code !== "number") throw error; }
+        try {
+          const split = await client.getSplit();
+          rig.split = split.split;
+        } catch (error) { if (typeof error.code !== "number") throw error; }
       }
-      if (pollCount % 4 === 2 && !rig.ptt) await pollControls();
+      if (pollCount % 4 === 2 && !controlsBusy()) await pollControls();
     } catch (error) {
       if (typeof error.code === "number") log(`rigctld: ${error.message}`);
     } finally {
@@ -407,9 +465,14 @@ function createRemoteAgent(options = {}) {
           if (rig.ptt) return { status: 409, body: { error: "Cambio bloqueado durante TX." } };
           await client.tune();
           break;
-        case "vfo": await client.setVfo(command.value); rig.vfo = command.value; break;
+        case "vfo": {
+          const name = rigVfoName(command.value === "VFOA" ? "A" : "B");
+          await client.setVfo(name);
+          rig.vfo = name;
+          break;
+        }
         case "split":
-          await client.setSplit(command.value, (rig.vfo || "VFOA") === "VFOA" ? "VFOB" : "VFOA");
+          await client.setSplit(command.value, rigVfoName(isFirstVfo() ? "B" : "A"));
           rig.split = command.value;
           break;
         case "ptt":
@@ -435,7 +498,7 @@ function createRemoteAgent(options = {}) {
     const route = `${request.method} ${url.pathname}`;
     if (route === "GET /api/state") { send(response, 200, snapshot(clientId)); return; }
     if (route === "GET /api/config") {
-      send(response, 200, { openwebrxUrl, openwebrxSpanHz: config.openwebrxSpanHz, callsign: config.callsign });
+      send(response, 200, { openwebrxUrl, openwebrxSpanHz: config.openwebrxSpanHz, callsign: config.callsign, sdrProxy: Boolean(sdrTarget) });
       return;
     }
     if (route === "GET /api/events") {
@@ -490,20 +553,164 @@ function createRemoteAgent(options = {}) {
     });
   }
 
-  const server = http.createServer(async (request, response) => {
+  const upgradedSockets = new Set();
+
+  function sessionCookieOf(request) {
+    for (const part of String(request.headers.cookie || "").split(";")) {
+      const [key, ...rest] = part.trim().split("=");
+      if (key === SESSION_COOKIE) return rest.join("=");
+    }
+    return "";
+  }
+
+  // Returns { ok, cookie }: cookie is set only when a fresh session was issued for a token/Bearer request.
+  function sdrAuth(request, url) {
+    const time = now();
+    for (const [id, expires] of sdrSessions) if (expires <= time) sdrSessions.delete(id);
+    const id = sessionCookieOf(request);
+    if (id && sdrSessions.has(id)) return { ok: true, cookie: "" };
+    const header = request.headers.authorization || "";
+    const supplied = header.startsWith("Bearer ") ? header.slice(7) : url.searchParams.get("token");
+    if (!tokenMatches(config.token, supplied)) return { ok: false, cookie: "" };
+    const fresh = crypto.randomBytes(32).toString("base64url");
+    sdrSessions.set(fresh, time + SESSION_MS);
+    const attrs = ["Path=/sdr/", "HttpOnly", "SameSite=Strict", `Max-Age=${SESSION_MS / 1000}`];
+    if (useTls) attrs.push("Secure");
+    return { ok: true, cookie: `${SESSION_COOKIE}=${fresh}; ${attrs.join("; ")}` };
+  }
+
+  function upstreamPath(url) {
+    const search = new URL(url.href);
+    search.searchParams.delete("token");
+    return `${sdrTarget.pathname.replace(/\/?$/, "/")}${url.pathname.slice(SDR_PREFIX.length)}${search.search}`;
+  }
+
+  function upstreamHeaders(request, { keepUpgrade = false } = {}) {
+    const listed = String(request.headers.connection || "").toLowerCase().split(",").map(item => item.trim());
+    const headers = {};
+    for (const [key, value] of Object.entries(request.headers)) {
+      const lower = key.toLowerCase();
+      if (lower === "authorization" || lower === "cookie") continue;
+      if (!keepUpgrade && (HOP_BY_HOP.includes(lower) || listed.includes(lower))) continue;
+      headers[key] = value;
+    }
+    const cookies = String(request.headers.cookie || "").split(";").map(item => item.trim())
+      .filter(item => item && !item.startsWith(`${SESSION_COOKIE}=`));
+    if (cookies.length) headers.cookie = cookies.join("; ");
+    headers.host = sdrTarget.host;
+    return headers;
+  }
+
+  function rewriteLocation(value) {
+    if (value.startsWith(sdrTarget.origin)) return `/sdr${value.slice(sdrTarget.origin.length)}`;
+    return value.startsWith("/") && !value.startsWith("//") ? `/sdr${value}` : value;
+  }
+
+  function proxyResponseHeaders(upstream, cookie) {
+    const listed = String(upstream.headers.connection || "").toLowerCase().split(",").map(item => item.trim());
+    const headers = {};
+    for (const [key, value] of Object.entries(upstream.headers)) {
+      const lower = key.toLowerCase();
+      if (HOP_BY_HOP.includes(lower) || listed.includes(lower)) continue;
+      if (lower === "set-cookie") headers[key] = value.map(item => item.replace(/;\s*Domain=[^;]*/gi, ""));
+      else if (lower === "location") headers[key] = rewriteLocation(value);
+      else headers[key] = value;
+    }
+    const lowerKeys = Object.fromEntries(Object.keys(headers).map(key => [key.toLowerCase(), key]));
+    const policyKey = lowerKeys["content-security-policy"];
+    if (policyKey) {
+      const directives = String(headers[policyKey]).split(";").map(item => item.trim())
+        .filter(item => item && !/^frame-ancestors\b/i.test(item));
+      headers[policyKey] = [...directives, "frame-ancestors 'self'"].join("; ");
+    } else {
+      headers["Content-Security-Policy"] = "frame-ancestors 'self'";
+    }
+    if (lowerKeys["x-frame-options"]) headers[lowerKeys["x-frame-options"]] = "SAMEORIGIN";
+    if (cookie) {
+      const key = lowerKeys["set-cookie"];
+      const existing = key ? headers[key] : [];
+      delete headers[key];
+      headers["Set-Cookie"] = [...existing, cookie];
+    }
+    return headers;
+  }
+
+  function proxySdr(request, response, url) {
+    if (url.pathname === "/sdr") {
+      response.writeHead(308, { Location: `${SDR_PREFIX}${url.search}` });
+      response.end();
+      return;
+    }
+    const auth = sdrAuth(request, url);
+    if (!auth.ok) { send(response, 401, { error: "Token no valido." }, { "WWW-Authenticate": "Bearer" }); return; }
+    // The proxied page keeps its own headers and caching; only the agent's console policy is dropped.
+    for (const header of ["Content-Security-Policy", "Cache-Control", "X-Content-Type-Options"]) response.removeHeader(header);
+    const transport = sdrTarget.protocol === "https:" ? https : http;
+    const upstream = transport.request({
+      host: sdrTarget.hostname.replace(/^\[|\]$/g, ""),
+      port: sdrTarget.port || (sdrTarget.protocol === "https:" ? 443 : 80),
+      method: request.method,
+      path: upstreamPath(url),
+      headers: upstreamHeaders(request)
+    }, reply => {
+      response.writeHead(reply.statusCode, reply.statusMessage, proxyResponseHeaders(reply, auth.cookie));
+      reply.pipe(response);
+    });
+    upstream.on("error", () => {
+      if (!response.headersSent) send(response, 502, { error: "OpenWebRX no disponible." });
+      else response.destroy();
+    });
+    response.on("close", () => upstream.destroy());
+    request.pipe(upstream);
+  }
+
+  function proxySdrUpgrade(request, socket, head) {
+    const reject = status => { socket.end(`HTTP/1.1 ${status}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`); };
+    let url;
+    try { url = new URL(request.url, "http://agent.local"); } catch { reject("400 Bad Request"); return; }
+    if (!sdrTarget || !url.pathname.startsWith(SDR_PREFIX)) { socket.destroy(); return; }
+    if (!sdrAuth(request, url).ok) { reject("401 Unauthorized"); return; }
+    const secure = sdrTarget.protocol === "https:";
+    const port = Number(sdrTarget.port) || (secure ? 443 : 80);
+    const hostname = sdrTarget.hostname.replace(/^\[|\]$/g, "");
+    const upstream = secure
+      ? tlsLib.connect({ host: hostname, port, servername: net.isIP(hostname) ? undefined : hostname })
+      : net.connect({ host: hostname, port });
+    upgradedSockets.add(socket);
+    upgradedSockets.add(upstream);
+    const drop = () => { socket.destroy(); upstream.destroy(); upgradedSockets.delete(socket); upgradedSockets.delete(upstream); };
+    socket.on("error", drop);
+    upstream.on("error", drop);
+    socket.on("close", drop);
+    upstream.on("close", drop);
+    upstream.once(secure ? "secureConnect" : "connect", () => {
+      const headers = upstreamHeaders(request, { keepUpgrade: true });
+      const lines = [`${request.method} ${upstreamPath(url)} HTTP/1.1`];
+      for (const [key, value] of Object.entries(headers)) for (const item of [].concat(value)) lines.push(`${key}: ${item}`);
+      upstream.write(`${lines.join("\r\n")}\r\n\r\n`);
+      if (head?.length) upstream.write(head);
+      socket.pipe(upstream);
+      upstream.pipe(socket);
+    });
+  }
+
+  const requestHandler = async (request, response) => {
     response.setHeader("Content-Security-Policy", policy);
     response.setHeader("X-Content-Type-Options", "nosniff");
     response.setHeader("Referrer-Policy", "no-referrer");
     response.setHeader("Cache-Control", "no-store");
     try {
       const url = new URL(request.url, "http://agent.local");
-      if (url.pathname.startsWith("/api/")) await handleApi(request, response, url);
+      if (sdrTarget && (url.pathname === "/sdr" || url.pathname.startsWith(SDR_PREFIX))) proxySdr(request, response, url);
+      else if (url.pathname.startsWith("/api/")) await handleApi(request, response, url);
       else serveStatic(request, response, url);
     } catch (error) {
       if (!response.headersSent) send(response, 500, { error: "Error interno." });
       else response.end();
     }
-  });
+  };
+  const server = useTls ? https.createServer({ key: identity.key, cert: identity.cert }, requestHandler) : http.createServer(requestHandler);
+  server.on("upgrade", proxySdrUpgrade);
 
   function pushState(entry, force = false) {
     const text = JSON.stringify(snapshot(entry.clientId));
@@ -536,13 +743,17 @@ function createRemoteAgent(options = {}) {
     client.stop();
     for (const entry of sseClients) entry.response.end();
     sseClients.clear();
+    for (const socket of upgradedSockets) socket.destroy();
     await new Promise(resolve => {
       server.close(() => resolve());
       server.closeAllConnections();
     });
   }
 
-  return { server, client, token: config.token, config, openwebrxUrl, start, close, snapshot };
+  return {
+    server, client, token: config.token, config, openwebrxUrl, start, close, snapshot,
+    tls: useTls, fingerprint: identity ? identity.fingerprint : ""
+  };
 }
 
 function parseArgs(argv, env = process.env) {
@@ -552,6 +763,7 @@ function parseArgs(argv, env = process.env) {
     "--openwebrx": "openwebrxUrl", "--config-dir": "configDir"
   };
   for (let i = 0; i < argv.length; i += 1) {
+    if (argv[i] === "--tls" || argv[i] === "--no-tls") { args.tls = argv[i] === "--tls"; continue; }
     const name = flags[argv[i]];
     if (!name || i + 1 >= argv.length) throw new Error(`Argumento no valido: ${argv[i]}`);
     args[name] = argv[i += 1];
@@ -574,13 +786,19 @@ async function main() {
   const args = parseArgs(process.argv.slice(2));
   const agent = createRemoteAgent({
     host: args.listen, port: args.port, rigctldHost: args.rigctldHost, rigctldPort: args.rigctldPort,
-    openwebrxUrl: args.openwebrxUrl, configDir: args.configDir, log: message => console.log(`[remote] ${message}`)
+    openwebrxUrl: args.openwebrxUrl, configDir: args.configDir, tls: args.tls, log: message => console.log(`[remote] ${message}`)
   });
   const address = await agent.start();
   const hosts = args.listen === "0.0.0.0" || args.listen === "::" ? lanAddresses()
     : args.listen === "127.0.0.1" ? ["127.0.0.1"] : [args.listen];
   console.log(`Remote shack escuchando en ${args.listen}:${address.port}`);
-  for (const ip of hosts) console.log(`Consola: http://${ip}:${address.port}/#token=${agent.token}`);
+  if (args.tls === false) console.warn("AVISO: --no-tls usa HTTP sin cifrar; el token y el control viajan en claro.");
+  const fragment = `#token=${agent.token}${agent.tls ? `&fp=${agent.fingerprint}` : ""}`;
+  for (const ip of hosts) {
+    console.log(`Consola: ${agent.tls ? "https" : "http"}://${ip}:${address.port}/${fragment}`);
+    console.log(`Android: radicodex-remote://pair?host=${ip}&port=${address.port}${fragment}`);
+  }
+  if (agent.tls) console.log(`Huella TLS (SHA-256): ${agent.fingerprint}`);
   if (args.listen === "127.0.0.1") console.log("Solo acceso local. Usa --listen 0.0.0.0 para LAN/Tailscale.");
   let stopping = false;
   const stop = async () => {

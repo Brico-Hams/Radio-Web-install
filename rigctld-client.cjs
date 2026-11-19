@@ -17,6 +17,7 @@ const GET_LINES = Object.freeze({ f: 1, m: 2, t: 1, l: 1, u: 1, v: 1, s: 2 });
 // Levels/functions the console may touch; anything else is never sent to rigctld.
 const LEVEL_NAMES = Object.freeze(["AF", "RF", "RFPOWER", "PREAMP", "ATT", "AGC"]);
 const FUNC_NAMES = Object.freeze(["NB", "NR", "TUNER"]);
+const VFO_NAMES = Object.freeze(["VFOA", "VFOB", "Main", "Sub", "MEM"]);
 // `\dump_caps` has no fixed length: it ends with a RPRT line, or (older builds) simply goes quiet.
 const BLOCK_IDLE_MS = 250;
 
@@ -70,7 +71,7 @@ class RigctldClient extends EventEmitter {
     super();
     this.host = options.host || "127.0.0.1";
     this.port = options.port || 4532;
-    this.timeoutMs = options.timeoutMs ?? 2000;
+    this.timeoutMs = options.timeoutMs ?? 5000;
     this.reconnectMs = options.reconnectMs ?? 3000;
     this.socketFactory = options.socketFactory || ((port, host) => net.connect({ port, host }));
     this.connected = false;
@@ -82,6 +83,9 @@ class RigctldClient extends EventEmitter {
     this.lines = [];
     this.reconnectTimer = null;
   }
+
+  // Commands queued behind the one in flight.
+  get pending() { return this.queue.length; }
 
   start() {
     if (this.running) return;
@@ -286,14 +290,18 @@ class RigctldClient extends EventEmitter {
     return reply.trim();
   }
 
-  setVfo(vfo) { return this.send(`V ${vfo}`); }
+  setVfo(vfo) {
+    if (!VFO_NAMES.includes(vfo)) throw new RigctldError(`vfo "${vfo}" not allowed`, "invalid");
+    return this.send(`V ${vfo}`);
+  }
 
   async getSplit() {
     const [split, txVfo] = await this.send("s");
     return { split: Number(split) > 0, txVfo: txVfo.trim() };
   }
 
-  setSplit(on, txVfo = "VFOB") { return this.send(`S ${on ? 1 : 0} ${txVfo}`); }
+  setSplit(on, txVfo = "VFOB") {
+    if (!VFO_NAMES.includes(txVfo)) throw new RigctldError(`vfo "${txVfo}" not allowed`, "invalid"); return this.send(`S ${on ? 1 : 0} ${txVfo}`); }
 
   // Level value, or null when the rig does not support/answer it (RPRT error).
   async getLevel(name) {
@@ -338,4 +346,4 @@ class RigctldClient extends EventEmitter {
   }
 }
 
-module.exports = { RigctldClient, RigctldError, parseCaps, LEVEL_NAMES, FUNC_NAMES };
+module.exports = { RigctldClient, RigctldError, parseCaps, LEVEL_NAMES, FUNC_NAMES, VFO_NAMES };

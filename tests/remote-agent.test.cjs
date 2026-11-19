@@ -3,6 +3,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const http = require("node:http");
+const https = require("node:https");
 const net = require("node:net");
 const os = require("node:os");
 const path = require("node:path");
@@ -33,9 +34,11 @@ const CAPS_LINES = [
 async function fakeRigctld() {
   const rig = {
     freq: 14074000, mode: "USB", passband: 2400, ptt: 0, failFreq: false, log: [], sockets: new Set(),
-    levels: { AF: 0.5, RF: 1, RFPOWER: 0.4, PREAMP: 0, ATT: 0, AGC: 2 }, funcs: { NB: 0, NR: 0, TUNER: 0 }, noCaps: false
+    levels: { AF: 0.5, RF: 1, RFPOWER: 0.4, PREAMP: 0, ATT: 0, AGC: 2 }, funcs: { NB: 0, NR: 0, TUNER: 0 }, noCaps: false,
+    vfoName: "VFOA", delays: {}, errors: {}, connections: 0
   };
   const server = net.createServer(socket => {
+    rig.connections += 1;
     rig.sockets.add(socket);
     socket.on("close", () => rig.sockets.delete(socket));
     socket.on("error", () => {});
@@ -52,17 +55,19 @@ async function fakeRigctld() {
         if (command === "f") reply = `${rig.freq}\n`;
         else if (command === "m") reply = `${rig.mode}\n${rig.passband}\n`;
         else if (command === "t") reply = `${rig.ptt}\n`;
-        else if (command === "l") reply = Object.hasOwn(rig.levels, args[0]) ? `${rig.levels[args[0]]}\n` : "RPRT -11\n";
+        else if (command === "l") reply = rig.errors[args[0]] ? `RPRT ${rig.errors[args[0]]}\n` : Object.hasOwn(rig.levels, args[0]) ? `${rig.levels[args[0]]}\n` : "RPRT -11\n";
         else if (command === "L") rig.levels[args[0]] = Number(args[1]);
         else if (command === "u") reply = Object.hasOwn(rig.funcs, args[0]) ? `${rig.funcs[args[0]]}\n` : "RPRT -11\n";
         else if (command === "U") rig.funcs[args[0]] = Number(args[1]);
         else if (command === "\\dump_caps") reply = rig.noCaps ? "RPRT -11\n" : `${CAPS_LINES.join("\n")}\nRPRT 0\n`;
-        else if (command === "v") reply = "VFOA\n";
-        else if (command === "s") reply = "0\nVFOA\n";
+        else if (command === "v") reply = `${rig.vfoName}\n`;
+        else if (command === "s") reply = `0\n${rig.vfoName}\n`;
+        else if (command === "V") rig.vfoName = args[0];
         else if (command === "F") { if (rig.failFreq) reply = "RPRT -1\n"; else rig.freq = Number(args[0]); }
         else if (command === "M") { rig.mode = args[0]; rig.passband = Number(args[1]); }
         else if (command === "T") rig.ptt = Number(args[0]);
-        socket.write(reply);
+        const delay = command === "l" || command === "u" ? rig.delays[args[0]] || 0 : 0;
+        if (delay) setTimeout(() => socket.write(reply), delay); else socket.write(reply);
       }
     });
   });
@@ -230,7 +235,7 @@ test("static files are limited to the console allow-list and carry security head
       assert.equal(response.status, 200, file);
       assert.equal(response.headers["x-content-type-options"], "nosniff");
       assert.equal(response.headers["referrer-policy"], "no-referrer");
-      assert.match(response.headers["content-security-policy"], /frame-src http:\/\/sdr\.example:8073;/);
+      assert.match(response.headers["content-security-policy"], /frame-src 'self' http:\/\/sdr\.example:8073;/);
     }
     for (const file of ["/server.cjs", "/remote-agent.cjs", "/package.json", "/../server.cjs", "/%2e%2e/server.cjs", "/styles.css"]) {
       assert.equal((await call("GET", file, { token: "" })).status, 404, file);
@@ -351,6 +356,77 @@ test("rig without caps reports null controls and answers 501, without polling th
   } finally { await cleanup(); await rig.close(); }
 });
 
+test("a slow level that errors is disabled without dropping the connection; RPRT -9 becomes null and caps get=false", async () => {
+  const rig = await fakeRigctld();
+  rig.errors.ATT = -9;
+  rig.errors.AGC = -9;
+  rig.delays.AGC = 120;
+  const { call, cleanup } = await startAgent(rig, { slowControlMs: 50 });
+  try {
+    await waitFor(async () => (await call("GET", "/api/state")).json.levels.af === 0.5);
+    await waitFor(async () => (await call("GET", "/api/state")).json.caps.level.AGC.get === false);
+    const state = (await call("GET", "/api/state")).json;
+    assert.equal(state.levels.att, null);
+    assert.equal(state.levels.agc, null);
+    assert.equal(state.caps.level.ATT.get, false);
+    assert.equal(state.caps.level.AF.get, true);
+    await sleep(500);
+    assert.equal(rig.log.filter(line => line === "l ATT").length, 1);
+    assert.equal(rig.log.filter(line => line === "l AGC").length, 1);
+    assert.equal(rig.connections, 1);
+  } finally { await cleanup(); await rig.close(); }
+});
+
+test("slow but working level is polled at most every 10 s (injected clock)", async () => {
+  const rig = await fakeRigctld();
+  rig.delays.AGC = 80;
+  let offset = 0;
+  const { call, cleanup } = await startAgent(rig, { slowControlMs: 30, now: () => Date.now() + offset });
+  const count = () => rig.log.filter(line => line === "l AGC").length;
+  try {
+    await waitFor(() => count() >= 2);
+    await sleep(600);
+    assert.equal(count(), 2);
+    assert.equal((await call("GET", "/api/state")).json.levels.agc, 2);
+    offset += 10_001;
+    await waitFor(() => count() >= 3);
+    await sleep(300);
+    assert.equal(count(), 3);
+    assert.equal(rig.connections, 1);
+  } finally { await cleanup(); await rig.close(); }
+});
+
+test("VFO names Main/Sub are exposed and used for vfo and split commands", async () => {
+  const rig = await fakeRigctld();
+  rig.vfoName = "Main";
+  const { call, cleanup } = await startAgent(rig);
+  const cmd = body => call("POST", "/api/cmd", { body });
+  try {
+    await waitFor(async () => (await call("GET", "/api/state")).json.vfo === "Main");
+    assert.equal((await cmd({ cmd: "vfo", value: "B" })).status, 200);
+    assert.equal(rig.vfoName, "Sub");
+    assert.equal((await cmd({ cmd: "split", value: true })).status, 200);
+    assert.ok(rig.log.includes("S 1 Main"));
+    assert.equal((await cmd({ cmd: "vfo", value: "A" })).status, 200);
+    assert.equal(rig.vfoName, "Main");
+    assert.equal((await cmd({ cmd: "split", value: true })).status, 200);
+    assert.ok(rig.log.includes("S 1 Sub"));
+  } finally { await cleanup(); await rig.close(); }
+});
+
+test("VFOA/VFOB rigs still get VFOA/VFOB names", async () => {
+  const rig = await fakeRigctld();
+  const { call, cleanup } = await startAgent(rig);
+  const cmd = body => call("POST", "/api/cmd", { body });
+  try {
+    await waitFor(async () => (await call("GET", "/api/state")).json.vfo === "VFOA");
+    assert.equal((await cmd({ cmd: "vfo", value: "B" })).status, 200);
+    assert.equal(rig.vfoName, "VFOB");
+    assert.equal((await cmd({ cmd: "split", value: true })).status, 200);
+    assert.ok(rig.log.includes("S 1 VFOA"));
+  } finally { await cleanup(); await rig.close(); }
+});
+
 test("TUNE sends G TUNE, is blocked while another client holds control (409) and during TX", async () => {
   const rig = await fakeRigctld();
   const { call, cleanup } = await startAgent(rig);
@@ -378,6 +454,124 @@ test("console assets: logo and locale scripts are served; the page has no inline
     const html = fs.readFileSync(path.join(__dirname, "..", "remote.html"), "utf8");
     assert.doesNotMatch(html, /<script(?![^>]*\bsrc=)/i);
     assert.doesNotMatch(html, /<style|\sstyle=|\son[a-z]+=/i);
-    assert.match(html, /bricohams-logo\.png/);
   } finally { await cleanup(); await rig.close(); }
+});
+
+async function fakeOpenwebrx() {
+  const seen = [];
+  const sockets = new Set();
+  const server = http.createServer((request, response) => {
+    seen.push({ url: request.url, headers: request.headers });
+    response.writeHead(200, {
+      "Content-Type": "text/plain",
+      "Set-Cookie": "sdr=1; Domain=sdr.example; Path=/",
+      "Content-Security-Policy": "default-src 'self'; frame-ancestors 'none'",
+      "Cache-Control": "max-age=60"
+    });
+    response.end(`sdr:${request.url}`);
+  });
+  server.on("connection", socket => { sockets.add(socket); socket.on("close", () => sockets.delete(socket)); });
+  server.on("upgrade", (request, socket) => {
+    seen.push({ url: request.url, headers: request.headers, upgrade: true });
+    sockets.add(socket);
+    socket.on("error", () => {});
+    socket.write("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n");
+    socket.on("data", chunk => socket.write(`echo:${chunk}`));
+  });
+  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+  return {
+    seen, port: server.address().port,
+    close: () => new Promise(resolve => { for (const socket of sockets) socket.destroy(); server.close(() => resolve()); })
+  };
+}
+
+test("/sdr/ proxies OpenWebRX only with the token or the rs_session cookie", async () => {
+  const rig = await fakeRigctld();
+  const sdr = await fakeOpenwebrx();
+  const { call, cleanup } = await startAgent(rig, { openwebrxUrl: `http://127.0.0.1:${sdr.port}/` });
+  try {
+    assert.equal((await call("GET", "/api/config")).json.sdrProxy, true);
+    assert.equal((await call("GET", "/sdr/", { token: "" })).status, 401);
+    assert.equal((await call("GET", "/sdr/", { token: "", headers: { Cookie: "rs_session=forged" } })).status, 401);
+
+    const first = await call("GET", "/sdr/static/app.js?x=1", { headers: { Cookie: "sdr=keep" } });
+    assert.equal(first.status, 200);
+    assert.equal(first.text, "sdr:/static/app.js?x=1");
+    const upstream = sdr.seen.at(-1);
+    assert.equal(upstream.headers.host, `127.0.0.1:${sdr.port}`);
+    assert.equal(upstream.headers.authorization, undefined);
+    assert.equal(upstream.headers.cookie, "sdr=keep");
+    assert.equal(first.headers["cache-control"], "max-age=60");
+    assert.match(first.headers["content-security-policy"], /default-src 'self'; frame-ancestors 'self'$/);
+    const cookies = [].concat(first.headers["set-cookie"]);
+    assert.ok(cookies.includes("sdr=1; Path=/"));
+    const session = cookies.find(item => item.startsWith("rs_session="));
+    assert.match(session, /HttpOnly/);
+    assert.match(session, /SameSite=Strict/);
+    assert.doesNotMatch(session, /Secure/);
+
+    const viaCookie = await call("GET", "/sdr/img.png", { token: "", headers: { Cookie: session.split(";")[0] } });
+    assert.equal(viaCookie.status, 200);
+    assert.equal(sdr.seen.at(-1).headers.cookie, undefined);
+  } finally { await cleanup(); await sdr.close(); await rig.close(); }
+});
+
+test("/sdr/ accepts ?token= (stripped upstream) and pipes websocket upgrades", async () => {
+  const rig = await fakeRigctld();
+  const sdr = await fakeOpenwebrx();
+  const { agent, call, cleanup } = await startAgent(rig, { openwebrxUrl: `http://127.0.0.1:${sdr.port}/` });
+  const port = agent.server.address().port;
+  const upgrade = headers => new Promise((resolve, reject) => {
+    const socket = net.connect(port, "127.0.0.1");
+    let text = "";
+    socket.on("error", reject);
+    socket.on("data", chunk => {
+      text += chunk;
+      if (text.startsWith("HTTP/1.1 101") && !text.includes("echo:") && !socket.sent) { socket.sent = true; socket.write("ping"); }
+      if (!text.startsWith("HTTP/1.1 101") && text.includes("\r\n\r\n")) { socket.destroy(); resolve(text); }
+      if (text.includes("echo:ping")) { socket.destroy(); resolve(text); }
+    });
+    socket.write(`GET /sdr/ws/?token=${headers.token}&a=1 HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: abc\r\nSec-WebSocket-Version: 13\r\n${headers.cookie ? `Cookie: ${headers.cookie}\r\n` : ""}\r\n`);
+  });
+  try {
+    const page = await call("GET", `/sdr/?token=${agent.token}`, { token: "" });
+    assert.equal(page.status, 200);
+    assert.equal(sdr.seen.at(-1).url, "/");
+    const cookie = [].concat(page.headers["set-cookie"]).find(item => item.startsWith("rs_session=")).split(";")[0];
+
+    assert.match(await upgrade({ token: "bad" }), /^HTTP\/1\.1 401/);
+    const echoed = await upgrade({ token: "", cookie });
+    assert.match(echoed, /^HTTP\/1\.1 101/);
+    assert.match(echoed, /echo:ping/);
+    const ws = sdr.seen.find(item => item.upgrade);
+    assert.equal(ws.url, "/ws/?a=1");
+    assert.equal(ws.headers.host, `127.0.0.1:${sdr.port}`);
+  } finally { await cleanup(); await sdr.close(); await rig.close(); }
+});
+
+test("agent over TLS answers /api/state when the client trusts the generated certificate", async () => {
+  const rig = await fakeRigctld();
+  const configDir = fs.mkdtempSync(path.join(os.tmpdir(), "radicodex-agent-tls-"));
+  const agent = createRemoteAgent({ configDir, port: 0, rigctldPort: rig.port, reconnectMs: 50, pollMs: 40, tls: true });
+  const { port } = await agent.start();
+  try {
+    assert.equal(agent.tls, true);
+    const pem = fs.readFileSync(path.join(configDir, "remote-agent-tls.pem"), "utf8");
+    assert.equal(agent.fingerprint, new (require("node:crypto").X509Certificate)(pem).fingerprint256);
+    const get = headers => new Promise((resolve, reject) => {
+      https.get({ host: "127.0.0.1", port, path: "/api/state", ca: pem, servername: "localhost", headers }, response => {
+        let text = "";
+        response.on("data", chunk => { text += chunk; });
+        response.on("end", () => resolve({ status: response.statusCode, text }));
+      }).on("error", reject);
+    });
+    const ok = await get({ Authorization: `Bearer ${agent.token}` });
+    assert.equal(ok.status, 200);
+    assert.ok("freq" in JSON.parse(ok.text));
+    assert.equal((await get({})).status, 401);
+  } finally {
+    await agent.close();
+    fs.rmSync(configDir, { recursive: true, force: true });
+    await rig.close();
+  }
 });

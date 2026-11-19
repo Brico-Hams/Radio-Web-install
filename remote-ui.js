@@ -57,10 +57,9 @@
   const $ = id => document.getElementById(id);
 
   const params = new URLSearchParams(location.hash.slice(1));
-  if (params.get("token")) {
-    sessionStorage.setItem(TOKEN_KEY, params.get("token"));
-    history.replaceState(null, "", location.pathname + location.search);
-  }
+  if (params.get("token")) sessionStorage.setItem(TOKEN_KEY, params.get("token"));
+  // "fp" (certificate fingerprint) is only for the Android app; the browser just drops it.
+  if (params.has("token") || params.has("fp")) history.replaceState(null, "", location.pathname + location.search);
   const token = sessionStorage.getItem(TOKEN_KEY) || "";
   let clientId = sessionStorage.getItem(CLIENT_KEY);
   if (!clientId) {
@@ -796,7 +795,12 @@
     setLocked(read(sessionStorage, LOCK_KEY) === "1");
     try {
       const config = await api("/api/config");
-      const initial = config.openwebrxUrl || sessionStorage.getItem(SDR_KEY) || "";
+      let initial = config.openwebrxUrl || sessionStorage.getItem(SDR_KEY) || "";
+      if (config.sdrProxy) {
+        // The Bearer request makes the agent issue the rs_session cookie the framed page and its websocket rely on.
+        const session = await fetch("/sdr/", { method: "HEAD", headers: { Authorization: `Bearer ${token}` } }).catch(() => null);
+        if (session?.ok) initial = new URL("/sdr/", location.href).href;
+      }
       if (initial) setSdrBase(initial);
       if (config.callsign) setText($("callsign"), config.callsign);
       const savedSpan = Number(read(localStorage, SPAN_KEY));

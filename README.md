@@ -393,7 +393,11 @@ Un agente junto a la radio la controla por CAT con Hamlib `rigctld` y ofrece una
 
 1. Arranca `rigctld` con tu radio: `rigctld -m <modelo> -r <puerto>` (por ejemplo `rigctld -m 1035 -r COM5`; lista de modelos con `rigctld -l`). Escucha en `127.0.0.1:4532`.
 2. Arranca el agente: `npm run remote` (opciones: `--port`, `--rigctld-host`, `--rigctld-port`, `--openwebrx <url>`, `--listen 0.0.0.0` o variable `REMOTE_LISTEN` para LAN/Tailscale). La primera vez genera un token aleatorio en `~/.radicodex/remote-agent.json` (tambien guarda `openwebrxUrl`, host/puerto de rigctld y `txLimitSeconds`, 180 por defecto).
-3. Abre en el navegador la direccion que imprime el agente, con el token en el fragmento (`http://<ip>:8788/#token=...`). La consola guarda el token en la sesion y lo quita de la barra de direcciones.
+3. Abre en el navegador la direccion que imprime el agente, con el token en el fragmento (`https://<ip>:8788/#token=...&fp=...`). La consola guarda el token en la sesion y lo quita (junto con `fp`) de la barra de direcciones.
+
+HTTPS: con `--listen` en una direccion no local el agente sirve HTTPS por defecto con un certificado autofirmado (ECDSA P-256) guardado en `~/.radicodex/remote-agent-tls.pem` (0600; se reutiliza y se regenera si falta, no es valido, caduca en menos de 30 dias o cambian las IP locales). El navegador avisara una vez del certificado; la huella SHA-256 `fp` impresa permite verificarlo. `--tls` fuerza HTTPS tambien en loopback y `--no-tls` fuerza HTTP plano (con aviso). Para la app Android el agente imprime el enlace `radicodex-remote://pair?host=<ip>&port=8788#token=...&fp=...` (token y huella solo en el fragmento).
+
+Espectro: con `--openwebrx <url>` el agente sirve OpenWebRX en `/sdr/` por el mismo origen autenticado (HTTP y WebSocket). La primera peticion exige el token y el agente fija la cookie `rs_session` (HttpOnly, SameSite=Strict, Secure con TLS, 12 h) para las peticiones internas de OpenWebRX.
 
 Seguridad: toda la API exige el token; solo un operador controla la radio a la vez (30 s de inactividad libera el control); la transmision se corta sola si faltan latidos durante 1 s, al llegar al limite de TX, al perder `rigctld` o al cerrar el agente. **No abras puertos en el router (sin port forwarding)**: para acceder fuera de casa usa Tailscale o WireGuard y `--listen` con la IP de esa red.
 

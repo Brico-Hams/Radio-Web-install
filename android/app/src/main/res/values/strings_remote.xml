@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="tool_remote_title">Shack remoto</string>
+    <string name="tool_remote_desc">Controla tu radio a través del agente remoto de RadiCodex en el PC.</string>
+    <string name="tool_remote_help">Empareja el móvil con el agente remoto de RadiCodex (red local o Tailscale) y abre su consola. Solo se aceptan direcciones privadas y el certificado debe coincidir con la huella emparejada.</string>
+    <string name="remote_title">Shack remoto</string>
+    <string name="remote_pair_help">Pega el enlace de emparejamiento (radicodex-remote://pair…) o la URL de la consola que muestra el agente de RadiCodex en el PC.</string>
+    <string name="remote_pair_hint">Enlace de emparejamiento</string>
+    <string name="remote_paste">Pegar</string>
+    <string name="remote_pair">Emparejar</string>
+    <string name="remote_pair_invalid">Enlace no válido: comprueba host privado, puerto, token y huella.</string>
+    <string name="remote_clipboard_empty">El portapapeles está vacío.</string>
+    <string name="remote_reload">Recargar</string>
+    <string name="remote_forget">Olvidar emparejamiento</string>
+    <string name="remote_cert_mismatch">Certificado no coincide: vuelve a emparejar</string>
+</resources>
