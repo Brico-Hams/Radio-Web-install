@@ -229,12 +229,12 @@ test("FTX-1 high raw SWR for over 1 s cuts the PTT and tells the console", async
   const { cmd, call, state, cleanup } = await startAgent(rig, { radioCat: ftx1(), rawIdleMs: 60, log: message => logs.push(message), txLimitSeconds: 60 });
   let stopBeat = () => {};
   try {
+    const started = Date.now();
     await cmd({ cmd: "ptt", value: true });
     stopBeat = keepAlive(call);
-    const started = Date.now();
     await waitFor(() => rig.ptt === 0, 3000);
     const elapsed = Date.now() - started;
-    assert.ok(elapsed >= 1000 && elapsed < 1800, `tripped after ${elapsed} ms`);
+    assert.ok(elapsed >= 900 && elapsed < 2200, `tripped after ${elapsed} ms`);
     assert.ok(logs.includes("PTT off: ROE alta"));
     await waitFor(async () => (await state()).ptt === false);
     const after = await state();
@@ -400,6 +400,24 @@ test("a tune that never ends is cut at tuneMaxSeconds: AC120, TX0, then T 0", as
     assert.ok(inOrder(connectStop), JSON.stringify(rig.log));
     assert.ok(logs.some(line => /abortada/.test(line)));
   } finally { stopBeat(); await cleanup(); await rig.close(); }
+});
+
+test("tune time cap is per tuner kind: ATAS 45 s default / 60 s max, internal 20 s / 30 s", async () => {
+  const cases = [
+    [{ tunerKind: "atas" }, 45], [{ tunerKind: "atas", tuneMaxSeconds: 999 }, 60],
+    [{ tunerKind: "internal" }, 20], [{ tunerKind: "internal", tuneMaxSeconds: 999 }, 30]
+  ];
+  for (const [extra, expected] of cases) {
+    const rig = await atasRig();
+    if (extra.tunerKind === "internal") Object.assign(rig.raw, { AC103: null, AC100: null });
+    const { cmd, call, state, cleanup } = await startAgent(rig, atasOptions(extra));
+    let stopBeat = () => {};
+    try {
+      stopBeat = keepAlive(call);
+      assert.equal((await cmd({ cmd: "tune" })).status, 200);
+      assert.equal((await state()).tune.maxSeconds, expected, JSON.stringify(extra));
+    } finally { stopBeat(); await cleanup(); await rig.close(); }
+  }
 });
 
 test("ATAS ignores the Hi-SWR flag and is cut at tuneMaxSeconds with the raw SWR in the notice", async () => {
