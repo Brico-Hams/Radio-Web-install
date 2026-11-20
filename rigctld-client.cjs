@@ -89,6 +89,7 @@ class RigctldClient extends EventEmitter {
     this.current = null;
     this.buffer = "";
     this.lines = [];
+    this.ghosts = [];
     this.reconnectTimer = null;
   }
 
@@ -172,13 +173,13 @@ class RigctldClient extends EventEmitter {
 
   // Queue one rigctld command. `priority` jumps ahead of waiting commands (used for PTT off);
   // `block` collects a variable-length reply (`\dump_caps`).
-  send(line, { priority = false, block = false, raw = false, read = false, idleMs = 0 } = {}) {
+  send(line, { priority = false, block = false, raw = false, read = false, idleMs = 0, timeoutMs = 0, abandon = false } = {}) {
     return new Promise((resolve, reject) => {
       if (!this.connected) {
         reject(new RigctldError("rigctld not connected", "disconnected"));
         return;
       }
-      const item = { line, block, raw, read, idleMs, queuedAt: Date.now(), expected: GET_LINES[line.split(" ")[0]] || 0, resolve, reject, timer: null, idle: null };
+      const item = { line, block, raw, read, idleMs, timeoutMs, abandon, cmd: raw ? line.split(" ")[1].replace(";", "") : "", queuedAt: Date.now(), expected: GET_LINES[line.split(" ")[0]] || 0, resolve, reject, timer: null, idle: null };
       if (priority) this.queue.unshift(item); else this.queue.push(item);
       this.pump();
     });
@@ -195,15 +196,23 @@ class RigctldClient extends EventEmitter {
     const item = this.queue.shift();
     this.current = item;
     this.lines = [];
+    this.ghosts = this.ghosts.filter(ghost => ghost.cmd !== item.cmd && Date.now() - ghost.at < GHOST_TTL_MS);
     item.timer = setTimeout(() => {
-      // A late answer would desynchronise the stream: drop the connection and reconnect.
       if (this.current !== item) return;
+      if (item.abandon && item.raw && item.read) {
+        // The late reply is recognised by its command prefix and discarded; the connection stays up.
+        this.ghosts.push({ cmd: item.cmd, at: Date.now() });
+        this.buffer = "";
+        this.finish(item, new RigctldError(`rigctld timeout on "${item.line}"`, "timeout"));
+        return;
+      }
+      // A late answer would desynchronise the stream: drop the connection and reconnect.
       const socket = this.socket;
       this.socket = null;
       this.dropConnection(new RigctldError(`rigctld timeout on "${item.line}"`, "timeout"), true);
       socket?.destroy();
       this.scheduleReconnect();
-    }, this.timeoutMs);
+    }, item.timeoutMs || this.timeoutMs);
     this.socket.write(`${item.line}\n`);
     // A raw set the radio does not answer must not drop the connection: it just goes quiet.
     if (item.raw && !item.read) this.armRawIdle(item);
@@ -218,6 +227,8 @@ class RigctldClient extends EventEmitter {
 
   // Raw replies end with NUL (e.g. "PC2010;\0"); a rejected command answers "?;".
   consumeRaw(item) {
+    this.discardGhostReplies();
+    if (!this.buffer) return;
     const report = /^RPRT (-?\d+)\r?\n/.exec(this.buffer);
     if (report) {
       this.buffer = this.buffer.slice(report[0].length);
@@ -236,6 +247,17 @@ class RigctldClient extends EventEmitter {
     this.armRawIdle(item);
   }
 
+  // Drops complete replies that belong to abandoned (timed-out) reads.
+  discardGhostReplies() {
+    let end;
+    while (this.ghosts.length && (end = this.buffer.indexOf("\0")) >= 0) {
+      const index = this.ghosts.findIndex(ghost => this.buffer.startsWith(ghost.cmd));
+      if (index < 0) return;
+      this.ghosts.splice(index, 1);
+      this.buffer = this.buffer.slice(end + 1);
+    }
+  }
+
   finishRaw(item, text) {
     this.buffer = "";
     const reply = String(text).replace(/[\0\r\n]/g, "").trim();
@@ -244,7 +266,7 @@ class RigctldClient extends EventEmitter {
   }
 
   consume() {
-    if (!this.current) { this.buffer = ""; return; }
+    if (!this.current) { this.discardGhostReplies(); this.buffer = ""; return; }
     if (this.current.raw) { this.consumeRaw(this.current); return; }
     let index;
     while ((index = this.buffer.indexOf("\n")) >= 0) {
@@ -356,10 +378,10 @@ class RigctldClient extends EventEmitter {
     if (!VFO_NAMES.includes(txVfo)) throw new RigctldError(`vfo "${txVfo}" not allowed`, "invalid"); return this.send(`S ${on ? 1 : 0} ${txVfo}`); }
 
   // Level value, or null when the rig does not support/answer it (RPRT error).
-  async getLevel(name) {
+  async getLevel(name, { timeoutMs = 0 } = {}) {
     if (!LEVEL_NAMES.includes(name) && !METER_NAMES.includes(name)) throw new RigctldError(`level "${name}" not allowed`, "invalid");
     try {
-      const [reply] = await this.send(`l ${name}`);
+      const [reply] = await this.send(`l ${name}`, { timeoutMs });
       const value = Number(reply);
       return Number.isFinite(value) ? value : null;
     } catch (error) {
@@ -395,13 +417,14 @@ class RigctldClient extends EventEmitter {
 
   // Raw CAT through rigctld's `W` command. `read` commands wait for the reply; others resolve with null
   // on rigctld's single NUL (or after a long safety silence). Rejects with code "rejected" on a "?;" reply.
-  sendRaw(cmd, { priority = false, read = false, idleMs = 0 } = {}) {
+  // `abandon`: a timed-out read is dropped without reconnecting; its late reply is discarded by command prefix.
+  sendRaw(cmd, { priority = false, read = false, idleMs = 0, timeoutMs = 0, abandon = false } = {}) {
     if (typeof cmd !== "string" || !RAW_FORMAT.test(cmd) || !this.rawAllow.has(cmd)) {
       return Promise.reject(new RigctldError("raw command not allowed", "invalid"));
     }
     // Sets use expected reply length 0 ("; 0"): rigctld answers a single NUL at once. The "; ;" terminator form
     // makes it wait ~1.8 s for a reply the radio never sends, blocking every following command.
-    return this.send(read ? `W ${cmd}; ;` : `W ${cmd}; 0`, { priority, raw: true, read, idleMs });
+    return this.send(read ? `W ${cmd}; ;` : `W ${cmd}; 0`, { priority, raw: true, read, idleMs, timeoutMs, abandon });
   }
 
   async dumpCaps() {
@@ -410,6 +433,7 @@ class RigctldClient extends EventEmitter {
 }
 
 const STOP_IDLE_MS = 100;
+const GHOST_TTL_MS = 10_000;
 
 function withinMs(promise, ms) {
   let timer;

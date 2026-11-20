@@ -74,9 +74,10 @@ function studioCSP(lock) {
   return `default-src 'none'; script-src ${lock.scriptHashes.map(hash => `'${hash}'`).join(" ")}; style-src 'unsafe-inline'; img-src data: blob:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`;
 }
 const defaultStudio = () => ({ file: path.join(__dirname, "studio.html"), lock: require("./studio.lock.json") });
+function remoteLog(message) { console.log(`[remote] ${message}`); }
 function createServer(firmware = new FirmwareService(), providers = new DataService(), studio = defaultStudio(), remote = null) {
 let remoteController = remote;
-const remoteStation = () => remoteController || (remoteController = require("./remote-station.cjs").createController());
+const remoteStation = () => remoteController || (remoteController = require("./remote-station.cjs").createController({ log: remoteLog }));
 return http.createServer(async (request, response) => {
   response.setHeader("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob: data:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'");
   response.setHeader("Permissions-Policy", "usb=(self), serial=(self), camera=(), microphone=(), geolocation=(self)");
@@ -253,7 +254,7 @@ return http.createServer(async (request, response) => {
 });
 }
 if (require.main === module) {
-const remote = require("./remote-station.cjs").createController();
+const remote = require("./remote-station.cjs").createController({ log: remoteLog });
 const server = createServer(undefined, undefined, undefined, remote);
 for (const signal of ["SIGINT", "SIGTERM"]) {
   process.on(signal, () => { remote.stop().catch(() => {}).finally(() => process.exit(0)); });

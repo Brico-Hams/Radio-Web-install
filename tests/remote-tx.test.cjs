@@ -58,7 +58,7 @@ async function fakeRigctld(capsLines = BASE_CAPS) {
           // Expected reply length 0: rigctld answers one NUL at once. "; ;" on a set blocks until its timeout.
           if (raw[2] === "0") { socket.write("\0"); continue; }
           const reply = typeof rig.raw[cmd] === "function" ? rig.raw[cmd]() : rig.raw[cmd];
-          if (reply === null || reply === undefined) { setTimeout(() => socket.write("\0"), rig.setBlockMs ?? 1800); continue; }
+          if (reply === null || reply === undefined) { if (rig.setBlockMs !== Infinity) setTimeout(() => socket.write("\0"), rig.setBlockMs ?? 1800); continue; }
           const write = () => socket.write(`${reply}\0`);
           if (rig.rawDelay) setTimeout(write, rig.rawDelay); else write();
           continue;
@@ -382,6 +382,46 @@ test("ATAS tune sends AC123 and completes by itself with AC120", async () => {
     await waitFor(() => rig.log.includes("W AC120; 0"));
     await waitFor(async () => !(await state()).tune);
     assert.ok(logs.some(line => line.includes("Sintonía terminada")));
+  } finally { stopBeat(); await cleanup(); await rig.close(); }
+});
+
+test("a meter read stuck during the tune never blocks the TX meters of the next PTT", async () => {
+  const rig = await atasRig();
+  // One RM4 read issued late in the tune gets no answer at all (not even a NUL).
+  let silent = false, swallowed = false;
+  Object.assign(rig.raw, {
+    RM4: () => { if (silent && !swallowed) { swallowed = true; return null; } return "RM4100000;"; },
+    RM5: "RM5128000;", RM6: "RM6020000;"
+  });
+  rig.setBlockMs = Infinity;
+  const { cmd, call, state, cleanup } = await startAgent(rig, atasOptions({ meterMs: 50 }));
+  let stopBeat = () => {};
+  try {
+    stopBeat = keepAlive(call);
+    assert.equal((await cmd({ cmd: "tune" })).status, 200);
+    await sleep(400);
+    silent = true;
+    await waitFor(() => swallowed, 2000);
+    rig.tuning = false;
+    await waitFor(async () => !(await state()).tune, 5000);
+    await cmd({ cmd: "ptt", value: true });
+    await waitFor(async () => { const { tx } = await state(); return typeof tx?.po === "number" && typeof tx.swr === "number" && typeof tx.alc === "number"; }, 1500);
+    assert.equal(rig.connections, 1);
+  } finally { stopBeat(); await cleanup(); await rig.close(); }
+});
+
+test("the tune notice reports the last raw SWR read while transmitting, not the one after RX", async () => {
+  const rig = await atasRig();
+  rig.raw.RM6 = () => (rig.tuning ? "RM6070000;" : "RM6000000;");
+  const { cmd, call, state, cleanup } = await startAgent(rig, atasOptions({ meterMs: 50 }));
+  let stopBeat = () => {};
+  try {
+    stopBeat = keepAlive(call);
+    assert.equal((await cmd({ cmd: "tune" })).status, 200);
+    await sleep(500);
+    rig.tuning = false;
+    await waitFor(async () => (await state()).notice?.text.includes("Sintonía terminada"));
+    assert.match((await state()).notice.text, /ROE bruta 70\/255/);
   } finally { stopBeat(); await cleanup(); await rig.close(); }
 });
 
