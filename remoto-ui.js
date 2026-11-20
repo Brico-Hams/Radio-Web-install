@@ -124,6 +124,7 @@
     const radio = selectedRadio();
     $.notes.textContent = radio ? radio.notes_es : "";
     if (!radio) return;
+    if ($.fTuner) $.fTuner.hidden = !radio.cat?.tuner;
     const defaults = radioDefaults(radio);
     $.link.replaceChildren(...defaults.links.map(option => el("option", { value: option.value, text: option.text })));
     if (!$.link.querySelector(`[value="${$.link.value}"]`)) $.link.value = defaults.link;
@@ -161,6 +162,7 @@
   function collect() {
     const radio = selectedRadio();
     const config = { radio: radio.id, link: $.link.value, listen: $.listen.value };
+    if (radio.cat?.tuner) config.tunerKind = $.tunerKind.value;
     if (config.link === "usb") {
       config.port = $.port.value.trim();
       if ($.baud.value.trim()) config.baud = Number($.baud.value);
@@ -216,6 +218,7 @@
     $.relayStation.value = config.relay ? config.relay.station : "";
     $.relaySecret.value = "";
     $.listen.value = config.listen || "local";
+    $.tunerKind.value = config.tunerKind || "internal";
     state.audio = { input: config.audio?.input || "", output: config.audio?.output || "" };
     renderAudio();
   }
@@ -278,6 +281,7 @@
     $.port = el("input", { id: "rm-port", type: "text", autocomplete: "off", spellcheck: "false" });
     $.baud = el("input", { id: "rm-baud", type: "number", min: 300, max: 4000000 });
     $.net = el("input", { id: "rm-net", type: "text", autocomplete: "off", spellcheck: "false" });
+    $.tunerKind = el("select", { id: "rm-tuner" }, el("option", { value: "internal", text: "interno" }), el("option", { value: "atas", text: "ATAS" }));
     $.ports = el("ul", { class: "rm-list" });
     $.rotor = el("select", { id: "rm-rotor", on: { change: () => { $.fRotorPort.hidden = !$.rotor.value; } } });
     $.rotorPort = el("input", { id: "rm-rotor-port", type: "text", autocomplete: "off", spellcheck: "false" });
@@ -302,7 +306,8 @@
           field("rm-link", "Enlace", $.link),
           field("rm-port", "Puerto serie", $.port),
           field("rm-baud", "Velocidad (baudios)", $.baud),
-          field("rm-net", "Direccion de red (equipo:puerto)", $.net)),
+          field("rm-net", "Direccion de red (equipo:puerto)", $.net),
+          field("rm-tuner", "Sintonizador", $.tunerKind)),
         $.notes),
       el("section", { class: "rm-card" }, el("h2", { text: "Radios USB detectadas" }), $.ports, el("div", { class: "rm-row" }, refresh)),
       el("section", { class: "rm-card" }, el("h2", { text: "Rotor (opcional)" }),
@@ -318,7 +323,7 @@
         el("div", { class: "rm-grid" }, field("rm-listen", "Escucha del agente", $.listen)),
         el("div", { class: "rm-row" }, $.save, $.start, $.stop), $.msg),
       el("section", { class: "rm-card" }, el("h2", { text: "Estado" }), $.status));
-    for (const id of ["port", "baud", "net"]) $[`f${id[0].toUpperCase()}${id.slice(1)}`] = document.getElementById(`f-rm-${id}`);
+    for (const id of ["port", "baud", "net", "tuner"]) $[`f${id[0].toUpperCase()}${id.slice(1)}`] = document.getElementById(`f-rm-${id}`);
     $.fRotorPort = document.getElementById("f-rm-rotor-port");
   }
 

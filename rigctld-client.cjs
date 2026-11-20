@@ -171,16 +171,22 @@ class RigctldClient extends EventEmitter {
 
   // Queue one rigctld command. `priority` jumps ahead of waiting commands (used for PTT off);
   // `block` collects a variable-length reply (`\dump_caps`).
-  send(line, { priority = false, block = false, raw = false, read = false } = {}) {
+  send(line, { priority = false, block = false, raw = false, read = false, idleMs = 0 } = {}) {
     return new Promise((resolve, reject) => {
       if (!this.connected) {
         reject(new RigctldError("rigctld not connected", "disconnected"));
         return;
       }
-      const item = { line, block, raw, read, expected: GET_LINES[line.split(" ")[0]] || 0, resolve, reject, timer: null, idle: null };
+      const item = { line, block, raw, read, idleMs, queuedAt: Date.now(), expected: GET_LINES[line.split(" ")[0]] || 0, resolve, reject, timer: null, idle: null };
       if (priority) this.queue.unshift(item); else this.queue.push(item);
       this.pump();
     });
+  }
+
+  // Age in ms of the oldest command still waiting for an answer (in flight or queued); 0 when idle.
+  oldestPendingMs() {
+    const items = [this.current, ...this.queue].filter(Boolean);
+    return items.length ? Date.now() - Math.min(...items.map(item => item.queuedAt)) : 0;
   }
 
   pump() {
@@ -206,7 +212,7 @@ class RigctldClient extends EventEmitter {
     clearTimeout(item.idle);
     item.idle = setTimeout(() => {
       if (this.current === item) this.finishRaw(item, this.buffer);
-    }, this.rawIdleMs);
+    }, item.idleMs || this.rawIdleMs);
   }
 
   // Raw replies end with NUL (e.g. "PC2010;\0"); a rejected command answers "?;".
@@ -388,11 +394,11 @@ class RigctldClient extends EventEmitter {
 
   // Raw CAT through rigctld's `W` command. `read` commands wait for the reply; others resolve with null
   // after a short silence when the radio does not answer. Rejects with code "rejected" on a "?;" reply.
-  sendRaw(cmd, { priority = false, read = false } = {}) {
+  sendRaw(cmd, { priority = false, read = false, idleMs = 0 } = {}) {
     if (typeof cmd !== "string" || !RAW_FORMAT.test(cmd) || !this.rawAllow.has(cmd)) {
       return Promise.reject(new RigctldError("raw command not allowed", "invalid"));
     }
-    return this.send(`W ${cmd}; ;`, { priority, raw: true, read });
+    return this.send(`W ${cmd}; ;`, { priority, raw: true, read, idleMs });
   }
 
   async dumpCaps() {
@@ -400,4 +406,28 @@ class RigctldClient extends EventEmitter {
   }
 }
 
-module.exports = { RigctldClient, RigctldError, parseCaps, LEVEL_NAMES, FUNC_NAMES, VFO_NAMES, METER_NAMES };
+const STOP_IDLE_MS = 100;
+
+function withinMs(promise, ms) {
+  let timer;
+  const limit = new Promise((_, reject) => { timer = setTimeout(() => reject(new RigctldError(`no answer within ${ms} ms`, "timeout")), ms); });
+  return Promise.race([promise, limit]).finally(() => clearTimeout(timer));
+}
+
+// Stops any transmission, in this order: tuner stop (only when a tune may be active, or the tuner is an ATAS whose
+// stop is harmless), raw txOff, then Hamlib `T 0`. Every step has queue priority and none waits more than `stepMs`
+// for the previous one. Resolves true when all steps were acknowledged.
+async function stopSequence(client, { cat = null, tunerKind = "internal", tuner = false, stepMs = 1000, log = () => {} } = {}) {
+  const steps = [];
+  const tunerStop = cat?.tuner?.[tunerKind]?.stop;
+  if (tunerStop && (tuner || tunerKind === "atas")) steps.push([tunerStop, () => client.sendRaw(tunerStop, { priority: true, idleMs: STOP_IDLE_MS })]);
+  if (cat?.txOff) steps.push([cat.txOff, () => client.sendRaw(cat.txOff, { priority: true, idleMs: STOP_IDLE_MS })]);
+  steps.push(["T 0", () => client.setPtt(false, { priority: true })]);
+  let ok = true;
+  for (const [name, run] of steps) {
+    try { await withinMs(run(), stepMs); } catch (error) { ok = false; log(`stop ${name} failed: ${error.message}`); }
+  }
+  return ok;
+}
+
+module.exports = { RigctldClient, RigctldError, parseCaps, stopSequence, LEVEL_NAMES, FUNC_NAMES, VFO_NAMES, METER_NAMES };

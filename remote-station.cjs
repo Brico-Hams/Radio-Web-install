@@ -8,7 +8,8 @@ const https = require("node:https");
 const os = require("node:os");
 const path = require("node:path");
 const childProcess = require("node:child_process");
-const { loadCatalog, findRadio, findRotor } = require("./remote-catalog.cjs");
+const { loadCatalog, findRadio, findRotor, catAllowList, TUNER_KINDS } = require("./remote-catalog.cjs");
+const { RigctldClient, stopSequence } = require("./rigctld-client.cjs");
 
 const RIGCTLD_PORT = 4532;
 const ROTCTLD_PORT = 4533;
@@ -198,7 +199,7 @@ function validateAudio(value) {
   return audio;
 }
 
-const CONFIG_KEYS = ["radio", "link", "port", "baud", "netAddress", "rotor", "relay", "listen", "agentPort", "audio"];
+const CONFIG_KEYS = ["radio", "link", "port", "baud", "netAddress", "rotor", "relay", "listen", "agentPort", "audio", "tunerKind"];
 
 // Returns the normalised configuration or throws an error with status 400. Unknown keys are rejected.
 function validateConfig(input, catalog = loadCatalog()) {
@@ -238,6 +239,10 @@ function validateConfig(input, catalog = loadCatalog()) {
   }
   config.relay = validateRelay(input.relay);
   config.audio = validateAudio(input.audio);
+  if (input.tunerKind !== undefined) {
+    if (!TUNER_KINDS.includes(input.tunerKind)) throw fail("Sintonizador no valido (interno o atas).");
+    config.tunerKind = input.tunerKind;
+  }
   if (input.listen !== undefined) {
     if (input.listen !== "local" && input.listen !== "lan") throw fail("Modo de escucha no valido (local o lan).");
     config.listen = input.listen;
@@ -326,6 +331,7 @@ function createManaged({ name, command, args, spawn, log, backoff, now = Date.no
   let killTimer = null;
   let failures = 0;
   let startedAt = 0;
+  let immediate = false;
   const state = { restarts: 0, lastExit: null };
   const waiters = [];
 
@@ -336,7 +342,8 @@ function createManaged({ name, command, args, spawn, log, backoff, now = Date.no
   function schedule() {
     if (stopped) return;
     failures = now() - startedAt > 10_000 ? 1 : failures + 1;
-    const delay = Math.min(backoff.max, backoff.min * 2 ** (failures - 1));
+    const delay = immediate ? 0 : Math.min(backoff.max, backoff.min * 2 ** (failures - 1));
+    immediate = false;
     state.restarts += 1;
     log(`${name} termino; reintento en ${delay} ms`);
     timer = setTimeout(launch, delay);
@@ -373,6 +380,15 @@ function createManaged({ name, command, args, spawn, log, backoff, now = Date.no
   return {
     name, command, args,
     start() { stopped = false; failures = 0; if (!child && !timer) launch(); },
+    // Hard kill and immediate relaunch (no backoff), used when the process stops answering.
+    restart() {
+      if (stopped) return;
+      immediate = true;
+      clearTimeout(timer);
+      timer = null;
+      if (!child) { launch(); return; }
+      try { child.kill("SIGKILL"); } catch { /* already gone */ }
+    },
     stop() {
       stopped = true;
       clearTimeout(timer);
@@ -410,6 +426,36 @@ function createStation(options = {}) {
   let active = null;
   let external = null;
   let failure = null;
+  let emergency = null;
+  const makeClient = options.createRigctldClient || (clientOptions => new RigctldClient(clientOptions));
+  const emergencyMs = options.emergencyTimeoutMs ?? 30_000;
+  const wait = ms => new Promise(resolve => { setTimeout(resolve, ms).unref?.(); });
+
+  // The agent reports rigctld hung while transmitting: kill it, relaunch it and, as soon as it accepts
+  // connections, send tuner stop + txOff + T 0 before anything else can touch the radio.
+  function emergencyStop({ cat, tunerKind, target }) {
+    if (emergency) return emergency;
+    emergency = (async () => {
+      log("rigctld no responde con TX activo: se reinicia para parar la transmision");
+      rig?.restart();
+      const deadline = Date.now() + emergencyMs;
+      let stopped = false;
+      while (!stopped && Date.now() < deadline && rig) {
+        const client = makeClient({ host: target.rigctldHost, port: target.rigctldPort, reconnectMs: 100, timeoutMs: 1500, rawAllow: catAllowList(cat), socketFactory: options.socketFactory });
+        const connected = new Promise(resolve => client.once("connect", () => resolve(true)));
+        client.start();
+        try {
+          if (await Promise.race([connected, wait(Math.max(0, deadline - Date.now())).then(() => false)])) {
+            stopped = await stopSequence(client, { cat, tunerKind, tuner: true, log });
+          }
+        } finally { client.stop(); }
+        if (!stopped) await wait(200);
+      }
+      const message = stopped ? "Parada de emergencia: rigctld no respondía" : "Parada de emergencia fallida: rigctld no responde tras reiniciarlo";
+      if (agent?.notify) agent.notify(message); else log(message);
+    })().finally(() => { emergency = null; });
+    return emergency;
+  }
 
   async function start(config) {
     if (running || starting) throw fail("La estacion ya esta en marcha.", 409);
@@ -424,10 +470,14 @@ function createStation(options = {}) {
       rotor?.start();
       if (plan.openDelayMs) await sleep(plan.openDelayMs);
       const lan = config.listen === "lan";
+      const radioEntry = findRadio(config.radio, catalog);
       agent = createAgent({
         configDir, host: lan ? "0.0.0.0" : "127.0.0.1", port: config.agentPort, tls: lan,
         rigctldHost: plan.agent.rigctldHost, rigctldPort: plan.agent.rigctldPort,
-        radioScope: findRadio(config.radio, catalog)?.scope, radioCat: findRadio(config.radio, catalog)?.cat, relay: config.relay || undefined, audio: config.audio, log
+        radioScope: radioEntry?.scope, radioCat: radioEntry?.cat, tunerKind: config.tunerKind,
+        socketFactory: options.socketFactory,
+        onRigctldHung: plan.rig ? () => emergencyStop({ cat: radioEntry?.cat || null, tunerKind: config.tunerKind || "internal", target: plan.agent }) : undefined,
+        relay: config.relay || undefined, audio: config.audio, log
       });
       await agent.start();
       active = config;

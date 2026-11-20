@@ -35,7 +35,7 @@ const BASE_CAPS = [
 async function fakeRigctld(capsLines = BASE_CAPS) {
   const rig = {
     freq: 28500000, ptt: 0, log: [], sockets: new Set(), connections: 0, rawDelay: 0, levels: {},
-    raw: { AC: "AC100;", PC: "PC2010;", TX: "TX0;", RM4: "RM4000000;", RM5: "RM5000000;", RM6: "RM6000000;" }
+    raw: { AC: "AC100;", PC: "PC2010;", TX: "TX0;", RI0: "RI00000000;", RM4: "RM4000000;", RM5: "RM5000000;", RM6: "RM6000000;" }
   };
   const server = net.createServer(socket => {
     rig.connections += 1;
@@ -50,6 +50,7 @@ async function fakeRigctld(capsLines = BASE_CAPS) {
         const line = buffer.slice(0, index);
         buffer = buffer.slice(index + 1);
         rig.log.push(line);
+        if (rig.hang) continue;
         const [command, ...args] = line.split(" ");
         const raw = /^W ([A-Z0-9]+); ;$/.exec(line);
         if (raw) {
@@ -150,13 +151,14 @@ test("raw allow-list rejects anything else and never reaches rigctld", async () 
 
 test("catalog: FTX-1 carries a validated cat override and bad ones are refused", () => {
   const cat = ftx1();
-  assert.equal(cat.tuner.on, "AC101");
-  assert.equal(cat.tuner.off, "AC100");
-  assert.equal(cat.tuner.start, "AC103");
+  assert.deepEqual(cat.tuner.internal, { on: "AC101", off: "AC100", start: "AC103", stop: "AC100" });
+  assert.deepEqual(cat.tuner.atas, { start: "AC123", stop: "AC120" });
+  assert.equal(cat.status, "RI0");
+  assert.equal(cat.txOff, "TX0");
   assert.deepEqual(cat.meters, { alc: "RM4", po: "RM5", swr: "RM6" });
   const data = JSON.parse(JSON.stringify(loadCatalog()));
-  data.radios.find(radio => radio.id === "yaesu-ftx-1").cat.tuner.on = "AC101;T1";
-  assert.throws(() => validateCatalog(data), /cat\.tuner\.on/);
+  data.radios.find(radio => radio.id === "yaesu-ftx-1").cat.tuner.internal.on = "AC101;T1";
+  assert.throws(() => validateCatalog(data), /cat\.tuner\.internal\.on/);
 });
 
 test("raw meter and power parsing", () => {
@@ -289,4 +291,136 @@ test("radios without a cat override expose Hamlib meters as they come, and SWR p
     await waitFor(() => rig.ptt === 0, 3000);
     assert.equal((await state()).txAlert, "swr");
   } finally { stopBeat(); await cleanup(); await rig.close(); }
+});
+
+function atasRig() {
+  return fakeRigctld().then(rig => {
+    rig.tuning = true;
+    Object.assign(rig.raw, {
+      AC123: null, AC120: null, TX0: null,
+      TX: () => (rig.tuning ? "TX2;" : "TX0;"),
+      RI0: () => (rig.tuning ? "RI00000100;" : "RI00000000;")
+    });
+    return rig;
+  });
+}
+
+const atasOptions = extra => ({ radioCat: ftx1(), tunerKind: "atas", rawIdleMs: 60, tuneStatusMs: 100, txLimitSeconds: 60, ...extra });
+const afterTune = rig => rig.log.slice(rig.log.lastIndexOf("W AC123; ;") + 1);
+const stopOrder = rig => {
+  const tail = afterTune(rig);
+  return [tail.indexOf("W AC120; ;"), tail.indexOf("W TX0; ;"), tail.indexOf("T 0")];
+};
+const inOrder = order => order[0] >= 0 && order[0] < order[1] && order[1] < order[2];
+
+test("ATAS tune sends AC123 and completes by itself with AC120", async () => {
+  const rig = await atasRig();
+  const logs = [];
+  const { cmd, call, state, cleanup } = await startAgent(rig, atasOptions({ log: message => logs.push(message) }));
+  let stopBeat = () => {};
+  try {
+    stopBeat = keepAlive(call);
+    assert.equal((await cmd({ cmd: "tune" })).status, 200);
+    assert.ok(rig.log.includes("W AC123; ;"));
+    assert.ok(!rig.log.includes("W AC103; ;"));
+    assert.ok((await state()).tune);
+    rig.tuning = false;
+    await waitFor(() => rig.log.includes("W AC120; ;"));
+    await waitFor(async () => !(await state()).tune);
+    assert.ok(logs.some(line => line.includes("Sintonía terminada")));
+  } finally { stopBeat(); await cleanup(); await rig.close(); }
+});
+
+test("a tune that never ends is cut at tuneMaxSeconds: AC120, TX0, then T 0", async () => {
+  const rig = await atasRig();
+  const logs = [];
+  const { cmd, call, cleanup } = await startAgent(rig, atasOptions({ tuneMaxSeconds: 1, log: message => logs.push(message) }));
+  let stopBeat = () => {};
+  try {
+    stopBeat = keepAlive(call);
+    assert.equal((await cmd({ cmd: "tune" })).status, 200);
+    await waitFor(() => afterTune(rig).includes("T 0"), 5000);
+    assert.ok(inOrder(stopOrder(rig)), JSON.stringify(rig.log));
+    const beforeTune = rig.log.slice(0, rig.log.lastIndexOf("W AC123; ;"));
+    const connectStop = [beforeTune.indexOf("W AC120; ;"), beforeTune.indexOf("W TX0; ;"), beforeTune.indexOf("T 0")];
+    assert.ok(inOrder(connectStop), JSON.stringify(rig.log));
+    assert.ok(logs.some(line => /abortada/.test(line)));
+  } finally { stopBeat(); await cleanup(); await rig.close(); }
+});
+
+test("a sustained Hi-SWR flag aborts the tune", async () => {
+  const rig = await atasRig();
+  rig.raw.RI0 = "RI01000100;";
+  const { cmd, call, cleanup } = await startAgent(rig, atasOptions({ tuneHiSwrMs: 300 }));
+  let stopBeat = () => {};
+  try {
+    stopBeat = keepAlive(call);
+    assert.equal((await cmd({ cmd: "tune" })).status, 200);
+    await waitFor(() => afterTune(rig).includes("T 0"), 4000);
+    assert.ok(inOrder(stopOrder(rig)));
+  } finally { stopBeat(); await cleanup(); await rig.close(); }
+});
+
+test("losing the heartbeat during a tune aborts it", async () => {
+  const rig = await atasRig();
+  const { cmd, call, cleanup } = await startAgent(rig, atasOptions());
+  try {
+    await call("POST", "/api/heartbeat", {});
+    assert.equal((await cmd({ cmd: "tune" })).status, 200);
+    await waitFor(() => afterTune(rig).includes("T 0"), 4000);
+    assert.ok(inOrder(stopOrder(rig)));
+  } finally { await cleanup(); await rig.close(); }
+});
+
+test("pttOff sends tuner stop, txOff and T 0 in that order", async () => {
+  const rig = await atasRig();
+  const { cmd, call, cleanup } = await startAgent(rig, atasOptions());
+  let stopBeat = () => {};
+  try {
+    stopBeat = keepAlive(call);
+    assert.equal((await cmd({ cmd: "tune" })).status, 200);
+    assert.equal((await cmd({ cmd: "ptt", value: false })).status, 200);
+    assert.ok(inOrder(stopOrder(rig)), JSON.stringify(rig.log));
+  } finally { stopBeat(); await cleanup(); await rig.close(); }
+});
+
+test("supervisor kills and restarts a hung rigctld, then sends the stop sequence", async () => {
+  const { EventEmitter } = require("node:events");
+  const { createStation, validateConfig } = require("../remote-station.cjs");
+  const rig = await atasRig();
+  const spawns = [];
+  const spawn = () => {
+    const child = new EventEmitter();
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    child.pid = 2000 + spawns.length;
+    child.kill = signal => { rig.hang = false; setImmediate(() => child.emit("exit", null, signal || "SIGTERM")); };
+    spawns.push(child);
+    return child;
+  };
+  const notices = [];
+  const agent = {
+    options: null, start: async () => {}, close: async () => {}, token: "t", tls: false,
+    snapshot: () => ({ connected: true, relay: { configured: false, connected: false } }), relayLinks: () => null,
+    notify: text => notices.push(text)
+  };
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "radicodex-hang-"));
+  const catalog = loadCatalog();
+  const sup = createStation({
+    spawn, findBinary: name => `/usr/bin/${name}`, sleep: async () => {}, configDir: dir, catalog, backoffMinMs: 5, backoffMaxMs: 20,
+    createAgent: options => { agent.options = options; return agent; },
+    createRigctldClient: clientOptions => new RigctldClient({ ...clientOptions, host: "127.0.0.1", port: rig.port, reconnectMs: 50, rawIdleMs: 60 })
+  });
+  try {
+    await sup.start(validateConfig({ radio: "yaesu-ftx-1", port: "COM7", tunerKind: "atas" }, catalog));
+    assert.equal(spawns.length, 1);
+    const mark = rig.log.length;
+    rig.hang = true;
+    agent.options.onRigctldHung();
+    await waitFor(() => notices.length > 0, 8000);
+    assert.equal(spawns.length, 2);
+    assert.equal(notices[0], "Parada de emergencia: rigctld no respondía");
+    const tail = rig.log.slice(mark);
+    assert.ok(tail.indexOf("W AC120; ;") >= 0 && tail.indexOf("W AC120; ;") < tail.indexOf("W TX0; ;") && tail.indexOf("W TX0; ;") < tail.indexOf("T 0"));
+  } finally { await sup.stop(); fs.rmSync(dir, { recursive: true, force: true }); await rig.close(); }
 });

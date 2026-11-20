@@ -48,8 +48,19 @@ function validateCat(cat, fail) {
   const command = (value, name) => { if (typeof value !== "string" || !CAT_COMMAND.test(value)) fail(`cat.${name} no valido`); };
   if (cat.tuner !== undefined) {
     if (!cat.tuner || typeof cat.tuner !== "object") fail("cat.tuner no valido");
-    for (const key of ["on", "off", "read", "start"]) command(cat.tuner[key], `tuner.${key}`);
+    command(cat.tuner.read, "tuner.read");
+    if (cat.tuner.atas !== undefined) {
+      if (!cat.tuner.atas || typeof cat.tuner.atas !== "object") fail("cat.tuner.atas no valido");
+      for (const key of ["start", "stop"]) command(cat.tuner.atas[key], `tuner.atas.${key}`);
+    }
+    if (cat.tuner.internal !== undefined) {
+      if (!cat.tuner.internal || typeof cat.tuner.internal !== "object") fail("cat.tuner.internal no valido");
+      for (const key of ["on", "off", "start", "stop"]) command(cat.tuner.internal[key], `tuner.internal.${key}`);
+    }
+    if (!cat.tuner.atas && !cat.tuner.internal) fail("cat.tuner necesita atas o internal");
   }
+  if (cat.status !== undefined) command(cat.status, "status");
+  if (cat.txOff !== undefined) command(cat.txOff, "txOff");
   command(cat.txState, "txState");
   if (!cat.meters || typeof cat.meters !== "object") fail("cat.meters obligatorio");
   for (const key of ["alc", "po", "swr"]) command(cat.meters[key], `meters.${key}`);
@@ -60,9 +71,12 @@ function validateCat(cat, fail) {
 // Every raw string the agent may send for a radio; nothing else ever reaches the radio.
 function catAllowList(cat) {
   if (!cat) return [];
-  const list = [cat.txState, cat.power, ...Object.values(cat.meters || {}), ...(cat.tuner ? Object.values(cat.tuner) : [])];
+  const tuner = cat.tuner ? [cat.tuner.read, ...Object.values(cat.tuner.atas || {}), ...Object.values(cat.tuner.internal || {})] : [];
+  const list = [cat.txState, cat.power, cat.status, cat.txOff, ...Object.values(cat.meters || {}), ...tuner].filter(Boolean);
   return [...new Set(list)];
 }
+
+const TUNER_KINDS = Object.freeze(["atas", "internal"]);
 
 function validateAccessory(item, where) {
   const fail = message => { throw new Error(`${where}: ${message}`); };
@@ -101,4 +115,4 @@ function loadCatalog(file = FILE) {
 const findRadio = (id, catalog = loadCatalog()) => catalog.radios.find(radio => radio.id === id) || null;
 const findRotor = (id, catalog = loadCatalog()) => catalog.rotors.find(rotor => rotor.id === id) || null;
 
-module.exports = { loadCatalog, validateCatalog, findRadio, findRotor, catAllowList, FILE };
+module.exports = { loadCatalog, validateCatalog, findRadio, findRotor, catAllowList, TUNER_KINDS, FILE };

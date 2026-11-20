@@ -8,8 +8,8 @@ const http = require("node:http");
 const https = require("node:https");
 const os = require("node:os");
 const path = require("node:path");
-const { RigctldClient, VFO_NAMES } = require("./rigctld-client.cjs");
-const { catAllowList } = require("./remote-catalog.cjs");
+const { RigctldClient, VFO_NAMES, stopSequence } = require("./rigctld-client.cjs");
+const { catAllowList, TUNER_KINDS } = require("./remote-catalog.cjs");
 const remoteTls = require("./remote-tls.cjs");
 const remoteWs = require("./remote-ws.cjs");
 const remoteAudio = require("./remote-audio.cjs");
@@ -40,6 +40,14 @@ const AUDIO_TX_RATE = 60;
 const AUDIO_BACKLOG_BYTES = 64 * 1024;
 const AUDIO_FRAME = Object.freeze({ codec: "opus", sampleRate: 48000, channels: 1, frameMs: 20 });
 const SWR_TRIP_MS = 1000;
+const TUNE_MAX_SECONDS_CAP = 30;
+const TUNE_MAX_SECONDS_DEFAULT = 20;
+const TUNE_POLL_MS = 300;
+const TUNE_HI_SWR_MS = 2000;
+const TUNE_SWR_MS = 3000;
+const HANG_MS = 2000;
+const HANG_RETRY_MS = 500;
+const TUNE_DONE = "Sintonía terminada";
 const NOTICE_MS = 15_000;
 const TUNE_FAILED = "La radio no ha iniciado la sintonía (revisa el sintonizador/ATAS en el equipo)";
 const STATIC_FILES = Object.freeze({
@@ -72,6 +80,8 @@ function loadConfig(dir) {
     // Protection thresholds: SWR ratio for radios that report one, raw 0-255 RM6 value for raw-CAT radios (not calibrated).
     swrLimit: Number(stored.swrLimit) > 1 ? Number(stored.swrLimit) : undefined,
     swrRawLimit: Number.isInteger(stored.swrRawLimit) && stored.swrRawLimit >= 1 && stored.swrRawLimit <= 255 ? stored.swrRawLimit : undefined,
+    tuneMaxSeconds: Number(stored.tuneMaxSeconds) > 0 ? Math.min(TUNE_MAX_SECONDS_CAP, Number(stored.tuneMaxSeconds)) : undefined,
+    tunerKind: TUNER_KINDS.includes(stored.tunerKind) ? stored.tunerKind : undefined,
     relay: normalizeRelay(stored.relay)
   };
   if (!config.token) {
@@ -187,7 +197,14 @@ function parsePower(reply) {
   return match ? Number(match[1]) : null;
 }
 
+// RI0 answers "RI P1..P8;" (one digit each): P2 1 = Hi-SWR, P4 0 RX / 1 TX / 2 TX inhibit, P6 1 = antenna tuner tuning.
+function parseRadioInfo(reply) {
+  const match = /^RI\d(\d)\d(\d)\d(\d)\d\d;?$/.exec(reply || "");
+  return match ? { hiSwr: match[1] === "1", tx: Number(match[2]), tuning: match[3] === "1" } : null;
+}
+
 const round3 = value => Math.round(value * 1000) / 1000;
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const clamp01 = value => Math.max(0, Math.min(1, value));
 
 function meterFraction(key, value, raw) {
@@ -214,6 +231,16 @@ function createRemoteAgent(options = {}) {
   const meterMs = options.meterMs ?? 400;
   const tuneWatchMs = options.tuneWatchMs ?? 3000;
   const tunePollMs = options.tunePollMs ?? 250;
+  const tuneMaxMs = Math.min(TUNE_MAX_SECONDS_CAP, options.tuneMaxSeconds ?? config.tuneMaxSeconds ?? TUNE_MAX_SECONDS_DEFAULT) * 1000;
+  const tuneStatusMs = options.tuneStatusMs ?? TUNE_POLL_MS;
+  const tuneHiSwrMs = options.tuneHiSwrMs ?? TUNE_HI_SWR_MS;
+  const tuneSwrMs = options.tuneSwrMs ?? TUNE_SWR_MS;
+  const hangMs = options.hangMs ?? HANG_MS;
+  const hangRetryMs = options.hangRetryMs ?? HANG_RETRY_MS;
+  const stepMs = options.stopStepMs ?? 1000;
+  const wantedKind = TUNER_KINDS.includes(options.tunerKind) ? options.tunerKind : config.tunerKind || "internal";
+  const tunerKind = cat?.tuner?.[wantedKind] ? wantedKind : cat?.tuner?.internal ? "internal" : "atas";
+  const tunerSpec = cat?.tuner?.[tunerKind] || null;
   const useTls = options.tls ?? !isLoopbackHost(host);
   const identity = useTls ? remoteTls.ensure(configDir) : null;
 
@@ -253,6 +280,11 @@ function createRemoteAgent(options = {}) {
   let tx = null;
   let swrSince = 0;
   let swrTripped = false;
+  let tune = null;
+  let tuneWasActive = false;
+  let stopping = 0;
+  let emergency = false;
+  let retryTimer = null;
   let meterBusy = false;
   let meterCycle = 0;
   let meterTimer = null;
@@ -291,6 +323,7 @@ function createRemoteAgent(options = {}) {
       txSeconds: rig.ptt ? Math.max(0, Math.floor((now() - txStart) / 1000)) : 0,
       tx: rig.ptt && tx ? { ...tx, fraction: { ...tx.fraction } } : null,
       txAlert: swrTripped ? "swr" : null,
+      tune: tune ? { kind: tunerKind, seconds: Math.max(0, Math.floor((now() - tune.startedAt) / 1000)), maxSeconds: Math.round(tuneMaxMs / 1000) } : null,
       notice: notice && now() - notice.at < NOTICE_MS ? { id: notice.id, text: notice.text } : null,
       operator: !active ? null : owner === clientId ? "me" : "other",
       relay: { configured: Boolean(relayConfig), connected: relayState.connected }
@@ -314,11 +347,29 @@ function createRemoteAgent(options = {}) {
     if (!on) { agentTx = false; tx = null; swrSince = 0; audio.txRelease?.(); }
   }
 
+  // Ordered stop (tuner stop, raw txOff, Hamlib T 0); `tuner` says a tune may be active.
+  async function runStop({ tuner = false } = {}) {
+    stopping += 1;
+    try { return await stopSequence(client, { cat, tunerKind, tuner, stepMs, log }); }
+    finally { stopping -= 1; }
+  }
+
+  function endEmergency() {
+    emergency = false;
+    clearInterval(retryTimer);
+    retryTimer = null;
+  }
+
   async function pttOff(reason) {
     log(`PTT off: ${reason}`);
+    const tuning = tune !== null;
+    if (tuning) {
+      log(`Sintonía abortada: ${reason}`);
+      setNotice(`Sintonía abortada: ${reason}`);
+    }
+    tune = null;
     setRigPtt(false);
-    try { await client.setPtt(false, { priority: true }); }
-    catch (error) { log(`T 0 failed: ${error.message}`); }
+    if (await runStop({ tuner: tuning })) endEmergency();
   }
 
   // Radios with a raw-CAT tuner override are driven through it, whatever Hamlib reports.
@@ -344,12 +395,16 @@ function createRemoteAgent(options = {}) {
 
   client.on("connect", () => {
     // Whatever happened while the link was down, make sure the rig is not transmitting.
-    client.setPtt(false, { priority: true }).catch(error => log(`T 0 failed: ${error.message}`));
+    const tuner = tuneWasActive;
+    tuneWasActive = false;
+    runStop({ tuner }).then(ok => { if (ok) endEmergency(); });
     unreadable.clear();
     meterOff.clear();
     detectCaps().finally(() => schedulePoll(0));
   });
   client.on("disconnect", () => {
+    if (tune) tuneWasActive = true;
+    tune = null;
     setRigPtt(false);
     Object.assign(rig, {
       freq: null, mode: null, passband: null, vfo: null, split: false, smeter: null,
@@ -443,12 +498,14 @@ function createRemoteAgent(options = {}) {
 
   async function checkSwr() {
     const limit = cat ? swrRawLimit : swrLimit;
-    if (!tx || tx.swr === null || !(tx.swr > limit)) { swrSince = 0; return; }
+    const tuning = tune !== null;
+    const over = tx && tx.swr !== null && (tuning ? tx.swr >= limit : tx.swr > limit);
+    if (!over) { swrSince = 0; return; }
     const time = now();
     if (!swrSince) { swrSince = time; return; }
-    if (time - swrSince <= SWR_TRIP_MS) return;
+    if (time - swrSince <= (tuning ? tuneSwrMs : SWR_TRIP_MS)) return;
     swrTripped = true;
-    setNotice("ROE alta: transmisión cortada");
+    setNotice(tuning ? "ROE alta: sintonía cortada" : "ROE alta: transmisión cortada");
     await pttOff("ROE alta");
   }
 
@@ -467,22 +524,97 @@ function createRemoteAgent(options = {}) {
     }
   }
 
-  // After AC103 the radio must report TX1/TX2; an ATAS antenna may never key it.
-  async function tuneKeyed() {
+  // After the start command the radio must report TX1/TX2; an ATAS antenna may never key it.
+  async function tuneKeyed(run) {
     let expired = false;
     const timer = setTimeout(() => { expired = true; }, tuneWatchMs);
     try {
-      while (!expired && !closing) {
+      while (!expired && !closing && tune === run) {
         try {
           if (/^TX[12];?$/.test(await client.sendRaw(cat.txState, { read: true }) || "")) return true;
         } catch (error) { if (error.code !== "rejected") throw error; }
-        if (expired) break;
-        await new Promise(resolve => setTimeout(resolve, tunePollMs));
+        if (expired || tune !== run) break;
+        // The client is still waiting for this request, so it counts as alive during the start window.
+        lastBeat = now();
+        await sleep(tunePollMs);
       }
       return false;
     } finally {
       clearTimeout(timer);
     }
+  }
+
+  // Tune state from RI0 (Hi-SWR, TX state, antenna tuner tuning); falls back to the TX state when RI0 is refused.
+  async function readTuneInfo() {
+    try {
+      const info = cat.status ? parseRadioInfo(await client.sendRaw(cat.status, { read: true })) : null;
+      if (info) return info;
+    } catch (error) { if (error.code !== "rejected") throw error; }
+    const match = /^TX(\d);?$/.exec(await client.sendRaw(cat.txState, { read: true }) || "");
+    return match ? { hiSwr: false, tx: Number(match[1]), tuning: Number(match[1]) > 0 } : null;
+  }
+
+  async function finishTune(run) {
+    if (tune !== run) return;
+    tune = null;
+    log(TUNE_DONE);
+    setNotice(TUNE_DONE);
+    setRigPtt(false);
+    await runStop({ tuner: true });
+  }
+
+  // Polls the radio until the tune ends. Limits (time, Hi-SWR, raw SWR, heartbeat) are enforced by watchTx/checkSwr,
+  // so a stuck poll can never keep a tune alive.
+  async function tuneLoop(run) {
+    while (tune === run && !closing) {
+      await sleep(tuneStatusMs);
+      if (tune !== run || closing) return;
+      try {
+        const info = await readTuneInfo();
+        if (tune !== run) return;
+        if (info) {
+          if (info.tuning || info.tx > 0) run.seen = true;
+          run.hiSwrSince = info.hiSwr ? run.hiSwrSince || now() : 0;
+          if (run.seen && !info.tuning && info.tx === 0) { await finishTune(run); return; }
+        }
+      } catch (error) {
+        if (typeof error.code !== "number" && error.code !== "rejected") log(`sintonía: ${error.message}`);
+      }
+    }
+  }
+
+  async function startCatTune(clientId) {
+    const run = { owner: clientId, startedAt: now(), hiSwrSince: 0, seen: false };
+    tune = run;
+    setRigPtt(true);
+    agentTx = true;
+    txStart = run.startedAt;
+    lastBeat = run.startedAt;
+    try {
+      await client.sendRaw(tunerSpec.start);
+      lastBeat = now();
+      if (!(await tuneKeyed(run))) {
+        if (tune !== run) return { status: 409, body: { error: "Sintonía cancelada." } };
+        log(TUNE_FAILED);
+        setNotice(TUNE_FAILED);
+        tune = null;
+        setRigPtt(false);
+        await runStop({ tuner: true });
+        return { status: 502, body: { error: TUNE_FAILED } };
+      }
+    } catch (error) {
+      if (tune === run) {
+        tune = null;
+        setRigPtt(false);
+        runStop({ tuner: true });
+      }
+      throw error;
+    }
+    if (tune !== run) return { status: 409, body: { error: "Sintonía cancelada." } };
+    run.seen = true;
+    log(`Sintonía iniciada (${tunerKind})`);
+    tuneLoop(run);
+    return null;
   }
 
   // Capabilities as shown to the console: controls found unreadable are reported as not gettable.
@@ -512,7 +644,7 @@ function createRemoteAgent(options = {}) {
       rig.mode = mode.mode;
       rig.passband = mode.passband;
       const ptt = await client.getPtt();
-      if (ptt !== rig.ptt) setRigPtt(ptt);
+      if (ptt !== rig.ptt && !tune) setRigPtt(ptt);
       rig.smeter = rig.ptt ? null : await client.getStrength();
       if (pollCount % 4 === 1) {
         try {
@@ -543,10 +675,33 @@ function createRemoteAgent(options = {}) {
   }
 
   function watchTx() {
+    checkHung();
     if (!agentTx || !rig.ptt) return;
     const time = now();
     if (time - lastBeat > heartbeatTimeoutMs) pttOff("sin latido");
     else if (time - txStart >= txLimitMs) pttOff("limite de TX");
+    else if (tune && time - tune.startedAt >= tuneMaxMs) pttOff(`tiempo máximo de sintonía (${Math.round(tuneMaxMs / 1000)} s)`);
+    else if (tune?.hiSwrSince && time - tune.hiSwrSince > tuneHiSwrMs) pttOff("Hi-SWR de la radio");
+  }
+
+  // A command pending for too long while transmitting means rigctld hung with the radio possibly keyed.
+  // With a supervisor (onRigctldHung) it restarts rigctld; otherwise the stop is retried until it gets through.
+  function checkHung() {
+    if (emergency || closing || !client.connected) return;
+    if (!(rig.ptt || agentTx || tune || stopping > 0) || client.oldestPendingMs() <= hangMs) return;
+    emergency = true;
+    log(`rigctld no responde (${hangMs} ms) con TX activo: parada de emergencia`);
+    if (options.onRigctldHung) {
+      Promise.resolve().then(() => options.onRigctldHung()).catch(error => log(`parada de emergencia: ${error.message}`));
+      return;
+    }
+    const retry = () => {
+      if (!emergency || closing) { endEmergency(); return; }
+      if (client.connected) runStop({ tuner: true }).then(ok => { if (ok) endEmergency(); });
+    };
+    retry();
+    retryTimer = setInterval(retry, hangRetryMs);
+    retryTimer.unref?.();
   }
 
   function clientIdOf(request, url) {
@@ -639,20 +794,18 @@ function createRemoteAgent(options = {}) {
         }
         case "func":
           if (!caps.func[command.name]?.set) return { status: 501, body: { error: "La radio no admite esta funcion." } };
-          if (command.name === "TUNER" && cat?.tuner) await client.sendRaw(command.on ? cat.tuner.on : cat.tuner.off);
-          else await client.setFunc(command.name, command.on);
+          if (command.name === "TUNER" && cat?.tuner) {
+            if (!cat.tuner.internal) return { status: 501, body: { error: "La radio no admite esta funcion." } };
+            await client.sendRaw(command.on ? cat.tuner.internal.on : cat.tuner.internal.off);
+          } else await client.setFunc(command.name, command.on);
           rig.funcs[FUNCS[command.name]] = command.on;
           break;
         case "tune":
           if (!caps.tune) return { status: 501, body: { error: "La radio no admite TUNE." } };
           if (rig.ptt) return { status: 409, body: { error: "Cambio bloqueado durante TX." } };
           if (cat?.tuner) {
-            await client.sendRaw(cat.tuner.start);
-            if (!(await tuneKeyed())) {
-              log(TUNE_FAILED);
-              setNotice(TUNE_FAILED);
-              return { status: 502, body: { error: TUNE_FAILED } };
-            }
+            const refused = await startCatTune(clientId);
+            if (refused) return refused;
           } else await client.tune();
           break;
         case "vfo": {
@@ -666,9 +819,14 @@ function createRemoteAgent(options = {}) {
           rig.split = command.value;
           break;
         case "ptt":
-          await client.setPtt(command.value, { priority: !command.value });
-          setRigPtt(command.value);
-          if (command.value) { agentTx = true; txStart = now(); lastBeat = txStart; }
+          if (command.value) {
+            if (tune) return { status: 409, body: { error: "Sintonía en curso." } };
+            await client.setPtt(true);
+            setRigPtt(true);
+            agentTx = true;
+            txStart = now();
+            lastBeat = txStart;
+          } else await pttOff("solicitado por el operador");
           break;
         default: break;
       }
@@ -1028,7 +1186,8 @@ function createRemoteAgent(options = {}) {
     clearInterval(meterTimer);
     clearInterval(sseTimer);
     clearInterval(keepAliveTimer);
-    if (client.connected && (rig.ptt || agentTx)) await pttOff("cierre del agente");
+    endEmergency();
+    if (client.connected && (rig.ptt || agentTx || tune)) await pttOff("cierre del agente");
     client.stop();
     for (const ws of audioSockets) { ws.fail(1001, "shutdown"); ws.socket.destroy(); }
     audio.close?.();
@@ -1052,8 +1211,14 @@ function createRemoteAgent(options = {}) {
     }
   }
 
+  // Lets the station supervisor surface an emergency stop in the console.
+  function notify(text) {
+    log(text);
+    setNotice(text);
+  }
+
   return {
-    server, client, token: config.token, config, start, close, snapshot, relayLinks,
+    server, client, token: config.token, config, start, close, snapshot, relayLinks, notify,
     tls: useTls, fingerprint: identity ? identity.fingerprint : ""
   };
 }
@@ -1130,4 +1295,4 @@ if (require.main === module) {
   main().catch(error => { console.error(error.message); process.exit(1); });
 }
 
-module.exports = { createRemoteAgent, parseArgs, validateCommand, parseRawMeter, parsePower, MODES };
+module.exports = { createRemoteAgent, parseArgs, validateCommand, parseRawMeter, parsePower, parseRadioInfo, MODES };

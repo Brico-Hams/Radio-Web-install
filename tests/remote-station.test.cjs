@@ -91,6 +91,9 @@ test("validateConfig acepta una configuracion correcta y rechaza el resto", () =
     { radio: "yaesu-ftx-1", port: "COM7", agentPort: 4532 }, { radio: "yaesu-ftx-1", link: "lan", netAddress: "h:1" }
   ];
   for (const input of bad) assert.throws(() => station.validateConfig(input, catalog), /./, JSON.stringify(input));
+  assert.equal(station.validateConfig({ radio: "yaesu-ftx-1", port: "COM7", tunerKind: "atas" }, catalog).tunerKind, "atas");
+  assert.equal(station.validateConfig({ radio: "yaesu-ftx-1", port: "COM7", tunerKind: "internal" }, catalog).tunerKind, "internal");
+  for (const tunerKind of ["manual", "", 1, null]) assert.throws(() => station.validateConfig({ radio: "yaesu-ftx-1", port: "COM7", tunerKind }, catalog), /Sintonizador/);
   assert.throws(() => station.validateConfig(JSON.parse('{"radio":"yaesu-ftx-1","port":"COM7","__proto__":{"x":1}}'), catalog));
 });
 

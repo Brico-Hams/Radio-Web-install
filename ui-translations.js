@@ -1872,6 +1872,11 @@ Transmision|Transmission|Émission|Senden
 Mantener para hablar|Hold to talk|Maintenir pour parler|Zum Sprechen halten
 Mantener para transmitir|Hold to transmit|Maintenir pour émettre|Zum Senden halten
 Transmitiendo...|Transmitting...|Émission en cours...|Sendet...
+Sintonizando...|Tuning...|Accord en cours...|Abstimmung läuft...
+Parar|Stop|Arrêter|Stopp
+Parar la sintonía|Stop tuning|Arrêter l’accord|Abstimmung stoppen
+Sintonía iniciada|Tuning started|Accord démarré|Abstimmung gestartet
+Sintonía terminada|Tuning finished|Accord terminé|Abstimmung beendet
 Al soltar, perder la conexion o cambiar de pestana se corta la transmision.|Releasing, losing the connection or switching tabs stops the transmission.|Relâcher, perdre la connexion ou changer d’onglet coupe l’émission.|Loslassen, Verbindungsverlust oder Tabwechsel beendet das Senden.
 Sin operador|No operator|Aucun opérateur|Kein Bediener
 Tienes el control|You have control|Vous avez le contrôle|Du hast die Kontrolle

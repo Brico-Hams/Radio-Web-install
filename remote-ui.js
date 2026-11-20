@@ -421,7 +421,7 @@
       }
       last.freq = state.freq;
     }
-    if (state.ptt && !last.ptt) addLog("TX iniciado");
+    if (state.ptt && !last.ptt) addLog(state.tune ? "Sintonía iniciada" : "TX iniciado");
     if (!state.ptt && last.ptt) addLog(`TX terminado (${last.txSeconds} s)`);
     last.ptt = state.ptt;
     last.txSeconds = state.txSeconds;
@@ -566,12 +566,26 @@
     refreshControls();
   }
 
+  function startTuneBeat() {
+    if (view.tuneBeat) return;
+    view.tuneBeat = setInterval(() => { api("api/heartbeat", { method: "POST", body: "{}" }).catch(() => {}); }, 250);
+  }
+
+  function stopTuneBeat() {
+    clearInterval(view.tuneBeat);
+    view.tuneBeat = null;
+  }
+
   function updatePttUi() {
     const button = $("ptt");
+    const tuning = Boolean(view.state?.tune);
     const tx = view.ptt || Boolean(view.state?.ptt);
     setPressed(button, tx);
     button.classList.toggle("tx", tx);
-    setText($("ptt-label"), tx ? "Transmitiendo..." : "Mantener para hablar");
+    setText($("ptt-label"), tuning ? "Sintonizando..." : tx ? "Transmitiendo..." : "Mantener para hablar");
+    $("tune-stop").hidden = !tuning;
+    if (tuning && view.state.operator === "me") startTuneBeat();
+    else if (!tuning && !view.tuneBusy) stopTuneBeat();
     const timer = $("tx-timer");
     timer.hidden = !tx;
     if (tx) setText(timer, formatTimer(view.state?.txSeconds || 0));
@@ -1047,9 +1061,13 @@
       if (view.locked || view.tuneBusy) return;
       view.tuneBusy = true;
       refreshControls();
-      await run({ cmd: "tune" });
+      // The agent aborts a tune whose client stops sending heartbeats, so they start before the request.
+      startTuneBeat();
+      const started = await run({ cmd: "tune" });
+      if (!started) stopTuneBeat();
       setTimeout(() => { view.tuneBusy = false; refreshControls(); }, 2000);
     });
+    $("tune-stop").addEventListener("click", () => { stopTuneBeat(); pttSendOff(); });
   }
 
   function connectEvents() {
