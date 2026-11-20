@@ -22,7 +22,8 @@ const VFO_NAMES = Object.freeze(["VFOA", "VFOB", "Main", "Sub", "MEM"]);
 const METER_NAMES = Object.freeze(["RFPOWER_METER_WATTS", "SWR", "ALC"]);
 // Raw CAT strings: upper-case letters/digits only, and only when the radio entry allows that exact string.
 const RAW_FORMAT = /^[A-Z0-9]{1,8}$/;
-const RAW_IDLE_MS = 300;
+// Safety net only: a set normally completes on rigctld's immediate NUL.
+const RAW_IDLE_MS = 1000;
 // `\dump_caps` has no fixed length: it ends with a RPRT line, or (older builds) simply goes quiet.
 const BLOCK_IDLE_MS = 250;
 
@@ -393,12 +394,14 @@ class RigctldClient extends EventEmitter {
   tune() { return this.send("G TUNE"); }
 
   // Raw CAT through rigctld's `W` command. `read` commands wait for the reply; others resolve with null
-  // after a short silence when the radio does not answer. Rejects with code "rejected" on a "?;" reply.
+  // on rigctld's single NUL (or after a long safety silence). Rejects with code "rejected" on a "?;" reply.
   sendRaw(cmd, { priority = false, read = false, idleMs = 0 } = {}) {
     if (typeof cmd !== "string" || !RAW_FORMAT.test(cmd) || !this.rawAllow.has(cmd)) {
       return Promise.reject(new RigctldError("raw command not allowed", "invalid"));
     }
-    return this.send(`W ${cmd}; ;`, { priority, raw: true, read, idleMs });
+    // Sets use expected reply length 0 ("; 0"): rigctld answers a single NUL at once. The "; ;" terminator form
+    // makes it wait ~1.8 s for a reply the radio never sends, blocking every following command.
+    return this.send(read ? `W ${cmd}; ;` : `W ${cmd}; 0`, { priority, raw: true, read, idleMs });
   }
 
   async dumpCaps() {

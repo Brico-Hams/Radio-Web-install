@@ -237,6 +237,8 @@ function createRemoteAgent(options = {}) {
   const tuneSwrMs = options.tuneSwrMs ?? TUNE_SWR_MS;
   const hangMs = options.hangMs ?? HANG_MS;
   const hangRetryMs = options.hangRetryMs ?? HANG_RETRY_MS;
+  const hangCooldownMs = options.hangCooldownMs ?? 30_000;
+  let lastHangAt = -Infinity;
   const stepMs = options.stopStepMs ?? 1000;
   const wantedKind = TUNER_KINDS.includes(options.tunerKind) ? options.tunerKind : config.tunerKind || "internal";
   const tunerKind = cat?.tuner?.[wantedKind] ? wantedKind : cat?.tuner?.internal ? "internal" : "atas";
@@ -348,10 +350,11 @@ function createRemoteAgent(options = {}) {
   }
 
   // Ordered stop (tuner stop, raw txOff, Hamlib T 0); `tuner` says a tune may be active.
-  async function runStop({ tuner = false } = {}) {
-    stopping += 1;
+  // `guarded` stops (PTT off, tune end) are watched by the hang watchdog; the connect-time one is not.
+  async function runStop({ tuner = false, guarded = true } = {}) {
+    if (guarded) stopping += 1;
     try { return await stopSequence(client, { cat, tunerKind, tuner, stepMs, log }); }
-    finally { stopping -= 1; }
+    finally { if (guarded) stopping -= 1; }
   }
 
   function endEmergency() {
@@ -360,12 +363,34 @@ function createRemoteAgent(options = {}) {
     retryTimer = null;
   }
 
+  // One raw SWR read (RM6) before stopping, bounded so a slow radio never delays the stop.
+  async function readFinalSwr() {
+    if (!cat?.meters?.swr || !client.connected || closing) return "";
+    const cmd = cat.meters.swr;
+    let timer;
+    try {
+      const value = await Promise.race([
+        client.sendRaw(cmd, { read: true }).then(reply => parseRawMeter(reply, cmd)),
+        new Promise(resolve => { timer = setTimeout(() => resolve(null), 800); })
+      ]);
+      return Number.isFinite(value) ? ` (ROE bruta ${Math.round(value)}/255)` : "";
+    } catch { return ""; } finally { clearTimeout(timer); }
+  }
+
   async function pttOff(reason) {
     log(`PTT off: ${reason}`);
     const tuning = tune !== null;
+    let swrText = "";
     if (tuning) {
+      const run = tune;
+      tune = null;
+      if (tunerKind === "atas") swrText = await readFinalSwr();
       log(`Sintonía abortada: ${reason}`);
-      setNotice(`Sintonía abortada: ${reason}`);
+      if (tunerKind === "atas" && reason.startsWith("tiempo máximo")) {
+        setNotice(`Sintonía cortada a los ${Math.round((now() - run.startedAt) / 1000)} s${swrText}: la antena no ha sintonizado`);
+      } else {
+        setNotice(`Sintonía abortada: ${reason}${swrText}`);
+      }
     }
     tune = null;
     setRigPtt(false);
@@ -397,7 +422,7 @@ function createRemoteAgent(options = {}) {
     // Whatever happened while the link was down, make sure the rig is not transmitting.
     const tuner = tuneWasActive;
     tuneWasActive = false;
-    runStop({ tuner }).then(ok => { if (ok) endEmergency(); });
+    runStop({ tuner, guarded: false }).then(ok => { if (ok) endEmergency(); });
     unreadable.clear();
     meterOff.clear();
     detectCaps().finally(() => schedulePoll(0));
@@ -499,6 +524,8 @@ function createRemoteAgent(options = {}) {
   async function checkSwr() {
     const limit = cat ? swrRawLimit : swrLimit;
     const tuning = tune !== null;
+    // An ATAS starts mismatched and the radio reports high SWR while the motor searches.
+    if (tuning && tunerKind === "atas") { swrSince = 0; return; }
     const over = tx && tx.swr !== null && (tuning ? tx.swr >= limit : tx.swr > limit);
     if (!over) { swrSince = 0; return; }
     const time = now();
@@ -557,8 +584,9 @@ function createRemoteAgent(options = {}) {
   async function finishTune(run) {
     if (tune !== run) return;
     tune = null;
-    log(TUNE_DONE);
-    setNotice(TUNE_DONE);
+    const swrText = tunerKind === "atas" ? await readFinalSwr() : "";
+    log(TUNE_DONE + swrText);
+    setNotice(TUNE_DONE + swrText);
     setRigPtt(false);
     await runStop({ tuner: true });
   }
@@ -681,7 +709,7 @@ function createRemoteAgent(options = {}) {
     if (time - lastBeat > heartbeatTimeoutMs) pttOff("sin latido");
     else if (time - txStart >= txLimitMs) pttOff("limite de TX");
     else if (tune && time - tune.startedAt >= tuneMaxMs) pttOff(`tiempo máximo de sintonía (${Math.round(tuneMaxMs / 1000)} s)`);
-    else if (tune?.hiSwrSince && time - tune.hiSwrSince > tuneHiSwrMs) pttOff("Hi-SWR de la radio");
+    else if (tunerKind !== "atas" && tune?.hiSwrSince && time - tune.hiSwrSince > tuneHiSwrMs) pttOff("Hi-SWR de la radio");
   }
 
   // A command pending for too long while transmitting means rigctld hung with the radio possibly keyed.
@@ -689,9 +717,11 @@ function createRemoteAgent(options = {}) {
   function checkHung() {
     if (emergency || closing || !client.connected) return;
     if (!(rig.ptt || agentTx || tune || stopping > 0) || client.oldestPendingMs() <= hangMs) return;
+    if (options.onRigctldHung && Date.now() - lastHangAt < hangCooldownMs) return;
     emergency = true;
     log(`rigctld no responde (${hangMs} ms) con TX activo: parada de emergencia`);
     if (options.onRigctldHung) {
+      lastHangAt = Date.now();
       Promise.resolve().then(() => options.onRigctldHung()).catch(error => log(`parada de emergencia: ${error.message}`));
       return;
     }

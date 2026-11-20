@@ -429,12 +429,16 @@ function createStation(options = {}) {
   let emergency = null;
   const makeClient = options.createRigctldClient || (clientOptions => new RigctldClient(clientOptions));
   const emergencyMs = options.emergencyTimeoutMs ?? 30_000;
+  const restartCooldownMs = options.restartCooldownMs ?? 30_000;
+  let lastRestartAt = -Infinity;
   const wait = ms => new Promise(resolve => { setTimeout(resolve, ms).unref?.(); });
 
   // The agent reports rigctld hung while transmitting: kill it, relaunch it and, as soon as it accepts
   // connections, send tuner stop + txOff + T 0 before anything else can touch the radio.
   function emergencyStop({ cat, tunerKind, target }) {
     if (emergency) return emergency;
+    if (Date.now() - lastRestartAt < restartCooldownMs) return Promise.resolve();
+    lastRestartAt = Date.now();
     emergency = (async () => {
       log("rigctld no responde con TX activo: se reinicia para parar la transmision");
       rig?.restart();
