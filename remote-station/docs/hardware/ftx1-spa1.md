@@ -6,7 +6,9 @@ BricoHams dispone de consultas CAT serie experimentales opt-in: modelo, puerto y
 baud se seleccionan explícitamente. Ajustes PC de potencia y frecuencia/modo
 MAIN/SUB tienen opt-ins separados.
 [PTT experimental](../ptt-ftx1.md) tiene configuración local independiente y
-desactivada por defecto; no incluye audio TX ni llave CW.
+desactivada por defecto. El agente Python también dispone de una ruta separada
+de [audio TX experimental](../audio-tx.md), sujeta a opt-ins y guardas PTT;
+no hay llave CW activa ni aceptación física de audio o RF.
 Se ha cotejado el manual oficial CAT 2508-C y realizado una comprobación USB/CAT
 de solo lectura con una unidad Windows. No constituye aceptación completa,
 prueba de TX, audio, ajustes, reconexión ni compatibilidad de todos los firmwares.
