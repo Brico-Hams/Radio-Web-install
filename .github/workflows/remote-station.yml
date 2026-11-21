@@ -10,8 +10,9 @@ jobs:
   host-agent:
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        os: [ubuntu-latest, ubuntu-24.04-arm, windows-latest, macos-latest]
     defaults:
       run:
         working-directory: remote-station
@@ -26,6 +27,15 @@ jobs:
       - run: python scripts/build_help.py --check
       - run: python scripts/build_diagnostic_contract.py --check
       - run: python -m unittest discover -s tests
+      - run: python scripts/build_agent.py --output dist/agent
+      - name: Test packaged agent in isolation
+        run: >-
+          python -I -c "import pathlib, sys, unittest;
+          archive = str(pathlib.Path('dist', 'agent', 'bricoham-station-agent.pyz').resolve());
+          sys.path[:0] = [archive, str(pathlib.Path('tests').resolve())];
+          import bricoham_station_agent.cat as cat;
+          assert str(cat.__file__).startswith(archive);
+          unittest.main(module=None, argv=['tests', 'test_serial_cat', 'test_wsjtx'])"
   web:
     runs-on: ubuntu-latest
     steps:

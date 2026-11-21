@@ -6,17 +6,19 @@ a audio ni controlar una radio.
 
 | Plataforma | Coordinador | Agente de hardware | Cliente web | Cliente nativo móvil |
 |---|---|---|---|---|
-| Windows | HTTP/HTTPS y wheel probados con sockets reales | ZIPAPP independiente probado; CAT con interfaz inyectada, no radio física | Build y navegador probados localmente | Entorno utilizado para compilar APK, no cliente Windows nativo |
+| Windows | HTTP/HTTPS y wheel probados con sockets reales | ZIPAPP independiente probado; FTX-1 USB/CAT de lectura comprobada en una unidad, sin aceptación RF | Build y navegador probados localmente | Entorno utilizado para compilar APK, no cliente Windows nativo |
 | Linux x86_64 | Código portable; ejecución pendiente | ZIPAPP preparado; puertos físicos no probados | Build pendiente de CI; navegador no validado | No aplica |
 | Raspberry Pi / Linux ARM | Pendiente de prueba ARM | ZIPAPP y plantilla systemd preparados, sin prueba ARM | No probado en dispositivo ARM | No aplica |
 | macOS | Ejecución pendiente | ZIPAPP preparado; puertos físicos no probados | Build pendiente de CI; navegador no validado | Xcode necesario para compilar el proyecto iOS |
 | FreeBSD | No probado ni incluido en CI | Sin validación | No probado | No aplica |
-| Android | No objetivo para el coordinador | USB Host/OTG no implementado | Navegador móvil no validado | APK debug móvil/tablet compilado y firma verificada; sin prueba nativa |
+| Android | No objetivo para el coordinador | Agente USB FTX-1 de lectura implementado; OTG físico sin validar, sin audio/PTT/WSJT-X | Navegador móvil no validado | APK debug móvil/tablet compilado y firma verificada; sin prueba nativa |
 | iOS/iPadOS | No objetivo para el coordinador | No implementado | Safari no validado | Proyecto universal iPhone/iPad preparado; sin compilación/firma Xcode |
 
-El workflow configura pruebas Python y build/test de la consola en Windows,
-Ubuntu y macOS, pero no se ha ejecutado una CI remota. FreeBSD y ARM/Raspberry Pi
-requieren runners o pruebas de hardware propios antes de declarar cobertura.
+El workflow configura pruebas Python en Windows, Ubuntu x86/ARM64 y macOS,
+incluidas pruebas del ZIPAPP aislado y, en POSIX, del bloqueo serie con PTY.
+La consola se prueba en Ubuntu. Esta configuración aún no se ha ejecutado
+remotamente. Un runner ARM64 no equivale a una Raspberry Pi ni valida sus USB,
+audio o RF. FreeBSD y Raspberry Pi requieren pruebas propias antes de declarar cobertura.
 También se configura un job Android; su resultado remoto todavía no se ha ejecutado.
 
 ## Objetivo de producto
@@ -27,8 +29,8 @@ También se configura un job Android; su resultado remoto todavía no se ha ejec
 - **Cliente web remoto:** consola responsive/PWA conectada al coordinador por API
   autenticada. El soporte de navegadores se declara después de pruebas por motor.
 - **Clientes nativos:** Capacitor comparte la consola HTML5/JavaScript entre
-  Android móvil/tablet e iPhone/iPad. Un agente Android USB Host/OTG es otro
-  componente y requiere implementación nativa y validación de adaptadores.
+  Android móvil/tablet e iPhone/iPad. El agente Android USB Host/OTG es otro
+  componente, limitado a lectura y pendiente de validación física.
 - **Núcleo de estación:** debe probarse con USB serie y audio en Windows, Linux
   x86/ARM, macOS y FreeBSD; las APIs y funciones pueden variar por plataforma.
 

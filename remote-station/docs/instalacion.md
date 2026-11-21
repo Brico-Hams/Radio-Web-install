@@ -1,7 +1,8 @@
 # Instalación local
 
-La instalación disponible es desde Python 3.12 o posterior. El coordinador no
-requiere paquetes externos; el agente usa `pyserial` 3.5. Para compilar o
+La instalación disponible es desde Python 3.12 o posterior. El paquete usa
+las dependencias `pyserial`, `wsproto` y `h11`; el audio requiere además el
+extra opcional. Para compilar o
 desarrollar la consola web se requiere Node.js 22. No hay instalador ni servicio
 del sistema automáticamente. Existe una plantilla systemd optativa en la
 [guía de agente headless y host HTTPS](despliegue-seguro.md).
@@ -70,8 +71,8 @@ No convierte el software en un servicio del sistema ni habilita CAT o acceso rem
 
 ## Linux, Raspberry Pi, macOS y FreeBSD
 
-El coordinador usa la biblioteca estándar de Python y el agente depende de
-`pyserial`; estos sistemas no se han validado en este entorno. No se declaran
+El paquete usa las dependencias indicadas arriba; estos sistemas no se han
+validado en este entorno. No se declaran
 instaladores, servicio systemd/launchd, paquetes ARM ni compatibilidad FreeBSD
 hasta ejecutar sus pruebas.
 
