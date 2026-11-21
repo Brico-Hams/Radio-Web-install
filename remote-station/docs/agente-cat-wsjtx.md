@@ -90,6 +90,15 @@ configuración con las opciones CAT, pero **WSJT-X y BricoHams no deben abrir el
 mismo puerto CAT simultáneamente**. Si WSJT-X posee el puerto, deja desactivado
 el CAT directo del agente; compartirlo mediante un broker queda pendiente.
 
+El protocolo público [rigctld de Hamlib](https://github.com/Hamlib/Hamlib/blob/master/doc/man1/rigctld.1)
+es una posible vía para compartir CAT, pero no equivale por sí solo a una
+integración segura. Una comprobación local con Hamlib 4.7.2 y su radio ficticia
+confirmó que `\chk_vfo` y `\dump_state` intervienen en el protocolo, además de
+las consultas de frecuencia y modo. El estado de capacidades debe representar
+lo que realmente implementa el puente; no se deben copiar capacidades de la
+radio ficticia ni presentar setters o PTT como disponibles. No se conectó una
+radio, no se probó WSJT-X y aún no hay puente rigctld en el agente.
+
 `GET /api/v1/digital` muestra:
 
 - Heartbeat, estado y decodificaciones de la instancia seleccionada.
