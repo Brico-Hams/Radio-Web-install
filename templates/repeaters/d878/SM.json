@@ -6,9 +6,9 @@
   "fmBroadcast": false,
   "channels": [
     {
-      "name": "8P6AW",
-      "rx": "145.31000",
-      "tx": "144.71000",
+      "name": "t77gr",
+      "rx": "430.26200",
+      "tx": "431.86200",
       "mode": "FM",
       "colorCode": 0,
       "timeslot": 1,
@@ -16,8 +16,8 @@
       "bandwidth": "pending",
       "broadcastOnly": false,
       "rxOnly": true,
-      "source": "https://hearham.com/repeaters/10195",
-      "zone": "Saint James",
+      "source": "https://hearham.com/repeaters/26730",
+      "zone": "Domagnano",
       "notes": "RX only; nominal TX and published tone are reference information, not enabled. Verify local activity, restrictions and licence."
     }
   ]

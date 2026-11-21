@@ -49,6 +49,21 @@
       "source": "https://hearham.com/repeaters/24382",
       "zone": "Ústecký",
       "notes": "RX only; nominal TX and published tone are reference information, not enabled. Verify local activity, restrictions and licence."
+    },
+    {
+      "name": "IR8ZZP",
+      "rx": "145.58700",
+      "tx": "144.98700",
+      "mode": "FM",
+      "colorCode": 0,
+      "timeslot": 1,
+      "talkgroup": 0,
+      "bandwidth": "pending",
+      "broadcastOnly": false,
+      "rxOnly": true,
+      "source": "https://hearham.com/repeaters/26387",
+      "zone": "Vysočina",
+      "notes": "RX only; nominal TX and published tone are reference information, not enabled. Verify local activity, restrictions and licence."
     }
   ]
 }
