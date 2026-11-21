@@ -21,6 +21,9 @@ import javax.net.ssl.HttpsURLConnection
 import javax.net.ssl.SSLException
 
 object AnonymousDiagnostics {
+    private val versionFormat = Regex("\\d{1,4}\\.\\d{1,4}\\.\\d{1,4}")
+    private lateinit var component: String
+    private lateinit var version: String
     private lateinit var database: SQLiteOpenHelper
     private lateinit var contract: JSONObject
     private var owner: Context? = null
@@ -52,13 +55,24 @@ object AnonymousDiagnostics {
         }
     }
 
-    @Synchronized fun initialize(context: Context) {
+    @Synchronized fun initialize(context: Context, component: String, version: String) {
         val application = context.applicationContext
-        if (owner === application) return
+        if (owner === application) {
+            require(this.component == component && this.version == version) {
+                "Diagnostic identity cannot change within an application"
+            }
+            return
+        }
+        val definition = JSONObject(context.assets.open("diagnostic-contract.json").bufferedReader().use { it.readText() })
+        require(component in values("components", definition) && version.matches(versionFormat)) {
+            "Invalid diagnostic component or version"
+        }
         val previous = if (::database.isInitialized) database else null
         owner = application
+        this.component = component
+        this.version = version
         target = null
-        contract = JSONObject(context.assets.open("diagnostic-contract.json").bufferedReader().use { it.readText() })
+        contract = definition
         database = object : SQLiteOpenHelper(context.applicationContext, "anonymous-diagnostics.sqlite3", null, 1) {
             override fun onCreate(db: SQLiteDatabase) {
                 db.execSQL("CREATE TABLE events(created INTEGER NOT NULL, payload TEXT NOT NULL)")
@@ -94,7 +108,7 @@ object AnonymousDiagnostics {
         record("started", "native", "info")
     }
 
-    private fun values(name: String): Set<String> = contract.getJSONArray(name).let { array ->
+    private fun values(name: String, definition: JSONObject = contract): Set<String> = definition.getJSONArray(name).let { array ->
         (0 until array.length()).map { array.getString(it) }.toSet()
     }
 
@@ -103,7 +117,7 @@ object AnonymousDiagnostics {
             value.opt("schema_version") != 1 ||
             value.opt("component") !in values("components") ||
             value.opt("platform") !in values("platforms") ||
-            (value.opt("version") as? String)?.matches(Regex("\\d{1,4}\\.\\d{1,4}\\.\\d{1,4}")) != true
+            (value.opt("version") as? String)?.matches(versionFormat) != true
         ) return false
         val events = value.optJSONArray("events") ?: return false
         if (events.length() !in 1..contract.getInt("max_events")) return false
@@ -120,8 +134,8 @@ object AnonymousDiagnostics {
     }
 
     private fun envelope(events: JSONArray): JSONObject = JSONObject()
-        .put("schema_version", 1).put("component", "radicodex").put("platform", "android")
-        .put("version", BuildConfig.VERSION_NAME).put("events", events)
+        .put("schema_version", 1).put("component", component).put("platform", "android")
+        .put("version", version).put("events", events)
 
     private fun category(error: Throwable?): String = when (error) {
         null -> "none"
@@ -138,7 +152,7 @@ object AnonymousDiagnostics {
             Log.w("RadiCodexDiagnostics", "Diagnostic logger not initialized")
             return
         }
-        val line = error?.stackTrace?.firstOrNull { it.className.startsWith("org.bricohams.radio.") }
+        val line = error?.stackTrace?.firstOrNull { it.className.startsWith("org.bricohams.") }
             ?.lineNumber?.coerceIn(0, 100000) ?: 0
         val event = JSONObject().put("code", code).put("source", source).put("severity", severity)
             .put("error_type", category(error)).put("line", line)
@@ -184,7 +198,7 @@ object AnonymousDiagnostics {
             while (rows.moveToNext()) {
                 val stored = JSONObject(rows.getString(0))
                 if (!validReport(stored)) throw SQLiteException("Invalid stored technical report")
-                if (stored.getString("version") == BuildConfig.VERSION_NAME) {
+                if (stored.getString("version") == version && stored.getString("component") == component) {
                     events.put(stored.getJSONArray("events").getJSONObject(0))
                 }
             }

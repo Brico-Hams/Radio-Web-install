@@ -17,3 +17,4 @@ dependencyResolutionManagement {
 }
 rootProject.name = "Bricohams"
 include(":app")
+include(":station-core")

@@ -32,6 +32,16 @@ del receptor debe configurar sus propios registros y politica de retencion.
 - Los antiguos informes USB detallados son privados y no se envian por estos
   mecanismos. Revisarlos por separado antes de compartirlos manualmente.
 
+El registro nativo y la validacion de origen HTTPS residen en la biblioteca Android
+`station-core`, reutilizable sin dependencias de la interfaz RadiCodex. Cada
+aplicacion inicializa el registro con su componente del contrato cerrado y su
+version publica; esa identidad no puede cambiar durante la misma aplicacion.
+RadiCodex conserva `radicodex` y su version compilada. El agente independiente
+utilizara `station-agent`, sin identificadores USB en los informes. El contrato
+JSON se genera desde la misma definicion Python y se empaqueta con la biblioteca.
+Esta extraccion no implementa por si sola el agente OTG ni cambia consentimiento,
+limites, retencion, validacion TLS o confirmacion HTTPS de recepcion.
+
 Los clientes JS conservan hasta 128 eventos y RadiCodex hasta 500 entradas.
 La caducidad logica es de siete dias, comprobada al leer/escribir; un dispositivo
 apagado no ejecuta una purga. Borrar aqui elimina solo registros locales: no

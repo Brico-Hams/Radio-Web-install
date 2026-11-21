@@ -7,7 +7,7 @@ import android.os.Bundle
 class RadioWorkspaceApplication : Application() {
     override fun onCreate() {
         super.onCreate()
-        AnonymousDiagnostics.initialize(this)
+        AnonymousDiagnostics.initialize(this, "radicodex", BuildConfig.VERSION_NAME)
         val previous = Thread.getDefaultUncaughtExceptionHandler()
         Thread.setDefaultUncaughtExceptionHandler { thread, error ->
             try { AnonymousDiagnostics.record("uncaught_error", "native", "error", error) }

@@ -30,6 +30,8 @@ class AnonymousDiagnosticsTest {
             val text = inspect()
             for (secret in listOf("TOKEN", "EA5XYZ", "private", "Users")) assertFalse(text.contains(secret))
             val report = JSONObject(text)
+            assertEquals("radicodex", report.getString("component"))
+            assertEquals(BuildConfig.VERSION_NAME, report.getString("version"))
             assertTrue(AnonymousDiagnostics.validReport(report))
             report.put("callsign", "EA5XYZ")
             assertFalse(AnonymousDiagnostics.validReport(report))

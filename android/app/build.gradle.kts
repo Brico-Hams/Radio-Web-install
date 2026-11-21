@@ -88,6 +88,7 @@ tasks.configureEach {
     if (name.startsWith("lintAnalyze") || name.startsWith("lintVitalAnalyze") || name.startsWith("generate") && name.endsWith("ReportModel") && name.contains("Lint")) dependsOn(syncChannelTemplates)
 }
 dependencies {
+    implementation(project(":station-core"))
     implementation("com.github.mik3y:usb-serial-for-android:3.9.0")
     implementation("org.mozilla:rhino:1.7.15")
     testImplementation("junit:junit:4.13.2")

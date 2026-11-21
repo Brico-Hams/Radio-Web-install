@@ -67,6 +67,22 @@ Todos los componentes disponen de registro tecnico minimizado y opciones de envi
 con consentimiento. Consulta [diagnostico y privacidad](DIAGNOSTICS.md) para el
 contrato cerrado, receptor HTTPS, roles, retencion y diferencias entre clientes.
 
+### Biblioteca nativa compartida Android
+
+`android/station-core` contiene el registro minimizado y el validador HTTPS antes
+acoplados a RadiCodex. Conserva el paquete Kotlin publico para no alterar llamadas
+ni pantallas existentes; recibe componente/version explicitamente, valida ambos
+contra el contrato y rechaza cambios de identidad durante una misma aplicacion.
+Los informes almacenados de otro componente o version no se reenvelopan como propios.
+El contrato generado se incorpora como asset de la biblioteca a cada APK consumidor.
+El envio sigue desactivado por defecto y las credenciales permanecen solo en memoria.
+No es todavia un agente Android OTG ejecutable: USB, servicio y enlace al host
+siguen pendientes. El APK RadiCodex conserva su identidad y cliente HTTPS existente.
+Las pruebas de biblioteca y de conexion/diagnostico RadiCodex pasan, junto a ambos
+lints y build APK. Se verifican los 53 recursos generados, firma debug v2 y contrato
+JSON dentro del APK actualizado. La revision de seguridad limitada a esta extraccion
+no encuentra vulnerabilidades confirmadas; no certifica el producto completo.
+
 ## Escritorio operativo
 
 El cliente compartido web/Android/iPhone/iPad presenta los controles del agente

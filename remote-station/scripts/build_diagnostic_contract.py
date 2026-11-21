@@ -31,7 +31,7 @@ def main() -> int:
     text = json.dumps(contract, indent=2, ensure_ascii=True) + "\n"
     outputs = {
         root / "diagnostic-contract.mjs": "export const contract = " + text.rstrip() + ";\n",
-        root / "android/app/src/main/assets/diagnostic-contract.json": text,
+        root / "android/station-core/src/main/assets/diagnostic-contract.json": text,
     }
     for path, content in outputs.items():
         if args.check:
