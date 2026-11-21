@@ -96,6 +96,13 @@ el CAT directo del agente; compartirlo mediante un broker queda pendiente.
   (reproducción WAV); si un campo antiguo no existe se muestra desconocido.
 - Tras 60 segundos sin actividad, cierre o fallo del receptor, `connected` pasa
   a falso. Los datos retenidos son históricos, no estado actual.
+- `status_age_seconds` mide desde el último mensaje **Status**, no desde un
+  heartbeat o decode. Después de 60 segundos la consola advierte que ese
+  estado puede estar desactualizado, incluso si sigue llegando tráfico. WSJT-X
+  suele emitir Status cuando cambia, por lo que la edad no prueba un fallo.
+- Después de Close se ignoran decodes y Clear atrasados; solo un nuevo heartbeat
+  o Status del origen fijado puede reabrir la sesión y permitir órdenes opt-in.
+  La edad sigue siendo telemetría UDP no autenticada, nunca un enclavamiento RF.
 - Contadores de paquetes inválidos o no implementados; datagramas mayores de
   8192 bytes y otros esquemas se rechazan.
 

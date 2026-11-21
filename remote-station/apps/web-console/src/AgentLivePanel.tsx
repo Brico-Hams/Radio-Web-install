@@ -143,6 +143,8 @@ export function AgentLivePanel({ token }: { token: string }) {
         <div>
           <p role="note">{t('liveUdpNotice')}</p>
           <p>{digital.connected ? t('liveDigitalConnected') : t('liveDigitalHistorical')}</p>
+          {typeof digital.status_age_seconds === 'number' && digital.status_age_seconds >= 60
+            ? <p role="note">{t('liveDigitalStatusOld')}</p> : null}
           {digital.commands_enabled ? <div className="session-actions">
             <button className="button button-secondary" disabled={busy || !digital.commands_ready}
               onClick={() => void operateDigital('replay')}>{t('digitalReplay')}</button>

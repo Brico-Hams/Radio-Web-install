@@ -136,6 +136,20 @@ describe('agent live panel', () => {
     expect(screen.queryByRole('button', { name: /transmitir|ptt/i })).toBeNull()
   })
 
+  it('warns about an old status even when other WSJT-X packets are still arriving', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => json({
+      api_version: 'v1', data_is_simulated: false, source: 'wsjtx_udp',
+      commands_enabled: false, connected: true, decodes: [], status_age_seconds: 120,
+      authenticated: false, suitable_for_control: false, trust: 'untrusted_local_udp',
+    })))
+    const user = userEvent.setup()
+    render(<><LanguageSelector /><AgentLivePanel token="test-token" /></>)
+    await user.click(screen.getByRole('button', { name: 'Consultar WSJT-X' }))
+    expect(await screen.findByText(/último estado WSJT-X tiene más de 60 segundos/)).toBeTruthy()
+    fireEvent.change(screen.getByLabelText('Idioma'), { target: { value: 'en' } })
+    expect(screen.getByText(/last WSJT-X status is over 60 seconds old/)).toBeTruthy()
+  })
+
   it('surfaces the agent error code instead of substituting simulated data', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => json({
       api_version: 'v1', error: { code: 'cat_timeout' },

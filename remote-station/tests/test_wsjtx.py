@@ -252,3 +252,68 @@ class WsjtxTests(unittest.TestCase):
         finally:
             sender.close()
             receiver.close()
+
+    def test_close_cannot_be_reopened_by_late_decode_or_clear(self) -> None:
+        receiver = WsjtxReceiver(0, "WSJT-X", commands_enabled=True)
+        sender = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            address = ("127.0.0.1", receiver.port)
+            for data in (status_packet(), packet(6), decode_packet(), packet(3)):
+                sender.sendto(data, address)
+            deadline = time.monotonic() + 2
+            while receiver.snapshot()["ignored_packets"] < 2:
+                if time.monotonic() >= deadline:
+                    self.fail("Late datagrams were not processed")
+                time.sleep(0.01)
+            state = receiver.snapshot()
+            self.assertFalse(state["connected"])
+            self.assertFalse(state["commands_ready"])
+            self.assertIsNone(state["status"])
+            self.assertIsNone(state["status_age_seconds"])
+            self.assertEqual(state["decodes"], [])
+            with self.assertRaisesRegex(WsjtxError, "instance_unavailable"):
+                receiver.operate({"operation": "halt_tx", "request_id": "closed-session-0001"})
+            sender.sendto(packet(0, struct.pack(">I", 3) + text("2.7") + text("test")), address)
+            deadline = time.monotonic() + 2
+            while not receiver.snapshot()["commands_ready"]:
+                if time.monotonic() >= deadline:
+                    self.fail("New heartbeat did not restore the pinned instance")
+                time.sleep(0.01)
+            self.assertIsNone(receiver.snapshot()["status_age_seconds"])
+        finally:
+            sender.close()
+            receiver.close()
+
+    def test_status_age_does_not_refresh_on_heartbeat_or_decode(self) -> None:
+        receiver = WsjtxReceiver(0, "WSJT-X")
+        sender = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            address = ("127.0.0.1", receiver.port)
+            sender.sendto(status_packet(), address)
+            deadline = time.monotonic() + 2
+            while receiver.snapshot()["status"] is None:
+                if time.monotonic() >= deadline:
+                    self.fail("WSJT-X status not received")
+                time.sleep(0.01)
+            with receiver._lock:
+                receiver._status_seen -= 120
+            sender.sendto(decode_packet(), address)
+            deadline = time.monotonic() + 2
+            while len(receiver.snapshot()["decodes"]) != 1:
+                if time.monotonic() >= deadline:
+                    self.fail("WSJT-X decode not received")
+                time.sleep(0.01)
+            state = receiver.snapshot()
+            self.assertTrue(state["connected"])
+            self.assertLess(state["last_seen_age_seconds"], 1)
+            self.assertGreaterEqual(state["status_age_seconds"], 120)
+            sender.sendto(status_packet(), address)
+            deadline = time.monotonic() + 2
+            while receiver.snapshot()["status_age_seconds"] >= 120:
+                if time.monotonic() >= deadline:
+                    self.fail("Updated status did not reset its age")
+                time.sleep(0.01)
+            self.assertLess(receiver.snapshot()["status_age_seconds"], 1)
+        finally:
+            sender.close()
+            receiver.close()

@@ -141,6 +141,7 @@ class WsjtxReceiver:
         self._closed = False
         self._failed = False
         self._status: dict[str, object] | None = None
+        self._status_seen: float | None = None
         self._decodes: deque[dict[str, object]] = deque(maxlen=100)
         self._invalid_packets = 0
         self._ignored_packets = 0
@@ -177,6 +178,9 @@ class WsjtxReceiver:
                 if identity != self.identity or kind not in (0, 1, 2, 3, 6):
                     self._ignored_packets += 1
                     continue
+                if self._closed and kind not in (0, 1):
+                    self._ignored_packets += 1
+                    continue
                 if self.commands_enabled:
                     if self._peer is not None and peer != self._peer:
                         self._ignored_packets += 1
@@ -189,12 +193,14 @@ class WsjtxReceiver:
                 self._closed = kind == 6
                 if kind == 1:
                     self._status = fields
+                    self._status_seen = self._last_seen
                 elif kind == 2:
                     self._decodes.append(fields)
                 elif kind == 3:
                     self._decodes.clear()
                 elif kind == 6:
                     self._status = None
+                    self._status_seen = None
 
     def _connected(self, age: float | None) -> bool:
         return (
@@ -260,7 +266,9 @@ class WsjtxReceiver:
 
     def snapshot(self) -> dict[str, object]:
         with self._lock:
-            age = None if self._last_seen is None else time.monotonic() - self._last_seen
+            now = time.monotonic()
+            age = None if self._last_seen is None else now - self._last_seen
+            status_age = None if self._status_seen is None else now - self._status_seen
             return {
                 "api_version": "v1",
                 "source": "wsjtx_udp",
@@ -276,6 +284,7 @@ class WsjtxReceiver:
                 "receiver_failed": self._failed,
                 "last_seen_age_seconds": age,
                 "status": copy.deepcopy(self._status),
+                "status_age_seconds": status_age,
                 "decodes": copy.deepcopy(list(self._decodes)),
                 "invalid_packets": self._invalid_packets,
                 "ignored_packets": self._ignored_packets,

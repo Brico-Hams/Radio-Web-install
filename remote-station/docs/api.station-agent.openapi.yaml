@@ -860,6 +860,10 @@ components:
           type: boolean
         last_seen_age_seconds:
           type: [number, "null"]
+        status_age_seconds:
+          type: [number, "null"]
+          minimum: 0
+          description: Edad del último Status; heartbeat y decode no la actualizan. UDP no autenticado.
         status:
           type: [object, "null"]
           description: Último Status externo; si no conectado es histórico.
