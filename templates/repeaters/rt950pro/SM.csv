@@ -1,0 +1,2 @@
+"Name","RX_MHz","TX_nominal_MHz","Modulation","RX_Only","Country","Region_ID","Locality","Identifier","Key","Source","Notes","Zone","Slot","Channel_Number"
+"t77gr","430.26200","431.86200","FM","Yes","SM","SM-03","San Marino (RSM)","t77gr","hearham:26730","https://hearham.com/repeaters/26730","RX only; nominal TX and published tone are reference information, not enabled. Verify local activity, restrictions and licence.","Domagnano","1","1"

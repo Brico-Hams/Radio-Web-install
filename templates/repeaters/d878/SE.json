@@ -51,21 +51,6 @@
       "notes": "RX only; nominal TX and published tone are reference information, not enabled. Verify local activity, restrictions and licence."
     },
     {
-      "name": "SK6BA",
-      "rx": "145.60000",
-      "tx": "145.00000",
-      "mode": "FM",
-      "colorCode": 0,
-      "timeslot": 1,
-      "talkgroup": 0,
-      "bandwidth": "pending",
-      "broadcastOnly": false,
-      "rxOnly": true,
-      "source": "https://hearham.com/repeaters/1073",
-      "zone": "Västra Götaland",
-      "notes": "RX only; nominal TX and published tone are reference information, not enabled. Verify local activity, restrictions and licence."
-    },
-    {
       "name": "SM6YRB",
       "rx": "145.30000",
       "tx": "145.30000",

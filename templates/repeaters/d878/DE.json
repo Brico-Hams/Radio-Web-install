@@ -306,6 +306,21 @@
       "notes": "RX only; nominal TX and published tone are reference information, not enabled. Verify local activity, restrictions and licence."
     },
     {
+      "name": "IR0EO",
+      "rx": "145.62500",
+      "tx": "145.02500",
+      "mode": "FM",
+      "colorCode": 0,
+      "timeslot": 1,
+      "talkgroup": 0,
+      "bandwidth": "pending",
+      "broadcastOnly": false,
+      "rxOnly": true,
+      "source": "https://hearham.com/repeaters/26699",
+      "zone": "Baden-Württemberg",
+      "notes": "RX only; nominal TX and published tone are reference information, not enabled. Verify local activity, restrictions and licence."
+    },
+    {
       "name": "OE5XBR",
       "rx": "438.77500",
       "tx": "431.17500",
@@ -318,6 +333,36 @@
       "rxOnly": true,
       "source": "https://hearham.com/repeaters/24388",
       "zone": "Baden-Württemberg",
+      "notes": "RX only; nominal TX and published tone are reference information, not enabled. Verify local activity, restrictions and licence."
+    },
+    {
+      "name": "darc",
+      "rx": "438.85000",
+      "tx": "431.25000",
+      "mode": "FM",
+      "colorCode": 0,
+      "timeslot": 1,
+      "talkgroup": 0,
+      "bandwidth": "pending",
+      "broadcastOnly": false,
+      "rxOnly": true,
+      "source": "https://hearham.com/repeaters/26777",
+      "zone": "Bayern",
+      "notes": "RX only; nominal TX and published tone are reference information, not enabled. Verify local activity, restrictions and licence."
+    },
+    {
+      "name": "DB0LBB",
+      "rx": "438.60000",
+      "tx": "431.00000",
+      "mode": "FM",
+      "colorCode": 0,
+      "timeslot": 1,
+      "talkgroup": 0,
+      "bandwidth": "pending",
+      "broadcastOnly": false,
+      "rxOnly": true,
+      "source": "https://hearham.com/repeaters/26776",
+      "zone": "Bayern",
       "notes": "RX only; nominal TX and published tone are reference information, not enabled. Verify local activity, restrictions and licence."
     },
     {
@@ -422,6 +467,21 @@
       "broadcastOnly": false,
       "rxOnly": true,
       "source": "https://hearham.com/repeaters/24370",
+      "zone": "Bayern",
+      "notes": "RX only; nominal TX and published tone are reference information, not enabled. Verify local activity, restrictions and licence."
+    },
+    {
+      "name": "OE7XET",
+      "rx": "438.22500",
+      "tx": "430.62500",
+      "mode": "FM",
+      "colorCode": 0,
+      "timeslot": 1,
+      "talkgroup": 0,
+      "bandwidth": "pending",
+      "broadcastOnly": false,
+      "rxOnly": true,
+      "source": "https://hearham.com/repeaters/26765",
       "zone": "Bayern",
       "notes": "RX only; nominal TX and published tone are reference information, not enabled. Verify local activity, restrictions and licence."
     },

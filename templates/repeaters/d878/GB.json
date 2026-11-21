@@ -9921,21 +9921,6 @@
       "notes": "RX only; nominal TX and published tone are reference information, not enabled. Verify local activity, restrictions and licence."
     },
     {
-      "name": "MB7UVT",
-      "rx": "144.80000",
-      "tx": "144.80000",
-      "mode": "FM",
-      "colorCode": 0,
-      "timeslot": 1,
-      "talkgroup": 0,
-      "bandwidth": "pending",
-      "broadcastOnly": false,
-      "rxOnly": true,
-      "source": "https://hearham.com/repeaters/24947",
-      "zone": "Lancashire",
-      "notes": "RX only; nominal TX and published tone are reference information, not enabled. Verify local activity, restrictions and licence."
-    },
-    {
       "name": "MB7UWV",
       "rx": "144.80000",
       "tx": "144.80000",
@@ -10652,6 +10637,21 @@
       "broadcastOnly": false,
       "rxOnly": true,
       "source": "https://hearham.com/repeaters/14560",
+      "zone": "Lisburn",
+      "notes": "RX only; nominal TX and published tone are reference information, not enabled. Verify local activity, restrictions and licence."
+    },
+    {
+      "name": "MB7IGI",
+      "rx": "145.26250",
+      "tx": "145.26250",
+      "mode": "FM",
+      "colorCode": 0,
+      "timeslot": 1,
+      "talkgroup": 0,
+      "bandwidth": "pending",
+      "broadcastOnly": false,
+      "rxOnly": true,
+      "source": "https://hearham.com/repeaters/25423",
       "zone": "Lisburn",
       "notes": "RX only; nominal TX and published tone are reference information, not enabled. Verify local activity, restrictions and licence."
     },

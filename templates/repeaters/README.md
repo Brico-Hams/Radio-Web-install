@@ -3,7 +3,7 @@
 Archivos generados por `npm run templates:build` (sin red) a partir de `data/channel-templates/<CC>.json`. No editar a mano.
 
 - Radios: RadiCodex (`radicodex`, .csv); Radtel RT-950 Pro (`rt950pro`, .csv); Quansheng UV-K5 V3 (`uvk5v3`, .csv); AnyTone AT-D878 (`d878`, .json); Yaesu FTX-1 (`ftx1`, .csv).
-- Paises con datos: 40 de 80. Archivos: 200. Generado: 2026-11-20T13:26:53.037Z.
+- Paises con datos: 44 de 80. Archivos: 220. Generado: 2026-11-21T12:54:39.546Z.
 - Ruta: `templates/repeaters/<radio>/<CC>.<ext>`. `index.json` lista cada archivo con canales, descartados y SHA-256 (`path` es relativo a esta carpeta).
 
 ## Formato
@@ -31,7 +31,6 @@ Los repetidores son canales de solo recepcion: el TX queda bloqueado y la entrad
 - BY Bielorrusia: HearHam no publica repetidores FM operativos utilizables para este pais.
 - BA Bosnia y Herzegovina: HearHam no publica repetidores FM operativos utilizables para este pais.
 - BG Bulgaria: HearHam no publica repetidores FM operativos utilizables para este pais.
-- HR Croacia: HearHam no publica repetidores FM operativos utilizables para este pais.
 - FI Finlandia: HearHam no publica repetidores FM operativos utilizables para este pais.
 - GR Grecia: HearHam no publica repetidores FM operativos utilizables para este pais.
 - IS Islandia: HearHam no publica repetidores FM operativos utilizables para este pais.
@@ -40,14 +39,10 @@ Los repetidores son canales de solo recepcion: el TX queda bloqueado y la entrad
 - LI Liechtenstein: HearHam no publica repetidores FM operativos utilizables para este pais.
 - LT Lituania: HearHam no publica repetidores FM operativos utilizables para este pais.
 - LU Luxemburgo: HearHam no publica repetidores FM operativos utilizables para este pais.
-- MT Malta: HearHam no publica repetidores FM operativos utilizables para este pais.
 - MD Moldavia: HearHam no publica repetidores FM operativos utilizables para este pais.
 - MC Mónaco: HearHam no publica repetidores FM operativos utilizables para este pais.
-- ME Montenegro: HearHam no publica repetidores FM operativos utilizables para este pais.
 - RO Rumanía: HearHam no publica repetidores FM operativos utilizables para este pais.
-- SM San Marino: HearHam no publica repetidores FM operativos utilizables para este pais.
 - SK Eslovaquia: HearHam no publica repetidores FM operativos utilizables para este pais.
-- SI Eslovenia: HearHam no publica repetidores FM operativos utilizables para este pais.
 - UA Ucrania: HearHam no publica repetidores FM operativos utilizables para este pais.
 - VA Ciudad del Vaticano: HearHam no publica repetidores FM operativos utilizables para este pais.
 - CR Costa Rica: HearHam no publica repetidores FM operativos utilizables para este pais.
@@ -55,6 +50,7 @@ Los repetidores son canales de solo recepcion: el TX queda bloqueado y la entrad
 - GT Guatemala: HearHam no publica repetidores FM operativos utilizables para este pais.
 - NI Nicaragua: HearHam no publica repetidores FM operativos utilizables para este pais.
 - BS Bahamas: HearHam no publica repetidores FM operativos utilizables para este pais.
+- BB Barbados: HearHam no publica repetidores FM operativos utilizables para este pais.
 - CU Cuba: HearHam no publica repetidores FM operativos utilizables para este pais.
 - GD Granada: HearHam no publica repetidores FM operativos utilizables para este pais.
 - HT Haití: HearHam no publica repetidores FM operativos utilizables para este pais.
