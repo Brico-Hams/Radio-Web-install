@@ -169,7 +169,13 @@ hora, SNR, desplazamiento, modo, mensaje y marcas de Replay, baja confianza
 y audio desde archivo. Campos ausentes o inválidos se indican como desconocidos,
 no como `false`. Las marcas no validan por sí mismas una señal real y la
 información sigue siendo UDP no autenticado. La instantánea no se actualiza
-sola; el usuario debe volver a consultar. Los datos técnicos originales están
+sola; el usuario debe volver a consultar. La consola indica el tiempo desde la
+consulta y hace avanzar localmente la antigüedad del Status recibido. La
+estimación incluye todo el tiempo de consulta y puede sobreestimar su edad. A los
+60 segundos advierte si la actividad observada o el Status pueden estar
+desactualizados; no interpreta la falta de una nueva consulta como desconexión.
+Si el agente anterior no comunica la edad del Status, esta se indica como
+desconocida. Los datos técnicos originales están
 disponibles en un desplegable y no se importan contactos automáticamente.
 
 Referencias públicas consultadas, implementación original:

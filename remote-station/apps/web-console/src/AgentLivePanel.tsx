@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { ApiError, createControlRequest, getApiData, isRecord } from './api'
 import { useLanguage } from './i18n'
 
@@ -59,6 +59,10 @@ function decodeTime(value: unknown, unknown: string): string {
   const millis = value % 1000
   return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:` +
     `${String(seconds).padStart(2, '0')}.${String(millis).padStart(3, '0')}`
+}
+
+function elapsedSince(monotonic: number, wall: number): number {
+  return Math.max(0, (performance.now() - monotonic) / 1000, (Date.now() - wall) / 1000)
 }
 
 function DigitalReadout({ data }: { data: LivePayload }) {
@@ -136,11 +140,36 @@ export function AgentLivePanel({ token }: { token: string }) {
   const { t } = useLanguage()
   const sendControl = useMemo(() => createControlRequest(token), [token])
   const [cat, setCat] = useState<LivePayload | null>(null)
-  const [digital, setDigital] = useState<LivePayload | null>(null)
+  const [digitalSnapshot, setDigitalSnapshot] = useState<{
+    data: LivePayload; requestedAt: number; wallTime: number
+  } | null>(null)
+  const [snapshotAge, setSnapshotAge] = useState(0)
   const [command, setCommand] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [commandResult, setCommandResult] = useState<DigitalCommandResult | null>(null)
+
+  useEffect(() => {
+    if (!digitalSnapshot) return
+    const updateAge = () => setSnapshotAge((previous) => Math.max(previous, elapsedSince(
+      digitalSnapshot.requestedAt, digitalSnapshot.wallTime,
+    )))
+    const timer = window.setInterval(updateAge, 1000)
+    document.addEventListener('visibilitychange', updateAge)
+    return () => {
+      window.clearInterval(timer)
+      document.removeEventListener('visibilitychange', updateAge)
+    }
+  }, [digitalSnapshot])
+
+  const digital = digitalSnapshot?.data
+  const activityAge = digital?.last_seen_age_seconds
+  const statusAge = digital?.status_age_seconds
+  const validAge = (value: unknown): value is number =>
+    typeof value === 'number' && Number.isFinite(value) && value >= 0
+  const activityMayBeOld = snapshotAge >= 60 ||
+    (validAge(activityAge) && activityAge + snapshotAge >= 60)
+  const statusMayBeOld = validAge(statusAge) && statusAge + snapshotAge >= 60
 
   async function operateDigital(operation: 'replay' | 'halt_tx') {
     setBusy(true)
@@ -153,7 +182,7 @@ export function AgentLivePanel({ token }: { token: string }) {
       if (result.operation !== operation) throw new Error(t('digitalCommandFailed'))
       setCommandResult(result)
     } catch (error) {
-      setDigital(null)
+      setDigitalSnapshot(null)
       setError(error instanceof Error ? error.message : t('digitalCommandFailed'))
     } finally {
       setBusy(false)
@@ -165,17 +194,22 @@ export function AgentLivePanel({ token }: { token: string }) {
     setError('')
     if (kind === 'cat') setCat(null)
     else {
-      setDigital(null)
+      setDigitalSnapshot(null)
       setCommandResult(null)
     }
     try {
       const endpoint = `/${kind}${read ? `?command=${encodeURIComponent(command)}` : ''}`
+      const requestedAt = performance.now()
+      const wallTime = Date.now()
       const response = await getApiData(token, endpoint, isLive)
       if (!response.allowed) throw new Error(t('radioPermission'))
       if (kind === 'cat') {
         setCat(response.data)
         if (!read) setCommand(response.data.queries?.[0] ?? '')
-      } else setDigital(response.data)
+      } else {
+        setSnapshotAge(elapsedSince(requestedAt, wallTime))
+        setDigitalSnapshot({ data: response.data, requestedAt, wallTime })
+      }
     } catch (error) {
       setError(error instanceof ApiError && error.status === 503
         ? `${t('liveUnavailable')} (${error.code ?? 'HTTP 503'}). ${t('liveCheckConfig')}`
@@ -223,9 +257,12 @@ export function AgentLivePanel({ token }: { token: string }) {
       {digital ? (
         <div>
           <p role="note">{t('liveUdpNotice')}</p>
-          <p>{digital.connected ? t('liveDigitalConnected') : t('liveDigitalHistorical')}</p>
-          {typeof digital.status_age_seconds === 'number' && digital.status_age_seconds >= 60
-            ? <p role="note">{t('liveDigitalStatusOld')}</p> : null}
+          <p>{t('digitalSnapshotAge')}: {Math.floor(snapshotAge)} s</p>
+          <p>{!digital.connected ? t('liveDigitalHistorical') :
+            activityMayBeOld ? t('digitalSnapshotOld') : t('liveDigitalConnected')}</p>
+          {statusMayBeOld ? <p role="note">{t('liveDigitalStatusOld')}</p> : null}
+          {isRecord(digital.status) && !validAge(statusAge)
+            ? <p role="note">{t('digitalStatusAgeUnknown')}</p> : null}
           {digital.commands_enabled ? <div className="session-actions">
             <button className="button button-secondary" disabled={busy || !digital.commands_ready}
               onClick={() => void operateDigital('replay')}>{t('digitalReplay')}</button>

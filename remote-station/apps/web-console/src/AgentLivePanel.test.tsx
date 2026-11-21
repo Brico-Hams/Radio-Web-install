@@ -1,4 +1,4 @@
-import { fireEvent, render as renderComponent, screen, within } from '@testing-library/react'
+import { act, fireEvent, render as renderComponent, screen, within } from '@testing-library/react'
 import type { ReactNode } from 'react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -145,9 +145,103 @@ describe('agent live panel', () => {
     const user = userEvent.setup()
     render(<><LanguageSelector /><AgentLivePanel token="test-token" /></>)
     await user.click(screen.getByRole('button', { name: 'Consultar WSJT-X' }))
-    expect(await screen.findByText(/último estado WSJT-X tiene más de 60 segundos/)).toBeTruthy()
+    expect(await screen.findByText(/último estado WSJT-X podría tener 60 segundos o más/)).toBeTruthy()
     fireEvent.change(screen.getByLabelText('Idioma'), { target: { value: 'en' } })
-    expect(screen.getByText(/last WSJT-X status is over 60 seconds old/)).toBeTruthy()
+    expect(screen.getByText(/last WSJT-X status may be at least 60 seconds old/)).toBeTruthy()
+  })
+
+  it('ages status and activity locally without polling or claiming disconnection', async () => {
+    const fetch = vi.fn(async () => json({
+      api_version: 'v1', data_is_simulated: false, source: 'wsjtx_udp',
+      commands_enabled: false, connected: true, decodes: [], status: { mode: 'FT8' },
+      last_seen_age_seconds: 57, status_age_seconds: 58,
+      authenticated: false, suitable_for_control: false, trust: 'untrusted_local_udp',
+    }))
+    vi.stubGlobal('fetch', fetch)
+    vi.useFakeTimers()
+    try {
+      const { unmount } = render(<AgentLivePanel token="test-token" />)
+      await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Consultar WSJT-X' })))
+      expect(screen.getByText('FT8')).toBeTruthy()
+      act(() => vi.advanceTimersByTime(1000))
+      expect(screen.queryByText(/último estado WSJT-X podría tener 60 segundos o más/)).toBeNull()
+      act(() => vi.advanceTimersByTime(1000))
+      expect(screen.getByText(/último estado WSJT-X podría tener 60 segundos o más/)).toBeTruthy()
+      expect(screen.queryByText(/La instantánea puede estar desactualizada/)).toBeNull()
+      act(() => vi.advanceTimersByTime(1000))
+      expect(screen.getByText(/La instantánea puede estar desactualizada/)).toBeTruthy()
+      expect(screen.queryByText(/cualquier dato retenido es histórico/)).toBeNull()
+      expect(fetch).toHaveBeenCalledOnce()
+      unmount()
+      expect(vi.getTimerCount()).toBe(0)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('does not infer status age when an older agent omits it', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => json({
+      api_version: 'v1', data_is_simulated: false, source: 'wsjtx_udp',
+      commands_enabled: false, connected: true, decodes: [], status: { mode: 'FT8' },
+      authenticated: false, suitable_for_control: false, trust: 'untrusted_local_udp',
+    })))
+    const user = userEvent.setup()
+    render(<AgentLivePanel token="test-token" />)
+    await user.click(screen.getByRole('button', { name: 'Consultar WSJT-X' }))
+    expect(await screen.findByText('Se desconoce la antigüedad del estado informado.')).toBeTruthy()
+    expect(screen.queryByText(/último estado WSJT-X podría tener 60 segundos o más/)).toBeNull()
+  })
+
+  it('updates snapshot age on visibility changes even if the monotonic timer paused', async () => {
+    const fetch = vi.fn(async () => json({
+      api_version: 'v1', data_is_simulated: false, source: 'wsjtx_udp',
+      commands_enabled: false, connected: true, decodes: [], status: { mode: 'FT8' },
+      last_seen_age_seconds: 0, status_age_seconds: 0,
+      authenticated: false, suitable_for_control: false, trust: 'untrusted_local_udp',
+    }))
+    vi.stubGlobal('fetch', fetch)
+    vi.useFakeTimers()
+    try {
+      render(<AgentLivePanel token="test-token" />)
+      await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Consultar WSJT-X' })))
+      act(() => {
+        vi.setSystemTime(Date.now() + 60_000)
+        document.dispatchEvent(new Event('visibilitychange'))
+      })
+      expect(screen.getByText(/La instantánea puede estar desactualizada/)).toBeTruthy()
+      expect(screen.getByText(/último estado WSJT-X podría tener 60 segundos o más/)).toBeTruthy()
+      act(() => {
+        vi.setSystemTime(Date.now() - 60_000)
+        document.dispatchEvent(new Event('visibilitychange'))
+      })
+      expect(screen.getByText(/La instantánea puede estar desactualizada/)).toBeTruthy()
+      expect(fetch).toHaveBeenCalledOnce()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('counts a slow request conservatively when assessing snapshot freshness', async () => {
+    let resolveFetch!: (response: Response) => void
+    const fetch = vi.fn(() => new Promise<Response>((resolve) => { resolveFetch = resolve }))
+    vi.stubGlobal('fetch', fetch)
+    vi.useFakeTimers()
+    try {
+      render(<AgentLivePanel token="test-token" />)
+      fireEvent.click(screen.getByRole('button', { name: 'Consultar WSJT-X' }))
+      act(() => vi.advanceTimersByTime(2000))
+      await act(async () => resolveFetch(json({
+        api_version: 'v1', data_is_simulated: false, source: 'wsjtx_udp',
+        commands_enabled: false, connected: true, decodes: [], status: { mode: 'FT8' },
+        last_seen_age_seconds: 0, status_age_seconds: 59,
+        authenticated: false, suitable_for_control: false, trust: 'untrusted_local_udp',
+      })))
+      expect(screen.getByText(/último estado WSJT-X podría tener 60 segundos o más/)).toBeTruthy()
+      expect(screen.getByText(/Tiempo desde la consulta: 2 s/)).toBeTruthy()
+      expect(fetch).toHaveBeenCalledOnce()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('renders reported WSJT-X status and safe decode markers without initiating TX', async () => {
