@@ -190,6 +190,15 @@ describe('web console', () => {
     expect(screen.getByText('COM7')).toBeTruthy()
     expect(screen.getByText('NO CLASIFICADO')).toBeTruthy()
     expect(await screen.findByText('Radios candidatas')).toBeTruthy()
+    const desk = screen.getByRole('region', { name: 'Escritorio de operación' })
+    const catalogHeading = screen.getByRole('heading', { name: 'Perfiles y capacidades' })
+    expect(desk.compareDocumentPosition(catalogHeading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    const shortcuts = screen.getByRole('navigation', { name: 'Acceso directo a controles de radio' })
+    for (const link of shortcuts.querySelectorAll('a')) {
+      const target = link.getAttribute('href')?.slice(1)
+      expect(target ? document.getElementById(target) : null).not.toBeNull()
+    }
+    expect(screen.queryByText(/No hay controles de PTT ni transmisión en esta consola/)).toBeNull()
     await user.click(screen.getByText('Icom'))
     expect(screen.getByText('IC-705')).toBeTruthy()
     expect(screen.getByText('CANDIDATA · NO VALIDADA')).toBeTruthy()

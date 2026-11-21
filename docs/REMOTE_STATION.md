@@ -67,6 +67,24 @@ Todos los componentes disponen de registro tecnico minimizado y opciones de envi
 con consentimiento. Consulta [diagnostico y privacidad](DIAGNOSTICS.md) para el
 contrato cerrado, receptor HTTPS, roles, retencion y diferencias entre clientes.
 
+## Escritorio operativo
+
+El cliente compartido web/Android/iPhone/iPad presenta los controles del agente
+antes de catalogos y referencias de protocolos. Los enlaces CAT/PTT/rotor/potencia/
+logbook desplazan la pagina; no emiten comandos ni cambian permisos o sesiones.
+La tarjeta del coordinador no autoriza TX y la demostracion permanece identificada.
+Los componentes conservan sus keys, handlers y mecanismos de cierre.
+
+El [estudio comparativo de UX](RADIO_UX_RESEARCH.md) documenta fuentes publicas,
+decisiones originales y limites. No es una copia de productos comerciales,
+un ranking de usuarios ni una aceptacion visual/hardware. Los controles principales
+tienen un minimo de 44 px; quedan pendientes comprobaciones tactiles y visuales.
+Este paso no termina el rediseño de todas las pantallas nativas del Workspace.
+El portal organiza radio/agente, host y operacion en tres pasos, sin red ni
+almacenamiento de credenciales. En RadiCodex, la configuracion se pliega durante
+la conexion sin recrear WebView; desconexion y estado permanecen visibles.
+Al desconectar o pasar a segundo plano vuelve la configuracion, sin reconectar.
+
 ## Verificacion de esta integracion
 
 - Destino Node: **483 pruebas correctas**, incluidos instaladores, traducciones,

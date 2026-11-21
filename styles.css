@@ -2,6 +2,14 @@
 :root{color-scheme:light;--brand-ink:#23272B;--brand-orange:#F26B1D;--on-accent:#23272B;--bg:#FFFFFF;--surface:#F6F7F8;--text:#23272B;--text-muted:#59636B;--border:#DCE1E5;--link:#AA410B;--focus:#F26B1D;--logo-bg:transparent;--logo-pad:0;--plate:#FFFFFF;--error:#B42336;--warning-bg:#FFF6E6;--warning-line:#B88128;--warning-text:#714915;--font-ui:Inter,"Segoe UI",system-ui,-apple-system,Roboto,"Helvetica Neue",Arial,sans-serif;--font-display:Montserrat,Inter,"Segoe UI",system-ui,-apple-system,sans-serif;font-family:var(--font-ui);color:var(--text);background:var(--bg)}
 #station-open[hidden]{display:none}
 #station-connect .button{margin-top:16px}
+.station-path { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; margin: 0 0 24px; padding: 0; list-style-position: inside; }
+.station-path li { min-width: 0; padding: 20px; border: 1px solid var(--border); border-top: 4px solid var(--brand-orange); border-radius: 12px; background: var(--surface); }
+.station-path li::marker { font-weight: 800; color: var(--link); }
+.station-path h2 { display: inline; font-size: 18px; }
+.station-path p { margin: 12px 0 0; font-size: 14px; }
+.station-layout { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); gap: 24px; align-items: start; }
+.station-layout > .panel { min-width: 0; margin: 0; }
+@media (max-width: 760px) { .station-path, .station-layout { grid-template-columns: minmax(0, 1fr); } }
 @media(prefers-color-scheme:dark){:root:not([data-theme="light"]){color-scheme:dark;--bg:#111518;--surface:#1C2329;--text:#F6F8FA;--text-muted:#BAC4CC;--border:#38434C;--link:#FFA06A;--focus:#FFC18F;--logo-bg:var(--plate);--logo-pad:6px 12px;--error:#FFACB5;--warning-bg:#302719;--warning-line:#997139;--warning-text:#F4D49B}}
 :root[data-theme="dark"]{color-scheme:dark;--bg:#111518;--surface:#1C2329;--text:#F6F8FA;--text-muted:#BAC4CC;--border:#38434C;--link:#FFA06A;--focus:#FFC18F;--logo-bg:var(--plate);--logo-pad:6px 12px;--error:#FFACB5;--warning-bg:#302719;--warning-line:#997139;--warning-text:#F4D49B}
 /* Legacy aliases map the older variable names onto the official tokens. */

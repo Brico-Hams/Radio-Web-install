@@ -7,6 +7,7 @@ import android.os.Bundle
 import android.text.InputType
 import android.util.Log
 import android.view.View
+import android.view.inputmethod.InputMethodManager
 import android.webkit.CookieManager
 import android.webkit.PermissionRequest
 import android.webkit.SslErrorHandler
@@ -25,6 +26,7 @@ class RemoteStationActivity : LocalizedActivity() {
     private lateinit var browser: WebView
     private lateinit var status: TextView
     private lateinit var host: EditText
+    private lateinit var connectionSetup: LinearLayout
     private var origin: String? = null
     private var foreground = false
 
@@ -39,20 +41,24 @@ class RemoteStationActivity : LocalizedActivity() {
             fitsSystemWindows = true
         }
         body.addView(Brand.heading(this, getString(R.string.remote_title)))
-        body.addView(Brand.text(this).apply { setText(R.string.remote_help) })
+        connectionSetup = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        connectionSetup.addView(Brand.text(this).apply { setText(R.string.remote_help) })
         host = EditText(this).apply {
             hint = getString(R.string.remote_host)
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
             importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO
             setSingleLine()
         }
-        body.addView(host)
-        body.addView(Brand.button(this, getString(R.string.remote_connect)) {
+        connectionSetup.addView(host)
+        connectionSetup.addView(Brand.button(this, getString(R.string.remote_connect)) {
             stopSession()
             try {
                 val url = RemoteStationUrl.parse(host.text.toString())
                 origin = url
                 host.isEnabled = false
+                host.clearFocus()
+                getSystemService(InputMethodManager::class.java).hideSoftInputFromWindow(host.windowToken, 0)
+                connectionSetup.visibility = View.GONE
                 browser.loadUrl(url)
                 status.setText(R.string.remote_loading)
             } catch (_: IllegalArgumentException) {
@@ -60,6 +66,7 @@ class RemoteStationActivity : LocalizedActivity() {
                 status.setText(R.string.remote_invalid)
             }
         })
+        body.addView(connectionSetup)
         body.addView(Brand.button(this, getString(R.string.remote_disconnect)) {
             stopSession()
             status.setText(R.string.remote_stopped)
@@ -137,6 +144,7 @@ class RemoteStationActivity : LocalizedActivity() {
 
     private fun stopSession() {
         origin = null
+        if (::connectionSetup.isInitialized) connectionSetup.visibility = View.VISIBLE
         if (::host.isInitialized) host.isEnabled = true
         if (::browser.isInitialized) {
             browser.evaluateJavascript("window.dispatchEvent(new Event('blur'))", null)

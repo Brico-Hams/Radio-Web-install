@@ -43,6 +43,10 @@ class RemoteStationActivityTest {
             val browser = all.filterIsInstance<WebView>().single()
             assertEquals("https://radio.example:8787/", shadowOf(browser).lastLoadedUrl)
             assertFalse(all.filterIsInstance<EditText>().single().isEnabled)
+            assertFalse(all.filterIsInstance<EditText>().single().isShown)
+            assertTrue(all.filterIsInstance<Button>().single {
+                it.text == activity.getString(R.string.remote_disconnect)
+            }.isShown)
             assertFalse(browser.settings.allowFileAccess)
             assertFalse(browser.settings.allowContentAccess)
             controller.pause()
@@ -50,6 +54,8 @@ class RemoteStationActivityTest {
             controller.resume()
             assertEquals("about:blank", shadowOf(browser).lastLoadedUrl)
             assertTrue(all.filterIsInstance<EditText>().single().isEnabled)
+            assertTrue(all.filterIsInstance<EditText>().single().isShown)
+            assertSame(browser, views(activity.window.decorView).filterIsInstance<WebView>().single())
         } finally { controller.pause().stop().destroy() }
     }
 

@@ -21,6 +21,12 @@
   <a class="skip" href="#main">Saltar al contenido</a>
   <template id="station-content">
     <header class="page-head"><h1>Estacion remota</h1><p>Radio USB conectada al agente, host HTTPS y cliente HTML5. No abre USB ni activa TX desde esta pagina.</p></header>
+    <ol class="station-path">
+      <li><h2>Radio y agente</h2><p>Conecta la radio por USB al agente de la estacion; configura el modelo y el puerto CAT correcto.</p></li>
+      <li><h2>Host HTTPS</h2><p>Usa el host HTTPS para autenticarte; esta pagina solo prepara la direccion.</p></li>
+      <li><h2>Operacion protegida</h2><p>Comprueba RX y los limites locales antes de transmitir. La demostracion no es una radio real.</p></li>
+    </ol>
+    <div class="station-layout">
     <section class="panel operations">
       <h2>Conectar con tu host</h2>
       <form id="station-connect">
@@ -37,6 +43,7 @@
       <p>El modulo remote-station incluye host, agentes Windows/Linux/macOS/Raspberry Pi, cliente Android/tablet y proyecto iPhone/iPad. Ayuda y configuracion ES/EN/FR/PT en el cliente del host.</p>
       <p>CAT, audio RX/TX, PTT, rotor, potencia y acoplador dependen del modelo, los opt-ins locales y sus limites. Hardware sin validar; CW activo, WSJT-X activo y scope nativo FTX-1 siguen pendientes.</p>
     </section>
+    </div>
   </template>
   <div id="app"></div>
   <noscript>Activa JavaScript para preparar la conexion HTTPS a tu estacion.</noscript>

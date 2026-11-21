@@ -395,6 +395,29 @@ function App() {
               </section>
             ) : null}
 
+            <section className="operation-workspace" aria-labelledby="operation-workspace-title">
+              <header>
+                <h2 id="operation-workspace-title">{t('operationWorkspace')}</h2>
+                <p className="muted-copy">{t('operationNotice')}</p>
+              </header>
+              <nav className="operation-shortcuts" aria-label={t('operationNavigation')}>
+                <a href="#operating-title">CAT</a>
+                <a href="#ptt-title">PTT</a>
+                <a href="#rotor-title">Rotor</a>
+                <a href="#radio-settings-title">{t('operationPower')}</a>
+                <a href="#logbook-title">Logbook</a>
+              </nav>
+              <div className="operation-workspace-grid">
+                <AgentLivePanel key={`live-${activeToken}`} token={activeToken} />
+                <RadioOperatingPanel key={`operating-${activeToken}`} token={activeToken} />
+                <PttPanel key={`ptt-${activeToken}`} token={activeToken} />
+                <AudioPanel key={`audio-${activeToken}`} token={activeToken} />
+                <RotorPanel key={`rotor-${activeToken}`} token={activeToken} />
+                <RadioSettingsPanel key={`settings-${activeToken}`} token={activeToken} />
+                <LogbookPanel key={`logbook-${activeToken}`} token={activeToken} />
+              </div>
+            </section>
+
             {snapshot ? (
               <section className="unavailable-grid" aria-label="Alcances no disponibles">
                 <article className="unavailable-card">
@@ -431,7 +454,7 @@ function App() {
                 <span className="tx-lock" aria-hidden="true">TX</span>
                 <div>
                   <h2 id="tx-title">Transmisión remota bloqueada</h2>
-                  <p>{snapshot.tx.reason} No hay controles de PTT ni transmisión en esta consola.</p>
+                  <p>{snapshot.tx.reason} {t('snapshotTxNotice')}</p>
                 </div>
                 <span className="state-pill state-blocked">BLOQUEADO</span>
               </section>
@@ -551,13 +574,6 @@ function App() {
             ) : null}
 
             <ProtocolPanel key={`protocol-${activeToken}`} token={activeToken} />
-            <AgentLivePanel key={`live-${activeToken}`} token={activeToken} />
-            <RadioOperatingPanel key={`operating-${activeToken}`} token={activeToken} />
-            <PttPanel key={`ptt-${activeToken}`} token={activeToken} />
-            <AudioPanel key={`audio-${activeToken}`} token={activeToken} />
-            <RotorPanel key={`rotor-${activeToken}`} token={activeToken} />
-            <RadioSettingsPanel key={`settings-${activeToken}`} token={activeToken} />
-            <LogbookPanel key={`logbook-${activeToken}`} token={activeToken} />
 
             <section className="content-card diagnostics-card" aria-labelledby="diagnostics-title">
               <div className="section-heading">

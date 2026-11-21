@@ -4,6 +4,11 @@ export type Language = 'es' | 'en' | 'fr' | 'pt'
 export const languageNames = { es: 'Español', en: 'English', fr: 'Français', pt: 'Português' }
 
 const es = {
+  operationWorkspace: 'Escritorio de operación',
+  operationPower: 'Potencia',
+  operationNotice: 'Controles del agente con permisos y límites locales. El estado del coordinador no autoriza TX; comprueba RX y distingue demostración de radio real.',
+  operationNavigation: 'Acceso directo a controles de radio',
+  snapshotTxNotice: 'Esta tarjeta del coordinador no autoriza TX. Los controles protegidos del agente requieren opt-in local y confirmación RX.',
   diagnosticsTitle: 'Diagnóstico remoto sin datos personales',
   diagnosticsPrivacy: 'Solo versión, plataforma genérica, códigos técnicos y líneas de código; sin tokens, indicativos, QSO, ubicación, frecuencias, audio, puertos ni identificadores del dispositivo. Sin identificador persistente de instalación. El receptor HTTPS puede conocer tu IP y metadatos de conexión. Revisa el informe y la política de tu host antes de enviar.',
   diagnosticsAutomatic: 'Permitir envío automático de las últimas 16 entradas técnicas cuando haya nuevos eventos (solo en primer plano y durante esta sesión conectada). Desactivado por defecto.',
@@ -54,6 +59,11 @@ const es = {
 }
 type Message = keyof typeof es
 const en: Record<Message, string> = {
+  operationWorkspace: 'Operating desk',
+  operationPower: 'Power',
+  operationNotice: 'Agent controls require permissions and local limits. Coordinator state does not authorize TX; confirm RX and distinguish demonstration from a real radio.',
+  operationNavigation: 'Direct access to radio controls',
+  snapshotTxNotice: 'This coordinator card does not authorize TX. Protected agent controls require local opt-in and RX confirmation.',
   diagnosticsTitle:'Remote diagnostics without personal fields',
   diagnosticsPrivacy:'Only version, generic platform, technical codes and code lines; no tokens, callsigns, QSOs, location, frequencies, audio, ports or device identifiers. No persistent installation identifier. The HTTPS receiver may know your IP and connection metadata. Review the report and host policy before sending.',
   diagnosticsAutomatic:'Allow automatic sending of the latest 16 technical entries when new events occur (foreground only, during this connected session). Off by default.',
@@ -97,6 +107,11 @@ const en: Record<Message, string> = {
   hostNotice:'Remote TLS host with verified agent link. Set distinct BRICOHAM_ADMIN_TOKEN and BRICOHAM_STATION_AGENT_TOKEN in the local environment. No secrets included; the host is not started.',
 }
 const fr: Record<Message, string> = {
+  operationWorkspace: 'Poste de commande',
+  operationPower: 'Puissance',
+  operationNotice: 'Les commandes de l’agent exigent autorisations et limites locales. L’état du coordinateur n’autorise pas TX ; confirmez RX et distinguez démonstration et radio réelle.',
+  operationNavigation: 'Accès direct aux commandes radio',
+  snapshotTxNotice: 'Cette carte du coordinateur n’autorise pas TX. Les commandes protégées de l’agent exigent activation locale et confirmation RX.',
   diagnosticsTitle:'Diagnostic distant sans champs personnels',
   diagnosticsPrivacy:'Version, plateforme générique, codes techniques et lignes de code uniquement ; aucun jeton, indicatif, QSO, emplacement, fréquence, audio, port ou identifiant appareil. Aucun identifiant persistant d’installation. Le récepteur HTTPS peut connaître votre IP et les métadonnées de connexion. Vérifiez le rapport et la politique de l’hôte avant envoi.',
   diagnosticsAutomatic:'Autoriser l’envoi automatique des 16 dernières entrées techniques lors de nouveaux événements (premier plan, pendant cette session connectée). Désactivé par défaut.',
@@ -140,6 +155,11 @@ const fr: Record<Message, string> = {
   hostNotice:"Hôte TLS distant et lien agent vérifié. Configurez BRICOHAM_ADMIN_TOKEN et BRICOHAM_STATION_AGENT_TOKEN distincts dans l'environnement local. Aucun secret inclus, aucun démarrage.",
 }
 const pt: Record<Message, string> = {
+  operationWorkspace: 'Mesa de operação',
+  operationPower: 'Potência',
+  operationNotice: 'Controlos do agente exigem permissões e limites locais. O estado do coordenador não autoriza TX; confirme RX e distinga demonstração de rádio real.',
+  operationNavigation: 'Acesso direto aos controlos do rádio',
+  snapshotTxNotice: 'Este cartão do coordenador não autoriza TX. Controlos protegidos do agente exigem opt-in local e confirmação RX.',
   diagnosticsTitle:'Diagnóstico remoto sem campos pessoais',
   diagnosticsPrivacy:'Só versão, plataforma genérica, códigos técnicos e linhas de código; sem tokens, indicativos, QSO, localização, frequências, áudio, portas ou identificadores do dispositivo. Sem identificador persistente de instalação. O recetor HTTPS pode conhecer o IP e metadados de ligação. Reveja o relatório e a política do host antes de enviar.',
   diagnosticsAutomatic:'Permitir envio automático das últimas 16 entradas técnicas quando houver novos eventos (primeiro plano, durante esta sessão ligada). Desativado por defeito.',
