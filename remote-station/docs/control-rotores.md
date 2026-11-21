@@ -5,6 +5,10 @@ para web, Android/tablet y los proyectos iPhone/iPad. Es software experimental:
 las pruebas TCP/HTTP/TLS no certifican un rotor, cableado ni limites fisicos.
 No se declara compatibilidad con un modelo concreto sin su aceptacion.
 
+El panel compartido usa ES/EN/FR/PT. Cambiar idioma conserva angulos editados,
+sesion y renovaciones: no envia movimiento ni parada y no reinicia el temporizador.
+Perder foco, desmontar o pulsar parada conserva el comportamiento documentado.
+
 ## Configuracion explicita
 
 Instala Hamlib por separado. Selecciona en su documentacion el modelo, puerto

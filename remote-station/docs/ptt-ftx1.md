@@ -90,6 +90,11 @@ Soltar, cancelar el gesto, perder foco, ocultar pagina o desmontar el cliente
 solicita RX con el host/token originales. Un START de respuesta tardia provoca
 otra parada, no una renovacion. El simulador conserva TX bloqueado.
 
+Controles y avisos del panel compartido usan ES/EN/FR/PT. Cambiar idioma no
+reinicia temporizadores, sesion ni microfono, ni emite START/STOP. Soltar o
+perder foco conserva su efecto de parada. Los fallos posteriores muestran el
+aviso en el idioma vigente, incluido RX no confirmado y necesidad de parada local.
+
 ## Fallos y limites reales
 
 El watchdog del agente solicita RX al caducar lease o maximo, sin depender de

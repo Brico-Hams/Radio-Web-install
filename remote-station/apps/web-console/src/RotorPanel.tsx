@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import { ApiError, createControlRequest, getApiData } from './api'
+import { useStableTranslation } from './i18n'
 
 type RotorState = {
   api_version: 'v1'
@@ -44,11 +45,12 @@ function isRotor(value: unknown): value is RotorState {
         Number.isFinite(value.position.elevation_deg)))
 }
 
-function errorText(error: unknown): string {
-  return error instanceof Error ? error.message : 'Error de control del rotor.'
+function errorText(error: unknown, fallback: string): string {
+  return error instanceof Error ? error.message : fallback
 }
 
 export function RotorPanel({ token }: { token: string }) {
+  const { t, translate } = useStableTranslation()
   const sendControl = useMemo(() => createControlRequest(token), [token])
   const [data, setData] = useState<RotorState | null>(null)
   const [azimuth, setAzimuth] = useState('')
@@ -74,12 +76,12 @@ export function RotorPanel({ token }: { token: string }) {
       if (announce) setData(state)
     } catch (stopError) {
       if (announce) {
-        setError(`Parada NO confirmada. Usa la parada local si es necesario. ${errorText(stopError)}`)
+        setError(`${translate('rotorStopUnconfirmed')} ${errorText(stopError, translate('rotorError'))}`)
       } else {
-        console.error('Rotor stop was not confirmed:', errorText(stopError))
+        console.error('Rotor stop was not confirmed:', errorText(stopError, translate('rotorError')))
       }
     }
-  }, [sendControl])
+  }, [sendControl, translate])
 
   useEffect(() => {
     const cancel = () => {
@@ -112,7 +114,7 @@ export function RotorPanel({ token }: { token: string }) {
         if (active.current === lease) setData(state)
       } catch (renewError) {
         if (active.current === lease) {
-          setError(`Sesión de movimiento perdida. ${errorText(renewError)}`)
+          setError(`${translate('rotorSessionLost')} ${errorText(renewError, translate('rotorError'))}`)
           void stop()
         }
       } finally {
@@ -120,20 +122,20 @@ export function RotorPanel({ token }: { token: string }) {
       }
     }, 1000)
     return () => window.clearInterval(timer)
-  }, [lease, sendControl, stop])
+  }, [lease, sendControl, stop, translate])
 
   async function load(position = false) {
     setBusy(true)
     setError('')
     try {
       const result = await getApiData(token, `/rotor${position ? '?command=position' : ''}`, isRotor)
-      if (!result.allowed) throw new Error('El rotor requiere permiso de admin u operador.')
+      if (!result.allowed) throw new Error(t('radioPermission'))
       setData(result.data)
       if (result.data.limits.elevation_min === result.data.limits.elevation_max) {
         setElevation(String(result.data.limits.elevation_min))
       }
     } catch (loadError) {
-      setError(errorText(loadError))
+      setError(errorText(loadError, t('rotorError')))
     } finally {
       setBusy(false)
     }
@@ -142,7 +144,7 @@ export function RotorPanel({ token }: { token: string }) {
   async function move(event: FormEvent) {
     event.preventDefault()
     if (!azimuth.trim() || !elevation.trim()) {
-      setError('Introduce ambos ángulos; no se utiliza una posición supuesta.')
+      setError(t('rotorBothAngles'))
       return
     }
     setBusy(true)
@@ -160,14 +162,14 @@ export function RotorPanel({ token }: { token: string }) {
         return
       }
       if (!state.lease_active || !state.lease_id) {
-        throw new Error('El agente no confirmó una sesión de movimiento.')
+        throw new Error(t('rotorSessionUnconfirmed'))
       }
       active.current = state.lease_id
       setLease(state.lease_id)
       setData(state)
     } catch (moveError) {
       if (generation.current === request) {
-        setError(errorText(moveError))
+        setError(errorText(moveError, t('rotorError')))
         if (!(moveError instanceof ApiError) || moveError.status >= 500) void stop()
       }
     } finally {
@@ -178,47 +180,43 @@ export function RotorPanel({ token }: { token: string }) {
 
   return (
     <section className="content-card operation-panel" aria-labelledby="rotor-title">
-      <h2 id="rotor-title">Rotor de antena</h2>
-      <p>Control experimental mediante rotctld local. Límites definidos en el agente;
-        sin validación física. Una orden aceptada no confirma haber alcanzado la posición.
-        La parada por software no garantiza detención física: mantén finales de carrera y parada local.</p>
+      <h2 id="rotor-title">{t('rotorTitle')}</h2>
+      <p>{t('rotorSafety')}</p>
       <div className="session-actions">
         <button className="button button-secondary" disabled={busy || !!lease}
-          onClick={() => void load()}>Consultar configuración del rotor</button>
+          onClick={() => void load()}>{t('rotorReadConfig')}</button>
         <button className="button button-secondary" disabled={busy || !!lease}
-          onClick={() => void load(true)}>Leer posición del rotor</button>
+          onClick={() => void load(true)}>{t('rotorReadPosition')}</button>
         <button className="button button-primary" onClick={() => {
           setError('')
           void stop()
-        }}>PARAR ROTOR</button>
+        }}>{t('rotorStop')}</button>
       </div>
       {error ? <p role="alert">{error}</p> : null}
       {data ? (
         <div>
-          <p>{data.label} · {data.motion_enabled ? 'MOVIMIENTO OPT-IN' : 'SOLO LECTURA'}</p>
-          <p>Posición reportada: {data.position
-            ? `${data.position.azimuth_deg}° azimut / ${data.position.elevation_deg}° elevación`
-            : 'no consultada'}</p>
-          {data.stop_failed ? <p role="alert">Parada no confirmada: movimiento bloqueado.</p> : null}
+          <p>{data.label} · {data.motion_enabled ? t('rotorOptIn') : t('rotorReadOnly')}</p>
+          <p>{t('rotorReportedPosition')}: {data.position
+            ? `${data.position.azimuth_deg}° ${t('rotorAzimuth')} / ${data.position.elevation_deg}° ${t('rotorElevation')}`
+            : t('radioNotRead')}</p>
+          {data.stop_failed ? <p role="alert">{t('rotorStopBlocked')}</p> : null}
           <form onSubmit={(event) => void move(event)}>
-            <label>Azimut objetivo (grados)
+            <label>{t('rotorTargetAzimuth')}
               <input type="number" step="any" required value={azimuth}
                 min={data.limits.azimuth_min} max={data.limits.azimuth_max}
                 onChange={(event) => setAzimuth(event.target.value)} />
             </label>
-            <label>Elevación objetivo (grados)
+            <label>{t('rotorTargetElevation')}
               <input type="number" step="any" required value={elevation}
                 min={data.limits.elevation_min} max={data.limits.elevation_max}
                 onChange={(event) => setElevation(event.target.value)} />
             </label>
             <button type="submit" className="button button-secondary"
               disabled={busy || !!lease || !data.motion_enabled || data.stop_failed}>
-              Mover rotor
+              {t('rotorMove')}
             </button>
           </form>
-          <p>{lease
-            ? 'Sesión renovada mientras este cliente mantiene el foco. El agente solicita parada a los 3 s sin renovación; máximo 30 s por movimiento.'
-            : 'Sin sesión de movimiento de este cliente. Mantén disponible la parada local.'}</p>
+          <p>{lease ? t('rotorLeaseActive') : t('rotorLeaseInactive')}</p>
         </div>
       ) : null}
     </section>

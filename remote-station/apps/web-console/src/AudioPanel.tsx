@@ -1,11 +1,29 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { createAudioRequest } from './api'
-import { AudioFraming } from './audioFraming'
+import { AudioFraming, AudioFramingError } from './audioFraming'
+import { useLanguage, type Message } from './i18n'
+
+type AudioStatus = { key: Message; detail?: string }
+
+class AudioDisplayError extends Error {
+  readonly key: Message
+  readonly detail?: string
+  constructor(key: Message, detail?: string) {
+    super(key)
+    this.key = key
+    this.detail = detail
+  }
+}
+
+const framingMessages = {
+  frame_too_large: 'rxFrameTooLarge', header_invalid: 'rxHeaderInvalid', block_invalid: 'rxBlockInvalid',
+} as const
 
 export function AudioPanel({ token }: { token: string }) {
+  const { t } = useLanguage()
   const request = useMemo(() => createAudioRequest(token), [token])
   const current = useRef<{ abort: AbortController; context: AudioContext; node?: AudioWorkletNode } | null>(null)
-  const [state, setState] = useState('Audio RX experimental detenido; hardware sin validar.')
+  const [state, setState] = useState<AudioStatus>({ key: 'rxStoppedInitial' })
 
   function stop() {
     const session = current.current
@@ -21,34 +39,34 @@ export function AudioPanel({ token }: { token: string }) {
   async function start() {
     stop()
     if (!window.AudioContext || !window.AudioWorkletNode) {
-      setState('AudioWorklet no disponible en este navegador o dispositivo.')
+      setState({ key: 'rxUnavailable' })
       return
     }
     let context: AudioContext
     try {
       context = new AudioContext()
     } catch {
-      setState('No se pudo crear el contexto de audio en este dispositivo.')
+      setState({ key: 'rxContextFailed' })
       return
     }
     const session = { abort: new AbortController(), context, node: undefined as AudioWorkletNode | undefined }
     current.current = session
     try {
-      if (!context.audioWorklet) throw new Error('AudioWorklet no disponible en este dispositivo.')
+      if (!context.audioWorklet) throw new AudioDisplayError('rxUnavailable')
       await context.resume()
       await context.audioWorklet.addModule(`${import.meta.env.BASE_URL}rx-audio-worklet.js`)
       if (current.current !== session) return
       const response = await request(session.abort.signal)
-      if (!response.ok) throw new Error(`Audio no disponible (HTTP ${response.status}).`)
+      if (!response.ok) throw new AudioDisplayError('rxHttpUnavailable', `(HTTP ${response.status}).`)
       if (response.headers.get('content-type') !== 'application/vnd.bricoham.pcm' || !response.body)
-        throw new Error('Respuesta de audio inválida.')
+        throw new AudioDisplayError('rxInvalidResponse')
       const reader = response.body.getReader()
       const framing = new AudioFraming()
       let accepted: (() => void) | undefined
-      setState('Conectado; llenando búfer de audio…')
+      setState({ key: 'rxBuffering' })
       while (current.current === session) {
         const { value, done } = await reader.read()
-        if (done) throw new Error('El flujo terminó inesperadamente.')
+        if (done) throw new AudioDisplayError('rxFlowEnded')
         const decoded = framing.push(value)
         if (decoded.rate) {
           const node = new AudioWorkletNode(context, 'bricoham-rx', {
@@ -61,13 +79,13 @@ export function AudioPanel({ token }: { token: string }) {
             if (event.data.state === 'accepted') accepted?.()
             else if (event.data.state === 'overflow') {
               stop()
-              setState('Error: desbordamiento del búfer de reproducción.')
-            } else if (event.data.state === 'underflow') setState('Audio RX: búfer insuficiente; esperando datos…')
-            else if (event.data.state === 'playing') setState('Audio RX experimental reproduciendo.')
+              setState({ key: 'rxOverflow' })
+            } else if (event.data.state === 'underflow') setState({ key: 'rxUnderflow' })
+            else if (event.data.state === 'playing') setState({ key: 'rxPlaying' })
           }
         }
         for (const block of decoded.blocks) {
-          if (!session.node) throw new Error('Cabecera de audio ausente.')
+          if (!session.node) throw new AudioDisplayError('rxHeaderMissing')
           const node = session.node
           await new Promise<void>((resolve, reject) => {
             const finish = (error?: Error) => {
@@ -77,8 +95,8 @@ export function AudioPanel({ token }: { token: string }) {
               if (error) reject(error)
               else resolve()
             }
-            const aborted = () => finish(new Error('Audio detenido.'))
-            const timer = setTimeout(() => finish(new Error('AudioWorklet no responde.')), 2000)
+            const aborted = () => finish(new AudioDisplayError('rxStopped'))
+            const timer = setTimeout(() => finish(new AudioDisplayError('rxWorkletUnresponsive')), 2000)
             accepted = () => finish()
             session.abort.signal.addEventListener('abort', aborted, { once: true })
             if (session.abort.signal.aborted) aborted()
@@ -89,16 +107,18 @@ export function AudioPanel({ token }: { token: string }) {
     } catch (error) {
       if (current.current === session) {
         stop()
-        setState(error instanceof Error ? `Error de audio: ${error.message}` : 'Error de audio.')
+        setState(error instanceof AudioDisplayError ? { key: error.key, detail: error.detail }
+          : error instanceof AudioFramingError ? { key: framingMessages[error.code] }
+          : { key: 'rxError', detail: error instanceof Error ? error.message : undefined })
       }
     }
   }
 
   return <section className="panel">
-    <h2>Audio RX experimental</h2>
-    <p>{state}</p>
-    <button type="button" onClick={() => void start()}>Escuchar RX</button>{' '}
-    <button type="button" onClick={() => { stop(); setState('Audio RX detenido.') }}>Detener</button>
-    <p>Solo recepción; sin micrófono ni transmisión. La aceptación física está pendiente.</p>
+    <h2>{t('rxTitle')}</h2>
+    <p>{t(state.key)}{state.detail ? ` ${state.detail}` : ''}</p>
+    <button type="button" onClick={() => void start()}>{t('rxListen')}</button>{' '}
+    <button type="button" onClick={() => { stop(); setState({ key: 'rxStopped' }) }}>{t('rxStop')}</button>
+    <p>{t('rxSafety')}</p>
   </section>
 }

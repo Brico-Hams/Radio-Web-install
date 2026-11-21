@@ -1,9 +1,9 @@
-import { render as renderComponent, screen } from '@testing-library/react'
+import { fireEvent, render as renderComponent, screen } from '@testing-library/react'
 import type { ReactNode } from 'react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { AgentLivePanel } from './AgentLivePanel'
-import { LanguageProvider } from './LanguageProvider'
+import { LanguageProvider, LanguageSelector } from './LanguageProvider'
 
 function render(ui: ReactNode) {
   return renderComponent(<LanguageProvider>{ui}</LanguageProvider>)
@@ -16,6 +16,28 @@ function json(payload: unknown, status = 200) {
 }
 
 describe('agent live panel', () => {
+  it.each([
+    ['en', 'Read-only CAT query', 'Read CAT query'],
+    ['fr', 'Requête CAT en lecture seule', 'Lire la requête CAT'],
+    ['pt', 'Consulta CAT de leitura', 'Ler consulta CAT'],
+  ])('preserves the selected CAT query while changing language to %s', async (lang, label, read) => {
+    const fetch = vi.fn(async () => json({
+      api_version: 'v1', data_is_simulated: false, status: 'experimental',
+      model: 'FTX-1', queries: ['FA', 'FB'], tx_control_enabled: false,
+    }))
+    vi.stubGlobal('fetch', fetch)
+    const user = userEvent.setup()
+    render(<><LanguageSelector /><AgentLivePanel token="test-token" /></>)
+    await user.click(screen.getByRole('button', { name: 'Consultar configuración CAT' }))
+    const select = await screen.findByLabelText<HTMLSelectElement>('Consulta CAT de lectura')
+    await user.selectOptions(select, 'FB')
+    fireEvent.change(screen.getByLabelText('Idioma'), { target: { value: lang } })
+    expect(screen.getByLabelText(label)).toBe(select)
+    expect(select.value).toBe('FB')
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: read }).disabled).toBe(false)
+    expect(fetch).toHaveBeenCalledOnce()
+  })
+
   it('offers only opt-in Replay and Halt Tx and explicitly marks delivery unconfirmed', async () => {
     const fetch = vi.fn(async (_input: RequestInfo | URL, options?: RequestInit) => {
       if (options?.method === 'POST') {

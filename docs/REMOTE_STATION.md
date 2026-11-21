@@ -192,3 +192,24 @@ lint y firma debug v2 correctos. Bundle identico en wheel/APK/assets Android/iOS
 y SHA256SUMS actualizado. Revision de seguridad limitada a este incremento
 y sus helpers de autenticacion/TLS: sin vulnerabilidades confirmadas.
 No certifica todo el producto, WSJT-X en ejecucion real ni hardware.
+
+## Idiomas sin interrumpir controles activos
+
+PTT, rotor, audio RX y el panel CAT/WSJT-X comparten ES/EN/FR/PT, incluidos
+avisos de seguridad y errores locales de trama. Los callbacks de parada y
+renovacion mantienen su identidad al cambiar idioma; no se reinicia la lease,
+se envia START/MOVE/STOP ni se recrea la grafica de audio por ese cambio.
+Las respuestas tecnicas del agente y errores externos conservan su formato/idioma.
+
+**89 pruebas del cliente**, lint y TypeScript/Vite correctos. Los nuevos casos
+comprueban PTT/rotor activos con renovacion y parada posterior, ausencia de
+comandos nuevos al cambiar idioma, conservacion de AudioContext/nodo/peticion,
+errores de trama traducibles sin reabrir audio y seleccion CAT conservada.
+El microfono TX preparado tambien conserva instancia y sesion al cambiar
+idioma; perder foco sigue cerrandolo y solicitando RX.
+La comprobacion inicial detecto traduccion visual diferida en el helper; se
+separaron traduccion de render y callback estable antes de validar la suite completa.
+Wheel reinstalado fuera del arbol fuente y APK dedicado recompilado con lint
+y firma debug v2 comprobados. El mismo bundle aparece en wheel/APK/Android/iOS
+y SHA256SUMS coincide con los cuatro paquetes. ZIPAPP y APK RadiCodex no cambian.
+No se atribuye aceptacion fisica/movil ni compilacion/firma iOS.

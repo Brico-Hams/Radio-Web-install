@@ -1,8 +1,16 @@
-import { act, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render as renderComponent, screen, waitFor } from '@testing-library/react'
+import type { ReactNode } from 'react'
 import userEvent from '@testing-library/user-event'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { setCoordinatorUrl } from './api'
 import { RotorPanel } from './RotorPanel'
+import { LanguageProvider, LanguageSelector } from './LanguageProvider'
+
+function render(ui: ReactNode) {
+  return renderComponent(<LanguageProvider>{ui}</LanguageProvider>)
+}
+
+beforeEach(() => localStorage.removeItem('bricoham.language'))
 
 afterEach(() => setCoordinatorUrl(''))
 
@@ -36,6 +44,29 @@ async function moveRotor() {
 }
 
 describe('control de rotor compartido', () => {
+  it.each([
+    ['en', 'Target azimuth (degrees)', 'STOP ROTATOR'],
+    ['fr', 'Azimut cible (degrés)', 'ARRÊTER LE ROTOR'],
+    ['pt', 'Azimute alvo (graus)', 'PARAR ROTOR'],
+  ])('mantiene objetivo y sesión al cambiar a %s; perder foco todavía para', async (lang, label, stop) => {
+    const { operations } = controller()
+    render(<><LanguageSelector /><RotorPanel token="operator-token" /></>)
+    await moveRotor()
+    const input = screen.getByLabelText<HTMLInputElement>('Azimut objetivo (grados)')
+    fireEvent.change(screen.getByLabelText('Idioma'), { target: { value: lang } })
+    expect(screen.getByLabelText(label)).toBe(input)
+    expect(input.value).toBe('90')
+    expect(screen.getByRole('button', { name: stop })).toBeTruthy()
+    expect(operations.filter((op) => op.operation === 'move')).toHaveLength(1)
+    expect(operations.some((op) => op.operation === 'stop')).toBe(false)
+    await waitFor(() => expect(operations.some((op) => op.operation === 'renew')).toBe(true), {
+      timeout: 2500,
+    })
+    await act(async () => { window.dispatchEvent(new Event('blur')) })
+    await waitFor(() => expect(operations.at(-1)?.operation).toBe('stop'))
+    expect(operations.at(-1)?.cancel_request_id).toBe(operations[0].request_id)
+  })
+
   it('envía objetivo con nonce, renueva la sesión y para al perder foco', async () => {
     const { operations, fetchMock } = controller()
     render(<RotorPanel token="operator-token" />)

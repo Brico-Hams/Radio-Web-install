@@ -42,6 +42,11 @@ sobrecarga de captura o reproducción interrumpe con error, no descarta bloques
 silenciosamente. El estado de búfer insuficiente es explícito. No sustituye a
 la supervisión local ni garantiza latencia constante.
 
+El panel y sus estados de búfer/errores de trama usan ES/EN/FR/PT. Cambiar
+idioma mantiene el flujo, AudioContext y nodo de reproducción; no reconecta
+ni abre otro dispositivo. Detener o desmontar sigue cerrando el contexto y
+abortando la petición. Los mensajes técnicos externos conservan su texto de origen.
+
 ## Protocolo experimental BHR1
 
 `GET /api/v1/audio` devuelve metadatos sin abrir el dispositivo; `GET

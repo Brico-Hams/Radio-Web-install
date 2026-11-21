@@ -90,15 +90,15 @@ export function AgentLivePanel({ token }: { token: string }) {
     try {
       const endpoint = `/${kind}${read ? `?command=${encodeURIComponent(command)}` : ''}`
       const response = await getApiData(token, endpoint, isLive)
-      if (!response.allowed) throw new Error('Esta función requiere permiso de admin u operador.')
+      if (!response.allowed) throw new Error(t('radioPermission'))
       if (kind === 'cat') {
         setCat(response.data)
         if (!read) setCommand(response.data.queries?.[0] ?? '')
       } else setDigital(response.data)
     } catch (error) {
       setError(error instanceof ApiError && error.status === 503
-        ? `El agente o la integración no están disponibles (${error.code ?? 'HTTP 503'}). Revisa su configuración y diagnóstico; no se muestran datos de demostración.`
-        : error instanceof Error ? error.message : 'Error al consultar el agente.')
+        ? `${t('liveUnavailable')} (${error.code ?? 'HTTP 503'}). ${t('liveCheckConfig')}`
+        : error instanceof Error ? error.message : t('liveError'))
     } finally {
       setBusy(false)
     }
@@ -108,43 +108,41 @@ export function AgentLivePanel({ token }: { token: string }) {
     <section className="content-card operation-panel" aria-labelledby="agent-live-title">
       <div className="section-heading">
         <div>
-          <p className="eyebrow">AGENTE · SIN DATOS SIMULADOS</p>
-          <h2 id="agent-live-title">CAT experimental y WSJT-X</h2>
+          <p className="eyebrow">{t('liveEyebrow')}</p>
+          <h2 id="agent-live-title">{t('liveTitle')}</h2>
         </div>
       </div>
       <p className="device-safety-note">
-        CAT solo lee consultas permitidas en un puerto seleccionado explícitamente.
+        {t('liveCatNotice')}{' '}
         {t('digitalSafeCommandsNotice')}
       </p>
       <div className="session-actions">
         <button className="button button-secondary" disabled={busy}
-          onClick={() => void load('cat')}>Consultar configuración CAT</button>
+          onClick={() => void load('cat')}>{t('liveReadCatConfig')}</button>
         <button className="button button-secondary" disabled={busy}
-          onClick={() => void load('digital')}>Consultar WSJT-X</button>
+          onClick={() => void load('digital')}>{t('liveReadDigital')}</button>
       </div>
       {error ? <p role="alert">{error}</p> : null}
       {cat ? (
         <div>
-          <p>{cat.model} · EXPERIMENTAL · pendiente de pruebas físicas</p>
+          <p>{cat.model} · {t('liveExperimental')}</p>
           {cat.protocol === 'OpenGD77 USB CPS' ? <p role="note">
-            OpenGD77 solo identifica modelo y firmware. USB CPS no ofrece control
-            de frecuencia, modo, canal ni PTT; no se sustituye por hotspot MMDVM.
+            {t('liveOpenGdNotice')}
           </p> : null}
-          <label>Consulta CAT de lectura
+          <label>{t('liveCatQuery')}
             <select value={command} disabled={busy} onChange={(event) => setCommand(event.target.value)}>
               {cat.queries?.map((value) => <option key={value}>{value}</option>)}
             </select>
           </label>
           <button className="button button-secondary" disabled={busy || !command}
-            onClick={() => void load('cat', true)}>Leer consulta CAT</button>
+            onClick={() => void load('cat', true)}>{t('liveReadCat')}</button>
           <pre className="live-data">{JSON.stringify(cat, null, 2)}</pre>
         </div>
       ) : null}
       {digital ? (
         <div>
-          <p role="note">UDP WSJT-X no autenticado: un proceso local puede suplantarlo.
-            Estos datos no se usan para autorizar ni controlar la radio.</p>
-          <p>{digital.connected ? 'WSJT-X detectado por UDP local' : 'WSJT-X sin actividad reciente; cualquier dato retenido es histórico'}</p>
+          <p role="note">{t('liveUdpNotice')}</p>
+          <p>{digital.connected ? t('liveDigitalConnected') : t('liveDigitalHistorical')}</p>
           {digital.commands_enabled ? <div className="session-actions">
             <button className="button button-secondary" disabled={busy || !digital.commands_ready}
               onClick={() => void operateDigital('replay')}>{t('digitalReplay')}</button>
