@@ -136,9 +136,11 @@ class WebSocketPeer:
         )
 
 
-def accept_websocket(handler: BaseHTTPRequestHandler) -> WebSocketPeer:
+def accept_websocket(
+    handler: BaseHTTPRequestHandler, *, path: str = TX_AUDIO_PATH, protocol: str = PROTOCOL
+) -> WebSocketPeer:
     if (
-        handler.path != TX_AUDIO_PATH
+        handler.path != path
         or handler.request_version != "HTTP/1.1"
         or handler.headers.get("Transfer-Encoding") is not None
         or handler.headers.get_all("Content-Length", []) not in ([], ["0"])
@@ -158,10 +160,10 @@ def accept_websocket(handler: BaseHTTPRequestHandler) -> WebSocketPeer:
         if (
             len(events) != 1
             or not isinstance(events[0], Request)
-            or events[0].subprotocols != [PROTOCOL]
+            or events[0].subprotocols != [protocol]
         ):
             raise WebSocketError("audio_tx_invalid_upgrade")
-        response = handshake.send(AcceptConnection(subprotocol=PROTOCOL))
+        response = handshake.send(AcceptConnection(subprotocol=protocol))
     except (ValueError, UnicodeError, LocalProtocolError, RemoteProtocolError) as error:
         raise WebSocketError("audio_tx_invalid_upgrade") from error
     handler.close_connection = True
@@ -178,6 +180,8 @@ def connect_websocket(
     *,
     context: ssl.SSLContext | None = None,
     origin: str | None = None,
+    path: str = TX_AUDIO_PATH,
+    protocol: str = PROTOCOL,
 ) -> WebSocketPeer:
     sock = socket.create_connection((host, port), timeout=2)
     connected = False
@@ -191,8 +195,8 @@ def connect_websocket(
             handshake.send(
                 Request(
                     host=f"{host}:{port}",
-                    target=TX_AUDIO_PATH,
-                    subprotocols=[PROTOCOL],
+                    target=path,
+                    subprotocols=[protocol],
                     extra_headers=headers,
                 )
             )
@@ -207,7 +211,7 @@ def connect_websocket(
                 raise WebSocketError("audio_tx_upgrade_failed")
             handshake.receive_data(data)
             for event in handshake.events():
-                if not isinstance(event, AcceptConnection) or event.subprotocol != PROTOCOL:
+                if not isinstance(event, AcceptConnection) or event.subprotocol != protocol:
                     raise WebSocketError("audio_tx_upgrade_failed")
                 assert handshake.connection is not None
                 connected = True

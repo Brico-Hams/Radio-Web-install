@@ -1,4 +1,5 @@
 import contextlib
+import io
 import json
 import shutil
 import socket
@@ -18,6 +19,7 @@ from test_radio_settings import SettingsPort
 from test_rotor import RotorBroker
 from test_wsjtx import status_packet
 
+from bricoham_remote_station.android_agent import ANDROID_AGENT_PATH, ANDROID_AGENT_PROTOCOL
 from bricoham_remote_station.diagnostic_reports import DiagnosticRuntime
 from bricoham_remote_station.secure_http import SecureHTTPServer, SecureRequestHandler
 from bricoham_remote_station.security import Role, TokenAuthenticator
@@ -52,6 +54,168 @@ from bricoham_station_agent.wsjtx import WsjtxReceiver
 
 
 class SecureTransportTests(unittest.TestCase):
+    def android_host(self):
+        return self.running(CoordinatorHTTPServer(
+            ("127.0.0.1", 0), self.auth, DeterministicSimulator(),
+            tls_context=self.ip_context, android_agent_token=self.link_token,
+        ))
+
+    def android_peer(self, host, token=None, *, origin=None):
+        peer = connect_websocket(
+            "127.0.0.1", host.server_address[1],
+            context=ssl.create_default_context(cafile=self.ip_cert),
+            path=ANDROID_AGENT_PATH, protocol=ANDROID_AGENT_PROTOCOL, origin=origin,
+        )
+        self.addCleanup(peer.close)
+        peer.send_json({"token": token or self.link_token})
+        return peer
+
+    def android_request(self, host, path, token=None):
+        connection = HTTPSConnection(
+            "127.0.0.1", host.server_address[1],
+            context=ssl.create_default_context(cafile=self.ip_cert), timeout=5,
+        )
+        try:
+            connection.request(
+                "GET", path, headers={"Authorization": f"Bearer {token or self.user_token}"},
+            )
+            response = connection.getresponse()
+            return response.status, json.loads(response.read())
+        finally:
+            connection.close()
+
+    def test_android_link_reads_canonical_cat_without_legacy_agent_fallback(self):
+        host = self.android_host()
+        with patch("bricoham_remote_station.server.HTTPConnection") as legacy:
+            self.assertEqual(self.android_request(host, "/api/v1/cat")[0], 503)
+            peer = self.android_peer(host)
+            peer.send_json({
+                "type": "hello", "identity": "ID0840;",
+                "vid": 0x10C4, "pid": 0xEA70, "port": 0,
+            })
+            self.assertEqual(json.loads(peer.receive())["type"], "ready")
+            status, inventory = self.android_request(host, "/api/v1/devices")
+            self.assertEqual(status, 200)
+            self.assertNotIn("serial_number", inventory["devices"][0])
+            errors = []
+
+            def respond(peer, errors):
+                try:
+                    request = json.loads(peer.receive())
+                    self.assertEqual(request["type"], "query")
+                    self.assertEqual(request["command"], "FA")
+                    peer.send_json({
+                        "type": "reply", "id": request["id"],
+                        "identity": "ID0840;", "reply": "FA014200000;",
+                    })
+                except (AssertionError, OSError, WebSocketError) as error:
+                    errors.append(error)
+
+            worker = threading.Thread(target=respond, args=(peer, errors))
+            worker.start()
+            status, result = self.android_request(host, "/api/v1/cat?command=FA")
+            worker.join(timeout=3)
+            self.assertFalse(worker.is_alive())
+            self.assertEqual(errors, [])
+            self.assertEqual(status, 200)
+            self.assertEqual(result["frequency_hz"], 14_200_000)
+            self.assertFalse(result["data_is_simulated"])
+            self.assertFalse(result["tx_control_enabled"])
+            for path in (
+                "/api/v1/cat?command=TX1", "/api/v1/cat?command=FA&command=TX",
+                "/api/v1/cat?command=FA&extra=x", "/api/v1/cat?command=",
+            ):
+                self.assertEqual(self.android_request(host, path)[0], 400)
+            for path in (
+                "/api/v1/digital", "/api/v1/rotor", "/api/v1/radio-settings",
+                "/api/v1/ptt", "/api/v1/audio", "/api/v1/audio/stream",
+                "/api/v1/audio/tx",
+            ):
+                status, result = self.android_request(host, path)
+                self.assertEqual(status, 501)
+                self.assertEqual(result["error"]["code"], "android_agent_operation_unsupported")
+            self.assertEqual(self.android_request(host, "/api/v1/cat", self.link_token)[0], 401)
+            legacy.assert_not_called()
+
+    def test_android_link_rejects_user_token_wrong_identity_and_duplicate_session(self):
+        host = self.android_host()
+        peer = self.android_peer(host, self.user_token)
+        self.assertEqual(json.loads(peer.receive())["code"], "android_agent_unauthorized")
+        wrong = self.android_peer(host)
+        wrong.send_json({
+            "type": "hello", "identity": "ID0670;",
+            "vid": 0x10C4, "pid": 0xEA70, "port": 0,
+        })
+        self.assertEqual(json.loads(wrong.receive())["code"], "android_agent_invalid_hello")
+        peer = self.android_peer(host)
+        hello = {
+            "type": "hello", "identity": "ID0840;",
+            "vid": 0x10C4, "pid": 0xEA70, "port": 0,
+        }
+        peer.send_json(hello)
+        self.assertEqual(json.loads(peer.receive())["type"], "ready")
+        duplicate = self.android_peer(host)
+        duplicate.send_json(hello)
+        self.assertEqual(
+            json.loads(duplicate.receive())["code"], "android_agent_already_connected"
+        )
+        with self.assertRaises(WebSocketError):
+            self.android_peer(host, origin="https://evil.example")
+        self.assertEqual(self.android_request(host, "/api/v1/cat")[0], 200)
+
+    def test_android_link_requires_tls_distinct_token_and_exclusive_source(self):
+        for kwargs in (
+            {},
+            {"tls_context": self.ip_context, "android_agent_token": self.user_token},
+            {"tls_context": self.ip_context, "android_agent_token": "x" * 31},
+            {"tls_context": self.ip_context, "android_agent_token": "x" * 32 + "\t"},
+            {"tls_context": self.ip_context,
+             "agent_link": AgentLink("https://localhost:8788", "z" * 32, self.cert)},
+        ):
+            with self.subTest(kwargs=tuple(kwargs)):
+                config = {"android_agent_token": self.link_token, **kwargs}
+                with self.assertRaises(ValueError):
+                    CoordinatorHTTPServer(
+                        ("127.0.0.1", 0), self.auth, DeterministicSimulator(), **config,
+                    )
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            coordinator_args(["--android-agent"])
+
+    def test_android_relay_rejects_unmatched_reply_and_undocumented_if_shift(self):
+        for command, reply, identifier, expected, code in (
+            ("FA", "FA014200000;", "wrong", 502, "android_agent_invalid_reply"),
+            ("IF", "IF" + "00000" + "014200000" + "+0000" + "00200" + "00" + "3;",
+             None, 409, "cat_invalid_response"),
+        ):
+            with self.subTest(command=command):
+                host = self.android_host()
+                peer = self.android_peer(host)
+                peer.send_json({
+                    "type": "hello", "identity": "ID0840;",
+                    "vid": 0x10C4, "pid": 0xEA70, "port": 0,
+                })
+                self.assertEqual(json.loads(peer.receive())["type"], "ready")
+                errors = []
+
+                def respond(peer, identifier, reply, errors):
+                    try:
+                        request = json.loads(peer.receive())
+                        peer.send_json({
+                            "type": "reply", "id": identifier or request["id"],
+                            "identity": "ID0840;", "reply": reply,
+                        })
+                    except (OSError, WebSocketError) as error:
+                        errors.append(error)
+
+                worker = threading.Thread(target=respond, args=(peer, identifier, reply, errors))
+                worker.start()
+                status, result = self.android_request(host, f"/api/v1/cat?command={command}")
+                worker.join(timeout=3)
+                self.assertFalse(worker.is_alive())
+                self.assertEqual(errors, [])
+                self.assertEqual(status, expected)
+                self.assertEqual(result["error"]["code"], code)
+
     def test_digital_halt_crosses_validated_tls_links_and_requires_client_origin(self):
         receiver = WsjtxReceiver(0, "WSJT-X", commands_enabled=True)
         agent = self.running(

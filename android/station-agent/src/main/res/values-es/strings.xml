@@ -1,0 +1,29 @@
+<resources>
+    <string name="app_name">BricoHams Agente de estación USB</string>
+    <string name="readonly_notice">Agente FTX-1 USB OTG: CAT de solo lectura. Interfaz Enhanced explícita, 38400 baudios, 8N1, RTS/DTR desactivados. Validación física pendiente.</string>
+    <string name="unsupported_notice">No implementados aquí: ajustes, PTT, audio, CW, digitales, rotores, acopladores ni espectro nativo. Este es el agente, no el cliente remoto.</string>
+    <string name="host_url">URL base HTTPS del host</string>
+    <string name="agent_token">Token exclusivo del agente Android</string>
+    <string name="select_device">Seleccionar el dispositivo USB físico</string>
+    <string name="select_interface">Seleccionar la interfaz CAT</string>
+    <string name="select_baud">Seleccionar los baudios configurados en la radio</string>
+    <string name="refresh">Actualizar dispositivos USB</string>
+    <string name="connect">Conectar la radio seleccionada al host</string>
+    <string name="disconnect">Desconectar / cancelar</string>
+    <string name="notifications">Permitir notificaciones del servicio activo</string>
+    <string name="disconnected">Desconectado</string>
+    <string name="connecting">Esperando permiso USB / conectando</string>
+    <string name="connected">Enlace USB de solo lectura conectado</string>
+    <string name="usb_failed">Fallo o desconexión USB/CAT. Comprobar dispositivo y baudios; reconectar explícitamente.</string>
+    <string name="permission_failed">Fallo de permiso USB o del servicio activo.</string>
+    <string name="connection_failed">Enlace cifrado fallido o rechazado. Comprobar certificado, token y configuración del host.</string>
+    <string name="input_failed">Configuración inválida. Seleccionar USB, Enhanced y baudios; usar URL base HTTPS y tokens ASCII distintos de 32–256 caracteres.</string>
+    <string name="privacy">Diagnóstico local minimizado: sin tokens, URL, números de serie, respuestas CAT ni frecuencias. El envío remoto está desactivado por defecto y requiere consentimiento y token de diagnóstico distinto. Retención: 7 días. No se guardan tokens.</string>
+    <string name="reporter_token">Token separado de envío de diagnósticos</string>
+    <string name="diagnostics_consent">Consentir envío de diagnósticos minimizados a este host HTTPS</string>
+    <string name="preview_diagnostics">Revisar informe de diagnóstico</string>
+    <string name="clear_diagnostics">Desactivar envío y borrar eventos locales</string>
+    <string name="no_events">No hay eventos retenidos.</string>
+    <string name="diagnostics_failed">Falló la operación de diagnóstico.</string>
+    <string name="cleared">Envío remoto desactivado; eventos locales borrados.</string>
+</resources>

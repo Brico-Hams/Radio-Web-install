@@ -1,0 +1,10 @@
+<resources>
+    <style name="AgentTheme" parent="android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:fontFamily">sans</item>
+        <item name="android:colorAccent">#AA410B</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:statusBarColor">#F6F7F8</item>
+        <item name="android:navigationBarColor">#F6F7F8</item>
+        <item name="android:windowBackground">#FFFFFF</item>
+    </style>
+</resources>

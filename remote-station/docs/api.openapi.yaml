@@ -2,12 +2,36 @@ openapi: 3.1.0
 info:
   title: Bricohams Radio Workspace - Remote Station Coordinator API
   version: 1.0.0
-  description: API HTTP loopback o HTTPS remoto, logbook y proxy CAT/rotor/PTT/audio experimental opt-in.
+  description: >
+    API HTTP loopback o HTTPS remoto, logbook y proxy CAT/rotor/PTT/audio experimental opt-in.
+    --android-agent usa un enlace WSS dedicado de solo lectura FTX-1; en ese modo
+    las otras operaciones físicas devuelven 501 android_agent_operation_unsupported,
+    sin fallback al agente Python. Véase agente-android-usb.md.
 servers:
   - url: http://127.0.0.1:8787
   - url: https://host.example.org:8787
     description: TLS explícito; CORS solo para orígenes HTTPS/Capacitor configurados.
 paths:
+  /api/v1/android-agent/connect:
+    get:
+      operationId: connectReadonlyAndroidAgent
+      security: []
+      description: >
+        Solo HTTPS y --android-agent. Upgrade bricoham.android-agent.readonly.v1,
+        sin Origin, query ni cuerpo. El upgrade NO autoriza: primer mensaje JSON
+        token exclusivo BRICOHAM_ANDROID_AGENT_TOKEN; después hello con identidad
+        ID0840; y CP2105 10C4/EA70, puerto Enhanced 0. Token distinto de usuarios y
+        diagnóstico, sin permisos de API de usuario. Un enlace y una consulta
+        pendiente, nonce por petición, identidad y respuesta CAT decodificadas
+        por el host. Solo dieciséis consultas documentadas, no setters, PTT/audio
+        ni actuadores. Mensajes 4096 bytes, 32 fragmentos, 16 controles; autenticar
+        y recibir hello dentro de los plazos del transporte. Ver protocolo,
+        errores y límites de validación física en agente-android-usb.md.
+      responses:
+        "101": { description: Upgrade; exige autenticación y hello antes de acceder a CAT. }
+        "400": { description: Upgrade inválido. }
+        "403": { description: Origin de navegador rechazado. }
+        "404": { description: Enlace Android no habilitado. }
   /api/v1/audio/tx:
     get:
       operationId: openTxAudio

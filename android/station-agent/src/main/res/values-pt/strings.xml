@@ -1,0 +1,29 @@
+<resources>
+    <string name="app_name">BricoHams Agente de estação USB</string>
+    <string name="readonly_notice">Agente FTX-1 USB OTG: CAT só de leitura. Interface Enhanced escolhida, 38400 baud, 8N1, RTS/DTR desativados. Validação física pendente.</string>
+    <string name="unsupported_notice">Não implementados aqui: ajustes, PTT, áudio, CW, digitais, rotores, acopladores e espectro nativo. Agente, não cliente remoto.</string>
+    <string name="host_url">URL base HTTPS do host</string>
+    <string name="agent_token">Token exclusivo do agente Android</string>
+    <string name="select_device">Selecionar o dispositivo USB físico</string>
+    <string name="select_interface">Selecionar a interface CAT</string>
+    <string name="select_baud">Selecionar o baud configurado no rádio</string>
+    <string name="refresh">Atualizar dispositivos USB</string>
+    <string name="connect">Ligar o rádio selecionado ao host</string>
+    <string name="disconnect">Desligar / cancelar</string>
+    <string name="notifications">Permitir notificações do serviço ativo</string>
+    <string name="disconnected">Desligado</string>
+    <string name="connecting">A aguardar permissão USB / a ligar</string>
+    <string name="connected">Ligação USB só de leitura ativa</string>
+    <string name="usb_failed">Falha ou desligamento USB/CAT. Verificar dispositivo e baud; voltar a ligar explicitamente.</string>
+    <string name="permission_failed">Falha de permissão USB ou do serviço ativo.</string>
+    <string name="connection_failed">Ligação cifrada falhou ou foi recusada. Verificar certificado, token e configuração.</string>
+    <string name="input_failed">Configuração inválida. Selecionar USB, Enhanced e baud; usar URL base HTTPS e tokens ASCII diferentes de 32–256 caracteres.</string>
+    <string name="privacy">Diagnóstico local minimizado: sem tokens, URL, números de série, respostas CAT ou frequências. Envio remoto desativado por defeito, com consentimento e token de diagnóstico distinto. Retenção: 7 dias. Tokens não guardados.</string>
+    <string name="reporter_token">Token separado para diagnóstico</string>
+    <string name="diagnostics_consent">Consentir envio de diagnóstico minimizado para este host HTTPS</string>
+    <string name="preview_diagnostics">Ver relatório de diagnóstico</string>
+    <string name="clear_diagnostics">Desativar envio e apagar eventos locais</string>
+    <string name="no_events">Sem eventos retidos.</string>
+    <string name="diagnostics_failed">A operação de diagnóstico falhou.</string>
+    <string name="cleared">Envio remoto desativado; eventos locais apagados.</string>
+</resources>

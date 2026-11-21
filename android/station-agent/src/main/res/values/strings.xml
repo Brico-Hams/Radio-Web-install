@@ -1,0 +1,29 @@
+<resources>
+    <string name="app_name">BricoHams USB Station Agent</string>
+    <string name="readonly_notice">FTX-1 USB OTG agent: CAT read-only. Explicit Enhanced interface, 38400 baud, 8N1, RTS/DTR off. Hardware validation pending.</string>
+    <string name="unsupported_notice">Not implemented here: setters, PTT, audio, CW, digital modes, rotors, tuners and native spectrum. This is an agent, not the remote client.</string>
+    <string name="host_url">Host HTTPS base URL</string>
+    <string name="agent_token">Dedicated Android agent token</string>
+    <string name="select_device">Select the physical USB device</string>
+    <string name="select_interface">Select the CAT interface</string>
+    <string name="select_baud">Select the configured radio baud rate</string>
+    <string name="refresh">Refresh USB devices</string>
+    <string name="connect">Connect selected radio to host</string>
+    <string name="disconnect">Disconnect / cancel</string>
+    <string name="notifications">Allow foreground-service notifications</string>
+    <string name="disconnected">Disconnected</string>
+    <string name="connecting">Waiting for USB permission / connecting</string>
+    <string name="connected">Read-only USB link connected</string>
+    <string name="usb_failed">USB/CAT failed or disconnected. Check device and baud; reconnect explicitly.</string>
+    <string name="permission_failed">USB or foreground-service permission failed.</string>
+    <string name="connection_failed">Encrypted host link failed or was rejected. Check certificate, token and host configuration.</string>
+    <string name="input_failed">Invalid configuration. Select the USB device, Enhanced interface and baud; use an HTTPS base URL and separate 32–256 character ASCII tokens.</string>
+    <string name="privacy">Local diagnostic events are minimized: no tokens, URLs, serial numbers, CAT replies or frequencies. Remote sending is off by default and requires separate consent and reporter token. Retention: 7 days. Tokens are not stored.</string>
+    <string name="reporter_token">Separate diagnostic reporter token</string>
+    <string name="diagnostics_consent">Consent to send minimized diagnostics to this HTTPS host</string>
+    <string name="preview_diagnostics">Preview diagnostic report</string>
+    <string name="clear_diagnostics">Disable sending and delete local events</string>
+    <string name="no_events">No retained events.</string>
+    <string name="diagnostics_failed">Diagnostic operation failed.</string>
+    <string name="cleared">Remote sending disabled; local events deleted.</string>
+</resources>

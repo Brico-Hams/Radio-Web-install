@@ -19,6 +19,11 @@ no se cambian las licencias de dependencias ni de recursos de terceros.
   `remote-station/apps/web-console/`, con marca, colores, tipografía y recursos
   oficiales BricoHams. iOS requiere Mac/Xcode para compilar y firmar.
 - El host coordinador y los agentes headless se ejecutan por separado.
+  El [agente Android USB independiente](../remote-station/docs/agente-android-usb.md)
+  tiene APK propio, enlace WSS saliente y CAT FTX-1 de solo lectura, con
+  selección explícita y diagnóstico ES/EN/FR/PT. Su aceptación OTG física,
+  audio, PTT, CW, digitales y accesorios siguen pendientes; no se confunde
+  con el cliente ni se presentan esas funciones como implementadas.
   El servidor Node local de firmware **no se publica en Internet** ni se
   convierte en proxy remoto. No se exponen copias/codeplugs ni proveedores.
 - No se cambian los conectores USB, memoria, firmware ni funciones nativas

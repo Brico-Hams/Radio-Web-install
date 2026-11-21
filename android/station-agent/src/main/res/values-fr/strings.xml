@@ -1,0 +1,29 @@
+<resources>
+    <string name="app_name">BricoHams Agent de station USB</string>
+    <string name="readonly_notice">Agent FTX-1 USB OTG : CAT en lecture seule. Interface Enhanced choisie, 38400 bauds, 8N1, RTS/DTR désactivés. Validation matérielle en attente.</string>
+    <string name="unsupported_notice">Non implémentés ici : réglages, PTT, audio, CW, modes numériques, rotors, coupleurs et spectre natif. Agent, pas client distant.</string>
+    <string name="host_url">URL HTTPS de base de l’hôte</string>
+    <string name="agent_token">Jeton dédié à l’agent Android</string>
+    <string name="select_device">Choisir le périphérique USB physique</string>
+    <string name="select_interface">Choisir l’interface CAT</string>
+    <string name="select_baud">Choisir les bauds configurés sur la radio</string>
+    <string name="refresh">Actualiser les périphériques USB</string>
+    <string name="connect">Connecter la radio choisie à l’hôte</string>
+    <string name="disconnect">Déconnecter / annuler</string>
+    <string name="notifications">Autoriser les notifications du service actif</string>
+    <string name="disconnected">Déconnecté</string>
+    <string name="connecting">Attente de permission USB / connexion</string>
+    <string name="connected">Liaison USB en lecture seule connectée</string>
+    <string name="usb_failed">Échec ou déconnexion USB/CAT. Vérifier périphérique et bauds ; reconnecter explicitement.</string>
+    <string name="permission_failed">Échec de permission USB ou du service actif.</string>
+    <string name="connection_failed">Liaison chiffrée échouée ou refusée. Vérifier certificat, jeton et configuration.</string>
+    <string name="input_failed">Configuration invalide. Choisir USB, Enhanced et bauds ; utiliser une URL HTTPS de base et des jetons ASCII distincts de 32–256 caractères.</string>
+    <string name="privacy">Diagnostic local minimisé : sans jetons, URL, numéros de série, réponses CAT ni fréquences. Envoi distant désactivé par défaut, avec consentement et jeton de diagnostic distinct. Conservation : 7 jours. Jetons non stockés.</string>
+    <string name="reporter_token">Jeton distinct pour le diagnostic</string>
+    <string name="diagnostics_consent">Consentir à envoyer le diagnostic minimisé à cet hôte HTTPS</string>
+    <string name="preview_diagnostics">Voir le rapport de diagnostic</string>
+    <string name="clear_diagnostics">Désactiver l’envoi et supprimer les événements locaux</string>
+    <string name="no_events">Aucun événement conservé.</string>
+    <string name="diagnostics_failed">Échec de l’opération de diagnostic.</string>
+    <string name="cleared">Envoi distant désactivé ; événements locaux supprimés.</string>
+</resources>
