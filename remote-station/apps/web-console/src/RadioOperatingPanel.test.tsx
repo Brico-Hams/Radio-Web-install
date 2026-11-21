@@ -1,7 +1,15 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { render as renderComponent, screen, waitFor } from '@testing-library/react'
+import type { ReactNode } from 'react'
 import userEvent from '@testing-library/user-event'
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { RadioOperatingPanel } from './RadioOperatingPanel'
+import { LanguageProvider, LanguageSelector } from './LanguageProvider'
+
+beforeEach(() => localStorage.removeItem('bricoham.language'))
+
+function render(ui: ReactNode) {
+  return renderComponent(<LanguageProvider>{ui}</LanguageProvider>)
+}
 
 const config = {
   api_version: 'v1', model: 'FTX-1', status: 'experimental',
@@ -31,6 +39,42 @@ async function loadAndRead() {
 }
 
 describe('controles MAIN/SUB FTX-1', () => {
+  it.each([
+    ['en', 'Receiver frequency (Hz)', 'Receiver mode', 'Apply frequency', 'Apply mode', 'unavailable for this selector'],
+    ['fr', 'Fréquence du récepteur (Hz)', 'Mode du récepteur', 'Appliquer la fréquence', 'Appliquer le mode', 'indisponible pour ce sélecteur'],
+    ['pt', 'Frequência do recetor (Hz)', 'Modo do recetor', 'Aplicar frequência', 'Aplicar modo', 'indisponível para este seletor'],
+  ])('cambiar a %s conserva la lectura y no habilita modo VFO-B inexistente', async (
+    language, frequencyLabel, modeLabel, applyFrequency, applyMode, unavailable,
+  ) => {
+    const yaesuConfig = {
+      ...config, model: 'FT-991A', frequency_min_hz: 30_000, frequency_max_hz: 470_000_000,
+      mode_options: [{ code: '1', label: 'LSB' }, { code: '2', label: 'USB' }],
+      receiver_options: [
+        { receiver: 'MAIN', label: 'VFO-A', mode_supported: true },
+        { receiver: 'SUB', label: 'VFO-B', mode_supported: false },
+      ],
+    }
+    const state = {
+      ...observed, ...yaesuConfig,
+      receivers: { ...observed.receivers, SUB: { frequency_hz: 7_074_000, mode_code: null } },
+    }
+    const fetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) =>
+      Response.json(init?.method === 'POST' ? state : yaesuConfig))
+    vi.stubGlobal('fetch', fetch)
+    render(<><LanguageSelector /><RadioOperatingPanel token="operator-token" /></>)
+    const user = await loadAndRead()
+    await user.selectOptions(screen.getByLabelText('Receptor de radio'), 'SUB')
+    const input = screen.getByLabelText<HTMLInputElement>('Frecuencia del receptor (Hz)')
+    await user.selectOptions(screen.getByLabelText('Idioma'), language)
+    expect(screen.getByLabelText(frequencyLabel)).toBe(input)
+    expect(input.value).toBe('7074000')
+    expect(screen.getByText(unavailable, { exact: false })).toBeTruthy()
+    expect(screen.getByText(applyFrequency).hasAttribute('disabled')).toBe(false)
+    expect(screen.getByText(applyMode).hasAttribute('disabled')).toBe(true)
+    expect(screen.getByLabelText(modeLabel).hasAttribute('disabled')).toBe(true)
+    expect(fetch).toHaveBeenCalledTimes(2)
+  })
+
   it('rechaza capacidades extra no validadas en una respuesta FTX-1', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => Response.json({
       ...config, receiver_options: 'invalid',

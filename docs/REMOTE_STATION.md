@@ -149,3 +149,18 @@ iOS y funciones expresamente pendientes no quedan cubiertas por estos resultados
 
 Estos incrementos no finalizan CW activo, WSJT-X activo/broker CAT, agente Android
 USB OTG independiente, firma iOS/produccion ni aceptacion fisica multiplataforma.
+
+## Idiomas de los controles operativos
+
+Frecuencia/modo y potencia/acoplador utilizan el selector ES/EN/FR/PT del cliente
+compartido, incluidos errores y avisos de seguridad. Cambiar idioma conserva
+lecturas, valores editados, limites y permisos; no remonta controles ni emite
+peticiones CAT. Las referencias tecnicas enlazadas mantienen su idioma original.
+
+Verificacion: **72 pruebas del cliente**, lint y TypeScript/Vite correctos;
+seis casos nuevos comprueban cambios de idioma con SUB sin modo y el limite
+200 W de FTDX101MP, sin alterar restricciones. Wheel reinstalado fuera del arbol
+fuente y APK dedicado recompilado con lint y firma debug v2 verificados.
+El bundle coincide por SHA256 en wheel, APK y assets Android/iOS; SHA256SUMS
+se actualiza para los dos paquetes afectados. ZIPAPP y APK RadiCodex no cambian.
+No se atribuye compilacion iOS, aceptacion fisica ni firma de produccion.

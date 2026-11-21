@@ -1,7 +1,15 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { render as renderComponent, screen, waitFor } from '@testing-library/react'
+import type { ReactNode } from 'react'
 import userEvent from '@testing-library/user-event'
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { RadioSettingsPanel } from './RadioSettingsPanel'
+import { LanguageProvider, LanguageSelector } from './LanguageProvider'
+
+beforeEach(() => localStorage.removeItem('bricoham.language'))
+
+function render(ui: ReactNode) {
+  return renderComponent(<LanguageProvider>{ui}</LanguageProvider>)
+}
 
 const settings = {
   api_version: 'v1', model: 'IC-7300', status: 'experimental',
@@ -22,6 +30,36 @@ async function loadAndRead() {
 }
 
 describe('ajustes documentados IC-7300', () => {
+  it.each([
+    ['en', 'Power setpoint (W, not measured RF)', 'Apply power level', 'Insert tuner'],
+    ['fr', 'Consigne de puissance (W, pas une mesure RF)', 'Appliquer la puissance', 'Insérer le coupleur'],
+    ['pt', 'Consigna de potência (W, não medida RF)', 'Aplicar nível de potência', 'Inserir acoplador'],
+  ])('cambiar a %s conserva la potencia editada y el límite específico', async (
+    language, powerLabel, applyPower, insertTuner,
+  ) => {
+    const config = {
+      ...settings, model: 'FTDX101MP', power_unit: 'watts_setpoint',
+      power_level_max: 200, tuner_switching_enabled: false,
+    }
+    const fetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) =>
+      Response.json(init?.method === 'POST' ? {
+        ...config, power_level: 100, tx_active: false, tuner_busy: false, observed_at: 123,
+      } : config))
+    vi.stubGlobal('fetch', fetch)
+    render(<><LanguageSelector /><RadioSettingsPanel token="operator-token" /></>)
+    const user = await loadAndRead()
+    const input = screen.getByLabelText<HTMLInputElement>('Consigna de potencia (W, no medida RF)')
+    await user.clear(input)
+    await user.type(input, '150')
+    await user.selectOptions(screen.getByLabelText('Idioma'), language)
+    expect(screen.getByLabelText(powerLabel)).toBe(input)
+    expect(input.value).toBe('150')
+    expect(input.getAttribute('max')).toBe('200')
+    expect(screen.getByText(applyPower).hasAttribute('disabled')).toBe(false)
+    expect(screen.queryByText(insertTuner)).toBeNull()
+    expect(fetch).toHaveBeenCalledTimes(2)
+  })
+
   it('admite 200 W de consigna solo en FTDX101MP, sin inventar cabezal o conmutación ATU', async () => {
     const config = {
       ...settings, model: 'FTDX101MP', power_unit: 'watts_setpoint',

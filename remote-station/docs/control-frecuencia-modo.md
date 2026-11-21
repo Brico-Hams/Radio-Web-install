@@ -56,6 +56,10 @@ reservados ni cadenas CAT arbitrarias.
 El panel web/Android/tablet/iPhone/iPad comparte la misma implementacion:
 seleccion explicita MAIN/SUB, lectura previa y bloqueo tras error hasta volver
 a leer. Cambiar el selector no envia una orden a la radio.
+Controles, unidades, estados no disponibles y avisos de seguridad siguen el
+idioma ES/EN/FR/PT elegido en la consola. Cambiar idioma conserva lectura,
+selector, valores editados y bloqueos; no reconecta ni emite consultas/setters.
+Los identificadores CAT, MAIN/SUB, VFO-A/B y nombres técnicos de modo no se traducen.
 
 ## Garantias y limites
 

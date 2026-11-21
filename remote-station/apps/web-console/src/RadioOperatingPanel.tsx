@@ -3,6 +3,7 @@ import {
   createControlRequest, getApiData, isRadioSettings, isRecord, type RadioSettings,
   isYaesuControlModel, type YaesuControlModel,
 } from './api'
+import { useLanguage } from './i18n'
 
 type Receiver = 'MAIN' | 'SUB'
 type ModeOption = { code: string; label: string }
@@ -85,6 +86,7 @@ function isOperating(value: unknown): value is Operating {
 }
 
 export function RadioOperatingPanel({ token }: { token: string }) {
+  const { t } = useLanguage()
   const send = useMemo(() => createControlRequest(token), [token])
   const [config, setConfig] = useState<Config | null>(null)
   const [observed, setObserved] = useState<Operating | null>(null)
@@ -108,10 +110,10 @@ export function RadioOperatingPanel({ token }: { token: string }) {
     setError('')
     try {
       const result = await getApiData(token, '/radio-settings', isConfig)
-      if (!result.allowed) throw new Error('Requiere permiso de admin u operador.')
+      if (!result.allowed) throw new Error(t('radioPermission'))
       setConfig(result.data)
     } catch (failure) {
-      setError(failure instanceof Error ? failure.message : 'Configuración Yaesu no disponible.')
+      setError(failure instanceof Error ? failure.message : t('radioConfigUnavailable'))
     } finally {
       setBusy(false)
     }
@@ -128,8 +130,8 @@ export function RadioOperatingPanel({ token }: { token: string }) {
       show(result, receiver)
       setVerified(true)
     } catch (failure) {
-      setError(`Operación no confirmada; lee de nuevo antes de ajustar. No hay reintento automático. ${
-        failure instanceof Error ? failure.message : 'Error CAT Yaesu.'
+      setError(`${t('radioOperationUnconfirmed')} ${
+        failure instanceof Error ? failure.message : t('radioCatError')
       }`)
     } finally {
       setBusy(false)
@@ -144,7 +146,7 @@ export function RadioOperatingPanel({ token }: { token: string }) {
         ...(operation === 'set_frequency' ? { frequency_hz: Number(frequency) } : { mode_code: mode }),
       })
     } catch (failure) {
-      setError(failure instanceof Error ? failure.message : 'No se pudo identificar la orden.')
+      setError(failure instanceof Error ? failure.message : t('radioIdentifierError'))
     }
   }
 
@@ -153,24 +155,21 @@ export function RadioOperatingPanel({ token }: { token: string }) {
   const modeSupported = options.find((option) => option.receiver === receiver)?.mode_supported === true
   return (
     <section className="content-card operation-panel" aria-labelledby="operating-title">
-      <h2 id="operating-title">Frecuencia y modo Yaesu{config ? ` · ${config.model}` : ''}</h2>
-      <p>CAT experimental real, separado de la demostración. Los selectores y límites
-        corresponden al manual del modelo; no selecciona VFO activo ni transmisor.
-        No habilita PTT. RX/ATU observados no son interlocks físicos: un control
-        local puede cambiar el estado entre comandos.</p>
+      <h2 id="operating-title">{t('radioOperatingTitle')}{config ? ` · ${config.model}` : ''}</h2>
+      <p>{t('radioOperatingSafety')}</p>
       <div className="session-actions">
         <button className="button button-secondary" disabled={busy}
-          onClick={() => void load()}>Consultar controles de radio</button>
+          onClick={() => void load()}>{t('radioReadControls')}</button>
         <button className="button button-secondary" disabled={busy || !config}
-          onClick={() => void operate({ operation: 'read_operating' })}>Leer receptores</button>
+          onClick={() => void operate({ operation: 'read_operating' })}>{t('radioReadReceivers')}</button>
       </div>
       {error ? <p role="alert">{error}</p> : null}
       {config ? <>
-        <label>Receptor de radio
+        <label>{t('radioReceiver')}
           <select value={receiver} disabled={busy} onChange={(event) => {
             const side = event.target.value
             if (side !== 'MAIN' && side !== 'SUB') {
-              setError('Selecciona explícitamente MAIN o SUB.')
+              setError(t('radioInvalidReceiver'))
               return
             }
             setReceiver(side)
@@ -181,31 +180,31 @@ export function RadioOperatingPanel({ token }: { token: string }) {
             </option>)}
           </select>
         </label>
-        {observed ? <p>Última lectura de {receiver}: {observed.receivers[receiver].frequency_hz} Hz,
-          modo {modeSupported ? config.mode_options.find((option) =>
-            option.code === observed.receivers[receiver].mode_code)?.label : 'no disponible para este selector'}.
-          TX observado: {observed.tx_active ? 'sí' : 'no'}.
-          ATU/ATAS solicita sintonía/movimiento: {observed.tuner_busy ? 'sí' : 'no'}.</p> : null}
-        {!verified ? <p>Lectura explícita requerida antes de ajustar.</p> : null}
+        {observed ? <p>{t('radioLastReading')} {receiver}: {observed.receivers[receiver].frequency_hz} Hz,
+          {' '}{t('radioMode')} {modeSupported ? config.mode_options.find((option) =>
+            option.code === observed.receivers[receiver].mode_code)?.label : t('radioModeUnavailable')}.
+          {' '}{t('radioTxObserved')}: {t(observed.tx_active ? 'radioYes' : 'radioNo')}.
+          {' '}{t('radioTunerBusy')}: {t(observed.tuner_busy ? 'radioYes' : 'radioNo')}.</p> : null}
+        {!verified ? <p>{t('radioReadRequired')}</p> : null}
         <form onSubmit={(event) => adjust(event, 'set_frequency')}>
-          <label>Frecuencia del receptor (Hz)
+          <label>{t('radioFrequencyLabel')}
             <input type="number" step="1" min={config.frequency_min_hz ?? 30_000}
               max={config.frequency_max_hz ?? 470_000_000} required
               value={frequency} onChange={(event) => setFrequency(event.target.value)} />
           </label>
           <button type="submit" className="button button-secondary"
-            disabled={blocked || !config.frequency_adjustment_enabled}>Aplicar frecuencia</button>
+            disabled={blocked || !config.frequency_adjustment_enabled}>{t('radioApplyFrequency')}</button>
         </form>
         <form onSubmit={(event) => adjust(event, 'set_mode')}>
-          <label>Modo del receptor
+          <label>{t('radioModeLabel')}
             <select required disabled={!modeSupported} value={mode} onChange={(event) => setMode(event.target.value)}>
-              <option value="">Lee el estado primero</option>
+              <option value="">{t('radioReadModeFirst')}</option>
               {config.mode_options.map((option) =>
                 <option key={option.code} value={option.code}>{option.label}</option>)}
             </select>
           </label>
           <button type="submit" className="button button-secondary"
-            disabled={blocked || !modeSupported || !config.mode_adjustment_enabled}>Aplicar modo</button>
+            disabled={blocked || !modeSupported || !config.mode_adjustment_enabled}>{t('radioApplyMode')}</button>
         </form>
       </> : null}
     </section>

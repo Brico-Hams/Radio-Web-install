@@ -4,6 +4,7 @@ import {
   isYaesuControlModel, type YaesuControlModel,
   type RadioSettings as Settings,
 } from './api'
+import { useLanguage } from './i18n'
 type ObservedSettings = Settings & {
   power_level: number
   tx_active: boolean
@@ -31,6 +32,7 @@ function isObserved(value: unknown): value is ObservedSettings {
 }
 
 export function RadioSettingsPanel({ token }: { token: string }) {
+  const { t } = useLanguage()
   const sendControl = useMemo(() => createControlRequest(token), [token])
   const [config, setConfig] = useState<Settings | null>(null)
   const [observed, setObserved] = useState<ObservedSettings | null>(null)
@@ -46,10 +48,10 @@ export function RadioSettingsPanel({ token }: { token: string }) {
     setError('')
     try {
       const response = await getApiData(token, '/radio-settings', isSettings)
-      if (!response.allowed) throw new Error('Estos ajustes requieren permiso de admin u operador.')
+      if (!response.allowed) throw new Error(t('radioPermission'))
       setConfig(response.data)
     } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : 'Error de configuración de radio.')
+      setError(loadError instanceof Error ? loadError.message : t('radioConfigUnavailable'))
     } finally {
       setBusy(false)
     }
@@ -66,8 +68,8 @@ export function RadioSettingsPanel({ token }: { token: string }) {
       setLevel(String(response.power_level))
       setVerified(true)
     } catch (operationError) {
-      setError(`Operación no confirmada. Lee el estado antes de otro ajuste; no se reintenta automáticamente. ${
-        operationError instanceof Error ? operationError.message : 'Error de ajustes de radio.'
+      setError(`${t('radioOperationUnconfirmed')} ${
+        operationError instanceof Error ? operationError.message : t('radioCatError')
       }`)
     } finally {
       setBusy(false)
@@ -78,7 +80,7 @@ export function RadioSettingsPanel({ token }: { token: string }) {
     try {
       void operate({ operation, request_id: crypto.randomUUID(), ...value })
     } catch (identifierError) {
-      setError(identifierError instanceof Error ? identifierError.message : 'No se pudo identificar la orden.')
+      setError(identifierError instanceof Error ? identifierError.message : t('radioIdentifierError'))
     }
   }
 
@@ -93,51 +95,44 @@ export function RadioSettingsPanel({ token }: { token: string }) {
     observed.power_head === 'field' ? Math.min(config.power_level_max, 10) : config?.power_level_max
   return (
     <section className="content-card operation-panel" aria-labelledby="radio-settings-title">
-      <h2 id="radio-settings-title">Potencia y acoplador{config ? ` · ${config.model}` : ''}</h2>
-      <p>Experimental y opt-in. IC-7300 usa posición CAT 0–255, no vatios. FTX-1
-        admite consigna en W del manual 2508-C y cabezal observado, incluido SPA-1
-        por el CAT de la radio, nunca por un enlace independiente. No es potencia RF medida.
-        El agente comprueba RX antes de ajustar,
-        pero esto no es un interlock físico ni impide un PTT local simultáneo.</p>
-      {config?.model === 'IC-7300' ? <p>El acoplador IC-7300 solo admite insertar/bypass.
-        No se inicia sintonía ni transmisión. Para insertar, PTT Start debe estar
-        desactivado localmente; valida la instalación sin accesorios externos.</p> :
-        <p>Yaesu ajusta consigna de potencia según modelo. No conmuta ATU/ATAS ni inicia sintonía o transmisión.</p>}
+      <h2 id="radio-settings-title">{t('radioPowerTitle')}{config ? ` · ${config.model}` : ''}</h2>
+      <p>{t('radioPowerSafety')}</p>
+      <p>{t(config?.model === 'IC-7300' ? 'radioIcomTunerSafety' : 'radioYaesuTunerSafety')}</p>
       <div className="session-actions">
         <button className="button button-secondary" disabled={busy}
-          onClick={() => void load()}>Consultar configuración de ajustes</button>
+          onClick={() => void load()}>{t('radioReadSettings')}</button>
         <button className="button button-secondary" disabled={busy || !config}
-          onClick={() => void operate({ operation: 'read' })}>Leer potencia y acoplador</button>
+          onClick={() => void operate({ operation: 'read' })}>{t('radioReadPower')}</button>
       </div>
       {error ? <p role="alert">{error}</p> : null}
       {config ? <>
-        <p>Modelo: {config.model}. Límite local: {config.power_level_max}
-          {config.model === 'IC-7300' ? ' / 255 CAT' : ' W de consigna (no medida RF)'}.
-          No se cambia automáticamente un nivel existente.</p>
-        <p>Último nivel reportado: {observed?.power_level ?? 'no consultado'}.
+        <p>{t('radioModel')}: {config.model}. {t('radioLocalLimit')}: {config.power_level_max}
+          {config.model === 'IC-7300' ? ' / 255 CAT' : ` ${t('radioWattsUnit')}`}.
+          {' '}{t('radioExistingLevel')}</p>
+        <p>{t('radioLastPower')}: {observed?.power_level ?? t('radioNotRead')}.
           {observed?.model === 'IC-7300' ?
-            ` Acoplador: ${['bypass', 'insertado', 'sintonizando'][observed.tuner_state]}.` :
+            ` ${t('radioTuner')}: ${['bypass', t('radioTunerInserted'), t('radioTunerTuning')][observed.tuner_state]}.` :
             observed?.model === 'FTX-1' ?
-              ` Cabezal: ${observed.power_head}. ATU/ATAS solicita sintonía/movimiento: ${observed.tuner_busy ? 'sí' : 'no'}.` :
+              ` ${t('radioHead')}: ${observed.power_head}. ${t('radioTunerBusy')}: ${t(observed.tuner_busy ? 'radioYes' : 'radioNo')}.` :
               observed && isYaesuControlModel(observed.model) ?
-                ` ATU solicita sintonía/movimiento: ${observed.tuner_busy ? 'sí' : 'no'}.` : null}
-          TX observado: {observed ? (observed.tx_active ? 'sí' : 'no') : 'no consultado'}.</p>
-        {!verified ? <p>Consulta el estado antes de habilitar los ajustes.</p> : null}
+                ` ${t('radioTunerBusy')}: ${t(observed.tuner_busy ? 'radioYes' : 'radioNo')}.` : null}
+          {' '}{t('radioTxObserved')}: {observed ? t(observed.tx_active ? 'radioYes' : 'radioNo') : t('radioNotRead')}.</p>
+        {!verified ? <p>{t('radioReadRequired')}</p> : null}
         <form onSubmit={power}>
-          <label>{config.model === 'IC-7300' ? 'Nivel de potencia CAT (no W)' : 'Consigna de potencia (W, no medida RF)'}
+          <label>{t(config.model === 'IC-7300' ? 'radioCatPowerLabel' : 'radioWattsPowerLabel')}
             <input type="number" step="1" min={config.model === 'IC-7300' ? 0 : 5} max={maximum}
               required value={level} onChange={(event) => setLevel(event.target.value)} />
           </label>
           <button type="submit" className="button button-secondary"
-            disabled={blocked || !config.power_adjustment_enabled}>Aplicar nivel de potencia</button>
+            disabled={blocked || !config.power_adjustment_enabled}>{t('radioApplyPower')}</button>
         </form>
         {config.model === 'IC-7300' ? <div className="session-actions">
           <button className="button button-secondary"
             disabled={blocked || !config.tuner_switching_enabled}
-            onClick={() => writeBody('set_tuner', { enabled: true })}>Insertar acoplador</button>
+            onClick={() => writeBody('set_tuner', { enabled: true })}>{t('radioInsertTuner')}</button>
           <button className="button button-secondary"
             disabled={blocked || !config.tuner_switching_enabled}
-            onClick={() => writeBody('set_tuner', { enabled: false })}>Bypass de acoplador</button>
+            onClick={() => writeBody('set_tuner', { enabled: false })}>{t('radioBypassTuner')}</button>
         </div> : null}
       </> : null}
     </section>

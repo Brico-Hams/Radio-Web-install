@@ -155,3 +155,7 @@ siempre falso. La API devuelve `power_unit: watts_setpoint`, `power_level`,
 ese límite sin confundirlo con el IC-7300. ID correcto, RX y AC no ocupado se
 exigen antes de escribir; ID, nivel, TX y AC se verifican después. No se activa
 sintonía, ATAS, PTT ni CW. Las observaciones CAT no sustituyen interlocks físicos.
+
+El panel compartido traduce controles, estados y avisos a ES/EN/FR/PT. Cambiar
+idioma conserva lectura, valores editados, límites locales y bloqueos; no envía
+consultas ni ajustes. Las unidades CAT y los identificadores técnicos se mantienen.
