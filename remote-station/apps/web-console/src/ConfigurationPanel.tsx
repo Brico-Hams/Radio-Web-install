@@ -6,7 +6,7 @@ import { useLanguage } from './i18n'
 export function ConfigurationPanel() {
   const { t } = useLanguage()
   const [form, setForm] = useState<AgentSetup>({
-    os: 'windows', agentFile: 'bricoham-station-agent.pyz', port: '8788', remote: false,
+    os: 'windows', agentFile: 'bricoham-station-agent.pyz', port: '8788', remote: false, listenHost: '127.0.0.1',
     certificate: '', privateKey: '', clientCa: '', cat: false, model: '', serialPort: '', baud: '', stopBits: '1',
   })
   const [command, setCommand] = useState('')
@@ -53,6 +53,9 @@ export function ConfigurationPanel() {
       <label className="setup-check"><input type="checkbox" checked={form.remote}
         onChange={(event) => update('remote', event.target.checked)} />{t('remote')}</label>
       {form.remote ? <>
+        <p role="alert" className="setup-warning">{t('remoteWarning')}</p>
+        <label>{t('listenHost')}<input value={form.listenHost} required autoComplete="off"
+          placeholder="192.168.1.10" onChange={(event) => update('listenHost', event.target.value)} /></label>
         <label>{t('certificate')}<input value={form.certificate} required autoComplete="off"
           onChange={(event) => update('certificate', event.target.value)} /></label>
         <label>{t('privateKey')}<input value={form.privateKey} required autoComplete="off"

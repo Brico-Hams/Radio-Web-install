@@ -14,6 +14,10 @@ android {
     testOptions {
         unitTests.isReturnDefaultValues = false
         unitTests.isIncludeAndroidResources = true
+        unitTests.all {
+            it.maxHeapSize = "2g"
+            it.forkEvery = 100
+        }
     }
 }
 dependencies {

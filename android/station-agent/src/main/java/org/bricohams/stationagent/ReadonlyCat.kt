@@ -38,8 +38,13 @@ class ReadonlyCat(private val bytes: CatBytes) {
                 if (value !in 32..126) throw ProtocolException("Invalid CAT byte")
                 output.write(value)
                 if (value == ';'.code) {
-                    if (index != count - 1) throw ProtocolException("Unexpected trailing CAT data")
-                    return output.toString(Charsets.US_ASCII.name())
+                    val frame = output.toString(Charsets.US_ASCII.name())
+                    // Discard unsolicited frames; only the reply to this command is accepted.
+                    if (frame.startsWith(command)) {
+                        if (index != count - 1) throw ProtocolException("Unexpected trailing CAT data")
+                        return frame
+                    }
+                    output.reset()
                 }
             }
         }

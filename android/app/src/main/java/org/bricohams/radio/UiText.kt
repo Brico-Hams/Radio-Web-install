@@ -63,8 +63,28 @@ inline fun <T : Any> requireNotNullUi(value: T?, text: () -> UiText): T {
     return value ?: throw LocalizedArgumentException(text())
 }
 
+/** Renders an error repeatedly (e.g. on every redraw) without flooding diagnostics: one record per class per minute. */
+internal object ErrorRecordDedupe {
+    private const val WINDOW_MS = 60_000L
+    private val last = HashMap<String, Long>()
+
+    @Synchronized fun shouldRecord(code: String, error: Throwable, now: Long = System.currentTimeMillis()): Boolean {
+        val key = code + ":" + error.javaClass.name
+        val previous = last[key]
+        if (previous != null && now - previous < WINDOW_MS && now >= previous) return false
+        if (last.size >= 64) last.entries.removeAll { now - it.value >= WINDOW_MS || now < it.value }
+        if (last.size >= 64) last.clear()
+        last[key] = now
+        return true
+    }
+
+    @Synchronized fun clear() = last.clear()
+}
+
 /** Localized text for an error: resource-backed for [LocalizedError], raw diagnostic otherwise. */
 fun Context.errorText(error: Throwable?, fallback: Int = R.string.error_unknown): String {
-    if (error != null) AnonymousDiagnostics.record("operation_failed", "native", "error", error)
+    if (error != null && ErrorRecordDedupe.shouldRecord("operation_failed", error)) {
+        AnonymousDiagnostics.record("operation_failed", "native", "error", error)
+    }
     return if (error is LocalizedError) error.text.resolve(this) else error?.message ?: getString(fallback)
 }

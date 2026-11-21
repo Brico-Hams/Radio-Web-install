@@ -17,6 +17,8 @@ import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.Executors
 import java.util.concurrent.RejectedExecutionException
+import java.util.concurrent.ScheduledExecutorService
+import java.util.concurrent.atomic.AtomicLong
 import javax.net.ssl.HttpsURLConnection
 import javax.net.ssl.SSLException
 
@@ -24,35 +26,61 @@ object AnonymousDiagnostics {
     private val versionFormat = Regex("\\d{1,4}\\.\\d{1,4}\\.\\d{1,4}")
     private lateinit var component: String
     private lateinit var version: String
-    private lateinit var database: SQLiteOpenHelper
-    private lateinit var contract: JSONObject
+    @Volatile private var database: SQLiteOpenHelper? = null
+    @Volatile private var contractValue: JSONObject? = null
+    private val contract: JSONObject get() = checkNotNull(contractValue) { "Diagnostics not initialized" }
     private var owner: Context? = null
     @Volatile private var target: Target? = null
     @Volatile var foreground = false
     @Volatile var lastFailure = false
         private set
-    private var generation = 0L
-    private var sentGeneration = 0L
-    private var nextUpload = 0L
-    private var retryDelay = 60000L
+    private val generation = AtomicLong(0)
+    private val sentGeneration = AtomicLong(0)
+    private val nextUpload = AtomicLong(0)
+    private val retryDelay = AtomicLong(60000)
     private data class Target(val origin: String, val token: String)
-    private val worker = ThreadPoolExecutor(
-        1, 1, 0, TimeUnit.SECONDS, ArrayBlockingQueue(128),
+    private var workerPool: ThreadPoolExecutor? = null
+    private var timerPool: ScheduledExecutorService? = null
+
+    // The worker core thread times out and both pools are recreated lazily after reset().
+    @Synchronized private fun worker(): ThreadPoolExecutor = workerPool ?: ThreadPoolExecutor(
+        1, 1, 30, TimeUnit.SECONDS, ArrayBlockingQueue(128),
         { task -> Thread(task, "anonymous-diagnostics").apply { isDaemon = true } },
         ThreadPoolExecutor.AbortPolicy()
-    )
-    private val timer = Executors.newSingleThreadScheduledExecutor { task ->
-        Thread(task, "diagnostic-schedule").apply { isDaemon = true }
-    }
-    private var scheduled = false
+    ).apply { allowCoreThreadTimeOut(true) }.also { workerPool = it }
 
     private fun enqueue(onFailure: (Throwable) -> Unit = {}, task: () -> Unit) {
-        try { worker.execute(task) }
+        try { worker().execute(task) }
         catch (error: RejectedExecutionException) {
             lastFailure = true
             Log.w("RadiCodexDiagnostics", "Diagnostic queue full; operation not retained")
             onFailure(error)
         }
+    }
+
+    /**
+     * Test hook: stops both executors, closes the database and forgets owner, target and contract
+     * so that no thread or Context outlives a test. The next initialize() starts from scratch.
+     */
+    @Synchronized fun reset() {
+        timerPool?.shutdownNow()
+        timerPool = null
+        workerPool?.let { pool ->
+            pool.shutdown()
+            if (!pool.awaitTermination(2, TimeUnit.SECONDS)) pool.shutdownNow()
+        }
+        workerPool = null
+        database?.close()
+        database = null
+        owner = null
+        target = null
+        contractValue = null
+        foreground = false
+        lastFailure = false
+        generation.set(0)
+        sentGeneration.set(0)
+        nextUpload.set(0)
+        retryDelay.set(60000)
     }
 
     @Synchronized fun initialize(context: Context, component: String, version: String) {
@@ -67,29 +95,31 @@ object AnonymousDiagnostics {
         require(component in values("components", definition) && version.matches(versionFormat)) {
             "Invalid diagnostic component or version"
         }
-        val previous = if (::database.isInitialized) database else null
+        val previous = database
         owner = application
         this.component = component
         this.version = version
         target = null
-        contract = definition
+        contractValue = definition
         database = object : SQLiteOpenHelper(context.applicationContext, "anonymous-diagnostics.sqlite3", null, 1) {
             override fun onCreate(db: SQLiteDatabase) {
                 db.execSQL("CREATE TABLE events(created INTEGER NOT NULL, payload TEXT NOT NULL)")
             }
             override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
-                throw SQLiteException("Unsupported diagnostic database version")
+                db.execSQL("DROP TABLE IF EXISTS events")
+                onCreate(db)
             }
             override fun onConfigure(db: SQLiteDatabase) {
                 db.rawQuery("PRAGMA max_page_count=2048", null).use { it.moveToFirst() }
             }
         }
         if (previous != null) enqueue { previous.close() }
-        if (!scheduled) {
-            scheduled = true
-            timer.scheduleAtFixedRate({
+        if (timerPool == null) {
+            timerPool = Executors.newSingleThreadScheduledExecutor { task ->
+                Thread(task, "diagnostic-schedule").apply { isDaemon = true }
+            }.also { timer -> timer.scheduleAtFixedRate({
                 if (foreground && target != null) enqueue {
-                    if (System.currentTimeMillis() >= nextUpload) {
+                    if (System.currentTimeMillis() >= nextUpload.get()) {
                         try { upload() }
                         catch (_: IOException) {
                             lastFailure = true
@@ -103,7 +133,7 @@ object AnonymousDiagnostics {
                         }
                     }
                 }
-            }, 60, 60, TimeUnit.SECONDS)
+            }, 60, 60, TimeUnit.SECONDS) }
         }
         record("started", "native", "info")
     }
@@ -148,7 +178,8 @@ object AnonymousDiagnostics {
     }
 
     fun record(code: String, source: String, severity: String, error: Throwable? = null) {
-        if (!::database.isInitialized) {
+        val localDatabase = database
+        if (localDatabase == null) {
             Log.w("RadiCodexDiagnostics", "Diagnostic logger not initialized")
             return
         }
@@ -159,17 +190,16 @@ object AnonymousDiagnostics {
         val report = envelope(JSONArray().put(event))
         require(validReport(report)) { "Invalid diagnostic event" }
         val serialized = report.toString()
-        val localDatabase = database
         enqueue {
             if (localDatabase !== database) return@enqueue
             try {
-                val db = database.writableDatabase
+                val db = localDatabase.writableDatabase
                 db.insertOrThrow("events", null, ContentValues().apply {
                     put("created", System.currentTimeMillis()); put("payload", serialized)
                 })
                 purge(db)
-                generation++
-                if (foreground && target != null && System.currentTimeMillis() >= nextUpload) upload()
+                generation.incrementAndGet()
+                if (foreground && target != null && System.currentTimeMillis() >= nextUpload.get()) upload()
             } catch (_: SQLiteException) {
                 lastFailure = true
                 Log.e("RadiCodexDiagnostics", "Diagnostic local storage failed")
@@ -190,8 +220,11 @@ object AnonymousDiagnostics {
         db.execSQL("DELETE FROM events WHERE rowid NOT IN (SELECT rowid FROM events ORDER BY rowid DESC LIMIT 500)")
     }
 
+    private fun openDatabase(): SQLiteDatabase =
+        (database ?: throw SQLiteException("Diagnostics not initialized")).writableDatabase
+
     private fun report(): JSONObject? {
-        val db = database.writableDatabase
+        val db = openDatabase()
         purge(db)
         val events = JSONArray()
         db.rawQuery("SELECT payload FROM events ORDER BY rowid DESC LIMIT 16", null).use { rows ->
@@ -224,9 +257,9 @@ object AnonymousDiagnostics {
     fun enable(origin: String, token: String) {
         val normalized = RemoteStationUrl.parse(origin)
         require(token.length >= 32 && token.all { it.code in 33..126 }) { "Invalid diagnostic secret" }
-        sentGeneration = 0
-        nextUpload = 0
-        retryDelay = 60000
+        sentGeneration.set(0)
+        nextUpload.set(0)
+        retryDelay.set(60000)
         target = Target(normalized, token)
         record("started", "native", "info")
     }
@@ -237,7 +270,7 @@ object AnonymousDiagnostics {
         disable()
         enqueue(onFailure = { callback(Result.failure(it)) }) {
             try {
-                database.writableDatabase.delete("events", null, null)
+                openDatabase().delete("events", null, null)
                 callback(Result.success(Unit))
             } catch (error: SQLiteException) {
                 lastFailure = true
@@ -249,7 +282,7 @@ object AnonymousDiagnostics {
 
     private fun upload() {
         val destination = target ?: return
-        if (generation == sentGeneration) return
+        if (generation.get() == sentGeneration.get()) return
         val payload = report() ?: return
         if (target !== destination || !foreground) return
         val connection = URL(destination.origin + "api/v1/diagnostic-reports").openConnection() as HttpsURLConnection
@@ -279,14 +312,15 @@ object AnonymousDiagnostics {
             val ack = try { JSONObject(String(buffer, 0, length, Charsets.UTF_8)) }
                 catch (error: JSONException) { throw IOException("Diagnostic acknowledgement invalid", error) }
             if (ack.length() != 1 || ack.opt("accepted") != true) throw IOException("Diagnostic acknowledgement invalid")
-            sentGeneration = generation
-            retryDelay = 60000
+            val sent = generation.get()
+            sentGeneration.set(sent)
+            retryDelay.set(60000)
             lastFailure = false
         } catch (error: IOException) {
-            retryDelay = (retryDelay * 2).coerceAtMost(600000)
+            retryDelay.set((retryDelay.get() * 2).coerceAtMost(600000))
             throw error
         } finally {
-            nextUpload = System.currentTimeMillis() + retryDelay
+            nextUpload.set(System.currentTimeMillis() + retryDelay.get())
             connection.disconnect()
         }
     }

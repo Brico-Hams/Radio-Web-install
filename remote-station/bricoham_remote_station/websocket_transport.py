@@ -40,10 +40,12 @@ class WebSocketPeer:
         sock: socket.socket,
         connection: Connection,
         read: Callable[[int], bytes] | None = None,
+        peek: Callable[[int], bytes] | None = None,
     ) -> None:
         self.sock = sock
         self.connection = connection
         self.read = read or sock.recv
+        self._peek = peek
         self._lock = threading.Lock()
         self._send_lock = threading.Lock()
         self._events = deque()
@@ -128,11 +130,26 @@ class WebSocketPeer:
         finally:
             self.sock.close()
 
+    def _buffered(self) -> bool:
+        if self._peek is None:
+            return False
+        # Bytes already pulled into the handler's buffered reader are invisible to select().
+        previous = self.sock.gettimeout()
+        try:
+            self.sock.settimeout(0)
+            return len(self._peek(1)) > 0
+        except (OSError, ValueError):
+            return False
+        finally:
+            self.sock.settimeout(previous)
+
     def pending(self) -> bool:
         with self._lock:
             self._events.extend(self.connection.events())
-        return bool(self._events) or (
-            isinstance(self.sock, ssl.SSLSocket) and self.sock.pending() > 0
+        return (
+            bool(self._events)
+            or (isinstance(self.sock, ssl.SSLSocket) and self.sock.pending() > 0)
+            or self._buffered()
         )
 
 
@@ -171,7 +188,9 @@ def accept_websocket(
     handler.connection.settimeout(2)
     handler.connection.sendall(response)
     assert handshake.connection is not None
-    return WebSocketPeer(handler.connection, handshake.connection, handler.rfile.read1)
+    return WebSocketPeer(
+        handler.connection, handshake.connection, handler.rfile.read1, handler.rfile.peek
+    )
 
 
 def connect_websocket(

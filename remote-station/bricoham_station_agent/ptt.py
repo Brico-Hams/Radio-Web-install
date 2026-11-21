@@ -16,6 +16,13 @@ from bricoham_station_agent.radio_settings import settings_request_identifier
 LOGGER = logging.getLogger("bricoham.station_agent.ptt")
 LEASE_SECONDS = 2.0
 TRANSACTION_SECONDS = 0.7
+WATCHDOG_INTERVAL = 0.05
+MAX_RETRY_DELAY = 1.0
+CRITICAL_LOG_INTERVAL = 5.0
+
+
+def next_retry_delay(current: float) -> float:
+    return min(max(current, WATCHDOG_INTERVAL) * 2, MAX_RETRY_DELAY)
 
 
 class PttError(Exception):
@@ -297,14 +304,22 @@ class PttController:
             self._lock.release()
 
     def _watchdog(self) -> None:
-        while not self._shutdown.wait(0.05):
+        delay = WATCHDOG_INTERVAL
+        last_critical = float("-inf")
+        while not self._shutdown.wait(delay):
             with self._lock:
                 try:
                     self._expire()
+                    delay = WATCHDOG_INTERVAL
                 except (CatError, ValueError, PttError) as error:
-                    LOGGER.critical(
-                        "PTT RX NOT confirmed (%s); use local stop", type(error).__name__
-                    )
+                    # Never stop retrying the unkey; only slow down and rate-limit the log.
+                    delay = next_retry_delay(delay)
+                    now = time.monotonic()
+                    if now - last_critical >= CRITICAL_LOG_INTERVAL:
+                        last_critical = now
+                        LOGGER.critical(
+                            "PTT RX NOT confirmed (%s); use local stop", type(error).__name__
+                        )
 
     def close(self) -> None:
         self._shutdown.set()

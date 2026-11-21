@@ -30,11 +30,12 @@ Kotlin en `AcarsChannels.kt`, `MainActivity.kt` y `NetControlActivity.kt`.
 ## Artefactos y límites
 
 Los paquetes de esta ejecución se encuentran en
-[`remote-station/dist/verification-20261121`](../remote-station/dist/verification-20261121/),
+`remote-station/dist/verification-20261121` (ruta local: `dist/` está en
+.gitignore y los artefactos no están versionados),
 separados de distribuciones anteriores. Las firmas de depuración no son
 credenciales de publicación. Los hashes verifican integridad de archivos, no
 la seguridad ni el funcionamiento del producto. El
-[manifiesto SHA-256](../remote-station/dist/verification-20261121/SHA256SUMS.txt)
+manifiesto SHA-256 (`remote-station/dist/verification-20261121/SHA256SUMS.txt`, local, no versionado)
 pertenece únicamente a esta ejecución; los binarios son artefactos locales
 generados y no se han publicado.
 

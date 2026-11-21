@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { buildAgentCommand, buildHostCommand, type AgentSetup, type HostSetup } from './agentSetup'
 
 const agent: AgentSetup = {
-  os:'windows', agentFile:"C:\\Radio's tools\\agent.pyz", port:'8788', remote:false,
+  os:'windows', agentFile:"C:\\Radio's tools\\agent.pyz", port:'8788', remote:false, listenHost:'127.0.0.1',
   certificate:'', privateKey:'', clientCa:'', cat:false, model:'', serialPort:'', baud:'', stopBits:'1',
 }
 const host: HostSetup = {
@@ -31,8 +31,13 @@ describe('local setup commands', () => {
   })
   it('requires TLS material for remote agent listening', () => {
     expect(() => buildAgentCommand({ ...agent, remote:true })).toThrow()
-    expect(buildAgentCommand({ ...agent, remote:true, certificate:'radio.crt', privateKey:'radio.key', clientCa:'clients.crt' }))
-      .toContain("'--host' '0.0.0.0' '--tls-cert' 'radio.crt' '--tls-key' 'radio.key' '--tls-client-ca' 'clients.crt'")
+    const remote = { ...agent, remote:true, listenHost:'192.168.1.10', certificate:'radio.crt', privateKey:'radio.key', clientCa:'clients.crt' }
+    expect(buildAgentCommand(remote))
+      .toContain("'--host' '192.168.1.10' '--tls-cert' 'radio.crt' '--tls-key' 'radio.key' '--tls-client-ca' 'clients.crt'")
+    expect(buildAgentCommand(remote)).not.toContain('0.0.0.0')
+    for (const listenHost of ['', '0.0.0.0', '::', '127.0.0.1', '::1', '256.1.1.1', 'station.example.org']) {
+      expect(() => buildAgentCommand({ ...remote, listenHost })).toThrow()
+    }
   })
   it('prepares a verified TLS/mTLS host link but rejects unsafe URLs and incomplete identities', () => {
     expect(buildHostCommand(host)).toContain("'--station-agent-url' 'https://station.example.org:8788' '--station-agent-ca' 'ca.crt'")

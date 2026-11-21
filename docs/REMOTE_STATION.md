@@ -45,7 +45,7 @@ remote-station\.venv\Scripts\python.exe -m pip install .\remote-station
 npm run build:station
 ```
 
-Los paquetes de host y agente se generan en `remote-station/dist/`.
+Los paquetes de host y agente se generan en `remote-station/dist/` (carpeta local, ignorada por git: los artefactos no están versionados).
 En POSIX, utiliza `python3` y `remote-station/.venv/bin/python`.
 La [guía de despliegue seguro](../remote-station/docs/despliegue-seguro.md)
 describe TLS/CA/hostname, mTLS opcional y secretos separados por rol/enlace.

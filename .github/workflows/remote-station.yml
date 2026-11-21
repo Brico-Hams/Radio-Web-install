@@ -1,9 +1,9 @@
 name: Remote station
 on:
   push:
-    paths: ["remote-station/**", "station*", "diagnostic*", "server.cjs", "android/**", "branding/**", "scripts/*station*", "scripts/export-project.cjs", "tests/*diagnostic*", "package*.json", ".github/workflows/remote-station.yml"]
+    paths: ["remote-station/**", "station*", "diagnostic*", "server.cjs", "app.js", "radio-ui.js", "ui-i18n.js", "ui-translations.js", "android/**", "branding/**", "scripts/*station*", "scripts/export-project.cjs", "tests/*diagnostic*", "tests/remote-station.test.cjs", "tests/ui-i18n.test.cjs", "package*.json", ".github/workflows/remote-station.yml"]
   pull_request:
-    paths: ["remote-station/**", "station*", "diagnostic*", "server.cjs", "android/**", "branding/**", "scripts/*station*", "scripts/export-project.cjs", "tests/*diagnostic*", "package*.json", ".github/workflows/remote-station.yml"]
+    paths: ["remote-station/**", "station*", "diagnostic*", "server.cjs", "app.js", "radio-ui.js", "ui-i18n.js", "ui-translations.js", "android/**", "branding/**", "scripts/*station*", "scripts/export-project.cjs", "tests/*diagnostic*", "tests/remote-station.test.cjs", "tests/ui-i18n.test.cjs", "package*.json", ".github/workflows/remote-station.yml"]
 permissions:
   contents: read
 jobs:

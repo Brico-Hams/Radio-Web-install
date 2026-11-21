@@ -1,14 +1,20 @@
 import contextlib
 import io
 import json
+import signal
 import threading
 import unittest
 from http.client import HTTPConnection
 from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
 
 from bricoham_remote_station.security import Role, TokenAuthenticator
 from bricoham_station_agent.inventory import DeviceEnumerationError, DeviceInventory
-from bricoham_station_agent.server import StationAgentHTTPServer, _parse_args
+from bricoham_station_agent.server import (
+    StationAgentHTTPServer,
+    _install_shutdown_handlers,
+    _parse_args,
+)
 
 ADMIN_TOKEN = "a" * 32
 OPERATOR_TOKEN = "b" * 32
@@ -33,6 +39,30 @@ def fake_port(**updates: object) -> SimpleNamespace:
 
 
 class StationAgentTests(unittest.TestCase):
+    def test_sigterm_handler_shuts_down_and_unkeys_ptt(self) -> None:
+        ptt = MagicMock()
+        server = StationAgentHTTPServer(
+            0,
+            TokenAuthenticator({Role.ADMIN: ADMIN_TOKEN}),
+            lambda: [],
+            ptt=ptt,
+        )
+        installed = {}
+        with patch(
+            "bricoham_station_agent.server.signal.signal",
+            side_effect=lambda number, handler: installed.setdefault(number, handler),
+        ):
+            previous = _install_shutdown_handlers(server)
+        self.assertIn(signal.SIGTERM, installed)
+        serving = threading.Thread(target=server.serve_forever)
+        serving.start()
+        installed[signal.SIGTERM](signal.SIGTERM, None)
+        serving.join(5)
+        self.assertFalse(serving.is_alive())
+        server.server_close()
+        ptt.close.assert_called()
+        self.assertEqual(set(previous), set(installed))
+
     def test_cli_default_override_and_help(self) -> None:
         self.assertEqual(_parse_args([]).port, 8788)
         self.assertEqual(_parse_args(["--port", "0"]).port, 0)

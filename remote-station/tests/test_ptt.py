@@ -9,7 +9,13 @@ from test_ftx1_power import FtxPowerPort
 
 from bricoham_remote_station.drivers import ftx1_cat as ftx
 from bricoham_station_agent.cat import CatConfig, CatError, SerialCat
-from bricoham_station_agent.ptt import PttConfig, PttController, PttError
+from bricoham_station_agent.ptt import (
+    WATCHDOG_INTERVAL,
+    PttConfig,
+    PttController,
+    PttError,
+    next_retry_delay,
+)
 
 
 class PttPort(FtxPowerPort):
@@ -190,10 +196,35 @@ class PttTests(unittest.TestCase):
         with self.assertRaisesRegex(CatError, "cat_busy"):
             self.cat.read("FA")
         self.port.ignore_stop = False
-        deadline = time.monotonic() + 1
+        deadline = time.monotonic() + 2.5
         while self.ptt.snapshot()["stop_failed"] and time.monotonic() < deadline:
             time.sleep(0.02)
         self.assertFalse(self.ptt.snapshot()["stop_failed"])
+        self.assertEqual(self.port.tx, 0)
+
+    def test_unkey_retry_backs_off_from_50ms_to_a_1s_cap(self):
+        delay = WATCHDOG_INTERVAL
+        seen = []
+        for _ in range(8):
+            delay = next_retry_delay(delay)
+            seen.append(delay)
+        self.assertEqual(seen[:3], [0.1, 0.2, 0.4])
+        self.assertEqual(seen[-1], 1.0)
+        self.assertEqual(WATCHDOG_INTERVAL, 0.05)
+
+    def test_failed_unkey_keeps_retrying_and_rate_limits_critical_log(self):
+        self.arm()
+        self.start()
+        self.port.ignore_stop = True
+        with self.assertRaisesRegex(PttError, "unconfirmed"):
+            self.arm()
+        with self.assertLogs("bricoham.station_agent.ptt", "CRITICAL") as logs:
+            time.sleep(0.8)
+        self.assertLessEqual(len(logs.records), 1)
+        self.port.ignore_stop = False
+        deadline = time.monotonic() + 2.5
+        while self.ptt.snapshot()["stop_failed"] and time.monotonic() < deadline:
+            time.sleep(0.02)
         self.assertEqual(self.port.tx, 0)
 
     def test_watchdog_stops_real_elapsed_lease_and_cannot_resurrect_it(self):

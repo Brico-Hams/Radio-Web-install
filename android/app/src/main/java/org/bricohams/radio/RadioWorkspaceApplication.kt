@@ -25,4 +25,10 @@ class RadioWorkspaceApplication : Application() {
             override fun onActivityDestroyed(activity: Activity) {}
         })
     }
+
+    // Robolectric calls this at teardown; it releases the diagnostics threads and database per test.
+    override fun onTerminate() {
+        AnonymousDiagnostics.reset()
+        super.onTerminate()
+    }
 }

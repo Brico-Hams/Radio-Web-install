@@ -148,6 +148,9 @@ class AgentService : Service() {
                             }
                         }
                     }
+                } catch (rejected: RejectedQueryException) {
+                    send(JSONObject().put("type", "error").put("id", rejected.queryId)
+                        .put("code", "cat_request_rejected").toString())
                 } catch (error: IOException) {
                     fail(R.string.connection_failed, "api", error)
                 } catch (error: JSONException) {

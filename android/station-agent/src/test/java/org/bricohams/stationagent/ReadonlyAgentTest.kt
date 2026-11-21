@@ -44,6 +44,20 @@ class ReadonlyAgentTest {
         assertEquals(listOf("ID;", "FA;"), bytes.written)
     }
 
+    @Test fun unsolicitedFramesAreDiscardedAndOnlyTheAskedReplyIsAccepted() {
+        val bytes = Bytes("ID0840;", "FB014200000;FA014200000;")
+        assertEquals("FA014200000;", ReadonlyCat(bytes).read("FA"))
+        assertThrows(SocketTimeoutException::class.java) { ReadonlyCat(Bytes("FB014200000;")).identify() }
+    }
+
+    @Test fun disallowedWellFormedQueryIsRejectedWithItsIdSoTheLinkStaysUp() {
+        val id = "a".repeat(32)
+        val rejected = assertThrows(RejectedQueryException::class.java) {
+            AgentProtocol.parse("""{"type":"query","id":"$id","command":"TX1"}""")
+        }
+        assertEquals(id, rejected.queryId)
+    }
+
     @Test fun wrongIdentityAndSettersNeverSendRequestedCommand() {
         val bytes = Bytes("ID0670;")
         assertThrows(ProtocolException::class.java) { ReadonlyCat(bytes).read("FA") }

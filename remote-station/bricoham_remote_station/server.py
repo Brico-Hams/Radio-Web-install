@@ -1,4 +1,5 @@
 import argparse
+import ipaddress
 import json
 import logging
 import mimetypes
@@ -106,6 +107,15 @@ _STATIC_SECURITY_HEADERS = {
 }
 
 
+def _is_loopback(host: str) -> bool:
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
 class CoordinatorHTTPServer(SecureHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
@@ -165,7 +175,49 @@ class CoordinatorHTTPServer(SecureHTTPServer):
         if logbook_database is not None:
             initialize_logbook(logbook_database)
         super().__init__(address, CoordinatorRequestHandler, tls_context=tls_context)
+        self._configure_own_origins(address[0])
 
+    def _configure_own_origins(self, bind_host: str) -> None:
+        # Own origins come from the configured listen address, never from the Host header.
+        host = bind_host.strip("[]").lower()
+        self._wildcard_bind = host in ("", "0.0.0.0", "::")
+        names: set[str] = set()
+        if not self._wildcard_bind:
+            names.add(host)
+        if self._wildcard_bind or _is_loopback(host):
+            names |= {"localhost", "127.0.0.1", "::1"}
+        self._own_hosts = frozenset(names)
+
+    def origin_allowed(self, origin: str | None) -> bool:
+        if origin is None:
+            return False
+        if origin in self.client_origins:
+            return True
+        try:
+            parts = urlsplit(origin)
+            hostname = parts.hostname
+            port = parts.port or (443 if parts.scheme == "https" else 80)
+        except ValueError:
+            return False
+        if (
+            parts.scheme != ("https" if self.tls_context else "http")
+            or hostname is None
+            or parts.path
+            or parts.query
+            or parts.username is not None
+            or port != self.server_address[1]
+        ):
+            return False
+        if hostname in self._own_hosts:
+            return True
+        if self._wildcard_bind:
+            # Wildcard bind: accept only IP literals; DNS rebinding needs a hostname.
+            try:
+                ipaddress.ip_address(hostname)
+            except ValueError:
+                return False
+            return True
+        return False
     def server_close(self) -> None:
         if self.android_agent is not None:
             self.android_agent.close()
@@ -187,6 +239,7 @@ class CoordinatorRequestHandler(SecureRequestHandler):
     protocol_version = "HTTP/1.1"
     server_version = "BricoHamCoordinator"
     sys_version = ""
+    reserved_paths = (PTT_PATH,)
 
     def do_GET(self) -> None:
         path = urlsplit(self.path).path
@@ -313,12 +366,7 @@ class CoordinatorRequestHandler(SecureRequestHandler):
             self._send_error(HTTPStatus.FORBIDDEN, "forbidden")
             return
         origin = self.headers.get("Origin")
-        scheme = "https" if self.server.tls_context else "http"
-        if (
-            origin is not None
-            and origin != f"{scheme}://{self.headers.get('Host')}"
-            and origin not in self.server.client_origins
-        ):
+        if origin is not None and not self.server.origin_allowed(origin):
             self._send_error(HTTPStatus.FORBIDDEN, "origin_not_allowed")
             return
         store = self.server.diagnostic_reports
@@ -371,12 +419,7 @@ class CoordinatorRequestHandler(SecureRequestHandler):
             self._send_error(HTTPStatus.SERVICE_UNAVAILABLE, "logbook_not_configured")
             return
         origin = self.headers.get("Origin")
-        scheme = "https" if self.server.tls_context else "http"
-        if (
-            origin is not None
-            and origin != f"{scheme}://{self.headers.get('Host')}"
-            and origin not in self.server.client_origins
-        ):
+        if origin is not None and not self.server.origin_allowed(origin):
             self._send_error(HTTPStatus.FORBIDDEN, "origin_not_allowed")
             return
         if self.headers.get_content_type() != "application/json":
@@ -434,12 +477,7 @@ class CoordinatorRequestHandler(SecureRequestHandler):
             self._send_error(HTTPStatus.BAD_REQUEST, "wsjtx_invalid_query")
             return
         origin = self.headers.get("Origin")
-        scheme = "https" if self.server.tls_context else "http"
-        if (
-            origin is not None
-            and origin != f"{scheme}://{self.headers.get('Host')}"
-            and origin not in self.server.client_origins
-        ):
+        if origin is not None and not self.server.origin_allowed(origin):
             self._send_error(HTTPStatus.FORBIDDEN, "origin_not_allowed")
             return
         try:
@@ -603,12 +641,8 @@ class CoordinatorRequestHandler(SecureRequestHandler):
         if self.server.android_agent is not None:
             self._send_error(HTTPStatus.NOT_IMPLEMENTED, "android_agent_operation_unsupported")
             return
-        scheme = "https" if self.server.tls_context else "http"
         origins = self.headers.get_all("Origin", [])
-        if len(origins) != 1 or (
-            origins[0] != f"{scheme}://{self.headers.get('Host')}"
-            and origins[0] not in self.server.client_origins
-        ):
+        if len(origins) != 1 or not self.server.origin_allowed(origins[0]):
             self._send_error(HTTPStatus.FORBIDDEN, "origin_not_allowed")
             return
         client: WebSocketPeer | None = None

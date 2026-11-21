@@ -1,7 +1,7 @@
 import profiles from './agent-profiles.json'
 
 export type AgentSetup = {
-  os: 'windows' | 'posix'; agentFile: string; port: string; remote: boolean
+  os: 'windows' | 'posix'; agentFile: string; port: string; remote: boolean; listenHost: string
   certificate: string; privateKey: string; clientCa: string
   cat: boolean; model: string; serialPort: string; baud: string; stopBits: string
 }
@@ -32,10 +32,20 @@ function command(os: AgentSetup['os'], args: string[]): string {
     : (value: string) => `'${value.replaceAll("'", "'\"'\"'")}'`
   return `${os === 'windows' ? 'py -3.12' : 'python3'} ${args.map(quote).join(' ')}`
 }
+function lanAddress(value: string): string {
+  const ipv4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(value)
+  const valid = ipv4
+    ? ipv4.slice(1).every((part) => Number(part) <= 255) && value !== '0.0.0.0' &&
+      !value.startsWith('127.') && !value.startsWith('169.254.') && value !== '255.255.255.255'
+    : /^[0-9a-f]{0,4}(:[0-9a-f]{0,4}){2,7}$/i.test(value) && !/^[0:]+1?$/.test(value)
+  if (!valid) throw new SetupError('invalidSetup')
+  return value
+}
 export function buildAgentCommand(input: AgentSetup): string {
   const args = [path(input.agentFile), '--port', integer(input.port, 1, 65535)]
   if (input.remote) {
-    args.push('--host', '0.0.0.0', '--tls-cert', path(input.certificate), '--tls-key', path(input.privateKey))
+    args.push('--host', lanAddress(input.listenHost), '--tls-cert', path(input.certificate),
+      '--tls-key', path(input.privateKey))
     if (input.clientCa) args.push('--tls-client-ca', path(input.clientCa))
   }
   if (input.cat) {

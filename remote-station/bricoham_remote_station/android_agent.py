@@ -206,6 +206,7 @@ class AndroidReadonlyAgent:
                     and isinstance(result["reply"], str)
                     and 1 <= len(result["reply"]) <= 64
                     and result["reply"].isascii()
+                    and result["reply"].startswith(pending.command)
                 ):
                     pending.reply = result["reply"]
                 else:

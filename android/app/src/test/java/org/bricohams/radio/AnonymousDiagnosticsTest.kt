@@ -1,6 +1,7 @@
 package org.bricohams.radio
 
 import org.json.JSONObject
+import org.junit.After
 import org.junit.Assert.*
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -13,6 +14,17 @@ import java.util.concurrent.TimeUnit
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [28], qualifiers = "es")
 class AnonymousDiagnosticsTest {
+    @After fun releaseDiagnostics() = AnonymousDiagnostics.reset()
+
+    @Test fun repeatedErrorRenderingIsRecordedOncePerClassPerMinute() {
+        ErrorRecordDedupe.clear()
+        val error = IllegalStateException("x")
+        assertTrue(ErrorRecordDedupe.shouldRecord("operation_failed", error, 1_000))
+        assertFalse(ErrorRecordDedupe.shouldRecord("operation_failed", error, 30_000))
+        assertTrue(ErrorRecordDedupe.shouldRecord("operation_failed", java.io.IOException(), 30_000))
+        assertTrue(ErrorRecordDedupe.shouldRecord("operation_failed", error, 61_001))
+    }
+
     private fun inspect(): String {
         val done = CountDownLatch(1)
         var result: Result<String?>? = null

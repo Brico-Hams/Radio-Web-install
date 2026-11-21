@@ -1,9 +1,11 @@
 import argparse
 import json
 import logging
+import signal
 import sqlite3
 import ssl
 import sys
+import threading
 import time
 from http import HTTPStatus
 from pathlib import Path
@@ -123,6 +125,7 @@ class StationAgentRequestHandler(SecureRequestHandler):
     protocol_version = "HTTP/1.1"
     server_version = "BricoHamStationAgent"
     sys_version = ""
+    reserved_paths = (PTT_PATH,)
 
     def do_GET(self) -> None:
         path = urlsplit(self.path).path
@@ -712,11 +715,44 @@ def main(argv: list[str] | None = None) -> int:
                 "requires explicit RX confirmation, local RF protection and operator supervision",
                 ptt.config.enabled,
             )
+        previous = _install_shutdown_handlers(server)
         try:
             server.serve_forever()
         except KeyboardInterrupt:
             LOGGER.info("Agente detenido")
+        finally:
+            _restore_handlers(previous)
+            # Always unkey and release the radio, whatever ended the loop.
+            if ptt is not None:
+                ptt.close()
     return 0
+
+
+def _install_shutdown_handlers(server: StationAgentHTTPServer) -> dict[int, object]:
+    def handler(signum: int, _frame: object = None) -> None:
+        LOGGER.info("Señal %s recibida; apagado ordenado", signum)
+        # shutdown() blocks until serve_forever() returns, so run it off the signal context.
+        threading.Thread(target=server.shutdown, name="signal-shutdown", daemon=True).start()
+
+    previous: dict[int, object] = {}
+    names = ("SIGTERM", "SIGHUP")
+    for name in names:
+        number = getattr(signal, name, None)
+        if number is None:
+            continue
+        try:
+            previous[number] = signal.signal(number, handler)
+        except (ValueError, OSError):
+            continue
+    return previous
+
+
+def _restore_handlers(previous: dict[int, object]) -> None:
+    for number, handler in previous.items():
+        try:
+            signal.signal(number, handler)  # type: ignore[arg-type]
+        except (ValueError, OSError, TypeError):
+            pass
 
 
 if __name__ == "__main__":

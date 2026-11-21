@@ -62,6 +62,10 @@ android {
     testOptions {
         unitTests.isReturnDefaultValues = false
         unitTests.isIncludeAndroidResources = true
+        unitTests.all {
+            it.maxHeapSize = "2g"
+            it.forkEvery = 100
+        }
     }
 }
 // The regional template datasets live once in data/channel-templates; they are copied at build time, never committed under assets.

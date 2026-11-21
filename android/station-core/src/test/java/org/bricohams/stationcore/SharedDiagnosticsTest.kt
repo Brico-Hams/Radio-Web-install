@@ -2,6 +2,7 @@ package org.bricohams.stationcore
 
 import org.bricohams.radio.AnonymousDiagnostics
 import org.json.JSONObject
+import org.junit.After
 import org.junit.Assert.*
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -15,6 +16,8 @@ import java.util.concurrent.TimeUnit
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [28])
 class SharedDiagnosticsTest {
+    @After fun releaseDiagnostics() = AnonymousDiagnostics.reset()
+
     private fun inspect(): JSONObject {
         val done = CountDownLatch(1)
         var result: Result<String?>? = null

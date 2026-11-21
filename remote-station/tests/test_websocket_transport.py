@@ -38,6 +38,24 @@ class WebSocketTransportTests(unittest.TestCase):
         with self.assertRaisesRegex(WebSocketError, "control_limit"):
             self.peer.receive()
 
+    def test_pending_sees_frames_already_buffered_by_the_handler_reader(self):
+        reader = self.peer.sock.makefile("rb")
+        self.addCleanup(reader.close)
+        peer = WebSocketPeer(
+            self.peer.sock, Connection(ConnectionType.SERVER), reader.read1, reader.peek
+        )
+        self.assertFalse(peer.pending())
+        self.client.sendall(
+            self.encoder.send(TextMessage(data='{"token":"secret"}'))
+            + self.encoder.send(BytesMessage(data=b"p" * 1920))
+        )
+        reader.peek(1)
+        self.assertTrue(peer.pending())
+        self.assertEqual(read_auth_token(peer), "secret")
+        self.assertTrue(peer.pending())
+        self.assertEqual(peer.receive(), b"p" * 1920)
+        self.assertFalse(peer.pending())
+
     def test_token_is_only_accepted_as_exact_first_json_object(self):
         self.client.sendall(self.encoder.send(TextMessage(data='{"token":"secret","extra":true}')))
         with self.assertRaisesRegex(WebSocketError, "invalid_auth"):

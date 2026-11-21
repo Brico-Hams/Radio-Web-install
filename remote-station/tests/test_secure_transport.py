@@ -184,6 +184,7 @@ class SecureTransportTests(unittest.TestCase):
     def test_android_relay_rejects_unmatched_reply_and_undocumented_if_shift(self):
         for command, reply, identifier, expected, code in (
             ("FA", "FA014200000;", "wrong", 502, "android_agent_invalid_reply"),
+            ("FA", "FB014200000;", None, 502, "android_agent_invalid_reply"),
             ("IF", "IF" + "00000" + "014200000" + "+0000" + "00200" + "00" + "3;",
              None, 409, "cat_invalid_response"),
         ):
