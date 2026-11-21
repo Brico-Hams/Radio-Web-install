@@ -5,15 +5,84 @@ from bricoham_remote_station.drivers.yaesu_cat import (
     YaesuMode,
     YaesuModel,
     YaesuReadCommand,
+    build_frequency_set,
+    build_mode_set,
+    build_power_set,
     build_query,
     parse_frequency_reply,
     parse_identification_reply,
     parse_mode_reply,
+    parse_parameter_reply,
+    parse_tuner_busy_reply,
     read_commands,
 )
 
 
 class YaesuCatProtocolTests(unittest.TestCase):
+    def test_documented_cw_power_tx_and_accessory_states_are_model_specific(self) -> None:
+        for model in YaesuModel:
+            with self.subTest(model=model):
+                self.assertEqual(
+                    parse_parameter_reply(model, YaesuReadCommand.KEYER_SPEED, b"KS004;"), 4
+                )
+                self.assertEqual(
+                    parse_parameter_reply(model, YaesuReadCommand.KEY_PITCH, b"KP75;"), 1050
+                )
+                self.assertIs(parse_parameter_reply(model, YaesuReadCommand.KEYER, b"KR1;"), True)
+                self.assertIs(
+                    parse_parameter_reply(model, YaesuReadCommand.BREAK_IN, b"BI0;"), False
+                )
+                self.assertEqual(
+                    parse_parameter_reply(model, YaesuReadCommand.TX_STATE, b"TX2;"), 2
+                )
+                for command, frame in (
+                    (YaesuReadCommand.KEYER_SPEED, b"KS003;"),
+                    (YaesuReadCommand.KEY_PITCH, b"KP76;"),
+                    (YaesuReadCommand.KEYER, b"KR2;"),
+                    (YaesuReadCommand.POWER, b"PC201;"),
+                    (YaesuReadCommand.TX_STATE, b"TX3;"),
+                ):
+                    with self.assertRaises(ValueError):
+                        parse_parameter_reply(model, command, frame)
+                self.assertFalse(parse_tuner_busy_reply(model, b"AC001;"))
+                busy = b"AC003;" if model is YaesuModel.FT_710 else b"AC002;"
+                self.assertTrue(parse_tuner_busy_reply(model, busy))
+                invalid = b"AC002;" if model is YaesuModel.FT_710 else b"AC003;"
+                with self.assertRaises(ValueError):
+                    parse_tuner_busy_reply(model, invalid)
+        self.assertTrue(parse_tuner_busy_reply(YaesuModel.FT_710, b"AC021;"))
+        self.assertFalse(parse_tuner_busy_reply(YaesuModel.FT_710, b"AC020;"))
+
+    def test_setters_enforce_model_ranges_and_do_not_offer_ptt_or_keying(self) -> None:
+        self.assertEqual(build_power_set(YaesuModel.FTDX101MP, 200), b"PC200;")
+        for model in YaesuModel:
+            with self.subTest(model=model):
+                maximum = (
+                    470_000_000
+                    if model is YaesuModel.FT_991A
+                    else (60_000_000 if model is YaesuModel.FTDX3000 else 75_000_000)
+                )
+                command = YaesuReadCommand.FREQUENCY_B
+                expected = (
+                    b"FB60000000;" if model is YaesuModel.FTDX3000 else f"FB{maximum:09d};".encode()
+                )
+                self.assertEqual(build_frequency_set(model, command, maximum), expected)
+                for invalid in (True, 29_999, maximum + 1, "14250000"):
+                    with self.assertRaises(ValueError):
+                        build_frequency_set(model, command, invalid)
+                self.assertEqual(build_mode_set(model, YaesuReadCommand.MAIN_MODE, "2"), b"MD02;")
+                for command in (YaesuReadCommand.TX_STATE, YaesuReadCommand.KEYER):
+                    with self.assertRaises(ValueError):
+                        build_mode_set(model, command, "1")
+                if model is not YaesuModel.FTDX101MP:
+                    with self.assertRaises(ValueError):
+                        build_power_set(model, 101)
+                    with self.assertRaises(ValueError):
+                        parse_parameter_reply(model, YaesuReadCommand.POWER, b"PC200;")
+        for model in (YaesuModel.FT_991A, YaesuModel.FTDX3000):
+            with self.assertRaises(ValueError):
+                build_mode_set(model, YaesuReadCommand.SUB_MODE, "2")
+
     def test_read_commands_are_model_specific_for_secondary_mode(self) -> None:
         self.assertIn(YaesuReadCommand.SUB_MODE, read_commands(YaesuModel.FT_710))
         self.assertNotIn(YaesuReadCommand.SUB_MODE, read_commands(YaesuModel.FT_991A))

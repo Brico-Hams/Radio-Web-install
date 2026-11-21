@@ -217,6 +217,15 @@ export function getTxAudioUrl(): string {
   return url.href
 }
 
+export const YAESU_CONTROL_MODELS = [
+  'FT-710', 'FT-991A', 'FTDX10', 'FTDX101D', 'FTDX101MP', 'FTDX3000',
+] as const
+export type YaesuControlModel = typeof YAESU_CONTROL_MODELS[number]
+
+export function isYaesuControlModel(value: unknown): value is YaesuControlModel {
+  return YAESU_CONTROL_MODELS.some((model) => model === value)
+}
+
 export type RadioSettings = {
   api_version: 'v1'
   status: 'experimental'
@@ -227,7 +236,7 @@ export type RadioSettings = {
   tune_enabled: false
 } & (
   { model: 'IC-7300'; power_unit: 'cat_position_0_255'; tuner_switching_enabled: boolean } |
-  { model: 'FTX-1'; power_unit: 'watts_setpoint'; tuner_switching_enabled: false }
+  { model: 'FTX-1' | YaesuControlModel; power_unit: 'watts_setpoint'; tuner_switching_enabled: false }
 )
 
 type ApiResult<T> = { allowed: true; data: T } | { allowed: false }
@@ -246,8 +255,8 @@ export function isRadioSettings(value: unknown): value is RadioSettings {
     typeof value.tuner_switching_enabled === 'boolean' && value.tune_enabled === false)) return false
   return (value.model === 'IC-7300' && value.power_unit === 'cat_position_0_255' &&
     value.power_level_max >= 0 && value.power_level_max <= 255) ||
-    (value.model === 'FTX-1' && value.power_unit === 'watts_setpoint' &&
-      value.power_level_max >= 5 && value.power_level_max <= 100 &&
+    ((value.model === 'FTX-1' || isYaesuControlModel(value.model)) && value.power_unit === 'watts_setpoint' &&
+      value.power_level_max >= 5 && value.power_level_max <= (value.model === 'FTDX101MP' ? 200 : 100) &&
       value.tuner_switching_enabled === false)
 }
 

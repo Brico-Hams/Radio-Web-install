@@ -1,4 +1,4 @@
-# Frecuencia y modo MAIN/SUB FTX-1
+# Frecuencia y modo Yaesu por selector explícito
 
 Implementacion experimental segun el manual CAT oficial Yaesu 2508-C,
 [evidencia y limites](hardware/ftx1-spa1.md). Pruebas de software con puerto
@@ -21,7 +21,9 @@ puerto y baud explicitos:
 
 Los dos ultimos flags son independientes y desactivados por defecto; un fichero
 anterior de tres campos sigue siendo valido y no habilita estas escrituras.
-Otros modelos rechazan ambos flags activados. No cambia la allowlist de lectura
+Los otros seis Yaesu del catálogo admiten flags independientes con los límites
+y selectores de su manual, descritos al final. IC-7300 y otros modelos rechazan
+estos flags activados. No cambia la allowlist de lectura
 de `GET /api/v1/cat`.
 
 ## API y consola compartida
@@ -68,3 +70,20 @@ que el equipo si cambio: leer antes de decidir una nueva orden. El estado se lee
 secuencialmente, no es un snapshot atomico; RX observado no es un interlock
 fisico. Otro operador, VOX o controlador puede actuar entre comandos.
 No habilita PTT, CW, audio TX, sintonizacion RF ni espectro nativo.
+
+## FT-710, FT-991A, FTDX10, FTDX101D/MP y FTDX3000
+
+Usan el mismo endpoint y flags locales; no se extrapola el rango del FTX-1.
+`receiver_options`, `frequency_min_hz` y `frequency_max_hz` describen los
+selectores y límites del [manual por modelo](hardware/yaesu-cat.md).
+`MAIN`/`SUB` son claves estables de API: la consola muestra VFO-A/B salvo en
+FTDX101D/MP. FT-991A y FTDX3000 no tienen MD1 documentado: SUB devuelve
+`mode_code: null`, muestra no disponible y rechaza `set_mode`, pero permite FB.
+
+Hz enteros: 30000..75000000 para FT-710, FTDX10 y FTDX101D/MP;
+30000..470000000 para FT-991A; 30000..60000000 con ocho dígitos para FTDX3000.
+Estos límites CAT no autorizan transmitir en esas frecuencias/bandas.
+La lectura operativa incluye además `power_level` como consigna, sin `power_head`.
+ID correcto, RX y AC se verifican antes de cualquier escritura. ID sirve de
+barrera frente a eco tardío antes de releer el objetivo; TX/AC se confirman
+después. Los límites de seguridad y no-reintento anteriores siguen aplicándose.

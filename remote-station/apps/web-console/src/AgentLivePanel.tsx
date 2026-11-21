@@ -80,6 +80,10 @@ export function AgentLivePanel({ token }: { token: string }) {
       {cat ? (
         <div>
           <p>{cat.model} · EXPERIMENTAL · pendiente de pruebas físicas</p>
+          {cat.protocol === 'OpenGD77 USB CPS' ? <p role="note">
+            OpenGD77 solo identifica modelo y firmware. USB CPS no ofrece control
+            de frecuencia, modo, canal ni PTT; no se sustituye por hotspot MMDVM.
+          </p> : null}
           <label>Consulta CAT de lectura
             <select value={command} disabled={busy} onChange={(event) => setCommand(event.target.value)}>
               {cat.queries?.map((value) => <option key={value}>{value}</option>)}

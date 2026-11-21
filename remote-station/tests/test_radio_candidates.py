@@ -15,10 +15,10 @@ class RadioCandidateCatalogTests(unittest.TestCase):
         self.assertEqual(catalog["api_version"], "v1")
         self.assertEqual(catalog["schema_version"], RADIO_CANDIDATE_SCHEMA_VERSION)
         self.assertFalse(catalog["hardware_validation_complete"])
-        self.assertEqual(len(candidates), 49)
+        self.assertEqual(len(candidates), 68)
         self.assertEqual(
             Counter(candidate.evidence_source for candidate in candidates),
-            {"third_party_listing": 44, "manufacturer_project_docs": 5},
+            {"third_party_listing": 44, "manufacturer_project_docs": 24},
         )
         self.assertEqual(
             Counter(candidate.manufacturer for candidate in candidates),
@@ -31,6 +31,9 @@ class RadioCandidateCatalogTests(unittest.TestCase):
                 "Hermes Lite": 1,
                 "DL2MAN": 1,
                 "QRP Labs": 1,
+                "OpenGD77 firmware project": 13,
+                "Xiegu": 5,
+                "Lab599": 1,
             },
         )
         self.assertIn("(tr)uSDX", {candidate.model for candidate in candidates})

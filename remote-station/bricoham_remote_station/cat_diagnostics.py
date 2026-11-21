@@ -20,6 +20,7 @@ from bricoham_remote_station.drivers import icom_civ as icom
 from bricoham_remote_station.drivers import (
     kenwood_cat as kenwood,
 )
+from bricoham_remote_station.drivers import opengd77_usb as opengd77
 from bricoham_remote_station.drivers import (
     qmx_cat as qmx,
 )
@@ -54,6 +55,17 @@ def _decode_smartsdr(frame: bytes) -> smartsdr.SmartSdrResponse:
 
 def read_profiles() -> dict[str, ReadProfile]:
     profiles: dict[str, ReadProfile] = {}
+    for model in opengd77.OpenGd77Model:
+        profiles[opengd77.profile_name(model)] = ReadProfile(
+            "OpenGD77 USB CPS",
+            {
+                "INFO": ReadQuery(
+                    opengd77.RADIO_INFO_QUERY,
+                    partial(opengd77.parse_radio_info, model),
+                    "device_information",
+                )
+            },
+        )
     ftx_queries = {
         command.value: ReadQuery(ftx1.build_query(command)) for command in ftx1.Ftx1ReadCommand
     }
@@ -202,9 +214,22 @@ def read_profiles() -> dict[str, ReadProfile]:
             elif command is yaesu.YaesuReadCommand.IDENTIFICATION:
                 decoder = partial(yaesu.parse_identification_reply, model)
                 result_name = "identification"
-            else:
+            elif command in (yaesu.YaesuReadCommand.MAIN_MODE, yaesu.YaesuReadCommand.SUB_MODE):
                 decoder = partial(yaesu.parse_mode_reply, model, command)
                 result_name = "band_mode_codes"
+            elif command is yaesu.YaesuReadCommand.TUNER:
+                decoder = partial(yaesu.parse_tuner_busy_reply, model)
+                result_name = "tuner_busy"
+            else:
+                decoder = partial(yaesu.parse_parameter_reply, model, command)
+                result_name = {
+                    yaesu.YaesuReadCommand.POWER: "power_setpoint_watts",
+                    yaesu.YaesuReadCommand.TX_STATE: "tx_state",
+                    yaesu.YaesuReadCommand.KEYER_SPEED: "cw_keyer_speed_wpm",
+                    yaesu.YaesuReadCommand.KEY_PITCH: "cw_pitch_hz",
+                    yaesu.YaesuReadCommand.KEYER: "cw_keyer_enabled",
+                    yaesu.YaesuReadCommand.BREAK_IN: "cw_break_in_enabled",
+                }[command]
             queries[command.value] = ReadQuery(
                 yaesu.build_query(model, command), decoder, result_name
             )

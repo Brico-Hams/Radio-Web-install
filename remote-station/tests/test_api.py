@@ -130,7 +130,7 @@ class CoordinatorAPITests(unittest.TestCase):
 
         status, body, _ = self.request("/api/v1/radios", GUEST_TOKEN)
         self.assertEqual(status, 200)
-        self.assertEqual(len(body["candidates"]), 49)
+        self.assertEqual(len(body["candidates"]), 68)
         self.assertFalse(body["hardware_validation_complete"])
 
         status, body, _ = self.request("/api/v1/diagnostics", LISTENER_TOKEN)
@@ -169,7 +169,7 @@ class CoordinatorAPITests(unittest.TestCase):
         self.assertEqual(body["api_version"], "v1")
         self.assertFalse(body["transport_enabled"])
         self.assertFalse(body["hardware_validation_complete"])
-        self.assertEqual(len(body["candidates"]), 49)
+        self.assertEqual(len(body["candidates"]), 68)
         k3s = next(candidate for candidate in body["candidates"] if candidate["model"] == "K3S")
         self.assertEqual(k3s["hardware_status"], "unsupported")
         self.assertTrue(any(query["command"] == "OM" for query in k3s["queries"]))

@@ -5,8 +5,215 @@ from unittest.mock import patch
 from test_serial_cat import ScriptedPort
 
 from bricoham_remote_station.drivers import icom_civ as icom
+from bricoham_remote_station.drivers import yaesu_cat as yaesu
 from bricoham_station_agent.cat import CatConfig, CatError, SerialCat
 from bricoham_station_agent.radio_settings import RadioSettingsConfig
+
+
+class YaesuSettingsPort(ScriptedPort):
+    def __init__(self, model):
+        super().__init__(b"")
+        self.model = model
+        self.ids = {
+            "FT-710": b"0800",
+            "FT-991A": b"0670",
+            "FTDX10": b"0761",
+            "FTDX101D": b"0681",
+            "FTDX101MP": b"0682",
+            "FTDX3000": b"0462",
+        }
+        self.id = self.ids[model]
+        self.tx = b"0"
+        self.tuner = b"001"
+        self.ignore_setting = False
+        self.values = {
+            b"PC": b"025",
+            b"FA": b"14250000" if model == "FTDX3000" else b"014250000",
+            b"FB": b"07074000" if model == "FTDX3000" else b"007074000",
+            b"MD0": b"2",
+            b"MD1": b"1",
+        }
+
+    def write(self, data):
+        self.writes.append(data)
+        command = data[:-1]
+        if command in (b"ID", b"TX", b"AC"):
+            payload = {b"ID": self.id, b"TX": self.tx, b"AC": self.tuner}[command]
+            self.buffer.extend(data + command + payload + b";")
+        elif command in self.values:
+            if command == b"MD1" and self.model in ("FT-991A", "FTDX3000"):
+                raise AssertionError("Undocumented secondary mode query")
+            self.buffer.extend(data + command + self.values[command] + b";")
+        else:
+            prefix = command[:3] if command.startswith(b"MD") else command[:2]
+            if prefix not in self.values or not command[len(prefix) :]:
+                raise AssertionError(f"Unsafe/unknown request: {data}")
+            if not self.ignore_setting:
+                self.values[prefix] = command[len(prefix) :]
+        return len(data)
+
+
+class YaesuSettingsTests(unittest.TestCase):
+    def test_read_operating_rejects_out_of_range_frequency_without_fabricating_state(self):
+        port = YaesuSettingsPort("FT-710")
+        port.values[b"FA"] = b"999999999"
+        with patch("bricoham_station_agent.cat.serial.Serial", return_value=port):
+            cat = self.configured("FT-710", port)
+            with self.assertRaisesRegex(CatError, "cat_invalid_response"):
+                cat.operate_settings({"operation": "read_operating"})
+            self.assertTrue(port.closed)
+
+    def configured(self, model, port, **flags):
+        cat = SerialCat(
+            CatConfig(model, "COM_TEST", 38400, timeout=0.1),
+            settings=RadioSettingsConfig(
+                power_adjustment_enabled=True,
+                power_level_max=200 if model == "FTDX101MP" else 100,
+                tuner_switching_enabled=False,
+                frequency_adjustment_enabled=True,
+                mode_adjustment_enabled=True,
+                **flags,
+            ),
+        )
+        self.addCleanup(cat.close)
+        return cat
+
+    def test_all_six_models_read_and_adjust_with_explicit_selectors_and_no_tx(self):
+        for model in yaesu.YaesuModel:
+            port = YaesuSettingsPort(model.value)
+            with (
+                self.subTest(model=model),
+                patch("bricoham_station_agent.cat.serial.Serial", return_value=port) as factory,
+            ):
+                cat = self.configured(model.value, port)
+                config = cat.settings_catalog()
+                factory.assert_not_called()
+                result = cat.operate_settings({"operation": "read_operating"})
+                secondary_mode = model not in (yaesu.YaesuModel.FT_991A, yaesu.YaesuModel.FTDX3000)
+                self.assertEqual(config["receiver_options"][1]["mode_supported"], secondary_mode)
+                self.assertEqual(
+                    result["receivers"]["SUB"]["mode_code"], "1" if secondary_mode else None
+                )
+                payload = {
+                    "operation": "set_frequency",
+                    "request_id": "yaesu-frequency-001",
+                    "receiver": "SUB",
+                    "frequency_hz": 7_100_000,
+                }
+                self.assertEqual(
+                    cat.operate_settings(payload)["receivers"]["SUB"]["frequency_hz"], 7_100_000
+                )
+                frame = b"FB07100000;" if model is yaesu.YaesuModel.FTDX3000 else b"FB007100000;"
+                self.assertEqual(port.writes.count(frame), 1)
+                count = len(port.writes)
+                with self.assertRaisesRegex(CatError, "cat_setting_request_repeated"):
+                    cat.operate_settings(payload)
+                self.assertEqual(len(port.writes), count)
+                self.assertEqual(
+                    cat.operate_settings(
+                        {
+                            "operation": "set_mode",
+                            "request_id": "yaesu-mode-request-001",
+                            "receiver": "MAIN",
+                            "mode_code": "3",
+                        }
+                    )["receivers"]["MAIN"]["mode_code"],
+                    "3",
+                )
+                watts = 200 if model is yaesu.YaesuModel.FTDX101MP else 100
+                self.assertEqual(
+                    cat.operate_settings(
+                        {
+                            "operation": "set_power",
+                            "request_id": "yaesu-power-request-001",
+                            "power_level": watts,
+                        }
+                    )["power_level"],
+                    watts,
+                )
+                self.assertTrue(
+                    all(
+                        not frame.startswith((b"TX0", b"TX1", b"AC0", b"KY", b"KM"))
+                        for frame in port.writes
+                    )
+                )
+                self.assertFalse(port.rts)
+                self.assertFalse(port.dtr)
+
+    def test_wrong_model_tx_and_tuner_prevent_writes_and_uncertain_setter_is_not_retried(self):
+        for model, tx, tuner, identity, error in (
+            ("FT-710", b"0", b"001", b"0670", "cat_invalid_response"),
+            ("FT-710", b"2", b"001", b"0800", "cat_settings_require_rx"),
+            ("FT-710", b"0", b"003", b"0800", "cat_settings_require_rx"),
+            ("FT-710", b"0", b"021", b"0800", "cat_settings_require_rx"),
+            ("FT-991A", b"0", b"002", b"0670", "cat_settings_require_rx"),
+        ):
+            port = YaesuSettingsPort(model)
+            port.tx, port.tuner, port.id = tx, tuner, identity
+            with (
+                self.subTest(model=model, tx=tx, tuner=tuner),
+                patch("bricoham_station_agent.cat.serial.Serial", return_value=port),
+            ):
+                cat = self.configured(model, port)
+                with self.assertRaisesRegex(CatError, error):
+                    cat.operate_settings(
+                        {
+                            "operation": "set_power",
+                            "request_id": "yaesu-guard-request-001",
+                            "power_level": 50,
+                        }
+                    )
+                self.assertNotIn(b"PC050;", port.writes)
+                self.assertTrue(port.closed)
+        port = YaesuSettingsPort("FTDX3000")
+        port.ignore_setting = True
+        with patch("bricoham_station_agent.cat.serial.Serial", return_value=port):
+            cat = self.configured("FTDX3000", port)
+            payload = {
+                "operation": "set_frequency",
+                "request_id": "yaesu-uncertain-001",
+                "receiver": "SUB",
+                "frequency_hz": 7_100_000,
+            }
+            with self.assertRaisesRegex(CatError, "cat_setting_readback_mismatch"):
+                cat.operate_settings(payload)
+            self.assertEqual(port.writes.count(b"FB07100000;"), 1)
+            with self.assertRaisesRegex(CatError, "cat_setting_request_repeated"):
+                cat.operate_settings(payload)
+            self.assertEqual(port.writes.count(b"FB07100000;"), 1)
+
+    def test_undocumented_secondary_mode_disabled_flags_and_invalid_limits_never_open(self):
+        with patch("bricoham_station_agent.cat.serial.Serial") as factory:
+            for model in ("FT-991A", "FTDX3000"):
+                cat = self.configured(model, None)
+                with self.assertRaises(ValueError):
+                    cat.operate_settings(
+                        {
+                            "operation": "set_mode",
+                            "request_id": "yaesu-sub-mode-001",
+                            "receiver": "SUB",
+                            "mode_code": "2",
+                        }
+                    )
+            cat = SerialCat(
+                CatConfig("FTDX10", "COM_TEST", 38400),
+                settings=RadioSettingsConfig(False, 50, False),
+            )
+            with self.assertRaisesRegex(CatError, "cat_frequency_adjustment_disabled"):
+                cat.operate_settings(
+                    {
+                        "operation": "set_frequency",
+                        "request_id": "yaesu-disabled-001",
+                        "receiver": "MAIN",
+                        "frequency_hz": 14_250_000,
+                    }
+                )
+            with self.assertRaises(ValueError):
+                SerialCat(
+                    CatConfig("FT-710", "COM_TEST", 38400),
+                    settings=RadioSettingsConfig(False, 200, False),
+                )
+            factory.assert_not_called()
 
 
 class SettingsPort(ScriptedPort):

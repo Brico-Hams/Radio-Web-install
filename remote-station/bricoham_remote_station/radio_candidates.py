@@ -2,6 +2,7 @@ from dataclasses import asdict, dataclass
 from typing import Literal
 
 from bricoham_remote_station.contracts import API_VERSION
+from bricoham_remote_station.drivers.opengd77_usb import OpenGd77Model, profile_name
 
 RADIO_CANDIDATE_SCHEMA_VERSION = "1.0"
 
@@ -314,6 +315,76 @@ _CANDIDATES = (
             bricoham_status="candidate",
         )
         for model in ("K3", "KX3", "KX2")
+    ),
+    *(
+        RadioCandidate(
+            manufacturer="OpenGD77 firmware project",
+            model=profile_name(model),
+            connection_claim=(
+                "USB CPS; experimental RadioInfo identification only, not CAT/RF control"
+            ),
+            bands_claim="RF coverage not assessed by this firmware identification profile",
+            third_party_scope_claim="not_in_source",
+            third_party_tested="not_in_source",
+            third_party_support_status="not_in_source",
+            evidence_source="manufacturer_project_docs",
+            source_url="https://github.com/LibreDMR/OpenGD77_UserGuide",
+            bricoham_status="candidate",
+        )
+        for model in OpenGd77Model
+    ),
+    *(
+        RadioCandidate(
+            manufacturer="Xiegu",
+            model=model,
+            connection_claim=connection,
+            bands_claim="RF coverage not assessed by this protocol research",
+            third_party_scope_claim="not_in_source",
+            third_party_tested="not_in_source",
+            third_party_support_status="not_in_source",
+            evidence_source="manufacturer_project_docs",
+            source_url=url,
+            bricoham_status="candidate",
+        )
+        for model, connection, url in (
+            (
+                "G90",
+                "Serial CI-V/CAT cable; address and framing require local validation",
+                "https://xiegu.eu/?sdm_process_download=1&download_id=1033",
+            ),
+            (
+                "X6100",
+                "USB-C DEV / CH342; address and framing require local validation",
+                "https://xiegu.eu/?sdm_process_download=1&download_id=2202",
+            ),
+            (
+                "X6200",
+                "USB-C DEV / CH342; exact commands/address/baud unverified",
+                "https://xiegu.eu/?sdm_process_download=1&download_id=9243",
+            ),
+            (
+                "X5105",
+                "Serial CI-V cable; exact commands/address/baud unverified",
+                "https://xiegu.eu/?sdm_process_download=1&download_id=1460",
+            ),
+            (
+                "G106",
+                "Named in Xiegu CI-V reference; serial profile unverified",
+                "https://xiegu.eu/?sdm_process_download=1&download_id=3576",
+            ),
+        )
+    ),
+    RadioCandidate(
+        manufacturer="Lab599",
+        model="TX-500",
+        connection_claim="Serial CAT; revision 3 command tables require further validation",
+        bands_claim="RF coverage not assessed by this protocol research",
+        third_party_scope_claim="not_in_source",
+        third_party_tested="not_in_source",
+        third_party_support_status="not_in_source",
+        evidence_source="manufacturer_project_docs",
+        source_url="https://downloads.lab599.com/DOCS/Lab599-CAT-protocol-r3.pdf",
+        bricoham_status="candidate",
     ),
 )
 

@@ -10,6 +10,8 @@ import serial
 from bricoham_remote_station.cat_diagnostics import ReadQuery, read_profiles
 from bricoham_remote_station.drivers import ftx1_cat as ftx1
 from bricoham_remote_station.drivers import icom_civ as icom
+from bricoham_remote_station.drivers import opengd77_usb as opengd77
+from bricoham_remote_station.drivers import yaesu_cat as yaesu
 from bricoham_station_agent.radio_settings import (
     RadioSettingsConfig,
     settings_request_identifier,
@@ -57,20 +59,32 @@ class SerialCat:
     def __init__(self, config: CatConfig, *, settings: RadioSettingsConfig | None = None) -> None:
         profiles = read_profiles()
         profile = profiles.get(config.model)
-        if profile is None or profile.protocol not in ("CAT ASCII", "Icom CI-V"):
+        if profile is None or profile.protocol not in (
+            "CAT ASCII",
+            "Icom CI-V",
+            "OpenGD77 USB CPS",
+        ):
             raise ValueError("El modelo no tiene un perfil CAT serie implementado.")
         self.config = config
         if settings is not None:
-            if config.model not in ("IC-7300", "FTX-1"):
-                raise ValueError("Radio settings are implemented only for IC-7300 and FTX-1.")
-            if config.model != "FTX-1" and (
+            if config.model not in ("IC-7300", "FTX-1", *yaesu.YaesuModel):
+                raise ValueError("Radio settings require a documented model-specific profile.")
+            if config.model == "IC-7300" and (
                 settings.frequency_adjustment_enabled or settings.mode_adjustment_enabled
             ):
-                raise ValueError("Frequency/mode adjustments are implemented only for FTX-1.")
+                raise ValueError("Frequency/mode adjustments are not implemented for IC-7300.")
             if config.model == "FTX-1" and (
                 settings.tuner_switching_enabled or not 5 <= settings.power_level_max <= 100
             ):
                 raise ValueError("FTX-1 requires a 5..100 W setpoint limit and no tuner switching.")
+            if config.model in yaesu.YaesuModel:
+                model = yaesu.YaesuModel(config.model)
+                if settings.tuner_switching_enabled or not (
+                    5 <= settings.power_level_max <= yaesu.power_limit(model)
+                ):
+                    raise ValueError(
+                        "Yaesu requires a model-specific watts limit and no tuner switching."
+                    )
         self.settings = settings
         self._setting_requests: deque[str] = deque(maxlen=256)
         self.queries = {
@@ -91,6 +105,17 @@ class SerialCat:
             "data_is_simulated": False,
             "queries": list(self.queries),
             "tx_control_enabled": False,
+            **(
+                {
+                    "protocol": self.protocol,
+                    "radio_control_available": False,
+                    "notice": (
+                        "OpenGD77 USB CPS identification only; no tuning, mode, channel or PTT."
+                    ),
+                }
+                if self.protocol == "OpenGD77 USB CPS"
+                else {}
+            ),
         }
 
     def _open(self) -> SerialPort:
@@ -162,7 +187,7 @@ class SerialCat:
                 "command": command,
                 "observed_at": time.time(),
                 query.result_name: decoded,
-                "reply_hex": frame.hex(),
+                **({"reply_hex": frame.hex()} if self.protocol != "OpenGD77 USB CPS" else {}),
             }
         finally:
             self._lock.release()
@@ -170,7 +195,7 @@ class SerialCat:
     def settings_catalog(self) -> dict[str, object]:
         if self.settings is None:
             raise CatError("cat_settings_not_configured")
-        return {
+        metadata: dict[str, object] = {
             "api_version": "v1",
             "model": self.config.model,
             "status": "experimental",
@@ -189,11 +214,39 @@ class SerialCat:
             ),
         }
 
+        if self.config.model in yaesu.YaesuModel:
+            model = yaesu.YaesuModel(self.config.model)
+            minimum, maximum = yaesu.frequency_limits(model)
+            main_sub = model in (yaesu.YaesuModel.FTDX101D, yaesu.YaesuModel.FTDX101MP)
+            metadata.update(
+                {
+                    "mode_options": yaesu.mode_options(model),
+                    "frequency_min_hz": minimum,
+                    "frequency_max_hz": maximum,
+                    "receiver_options": [
+                        {
+                            "receiver": "MAIN",
+                            "label": "MAIN" if main_sub else "VFO-A",
+                            "mode_supported": True,
+                        },
+                        {
+                            "receiver": "SUB",
+                            "label": "SUB" if main_sub else "VFO-B",
+                            "mode_supported": yaesu.YaesuReadCommand.SUB_MODE
+                            in yaesu.read_commands(model),
+                        },
+                    ],
+                }
+            )
+        return metadata
+
     def operate_settings(self, payload: object) -> dict[str, object]:
         metadata = self.settings_catalog()
         assert self.settings is not None
         if self.config.model == "FTX-1":
             return self._operate_ftx1_settings(payload, metadata)
+        if self.config.model in yaesu.YaesuModel:
+            return self._operate_yaesu_settings(payload, metadata)
         if not isinstance(payload, dict):
             raise ValueError("Settings operation must be an object.")
         operation = payload.get("operation")
@@ -426,6 +479,163 @@ class SerialCat:
         finally:
             self._lock.release()
 
+    def _operate_yaesu_settings(
+        self, payload: object, metadata: dict[str, object]
+    ) -> dict[str, object]:
+        assert self.settings is not None
+        model = yaesu.YaesuModel(self.config.model)
+        if not isinstance(payload, dict):
+            raise ValueError("Settings operation must be an object.")
+        operation = payload.get("operation")
+        identifier = None
+        request = None
+        command = None
+        target = None
+        receiver = None
+        if operation in ("read", "read_operating"):
+            if set(payload) != {"operation"}:
+                raise ValueError("Unexpected read fields.")
+        elif operation == "set_power":
+            if set(payload) != {"operation", "request_id", "power_level"}:
+                raise ValueError("Unexpected power fields.")
+            identifier = settings_request_identifier(payload["request_id"])
+            target = payload["power_level"]
+            request = yaesu.build_power_set(model, target)
+            command = yaesu.YaesuReadCommand.POWER
+            if target > self.settings.power_level_max:
+                raise ValueError("Power exceeds the local watts limit.")
+            if not self.settings.power_adjustment_enabled:
+                raise CatError("cat_power_adjustment_disabled")
+        elif operation in ("set_frequency", "set_mode"):
+            field = "frequency_hz" if operation == "set_frequency" else "mode_code"
+            if set(payload) != {"operation", "request_id", "receiver", field}:
+                raise ValueError("Unexpected operating control fields.")
+            identifier = settings_request_identifier(payload["request_id"])
+            receiver = payload["receiver"]
+            if receiver not in ("MAIN", "SUB"):
+                raise ValueError("Select an explicit receiver.")
+            target = payload[field]
+            if operation == "set_frequency":
+                command = (
+                    yaesu.YaesuReadCommand.FREQUENCY_A
+                    if receiver == "MAIN"
+                    else yaesu.YaesuReadCommand.FREQUENCY_B
+                )
+                request = yaesu.build_frequency_set(model, command, target)
+                if not self.settings.frequency_adjustment_enabled:
+                    raise CatError("cat_frequency_adjustment_disabled")
+            else:
+                command = (
+                    yaesu.YaesuReadCommand.MAIN_MODE
+                    if receiver == "MAIN"
+                    else yaesu.YaesuReadCommand.SUB_MODE
+                )
+                request = yaesu.build_mode_set(model, command, target)
+                if not self.settings.mode_adjustment_enabled:
+                    raise CatError("cat_mode_adjustment_disabled")
+        else:
+            raise ValueError("Unknown Yaesu setting; no PTT, tuner switching or keying.")
+        if not self._lock.acquire(blocking=False):
+            raise CatError("cat_busy")
+        try:
+            if identifier is not None:
+                if identifier in self._setting_requests:
+                    raise CatError("cat_setting_request_repeated")
+                self._setting_requests.append(identifier)
+            deadline = time.monotonic() + 3
+            setting_sent = False
+            try:
+                connection = self._port if self._port is not None else self._open()
+
+                def read(query_command: yaesu.YaesuReadCommand) -> bytes:
+                    return self._exchange(
+                        connection,
+                        ReadQuery(yaesu.build_query(model, query_command)),
+                        deadline=deadline,
+                    )
+
+                def status() -> tuple[bool, bool]:
+                    tx = yaesu.parse_parameter_reply(
+                        model,
+                        yaesu.YaesuReadCommand.TX_STATE,
+                        read(yaesu.YaesuReadCommand.TX_STATE),
+                    )
+                    return tx != 0, yaesu.parse_tuner_busy_reply(
+                        model, read(yaesu.YaesuReadCommand.TUNER)
+                    )
+
+                yaesu.parse_identification_reply(model, read(yaesu.YaesuReadCommand.IDENTIFICATION))
+                tx_active, tuner_busy = status()
+                if request is not None:
+                    if tx_active or tuner_busy:
+                        raise CatError("cat_settings_require_rx")
+                    connection.reset_input_buffer()
+                    setting_sent = True
+                    self._write_request(connection, request, deadline)
+                    yaesu.parse_identification_reply(
+                        model, read(yaesu.YaesuReadCommand.IDENTIFICATION)
+                    )
+                power = yaesu.parse_parameter_reply(
+                    model, yaesu.YaesuReadCommand.POWER, read(yaesu.YaesuReadCommand.POWER)
+                )
+                receivers: dict[str, dict[str, int | str | None]] = {}
+                if operation not in ("read", "set_power"):
+                    for side, frequency_command, mode_command in (
+                        (
+                            "MAIN",
+                            yaesu.YaesuReadCommand.FREQUENCY_A,
+                            yaesu.YaesuReadCommand.MAIN_MODE,
+                        ),
+                        (
+                            "SUB",
+                            yaesu.YaesuReadCommand.FREQUENCY_B,
+                            yaesu.YaesuReadCommand.SUB_MODE,
+                        ),
+                    ):
+                        mode_code = None
+                        if mode_command in yaesu.read_commands(model):
+                            mode_frame = read(mode_command)
+                            yaesu.parse_mode_reply(model, mode_command, mode_frame)
+                            mode_code = mode_frame[len(mode_command.value) : -1].decode("ascii")
+                        frequency_hz = yaesu.parse_frequency_reply(
+                            model, frequency_command, read(frequency_command)
+                        )
+                        minimum, maximum = yaesu.frequency_limits(model)
+                        if not minimum <= frequency_hz <= maximum:
+                            raise ValueError(
+                                "Operating frequency is outside the model's CAT range."
+                            )
+                        receivers[side] = {
+                            "frequency_hz": frequency_hz,
+                            "mode_code": mode_code,
+                        }
+                if request is not None:
+                    observed = power if operation == "set_power" else receivers[receiver][field]
+                    if observed != target:
+                        raise CatError("cat_setting_readback_mismatch")
+                    tx_active, tuner_busy = status()
+                    if tx_active or tuner_busy:
+                        raise CatError("cat_settings_require_rx")
+            except (OSError, ValueError, CatError) as error:
+                self._close()
+                LOGGER.warning("Yaesu settings transaction failed (%s)", type(error).__name__)
+                if isinstance(error, CatError):
+                    raise
+                raise CatError(
+                    "cat_setting_unconfirmed" if setting_sent else "cat_invalid_response"
+                ) from error
+            LOGGER.info("Yaesu settings model=%s operation=%s verified", model.value, operation)
+            return {
+                **metadata,
+                "power_level": power,
+                "tx_active": tx_active,
+                "tuner_busy": tuner_busy,
+                "observed_at": time.time(),
+                **({"receivers": receivers} if receivers else {}),
+            }
+        finally:
+            self._lock.release()
+
     def _write_request(self, connection: SerialPort, request: bytes, deadline: float) -> None:
         if time.monotonic() >= deadline:
             raise CatError("cat_timeout")
@@ -443,6 +653,22 @@ class SerialCat:
             time.monotonic() + self.config.timeout,
         )
         self._write_request(connection, query.request, deadline)
+        if self.protocol == "OpenGD77 USB CPS":
+            frame = bytearray()
+            while time.monotonic() < deadline:
+                chunk = connection.read(1)
+                if not chunk:
+                    continue
+                frame.extend(chunk)
+                if len(frame) == 1 and frame != b"R":
+                    raise CatError(
+                        "cat_request_rejected" if frame == b"-" else "cat_invalid_response"
+                    )
+                if len(frame) == 3 and frame != b"R\x00\x2e":
+                    raise CatError("cat_invalid_response")
+                if len(frame) == opengd77.RADIO_INFO_SIZE + 3:
+                    return bytes(frame)
+            raise CatError("cat_timeout")
         terminator = b"\xfd" if self.protocol == "Icom CI-V" else b";"
         frame = bytearray()
         echoes = 0

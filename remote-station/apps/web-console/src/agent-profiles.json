@@ -16,7 +16,14 @@
       "FB",
       "MD0",
       "MD1",
-      "ID"
+      "ID",
+      "PC",
+      "TX",
+      "AC",
+      "KS",
+      "KP",
+      "KR",
+      "BI"
     ]
   },
   {
@@ -26,7 +33,14 @@
       "FA",
       "FB",
       "MD0",
-      "ID"
+      "ID",
+      "PC",
+      "TX",
+      "AC",
+      "KS",
+      "KP",
+      "KR",
+      "BI"
     ]
   },
   {
@@ -37,7 +51,14 @@
       "FB",
       "MD0",
       "MD1",
-      "ID"
+      "ID",
+      "PC",
+      "TX",
+      "AC",
+      "KS",
+      "KP",
+      "KR",
+      "BI"
     ]
   },
   {
@@ -48,7 +69,14 @@
       "FB",
       "MD0",
       "MD1",
-      "ID"
+      "ID",
+      "PC",
+      "TX",
+      "AC",
+      "KS",
+      "KP",
+      "KR",
+      "BI"
     ]
   },
   {
@@ -59,7 +87,14 @@
       "FB",
       "MD0",
       "MD1",
-      "ID"
+      "ID",
+      "PC",
+      "TX",
+      "AC",
+      "KS",
+      "KP",
+      "KR",
+      "BI"
     ]
   },
   {
@@ -69,7 +104,14 @@
       "FA",
       "FB",
       "MD0",
-      "ID"
+      "ID",
+      "PC",
+      "TX",
+      "AC",
+      "KS",
+      "KP",
+      "KR",
+      "BI"
     ]
   },
   {
@@ -280,6 +322,97 @@
       "MD$",
       "BW",
       "BW$"
+    ]
+  },
+  {
+    "model": "OpenGD77 DM-1701",
+    "protocol": "OpenGD77 USB CPS",
+    "commands": [
+      "INFO"
+    ]
+  },
+  {
+    "model": "OpenGD77 DM-1701 RGB",
+    "protocol": "OpenGD77 USB CPS",
+    "commands": [
+      "INFO"
+    ]
+  },
+  {
+    "model": "OpenGD77 DM-1801",
+    "protocol": "OpenGD77 USB CPS",
+    "commands": [
+      "INFO"
+    ]
+  },
+  {
+    "model": "OpenGD77 DM-1801A",
+    "protocol": "OpenGD77 USB CPS",
+    "commands": [
+      "INFO"
+    ]
+  },
+  {
+    "model": "OpenGD77 DM-32",
+    "protocol": "OpenGD77 USB CPS",
+    "commands": [
+      "INFO"
+    ]
+  },
+  {
+    "model": "OpenGD77 GD-77",
+    "protocol": "OpenGD77 USB CPS",
+    "commands": [
+      "INFO"
+    ]
+  },
+  {
+    "model": "OpenGD77 GD-77S",
+    "protocol": "OpenGD77 USB CPS",
+    "commands": [
+      "INFO"
+    ]
+  },
+  {
+    "model": "OpenGD77 MD-2017",
+    "protocol": "OpenGD77 USB CPS",
+    "commands": [
+      "INFO"
+    ]
+  },
+  {
+    "model": "OpenGD77 MD-380",
+    "protocol": "OpenGD77 USB CPS",
+    "commands": [
+      "INFO"
+    ]
+  },
+  {
+    "model": "OpenGD77 MD-9600",
+    "protocol": "OpenGD77 USB CPS",
+    "commands": [
+      "INFO"
+    ]
+  },
+  {
+    "model": "OpenGD77 MD-UV380",
+    "protocol": "OpenGD77 USB CPS",
+    "commands": [
+      "INFO"
+    ]
+  },
+  {
+    "model": "OpenGD77 RD-5R",
+    "protocol": "OpenGD77 USB CPS",
+    "commands": [
+      "INFO"
+    ]
+  },
+  {
+    "model": "OpenGD77 UV008",
+    "protocol": "OpenGD77 USB CPS",
+    "commands": [
+      "INFO"
     ]
   },
   {

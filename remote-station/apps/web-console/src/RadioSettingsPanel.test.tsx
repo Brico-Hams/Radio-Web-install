@@ -22,6 +22,46 @@ async function loadAndRead() {
 }
 
 describe('ajustes documentados IC-7300', () => {
+  it('admite 200 W de consigna solo en FTDX101MP, sin inventar cabezal o conmutación ATU', async () => {
+    const config = {
+      ...settings, model: 'FTDX101MP', power_unit: 'watts_setpoint',
+      power_level_max: 200, tuner_switching_enabled: false,
+    }
+    const operations: Record<string, unknown>[] = []
+    vi.stubGlobal('fetch', vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method !== 'POST') return Response.json(config)
+      const body: Record<string, unknown> = JSON.parse(String(init.body))
+      operations.push(body)
+      return Response.json({
+        ...config, power_level: body.power_level ?? 100,
+        tx_active: false, tuner_busy: false, observed_at: 123,
+      })
+    }))
+    render(<RadioSettingsPanel token="operator-token" />)
+    const user = await loadAndRead()
+    const input = screen.getByLabelText('Consigna de potencia (W, no medida RF)')
+    expect(input.getAttribute('max')).toBe('200')
+    await user.clear(input)
+    await user.type(input, '200')
+    await user.click(screen.getByText('Aplicar nivel de potencia'))
+    await waitFor(() => expect(operations.at(-1)).toMatchObject({
+      operation: 'set_power', power_level: 200,
+    }))
+    expect(screen.queryByText('Insertar acoplador')).toBeNull()
+    expect(screen.queryByText(/Cabezal:/)).toBeNull()
+  })
+
+  it('rechaza 200 W configurados para FTDX101D antes de permitir controles', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json({
+      ...settings, model: 'FTDX101D', power_unit: 'watts_setpoint',
+      power_level_max: 200, tuner_switching_enabled: false,
+    })))
+    render(<RadioSettingsPanel token="operator-token" />)
+    await userEvent.setup().click(screen.getByText('Consultar configuración de ajustes'))
+    await screen.findByRole('alert')
+    expect(screen.queryByText('Aplicar nivel de potencia')).toBeNull()
+  })
+
   it('exige lectura y envía el nivel CAT con nonce, sin convertirlo en vatios', async () => {
     const operations: Record<string, unknown>[] = []
     vi.stubGlobal('fetch', vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {

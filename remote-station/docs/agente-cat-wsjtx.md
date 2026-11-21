@@ -44,7 +44,7 @@ Rutas autenticadas, tanto en el agente como en el proxy del coordinador:
 - `GET /api/v1/cat`: configuración de consultas, sin abrir el puerto.
 - `GET /api/v1/cat?command=FA`: ejecuta una consulta allowlist. El identificador
   no incluye terminador; para CI-V es `03` o `04`.
-- FTX-1 permite consultar `KS` (WPM), `KP` (Hz), `KR` (keyer) y `BI`
+- Los siete Yaesu del catálogo permiten consultar `KS` (WPM), `KP` (Hz), `KR` (keyer) y `BI`
   (break-in). Son lecturas, no llave CW ni reproduccion de memorias;
   los comandos de transmision `KY` y escritura `KM` no se admiten.
 
@@ -54,8 +54,18 @@ transacción, no todo el modelo ni que la conexión sea segura para transmitir.
 Los errores `cat_timeout`, `cat_io_failed`, `cat_invalid_response`, `cat_busy`
 y demás se muestran explícitamente, sin sustituirlos por datos de demostración.
 Los [ajustes por modelo](control-potencia-acoplador.md) son otro endpoint opt-in:
-IC-7300 RF PWR/ATU y FTX-1 PC de potencia limitada según cabezal observado.
+IC-7300 RF PWR/ATU, FTX-1 PC de potencia limitada según cabezal observado y
+FT-710, FT-991A, FTDX10, FTDX101D/MP y FTDX3000 con frecuencia/modo/potencia
+según [manual específico](hardware/yaesu-cat.md).
 No habilitan PTT, sintonía RF ni CAT arbitrario.
+
+Además hay 13 perfiles `OpenGD77 <modelo>` de
+[identificación USB CPS](hardware/opengd77-usb.md), fuera de los 31 perfiles CAT
+anteriores: solo `INFO`, no control RF ni programación remota. La misma ruta
+autenticada muestra modelo/firmware sin bytes desconocidos ni `reply_hex`.
+Las builds antiguas sin R9 devuelven error explícito; no hay fallback simulado.
+Los [Xiegu y Lab599 investigados](hardware/xiegu-candidates.md) aparecen como
+candidatos sin transporte habilitado, no en el selector de agentes.
 
 ## Modos digitales: integración WSJT-X
 

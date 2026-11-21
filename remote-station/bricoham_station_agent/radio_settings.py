@@ -2,6 +2,8 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
+from bricoham_remote_station.drivers.yaesu_cat import YaesuModel
+
 
 def settings_request_identifier(value: object) -> str:
     if (
@@ -53,12 +55,12 @@ class RadioSettingsConfig:
         return cls(**payload)
 
     def metadata(self, *, model: str = "IC-7300") -> dict[str, object]:
-        if model not in ("IC-7300", "FTX-1"):
+        if model not in ("IC-7300", "FTX-1", *YaesuModel):
             raise ValueError("Radio settings are not implemented for this model.")
         return {
             "power_adjustment_enabled": self.power_adjustment_enabled,
             "power_level_max": self.power_level_max,
-            "power_unit": "watts_setpoint" if model == "FTX-1" else "cat_position_0_255",
+            "power_unit": "cat_position_0_255" if model == "IC-7300" else "watts_setpoint",
             "tuner_switching_enabled": self.tuner_switching_enabled,
             "frequency_adjustment_enabled": self.frequency_adjustment_enabled,
             "mode_adjustment_enabled": self.mode_adjustment_enabled,

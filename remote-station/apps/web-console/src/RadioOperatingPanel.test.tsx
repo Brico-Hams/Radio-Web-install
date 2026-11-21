@@ -24,13 +24,49 @@ const observed = {
 
 async function loadAndRead() {
   const user = userEvent.setup()
-  await user.click(screen.getByText('Consultar controles FTX-1'))
-  await user.click(await screen.findByText('Leer receptores FTX-1'))
+  await user.click(screen.getByText('Consultar controles de radio'))
+  await user.click(await screen.findByText('Leer receptores'))
   await screen.findByText(/Última lectura de MAIN/)
   return user
 }
 
 describe('controles MAIN/SUB FTX-1', () => {
+  it('rechaza capacidades extra no validadas en una respuesta FTX-1', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json({
+      ...config, receiver_options: 'invalid',
+    })))
+    render(<RadioOperatingPanel token="operator-token" />)
+    await userEvent.setup().click(screen.getByText('Consultar controles de radio'))
+    await screen.findByRole('alert')
+    expect(screen.queryByText('Aplicar frecuencia')).toBeNull()
+  })
+
+  it.each(['FT-991A', 'FTDX3000'])('permite VFO-B sin inventar un modo secundario para %s', async (model) => {
+    const yaesuConfig = {
+      ...config, model, frequency_min_hz: 30_000,
+      frequency_max_hz: model === 'FT-991A' ? 470_000_000 : 60_000_000,
+      mode_options: [{ code: '1', label: 'LSB' }, { code: '2', label: 'USB' }],
+      receiver_options: [
+        { receiver: 'MAIN', label: 'VFO-A', mode_supported: true },
+        { receiver: 'SUB', label: 'VFO-B', mode_supported: false },
+      ],
+    }
+    const state = {
+      ...observed, ...yaesuConfig,
+      receivers: { ...observed.receivers, SUB: { frequency_hz: 7_074_000, mode_code: null } },
+    }
+    vi.stubGlobal('fetch', vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) =>
+      Response.json(init?.method === 'POST' ? state : yaesuConfig)))
+    render(<RadioOperatingPanel token="operator-token" />)
+    const user = await loadAndRead()
+    await user.selectOptions(screen.getByLabelText('Receptor de radio'), 'SUB')
+    expect(screen.getByText(/no disponible para este selector/)).toBeTruthy()
+    expect(screen.getByText('Aplicar frecuencia').hasAttribute('disabled')).toBe(false)
+    expect(screen.getByText('Aplicar modo').hasAttribute('disabled')).toBe(true)
+    expect(screen.getByLabelText('Modo del receptor').hasAttribute('disabled')).toBe(true)
+    expect(screen.getByLabelText('Frecuencia del receptor (Hz)').getAttribute('max'))
+      .toBe(String(yaesuConfig.frequency_max_hz))
+  })
   it('exige lectura y envía frecuencia/modo al receptor explícito con nonce', async () => {
     const operations: Record<string, unknown>[] = []
     const state = structuredClone(observed)
@@ -49,11 +85,11 @@ describe('controles MAIN/SUB FTX-1', () => {
     }))
     render(<RadioOperatingPanel token="operator-token" />)
     const user = userEvent.setup()
-    await user.click(screen.getByText('Consultar controles FTX-1'))
+    await user.click(screen.getByText('Consultar controles de radio'))
     expect((await screen.findByText('Aplicar frecuencia')).hasAttribute('disabled')).toBe(true)
-    await user.click(screen.getByText('Leer receptores FTX-1'))
+    await user.click(screen.getByText('Leer receptores'))
     await screen.findByText(/Última lectura de MAIN/)
-    await user.selectOptions(screen.getByLabelText('Receptor FTX-1'), 'SUB')
+    await user.selectOptions(screen.getByLabelText('Receptor de radio'), 'SUB')
     expect(operations).toEqual([{ operation: 'read_operating' }])
     const input = screen.getByLabelText('Frecuencia del receptor (Hz)')
     await user.clear(input)
@@ -89,7 +125,7 @@ describe('controles MAIN/SUB FTX-1', () => {
     expect(screen.getByText('Aplicar frecuencia').hasAttribute('disabled')).toBe(true)
     expect(screen.getByText('Aplicar modo').hasAttribute('disabled')).toBe(true)
     expect(operations).toEqual(['read_operating', 'set_frequency'])
-    await user.click(screen.getByText('Leer receptores FTX-1'))
+    await user.click(screen.getByText('Leer receptores'))
     await waitFor(() => expect(screen.getByText('Aplicar frecuencia').hasAttribute('disabled')).toBe(false))
   })
 
@@ -112,8 +148,8 @@ describe('controles MAIN/SUB FTX-1', () => {
       } : config)))
     render(<RadioOperatingPanel token="operator-token" />)
     const user = userEvent.setup()
-    await user.click(screen.getByText('Consultar controles FTX-1'))
-    await user.click(await screen.findByText('Leer receptores FTX-1'))
+    await user.click(screen.getByText('Consultar controles de radio'))
+    await user.click(await screen.findByText('Leer receptores'))
     await screen.findByRole('alert')
     expect(screen.queryByText(/Última lectura de MAIN/)).toBeNull()
     expect(screen.getByText('Aplicar frecuencia').hasAttribute('disabled')).toBe(true)

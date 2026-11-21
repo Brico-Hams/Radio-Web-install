@@ -14,6 +14,7 @@ from bricoham_remote_station.diagnostic_reports import (
     add_diagnostic_arguments,
     configure_diagnostics,
 )
+from bricoham_remote_station.drivers.yaesu_cat import YaesuModel
 from bricoham_remote_station.secure_http import (
     RequestJsonError,
     SecureHTTPServer,
@@ -551,9 +552,10 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     elif any(value is not None for value in serial_options) or args.serial_stopbits != 1:
         parser.error("Las opciones serie requieren --enable-experimental-cat.")
     if args.radio_settings_config and (
-        not args.enable_experimental_cat or args.serial_model not in ("IC-7300", "FTX-1")
+        not args.enable_experimental_cat
+        or args.serial_model not in ("IC-7300", "FTX-1", *YaesuModel)
     ):
-        parser.error("--radio-settings-config requires experimental CAT with IC-7300 or FTX-1.")
+        parser.error("--radio-settings-config requires a documented IC-7300 or Yaesu CAT model.")
     if args.ptt_config and (not args.enable_experimental_cat or args.serial_model != "FTX-1"):
         parser.error("--ptt-config requires explicit experimental FTX-1 CAT.")
     if args.tx_audio_config and not args.ptt_config:

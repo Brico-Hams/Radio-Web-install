@@ -1,17 +1,22 @@
 import { useMemo, useState, type FormEvent } from 'react'
 import {
   createControlRequest, getApiData, isRadioSettings, isRecord, type RadioSettings,
+  isYaesuControlModel, type YaesuControlModel,
 } from './api'
 
 type Receiver = 'MAIN' | 'SUB'
 type ModeOption = { code: string; label: string }
+type ReceiverOption = { receiver: Receiver; label: string; mode_supported: boolean }
 type Config = RadioSettings & {
-  model: 'FTX-1'
+  model: 'FTX-1' | YaesuControlModel
   frequency_adjustment_enabled: boolean
   mode_adjustment_enabled: boolean
   mode_options: ModeOption[]
+  receiver_options?: ReceiverOption[]
+  frequency_min_hz?: number
+  frequency_max_hz?: number
 }
-type ReceiverState = { frequency_hz: number; mode_code: string }
+type ReceiverState = { frequency_hz: number; mode_code: string | null }
 type Operating = Config & {
   receivers: Record<Receiver, ReceiverState>
   tx_active: boolean
@@ -31,24 +36,51 @@ function isConfig(value: unknown): value is Config {
     value.mode_options.length === 0 || value.mode_options.length > 32 ||
     !value.mode_options.every(isModeOption) ||
     new Set(value.mode_options.map((mode) => mode.code)).size !== value.mode_options.length) return false
-  return isRadioSettings(value) && value.model === 'FTX-1'
+  if (value.model === 'FTX-1') return value.receiver_options === undefined &&
+    value.frequency_min_hz === undefined && value.frequency_max_hz === undefined &&
+    isRadioSettings(value)
+  if (!isYaesuControlModel(value.model)) return false
+  const modePattern = value.model === 'FT-991A' ? /^[1-9A-E]$/ :
+    value.model === 'FTDX3000' ? /^[1-9A-D]$/ : /^[1-9A-F]$/
+  if (!value.mode_options.every((option) => modePattern.test(option.code))) return false
+  const maximum = value.model === 'FT-991A' ? 470_000_000 :
+    value.model === 'FTDX3000' ? 60_000_000 : 75_000_000
+  return value.frequency_min_hz === 30_000 && value.frequency_max_hz === maximum &&
+    Array.isArray(value.receiver_options) && value.receiver_options.length === 2 &&
+    value.receiver_options.every((option) => isRecord(option) &&
+      (option.receiver === 'MAIN' || option.receiver === 'SUB') &&
+      typeof option.label === 'string' && option.label.length > 0 && option.label.length <= 32 &&
+      option.mode_supported === (option.receiver === 'MAIN' ||
+        (value.model !== 'FT-991A' && value.model !== 'FTDX3000'))) &&
+    new Set(value.receiver_options.map((option) => option.receiver)).size === 2 &&
+    isRadioSettings(value)
+}
+
+function receiverOptions(config: Config | null): ReceiverOption[] {
+  return config?.receiver_options ?? [
+    { receiver: 'MAIN', label: 'MAIN (FA / MD0)', mode_supported: true },
+    { receiver: 'SUB', label: 'SUB (FB / MD1)', mode_supported: true },
+  ]
 }
 
 function isOperating(value: unknown): value is Operating {
   if (!isRecord(value) || !isRecord(value.receivers)) return false
   const receivers = value.receivers
-  if (!['MAIN', 'SUB'].every((side) => {
-    const state = receivers[side]
-    return isRecord(state) && typeof state.frequency_hz === 'number' &&
-      Number.isInteger(state.frequency_hz) && state.frequency_hz >= 30_000 &&
-      state.frequency_hz <= 470_000_000 && typeof state.mode_code === 'string'
-  })) return false
   if (typeof value.tx_active !== 'boolean' || typeof value.tuner_busy !== 'boolean' ||
     typeof value.observed_at !== 'number' || !Number.isFinite(value.observed_at) ||
     !isConfig(value)) return false
-  return ['MAIN', 'SUB'].every((side) => {
+  if (!receiverOptions(value).every((option) => {
+    const side = option.receiver
     const state = receivers[side]
-    return isRecord(state) && value.mode_options.some((mode) => mode.code === state.mode_code)
+    return isRecord(state) && typeof state.frequency_hz === 'number' &&
+      Number.isInteger(state.frequency_hz) && state.frequency_hz >= 30_000 &&
+      state.frequency_hz <= (value.frequency_max_hz ?? 470_000_000) &&
+      (option.mode_supported ? typeof state.mode_code === 'string' : state.mode_code === null)
+  })) return false
+  return receiverOptions(value).every((option) => {
+    const state = receivers[option.receiver]
+    return isRecord(state) && (!option.mode_supported ||
+      value.mode_options.some((mode) => mode.code === state.mode_code))
   })
 }
 
@@ -65,7 +97,7 @@ export function RadioOperatingPanel({ token }: { token: string }) {
 
   function show(state: Operating, side: Receiver) {
     setFrequency(String(state.receivers[side].frequency_hz))
-    setMode(state.receivers[side].mode_code)
+    setMode(state.receivers[side].mode_code ?? '')
   }
 
   async function load() {
@@ -79,7 +111,7 @@ export function RadioOperatingPanel({ token }: { token: string }) {
       if (!result.allowed) throw new Error('Requiere permiso de admin u operador.')
       setConfig(result.data)
     } catch (failure) {
-      setError(failure instanceof Error ? failure.message : 'Configuración FTX-1 no disponible.')
+      setError(failure instanceof Error ? failure.message : 'Configuración Yaesu no disponible.')
     } finally {
       setBusy(false)
     }
@@ -97,7 +129,7 @@ export function RadioOperatingPanel({ token }: { token: string }) {
       setVerified(true)
     } catch (failure) {
       setError(`Operación no confirmada; lee de nuevo antes de ajustar. No hay reintento automático. ${
-        failure instanceof Error ? failure.message : 'Error CAT FTX-1.'
+        failure instanceof Error ? failure.message : 'Error CAT Yaesu.'
       }`)
     } finally {
       setBusy(false)
@@ -117,22 +149,24 @@ export function RadioOperatingPanel({ token }: { token: string }) {
   }
 
   const blocked = busy || !verified || observed?.tx_active !== false || observed.tuner_busy
+  const options = receiverOptions(config)
+  const modeSupported = options.find((option) => option.receiver === receiver)?.mode_supported === true
   return (
     <section className="content-card operation-panel" aria-labelledby="operating-title">
-      <h2 id="operating-title">Frecuencia y modo FTX-1</h2>
-      <p>CAT experimental real, separado de la demostración. MAIN/SUB son los
-        receptores del manual 2508-C; no selecciona VFO activo ni transmisor.
+      <h2 id="operating-title">Frecuencia y modo Yaesu{config ? ` · ${config.model}` : ''}</h2>
+      <p>CAT experimental real, separado de la demostración. Los selectores y límites
+        corresponden al manual del modelo; no selecciona VFO activo ni transmisor.
         No habilita PTT. RX/ATU observados no son interlocks físicos: un control
         local puede cambiar el estado entre comandos.</p>
       <div className="session-actions">
         <button className="button button-secondary" disabled={busy}
-          onClick={() => void load()}>Consultar controles FTX-1</button>
+          onClick={() => void load()}>Consultar controles de radio</button>
         <button className="button button-secondary" disabled={busy || !config}
-          onClick={() => void operate({ operation: 'read_operating' })}>Leer receptores FTX-1</button>
+          onClick={() => void operate({ operation: 'read_operating' })}>Leer receptores</button>
       </div>
       {error ? <p role="alert">{error}</p> : null}
       {config ? <>
-        <label>Receptor FTX-1
+        <label>Receptor de radio
           <select value={receiver} disabled={busy} onChange={(event) => {
             const side = event.target.value
             if (side !== 'MAIN' && side !== 'SUB') {
@@ -142,18 +176,21 @@ export function RadioOperatingPanel({ token }: { token: string }) {
             setReceiver(side)
             if (observed) show(observed, side)
           }}>
-            <option value="MAIN">MAIN (FA / MD0)</option>
-            <option value="SUB">SUB (FB / MD1)</option>
+            {options.map((option) => <option key={option.receiver} value={option.receiver}>
+              {option.label}
+            </option>)}
           </select>
         </label>
         {observed ? <p>Última lectura de {receiver}: {observed.receivers[receiver].frequency_hz} Hz,
-          modo {config.mode_options.find((option) => option.code === observed.receivers[receiver].mode_code)?.label}.
+          modo {modeSupported ? config.mode_options.find((option) =>
+            option.code === observed.receivers[receiver].mode_code)?.label : 'no disponible para este selector'}.
           TX observado: {observed.tx_active ? 'sí' : 'no'}.
           ATU/ATAS solicita sintonía/movimiento: {observed.tuner_busy ? 'sí' : 'no'}.</p> : null}
         {!verified ? <p>Lectura explícita requerida antes de ajustar.</p> : null}
         <form onSubmit={(event) => adjust(event, 'set_frequency')}>
           <label>Frecuencia del receptor (Hz)
-            <input type="number" step="1" min="30000" max="470000000" required
+            <input type="number" step="1" min={config.frequency_min_hz ?? 30_000}
+              max={config.frequency_max_hz ?? 470_000_000} required
               value={frequency} onChange={(event) => setFrequency(event.target.value)} />
           </label>
           <button type="submit" className="button button-secondary"
@@ -161,14 +198,14 @@ export function RadioOperatingPanel({ token }: { token: string }) {
         </form>
         <form onSubmit={(event) => adjust(event, 'set_mode')}>
           <label>Modo del receptor
-            <select required value={mode} onChange={(event) => setMode(event.target.value)}>
+            <select required disabled={!modeSupported} value={mode} onChange={(event) => setMode(event.target.value)}>
               <option value="">Lee el estado primero</option>
               {config.mode_options.map((option) =>
                 <option key={option.code} value={option.code}>{option.label}</option>)}
             </select>
           </label>
           <button type="submit" className="button button-secondary"
-            disabled={blocked || !config.mode_adjustment_enabled}>Aplicar modo</button>
+            disabled={blocked || !modeSupported || !config.mode_adjustment_enabled}>Aplicar modo</button>
         </form>
       </> : null}
     </section>

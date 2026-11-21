@@ -1,11 +1,13 @@
-# Yaesu CAT: codecs de solo lectura
+# Yaesu CAT: consultas y ajustes experimentales por modelo
 
 El módulo
 [`yaesu_cat.py`](../../bricoham_remote_station/drivers/yaesu_cat.py) proporciona
 formateo y análisis CAT puros para seis modelos concretos. No abre puertos,
-controla líneas serie, escribe ajustes, conmuta PTT ni transmite. La inclusión
-de un comando en el codec solo significa que el manual identifica su forma de
-lectura; no constituye una certificación de compatibilidad física de
+controla líneas serie, conmuta PTT ni transmite. Además de consultas, construye
+setters documentados de frecuencia, modo y consigna de potencia; ejecutarlos
+requiere flags locales explícitos en el agente. La inclusión
+de un comando solo significa que el manual identifica su forma;
+no constituye una certificación de compatibilidad física de
 BricoHams.
 
 ## Superficie pública
@@ -26,6 +28,13 @@ Los miembros de `YaesuReadCommand` son `FREQUENCY_A` (`FA`), `FREQUENCY_B`
 `read_commands(model)` devuelve, en el orden del enum, solo los comandos
 permitidos para ese modelo. `SUB_MODE` solo está habilitado para FT-710, FTDX10,
 FTDX101D y FTDX101MP.
+
+También se implementan `PC`, `TX`, `AC`, `KS`, `KP`, `KR` y `BI` para los seis
+modelos. `KS` devuelve 4..60 WPM; `KP` traduce 00..75 a 300..1050 Hz en pasos
+de 10; `KR` y `BI` devuelven booleanos. `TX` admite 0 RX, 1 CAT TX y 2 TX
+originado en la radio. `AC` devuelve `tuner_busy`: FT-710 usa AC003 para
+sintonía ATU y AC02n para ATAS (cualquier n distinto de 0 bloquea ajustes);
+los otros cinco usan AC002 para sintonía. No se escriben estos comandos.
 
 ## Matriz de comandos implementados
 
@@ -86,10 +95,36 @@ fijados al commit
 Hamlib se considera evidencia secundaria, no prueba de compatibilidad de este
 proyecto.
 
+### Páginas y límites de los ajustes nuevos
+
+Las páginas son índices PDF (1-based); los valores son del manual, no medidas RF.
+
+| Modelo / revisión | AC / BI | FA-FB | KP-KR / KS | PC (W de consigna) | TX |
+| --- | --- | --- | --- | --- | --- |
+| FT-710 2306-C | 7 / 8 | 14, 30 kHz..75 MHz | 15 / 15 | 19, 5..100 | 22 |
+| FT-991A 1711-D | 5 / 6 | 10, 30 kHz..470 MHz | 11 / 12 | 15, 5..100 | 18 |
+| FTDX10 2308-F | 7 / 8 | 14, 30 kHz..75 MHz | 15 / 15 | 19, 5..100 | 23 |
+| FTDX101D/MP 2308-L | 7 / 8 | 14, 30 kHz..75 MHz | 15 / 15 | 19, D: 5..100; MP: 5..200 | 23 |
+| FTDX3000 2006-D | 5 / 6 | 10, 30 kHz..60 MHz, 8 dígitos | 11 / 12 | 14, 5..100 | 17 |
+
+El agente requiere ID del modelo correcto antes de cualquier escritura, RX y
+ausencia de sintonía/movimiento. Tras escribir exige ID como barrera frente al
+eco tardío, lectura coincidente del ajuste y RX/AC confirmados. Comparte el lock
+CAT, limita la transacción a tres segundos y deduplica 256 request IDs recientes
+en memoria. Un error no se reintenta ni se revierte: el ajuste puede haberse
+aplicado y debe leerse explícitamente.
+
+La consola usa MAIN/SUB para FTDX101D/MP y VFO-A/B para los demás. Para FT-991A
+y FTDX3000 el modo secundario es `null`, se muestra no disponible y se bloquea
+su setter; nunca se copia el modo principal. No se selecciona VFO activo/TX.
+Véanse [frecuencia/modo](../control-frecuencia-modo.md) y
+[potencia/acoplador](../control-potencia-acoplador.md).
+
 ## Límites
 
-No se implementan lectura de otros parámetros, notificaciones espontáneas,
-comandos de configuración, transmisión, PTT ni control de líneas RTS/DTR. No se
+No se implementan otras consultas/setters, notificaciones espontáneas,
+transmisión, PTT, llave CW, reproducción/escritura de memorias, sintonía RF ni
+conmutación de ATU/ATAS. No se
 ha probado ningún transceptor físico; la velocidad, paridad, bits de parada,
 handshake y rutas USB/red quedan fuera de este codec. No se debe inferir
 compatibilidad del FTDX101D con el FTDX101MP, ni de otro modelo Yaesu, a partir

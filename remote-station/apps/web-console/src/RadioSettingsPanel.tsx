@@ -1,6 +1,7 @@
 import { useMemo, useState, type FormEvent } from 'react'
 import {
   createControlRequest, getApiData, isRecord, isRadioSettings as isSettings,
+  isYaesuControlModel, type YaesuControlModel,
   type RadioSettings as Settings,
 } from './api'
 type ObservedSettings = Settings & {
@@ -10,6 +11,7 @@ type ObservedSettings = Settings & {
 } & (
   { model: 'IC-7300'; tuner_state: number } |
   { model: 'FTX-1'; power_head: 'field' | 'SPA-1'; tuner_busy: boolean }
+  | { model: YaesuControlModel; tuner_busy: boolean }
 )
 
 function isObserved(value: unknown): value is ObservedSettings {
@@ -20,7 +22,10 @@ function isObserved(value: unknown): value is ObservedSettings {
      (value.model === 'FTX-1' && value.power_level >= 5 &&
       (value.power_head === 'field' || value.power_head === 'SPA-1') &&
       value.power_level <= (value.power_head === 'field' ? 10 : 100) &&
-      typeof value.tuner_busy === 'boolean')) &&
+      typeof value.tuner_busy === 'boolean') ||
+     (isYaesuControlModel(value.model) && value.power_level >= 5 &&
+       value.power_level <= (value.model === 'FTDX101MP' ? 200 : 100) &&
+       typeof value.tuner_busy === 'boolean')) &&
     typeof value.tx_active === 'boolean' &&
     typeof value.observed_at === 'number' && Number.isFinite(value.observed_at) && isSettings(value)
 }
@@ -94,10 +99,10 @@ export function RadioSettingsPanel({ token }: { token: string }) {
         por el CAT de la radio, nunca por un enlace independiente. No es potencia RF medida.
         El agente comprueba RX antes de ajustar,
         pero esto no es un interlock físico ni impide un PTT local simultáneo.</p>
-      {config?.model !== 'FTX-1' ? <p>El acoplador IC-7300 solo admite insertar/bypass.
+      {config?.model === 'IC-7300' ? <p>El acoplador IC-7300 solo admite insertar/bypass.
         No se inicia sintonía ni transmisión. Para insertar, PTT Start debe estar
         desactivado localmente; valida la instalación sin accesorios externos.</p> :
-        <p>FTX-1 solo ajusta potencia. No conmuta ATU/ATAS ni inicia sintonía o transmisión.</p>}
+        <p>Yaesu ajusta consigna de potencia según modelo. No conmuta ATU/ATAS ni inicia sintonía o transmisión.</p>}
       <div className="session-actions">
         <button className="button button-secondary" disabled={busy}
           onClick={() => void load()}>Consultar configuración de ajustes</button>
@@ -113,7 +118,9 @@ export function RadioSettingsPanel({ token }: { token: string }) {
           {observed?.model === 'IC-7300' ?
             ` Acoplador: ${['bypass', 'insertado', 'sintonizando'][observed.tuner_state]}.` :
             observed?.model === 'FTX-1' ?
-              ` Cabezal: ${observed.power_head}. ATU/ATAS solicita sintonía/movimiento: ${observed.tuner_busy ? 'sí' : 'no'}.` : null}
+              ` Cabezal: ${observed.power_head}. ATU/ATAS solicita sintonía/movimiento: ${observed.tuner_busy ? 'sí' : 'no'}.` :
+              observed && isYaesuControlModel(observed.model) ?
+                ` ATU solicita sintonía/movimiento: ${observed.tuner_busy ? 'sí' : 'no'}.` : null}
           TX observado: {observed ? (observed.tx_active ? 'sí' : 'no') : 'no consultado'}.</p>
         {!verified ? <p>Consulta el estado antes de habilitar los ajustes.</p> : null}
         <form onSubmit={power}>

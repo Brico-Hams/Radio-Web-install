@@ -139,3 +139,19 @@ de frecuencia/modo: estas últimas tienen
 [flags independientes MAIN/SUB](control-frecuencia-modo.md).
 Pruebas serie sintéticas, API y dos saltos HTTPS
 verifican software, no una radio ni RF.
+
+## Otros seis Yaesu del catálogo
+
+FT-710, FT-991A, FTDX10, FTDX101D y FTDX3000 usan `PCnnn;` con 5..100 W
+enteros de consigna; FTDX101MP permite 5..200 W. No son una lectura calibrada
+de RF ni un control independiente de amplificador. No se inventa `power_head`.
+Las [fuentes, páginas y guardas específicas](hardware/yaesu-cat.md) diferencian
+estos equipos del formato PC del FTX-1.
+
+El JSON local usa los mismos tres campos: `power_adjustment_enabled` apagado
+por defecto, límite local de 5..máximo del modelo y `tuner_switching_enabled`
+siempre falso. La API devuelve `power_unit: watts_setpoint`, `power_level`,
+`tx_active` y `tuner_busy`; el cliente web y sus contenedores Android/iOS usan
+ese límite sin confundirlo con el IC-7300. ID correcto, RX y AC no ocupado se
+exigen antes de escribir; ID, nivel, TX y AC se verifican después. No se activa
+sintonía, ATAS, PTT ni CW. Las observaciones CAT no sustituyen interlocks físicos.

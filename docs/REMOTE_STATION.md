@@ -114,3 +114,38 @@ Los paquetes se encuentran en `remote-station/dist/`: subdirectorios `agent/`
 y `host/`, mas los dos APK debug. `SHA256SUMS` permite comprobar integridad.
 La aceptacion fisica USB/RF, pruebas en dispositivos moviles, compilacion/firma
 iOS y funciones expresamente pendientes no quedan cubiertas por estos resultados.
+
+## Ampliacion Yaesu, OpenGD77 y nuevos candidatos
+
+- Los siete Yaesu del catalogo tienen consultas CW documentadas de solo lectura.
+  FT-710, FT-991A, FTDX10, FTDX101D/MP y FTDX3000 incorporan ajustes opt-in de
+  frecuencia, modo y consigna de potencia por modelo. ID correcto, RX, acoplador
+  no ocupado, limite local, deduplicacion y readback se verifican sin habilitar TX.
+  FTDX101MP admite hasta 200 W de consigna; los otros seis no heredan ese limite.
+  FT-991A y FTDX3000 no inventan MD1: modo secundario null y control deshabilitado.
+  [Manuales, paginas y restricciones](../remote-station/docs/hardware/yaesu-cat.md).
+- Se integran 13 perfiles experimentales de
+  [identificacion OpenGD77 USB CPS](../remote-station/docs/hardware/opengd77-usb.md)
+  en el agente headless y la consola compartida. Solo INFO, sin entrar/salir de
+  CPS, escribir memoria, transmitir ni inferir CAT RF. Se rechazan firmware/modelo
+  desconocidos; las builds antiguas sin R9 no se presentan como compatibles.
+  La programacion/pantalla local original del Workspace se conserva.
+- [Xiegu y Lab599 investigados](../remote-station/docs/hardware/xiegu-candidates.md)
+  se agregan como candidatos sin transporte: las direcciones, framing y detalles
+  de respuesta pendientes no se adivinan desde Icom, Kenwood o Hamlib.
+  El catalogo contiene 68 candidatos, no 68 radios certificadas.
+- Verificacion final: **223 pruebas Python**, **66 del cliente** y **44 Node
+  enfocadas** correctas; Ruff, lint y build correctos. Un aborto transitorio
+  WinError 10053 de una prueba rotor se repitio aisladamente y la suite completa
+  posterior paso, sin cambiar el controlador ni los limites HTTP.
+- ZIPAPP y wheel actualizados se ejecutaron fuera del arbol fuente; los dos APK
+  debug verifican firma v2. SHA256SUMS coincide con los cuatro paquetes. El bundle
+  actual coincide byte a byte entre wheel, APK dedicado y assets Android/iOS.
+  RadiCodex conserva su APK: carga la interfaz actual desde el host HTTPS,
+  no incorpora un motor CAT nuevo en la WebView.
+- La publicacion sigue bloqueada: HTTPS no dispone de credenciales y SSH rechaza
+  autenticacion publickey. Se verifico la clave oficial de github.com en un archivo
+  aislado, sin modificar perfiles SSH ni desactivar comprobacion de host.
+
+Estos incrementos no finalizan CW activo, WSJT-X activo/broker CAT, agente Android
+USB OTG independiente, firma iOS/produccion ni aceptacion fisica multiplataforma.

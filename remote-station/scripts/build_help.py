@@ -65,7 +65,7 @@ def generated_files() -> dict[Path, str]:
             ],
         }
         for model, profile in sorted(read_profiles().items())
-        if profile.protocol in ("CAT ASCII", "Icom CI-V")
+        if profile.protocol in ("CAT ASCII", "Icom CI-V", "OpenGD77 USB CPS")
         and profile.binding_status == "model_profile"
     ]
     output[source / "src" / "agent-profiles.json"] = (

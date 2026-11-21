@@ -119,7 +119,7 @@ class CatDiagnosticsTests(unittest.TestCase):
         catalog = diagnostic_catalog()
         self.assertFalse(catalog["hardware_validation_complete"])
         candidates = catalog["candidates"]
-        self.assertEqual(len(candidates), 49)
+        self.assertEqual(len(candidates), 68)
         self.assertTrue(
             all(candidate["hardware_status"] == "unsupported" for candidate in candidates)
         )
@@ -132,7 +132,7 @@ class CatDiagnosticsTests(unittest.TestCase):
                 for candidate in candidates
                 if candidate["binding_status"] == "unimplemented"
             },
-            {"IC-7800"},
+            {"IC-7800", "G90", "X6100", "X6200", "X5105", "G106", "TX-500"},
         )
 
 
