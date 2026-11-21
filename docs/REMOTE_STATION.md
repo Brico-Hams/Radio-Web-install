@@ -83,6 +83,30 @@ lints y build APK. Se verifican los 53 recursos generados, firma debug v2 y cont
 JSON dentro del APK actualizado. La revision de seguridad limitada a esta extraccion
 no encuentra vulnerabilidades confirmadas; no certifica el producto completo.
 
+## Fuentes upstream y primera comprobacion USB FTX-1
+
+Se revisaron fuentes publicas GitLab y enlaces a Hamlib mantenido, sin acceder
+a Patreon privado/de pago ni ejecutar codigo descargado. Patreon no proporciono
+contenido verificable; la busqueda GitLab es acotada, no un inventario completo.
+Los [bugs Yaesu](../remote-station/docs/hardware/yaesu-cat.md),
+[riesgos Xiegu](../remote-station/docs/hardware/xiegu-candidates.md) y
+[restricciones OpenGD77](../remote-station/docs/hardware/opengd77-usb.md)
+documentan evidencia, licencias, candidatos y limites sin copiar codigo/tablas.
+FTX-1 exige ahora ID0840 antes y despues de ajustes de frecuencia/modo/potencia;
+modelo incorrecto o identidad perdida impiden confirmar el ajuste, sin reintento.
+Pasan **230 pruebas Python**, Ruff y verificacion de los 53 recursos generados.
+
+La [comprobacion USB real](../remote-station/docs/hardware/ftx1-spa1.md) resolvio
+driver ausente con un paquete oficial firmado y verifico 15 consultas por la
+interfaz Enhanced a 38400/8N1, sin setters ni TX. IF devuelve P10=3 no documentado
+en 2508-C: se rechaza y PTT sigue bloqueado cuando no puede comprobar estado
+seguro. No se declara aceptacion RF, audio, reconexion, firmware ni producto completo.
+Wheel y ZIPAPP actualizados se verificaron fuera del arbol fuente: rechazan un
+ID de otro modelo sin setters y leen ID0840 en la unidad USB real. El bundle
+compartido sigue identico en wheel y APK dedicado; los cuatro SHA256 coinciden.
+La revision de seguridad acotada a la guarda de identidad FTX-1 no encontro
+vulnerabilidades confirmadas; no es una certificacion global.
+
 ## Escritorio operativo
 
 El cliente compartido web/Android/iPhone/iPad presenta los controles del agente

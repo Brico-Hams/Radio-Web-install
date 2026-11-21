@@ -67,6 +67,24 @@ memoria, sondeo de puertos, escritura de codeplug ni descarga de firmware.
   validación del protocolo de cada build. No se incorpora firmware/códec
   comercial ni código fuente de terceros a los paquetes del agente.
 
+## Referencia pública GitLab y licencia
+
+[OpenGD77 Screen Mirror](https://gitlab.com/chopsuei3/opengd77-screen-mirror)
+documenta lecturas de información y framebuffer. Su
+[licencia](https://gitlab.com/chopsuei3/opengd77-screen-mirror/-/raw/main/LICENSE)
+añade una restricción no comercial: no se incorpora su código ni binarios a
+este producto de software libre. El README es evidencia secundaria, no prueba
+de R9 en firmware original. La fuente archivada citada arriba sigue sin R9;
+no se promociona esta integración a soporte validado.
+
+No se encontraron issues públicas del proyecto que confirmen un bug corregido.
+Sus advertencias sobre hotspot y uso simultáneo del puerto no son aceptación
+física de nuestro agente: timeout/puerto ocupado siguen siendo fallos explícitos.
+Los tamaños de paquete/fragmentos grandes de framebuffer no se extrapolan a
+RadioInfo: nuestra respuesta R9 tiene 49 bytes, no un bloque de 512 bytes.
+Se conserva el framing por longitud y el rechazo `-`, sin entrar en CPS ni
+activar lecturas de pantalla, escritura o RF.
+
 Pruebas de software cubren fragmentación, bytes `FD`/`;` dentro del payload,
 cabeceras/tamaños, revisión/modelo, negativas, timeout y ausencia de comandos
 C/W/PTT. No son pruebas físicas de radio, audio, USB OTG ni RF.

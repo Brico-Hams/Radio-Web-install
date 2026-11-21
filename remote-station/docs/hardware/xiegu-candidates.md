@@ -48,6 +48,25 @@ no puede usarse como autorización de TX ni guardia RF universal.
 - Hamlib/comunidad solo son evidencia secundaria. No se implementa FX-4CR:
   aún no hay investigación primaria suficiente.
 
+## Incidencias upstream que impiden extrapolar telemetría
+
+El fork Hamlib localizado en GitLab remite a GitHub como fuente mantenida.
+Estas incidencias no validan el transporte pendiente ni autorizan copiar tablas
+de calibración o activar comandos en nuestros candidatos.
+
+| Fuente | Evidencia y estado | Prevención para futuras implementaciones |
+| --- | --- | --- |
+| [G90 SWR #2257](https://github.com/Hamlib/Hamlib/issues/2257), cerrada; [PR #2306](https://github.com/Hamlib/Hamlib/pull/2306) | Lecturas con nibbles no BCD pueden convertirse en SWR falso; la corrección rechaza datos inválidos | No interpretar A..F como decimal ni fabricar un valor de SWR; error de protocolo y validación por firmware |
+| [G90 calibración SWR #2256](https://github.com/Hamlib/Hamlib/issues/2256), abierta | Informe de divergencia entre calibración genérica y panel; no es una calibración verificada | No reutilizar tablas Icom ni presentar valores empíricos como medidas calibradas |
+| [G90 AF #2245](https://github.com/Hamlib/Hamlib/issues/2245), abierta; [PR #2246](https://github.com/Hamlib/Hamlib/pull/2246), cerrado | Firmware 1.8: volumen no sigue necesariamente BCD; cerrar un PR no acredita una versión corregida | No usar un decoder genérico solo porque algunos ejemplos sean BCD válido |
+| [Rangos TX Xiegu #2288](https://github.com/Hamlib/Hamlib/issues/2288), abierta | Informe de rangos de transmisión erróneos en capacidades, con X6200 entre los modelos citados | No convertir un rango de recepción, catálogo o backend en autorización de TX |
+
+No se ejecutó firmware/código upstream ni se probó RF. La inclusión de cada
+corrección en una versión publicada queda sin verificar. SWR, AF y rangos TX
+siguen sin implementarse en estos candidatos: no se añade un decoder especulativo.
+La licencia GPL/LGPL de Hamlib debe revisarse por componente y uso; no se ha
+copiado código, tests ni tablas en esta revisión.
+
 El catálogo muestra estas limitaciones, no compatibilidad ficticia ni espectro
 simulado. Las siguientes implementaciones deberán validar los campos exactos
 y conservar exclusividad CAT, límites locales y pruebas de error.

@@ -120,6 +120,27 @@ su setter; nunca se copia el modo principal. No se selecciona VFO activo/TX.
 Véanse [frecuencia/modo](../control-frecuencia-modo.md) y
 [potencia/acoplador](../control-potencia-acoplador.md).
 
+## Incidencias públicas revisadas y prevención
+
+El fork [Hamlib en GitLab](https://gitlab.com/epichamradio/hamlib) remite al
+repositorio mantenido de GitHub. No se adopta el fork como fuente de verdad ni
+se incorpora código Hamlib. Las incidencias son evidencia secundaria; una issue
+cerrada no prueba qué paquete publicado contiene el arreglo ni aceptación física.
+
+| Incidencia upstream | Riesgo declarado | Tratamiento propio |
+| --- | --- | --- |
+| [Hamlib #2219](https://github.com/Hamlib/Hamlib/issues/2219), cerrada | FTX-1 configurada como FTDX10: frecuencia sin ceros iniciales, `?;` y resultado de éxito indebido | FTX-1 usa nueve dígitos y exige ID0840 antes/después de ajustes; rechazo/readback inválido produce error, no éxito |
+| [#2241](https://github.com/Hamlib/Hamlib/issues/2241), cerrada; [PR #2262](https://github.com/Hamlib/Hamlib/pull/2262) | Cambio de modo SUB asociado a un `SH` dirigido a MAIN | Nuestros setters de modo no emiten `SH`; no se habilitan filtros por analogía ni se hereda el selector de MAIN |
+| [#1966](https://github.com/Hamlib/Hamlib/issues/1966), cerrada; [PR #2265](https://github.com/Hamlib/Hamlib/pull/2265) | Caché obsoleta evita escribir la frecuencia split solicitada | Una orden nueva no se omite por igualdad con una lectura previa; se escribe y verifica. Deduplicar request IDs no es cachear el estado RF |
+
+No se aplica la recomendación de nueve dígitos a todos los Yaesu: FTDX3000
+mantiene sus ocho dígitos documentados. Tampoco se habilita selección split/TX
+por disponer de `FB`. Las pruebas propias comprueban anchos por modelo, selector,
+rechazo y lectura de confirmación. La nueva guarda FTX-1 cubre ID de otro modelo
+antes del setter y cambio de identidad después, cierre de puerto y no-reintento.
+Una identidad perdida después de escribir deja el resultado no confirmado:
+el ajuste puede haberse aplicado. Las lecturas ID/RX no son un interlock físico.
+
 ## Límites
 
 No se implementan otras consultas/setters, notificaciones espontáneas,

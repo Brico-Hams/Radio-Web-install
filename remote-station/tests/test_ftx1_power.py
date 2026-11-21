@@ -27,11 +27,17 @@ class FtxPowerPort(ScriptedPort):
         self.ready_at = 0
         self.frequency = {b"FA": 14_250_000, b"FB": 7_074_000}
         self.modes = {b"MD0": b"2", b"MD1": b"1"}
+        self.identity = b"ID0840;"
+        self.change_identity_after_set = False
 
     def write(self, data):
         self.writes.append(data)
         self.ready_at = time.monotonic() + self.delay
-        if data == b"PC;":
+        if self.change_identity_after_set and len(data) > 4:
+            self.identity = b"ID0761;"
+        if data == b"ID;":
+            reply = self.identity
+        elif data == b"PC;":
             reply = f"PC{self.head}{self.level:03d};".encode("ascii")
         elif data == b"TX;":
             reply = f"TX{self.tx};".encode("ascii")
@@ -181,6 +187,54 @@ class FtxPowerTests(unittest.TestCase):
                 }
             )
 
+    def test_wrong_radio_identity_prevents_every_ftx1_setting(self):
+        for operation, field, value in (
+            ("set_power", "power_level", 40),
+            ("set_frequency", "frequency_hz", 7_078_000),
+            ("set_mode", "mode_code", "2"),
+        ):
+            port = FtxPowerPort()
+            port.identity = b"ID0761;"
+            self.factory.return_value = port
+            cat = SerialCat(
+                self.cat.config,
+                settings=RadioSettingsConfig(
+                    True, 50, False,
+                    frequency_adjustment_enabled=True,
+                    mode_adjustment_enabled=True,
+                ),
+            )
+            self.addCleanup(cat.close)
+            with self.subTest(operation=operation):
+                with self.assertRaisesRegex(CatError, "cat_setting_unconfirmed"):
+                    cat.operate_settings({
+                        "operation": operation,
+                        "request_id": "wrong-radio-request-0001",
+                        **({"receiver": "MAIN"} if operation != "set_power" else {}),
+                        field: value,
+                    })
+                self.assertEqual(port.writes, [b"ID;"])
+                self.assertTrue(port.closed)
+
+    def test_identity_change_after_setter_never_confirms_or_retries_the_adjustment(self):
+        self.enable_operating()
+        self.port.change_identity_after_set = True
+        payload = {
+            "operation": "set_frequency",
+            "receiver": "SUB",
+            "frequency_hz": 7_078_000,
+            "request_id": "identity-change-request-0001",
+        }
+        with self.assertRaisesRegex(CatError, "cat_setting_unconfirmed"):
+            self.cat.operate_settings(payload)
+        self.assertEqual(self.port.writes.count(b"FB007078000;"), 1)
+        self.assertEqual(self.port.writes.count(b"ID;"), 2)
+        self.assertTrue(self.port.closed)
+        count = len(self.port.writes)
+        with self.assertRaisesRegex(CatError, "cat_setting_request_repeated"):
+            self.cat.operate_settings(payload)
+        self.assertEqual(len(self.port.writes), count)
+
     def test_operating_controls_reject_disabled_invalid_targets_before_opening_port(self):
         for operation, field, value, code in (
             ("set_frequency", "frequency_hz", 14_250_000, "cat_frequency_adjustment_disabled"),
@@ -256,7 +310,7 @@ class FtxPowerTests(unittest.TestCase):
         self.assertFalse(result["tuner_busy"])
         self.assertEqual(self.port.writes.count(b"PC2040;"), 1)
         self.assertTrue(
-            all(frame in (b"TX;", b"AC;", b"PC;", b"PC2040;") for frame in self.port.writes)
+            all(frame in (b"ID;", b"TX;", b"AC;", b"PC;", b"PC2040;") for frame in self.port.writes)
         )
         with self.assertRaisesRegex(CatError, "cat_setting_request_repeated"):
             self.power()
@@ -290,7 +344,9 @@ class FtxPowerTests(unittest.TestCase):
             self.port.tx, self.port.tuner = tx, tuner
             with self.assertRaisesRegex(CatError, "cat_settings_require_rx"):
                 self.power(identifier=f"ftx1-guard-request-{index:04d}")
-        self.assertTrue(all(frame in (b"TX;", b"AC;", b"PC;") for frame in self.port.writes))
+        self.assertTrue(
+            all(frame in (b"ID;", b"TX;", b"AC;", b"PC;") for frame in self.port.writes)
+        )
 
     def test_inputs_units_disabled_flags_and_no_unsupported_operations(self):
         for level in (True, "5", 5.5, 0, 4, 51, 101, float("nan")):

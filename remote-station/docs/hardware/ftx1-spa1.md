@@ -7,7 +7,9 @@ baud se seleccionan explícitamente. Ajustes PC de potencia y frecuencia/modo
 MAIN/SUB tienen opt-ins separados.
 [PTT experimental](../ptt-ftx1.md) tiene configuración local independiente y
 desactivada por defecto; no incluye audio TX ni llave CW.
-Se ha cotejado el manual oficial CAT 2508-C, no una unidad física.
+Se ha cotejado el manual oficial CAT 2508-C y realizado una comprobación USB/CAT
+de solo lectura con una unidad Windows. No constituye aceptación completa,
+prueba de TX, audio, ajustes, reconexión ni compatibilidad de todos los firmwares.
 
 ## Lo que sí se ha encontrado
 
@@ -16,12 +18,12 @@ Se ha cotejado el manual oficial CAT 2508-C, no una unidad física.
 | Manual primario cotejado | Yaesu CAT 2508-C, 29 páginas; SHA256 `fbbd8eb6b12d1fec9474f3771f4b872ba4fd195dbe4b080cc2a1aae2b4ebc56c` | FA/FB son Hz de nueve dígitos; MD requiere MAIN/SUB. No acredita hardware ni firmware instalado. |
 | Existe backend Hamlib específico | Hamlib `rigs/yaesu/ftx1`, modelo 1051; la nota de versión 4.7 menciona FTX-1 | No es una inferencia desde soporte Yaesu genérico. Hamlib no está integrado en esta aplicación. |
 | Cobertura que declara el backend | README Hamlib: 90/90 comandos CAT; referencia `FTX-1_CAT_OM_ENG_2508-C.pdf`; firmware que declara probado: actualización de noviembre de 2025 | Es una declaración del proyecto Hamlib; no es una prueba de hardware ejecutada por BricoHams. |
-| Serie | README Hamlib: 38400 baud, 8N1; documenta soporte de velocidades entre 4800 y 115200 | No se ha verificado enumeración USB, COM correcto, identificadores USB, latencia ni control de flujo. |
+| Serie | README Hamlib: 38400 baud, 8N1; documenta soporte de velocidades entre 4800 y 115200 | Una unidad respondió a 38400/8N1 por CP2105 Enhanced; no se extrapola a otros puertos, velocidades, firmware ni sistemas. |
 | Identificación CAT | README Hamlib: el comando de ID devuelve `0840` en todas las configuraciones | No usar ese valor por sí solo para distinguir unidad, configuración Field/SPA-1 o firmware. |
 | Scope CAT | `ftx1_ext.c` describe `SS` para leer/ajustar parámetros como velocidad, peak hold, marker, color, nivel, span y modo | Control de parámetros no equivale a exportar muestras FFT. No se ha identificado un flujo de amplitudes ni de waterfall en las fuentes inspeccionadas. |
 | Perfil en wfview | `rigs/FTX-1.rig` declara `HasSpectrum=false` | Evidencia de configuración en una aplicación de terceros, no especificación del fabricante; refuerza no declarar scope nativo. |
 | Driver en fork de flrig | `PhotoNomad0/flrig_newer` contiene `FTX1.cxx`; configura RTS/CTS y CAT PTT en su perfil | No es flrig upstream ni BricoHams. No adoptar sus señales ni su habilitación de PTT. |
-| SPA-1 | Manual CAT `PC` identifica field/SPA-1 y su consigna de potencia | Lectura y ajuste PC opt-in por FTX-1, sin sondeo mutante ni enlace independiente; hardware sin validar. |
+| SPA-1 | Manual CAT `PC` identifica field/SPA-1 y su consigna de potencia | Lectura PC comprobada en una unidad; ajustes y potencia RF no validados, sin sondeo mutante ni enlace independiente. |
 
 El endpoint CAT de lectura construye exclusivamente `FA;`, `FB;`, `MD0;`, `MD1;`, `ID;`, `PC;`,
 `AC;`, `TX;`, `FT;`, `ST;` e `IF;`. En TX se consulta estado; nunca se añade el parámetro
@@ -64,11 +66,40 @@ La misma ruta permite [frecuencia y modo MAIN/SUB](../control-frecuencia-modo.md
 con flags locales independientes, comprobaciones RX/AC y readback. FA/FB
 identifican MAIN/SUB (PDF 17), no seleccionan VFO activo ni transmisor.
 
+## Comprobación USB/CAT real, limitada a lectura
+
+Windows enumeró CP2105 `VID_10C4&PID_EA70`: Enhanced `MI_00` y Standard
+`MI_01`, ambos inicialmente con error 28 (driver ausente), no un fallo CAT.
+Se instaló Silicon Labs 11.5.0.417 desde el
+[catálogo oficial de Microsoft](https://www.catalog.update.microsoft.com/Search.aspx?q=CP210x),
+con firma de catálogo válida de Microsoft Windows Hardware Compatibility Publisher.
+El SHA256 del CAB utilizado es
+`7ea8a03769a05c7bb78718c360b5079be354ed6437623408d51b9c1e8f5a122a`.
+No se distribuye el driver en el agente.
+
+Se seleccionó exclusivamente Enhanced, no el primer COM. El número COM varía
+por instalación; el VID/PID tampoco identifica por sí solo un modelo Yaesu.
+`ID;` confirmó `0840`. A 38400/8N1 respondieron y se decodificaron
+ID, FA, FB, MD0, MD1, PC, TX, AC, FT, ST, KS, KP, KR, BI y VX.
+PC identificó el cabezal SPA-1 asociado, sin cambiar potencia. RTS/DTR y flujo
+permanecieron desactivados en software; no se midieron pulsos eléctricos.
+No se enviaron setters, PTT, CW, comandos de sintonía ni señales de transmisión.
+Las frecuencias, configuración privada y reply completo no se incluyen aquí
+ni se envían por diagnóstico remoto.
+
+**IF sigue sin validación para esta unidad:** el payload tiene los 27 bytes
+esperados, pero P10 devuelve `3`. El manual primario 2508-C, página PDF 18,
+solo documenta 0=símplex, 1=desplazamiento positivo y 2=negativo. No hay evidencia
+para interpretar `3` como símplex ni una versión de firmware/errata identificada.
+ST0 observado no resuelve esa discrepancia. El parser estricto rechaza IF y
+las guardas PTT no se relajan: no se fabrica una confirmación de estado seguro.
+La lectura de los otros comandos no acredita TX ni compatibilidad completa.
+
 ## Datos aún no verificados
 
 - Aplicabilidad del manual 2508-C al firmware instalado y sus erratas posteriores.
-- Qué interfaces USB crea cada combinación FTX-1/SPA-1 y cómo identificarlas sin
-  escoger el primer puerto disponible.
+- Reproducibilidad de las interfaces observadas con otras combinaciones
+  FTX-1/SPA-1, firmware, drivers y sistemas; no escoger el primer puerto disponible.
 - Paridad/control de flujo a nivel del dispositivo, comportamiento RTS/DTR,
   reconexión USB y suspensión/reanudación por sistema operativo.
 - Rutas/canales de audio USB RX/TX en cada modo y compatibilidad por host.

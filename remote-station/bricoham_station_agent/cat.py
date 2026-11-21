@@ -405,6 +405,8 @@ class SerialCat:
                         connection, ReadQuery(ftx1.build_query(command)), deadline=deadline
                     )
 
+                if target is not None:
+                    ftx1.parse_identification_reply(read(ftx1.Ftx1ReadCommand.IDENTIFICATION))
                 tx = ftx1.parse_tx_reply(read(ftx1.Ftx1ReadCommand.TX_STATE))
                 tuner = ftx1.parse_tuner_reply(read(ftx1.Ftx1ReadCommand.TUNER))
                 power = (
@@ -424,6 +426,7 @@ class SerialCat:
                     connection.reset_input_buffer()
                     self._write_request(connection, request, deadline)
                     # A different reply prefix fences delayed setter echo before readback.
+                    ftx1.parse_identification_reply(read(ftx1.Ftx1ReadCommand.IDENTIFICATION))
                     ftx1.parse_tx_reply(read(ftx1.Ftx1ReadCommand.TX_STATE))
                     if power is not None:
                         observed = ftx1.parse_power_reply(read(ftx1.Ftx1ReadCommand.POWER))

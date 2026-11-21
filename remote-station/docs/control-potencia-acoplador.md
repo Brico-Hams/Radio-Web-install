@@ -125,9 +125,10 @@ La misma API/panel devuelve `power_unit: watts_setpoint`, `power_head`,
 `cat_position_0_255` del IC-7300. La lectura no ajusta un nivel existente, aunque
 supere el límite local. Este límite solo restringe nuevas peticiones de BricoHams.
 
-Antes de escribir consulta TX/AC/PC y rechaza TX, sintonía ATU o petición de
-movimiento/sintonía ATAS. Después exige una respuesta TX de prefijo distinto
-como barrera contra eco tardío del setter y relee PC: cabezal o nivel distintos
+Antes de escribir exige ID0840, consulta TX/AC/PC y rechaza TX, sintonía ATU
+o petición de movimiento/sintonía ATAS. Después verifica de nuevo ID0840 y
+exige TX de prefijo distinto como barrera contra eco tardío del setter y relee PC:
+cabezal o nivel distintos
 son error, no éxito. No inventa un ACK que el protocolo no documenta.
 También relee TX/AC, comparte el lock CAT, deduplica 256 IDs recientes, aplica
 el presupuesto agregado de tres segundos y no reintenta ni revierte escrituras.

@@ -64,9 +64,10 @@ Los identificadores CAT, MAIN/SUB, VFO-A/B y nombres técnicos de modo no se tra
 ## Garantias y limites
 
 Todas las operaciones comparten lock, presupuesto global de tres segundos y
-cache acotada de 256 identificadores con potencia. Se consulta RX y AC; TX,
-sintonia ATU o movimiento/sintonia ATAS bloquean la operacion. Tras escribir,
-una consulta TX de distinto prefijo sirve como barrera frente a eco tardio;
+cache acotada de 256 identificadores con potencia. Antes de escribir se exige
+ID0840 y se consulta RX y AC; TX, sintonia ATU o movimiento/sintonia ATAS
+bloquean la operacion. Tras escribir, ID0840 y TX de distinto prefijo sirven
+como barrera frente a eco tardio e identidad incorrecta;
 se leen ambos receptores, se compara el objetivo y se vuelven a comprobar TX/AC.
 
 No hay ACK inventado, reintento ni rollback automatico. Un error puede significar
