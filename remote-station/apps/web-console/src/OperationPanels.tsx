@@ -185,7 +185,7 @@ export function LogbookPanel({ token }: { token: string }) {
               </label>
               <label>Modo del QSO
                 <select disabled={busy} value={mode} onChange={(event) => setMode(event.target.value)}>
-                  {['CW', 'SSB', 'USB', 'LSB', 'AM', 'FM', 'RTTY', 'FT8'].map((value) => (
+                  {['CW', 'SSB', 'USB', 'LSB', 'AM', 'FM', 'RTTY', 'FT8', 'FT4'].map((value) => (
                     <option key={value}>{value}</option>
                   ))}
                 </select>

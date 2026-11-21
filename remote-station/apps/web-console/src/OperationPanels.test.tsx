@@ -33,12 +33,12 @@ describe('operation panels', () => {
     expect(screen.queryByRole('button', { name: /enviar|ptt|transmitir/i })).toBeNull()
   })
 
-  it('records explicit contact data and reloads the persistent list', async () => {
+  it.each(['FT8', 'FT4'])('records an explicit %s contact and reloads the list', async (mode) => {
     let saved = false
     const fetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
       if (init?.method === 'POST') {
         expect(JSON.parse(String(init.body))).toEqual({
-          call: 'EA1ABC', started_at: '2026-11-20T12:00:00Z', frequency_hz: 7074000, mode: 'FT8',
+          call: 'EA1ABC', started_at: '2026-11-20T12:00:00Z', frequency_hz: 7074000, mode,
         })
         expect(init.headers).toEqual({ Authorization: 'Bearer test-token', 'Content-Type': 'application/json' })
         saved = true
@@ -46,7 +46,7 @@ describe('operation panels', () => {
       }
       return json({ api_version: 'v1', offset: 0, has_more: false, can_write: true,
         qsos: saved ? [{ call: 'EA1ABC', started_at: '2026-11-20T12:00:00+00:00',
-          frequency_hz: 7074000, mode: 'FT8' }] : [] })
+          frequency_hz: 7074000, mode }] : [] })
     })
     vi.stubGlobal('fetch', fetch)
     const user = userEvent.setup()
@@ -57,7 +57,7 @@ describe('operation panels', () => {
     await user.type(call, 'EA1ABC')
     await user.type(screen.getByLabelText('Fecha/hora ISO con zona'), '2026-11-20T12:00:00Z')
     await user.type(screen.getByLabelText('Frecuencia del QSO (Hz)'), '7074000')
-    await user.selectOptions(screen.getByLabelText('Modo del QSO'), 'FT8')
+    await user.selectOptions(screen.getByLabelText('Modo del QSO'), mode)
     await user.click(screen.getByRole('button', { name: 'Guardar QSO' }))
     expect(await screen.findByText('EA1ABC')).toBeTruthy()
     expect(screen.getByRole('status').textContent).toContain('QSO guardado en SQLite')

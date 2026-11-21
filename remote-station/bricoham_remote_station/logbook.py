@@ -7,7 +7,7 @@ from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-MODES = ("CW", "SSB", "USB", "LSB", "AM", "FM", "RTTY", "FT8")
+MODES = ("CW", "SSB", "USB", "LSB", "AM", "FM", "RTTY", "FT8", "FT4")
 _MAX_SQLITE_INTEGER = 2**63 - 1
 
 
@@ -106,14 +106,15 @@ def export_adif(database: Path, *, max_records: int | None = None) -> str:
         timestamp = datetime.fromisoformat(qso.started_at)
         frequency = f"{qso.frequency_hz // 1_000_000}.{qso.frequency_hz % 1_000_000:06d}"
         frequency = frequency.rstrip("0").rstrip(".")
+        mode = "SSB" if qso.mode in ("USB", "LSB") else "MFSK" if qso.mode == "FT4" else qso.mode
         fields = [
             _adif_field("CALL", qso.call),
             _adif_field("QSO_DATE", timestamp.strftime("%Y%m%d")),
             _adif_field("TIME_ON", timestamp.strftime("%H%M%S")),
             _adif_field("FREQ", frequency),
-            _adif_field("MODE", "SSB" if qso.mode in ("USB", "LSB") else qso.mode),
+            _adif_field("MODE", mode),
         ]
-        if qso.mode in ("USB", "LSB"):
+        if qso.mode != mode:
             fields.append(_adif_field("SUBMODE", qso.mode))
         records.append(" ".join(fields) + " <EOR>")
     return (

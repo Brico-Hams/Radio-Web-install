@@ -598,7 +598,7 @@ components:
           maximum: 9223372036854775807
         mode:
           type: string
-          enum: [CW, SSB, USB, LSB, AM, FM, RTTY, FT8]
+          enum: [CW, SSB, USB, LSB, AM, FM, RTTY, FT8, FT4]
     LogbookPage:
       type: object
       required: [api_version, qsos, offset, has_more, can_write]

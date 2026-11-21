@@ -53,8 +53,9 @@ en JavaScript; rechaza respuestas fuera de ese rango en lugar de redondearlas.
 ## Campos y límites
 
 - Se guardan indicativo, fecha/hora de inicio, frecuencia entera en Hz y modo.
-- Modos implementados: CW, SSB, USB, LSB, AM, FM, RTTY y FT8. ADIF exporta
-  USB/LSB como MODE=SSB más SUBMODE=USB/LSB; no genera BAND sin un perfil de
+- Modos implementados: CW, SSB, USB, LSB, AM, FM, RTTY, FT8 y FT4. ADIF exporta
+  USB/LSB como MODE=SSB más SUBMODE=USB/LSB y FT4 como MODE=MFSK más SUBMODE=FT4.
+  Es registro manual: no activa digitales ni importa datos de WSJT-X. No genera BAND sin un perfil de
   bandas/región validado.
 - El indicativo se normaliza a mayúsculas y admite barras internas. Esto es
   validación sintáctica, no comprobación de licencia ni identidad.

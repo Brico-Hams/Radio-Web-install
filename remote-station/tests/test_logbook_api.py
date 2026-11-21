@@ -83,6 +83,18 @@ class LogbookApiTests(unittest.TestCase):
             self.assertEqual(self.request("POST", body=json.dumps(QSO), role=role)[0], expected)
         self.assertEqual(read_qsos(self.database), ())
 
+    def test_operator_can_store_and_export_explicit_ft4_contact(self) -> None:
+        status, _, _ = self.request(
+            "POST", body=json.dumps({**QSO, "mode": "FT4"}), role=Role.OPERATOR
+        )
+        self.assertEqual(status, 201)
+        status, body, _ = self.request(role=Role.LISTENER)
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)["qsos"][0]["mode"], "FT4")
+        status, body, _ = self.request(path="/api/v1/logbook/adif", role=Role.LISTENER)
+        self.assertEqual(status, 200)
+        self.assertIn(b"<MODE:4>MFSK <SUBMODE:3>FT4", body)
+
     def test_rejects_bad_fields_types_lengths_origins_and_content_types(self) -> None:
         for payload in (
             {**QSO, "call": None},

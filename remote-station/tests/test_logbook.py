@@ -45,6 +45,22 @@ class LogbookTests(unittest.TestCase):
                     add_qso(database, qso)
                 self.assertFalse(database.exists())
 
+    def test_ft4_is_stored_and_exported_as_adif_mfsk_submode(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "logbook.sqlite3"
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(main([
+                    "--database", str(database), "add",
+                    "--call", "EA1ABC", "--started-at", "2026-11-20T12:00:00Z",
+                    "--frequency-hz", "14080000", "--mode", "FT4",
+                ]), 0)
+            add_qso(database, Qso("EA2ABC", "2026-11-20T13:00:00Z", 14_074_000, "FT8"))
+            self.assertEqual([qso.mode for qso in read_qsos(database)], ["FT4", "FT8"])
+            records = export_adif(database).split("<EOR>")
+            self.assertIn("<MODE:4>MFSK <SUBMODE:3>FT4", records[0])
+            self.assertIn("<MODE:3>FT8", records[1])
+            self.assertNotIn("<SUBMODE", records[1])
+
     def test_export_is_read_only_and_orders_qsos_by_utc_time(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / "logbook.sqlite3"
