@@ -1,7 +1,10 @@
 from dataclasses import dataclass
 from enum import IntEnum, StrEnum
 
-from bricoham_remote_station.drivers.cat_codec import parse_ascii_cat_reply
+from bricoham_remote_station.drivers.cat_codec import (
+    parse_ascii_cat_number,
+    parse_ascii_cat_reply,
+)
 
 
 class Ftx1ReadCommand(StrEnum):
@@ -18,6 +21,10 @@ class Ftx1ReadCommand(StrEnum):
     SPLIT = "ST"
     MAIN_INFORMATION = "IF"
     VOX = "VX"
+    KEYER_SPEED = "KS"
+    KEY_PITCH = "KP"
+    KEYER = "KR"
+    BREAK_IN = "BI"
 
 
 class Ftx1Mode(StrEnum):
@@ -80,6 +87,34 @@ def parse_vox_reply(frame: bytes) -> bool:
     if payload not in (b"0", b"1"):
         raise ValueError("Invalid FTX-1 VOX state.")
     return payload == b"1"
+
+
+def parse_keyer_speed_reply(frame: bytes) -> int:
+    speed = parse_ascii_cat_number("KS", frame, 3)
+    if not 4 <= speed <= 60:
+        raise ValueError("FTX-1 keyer speed is outside the documented 4..60 WPM range.")
+    return speed
+
+
+def parse_key_pitch_reply(frame: bytes) -> int:
+    code = parse_ascii_cat_number("KP", frame, 2)
+    if code > 75:
+        raise ValueError("FTX-1 key pitch is outside the documented 300..1050 Hz range.")
+    return 300 + 10 * code
+
+
+def parse_keyer_reply(frame: bytes) -> bool:
+    code = parse_ascii_cat_number("KR", frame, 1)
+    if code not in (0, 1):
+        raise ValueError("Invalid FTX-1 CW keyer state.")
+    return code == 1
+
+
+def parse_break_in_reply(frame: bytes) -> bool:
+    code = parse_ascii_cat_number("BI", frame, 1)
+    if code not in (0, 1):
+        raise ValueError("Invalid FTX-1 break-in state.")
+    return code == 1
 
 
 def parse_main_information(frame: bytes) -> Ftx1MainInformation:

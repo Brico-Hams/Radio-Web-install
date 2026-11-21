@@ -8,9 +8,13 @@ from bricoham_remote_station.drivers.ftx1_cat import (
     Ftx1ReadCommand,
     Ftx1TxState,
     build_query,
+    parse_break_in_reply,
     parse_frequency_field,
     parse_frequency_reply,
     parse_identification_reply,
+    parse_key_pitch_reply,
+    parse_keyer_reply,
+    parse_keyer_speed_reply,
     parse_mode_reply,
     parse_power_reply,
     parse_tuner_reply,
@@ -34,6 +38,10 @@ class Ftx1CatProtocolTests(unittest.TestCase):
             b"ST;",
             b"IF;",
             b"VX;",
+            b"KS;",
+            b"KP;",
+            b"KR;",
+            b"BI;",
         }
         self.assertEqual({build_query(command) for command in Ftx1ReadCommand}, expected)
         with self.assertRaises(ValueError):
@@ -112,6 +120,52 @@ class Ftx1CatProtocolTests(unittest.TestCase):
                     else:
                         self.assertEqual(result["power_control"].head, "SPA-1")
                         self.assertEqual(result["power_control"].watts, 50)
+                    self.assertEqual(port.writes, [command.encode("ascii") + b";"])
+                finally:
+                    cat.close()
+
+    def test_cw_parameters_enforce_primary_units_ranges_and_exact_frame_shape(self):
+        for decoder, cases in (
+            (parse_keyer_speed_reply, ((b"KS004;", 4), (b"KS060;", 60))),
+            (parse_key_pitch_reply, ((b"KP00;", 300), (b"KP35;", 650), (b"KP75;", 1050))),
+            (parse_keyer_reply, ((b"KR0;", False), (b"KR1;", True))),
+            (parse_break_in_reply, ((b"BI0;", False), (b"BI1;", True))),
+        ):
+            for frame, expected in cases:
+                with self.subTest(frame=frame):
+                    self.assertEqual(decoder(frame), expected)
+                    self.assertIs(type(decoder(frame)), type(expected))
+        for decoder, frames in (
+            (parse_keyer_speed_reply, (b"KS003;", b"KS061;", b"KS20;", b"KS020;KY01;")),
+            (parse_key_pitch_reply, (b"KP76;", b"KP3.5;", b"KP035;", b"KS35;")),
+            (parse_keyer_reply, (b"KR2;", b"KR01;", b"KR1;\r", b"KR1;BI1;")),
+            (parse_break_in_reply, (b"BI2;", b"BI01;", b"BI;", b"BI1;KY01;")),
+        ):
+            for frame in frames:
+                with self.subTest(frame=frame), self.assertRaises(ValueError):
+                    decoder(frame)
+
+    def test_cw_serial_reads_do_not_enable_keying_or_write_memories(self):
+        for command, frame, field, expected in (
+            ("KS", b"KS020;", "cw_keyer_speed_wpm", 20),
+            ("KP", b"KP35;", "cw_pitch_hz", 650),
+            ("KR", b"KR1;", "cw_keyer_enabled", True),
+            ("BI", b"BI0;", "cw_break_in_enabled", False),
+        ):
+            port = ScriptedPort(frame)
+            with self.subTest(command=command), patch(
+                "bricoham_station_agent.cat.serial.Serial", return_value=port
+            ):
+                cat = SerialCat(CatConfig("FTX-1", "COM_TEST", 38400))
+                try:
+                    result = cat.read(command)
+                    self.assertEqual(result[field], expected)
+                    self.assertFalse(result["tx_control_enabled"])
+                    self.assertEqual(port.writes, [command.encode("ascii") + b";"])
+                    self.assertFalse(port.rts or port.dtr)
+                    for forbidden in ("KY", "KY01", "KM1", "KR1", "BI1"):
+                        with self.assertRaises(ValueError):
+                            cat.read(forbidden)
                     self.assertEqual(port.writes, [command.encode("ascii") + b";"])
                 finally:
                     cat.close()

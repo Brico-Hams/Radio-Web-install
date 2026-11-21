@@ -44,6 +44,9 @@ Rutas autenticadas, tanto en el agente como en el proxy del coordinador:
 - `GET /api/v1/cat`: configuración de consultas, sin abrir el puerto.
 - `GET /api/v1/cat?command=FA`: ejecuta una consulta allowlist. El identificador
   no incluye terminador; para CI-V es `03` o `04`.
+- FTX-1 permite consultar `KS` (WPM), `KP` (Hz), `KR` (keyer) y `BI`
+  (break-in). Son lecturas, no llave CW ni reproduccion de memorias;
+  los comandos de transmision `KY` y escritura `KM` no se admiten.
 
 La respuesta declara `status: experimental`, `data_is_simulated: false` y
 `hardware_validation_complete: false`. Una respuesta válida solo demuestra esa

@@ -75,6 +75,10 @@ def read_profiles() -> dict[str, ReadProfile]:
     ftx_queries["ST"] = ReadQuery(b"ST;", ftx1.parse_split_reply, "split_enabled")
     ftx_queries["IF"] = ReadQuery(b"IF;", ftx1.parse_main_information, "main_information")
     ftx_queries["VX"] = ReadQuery(b"VX;", ftx1.parse_vox_reply, "vox_enabled")
+    ftx_queries["KS"] = ReadQuery(b"KS;", ftx1.parse_keyer_speed_reply, "cw_keyer_speed_wpm")
+    ftx_queries["KP"] = ReadQuery(b"KP;", ftx1.parse_key_pitch_reply, "cw_pitch_hz")
+    ftx_queries["KR"] = ReadQuery(b"KR;", ftx1.parse_keyer_reply, "cw_keyer_enabled")
+    ftx_queries["BI"] = ReadQuery(b"BI;", ftx1.parse_break_in_reply, "cw_break_in_enabled")
     profiles["FTX-1"] = ReadProfile("CAT ASCII", ftx_queries)
 
     tru_queries = {

@@ -28,6 +28,20 @@ El endpoint CAT de lectura construye exclusivamente `FA;`, `FB;`, `MD0;`, `MD1;`
 de transmisión. Todos tienen decoder y se pueden enviar por el transporte opt-in.
 La capacidad de lectura es `experimental`, nunca `verified`.
 
+Se añaden `VX;`, `KS;`, `KP;`, `KR;` y `BI;` a la allowlist de lectura.
+Las cuatro consultas CW usan el manual 2508-C, paginas PDF 8 y 19:
+`KS` devuelve 4..60 WPM, `KP` devuelve 300..1050 Hz en pasos de 10 Hz,
+`KR` informa el keyer interno y `BI` informa break-in, ambos booleanos.
+No habilitan keyer/break-in, no transmiten y no escriben memorias.
+
+El mismo manual distingue `KM` (contenido de memorias 1..5, hasta 50 caracteres)
+y `KY` (reproducir/detener memorias de texto o mensaje). **KY no es una llave
+instantanea key-down/key-up ni acepta texto arbitrario como otros modelos.**
+La tabla secundaria Hamlib consultada atribuye lectura/respuesta a KY, mientras
+el manual primario no las documenta. BricoHams no añade una consulta KY ni
+reutiliza un protocolo CW de otra radio. La llave remota activa sigue pendiente
+de un backend de keying con cancelacion y enclavamientos verificados.
+
 El manual oficial, páginas PDF 5 y 17, resuelve la escala: `FA014250000;`
 corresponde a 14.250000 MHz y documenta 30000..470000000 Hz. La API y CLI
 devuelven ahora `frequency_hz`, sustituyendo el anterior campo experimental

@@ -103,6 +103,13 @@ Al desconectar o pasar a segundo plano vuelve la configuracion, sin reconectar.
   El comportamiento del panel Workspace se comprueba mediante pruebas DOM,
   sin atribuirles una comprobacion visual.
 
+Incremento CAT posterior: FTX-1 incorpora lecturas KS/KP/KR/BI cotejadas con
+el manual primario, sin keying ni escritura de memorias. Pasan 23 pruebas Python
+enfocadas y diez de cliente sobre conexion, navegacion y perfiles regenerados;
+Ruff, lint/build y verificacion de los 53 recursos generados correctos.
+Wheel y ZIPAPP ejecutan los decoders empaquetados; bundle compartido identico
+en wheel, APK y assets Android/iOS, comprobado por SHA256.
+
 Los paquetes se encuentran en `remote-station/dist/`: subdirectorios `agent/`
 y `host/`, mas los dos APK debug. `SHA256SUMS` permite comprobar integridad.
 La aceptacion fisica USB/RF, pruebas en dispositivos moviles, compilacion/firma
