@@ -130,6 +130,7 @@ class SerialCat:
             xonxoff=False,
             rtscts=False,
             dsrdtr=False,
+            exclusive=True,
         )
         self._port = connection
         connection.rts = False

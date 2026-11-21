@@ -1,3 +1,5 @@
+import os
+import sys
 import time
 import unittest
 from unittest.mock import patch
@@ -65,10 +67,52 @@ class SerialCatTests(unittest.TestCase):
             self.assertEqual(result["status"], "experimental")
             self.assertEqual(port.writes, [b"FA;"])
             self.assertIsNone(factory.call_args.kwargs["port"])
+            self.assertTrue(factory.call_args.kwargs["exclusive"])
             for flag in ("xonxoff", "rtscts", "dsrdtr"):
                 self.assertFalse(factory.call_args.kwargs[flag])
             cat.close()
             self.assertTrue(port.closed)
+
+    def test_refused_exclusive_open_fails_without_writing_or_retrying(self) -> None:
+        class BusyPort(ScriptedPort):
+            def open(self) -> None:
+                super().open()
+                raise PermissionError("locked")
+
+        port = BusyPort(b"FA00014074000;")
+        with (
+            patch("bricoham_station_agent.cat.serial.Serial", return_value=port) as factory,
+            self.assertLogs("bricoham.station_agent.cat", level="WARNING"),
+        ):
+            cat = SerialCat(CatConfig("K4", "COM7", 38400))
+            with self.assertRaisesRegex(CatError, "^cat_io_failed$"):
+                cat.read("FA")
+            self.assertEqual(port.writes, [])
+            self.assertTrue(port.closed)
+            self.assertEqual(factory.call_count, 1)
+
+    @unittest.skipUnless(
+        sys.platform.startswith("linux") or sys.platform == "darwin",
+        "PTY and pyserial advisory lock test requires Linux or macOS",
+    )
+    def test_cooperating_agents_cannot_open_same_posix_port(self) -> None:
+        import pty
+
+        master, slave = pty.openpty()
+        first = SerialCat(CatConfig("K4", os.ttyname(slave), 38400))
+        second = SerialCat(CatConfig("K4", os.ttyname(slave), 38400))
+        try:
+            first._open()
+            with self.assertLogs("bricoham.station_agent.cat", level="WARNING"):
+                with self.assertRaisesRegex(CatError, "^cat_io_failed$"):
+                    second.read("FA")
+            first.close()
+            second._open()
+        finally:
+            first.close()
+            second.close()
+            os.close(slave)
+            os.close(master)
 
     def test_binary_civ_and_model_specific_decoding(self) -> None:
         port = ScriptedPort(bytes.fromhex("FEFE94E003FD FEFEE094030040071400FD"))

@@ -30,6 +30,11 @@ COM y no se envían setters, PTT o comandos arbitrarios.
   validarse la apertura/cierre con transmisión inhibida físicamente.
 - Una transacción a la vez; puerto persistente, escritura acotada, plazo de
   respuesta, framing por terminador, eco limitado y máximo 256 bytes.
+- El agente solicita apertura exclusiva. Windows usa la exclusión del sistema;
+  en Linux/macOS pyserial usa `flock` **consultivo**: solo evita la apertura
+  simultánea de otros procesos que cooperen con el mismo bloqueo. No garantiza
+  que WSJT-X, Hamlib u otra aplicación respeten ese bloqueo; mantén un único
+  propietario del CAT y no confíes en él como enclavamiento de transmisión.
 - Se descartan bytes pendientes antes de consultar; desactiva mensajes CAT
   espontáneos/AI en la configuración local de la radio si interfieren. El agente
   no cambia esos ajustes por ti.
