@@ -1,5 +1,6 @@
-import { useState } from 'react'
-import { ApiError, getApiData } from './api'
+import { useMemo, useState } from 'react'
+import { ApiError, createControlRequest, getApiData, isRecord } from './api'
+import { useLanguage } from './i18n'
 
 type LivePayload = {
   api_version: 'v1'
@@ -9,7 +10,8 @@ type LivePayload = {
   queries?: string[]
   source?: string
   connected?: boolean
-  commands_enabled?: false
+  commands_enabled?: boolean
+  commands_ready?: boolean
   tx_control_enabled?: false
   [key: string]: unknown
 }
@@ -18,7 +20,12 @@ function isLive(payload: unknown): payload is LivePayload {
   if (typeof payload !== 'object' || payload === null) return false
   const record = Object.fromEntries(Object.entries(payload))
   return record.api_version === 'v1' && record.data_is_simulated === false && (
-    (record.source === 'wsjtx_udp' && record.commands_enabled === false &&
+    (record.source === 'wsjtx_udp' &&
+      (record.commands_enabled === false ||
+        (record.commands_enabled === true && typeof record.commands_ready === 'boolean' &&
+          Array.isArray(record.allowed_operations) &&
+          record.allowed_operations.length === 2 &&
+          record.allowed_operations[0] === 'replay' && record.allowed_operations[1] === 'halt_tx')) &&
       record.authenticated === false && record.suitable_for_control === false &&
       record.trust === 'untrusted_local_udp' &&
       typeof record.connected === 'boolean' && Array.isArray(record.decodes)) ||
@@ -28,18 +35,58 @@ function isLive(payload: unknown): payload is LivePayload {
   )
 }
 
+type DigitalCommandResult = {
+  api_version: 'v1'
+  data_is_simulated: false
+  operation: 'replay' | 'halt_tx'
+  delivery: 'sent_unconfirmed'
+  transmission_stopped_confirmed: false
+  trust: 'untrusted_local_udp'
+}
+
+function isDigitalCommandResult(value: unknown): value is DigitalCommandResult {
+  return isRecord(value) && value.api_version === 'v1' && value.data_is_simulated === false &&
+    (value.operation === 'replay' || value.operation === 'halt_tx') &&
+    value.delivery === 'sent_unconfirmed' && value.transmission_stopped_confirmed === false &&
+    value.trust === 'untrusted_local_udp'
+}
+
 export function AgentLivePanel({ token }: { token: string }) {
+  const { t } = useLanguage()
+  const sendControl = useMemo(() => createControlRequest(token), [token])
   const [cat, setCat] = useState<LivePayload | null>(null)
   const [digital, setDigital] = useState<LivePayload | null>(null)
   const [command, setCommand] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const [commandResult, setCommandResult] = useState<DigitalCommandResult | null>(null)
+
+  async function operateDigital(operation: 'replay' | 'halt_tx') {
+    setBusy(true)
+    setError('')
+    setCommandResult(null)
+    try {
+      const result = await sendControl('/digital', {
+        operation, request_id: crypto.randomUUID(),
+      }, isDigitalCommandResult)
+      if (result.operation !== operation) throw new Error(t('digitalCommandFailed'))
+      setCommandResult(result)
+    } catch (error) {
+      setDigital(null)
+      setError(error instanceof Error ? error.message : t('digitalCommandFailed'))
+    } finally {
+      setBusy(false)
+    }
+  }
 
   async function load(kind: 'cat' | 'digital', read = false) {
     setBusy(true)
     setError('')
     if (kind === 'cat') setCat(null)
-    else setDigital(null)
+    else {
+      setDigital(null)
+      setCommandResult(null)
+    }
     try {
       const endpoint = `/${kind}${read ? `?command=${encodeURIComponent(command)}` : ''}`
       const response = await getApiData(token, endpoint, isLive)
@@ -67,8 +114,7 @@ export function AgentLivePanel({ token }: { token: string }) {
       </div>
       <p className="device-safety-note">
         CAT solo lee consultas permitidas en un puerto seleccionado explícitamente.
-        WSJT-X se ejecuta en el equipo de estación; el agente recibe su UDP local y no
-        envía comandos ni habilita TX. El estado TX que pueda mostrar WSJT-X es externo a BricoHams.
+        {t('digitalSafeCommandsNotice')}
       </p>
       <div className="session-actions">
         <button className="button button-secondary" disabled={busy}
@@ -99,9 +145,19 @@ export function AgentLivePanel({ token }: { token: string }) {
           <p role="note">UDP WSJT-X no autenticado: un proceso local puede suplantarlo.
             Estos datos no se usan para autorizar ni controlar la radio.</p>
           <p>{digital.connected ? 'WSJT-X detectado por UDP local' : 'WSJT-X sin actividad reciente; cualquier dato retenido es histórico'}</p>
+          {digital.commands_enabled ? <div className="session-actions">
+            <button className="button button-secondary" disabled={busy || !digital.commands_ready}
+              onClick={() => void operateDigital('replay')}>{t('digitalReplay')}</button>
+            <button className="button button-secondary" disabled={busy || !digital.commands_ready}
+              onClick={() => void operateDigital('halt_tx')}>{t('digitalHaltTx')}</button>
+          </div> : null}
+          {digital.commands_enabled ? <p role="note">{t('digitalDeliveryWarning')}</p> : null}
           <pre className="live-data">{JSON.stringify(digital, null, 2)}</pre>
         </div>
       ) : null}
+      {commandResult ? <p role="status">
+        {commandResult.operation === 'halt_tx' ? t('digitalHaltSent') : t('digitalReplaySent')}
+      </p> : null}
     </section>
   )
 }

@@ -4,6 +4,12 @@ export type Language = 'es' | 'en' | 'fr' | 'pt'
 export const languageNames = { es: 'Español', en: 'English', fr: 'Français', pt: 'Português' }
 
 const es = {
+  digitalSafeCommandsNotice: 'WSJT-X se ejecuta en la estación. Por defecto, el agente solo recibe UDP local; un opt-in local separado admite Replay y Halt Tx, nunca iniciar TX.',
+  digitalReplay: 'Recuperar decodificaciones WSJT-X', digitalHaltTx: 'Solicitar parada TX de WSJT-X',
+  digitalDeliveryWarning: 'UDP no ofrece ACK autenticado. Enviar Halt Tx no confirma parada RF: comprueba RX localmente y conserva las protecciones físicas.',
+  digitalHaltSent: 'Halt Tx enviado sin confirmación. Comprueba RX en la radio; no hay reintento automático.',
+  digitalReplaySent: 'Replay enviado sin confirmación. Consulta WSJT-X para revisar decodificaciones y estado, todavía no autenticados.',
+  digitalCommandFailed: 'Orden WSJT-X no confirmada. Consulta de nuevo; no hay reintento automático.',
   radioOperatingTitle: 'Frecuencia y modo Yaesu',
   radioOperatingSafety: 'CAT experimental real, separado de la demostración. Los selectores y límites corresponden al manual del modelo; no selecciona VFO activo ni transmisor. No habilita PTT. RX/ATU observados no son interlocks físicos: un control local puede cambiar el estado entre comandos.',
   radioReadControls: 'Consultar controles de radio', radioReadReceivers: 'Leer receptores',
@@ -86,6 +92,12 @@ const es = {
 }
 type Message = keyof typeof es
 const en: Record<Message, string> = {
+  digitalSafeCommandsNotice: 'WSJT-X runs at the station. By default the agent only receives local UDP; a separate local opt-in allows Replay and Halt Tx, never starting TX.',
+  digitalReplay: 'Retrieve WSJT-X decodes', digitalHaltTx: 'Request WSJT-X TX stop',
+  digitalDeliveryWarning: 'UDP provides no authenticated ACK. Sending Halt Tx does not confirm RF stop: check RX locally and keep physical protections.',
+  digitalHaltSent: 'Halt Tx sent without confirmation. Check RX on the radio; no automatic retry.',
+  digitalReplaySent: 'Replay sent without confirmation. Read WSJT-X to review decodes and status, still unauthenticated.',
+  digitalCommandFailed: 'WSJT-X command unconfirmed. Read again; no automatic retry.',
   radioOperatingTitle: 'Yaesu frequency and mode',
   radioOperatingSafety: 'Real experimental CAT, separate from demonstration. Selectors and limits follow the model manual; no active VFO or transmitter selection. Does not enable PTT. Observed RX/ATU are not physical interlocks: local controls can change state between commands.',
   radioReadControls: 'Read radio controls', radioReadReceivers: 'Read receivers',
@@ -161,6 +173,12 @@ const en: Record<Message, string> = {
   hostNotice:'Remote TLS host with verified agent link. Set distinct BRICOHAM_ADMIN_TOKEN and BRICOHAM_STATION_AGENT_TOKEN in the local environment. No secrets included; the host is not started.',
 }
 const fr: Record<Message, string> = {
+  digitalSafeCommandsNotice: 'WSJT-X fonctionne à la station. Par défaut, seul UDP local est reçu ; une activation locale distincte permet Replay et Halt Tx, jamais de démarrer TX.',
+  digitalReplay: 'Récupérer les décodages WSJT-X', digitalHaltTx: 'Demander l’arrêt TX de WSJT-X',
+  digitalDeliveryWarning: 'UDP ne fournit pas d’ACK authentifié. Envoyer Halt Tx ne confirme pas l’arrêt RF : vérifiez RX localement et conservez les protections physiques.',
+  digitalHaltSent: 'Halt Tx envoyé sans confirmation. Vérifiez RX sur la radio ; aucun nouvel essai automatique.',
+  digitalReplaySent: 'Replay envoyé sans confirmation. Consultez WSJT-X pour les décodages et l’état, toujours non authentifiés.',
+  digitalCommandFailed: 'Commande WSJT-X non confirmée. Relisez ; aucun nouvel essai automatique.',
   radioOperatingTitle: 'Fréquence et mode Yaesu',
   radioOperatingSafety: 'CAT expérimental réel, séparé de la démonstration. Sélecteurs et limites suivent le manuel du modèle ; aucun choix du VFO actif ou de l’émetteur. N’active pas le PTT. RX/ATU observés ne sont pas des interverrouillages physiques : les commandes locales peuvent changer l’état entre deux commandes.',
   radioReadControls: 'Lire les commandes radio', radioReadReceivers: 'Lire les récepteurs',
@@ -236,6 +254,12 @@ const fr: Record<Message, string> = {
   hostNotice:"Hôte TLS distant et lien agent vérifié. Configurez BRICOHAM_ADMIN_TOKEN et BRICOHAM_STATION_AGENT_TOKEN distincts dans l'environnement local. Aucun secret inclus, aucun démarrage.",
 }
 const pt: Record<Message, string> = {
+  digitalSafeCommandsNotice: 'WSJT-X funciona na estação. Por padrão, o agente só recebe UDP local; uma ativação local separada permite Replay e Halt Tx, nunca iniciar TX.',
+  digitalReplay: 'Recuperar descodificações WSJT-X', digitalHaltTx: 'Solicitar paragem TX do WSJT-X',
+  digitalDeliveryWarning: 'UDP não fornece ACK autenticado. Enviar Halt Tx não confirma paragem RF: verifique RX localmente e mantenha as proteções físicas.',
+  digitalHaltSent: 'Halt Tx enviado sem confirmação. Verifique RX no rádio; sem repetição automática.',
+  digitalReplaySent: 'Replay enviado sem confirmação. Consulte WSJT-X para descodificações e estado, ainda não autenticados.',
+  digitalCommandFailed: 'Comando WSJT-X não confirmado. Consulte novamente; sem repetição automática.',
   radioOperatingTitle: 'Frequência e modo Yaesu',
   radioOperatingSafety: 'CAT experimental real, separado da demonstração. Seletores e limites seguem o manual do modelo; não seleciona VFO ativo nem transmissor. Não ativa PTT. RX/ATU observados não são interbloqueios físicos: comandos locais podem mudar o estado entre ordens.',
   radioReadControls: 'Consultar controlos do rádio', radioReadReceivers: 'Ler recetores',

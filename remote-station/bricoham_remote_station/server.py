@@ -327,7 +327,7 @@ class CoordinatorRequestHandler(SecureRequestHandler):
         if urlsplit(self.path).path == REPORT_PATH:
             self._accept_diagnostic_report()
             return
-        if urlsplit(self.path).path in (ROTOR_PATH, SETTINGS_PATH, PTT_PATH):
+        if urlsplit(self.path).path in (ROTOR_PATH, SETTINGS_PATH, PTT_PATH, DIGITAL_PATH):
             self._operate_station_agent(urlsplit(self.path).path)
             return
         if urlsplit(self.path).path != LOGBOOK_PATH:
@@ -405,6 +405,9 @@ class CoordinatorRequestHandler(SecureRequestHandler):
         if role not in _DIAGNOSTIC_ROLES:
             self._send_error(HTTPStatus.FORBIDDEN, "forbidden")
             return
+        if path == DIGITAL_PATH and urlsplit(self.path).query:
+            self._send_error(HTTPStatus.BAD_REQUEST, "wsjtx_invalid_query")
+            return
         origin = self.headers.get("Origin")
         scheme = "https" if self.server.tls_context else "http"
         if (
@@ -442,7 +445,8 @@ class CoordinatorRequestHandler(SecureRequestHandler):
             or not path.startswith("/api/v1/")
             or method not in ("GET", "POST")
             or (
-                method == "POST" and path not in (LOGBOOK_PATH, ROTOR_PATH, SETTINGS_PATH, PTT_PATH)
+                method == "POST"
+                and path not in (LOGBOOK_PATH, ROTOR_PATH, SETTINGS_PATH, PTT_PATH, DIGITAL_PATH)
             )
             or requested - {"authorization", "content-type"}
         ):
@@ -820,7 +824,7 @@ class CoordinatorRequestHandler(SecureRequestHandler):
         if not isinstance(payload, dict) or not (
             _is_device_inventory(payload)
             if path == DEVICES_PATH
-            else _is_live_agent_data(path, payload)
+            else _is_live_agent_data(path, payload, method=method)
         ):
             self._send_error(HTTPStatus.BAD_GATEWAY, "station_agent_invalid_response")
             return
@@ -879,9 +883,16 @@ def _is_device_inventory(payload: dict[str, object]) -> bool:
     )
 
 
-def _is_live_agent_data(path: str, payload: dict[str, object]) -> bool:
+def _is_live_agent_data(path: str, payload: dict[str, object], *, method: str = "GET") -> bool:
     if payload.get("api_version") != API_VERSION or payload.get("data_is_simulated") is not False:
         return False
+    if path == DIGITAL_PATH and method == "POST":
+        return (
+            payload.get("operation") in ("replay", "halt_tx")
+            and payload.get("delivery") == "sent_unconfirmed"
+            and payload.get("transmission_stopped_confirmed") is False
+            and payload.get("trust") == "untrusted_local_udp"
+        )
     if path == PTT_PATH:
         return (
             payload.get("model") == "FTX-1"
@@ -978,7 +989,14 @@ def _is_live_agent_data(path: str, payload: dict[str, object]) -> bool:
         and payload.get("authenticated") is False
         and payload.get("suitable_for_control") is False
         and payload.get("trust") == "untrusted_local_udp"
-        and payload.get("commands_enabled") is False
+        and (
+            payload.get("commands_enabled") is False
+            or (
+                payload.get("commands_enabled") is True
+                and payload.get("allowed_operations") == ["replay", "halt_tx"]
+                and type(payload.get("commands_ready")) is bool
+            )
+        )
         and isinstance(payload.get("connected"), bool)
         and isinstance(decodes, list)
         and len(decodes) <= 100

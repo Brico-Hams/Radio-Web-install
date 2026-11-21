@@ -490,6 +490,33 @@ paths:
           description: Respuesta no válida del agente.
         "503":
           description: Agente o receptor WSJT-X no configurado/disponible.
+    post:
+      operationId: operateDigital
+      description: >
+        Proxy admin/operador de Replay/Halt Tx opt-in, sin inicio TX.
+        Valida origen de cliente y TLS del enlace remoto; no acepta query.
+        Entrega UDP no confirmada, nunca confirmación de parada RF.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "./api.station-agent.openapi.yaml#/components/schemas/DigitalOperation"
+      responses:
+        "200":
+          description: Datagram enviado; no confirma ejecución ni parada RF.
+          content:
+            application/json:
+              schema:
+                $ref: "./api.station-agent.openapi.yaml#/components/schemas/DigitalCommandResult"
+        "400": { description: Operación, query o campos inválidos. }
+        "401": { description: Token inválido. }
+        "403": { description: Rol/origen no autorizado. }
+        "409": { description: ID repetido o límite de Replay. }
+        "502": { description: Respuesta no válida o fallo TLS del agente. }
+        "503": { description: Opt-in desactivado, instancia caducada o error de transporte. }
   /api/v1/devices:
     get:
       operationId: getDeviceInventory

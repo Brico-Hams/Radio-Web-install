@@ -1,13 +1,86 @@
-import { render, screen } from '@testing-library/react'
+import { render as renderComponent, screen } from '@testing-library/react'
+import type { ReactNode } from 'react'
 import userEvent from '@testing-library/user-event'
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { AgentLivePanel } from './AgentLivePanel'
+import { LanguageProvider } from './LanguageProvider'
+
+function render(ui: ReactNode) {
+  return renderComponent(<LanguageProvider>{ui}</LanguageProvider>)
+}
+
+beforeEach(() => localStorage.removeItem('bricoham.language'))
 
 function json(payload: unknown, status = 200) {
   return new Response(JSON.stringify(payload), { status, headers: { 'Content-Type': 'application/json' } })
 }
 
 describe('agent live panel', () => {
+  it('offers only opt-in Replay and Halt Tx and explicitly marks delivery unconfirmed', async () => {
+    const fetch = vi.fn(async (_input: RequestInfo | URL, options?: RequestInit) => {
+      if (options?.method === 'POST') {
+        const body = JSON.parse(String(options.body))
+        return json({
+          api_version: 'v1', data_is_simulated: false, operation: body.operation,
+          delivery: 'sent_unconfirmed', transmission_stopped_confirmed: false,
+          trust: 'untrusted_local_udp',
+        })
+      }
+      return json({
+        api_version: 'v1', data_is_simulated: false, source: 'wsjtx_udp',
+        commands_enabled: true, commands_ready: true, allowed_operations: ['replay', 'halt_tx'],
+        connected: true, decodes: [], authenticated: false,
+        suitable_for_control: false, trust: 'untrusted_local_udp',
+      })
+    })
+    vi.stubGlobal('fetch', fetch)
+    const user = userEvent.setup()
+    render(<AgentLivePanel token="test-token" />)
+    expect(fetch).not.toHaveBeenCalled()
+    await user.click(screen.getByRole('button', { name: 'Consultar WSJT-X' }))
+    await user.click(await screen.findByRole('button', { name: 'Recuperar decodificaciones WSJT-X' }))
+    expect((await screen.findByRole('status')).textContent).toContain('Replay enviado sin confirmación')
+    await user.click(screen.getByRole('button', { name: 'Solicitar parada TX de WSJT-X' }))
+    expect((await screen.findByRole('status')).textContent).toContain('Halt Tx enviado sin confirmación')
+    const posts = fetch.mock.calls.filter(([, options]) => options?.method === 'POST')
+    expect(posts).toHaveLength(2)
+    expect(posts.map(([, options]) => JSON.parse(String(options?.body)).operation))
+      .toEqual(['replay', 'halt_tx'])
+    for (const [url, options] of posts) {
+      expect(url).toBe('/api/v1/digital')
+      expect(options?.headers).toEqual({
+        Authorization: 'Bearer test-token', 'Content-Type': 'application/json',
+      })
+      expect(JSON.parse(String(options?.body)).request_id).toMatch(/^[a-f0-9-]{36}$/)
+    }
+  })
+
+  it('blocks stale opt-in commands and clears command controls after delivery errors', async () => {
+    let reads = 0
+    const fetch = vi.fn(async (_input: RequestInfo | URL, options?: RequestInit) =>
+      options?.method === 'POST' ? json({
+        api_version: 'v1', error: { code: 'wsjtx_instance_unavailable' },
+      }, 503) : json({
+        api_version: 'v1', data_is_simulated: false, source: 'wsjtx_udp',
+        commands_enabled: true, commands_ready: ++reads > 1,
+        allowed_operations: ['replay', 'halt_tx'], connected: true, decodes: [],
+        authenticated: false, suitable_for_control: false, trust: 'untrusted_local_udp',
+      }))
+    vi.stubGlobal('fetch', fetch)
+    const user = userEvent.setup()
+    render(<AgentLivePanel token="test-token" />)
+    await user.click(screen.getByRole('button', { name: 'Consultar WSJT-X' }))
+    expect((await screen.findByRole<HTMLButtonElement>('button', {
+      name: 'Solicitar parada TX de WSJT-X',
+    })).disabled).toBe(true)
+    await user.click(screen.getByRole('button', { name: 'Consultar WSJT-X' }))
+    await user.click(await screen.findByRole('button', { name: 'Solicitar parada TX de WSJT-X' }))
+    expect((await screen.findByRole('alert')).textContent).toContain('wsjtx_instance_unavailable')
+    expect(screen.queryByRole('button', { name: 'Solicitar parada TX de WSJT-X' })).toBeNull()
+    expect(screen.queryByRole('status')).toBeNull()
+    expect(fetch).toHaveBeenCalledTimes(3)
+  })
+
   it('only reads an explicitly selected allowlisted CAT command', async () => {
     const fetch = vi.fn(async (input: RequestInfo | URL) => json({
       api_version: 'v1', data_is_simulated: false, status: 'experimental',

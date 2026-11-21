@@ -16,6 +16,7 @@ from test_audio_tx import FakeDac
 from test_ptt import PttPort
 from test_radio_settings import SettingsPort
 from test_rotor import RotorBroker
+from test_wsjtx import status_packet
 
 from bricoham_remote_station.diagnostic_reports import DiagnosticRuntime
 from bricoham_remote_station.secure_http import SecureHTTPServer, SecureRequestHandler
@@ -47,9 +48,101 @@ from bricoham_station_agent.server import (
 from bricoham_station_agent.server import (
     _parse_args as agent_args,
 )
+from bricoham_station_agent.wsjtx import WsjtxReceiver
 
 
 class SecureTransportTests(unittest.TestCase):
+    def test_digital_halt_crosses_validated_tls_links_and_requires_client_origin(self):
+        receiver = WsjtxReceiver(0, "WSJT-X", commands_enabled=True)
+        agent = self.running(
+            StationAgentHTTPServer(
+                0,
+                TokenAuthenticator({Role.ADMIN: self.link_token}),
+                lambda: [],
+                wsjtx=receiver,
+                tls_context=self.ip_context,
+            )
+        )
+        host = self.coordinator(
+            agent,
+            hostname="127.0.0.1",
+            ca_file=self.ip_cert,
+            tls_context=self.ip_context,
+            client_origins=("https://console.example",),
+        )
+        client_context = ssl.create_default_context(cafile=self.ip_cert)
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sender:
+            sender.settimeout(1)
+            sender.sendto(status_packet(), ("127.0.0.1", receiver.port))
+            deadline = time.monotonic() + 1
+            while not receiver.snapshot()["commands_ready"]:
+                if time.monotonic() >= deadline:
+                    self.fail("WSJT-X peer was not received")
+                time.sleep(0.01)
+            for origin, expected in (
+                ("https://evil.example", 403),
+                ("https://console.example", 200),
+            ):
+                connection = HTTPSConnection(
+                    "127.0.0.1",
+                    host.server_address[1],
+                    context=client_context,
+                    timeout=5,
+                )
+                try:
+                    connection.request(
+                        "POST",
+                        "/api/v1/digital",
+                        body=json.dumps(
+                            {
+                                "operation": "halt_tx",
+                                "request_id": "tls-halt-request-0001",
+                            }
+                        ),
+                        headers={
+                            "Authorization": f"Bearer {self.user_token}",
+                            "Content-Type": "application/json",
+                            "Origin": origin,
+                        },
+                    )
+                    response = connection.getresponse()
+                    payload = json.loads(response.read())
+                    self.assertEqual(response.status, expected)
+                    if expected == 200:
+                        self.assertEqual(
+                            response.getheader("Access-Control-Allow-Origin"),
+                            origin,
+                        )
+                        self.assertEqual(payload["delivery"], "sent_unconfirmed")
+                        self.assertFalse(payload["transmission_stopped_confirmed"])
+                finally:
+                    connection.close()
+            self.assertEqual(
+                sender.recvfrom(1024)[0],
+                b"\xad\xbc\xcb\xda\x00\x00\x00\x03\x00\x00\x00\x08\x00\x00\x00\x06WSJT-X\x00",
+            )
+            connection = HTTPSConnection(
+                "127.0.0.1",
+                host.server_address[1],
+                context=client_context,
+                timeout=5,
+            )
+            try:
+                connection.request(
+                    "OPTIONS",
+                    "/api/v1/digital",
+                    headers={
+                        "Origin": "https://console.example",
+                        "Access-Control-Request-Method": "POST",
+                        "Access-Control-Request-Headers": "authorization,content-type",
+                    },
+                )
+                response = connection.getresponse()
+                self.assertEqual(response.status, 200)
+                response.read()
+            finally:
+                connection.close()
+
     def test_diagnostic_upload_verifies_tls_and_requires_boolean_acknowledgement(self):
         class Receiver(SecureRequestHandler):
             acknowledgement = b'{"accepted":true}'

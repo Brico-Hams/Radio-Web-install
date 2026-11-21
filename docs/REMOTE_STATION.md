@@ -164,3 +164,31 @@ fuente y APK dedicado recompilado con lint y firma debug v2 verificados.
 El bundle coincide por SHA256 en wheel, APK y assets Android/iOS; SHA256SUMS
 se actualiza para los dos paquetes afectados. ZIPAPP y APK RadiCodex no cambian.
 No se atribuye compilacion iOS, aceptacion fisica ni firma de produccion.
+
+## Ordenes WSJT-X limitadas
+
+El agente y el host incorporan POST autenticado para Replay y Halt Tx,
+exclusivamente con `--enable-wsjtx-safe-commands` local. La consola compartida
+web/Android/iPhone/iPad ofrece ambas acciones en ES/EN/FR/PT. No hay inicio TX,
+Reply, Free Text ni Configure; el broker CAT y la operacion digital completa
+siguen pendientes. Consulta [activacion y limites UDP](../remote-station/docs/agente-cat-wsjtx.md).
+
+El primer origen loopback Heartbeat/Status queda fijado hasta reiniciar el
+agente. Se rechazan origen distinto, instancia caducada/cerrada, campos no
+admitidos y IDs repetidos; Replay tiene limite de una solicitud por segundo.
+Esto no autentica el proceso WSJT-X. La entrega siempre declara
+`sent_unconfirmed` y no confirma parada RF; la UI requiere nueva consulta
+tras error, sin reintentos. Mantener protecciones fisicas y comprobar RX.
+
+Verificacion: **228 pruebas Python** y **74 del cliente** correctas,
+incluido POST por dos enlaces TLS validados, CORS y rechazo de una respuesta
+que pretenda confirmar parada RF. Ruff, lint, TypeScript/Vite y 53 recursos
+generados correctos. Un timeout de diagnostico Workspace en la ejecucion
+concurrente se repitio aisladamente y despues en la suite completa con dos
+workers; ambas pasaron sin cambiar ese test ni sus limites.
+
+Wheel y ZIPAPP ejecutados fuera del arbol fuente; APK dedicado con build,
+lint y firma debug v2 correctos. Bundle identico en wheel/APK/assets Android/iOS
+y SHA256SUMS actualizado. Revision de seguridad limitada a este incremento
+y sus helpers de autenticacion/TLS: sin vulnerabilidades confirmadas.
+No certifica todo el producto, WSJT-X en ejecucion real ni hardware.

@@ -13,6 +13,11 @@ CA/hostname y un token dedicado distinto de los usuarios del host. El agente no
 recibe identidad individual del usuario ni órdenes de TX. Un fallo TLS no permite
 fallback HTTP; la UI no sustituye errores por simulación.
 
+El endpoint [digital](agente-cat-wsjtx.md) también reenvía Replay/Halt Tx con
+opt-in local independiente e ID de petición; nunca inicia transmisión. La
+allowlist del agente no convierte UDP WSJT-X en un protocolo autenticado.
+Una entrega `sent_unconfirmed` no confirma ejecución ni parada RF.
+
 El contrato operativo está especificado en
 [api.station-agent.openapi.yaml](api.station-agent.openapi.yaml); el contrato
 del coordinador, incluido su proxy, está en [api.openapi.yaml](api.openapi.yaml).

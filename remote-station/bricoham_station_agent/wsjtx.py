@@ -7,7 +7,13 @@ import threading
 import time
 from collections import deque
 
+from bricoham_station_agent.radio_settings import settings_request_identifier
+
 LOGGER = logging.getLogger("bricoham.station_agent.wsjtx")
+
+
+class WsjtxError(RuntimeError):
+    pass
 
 
 class _Reader:
@@ -109,12 +115,15 @@ def parse_packet(packet: bytes) -> tuple[int, str, dict[str, object]]:
 
 
 class WsjtxReceiver:
-    def __init__(self, port: int, identity: str) -> None:
+    def __init__(self, port: int, identity: str, *, commands_enabled: bool = False) -> None:
         if type(port) is not int or not 0 <= port <= 65535:
             raise ValueError("El puerto UDP debe estar entre 0 y 65535.")
         if not identity or len(identity) > 128:
             raise ValueError("Selecciona el Id exacto de instancia WSJT-X (máximo 128 caracteres).")
+        if type(commands_enabled) is not bool:
+            raise ValueError("WSJT-X commands require an explicit boolean opt-in.")
         self.identity = identity
+        self.commands_enabled = commands_enabled
         self._socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         try:
             self._socket.bind(("127.0.0.1", port))
@@ -135,6 +144,9 @@ class WsjtxReceiver:
         self._decodes: deque[dict[str, object]] = deque(maxlen=100)
         self._invalid_packets = 0
         self._ignored_packets = 0
+        self._peer: tuple[str, int] | None = None
+        self._requests: deque[str] = deque(maxlen=256)
+        self._last_replay: float | None = None
         self._thread.start()
 
     def close(self) -> None:
@@ -147,7 +159,7 @@ class WsjtxReceiver:
     def _receive(self) -> None:
         while not self._stop.is_set():
             try:
-                packet, _ = self._socket.recvfrom(65535)
+                packet, peer = self._socket.recvfrom(65535)
             except TimeoutError:
                 continue
             except OSError:
@@ -165,6 +177,12 @@ class WsjtxReceiver:
                 if identity != self.identity or kind not in (0, 1, 2, 3, 6):
                     self._ignored_packets += 1
                     continue
+                if self.commands_enabled:
+                    if self._peer is not None and peer != self._peer:
+                        self._ignored_packets += 1
+                        continue
+                    if self._peer is None and kind in (0, 1):
+                        self._peer = peer
                 self._last_seen = time.monotonic()
                 self._schema = int.from_bytes(packet[4:8], "big")
                 self._last_message_type = kind
@@ -177,6 +195,68 @@ class WsjtxReceiver:
                     self._decodes.clear()
                 elif kind == 6:
                     self._status = None
+
+    def _connected(self, age: float | None) -> bool:
+        return (
+            age is not None
+            and age < 60
+            and not self._closed
+            and not self._failed
+            and not self._stop.is_set()
+        )
+
+    def operate(self, payload: object) -> dict[str, object]:
+        if not isinstance(payload, dict) or set(payload) != {"operation", "request_id"}:
+            raise ValueError("Invalid WSJT-X operation fields.")
+        operation = payload["operation"]
+        if operation not in ("replay", "halt_tx"):
+            raise ValueError("Unsupported WSJT-X operation.")
+        identifier = settings_request_identifier(payload["request_id"])
+        with self._lock:
+            if not self.commands_enabled:
+                raise WsjtxError("wsjtx_commands_disabled")
+            now = time.monotonic()
+            age = None if self._last_seen is None else now - self._last_seen
+            if not self._connected(age) or self._peer is None or self._schema not in (2, 3):
+                raise WsjtxError("wsjtx_instance_unavailable")
+            if identifier in self._requests:
+                raise WsjtxError("wsjtx_command_request_repeated")
+            if (
+                operation == "replay"
+                and self._last_replay is not None
+                and now - self._last_replay < 1
+            ):
+                raise WsjtxError("wsjtx_replay_rate_limited")
+            encoded = self.identity.encode("utf-8")
+            packet = (
+                struct.pack(
+                    ">IIII",
+                    0xADBCCBDA,
+                    self._schema,
+                    7 if operation == "replay" else 8,
+                    len(encoded),
+                )
+                + encoded
+                + (b"\x00" if operation == "halt_tx" else b"")
+            )
+            self._requests.append(identifier)
+            if operation == "replay":
+                self._last_replay = now
+            try:
+                sent = self._socket.sendto(packet, self._peer)
+                if sent != len(packet):
+                    raise OSError("Incomplete WSJT-X datagram.")
+            except OSError as error:
+                LOGGER.warning("WSJT-X command delivery failed (%s)", type(error).__name__)
+                raise WsjtxError("wsjtx_command_io_failed") from error
+            return {
+                "api_version": "v1",
+                "data_is_simulated": False,
+                "operation": operation,
+                "delivery": "sent_unconfirmed",
+                "transmission_stopped_confirmed": False,
+                "trust": "untrusted_local_udp",
+            }
 
     def snapshot(self) -> dict[str, object]:
         with self._lock:
@@ -192,12 +272,16 @@ class WsjtxReceiver:
                 "supported_schemas": [2, 3],
                 "last_message_type": self._last_message_type,
                 "instance_id": self.identity,
-                "connected": age is not None and age < 60 and not self._closed and not self._failed,
+                "connected": self._connected(age),
                 "receiver_failed": self._failed,
                 "last_seen_age_seconds": age,
                 "status": copy.deepcopy(self._status),
                 "decodes": copy.deepcopy(list(self._decodes)),
                 "invalid_packets": self._invalid_packets,
                 "ignored_packets": self._ignored_packets,
-                "commands_enabled": False,
+                "commands_enabled": self.commands_enabled,
+                "allowed_operations": ["replay", "halt_tx"] if self.commands_enabled else [],
+                "commands_ready": (
+                    self.commands_enabled and self._peer is not None and self._connected(age)
+                ),
             }

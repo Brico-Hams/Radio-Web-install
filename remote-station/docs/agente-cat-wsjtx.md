@@ -99,7 +99,7 @@ el CAT directo del agente; compartirlo mediante un broker queda pendiente.
 - Contadores de paquetes inválidos o no implementados; datagramas mayores de
   8192 bytes y otros esquemas se rechazan.
 
-No implementa órdenes Reply/FreeText/Configure/HaltTx, audio, lanzamiento de
+Sin el opt-in descrito abajo no se envían órdenes. No implementa Reply/FreeText/Configure, audio, lanzamiento de
 WSJT-X, decodificación propia, importación automática de QSOs ni WSPR Decode.
 Los decodes nunca se insertan como contactos en el logbook. El UDP loopback no
 autentica al proceso emisor; el Id filtra instancias, no es una credencial.
@@ -107,6 +107,50 @@ La API marca `authenticated: false`, `trust: untrusted_local_udp` y
 `suitable_for_control: false`, y la consola advierte del riesgo. Esto evita
 presentarlos como datos confiables, pero no impide la suplantación local.
 No deben usarse para autorizar control, enclavamientos RF o altas automáticas.
+
+### Replay y Halt Tx: activación local independiente
+
+```powershell
+py -3.12 -m bricoham_station_agent --wsjtx-udp-port 2237 --wsjtx-id "WSJT-X" `
+  --enable-wsjtx-safe-commands
+```
+
+Este flag permite exclusivamente Replay (tipo 7) y Halt Tx (tipo 8,
+`Auto Tx Only=false`) del protocolo oficial. No permite Reply, Free Text,
+Configure ni mensajes arbitrarios; nunca inicia TX. WSJT-X sigue instalado y
+ejecutado por separado. Para recibir estas dos órdenes debe habilitarse la
+opción de solicitudes UDP de WSJT-X: esto también permite solicitudes de otros
+procesos locales, fuera de la allowlist de BricoHams. Aísla el usuario/equipo de
+estación y no publiques UDP ni lo uses en un equipo compartido no confiable.
+
+El primer Heartbeat/Status válido del Id elegido fija IP/puerto de origen
+loopback hasta reiniciar el agente. Otro origen no renueva el estado.
+Si WSJT-X cambia su puerto de origen al reiniciar, reinicia explícitamente
+el agente: no se redescubre ni se cambian destinos automáticamente.
+No se envían órdenes antes de descubrir ese origen, tras Close, fallo o
+60 segundos sin actividad. El Id y el pin de origen no autentican al proceso.
+
+`POST /api/v1/digital`, en agente y host, exige admin/operador, JSON con solo
+`operation` (`replay` o `halt_tx`) y `request_id` ASCII único de 16..64 caracteres
+alfanuméricos, guion o guion bajo. El host valida el origen del cliente y TLS
+del enlace remoto. No acepta IP, puerto, comandos ni parámetros del cliente.
+Se usa el esquema 2/3 observado. Los últimos 256 IDs se deduplican en memoria,
+incluidos los envíos fallidos; Replay admite como máximo una petición por segundo.
+No se limita Halt Tx por una solicitud Replay anterior ni se reintenta ninguna orden.
+
+La respuesta es `delivery: sent_unconfirmed`,
+`transmission_stopped_confirmed: false`. **UDP no ofrece ACK autenticado y no
+se confirma que WSJT-X haya obedecido ni que la radio haya dejado de transmitir.**
+Comprueba RX localmente y conserva las protecciones físicas. Los controles
+web/Android/iPhone/iPad muestran este límite en ES/EN/FR/PT; tras error requieren
+nueva consulta, sin reintento automático. Replay no importa QSOs: consulta de
+nuevo para revisar las decodificaciones, que siguen sin estar autenticadas.
+
+Errores explícitos: `wsjtx_commands_disabled`, `wsjtx_instance_unavailable`,
+`wsjtx_invalid_operation`, `wsjtx_command_request_repeated`,
+`wsjtx_replay_rate_limited` y `wsjtx_command_io_failed`.
+Las pruebas comprueban tramas en sockets reales, autorización y rechazo de
+respuestas que pretendan confirmar parada RF; no ejecutan WSJT-X ni prueban RF.
 
 ## Consola y evidencia
 

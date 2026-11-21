@@ -316,8 +316,8 @@ paths:
       operationId: getAgentDigital
       description: >
         Admin/operador; telemetría UDP WSJT-X de la instancia configurada.
-        Receptor pasivo loopback, esquemas 2/3; sin lanzamiento del programa,
-        audio, órdenes salientes ni registro automático de contactos.
+        Loopback, esquemas 2/3; pasivo por defecto. Replay/Halt Tx requieren
+        opt-in local independiente; sin audio, lanzamiento ni altas de contactos.
       security:
         - bearerAuth: []
       responses:
@@ -333,6 +333,32 @@ paths:
           description: Requiere admin/operador.
         "503":
           description: wsjtx_not_configured.
+    post:
+      operationId: operateAgentDigital
+      description: >
+        Admin/operador; Replay/Halt Tx exclusivamente con opt-in local,
+        origen UDP fijado y actividad reciente. Nunca inicia TX, no acepta query,
+        no reintenta ni confirma parada RF. UDP no autentica el proceso.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DigitalOperation"
+      responses:
+        "200":
+          description: Datagram enviado; ejecución y parada RF no confirmadas.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DigitalCommandResult"
+        "400": { description: Operación, query o campos inválidos. }
+        "401": { description: Token inválido. }
+        "403": { description: Requiere admin/operador. }
+        "409": { description: ID repetido o límite de Replay. }
+        "503": { description: Opt-in desactivado, instancia ausente/caducada o error UDP. }
   /api/v1/devices:
     get:
       operationId: getSerialDeviceInventory
@@ -794,7 +820,18 @@ components:
         FTX-1 usa Hz según el manual oficial CAT 2508-C; falta validación física.
     AgentDigital:
       type: object
-      required: [api_version, source, authenticated, trust, suitable_for_control, data_is_simulated, instance_id, connected, receiver_failed, status, decodes, commands_enabled]
+      required: [api_version, source, authenticated, trust, suitable_for_control, data_is_simulated, instance_id, connected, receiver_failed, status, decodes, commands_enabled, allowed_operations, commands_ready]
+      allOf:
+        - if:
+            properties:
+              commands_enabled: { const: true }
+          then:
+            properties:
+              allowed_operations: { const: [replay, halt_tx] }
+          else:
+            properties:
+              allowed_operations: { const: [] }
+              commands_ready: { const: false }
       properties:
         api_version:
           const: v1
@@ -837,7 +874,40 @@ components:
         ignored_packets:
           type: integer
         commands_enabled:
-          const: false
+          type: boolean
+          default: false
+        allowed_operations:
+          type: array
+          maxItems: 2
+          uniqueItems: true
+          items:
+            enum: [replay, halt_tx]
+        commands_ready:
+          type: boolean
+          description: Opt-in y origen UDP fijado con actividad reciente; no autentica al proceso.
+    DigitalOperation:
+      type: object
+      additionalProperties: false
+      required: [operation, request_id]
+      properties:
+        operation:
+          enum: [replay, halt_tx]
+        request_id:
+          type: string
+          minLength: 16
+          maxLength: 64
+          pattern: "^[A-Za-z0-9_-]+$"
+    DigitalCommandResult:
+      type: object
+      additionalProperties: false
+      required: [api_version, data_is_simulated, operation, delivery, transmission_stopped_confirmed, trust]
+      properties:
+        api_version: { const: v1 }
+        data_is_simulated: { const: false }
+        operation: { enum: [replay, halt_tx] }
+        delivery: { const: sent_unconfirmed }
+        transmission_stopped_confirmed: { const: false }
+        trust: { const: untrusted_local_udp }
     DeviceInventory:
       type: object
       required: [api_version, schema_version, devices]

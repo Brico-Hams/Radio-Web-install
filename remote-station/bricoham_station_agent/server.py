@@ -43,7 +43,7 @@ from bricoham_station_agent.inventory import (
 from bricoham_station_agent.ptt import PttConfig, PttController, PttError
 from bricoham_station_agent.radio_settings import RadioSettingsConfig
 from bricoham_station_agent.rotor import RotorConfig, RotorController, RotorError
-from bricoham_station_agent.wsjtx import WsjtxReceiver
+from bricoham_station_agent.wsjtx import WsjtxError, WsjtxReceiver
 
 LOGGER = logging.getLogger("bricoham.station_agent")
 HEALTH_PATH = "/healthz"
@@ -366,7 +366,7 @@ class StationAgentRequestHandler(SecureRequestHandler):
 
     def do_POST(self) -> None:
         path = urlsplit(self.path).path
-        if path not in (ROTOR_PATH, SETTINGS_PATH, PTT_PATH):
+        if path not in (ROTOR_PATH, SETTINGS_PATH, PTT_PATH, DIGITAL_PATH):
             self._method_not_allowed()
             return
         self.close_connection = True
@@ -376,6 +376,31 @@ class StationAgentRequestHandler(SecureRequestHandler):
             return
         if role not in _INVENTORY_ROLES:
             self._send_error(HTTPStatus.FORBIDDEN, "forbidden")
+            return
+        if path == DIGITAL_PATH:
+            if self.server.wsjtx is None:
+                self._send_error(HTTPStatus.SERVICE_UNAVAILABLE, "wsjtx_not_configured")
+                return
+            if urlsplit(self.path).query:
+                self._send_error(HTTPStatus.BAD_REQUEST, "wsjtx_invalid_query")
+                return
+            try:
+                result = self.server.wsjtx.operate(self.request_json())
+            except RequestJsonError as error:
+                self._send_error(error.status, str(error))
+                return
+            except ValueError:
+                self._send_error(HTTPStatus.BAD_REQUEST, "wsjtx_invalid_operation")
+                return
+            except WsjtxError as error:
+                self._send_error(
+                    HTTPStatus.CONFLICT
+                    if str(error) in ("wsjtx_command_request_repeated", "wsjtx_replay_rate_limited")
+                    else HTTPStatus.SERVICE_UNAVAILABLE,
+                    str(error),
+                )
+                return
+            self._send_json(HTTPStatus.OK, result)
             return
         if path == PTT_PATH:
             if self.server.ptt is None:
@@ -538,6 +563,11 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--serial-stopbits", type=int, choices=(1, 2), default=1)
     parser.add_argument("--wsjtx-udp-port", type=int)
     parser.add_argument(
+        "--enable-wsjtx-safe-commands",
+        action="store_true",
+        help="Opt-in local WSJT-X Replay/Halt Tx only; never enables transmission.",
+    )
+    parser.add_argument(
         "--wsjtx-id", help="Id exacto de instancia WSJT-X; sin lanzamiento automático."
     )
     args = parser.parse_args(argv)
@@ -562,6 +592,8 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         parser.error("--tx-audio-config requires --ptt-config.")
     if (args.wsjtx_udp_port is None) != (args.wsjtx_id is None):
         parser.error("WSJT-X requiere --wsjtx-udp-port y --wsjtx-id juntos.")
+    if args.enable_wsjtx_safe_commands and args.wsjtx_id is None:
+        parser.error("--enable-wsjtx-safe-commands requires explicit WSJT-X port and Id.")
     if args.wsjtx_id is not None and not 1 <= len(args.wsjtx_id) <= 128:
         parser.error("--wsjtx-id debe tener entre 1 y 128 caracteres.")
     return args
@@ -603,7 +635,15 @@ def main(argv: list[str] | None = None) -> int:
             if args.enable_experimental_cat
             else None
         )
-        wsjtx = WsjtxReceiver(args.wsjtx_udp_port, args.wsjtx_id) if args.wsjtx_id else None
+        wsjtx = (
+            WsjtxReceiver(
+                args.wsjtx_udp_port,
+                args.wsjtx_id,
+                commands_enabled=args.enable_wsjtx_safe_commands,
+            )
+            if args.wsjtx_id
+            else None
+        )
         rotor = RotorController(rotor_config) if rotor_config else None
         ptt = None
         if ptt_config is not None:
@@ -661,7 +701,11 @@ def main(argv: list[str] | None = None) -> int:
                 settings_config.metadata(model=args.serial_model)["power_unit"],
             )
         if wsjtx is not None:
-            LOGGER.info("WSJT-X UDP pasivo en 127.0.0.1:%s; sin comandos salientes", wsjtx.port)
+            LOGGER.info(
+                "WSJT-X UDP en 127.0.0.1:%s; Replay/Halt Tx opt-in=%s; no habilita TX",
+                wsjtx.port,
+                wsjtx.commands_enabled,
+            )
         if ptt is not None:
             LOGGER.warning(
                 "Guarded PTT configured: enabled=%s, MAIN simplex SSB only; "

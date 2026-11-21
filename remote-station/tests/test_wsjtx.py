@@ -4,7 +4,7 @@ import time
 import unittest
 from unittest.mock import patch
 
-from bricoham_station_agent.wsjtx import WsjtxReceiver, parse_packet
+from bricoham_station_agent.wsjtx import WsjtxError, WsjtxReceiver, parse_packet
 
 
 def text(value: str | None) -> bytes:
@@ -43,6 +43,128 @@ def decode_packet() -> bytes:
 
 
 class WsjtxTests(unittest.TestCase):
+    def test_opt_in_commands_use_observed_schema_and_pin_instance_endpoint(self) -> None:
+        for schema in (2, 3):
+            with self.subTest(schema=schema):
+                identity = "WSJT-X-é"
+                receiver = WsjtxReceiver(0, identity, commands_enabled=True)
+                with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sender:
+                    try:
+                        sender.settimeout(1)
+                        address = ("127.0.0.1", receiver.port)
+                        header = struct.pack(">III", 0xADBCCBDA, schema, 0)
+                        sender.sendto(
+                            header
+                            + text(identity)
+                            + struct.pack(">I", schema)
+                            + text("2.7")
+                            + text("test"),
+                            address,
+                        )
+                        deadline = time.monotonic() + 1
+                        while not receiver.snapshot()["commands_ready"]:
+                            if time.monotonic() >= deadline:
+                                self.fail("WSJT-X peer was not received")
+                            time.sleep(0.01)
+                        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as other:
+                            other.sendto(packet(6, identity=identity), address)
+                            deadline = time.monotonic() + 1
+                            while not receiver.snapshot()["ignored_packets"]:
+                                if time.monotonic() >= deadline:
+                                    self.fail("Second endpoint was not rejected")
+                                time.sleep(0.01)
+                        for operation, kind, suffix in (
+                            ("replay", 7, b""),
+                            ("halt_tx", 8, b"\x00"),
+                        ):
+                            result = receiver.operate(
+                                {
+                                    "operation": operation,
+                                    "request_id": f"wsjtx-{operation}-0001",
+                                }
+                            )
+                            received, source = sender.recvfrom(1024)
+                            self.assertEqual(
+                                received,
+                                struct.pack(">III", 0xADBCCBDA, schema, kind)
+                                + text(identity)
+                                + suffix,
+                            )
+                            self.assertEqual(source, address)
+                            self.assertEqual(result["delivery"], "sent_unconfirmed")
+                            self.assertFalse(result["transmission_stopped_confirmed"])
+                        with self.assertRaisesRegex(WsjtxError, "request_repeated"):
+                            receiver.operate(
+                                {
+                                    "operation": "halt_tx",
+                                    "request_id": "wsjtx-halt_tx-0001",
+                                }
+                            )
+                        with self.assertRaisesRegex(WsjtxError, "replay_rate_limited"):
+                            receiver.operate(
+                                {
+                                    "operation": "replay",
+                                    "request_id": "wsjtx-replay-0002",
+                                }
+                            )
+                        sender.settimeout(0.05)
+                        with self.assertRaises(TimeoutError):
+                            sender.recvfrom(1024)
+                    finally:
+                        receiver.close()
+
+    def test_commands_reject_invalid_disabled_stale_closed_and_failed_delivery(self) -> None:
+        operation = {"operation": "halt_tx", "request_id": "halt-request-test-0001"}
+        receiver = WsjtxReceiver(0, "WSJT-X")
+        try:
+            with self.assertRaisesRegex(WsjtxError, "commands_disabled"):
+                receiver.operate(operation)
+            for invalid in (
+                {"operation": "reply", "request_id": "halt-request-test-0001"},
+                {**operation, "endpoint": "192.0.2.1"},
+                {**operation, "request_id": "short"},
+            ):
+                with self.assertRaises(ValueError):
+                    receiver.operate(invalid)
+        finally:
+            receiver.close()
+        receiver = WsjtxReceiver(0, "WSJT-X", commands_enabled=True)
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sender:
+            try:
+                with self.assertRaisesRegex(WsjtxError, "instance_unavailable"):
+                    receiver.operate(operation)
+                sender.sendto(status_packet(), ("127.0.0.1", receiver.port))
+                deadline = time.monotonic() + 1
+                while not receiver.snapshot()["commands_ready"]:
+                    if time.monotonic() >= deadline:
+                        self.fail("WSJT-X peer was not received")
+                    time.sleep(0.01)
+                with patch(
+                    "bricoham_station_agent.wsjtx.time.monotonic",
+                    return_value=time.monotonic() + 61,
+                ):
+                    with self.assertRaisesRegex(WsjtxError, "instance_unavailable"):
+                        receiver.operate(operation)
+                with patch("socket.socket.sendto", side_effect=OSError("private detail")):
+                    with self.assertLogs("bricoham.station_agent.wsjtx", level="WARNING"):
+                        with self.assertRaisesRegex(WsjtxError, "command_io_failed"):
+                            receiver.operate(operation)
+                with self.assertRaisesRegex(WsjtxError, "request_repeated"):
+                    receiver.operate(operation)
+                sender.sendto(packet(6), ("127.0.0.1", receiver.port))
+                deadline = time.monotonic() + 1
+                while receiver.snapshot()["last_message_type"] != 6:
+                    if time.monotonic() >= deadline:
+                        self.fail("WSJT-X close was not received")
+                    time.sleep(0.01)
+                with self.assertRaisesRegex(WsjtxError, "instance_unavailable"):
+                    receiver.operate({**operation, "request_id": "halt-request-test-0002"})
+                sender.settimeout(0.05)
+                with self.assertRaises(TimeoutError):
+                    sender.recvfrom(1024)
+            finally:
+                receiver.close()
+
     def test_status_and_decode_parse_documented_fields_not_tx_commands(self) -> None:
         kind, identity, status = parse_packet(status_packet() + b"\x00")
         self.assertEqual((kind, identity), (1, "WSJT-X"))

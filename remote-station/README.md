@@ -40,10 +40,11 @@ no declara hardware validado ni producto completo.
 - **Audio TX experimental:** [micrófono remoto y DAC USB explícito](docs/audio-tx.md),
   WebSocket autenticado, TLS/mTLS y capacidad vinculada a PTT; salida silenciada
   hasta confirmar TX, VOX apagado y parada al perder audio fresco.
-- **Pendiente:** CW, WSJT-X activo, scope/waterfall nativos, aceptación física/móvil,
+- **Pendiente:** CW, inicio TX digital/broker WSJT-X, scope/waterfall nativos, aceptación física/móvil,
   agente Android OTG y otros accesorios.
 - **Digitales:** receptor UDP local WSJT-X integrado en el agente y consola;
-  estado/decodes pasivos no autenticados, sin audio ni órdenes salientes a WSJT-X.
+  estado/decodes no autenticados. Replay y Halt Tx mediante opt-in local separado,
+  sin ACK ni confirmación de parada RF; no inicia TX ni integra audio digital.
 - **Distribución y enlace:** [agente headless y host HTTPS separados](docs/despliegue-seguro.md),
   validación CA/hostname, secreto dedicado, mTLS de equipo opt-in y HTTP remoto prohibido.
 - **Clientes móviles:** [proyectos Android/tablet, iPhone e iPad](docs/clientes-moviles.md)
@@ -151,6 +152,7 @@ Rutas de la API:
 | `GET /api/v1/devices` | Admin/operador; proxy al agente loopback, 503 si está detenido |
 | `GET /api/v1/cat` | Admin/operador; catálogo del agente o lectura experimental con `?command=` |
 | `GET /api/v1/digital` | Admin/operador; estado/decodes WSJT-X recibidos por el agente |
+| `POST /api/v1/digital` | Admin/operador; Replay/Halt Tx con opt-in local; entrega no confirmada |
 | `GET /api/v1/rotor` | Admin/operador; metadatos o posición con `?command=position`, configuración opt-in |
 | `POST /api/v1/rotor` | Admin/operador; objetivo, renovación o parada; límites y deadman en el agente |
 | `GET /api/v1/radio-settings` | Admin/operador; configuración IC-7300 opt-in sin abrir puerto |

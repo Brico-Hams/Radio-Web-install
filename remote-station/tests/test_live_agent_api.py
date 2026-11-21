@@ -2,6 +2,7 @@ import contextlib
 import io
 import json
 import socket
+import struct
 import threading
 import time
 import unittest
@@ -23,6 +24,110 @@ from bricoham_station_agent.wsjtx import WsjtxReceiver
 
 
 class LiveAgentApiTests(unittest.TestCase):
+    def test_digital_commands_require_local_opt_in_and_roles_at_both_services(self):
+        command = {"operation": "halt_tx", "request_id": "api-halt-request-0001"}
+        for direct in (False, True):
+            for role, expected in (
+                (None, 401),
+                (Role.LISTENER, 403),
+                (Role.GUEST, 403),
+                (Role.OPERATOR, 503),
+            ):
+                status, _ = self.request(
+                    "/api/v1/digital",
+                    role,
+                    direct,
+                    method="POST",
+                    payload=command,
+                )
+                self.assertEqual(status, expected)
+        self.assertEqual(
+            self.request(
+                "/api/v1/digital",
+                method="POST",
+                payload=command,
+                headers={"Origin": "https://evil.example"},
+            )[0],
+            403,
+        )
+        for direct in (False, True):
+            self.assertEqual(
+                self.request(
+                    "/api/v1/digital?endpoint=evil",
+                    direct=direct,
+                    method="POST",
+                    payload=command,
+                )[0],
+                400,
+            )
+
+    def test_digital_command_proxy_sends_only_documented_packets_without_claiming_rf_stop(self):
+        self.wsjtx.close()
+        self.wsjtx = WsjtxReceiver(0, "WSJT-X", commands_enabled=True)
+        self.agent.wsjtx = self.wsjtx
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sender:
+            sender.settimeout(1)
+            sender.sendto(status_packet(), ("127.0.0.1", self.wsjtx.port))
+            deadline = time.monotonic() + 1
+            while not self.wsjtx.snapshot()["commands_ready"]:
+                if time.monotonic() >= deadline:
+                    self.fail("WSJT-X peer was not received")
+                time.sleep(0.01)
+            status, metadata = self.request("/api/v1/digital")
+            self.assertEqual(status, 200)
+            self.assertEqual(metadata["allowed_operations"], ["replay", "halt_tx"])
+            for operation, kind in (("replay", 7), ("halt_tx", 8)):
+                command = {"operation": operation, "request_id": f"api-{operation}-request-0001"}
+                status, result = self.request(
+                    "/api/v1/digital",
+                    Role.OPERATOR,
+                    method="POST",
+                    payload=command,
+                )
+                self.assertEqual(status, 200)
+                self.assertEqual(result["delivery"], "sent_unconfirmed")
+                self.assertFalse(result["transmission_stopped_confirmed"])
+                sent = sender.recvfrom(1024)[0]
+                self.assertEqual(struct.unpack(">III", sent[:12]), (0xADBCCBDA, 3, kind))
+                self.assertEqual(
+                    sent[12:],
+                    b"\x00\x00\x00\x06WSJT-X" + (b"\x00" if operation == "halt_tx" else b""),
+                )
+                status, result = self.request("/api/v1/digital", method="POST", payload=command)
+                self.assertEqual(status, 409)
+                self.assertEqual(result["error"]["code"], "wsjtx_command_request_repeated")
+            self.assertEqual(
+                self.request(
+                    "/api/v1/digital",
+                    method="POST",
+                    payload={"operation": "free_text", "request_id": "api-invalid-request-0001"},
+                )[0],
+                400,
+            )
+            sender.settimeout(0.05)
+            with self.assertRaises(TimeoutError):
+                sender.recvfrom(1024)
+        with patch.object(
+            self.wsjtx,
+            "operate",
+            return_value={
+                "api_version": "v1",
+                "data_is_simulated": False,
+                "operation": "halt_tx",
+                "delivery": "sent_unconfirmed",
+                "transmission_stopped_confirmed": True,
+                "trust": "untrusted_local_udp",
+            },
+        ):
+            self.assertEqual(
+                self.request(
+                    "/api/v1/digital",
+                    method="POST",
+                    payload={"operation": "halt_tx", "request_id": "api-untrusted-request-0001"},
+                )[0],
+                502,
+            )
+
     def setUp(self) -> None:
         self.tokens = {role: role.value.ljust(32, "x") for role in Role}
         auth = TokenAuthenticator(self.tokens)
@@ -272,6 +377,7 @@ class LiveAgentApiTests(unittest.TestCase):
             ["--serial-model", "K4"],
             ["--enable-experimental-cat"],
             ["--wsjtx-id", "WSJT-X"],
+            ["--enable-wsjtx-safe-commands"],
             ["--wsjtx-id", "", "--wsjtx-udp-port", "2237"],
             ["--radio-settings-config", "unsafe.json"],
         ):
@@ -290,7 +396,9 @@ class LiveAgentApiTests(unittest.TestCase):
                 "WSJT-X",
                 "--wsjtx-udp-port",
                 "2237",
+                "--enable-wsjtx-safe-commands",
             ]
         )
         self.assertTrue(args.enable_experimental_cat)
         self.assertEqual(args.wsjtx_udp_port, 2237)
+        self.assertTrue(args.enable_wsjtx_safe_commands)
