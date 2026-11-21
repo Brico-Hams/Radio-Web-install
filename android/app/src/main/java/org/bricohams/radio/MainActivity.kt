@@ -334,6 +334,16 @@ class MainActivity : LocalizedActivity() {
             try { build() } finally { content = parent }
         }
         section(R.string.home_next_pass_title, R.string.home_group_satellites_help) { nextPass() }
+        section(R.string.remote_title, R.string.remote_help) {
+            content.addView(BrandUi.primaryButton(this, getString(R.string.remote_connect)) {
+                startActivity(Intent(this, RemoteStationActivity::class.java))
+            })
+        }
+        section(R.string.anon_diag_title, R.string.anon_diag_disabled) {
+            content.addView(BrandUi.primaryButton(this, getString(R.string.anon_diag_inspect)) {
+                startActivity(Intent(this, AnonymousDiagnosticsActivity::class.java))
+            })
+        }
 
         fun tools(tool: Tool): View {
             val data = info(tool)

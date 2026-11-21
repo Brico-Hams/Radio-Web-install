@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Bricohams Radio Workspace - Estacion remota</title>
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob: data:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <link rel="icon" href="bricohams-logo.png" type="image/png">
+  <link rel="stylesheet" href="styles.css">
+  <script src="appearance.js" defer></script>
+  <script src="radio-core.js" defer></script>
+  <script src="runtime-mode.js" defer></script>
+  <script src="ui-translations.js" defer></script>
+  <script src="ui-i18n.js" defer></script>
+  <script src="station-ui.js" defer></script>
+  <script type="module" src="diagnostics-ui.mjs"></script>
+  <script src="app.js" defer></script>
+</head>
+<body data-page="station">
+  <a class="skip" href="#main">Saltar al contenido</a>
+  <template id="station-content">
+    <header class="page-head"><h1>Estacion remota</h1><p>Radio USB conectada al agente, host HTTPS y cliente HTML5. No abre USB ni activa TX desde esta pagina.</p></header>
+    <section class="panel operations">
+      <h2>Conectar con tu host</h2>
+      <form id="station-connect">
+        <label for="station-host">URL HTTPS del host de estacion</label>
+        <input id="station-host" type="url" required autocomplete="off" placeholder="https://station.example.org:8787">
+        <button class="button primary" type="submit">Preparar conexion HTTPS</button>
+      </form>
+      <p id="station-status" role="status"></p>
+      <a id="station-open" class="button secondary" target="_blank" rel="noopener noreferrer" hidden>Abrir cliente de estacion</a>
+      <p>El token se introduce solo en el host; no se guarda ni se transmite desde esta pagina. Los editores y firmware locales siguen separados del acceso remoto.</p>
+    </section>
+    <section class="panel">
+      <h2>Agente y clientes integrados</h2>
+      <p>El modulo remote-station incluye host, agentes Windows/Linux/macOS/Raspberry Pi, cliente Android/tablet y proyecto iPhone/iPad. Ayuda y configuracion ES/EN/FR/PT en el cliente del host.</p>
+      <p>CAT, audio RX/TX, PTT, rotor, potencia y acoplador dependen del modelo, los opt-ins locales y sus limites. Hardware sin validar; CW activo, WSJT-X activo y scope nativo FTX-1 siguen pendientes.</p>
+    </section>
+  </template>
+  <div id="app"></div>
+  <noscript>Activa JavaScript para preparar la conexion HTTPS a tu estacion.</noscript>
+</body>
+</html>

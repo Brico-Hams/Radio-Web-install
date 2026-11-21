@@ -1,0 +1,31 @@
+[project]
+name = "bricoham-remote-station"
+version = "0.1.0"
+description = "Bricohams Radio Workspace: host HTTPS y agente de estacion independiente"
+requires-python = ">=3.12"
+dependencies = ["pyserial==3.5", "wsproto==1.3.2", "h11==0.16.0"]
+
+[project.optional-dependencies]
+audio = ["sounddevice==0.5.3"]
+
+[project.scripts]
+bricohams-station-host = "bricoham_remote_station.server:main"
+bricohams-station-agent = "bricoham_station_agent.server:main"
+bricoham-coordinator = "bricoham_remote_station.server:main"
+bricoham-station-agent = "bricoham_station_agent.server:main"
+bricoham-cat = "bricoham_remote_station.cat_diagnostics:main"
+bricoham-logbook = "bricoham_remote_station.logbook:main"
+
+[tool.setuptools.packages.find]
+include = ["bricoham_remote_station*", "bricoham_station_agent*"]
+namespaces = false
+
+[tool.setuptools.package-data]
+bricoham_remote_station = ["web_console/*", "web_console/**/*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["B", "E", "F", "I", "UP"]

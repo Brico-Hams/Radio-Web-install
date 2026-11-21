@@ -4,6 +4,12 @@
 
 # Bricohams Radio-Arbeitsbereich
 
+[Integrierte Remote-Station](docs/REMOTE_STATION.md): HTTPS-Host,
+Windows/Linux/macOS/Raspberry-Pi-Agenten und Web/Android/Tablet/iPhone/iPad-Clients.
+Web und RadiCodex trennen lokale Firmware vom Fernzugriff, mit ausdruecklicher
+Freigabe und Verriegelungen. Offene Hardware- und Funktionspruefungen bleiben
+dokumentiert und gelten nicht als bestaetigte Kompatibilitaet.
+
 Zwei Bereiche mit jeweils eigenen Anschlüssen WebUSB/Web Serial, lokale Vorgänge und automatische Sicherung, bevor Schreibvorgänge zugelassen werden.
 
 ## Projektstruktur und Distributionstests

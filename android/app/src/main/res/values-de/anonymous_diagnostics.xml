@@ -1,0 +1,15 @@
+<resources>
+    <string name="anon_diag_title">Remote-Softwarediagnose</string>
+    <string name="anon_diag_privacy">Begrenzte technische Logs: Version, allgemeine Plattform, Codes und Codezeilen. Keine Tokens, Rufzeichen, QSOs, Frequenzen, Audio, Position, Ports oder Geräte-/Installationskennungen. Der HTTPS-Empfänger kann IP und Verbindungsmetadaten kennen. Versand standardmäßig aus; Freigabe sendet die letzten 16 Einträge im Vordergrund. Geheimnis nur im Speicher; Neustart deaktiviert Versand. Keine Funkverbindung und kein TX. Bestehende detaillierte USB-Berichte bleiben privat und werden nie automatisch gesendet.</string>
+    <string name="anon_diag_host">HTTPS-Basis-URL des Empfängers</string>
+    <string name="anon_diag_token">Eigenes Diagnose-Token (mindestens 32 Zeichen)</string>
+    <string name="anon_diag_enable">Remote-Versand für diese Sitzung erlauben</string>
+    <string name="anon_diag_disable">Remote-Versand deaktivieren</string>
+    <string name="anon_diag_inspect">Technischen Bericht prüfen</string>
+    <string name="anon_diag_clear">Nur technische Logs löschen und Versand deaktivieren</string>
+    <string name="anon_diag_enabled">Versand für diese Sitzung erlaubt; konfigurierter HTTPS-Empfänger erforderlich. Zustellung nicht bestätigt.</string>
+    <string name="anon_diag_disabled">Remote-Versand aus; nur lokales technisches Log.</string>
+    <string name="anon_diag_invalid">Konfiguration abgelehnt: HTTPS-Basis-URL ohne Zugangsdaten/Pfad/Parameter und gültiges eigenes Token erforderlich.</string>
+    <string name="anon_diag_empty">Keine technischen Ereignisse.</string>
+    <string name="anon_diag_failure">Speicherung oder Zustellung fehlgeschlagen; Empfang unbestätigt. HTTPS, Berechtigungen und Konfiguration prüfen.</string>
+</resources>

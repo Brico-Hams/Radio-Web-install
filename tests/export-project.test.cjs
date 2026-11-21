@@ -9,6 +9,19 @@ const { execFileSync } = require("node:child_process");
 const { projectSource, safeRelative, checksumFiles, copyAndroid, exportProject } = require("../scripts/export-project.cjs");
 const sha = bytes => createHash("sha256").update(bytes).digest("hex");
 
+test("remote source export includes official branding and excludes Python caches, keys and release binaries", () => {
+  for (const name of ["remote-station/pyproject.toml", "remote-station/bricoham_station_agent/server.py",
+    "remote-station/apps/web-console/src/App.tsx", "branding/bricohams_mark.svg"]) {
+    assert.equal(projectSource(name), true, name);
+  }
+  for (const name of ["remote-station/.venv/pyvenv.cfg", "remote-station/package.egg-info/PKG-INFO",
+    "remote-station/tests/__pycache__/test_api.pyc", "remote-station/.pytest_cache/v/cache/nodeids",
+    "remote-station/host.key", "remote-station/host.pem", "remote-station/agent.pyz",
+    "remote-station/dist/station.whl"]) {
+    assert.equal(projectSource(name), false, name);
+  }
+});
+
 function write(directory, name, text) {
   const file = path.join(directory, ...name.split("/"));
   fs.mkdirSync(path.dirname(file), { recursive: true });

@@ -1,0 +1,328 @@
+[
+  {
+    "model": "(tr)uSDX",
+    "protocol": "CAT ASCII",
+    "commands": [
+      "FA",
+      "MD",
+      "ID"
+    ]
+  },
+  {
+    "model": "FT-710",
+    "protocol": "CAT ASCII",
+    "commands": [
+      "FA",
+      "FB",
+      "MD0",
+      "MD1",
+      "ID"
+    ]
+  },
+  {
+    "model": "FT-991A",
+    "protocol": "CAT ASCII",
+    "commands": [
+      "FA",
+      "FB",
+      "MD0",
+      "ID"
+    ]
+  },
+  {
+    "model": "FTDX10",
+    "protocol": "CAT ASCII",
+    "commands": [
+      "FA",
+      "FB",
+      "MD0",
+      "MD1",
+      "ID"
+    ]
+  },
+  {
+    "model": "FTDX101D",
+    "protocol": "CAT ASCII",
+    "commands": [
+      "FA",
+      "FB",
+      "MD0",
+      "MD1",
+      "ID"
+    ]
+  },
+  {
+    "model": "FTDX101MP",
+    "protocol": "CAT ASCII",
+    "commands": [
+      "FA",
+      "FB",
+      "MD0",
+      "MD1",
+      "ID"
+    ]
+  },
+  {
+    "model": "FTDX3000",
+    "protocol": "CAT ASCII",
+    "commands": [
+      "FA",
+      "FB",
+      "MD0",
+      "ID"
+    ]
+  },
+  {
+    "model": "FTX-1",
+    "protocol": "CAT ASCII",
+    "commands": [
+      "FA",
+      "FB",
+      "MD0",
+      "MD1",
+      "ID",
+      "PC",
+      "AC",
+      "TX",
+      "FT",
+      "ST",
+      "IF",
+      "VX"
+    ]
+  },
+  {
+    "model": "IC-705",
+    "protocol": "Icom CI-V",
+    "commands": [
+      "03",
+      "04"
+    ]
+  },
+  {
+    "model": "IC-7100",
+    "protocol": "Icom CI-V",
+    "commands": [
+      "03",
+      "04"
+    ]
+  },
+  {
+    "model": "IC-7200",
+    "protocol": "Icom CI-V",
+    "commands": [
+      "03",
+      "04"
+    ]
+  },
+  {
+    "model": "IC-7300",
+    "protocol": "Icom CI-V",
+    "commands": [
+      "03",
+      "04"
+    ]
+  },
+  {
+    "model": "IC-7300MK2",
+    "protocol": "Icom CI-V",
+    "commands": [
+      "03",
+      "04"
+    ]
+  },
+  {
+    "model": "IC-7410",
+    "protocol": "Icom CI-V",
+    "commands": [
+      "03",
+      "04"
+    ]
+  },
+  {
+    "model": "IC-7600",
+    "protocol": "Icom CI-V",
+    "commands": [
+      "03",
+      "04"
+    ]
+  },
+  {
+    "model": "IC-7610",
+    "protocol": "Icom CI-V",
+    "commands": [
+      "03",
+      "04"
+    ]
+  },
+  {
+    "model": "IC-7700",
+    "protocol": "Icom CI-V",
+    "commands": [
+      "03",
+      "04"
+    ]
+  },
+  {
+    "model": "IC-7760",
+    "protocol": "Icom CI-V",
+    "commands": [
+      "03",
+      "04"
+    ]
+  },
+  {
+    "model": "IC-7850",
+    "protocol": "Icom CI-V",
+    "commands": [
+      "03",
+      "04"
+    ]
+  },
+  {
+    "model": "IC-7851",
+    "protocol": "Icom CI-V",
+    "commands": [
+      "03",
+      "04"
+    ]
+  },
+  {
+    "model": "IC-905",
+    "protocol": "Icom CI-V",
+    "commands": [
+      "03",
+      "04"
+    ]
+  },
+  {
+    "model": "IC-9100",
+    "protocol": "Icom CI-V",
+    "commands": [
+      "03",
+      "04"
+    ]
+  },
+  {
+    "model": "IC-9700",
+    "protocol": "Icom CI-V",
+    "commands": [
+      "03",
+      "04"
+    ]
+  },
+  {
+    "model": "IC-R8600 (receiver)",
+    "protocol": "Icom CI-V",
+    "commands": [
+      "03",
+      "04"
+    ]
+  },
+  {
+    "model": "K3",
+    "protocol": "CAT ASCII",
+    "commands": [
+      "FA",
+      "FB",
+      "MD",
+      "MD$",
+      "BW",
+      "BW$"
+    ]
+  },
+  {
+    "model": "K3S",
+    "protocol": "CAT ASCII",
+    "commands": [
+      "FA",
+      "FB",
+      "MD",
+      "MD$",
+      "BW",
+      "BW$",
+      "ID",
+      "OM"
+    ]
+  },
+  {
+    "model": "K4",
+    "protocol": "CAT ASCII",
+    "commands": [
+      "FA",
+      "FB",
+      "MD",
+      "MD$"
+    ]
+  },
+  {
+    "model": "KX2",
+    "protocol": "CAT ASCII",
+    "commands": [
+      "FA",
+      "FB",
+      "MD",
+      "MD$",
+      "BW",
+      "BW$"
+    ]
+  },
+  {
+    "model": "KX3",
+    "protocol": "CAT ASCII",
+    "commands": [
+      "FA",
+      "FB",
+      "MD",
+      "MD$",
+      "BW",
+      "BW$"
+    ]
+  },
+  {
+    "model": "QMX+",
+    "protocol": "CAT ASCII",
+    "commands": [
+      "FA",
+      "FB",
+      "MD"
+    ]
+  },
+  {
+    "model": "TS-590S",
+    "protocol": "CAT ASCII",
+    "commands": [
+      "FA",
+      "FB",
+      "MD"
+    ]
+  },
+  {
+    "model": "TS-590SG",
+    "protocol": "CAT ASCII",
+    "commands": [
+      "FA",
+      "FB",
+      "MD"
+    ]
+  },
+  {
+    "model": "TS-890S",
+    "protocol": "CAT ASCII",
+    "commands": [
+      "FA",
+      "FB",
+      "SF0",
+      "SF1"
+    ]
+  },
+  {
+    "model": "TS-990S",
+    "protocol": "CAT ASCII",
+    "commands": [
+      "FA",
+      "FB",
+      "OM0",
+      "OM1"
+    ]
+  }
+]

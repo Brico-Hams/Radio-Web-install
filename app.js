@@ -117,6 +117,7 @@ const helpTemplate = document.getElementById("help-content");
 const anytoneTemplate = document.getElementById("anytone-content");
 const ftx1Template = document.getElementById("ftx1-content");
 const icomTemplate = document.getElementById("icom-content");
+const stationTemplate = document.getElementById("station-content");
 const external = 'target="_blank" rel="noopener noreferrer"';
 // Quansheng shows one view at a time (no in-page anchors); the other pages keep scrolling to the step.
 const steps = page === "quansheng"
@@ -146,7 +147,7 @@ const navItem = (file, label, key, extra = "", children = "") =>
   `<li><a href="${file}"${page === key ? ' aria-current="page"' : ""}${extra}>${label}</a>${children}</li>`;
 const nav = (key, label) => navItem(`${key}.html`, label, key);
 const sidebarNav = () => `<nav aria-label="Navegacion principal"><ul class="nav-list">${navItem("index.html", "Inicio", "home")}${navItem("satelites.html", "Satelites", "satelites")}${navItem("radios.html", "Radios", "radios", isModel ? ' class="nav-ancestor"' : "",
-  `<ul class="nav-sub" aria-label="Modelos de radio">${nav("opengd77", "OpenGD77")}${nav("quansheng", "Quansheng")}${nav("anytone", "AnyTone Beta")}${nav("ftx1", "Yaesu FTX-1")}${nav("icom", "Icom transversores")}</ul>`)}${navItem("ayuda.html", "Ayuda", "ayuda")}</ul></nav>`;
+  `<ul class="nav-sub" aria-label="Modelos de radio">${nav("opengd77", "OpenGD77")}${nav("quansheng", "Quansheng")}${nav("anytone", "AnyTone Beta")}${nav("ftx1", "Yaesu FTX-1")}${nav("icom", "Icom transversores")}</ul>`)}${navItem("station.html", "Estacion remota", "station")}${navItem("ayuda.html", "Ayuda", "ayuda")}</ul></nav>`;
 
 function readStorage(key) {
   try { return JSON.parse(localStorage.getItem(key)); } catch { return null; }
@@ -202,6 +203,7 @@ function home() {
   return `<header class="page-head">${eyebrow}<h1>Inicio</h1></header>
   <section id="home-next-pass" class="panel home-panel" aria-live="polite" aria-labelledby="home-next-pass-title"><h2 id="home-next-pass-title">Proximo pase</h2><div id="home-next-pass-body"></div></section>
   <section id="home-your-radio" class="panel home-panel" aria-labelledby="home-your-radio-title"><h2 id="home-your-radio-title">Tu radio</h2>${yourRadio}</section>
+  <section class="panel home-panel"><h2>Estacion remota</h2><a class="button secondary" href="station.html">Conectar con tu host</a></section>
   <aside class="notice"><span class="notice-icon" aria-hidden="true">!</span><div><h2>Parecidas por fuera. Diferentes por dentro.</h2><p>OpenGD77 y F4HWN no son firmware intercambiables. Confirma el modelo, la revision de hardware y el firmware antes de conectar o escribir.</p></div></aside>
   <section class="steps-summary" aria-label="Como empezar"><div><span>01</span><h3>Conecta</h3><p>Elige tu familia y pulsa Conectar radio.</p></div><div><span>02</span><h3>Reconocemos tu radio</h3><p>Verás su nombre y su firmware.</p></div><div><span>03</span><h3>Elige una acción</h3>  <p>Sin copia verificada, no se escribe.</p></div></section>
     <p class="card-note home-help"><a href="ayuda.html">Primeros pasos y ayuda</a> &middot; <a href="ayuda-quansheng.html#puesta-en-marcha-de-0-a-100">Quansheng de 0 a 100 %</a> &middot; <a href="ayuda-atlas-uv-k5-v3.html">Atlas tecnico UV-K5 V3</a> &middot; <a href="ayuda-firmwares.html">Biblioteca de firmware</a></p>`;
@@ -276,13 +278,18 @@ document.getElementById("app").innerHTML = `
     <div class="sidebar-bottom"><span class="local-dot"></span> USB / Serial local<p>Sin envio de datos a servidores.<br>Copias antes de escribir.</p></div>
   </aside>
   <div class="workspace"><header class="topbar">
-    <div class="topbar-left"><span class="crumb">${BRAND.name} <span class="breadcrumb">/ ${current ? current.name : anytoneTemplate ? "AnyTone Beta" : ftx1Template ? "Yaesu FTX-1" : icomTemplate ? "Icom transversores" : helpTemplate ? "Ayuda y soporte" : page === "satelites" ? "Satelites" : page === "radios" ? "Radios" : "Inicio"}</span></span>${current ? '<span class="topbar-status"><span class="status-dot" aria-hidden="true"></span><span id="topbar-status">Sin conexion.</span></span>' : ""}</div>
+    <div class="topbar-left"><span class="crumb">${BRAND.name} <span class="breadcrumb">/ ${current ? current.name : stationTemplate ? "Estacion remota" : anytoneTemplate ? "AnyTone Beta" : ftx1Template ? "Yaesu FTX-1" : icomTemplate ? "Icom transversores" : helpTemplate ? "Ayuda y soporte" : page === "satelites" ? "Satelites" : page === "radios" ? "Radios" : "Inicio"}</span></span>${current ? '<span class="topbar-status"><span class="status-dot" aria-hidden="true"></span><span id="topbar-status">Sin conexion.</span></span>' : ""}</div>
     <div class="topbar-right"><span class="pill">BETA - EN VALIDACION</span><span id="mode-badge" class="mode-badge"></span><span class="local-badge">SIN CUENTA &middot; SIN SUBIDAS</span>${current ? '<button id="topbar-connect" class="button primary topbar-connect" type="button" disabled><span aria-hidden="true">⌁</span> Conectar</button>' : ""}</div></header>
-  <main id="main">${current ? detail(current) : helpTemplate || anytoneTemplate ||   ftx1Template || icomTemplate || page === "satelites" ? "" : page === "radios" ? radios() : home()}</main>  <footer><span>&copy; 2026 ${BRAND.name} ${BRAND.product} <span class="muted">/ GPL-3.0-or-later / Sin garantia</span></span><span><a href="ayuda-referencias.html">Documentacion de referencia</a> &middot; <a href="ayuda.html#inicio">Instalar en local</a> &middot; <a href="ayuda.html">Ayuda y soporte</a> &middot; <a href="${BRAND.repository}" target="_blank" rel="noopener noreferrer">Codigo fuente</a> &middot; No afiliado a OpenGD77, grid.radio, F4HWN ni Quansheng.</span></footer></div>`;
+  <main id="main">${current ? detail(current) : stationTemplate || helpTemplate || anytoneTemplate || ftx1Template || icomTemplate || page === "satelites" ? "" : page === "radios" ? radios() : home()}</main>  <footer><span>&copy; 2026 ${BRAND.name} ${BRAND.product} <span class="muted">/ GPL-3.0-or-later / Sin garantia</span></span><span><a href="ayuda-referencias.html">Documentacion de referencia</a> &middot; <a href="ayuda.html#inicio">Instalar en local</a> &middot; <a href="ayuda.html">Ayuda y soporte</a> &middot; <a href="${BRAND.repository}" target="_blank" rel="noopener noreferrer">Codigo fuente</a> &middot; No afiliado a OpenGD77, grid.radio, F4HWN ni Quansheng.</span></footer></div>`;
 
 if (anytoneTemplate) {
   document.getElementById("main").append(anytoneTemplate.content.cloneNode(true));
   globalThis.RadioWorkspace.mountAnytoneUI();
+}
+
+if (stationTemplate) {
+  document.getElementById("main").replaceChildren(stationTemplate.content.cloneNode(true));
+  globalThis.RadioWorkspace.mountStationUI();
 }
 
 if (ftx1Template) {

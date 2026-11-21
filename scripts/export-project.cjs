@@ -10,9 +10,9 @@ require("../custom-firmware-ui.js");
 
 const root = path.join(__dirname, "..");
 const sha = bytes => createHash("sha256").update(bytes).digest("hex");
-const sourceDirectories = new Set([".github", "docs", "firmware", "android", "installers", "scripts", "tests", "data"]);
-const privateName = /^(?:\.env(?:\..*)?|node_modules|\.git|\.vscode|\.gradle|\.kotlin|build|local\.properties|dist|firmware-builds|coverage|tmp)$/i;
-const privateFile = /(?:\.bin|\.apk|\.aab|\.jks|\.keystore|\.g77|\.rwb\.json|\.provenance\.json|\.log|\.tle|\.pem|\.key|\.p12|\.pfx|\.bundle)$/i;
+const sourceDirectories = new Set([".github", "docs", "firmware", "android", "installers", "scripts", "tests", "data", "branding", "remote-station"]);
+const privateName = /^(?:\.env(?:\..*)?|node_modules|\.git|\.vscode|\.gradle|\.kotlin|\.venv|__pycache__|\.ruff_cache|\.pytest_cache|\.mypy_cache|.+\.egg-info|build|local\.properties|dist|firmware-builds|coverage|tmp)$/i;
+const privateFile = /(?:\.bin|\.apk|\.aab|\.jks|\.keystore|\.g77|\.rwb\.json|\.provenance\.json|\.log|\.jsonl(?:\.tmp)?|\.sqlite3(?:-wal|-shm|-journal)?|\.tle|\.pem|\.key|\.p12|\.pfx|\.bundle|\.pyc|\.pyo|\.pyz|\.whl)$/i;
 
 function safeRelative(name) {
   if (!name || /[\x00-\x1f\x7f]/.test(name) || name.includes("\\") || name.startsWith("/") || name.includes(":") ||
@@ -30,7 +30,7 @@ function projectSource(name) {
   if (parts.some(part => privateName.test(part)) || privateFile.test(name)) return false;
   if (name === "studio.html") return false;
   if (parts[0] === "data") return name === "data/satellites.config.json";
-  return parts.length === 1 ? /^(?:LICENSE|\.gitignore)$|\.(?:md|js|cjs|json|html|css|png)$/.test(name) :
+  return parts.length === 1 ? /^(?:LICENSE|\.gitignore)$|\.(?:md|js|cjs|mjs|mts|json|html|css|png)$/.test(name) :
     sourceDirectories.has(parts[0]);
 }
 

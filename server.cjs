@@ -15,6 +15,8 @@ function generatedTemplateFiles() {
   return [...data, ...(fsSync.existsSync(path.join(__dirname, "templates/repeaters/index.json")) ? ["templates/repeaters/index.json"] : []), ...repeaters];
 }
 const BASE_FILES = [
+  "station.html", "station-ui.js",
+  "diagnostics-core.mjs", "diagnostic-contract.mjs", "diagnostics-ui.mjs",
   // OTA page + manifest and firmware signatures exist only after the release pipeline has produced them (docs/RELEASE.md).
   "ota.html", "ota.css", "ota.js",
   ...["radicodex-update.json", "precompiled/SHA256SUMS", "precompiled/SHA256SUMS.sig",
@@ -70,7 +72,7 @@ function studioCSP(lock) {
   return `default-src 'none'; script-src ${lock.scriptHashes.map(hash => `'${hash}'`).join(" ")}; style-src 'unsafe-inline'; img-src data: blob:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`;
 }
 const defaultStudio = () => ({ file: path.join(__dirname, "studio.html"), lock: require("./studio.lock.json") });
-function createServer(firmware = new FirmwareService(), providers = new DataService(), studio = defaultStudio()) {
+function createServer(firmware = new FirmwareService(), providers = new DataService(), studio = defaultStudio(), diagnostics = null) {
 return http.createServer(async (request, response) => {
   response.setHeader("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob: data:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'");
   response.setHeader("Permissions-Policy", "usb=(self), serial=(self), camera=(), microphone=(), geolocation=(self)");
@@ -87,6 +89,31 @@ return http.createServer(async (request, response) => {
     (request.headers.origin && request.headers.origin !== `http://${request.headers.host}`)) {
     response.writeHead(403);
     response.end("Solo se permite el origen local.");
+    return;
+  }
+  if (request.method === "POST" && request.url === "/api/diagnostic-report") {
+    if (request.headers.origin !== `http://${request.headers.host}` || request.headers["content-type"] !== "application/json") {
+      response.writeHead(403); response.end("Origen o tipo no permitido."); return;
+    }
+    if (!diagnostics?.status().remote_enabled) {
+      response.writeHead(503); response.end("Diagnostico remoto no configurado o sin consentimiento."); return;
+    }
+    let body = "";
+    try {
+      for await (const chunk of request) {
+        body += chunk.toString("utf8");
+        if (Buffer.byteLength(body) > 4096) {
+          response.writeHead(413); response.end("Informe demasiado grande."); return;
+        }
+      }
+      await diagnostics.accept(JSON.parse(body));
+      response.writeHead(202, { "Content-Type": "application/json" });
+      response.end('{"accepted":true}');
+    } catch (error) {
+      console.warn("Diagnostic relay failed; no private report fields logged.");
+      response.writeHead(error instanceof SyntaxError || error instanceof TypeError ? 400 : 502);
+      response.end("Diagnostico no confirmado.");
+    }
     return;
   }
   if (request.method === "POST" && request.url === "/api/data/repeaterbook-config") {
@@ -238,11 +265,26 @@ return http.createServer(async (request, response) => {
 });
 }
 if (require.main === module) {
-const server = createServer();
-server.on("error", error => {
-  console.error(`Error de servidor: ${error.message}`);
-  process.exitCode = 1;
-});
-server.listen(8787, "127.0.0.1", () => console.log("Bricohams Radio Workspace: http://127.0.0.1:8787 (solo equipo local)"));
+void (async () => {
+  const { createDiagnostics } = require("./diagnostics-node.cjs");
+  const diagnostics = await createDiagnostics({
+    optIn: process.env.BRICOHAM_DIAGNOSTICS_OPT_IN === "1",
+    url: process.env.BRICOHAM_DIAGNOSTICS_URL, token: process.env.BRICOHAM_DIAGNOSTICS_TOKEN,
+    ca: process.env.BRICOHAM_DIAGNOSTICS_CA,
+  });
+  const original = { warn: console.warn, error: console.error };
+  for (const level of ["warn", "error"]) console[level] = (...args) => {
+    diagnostics.record("runtime_log", "server", level === "warn" ? "warning" : "error",
+      args.find(value => value instanceof Error));
+    original[level](...args);
+  };
+  const server = createServer(undefined, undefined, undefined, diagnostics);
+  server.on("close", () => { void diagnostics.close(); });
+  server.on("error", error => {
+    console.error(`Error de servidor: ${error.message}`);
+    process.exitCode = 1;
+  });
+  server.listen(8787, "127.0.0.1", () => console.log("Bricohams Radio Workspace: http://127.0.0.1:8787 (solo equipo local)"));
+})().catch(() => { console.error("No se pudo iniciar el servidor o su diagnostico configurado."); process.exitCode = 1; });
 }
 module.exports = { createServer, ALLOWED_FILES };

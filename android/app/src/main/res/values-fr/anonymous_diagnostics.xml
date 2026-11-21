@@ -1,0 +1,15 @@
+<resources>
+    <string name="anon_diag_title">Diagnostic distant du logiciel</string>
+    <string name="anon_diag_privacy">Journaux techniques limités : version, plateforme générique, codes et lignes de code. Aucun jeton, indicatif, QSO, fréquence, audio, emplacement, port ou identifiant appareil/installation. Le récepteur HTTPS peut connaître votre IP et les métadonnées de connexion. Envoi désactivé par défaut ; autoriser envoie les 16 dernières entrées au premier plan. Secret en mémoire uniquement ; redémarrer désactive le transfert. Aucune connexion radio ni TX. Les anciens rapports USB détaillés restent privés, jamais envoyés automatiquement.</string>
+    <string name="anon_diag_host">URL HTTPS de base du récepteur</string>
+    <string name="anon_diag_token">Jeton de diagnostic dédié (32 caractères minimum)</string>
+    <string name="anon_diag_enable">Autoriser le transfert pour cette session</string>
+    <string name="anon_diag_disable">Désactiver le transfert distant</string>
+    <string name="anon_diag_inspect">Vérifier le rapport technique</string>
+    <string name="anon_diag_clear">Effacer seulement les journaux techniques et désactiver le transfert</string>
+    <string name="anon_diag_enabled">Envoi permis pour cette session ; récepteur HTTPS configuré requis. Livraison non confirmée.</string>
+    <string name="anon_diag_disabled">Transfert distant désactivé ; journal technique local uniquement.</string>
+    <string name="anon_diag_invalid">Configuration refusée : URL HTTPS de base sans identifiants/chemin/paramètres et jeton dédié valide requis.</string>
+    <string name="anon_diag_empty">Aucun événement technique.</string>
+    <string name="anon_diag_failure">Échec du stockage ou transfert ; réception non confirmée. Vérifiez HTTPS, permissions et configuration.</string>
+</resources>

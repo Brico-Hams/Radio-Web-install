@@ -1,0 +1,665 @@
+openapi: 3.1.0
+info:
+  title: Bricohams Radio Workspace - Remote Station Coordinator API
+  version: 1.0.0
+  description: API HTTP loopback o HTTPS remoto, logbook y proxy CAT/rotor/PTT/audio experimental opt-in.
+servers:
+  - url: http://127.0.0.1:8787
+  - url: https://host.example.org:8787
+    description: TLS explícito; CORS solo para orígenes HTTPS/Capacitor configurados.
+paths:
+  /api/v1/audio/tx:
+    get:
+      operationId: openTxAudio
+      security: []
+      description: >
+        Upgrade WebSocket bricoham.pcm-tx.v1. Origin obligatorio mismo origen o
+        allowlist; sin query/cuerpo. Primer mensaje JSON token obligatorio,
+        plazo 2 s, admin/operador; el upgrade no autoriza audio. El host sustituye
+        credenciales con el token del enlace al agente remoto y valida TLS/mTLS.
+        PCM16LE mono 48 kHz, 1920 bytes/mensaje; ver audio-tx.md.
+      responses:
+        "101": { description: Upgrade; requiere autenticación antes de acceder al agente. }
+        "400": { description: Upgrade inválido. }
+        "403": { description: Origin no permitido. }
+  /api/v1/audio:
+    get:
+      operationId: getAudioMetadata
+      description: Admin, operador o listener; metadatos sin abrir el dispositivo.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Configuración experimental o enabled false.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [api_version, enabled]
+                properties:
+                  api_version: { const: v1 }
+                  enabled: { type: boolean }
+                  format: { const: BHR1 }
+                  device: { type: integer, minimum: 0 }
+                  device_name: { type: [string, "null"] }
+                  sample_rate: { type: integer, minimum: 8000, maximum: 48000 }
+                  block_ms: { type: integer, minimum: 10, maximum: 100 }
+                  channels: { const: 1 }
+                  bits: { const: 16 }
+                  hardware_validated: { const: false }
+        "401": { description: Token inválido. }
+        "403": { description: Rol no autorizado. }
+        "502": { description: Respuesta de agente inválida. }
+  /api/v1/audio/stream:
+    get:
+      operationId: streamAudio
+      description: >
+        Admin, operador o listener. Un consumidor; BHR1 PCM16 mono por HTTP chunked.
+        Consulte audio-rx.md para formato y truncamiento ante errores.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Flujo binario RX experimental.
+          content:
+            application/vnd.bricoham.pcm:
+              schema: { type: string, format: binary }
+        "400": { description: No admite query. }
+        "401": { description: Token inválido. }
+        "403": { description: Rol no autorizado. }
+        "409": { description: Audio ocupado. }
+        "502": { description: Agente o enlace inválido. }
+        "503": { description: Audio no configurado o captura no disponible. }
+  /healthz:
+    get:
+      operationId: getHealth
+      security: []
+      responses:
+        "200":
+          description: Coordinador activo; no incluye datos de estación.
+  /api/v1/status:
+    get:
+      operationId: getStationStatus
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Estado de demostración identificado como simulado.
+        "401":
+          description: Token ausente o inválido.
+        "403":
+          description: Rol no autorizado.
+  /api/v1/capabilities:
+    get:
+      operationId: getCapabilities
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Capacidades BricoHam con su estado y límites de validación.
+        "401":
+          description: Token ausente o inválido.
+  /api/v1/radios:
+    get:
+      operationId: getRadioCandidates
+      description: >
+        Catálogo de candidatos y afirmaciones atribuidas a las fuentes indicadas.
+        No es una lista de radios soportadas ni validadas por BricoHam.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: >
+            Catálogo versionado de 46 candidatas. Las fichas y afirmaciones de
+            terceros no implican soporte o validación BricoHam.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RadioCandidateCatalog"
+        "401":
+          description: Token ausente o inválido.
+        "403":
+          description: Rol no autorizado.
+  /api/v1/protocols:
+    get:
+      operationId: getProtocolCatalog
+      description: >
+        Consultas y parsers offline por candidato. No conecta ni envía CAT.
+        Los perfiles de familia no prueban compatibilidad del modelo.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Catálogo de diagnóstico de solo lectura, accesible a roles configurados.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProtocolCatalog"
+        "401":
+          description: Token ausente o inválido.
+  /api/v1/radio-settings:
+    get:
+      operationId: getRadioSettings
+      security:
+        - bearerAuth: []
+      description: Proxy admin/operador de metadatos IC-7300/FTX-1 opt-in, sin abrir puerto.
+      responses:
+        "200":
+          description: Configuración experimental, no hardware validado.
+          content:
+            application/json:
+              schema:
+                $ref: "./api.station-agent.openapi.yaml#/components/schemas/RadioSettings"
+        "400":
+          description: No admite query.
+        "401":
+          description: Token inválido.
+        "403":
+          description: Requiere admin/operador.
+        "502":
+          description: TLS o respuesta del agente inválidos.
+        "503":
+          description: Agente o ajustes no configurados.
+    post:
+      operationId: operateRadioSettings
+      security:
+        - bearerAuth: []
+      description: >
+        Proxy admin/operador de ajustes por modelo. JSON hasta 4096 bytes con
+        Content-Length único; sin Transfer-Encoding ni query. Origin debe ser
+        propio o explícitamente permitido si está presente. El agente aplica
+        límites, comprobación RX y readback, no inicia sintonía ni PTT. FTX-1
+        admite read/set_power, en W de consigna y cabezal PC observado, y
+        read_operating/set_frequency/set_mode MAIN/SUB con opt-ins locales
+        separados; no selecciona VFO activo ni transmisor.
+        IC-7300 usa posición CAT, no vatios. Sin reintento automático de setters.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "./api.station-agent.openapi.yaml#/components/schemas/RadioSettingsOperation"
+      responses:
+        "200":
+          description: Estado observado, no vatios calibrados ni garantía RF.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "./api.station-agent.openapi.yaml#/components/schemas/ObservedRadioSettings"
+                  - $ref: "./api.station-agent.openapi.yaml#/components/schemas/ObservedOperatingSettings"
+        "400":
+          description: Operación, campos, JSON o límite local inválidos.
+        "401":
+          description: Token inválido.
+        "403":
+          description: Rol u origen no autorizado.
+        "408":
+          description: Lectura del cuerpo agotada.
+        "409":
+          description: Puerto ocupado, RX requerido, PTT Start activado o identificador repetido.
+        "413":
+          description: Cuerpo mayor de 4096 bytes.
+        "415":
+          description: Requiere application/json.
+        "502":
+          description: TLS o respuesta del agente inválidos.
+        "503":
+          description: No configurado, función deshabilitada o transacción no confirmada.
+  /api/v1/ptt:
+    get:
+      operationId: getPtt
+      security:
+        - bearerAuth: []
+      description: Proxy admin/operador de metadatos PTT opt-in sin I/O ni secreto de lease.
+      responses:
+        "200":
+          description: Estado y límites administrativos; no RX físico continuo.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "./api.station-agent.openapi.yaml#/components/schemas/PttState"
+                  - not:
+                      required: [lease_id]
+        "401":
+          description: Token inválido.
+        "403":
+          description: Requiere admin/operador.
+        "503":
+          description: Agente/PTT no disponible.
+    post:
+      operationId: operatePtt
+      security:
+        - bearerAuth: []
+      description: >
+        Proxy admin/operador START/RENEW/STOP. JSON hasta 4096 bytes,
+        sin query/Transfer-Encoding; Origin propio o explícitamente permitido.
+        El agente exige opt-in local separado y aplica guardas, lease y watchdog.
+        Puede emitir RF real. No reintentar START ni asumir RX si falla la red/USB.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "./api.station-agent.openapi.yaml#/components/schemas/PttOperation"
+      responses:
+        "200":
+          description: Confirmación CAT; lease_id solo START/RENEW del poseedor.
+          content:
+            application/json:
+              schema:
+                $ref: "./api.station-agent.openapi.yaml#/components/schemas/PttState"
+        "400":
+          description: JSON, campos o consulta inválidos.
+        "401":
+          description: Token inválido.
+        "403":
+          description: Rol/origen no permitido.
+        "409":
+          description: Guardas, RX previo, lease inválido/caducado u ocupado.
+        "502":
+          description: TLS o respuesta del agente inválidos.
+        "503":
+          description: Agente/PTT no disponible o transacción no confirmada.
+  /api/v1/rotor:
+    get:
+      operationId: getRotor
+      description: >
+        Proxy autenticado admin/operador al agente configurado, sin fallback
+        simulado. Metadatos por defecto; command=position consulta el controlador.
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: query
+          name: command
+          schema:
+            const: position
+      responses:
+        "200":
+          description: Estado experimental, no validación física.
+          content:
+            application/json:
+              schema:
+                $ref: "./api.station-agent.openapi.yaml#/components/schemas/RotorState"
+        "400":
+          description: Consulta inválida.
+        "401":
+          description: Token inválido.
+        "403":
+          description: Requiere admin/operador.
+        "409":
+          description: rotor_busy.
+        "502":
+          description: Fallo TLS o respuesta inválida del agente.
+        "503":
+          description: Agente/rotor no disponible o fallo de controlador.
+    post:
+      operationId: operateRotor
+      description: >
+        Proxy admin/operador de move/renew/stop; no envía comandos arbitrarios.
+        JSON hasta 4096 bytes, Content-Length único, sin Transfer-Encoding ni
+        query. Origin, si existe, debe ser propio o explícitamente permitido.
+        El agente impone límites y deadman; STOP es best effort, no parada física garantizada.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "./api.station-agent.openapi.yaml#/components/schemas/RotorOperation"
+      responses:
+        "200":
+          description: Operación aceptada, no posición alcanzada.
+          content:
+            application/json:
+              schema:
+                $ref: "./api.station-agent.openapi.yaml#/components/schemas/RotorState"
+        "400":
+          description: Operación, campos, tipos, JSON o límites inválidos.
+        "401":
+          description: Token inválido.
+        "403":
+          description: Rol u origen no autorizado.
+        "408":
+          description: Lectura del cuerpo agotada.
+        "409":
+          description: Sesión ocupada/caducada, parada sin confirmar o request_id usado/cancelado.
+        "413":
+          description: Cuerpo mayor de 4096 bytes.
+        "415":
+          description: Requiere application/json.
+        "502":
+          description: Fallo TLS o respuesta inválida del agente.
+        "503":
+          description: Agente/rotor no disponible, movimiento deshabilitado o fallo de controlador.
+  /api/v1/logbook:
+    get:
+      operationId: getLogbook
+      description: >
+        Requiere --logbook-database. Admin, operador y oyente pueden leer.
+        Página de hasta 50 contactos en orden UTC ascendente.
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: query
+          name: offset
+          schema:
+            type: integer
+            minimum: 0
+            maximum: 999999999
+            default: 0
+      responses:
+        "200":
+          description: Página de contactos persistidos, nunca datos del simulador.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LogbookPage"
+        "400":
+          description: Paginación o parámetros no válidos.
+        "401":
+          description: Token ausente o inválido.
+        "403":
+          description: Rol invitado no autorizado.
+        "500":
+          description: Error de almacenamiento; no se devuelve una lista vacía ficticia.
+        "503":
+          description: Logbook web no configurado.
+    post:
+      operationId: createQso
+      description: >
+        Alta manual para admin u operador. JSON de hasta 4096 bytes con
+        Content-Length único; no admite Transfer-Encoding ni parámetros de URL.
+        Si Origin está presente debe coincidir con el origen HTTP del coordinador.
+        No hay reintento automático ni deduplicación implícita: si se pierde la
+        respuesta hay que consultar el logbook antes de repetir el alta.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Qso"
+      responses:
+        "201":
+          description: QSO confirmado en SQLite.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [api_version, qso_id]
+                properties:
+                  api_version:
+                    const: v1
+                  qso_id:
+                    type: integer
+                    minimum: 1
+        "400":
+          description: Campos, tipos, JSON o longitud no válidos.
+        "401":
+          description: Token ausente o inválido.
+        "403":
+          description: Rol u origen no autorizado.
+        "408":
+          description: Tiempo de lectura del cuerpo agotado.
+        "413":
+          description: Cuerpo mayor de 4096 bytes.
+        "415":
+          description: Requiere application/json.
+        "500":
+          description: Error de almacenamiento.
+        "503":
+          description: Logbook web no configurado.
+  /api/v1/logbook/adif:
+    get:
+      operationId: exportLogbookAdif
+      description: >
+        Exportación ADIF 3.1.4 para admin, operador y oyente; sin parámetros.
+        Hasta 5000 contactos; para exportaciones mayores usar la CLI.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Archivo ASCII con Content-Disposition attachment.
+          content:
+            application/x-adif:
+              schema:
+                type: string
+        "400":
+          description: No admite parámetros de URL.
+        "401":
+          description: Token ausente o inválido.
+        "403":
+          description: Rol no autorizado.
+        "413":
+          description: Usar exportación CLI para más de 5000 contactos.
+        "500":
+          description: Error de almacenamiento.
+        "503":
+          description: Logbook web no configurado.
+  /api/v1/cat:
+    get:
+      operationId: getExperimentalCat
+      description: Proxy loopback autenticado de CAT experimental; admin/operador.
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: query
+          name: command
+          schema:
+            type: string
+          description: Sin parámetro consulta catálogo; con él realiza lectura allowlist.
+      responses:
+        "200":
+          description: Catálogo o lectura sin datos de demostración.
+          content:
+            application/json:
+              schema:
+                $ref: "./api.station-agent.openapi.yaml#/components/schemas/AgentCat"
+        "400":
+          description: Consulta inválida.
+        "401":
+          description: Token inválido.
+        "403":
+          description: Requiere admin/operador.
+        "502":
+          description: Respuesta no válida del agente.
+        "503":
+          description: Agente/CAT no configurado, ocupado o error de transporte/protocolo.
+  /api/v1/digital:
+    get:
+      operationId: getDigitalTelemetry
+      description: Proxy autenticado del receptor pasivo WSJT-X; admin/operador.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Estado externo y decodes WSJT-X, no motor de audio integrado.
+          content:
+            application/json:
+              schema:
+                $ref: "./api.station-agent.openapi.yaml#/components/schemas/AgentDigital"
+        "401":
+          description: Token inválido.
+        "403":
+          description: Requiere admin/operador.
+        "502":
+          description: Respuesta no válida del agente.
+        "503":
+          description: Agente o receptor WSJT-X no configurado/disponible.
+  /api/v1/devices:
+    get:
+      operationId: getDeviceInventory
+      description: >
+        Proxy de solo lectura al agente local 127.0.0.1:8788. Requiere rol
+        admin u operador. Las interfaces se devuelven sin clasificar y no se abren.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Inventario local de interfaces serie.
+        "401":
+          description: Token ausente o inválido.
+        "403":
+          description: Rol no autorizado.
+        "503":
+          description: Agente detenido o inventario no disponible.
+  /api/v1/diagnostics:
+    get:
+      operationId: getDiagnostics
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Diagnóstico no sensible para admin u operador.
+        "401":
+          description: Token ausente o inválido.
+        "403":
+          description: Rol no autorizado.
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: opaque token
+  schemas:
+    Qso:
+      type: object
+      additionalProperties: false
+      required: [call, started_at, frequency_hz, mode]
+      properties:
+        call:
+          type: string
+          minLength: 1
+          maxLength: 32
+          description: Indicativo ASCII, barras internas permitidas; se normaliza a mayúsculas.
+        started_at:
+          type: string
+          format: date-time
+          maxLength: 64
+          description: ISO 8601 con zona horaria explícita; se persiste en UTC.
+        frequency_hz:
+          type: integer
+          minimum: 1
+          maximum: 9223372036854775807
+        mode:
+          type: string
+          enum: [CW, SSB, USB, LSB, AM, FM, RTTY, FT8]
+    LogbookPage:
+      type: object
+      required: [api_version, qsos, offset, has_more, can_write]
+      properties:
+        api_version:
+          const: v1
+        qsos:
+          type: array
+          maxItems: 50
+          items:
+            $ref: "#/components/schemas/Qso"
+        offset:
+          type: integer
+          minimum: 0
+        has_more:
+          type: boolean
+        can_write:
+          type: boolean
+    ProtocolCatalog:
+      type: object
+      required: [api_version, schema_version, transport_enabled, hardware_validation_complete, candidates]
+      properties:
+        api_version:
+          const: v1
+        schema_version:
+          const: "1.0"
+        transport_enabled:
+          const: false
+        hardware_validation_complete:
+          const: false
+        candidates:
+          type: array
+          items:
+            type: object
+            required: [manufacturer, model, protocol, hardware_status, binding_status, queries]
+            properties:
+              manufacturer:
+                type: string
+              model:
+                type: string
+              protocol:
+                type: [string, "null"]
+              hardware_status:
+                const: unsupported
+              binding_status:
+                enum: [model_profile, family_syntax_only, unimplemented]
+              queries:
+                type: array
+                items:
+                  type: object
+                  required: [command, reply_decoder]
+                  properties:
+                    command:
+                      type: string
+                    reply_decoder:
+                      type: boolean
+    RadioCandidateCatalog:
+      type: object
+      required: [api_version, schema_version, hardware_validation_complete, notice, candidates]
+      properties:
+        api_version:
+          type: string
+          const: v1
+        schema_version:
+          type: string
+          const: "1.0"
+        hardware_validation_complete:
+          type: boolean
+          const: false
+        notice:
+          type: string
+        candidates:
+          type: array
+          items:
+            $ref: "#/components/schemas/RadioCandidate"
+    RadioCandidate:
+      type: object
+      required:
+        - manufacturer
+        - model
+        - connection_claim
+        - bands_claim
+        - third_party_scope_claim
+        - third_party_tested
+        - third_party_support_status
+        - evidence_source
+        - source_url
+        - bricoham_status
+      properties:
+        manufacturer:
+          type: string
+        model:
+          type: string
+        connection_claim:
+          type: string
+        bands_claim:
+          type: string
+        third_party_scope_claim:
+          type: string
+          enum: [yes, no, not_stated, not_in_source]
+        third_party_tested:
+          type: string
+          enum: [yes, not_stated, not_in_source]
+        third_party_support_status:
+          type: string
+          enum: [beta, not_stated, not_in_source]
+        evidence_source:
+          type: string
+          enum: [third_party_listing, manufacturer_project_docs]
+        source_url:
+          type: string
+          format: uri
+        bricoham_status:
+          type: string
+          const: candidate

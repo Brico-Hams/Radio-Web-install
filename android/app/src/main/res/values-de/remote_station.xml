@@ -1,0 +1,15 @@
+<resources>
+    <string name="remote_title">Remote-Station</string>
+    <string name="remote_help">Bricohams Radio Workspace HTTPS-Host. Tokens nur im Arbeitsspeicher. Kein lokales USB. Verlassen schließt den Client; ausdrücklich neu verbinden. PTT und Audio benötigen lokale Konfiguration und RF-Abnahme.</string>
+    <string name="remote_host">HTTPS-URL des Hosts</string>
+    <string name="remote_connect">Remote-Station verbinden</string>
+    <string name="remote_disconnect">Remote-Client schließen</string>
+    <string name="remote_loading">HTTPS-Host wird geladen; im Client anmelden.</string>
+    <string name="remote_ready">HTTPS-Client geladen; anmelden und Agent-Status prüfen.</string>
+    <string name="remote_permission_denied">Mikrofonberechtigung verweigert. Kein Audio und kein Sendestart.</string>
+    <string name="remote_stopped">Client geschlossen. Bei Sendebetrieb RX prüfen; der Watchdog ersetzt keinen physischen Stopp.</string>
+    <string name="remote_invalid">URL nicht erlaubt. HTTPS ohne Zugangsdaten, Pfad, Parameter oder Fragment; andere Origins sind gesperrt.</string>
+    <string name="remote_tls_error">TLS-Zertifikat abgelehnt. Keine Umgehung der Prüfung.</string>
+    <string name="remote_load_error">Host konnte nicht geladen werden. URL, Zertifikat und Netzwerk prüfen.</string>
+    <string name="remote_permission_retry">Berechtigung verarbeitet. Neu verbinden und Mikrofon ausdrücklich vorbereiten; kein automatischer Start.</string>
+</resources>

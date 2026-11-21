@@ -1,5 +1,7 @@
 /* BricoHams official colour manual v1.1 (03-11-2026): brand tokens for light, dark (system) and data-theme override. */
 :root{color-scheme:light;--brand-ink:#23272B;--brand-orange:#F26B1D;--on-accent:#23272B;--bg:#FFFFFF;--surface:#F6F7F8;--text:#23272B;--text-muted:#59636B;--border:#DCE1E5;--link:#AA410B;--focus:#F26B1D;--logo-bg:transparent;--logo-pad:0;--plate:#FFFFFF;--error:#B42336;--warning-bg:#FFF6E6;--warning-line:#B88128;--warning-text:#714915;--font-ui:Inter,"Segoe UI",system-ui,-apple-system,Roboto,"Helvetica Neue",Arial,sans-serif;--font-display:Montserrat,Inter,"Segoe UI",system-ui,-apple-system,sans-serif;font-family:var(--font-ui);color:var(--text);background:var(--bg)}
+#station-open[hidden]{display:none}
+#station-connect .button{margin-top:16px}
 @media(prefers-color-scheme:dark){:root:not([data-theme="light"]){color-scheme:dark;--bg:#111518;--surface:#1C2329;--text:#F6F8FA;--text-muted:#BAC4CC;--border:#38434C;--link:#FFA06A;--focus:#FFC18F;--logo-bg:var(--plate);--logo-pad:6px 12px;--error:#FFACB5;--warning-bg:#302719;--warning-line:#997139;--warning-text:#F4D49B}}
 :root[data-theme="dark"]{color-scheme:dark;--bg:#111518;--surface:#1C2329;--text:#F6F8FA;--text-muted:#BAC4CC;--border:#38434C;--link:#FFA06A;--focus:#FFC18F;--logo-bg:var(--plate);--logo-pad:6px 12px;--error:#FFACB5;--warning-bg:#302719;--warning-line:#997139;--warning-text:#F4D49B}
 /* Legacy aliases map the older variable names onto the official tokens. */

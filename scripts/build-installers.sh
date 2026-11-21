@@ -15,6 +15,7 @@ node "$root/scripts/build-help.cjs"
 # Rate-limit fallback listing for the firmware catalog; a failed refresh keeps the committed snapshot.
 node "$root/scripts/fetch-firmware-fallback.cjs"
 app_files=(
+  station.html station-ui.js diagnostic-contract.mjs diagnostics-core.mjs diagnostics-node.cjs diagnostics-ui.mjs
   LICENSE AUTHORS.md ACKNOWLEDGEMENTS.md SUPPORT.md SECURITY.md
   anytone.html anytone-core.js anytone-ui.js
   ftx1.html ftx1-menu.js ftx1-core.js ftx1-ui.js

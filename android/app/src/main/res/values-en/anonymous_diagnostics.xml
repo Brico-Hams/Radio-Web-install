@@ -1,0 +1,15 @@
+<resources>
+    <string name="anon_diag_title">Remote software diagnostics</string>
+    <string name="anon_diag_privacy">Bounded technical logs: version, generic platform, codes and code lines. No tokens, callsigns, QSOs, frequencies, audio, location, ports, device or installation identifiers. The HTTPS receiver may know your IP and connection metadata. Sending is off by default; approval sends the latest 16 entries in the foreground. Secret stays in memory; restarting disables sending. No radio connection or TX. Existing detailed USB reports remain private and are never automatically sent.</string>
+    <string name="anon_diag_host">Collector HTTPS base URL</string>
+    <string name="anon_diag_token">Dedicated diagnostic token (at least 32 characters)</string>
+    <string name="anon_diag_enable">Allow remote sending for this session</string>
+    <string name="anon_diag_disable">Disable remote sending</string>
+    <string name="anon_diag_inspect">Review technical report</string>
+    <string name="anon_diag_clear">Clear technical logs only and disable sending</string>
+    <string name="anon_diag_enabled">Sending permitted for this session; requires configured HTTPS collector. Delivery not confirmed.</string>
+    <string name="anon_diag_disabled">Remote sending disabled; technical local log only.</string>
+    <string name="anon_diag_invalid">Configuration rejected: HTTPS base URL without credentials/path/query and valid dedicated token required.</string>
+    <string name="anon_diag_empty">No technical events.</string>
+    <string name="anon_diag_failure">Storage or delivery failed; receipt not confirmed. Check HTTPS, permissions and configuration.</string>
+</resources>

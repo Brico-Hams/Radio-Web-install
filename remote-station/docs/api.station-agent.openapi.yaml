@@ -1,0 +1,884 @@
+openapi: 3.1.0
+info:
+  title: BricoHam Station Agent API
+  version: 1.0.0
+  description: >
+    Inventario local, CAT serie experimental opt-in, recepción pasiva WSJT-X y rotor rotctld.
+    El inventario no abre puertos. CAT requiere modelo/puerto/baud explícitos.
+servers:
+  - url: http://127.0.0.1:8788
+  - url: https://station.example.org:8788
+    description: Requiere certificado/clave explícitos, TLS y cortafuegos configurados.
+paths:
+  /api/v1/audio/tx:
+    get:
+      operationId: openAgentTxAudio
+      security: []
+      description: >
+        Upgrade WebSocket bricoham.pcm-tx.v1; no Origin, query ni cuerpo.
+        Autenticación obligatoria en el primer mensaje JSON token, plazo 2 s;
+        solo admin/operador antes de CAT/DAC. PCM16LE mono 48 kHz, mensajes
+        binarios de 1920 bytes. Sesión secreta vinculada a PTT; ver audio-tx.md.
+        security vacío describe el upgrade, no acceso anónimo al audio.
+      responses:
+        "101": { description: Upgrade; todavía requiere autenticar el primer mensaje. }
+        "400": { description: Upgrade inválido. }
+        "403": { description: Origin de navegador no permitido. }
+  /api/v1/audio:
+    get:
+      operationId: getAgentAudioMetadata
+      description: Admin, operador o listener; metadatos sin abrir el ADC.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Configuración experimental o enabled false.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [api_version, enabled]
+                properties:
+                  api_version: { const: v1 }
+                  enabled: { type: boolean }
+                  format: { const: BHR1 }
+                  device: { type: integer, minimum: 0 }
+                  device_name: { type: [string, "null"] }
+                  sample_rate: { type: integer, minimum: 8000, maximum: 48000 }
+                  block_ms: { type: integer, minimum: 10, maximum: 100 }
+                  channels: { const: 1 }
+                  bits: { const: 16 }
+                  hardware_validated: { const: false }
+        "400": { description: No admite query. }
+        "401": { description: Token inválido. }
+        "403": { description: Rol no autorizado. }
+  /api/v1/audio/stream:
+    get:
+      operationId: streamAgentAudio
+      description: >
+        Admin, operador o listener. Un consumidor; BHR1 PCM16 mono por HTTP chunked.
+        Consulte audio-rx.md para formato y truncamiento ante errores.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Flujo binario RX experimental.
+          content:
+            application/vnd.bricoham.pcm:
+              schema: { type: string, format: binary }
+        "400": { description: No admite query. }
+        "401": { description: Token inválido. }
+        "403": { description: Rol no autorizado. }
+        "409": { description: Audio ocupado. }
+        "503": { description: Audio no configurado o captura no disponible. }
+  /healthz:
+    get:
+      operationId: getAgentHealth
+      security: []
+      responses:
+        "200":
+          description: Agente disponible; no incluye datos de dispositivos.
+  /api/v1/radio-settings:
+    get:
+      operationId: getAgentRadioSettings
+      description: >
+        Admin/operador; metadatos IC-7300 o FTX-1 opt-in sin abrir el puerto. Requiere
+        --radio-settings-config y CAT experimental para ese modelo exacto.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Configuración, no estado observado ni hardware validado.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RadioSettings"
+        "400":
+          description: No admite query.
+        "401":
+          description: Token inválido.
+        "403":
+          description: Requiere admin/operador.
+        "503":
+          description: cat_settings_not_configured.
+    post:
+      operationId: operateAgentRadioSettings
+      description: >
+        Admin/operador; JSON hasta 4096 bytes con Content-Length único, sin query
+        ni Transfer-Encoding. IC-7300 usa posición CAT 0..255, ACK y readback;
+        insertar ATU exige PTT Start desactivado. FTX-1 admite potencia en W
+        de consigna (no medida RF), 5..10 field / 5..100 SPA-1 según cabezal PC
+        observado y límite local. Usa barrera TX de lectura y readback, no ACK
+        inexistente ni sondeo mediante escrituras. Se comprueba RX y ausencia de
+        sintonía/movimiento ATAS. No inicia tuning, PTT ni transmisión.
+        FTX-1 añade read_operating y setters opt-in separados set_frequency/set_mode:
+        MAIN/SUB explícito, no selección de VFO activo. Lee ambos receptores y
+        verifica el objetivo tras barrera TX; mismo lock y presupuesto global de 3 s.
+        Un fallo no garantiza que el ajuste no se aplicó: leer antes de repetir.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RadioSettingsOperation"
+      responses:
+        "200":
+          description: Estado observado; power_unit distingue posición CAT y W de consigna.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ObservedRadioSettings"
+                  - $ref: "#/components/schemas/ObservedOperatingSettings"
+        "400":
+          description: Campos, tipos, JSON o límite local inválidos.
+        "401":
+          description: Token inválido.
+        "403":
+          description: Requiere admin/operador.
+        "408":
+          description: Tiempo de lectura agotado.
+        "409":
+          description: cat_busy, cat_settings_require_rx, cat_disable_ptt_tune_locally, cat_power_head_limit_exceeded o cat_setting_request_repeated.
+        "413":
+          description: Cuerpo mayor de 4096 bytes.
+        "415":
+          description: Requiere application/json.
+        "503":
+          description: No configurado, función deshabilitada, timeout, NAK o readback inválido.
+  /api/v1/ptt:
+    get:
+      operationId: getAgentPtt
+      security:
+        - bearerAuth: []
+      description: Admin/operador; metadatos sin I/O. Configuración local separada, desactivada por defecto. Nunca incluye lease_id.
+      responses:
+        "200":
+          description: Política y estado software; no garantiza RX físico.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/PttState"
+                  - not:
+                      required: [lease_id]
+        "401":
+          description: Token inválido.
+        "403":
+          description: Requiere admin/operador.
+        "409":
+          description: Controlador ocupado.
+        "503":
+          description: PTT no configurado.
+    post:
+      operationId: operateAgentPtt
+      security:
+        - bearerAuth: []
+      description: >
+        Admin/operador, JSON hasta 4096 bytes sin query ni Transfer-Encoding.
+        PTT real opt-in solo MAIN VFO simplex LSB/USB FTX-1, RX explícito previo,
+        límites locales de frecuencia/PC/tiempo, reserva CAT y watchdog.
+        START no se reintenta. RENEW verifica guardas y no prolonga el máximo.
+        STOP sin secreto permite parada y cancelación de START tardío.
+        Lease 2 s, presupuesto de intercambio 0,7 s: no es garantía de corte RF.
+        Audio TX opcional requiere capacidad de sesión; sin CW ni interlock físico.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PttOperation"
+      responses:
+        "200":
+          description: Estado confirmado por CAT. Solo START/RENEW devuelven lease_id.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PttState"
+        "400":
+          description: Operación/campos/JSON inválidos.
+        "401":
+          description: Token inválido.
+        "403":
+          description: Requiere admin/operador.
+        "409":
+          description: Guardas, RX previo, lease, identificador cancelado/repetido o controlador ocupado.
+        "413":
+          description: Cuerpo mayor de 4096 bytes.
+        "415":
+          description: Requiere application/json.
+        "503":
+          description: No configurado/desactivado o TX/RX no confirmado; usar parada local.
+  /api/v1/rotor:
+    get:
+      operationId: getAgentRotor
+      description: >
+        Admin/operador; requiere --rotor-config. Sin command devuelve metadatos;
+        command=position consulta rotctld loopback. Puede solicitar STOP si una
+        sesión ha caducado. No declara aceptación física.
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: query
+          name: command
+          schema:
+            const: position
+      responses:
+        "200":
+          description: Metadatos o posición observada.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RotorState"
+        "400":
+          description: Consulta inválida.
+        "401":
+          description: Token inválido.
+        "403":
+          description: Requiere admin/operador.
+        "409":
+          description: rotor_busy.
+        "503":
+          description: Sin configurar, transporte, protocolo o posición no válidos.
+    post:
+      operationId: operateAgentRotor
+      description: >
+        Admin/operador; solo move/renew/stop, JSON hasta 4096 bytes con
+        Content-Length único, sin Transfer-Encoding ni query. Movimiento opt-in
+        dentro de límites explícitos y posición actual válida; sesión exclusiva
+        de 3 segundos, máximo absoluto 30 segundos. STOP no requiere lease ni
+        movimiento habilitado. Parada best effort, no garantía mecánica.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RotorOperation"
+      responses:
+        "200":
+          description: Operación aceptada; no confirma posición alcanzada.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RotorState"
+        "400":
+          description: Operación, campos, tipos, JSON o límites inválidos.
+        "401":
+          description: Token inválido.
+        "403":
+          description: Requiere admin/operador.
+        "408":
+          description: Tiempo de lectura agotado.
+        "409":
+          description: Sesión ocupada/caducada, parada sin confirmar o request_id usado/cancelado.
+        "413":
+          description: Cuerpo mayor de 4096 bytes.
+        "415":
+          description: Requiere application/json.
+        "503":
+          description: Sin configurar, movimiento deshabilitado o fallo de transporte/protocolo.
+  /api/v1/cat:
+    get:
+      operationId: getAgentCat
+      description: >
+        Admin/operador. Sin command devuelve catálogo sin abrir puerto; con command
+        ejecuta una consulta allowlist con decoder en el puerto configurado. No
+        habilita PTT ni setters. Acceso remoto HTTPS opt-in. hardware_validation_complete false.
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: query
+          name: command
+          schema:
+            type: string
+          description: Identificador exacto del catálogo sin terminador, por ejemplo FA o "03".
+      responses:
+        "200":
+          description: Catálogo o transacción experimental, nunca simulación.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentCat"
+        "400":
+          description: Consulta inválida o sin decoder.
+        "401":
+          description: Token inválido.
+        "403":
+          description: Requiere admin/operador.
+        "503":
+          description: cat_not_configured, cat_busy, cat_timeout, cat_io_failed o cat_invalid_response.
+  /api/v1/digital:
+    get:
+      operationId: getAgentDigital
+      description: >
+        Admin/operador; telemetría UDP WSJT-X de la instancia configurada.
+        Receptor pasivo loopback, esquemas 2/3; sin lanzamiento del programa,
+        audio, órdenes salientes ni registro automático de contactos.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Estado y decodes con antigüedad y conexión explícitas.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentDigital"
+        "401":
+          description: Token inválido.
+        "403":
+          description: Requiere admin/operador.
+        "503":
+          description: wsjtx_not_configured.
+  /api/v1/devices:
+    get:
+      operationId: getSerialDeviceInventory
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Inventario de interfaces serie, todas con classification unknown.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeviceInventory"
+        "401":
+          description: Token ausente o inválido.
+        "403":
+          description: Rol no autorizado; requiere admin u operador.
+        "404":
+          description: Ruta desconocida.
+        "503":
+          description: Enumeración del sistema operativo no disponible.
+        "405":
+          description: Método distinto de GET.
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: opaque token
+  schemas:
+    PttOperation:
+      oneOf:
+        - type: object
+          required: [operation, request_id]
+          additionalProperties: false
+          properties:
+            operation:
+              const: start
+            request_id:
+              type: string
+              minLength: 16
+              maxLength: 64
+              pattern: "^[A-Za-z0-9_-]+$"
+            audio_session_id:
+              type: string
+              minLength: 16
+              maxLength: 64
+              pattern: "^[A-Za-z0-9_-]+$"
+              description: Obligatorio si tx_audio_required; prohibido sin DAC TX configurado.
+        - type: object
+          required: [operation, lease_id]
+          additionalProperties: false
+          properties:
+            operation:
+              const: renew
+            lease_id:
+              type: string
+              minLength: 32
+              maxLength: 128
+              description: Secreto de sesión, no se registra ni se obtiene por GET.
+        - type: object
+          required: [operation]
+          additionalProperties: false
+          properties:
+            operation:
+              const: stop
+            cancel_request_id:
+              type: string
+              minLength: 16
+              maxLength: 64
+              pattern: "^[A-Za-z0-9_-]+$"
+    PttState:
+      type: object
+      required: [api_version, model, status, data_is_simulated, hardware_validation_complete, enabled, tx_audio_required, lease_active, rx_confirmed, stop_failed, lease_seconds, max_transmit_seconds, frequency_min_hz, frequency_max_hz, power_max_watts]
+      properties:
+        api_version:
+          const: v1
+        model:
+          const: FTX-1
+        status:
+          const: experimental
+        data_is_simulated:
+          const: false
+        hardware_validation_complete:
+          const: false
+        enabled:
+          type: boolean
+        tx_audio_required:
+          type: boolean
+        lease_active:
+          type: boolean
+        rx_confirmed:
+          type: boolean
+          description: Confirmación de RX en STOP, no observación continua ni interlock físico.
+        stop_failed:
+          type: boolean
+        lease_seconds:
+          const: 2
+        max_transmit_seconds:
+          type: integer
+          minimum: 1
+          maximum: 30
+        frequency_min_hz:
+          type: integer
+          minimum: 30000
+          maximum: 470000000
+        frequency_max_hz:
+          type: integer
+          minimum: 30000
+          maximum: 470000000
+        power_max_watts:
+          type: integer
+          minimum: 5
+          maximum: 100
+        lease_id:
+          type: string
+          minLength: 32
+          maxLength: 128
+    RadioSettingsOperation:
+      oneOf:
+        - type: object
+          additionalProperties: false
+          required: [operation]
+          properties:
+            operation:
+              enum: [read, read_operating]
+              description: read devuelve potencia/acoplador; read_operating solo FTX-1, frecuencia/modo MAIN/SUB.
+        - type: object
+          additionalProperties: false
+          required: [operation, request_id, power_level]
+          properties:
+            operation:
+              const: set_power
+            request_id:
+              type: string
+              minLength: 16
+              maxLength: 64
+              pattern: "^[A-Za-z0-9_-]+$"
+            power_level:
+              type: integer
+              minimum: 0
+              maximum: 255
+              description: Según power_unit; posición CAT IC-7300 o W enteros de consigna FTX-1. Límites locales y de cabezal obligatorios.
+        - type: object
+          additionalProperties: false
+          required: [operation, request_id, enabled]
+          properties:
+            operation:
+              const: set_tuner
+              description: Solo IC-7300; FTX-1 rechaza esta operación.
+            request_id:
+              type: string
+              minLength: 16
+              maxLength: 64
+              pattern: "^[A-Za-z0-9_-]+$"
+            enabled:
+              type: boolean
+        - type: object
+          additionalProperties: false
+          required: [operation, request_id, receiver, frequency_hz]
+          properties:
+            operation:
+              const: set_frequency
+              description: Solo FTX-1 con opt-in local; no selecciona VFO activo.
+            request_id:
+              type: string
+              minLength: 16
+              maxLength: 64
+              pattern: "^[A-Za-z0-9_-]+$"
+            receiver:
+              enum: [MAIN, SUB]
+            frequency_hz:
+              type: integer
+              minimum: 30000
+              maximum: 470000000
+        - type: object
+          additionalProperties: false
+          required: [operation, request_id, receiver, mode_code]
+          properties:
+            operation:
+              const: set_mode
+              description: Solo FTX-1 con opt-in local; códigos del manual 2508-C.
+            request_id:
+              type: string
+              minLength: 16
+              maxLength: 64
+              pattern: "^[A-Za-z0-9_-]+$"
+            receiver:
+              enum: [MAIN, SUB]
+            mode_code:
+              $ref: "#/components/schemas/Ftx1ModeCode"
+    RadioSettings:
+      type: object
+      required: [api_version, model, status, hardware_validation_complete, data_is_simulated, power_adjustment_enabled, power_level_max, power_unit, tuner_switching_enabled, tune_enabled]
+      properties:
+        api_version:
+          const: v1
+        model:
+          enum: [IC-7300, FTX-1]
+        status:
+          const: experimental
+        hardware_validation_complete:
+          const: false
+        data_is_simulated:
+          const: false
+        power_adjustment_enabled:
+          type: boolean
+        power_level_max:
+          type: integer
+          minimum: 0
+          maximum: 255
+        power_unit:
+          enum: [cat_position_0_255, watts_setpoint]
+        tuner_switching_enabled:
+          type: boolean
+        frequency_adjustment_enabled:
+          type: boolean
+          default: false
+          description: Opt-in local independiente, solo FTX-1; ausente en agentes antiguos.
+        mode_adjustment_enabled:
+          type: boolean
+          default: false
+          description: Opt-in local independiente, solo FTX-1; ausente en agentes antiguos.
+        mode_options:
+          type: array
+          description: FTX-1; códigos únicos del manual, no modos disponibles verificados físicamente.
+          maxItems: 32
+          items:
+            type: object
+            required: [code, label]
+            additionalProperties: false
+            properties:
+              code:
+                $ref: "#/components/schemas/Ftx1ModeCode"
+              label:
+                type: string
+        tune_enabled:
+          const: false
+        power_level:
+          type: integer
+          minimum: 0
+          maximum: 255
+        tuner_state:
+          type: integer
+          enum: [0, 1, 2]
+          description: Bypass/insertado/sintonizando; 2 solo se observa, no se ordena.
+        power_head:
+          enum: [field, SPA-1]
+          description: FTX-1, leído de PC; no es una selección del cliente.
+        tuner_busy:
+          type: boolean
+          description: FTX-1, CAT solicita sintonía ATU o movimiento/sintonía ATAS; no interlock físico.
+        tx_active:
+          type: boolean
+          description: Observación, no interlock atómico.
+        observed_at:
+          type: number
+      oneOf:
+        - properties:
+            model:
+              const: IC-7300
+            power_unit:
+              const: cat_position_0_255
+            frequency_adjustment_enabled:
+              const: false
+            mode_adjustment_enabled:
+              const: false
+        - properties:
+            model:
+              const: FTX-1
+            power_unit:
+              const: watts_setpoint
+            power_level_max:
+              minimum: 5
+              maximum: 100
+            power_level:
+              minimum: 5
+              maximum: 100
+            tuner_switching_enabled:
+              const: false
+    ObservedRadioSettings:
+      allOf:
+        - $ref: "#/components/schemas/RadioSettings"
+        - type: object
+          required: [power_level, tx_active, observed_at]
+          oneOf:
+            - required: [tuner_state]
+              properties:
+                model:
+                  const: IC-7300
+            - required: [power_head, tuner_busy]
+              properties:
+                model:
+                  const: FTX-1
+              if:
+                properties:
+                  power_head:
+                    const: field
+              then:
+                properties:
+                  power_level:
+                    maximum: 10
+    Ftx1ModeCode:
+      type: string
+      enum: ["1", "2", "3", "4", "5", "6", "7", "8", "9", "A", "B", "C", "D", "E", "F", "H", "I"]
+    Ftx1ReceiverState:
+      type: object
+      required: [frequency_hz, mode_code]
+      additionalProperties: false
+      properties:
+        frequency_hz:
+          type: integer
+          minimum: 30000
+          maximum: 470000000
+        mode_code:
+          $ref: "#/components/schemas/Ftx1ModeCode"
+    ObservedOperatingSettings:
+      allOf:
+        - $ref: "#/components/schemas/RadioSettings"
+        - type: object
+          required: [receivers, tx_active, tuner_busy, observed_at, frequency_adjustment_enabled, mode_adjustment_enabled, mode_options]
+          properties:
+            model:
+              const: FTX-1
+            receivers:
+              type: object
+              required: [MAIN, SUB]
+              additionalProperties: false
+              properties:
+                MAIN:
+                  $ref: "#/components/schemas/Ftx1ReceiverState"
+                SUB:
+                  $ref: "#/components/schemas/Ftx1ReceiverState"
+          description: Lectura secuencial, no snapshot atómico ni selección del transmisor; no incluye power_level.
+    RotorOperation:
+      oneOf:
+        - type: object
+          additionalProperties: false
+          required: [operation, request_id, azimuth_deg, elevation_deg]
+          properties:
+            operation:
+              const: move
+            request_id:
+              type: string
+              minLength: 16
+              maxLength: 64
+              pattern: "^[A-Za-z0-9_-]+$"
+              description: Único por objetivo; cache reciente acotada, no persistente.
+            azimuth_deg:
+              type: number
+            elevation_deg:
+              type: number
+        - type: object
+          additionalProperties: false
+          required: [operation, lease_id]
+          properties:
+            operation:
+              const: renew
+            lease_id:
+              type: string
+              maxLength: 128
+        - type: object
+          additionalProperties: false
+          required: [operation]
+          properties:
+            operation:
+              const: stop
+            cancel_request_id:
+              type: string
+              minLength: 16
+              maxLength: 64
+              pattern: "^[A-Za-z0-9_-]+$"
+    RotorPosition:
+      type: object
+      required: [azimuth_deg, elevation_deg]
+      properties:
+        azimuth_deg:
+          type: number
+        elevation_deg:
+          type: number
+    RotorState:
+      type: object
+      required: [api_version, source, status, data_is_simulated, hardware_validation_complete, label, motion_enabled, limits, lease_active, stop_failed, lease_seconds, max_motion_seconds]
+      properties:
+        api_version:
+          const: v1
+        source:
+          const: hamlib_rotctld
+        status:
+          const: experimental
+        data_is_simulated:
+          const: false
+        hardware_validation_complete:
+          const: false
+        label:
+          type: string
+        motion_enabled:
+          type: boolean
+        limits:
+          type: object
+          required: [azimuth_min, azimuth_max, elevation_min, elevation_max]
+          properties:
+            azimuth_min:
+              type: number
+            azimuth_max:
+              type: number
+            elevation_min:
+              type: number
+            elevation_max:
+              type: number
+        lease_active:
+          type: boolean
+        stop_failed:
+          type: boolean
+        lease_seconds:
+          const: 3
+        max_motion_seconds:
+          const: 30
+        lease_id:
+          type: string
+          description: Secreto devuelto solo por move/renew, nunca por GET.
+        position:
+          $ref: "#/components/schemas/RotorPosition"
+        observed_at:
+          type: number
+          description: Unix timestamp de la consulta de posición.
+        accepted_target:
+          $ref: "#/components/schemas/RotorPosition"
+    AgentCat:
+      type: object
+      required: [api_version, model, status, hardware_validation_complete, data_is_simulated, queries, tx_control_enabled]
+      properties:
+        api_version:
+          const: v1
+        model:
+          type: string
+        status:
+          const: experimental
+        hardware_validation_complete:
+          const: false
+        data_is_simulated:
+          const: false
+        tx_control_enabled:
+          const: false
+        queries:
+          type: array
+          items:
+            type: string
+        command:
+          type: string
+        observed_at:
+          type: number
+          description: Unix timestamp de la respuesta observada.
+        reply_hex:
+          type: string
+          description: Trama recibida, no una confirmación de seguridad RF.
+      description: >
+        Una lectura añade el campo del decoder, por ejemplo frequency_hz,
+        raw_mode_reading. Los códigos de modo no se normalizan. La frecuencia
+        FTX-1 usa Hz según el manual oficial CAT 2508-C; falta validación física.
+    AgentDigital:
+      type: object
+      required: [api_version, source, authenticated, trust, suitable_for_control, data_is_simulated, instance_id, connected, receiver_failed, status, decodes, commands_enabled]
+      properties:
+        api_version:
+          const: v1
+        source:
+          const: wsjtx_udp
+        authenticated:
+          const: false
+        trust:
+          const: untrusted_local_udp
+          description: El Id UDP no autentica; otro proceso local puede suplantar estos datos.
+        suitable_for_control:
+          const: false
+        data_is_simulated:
+          const: false
+        instance_id:
+          type: string
+        schema:
+          enum: [null, 2, 3]
+        supported_schemas:
+          type: array
+          items:
+            enum: [2, 3]
+        connected:
+          type: boolean
+        receiver_failed:
+          type: boolean
+        last_seen_age_seconds:
+          type: [number, "null"]
+        status:
+          type: [object, "null"]
+          description: Último Status externo; si no conectado es histórico.
+        decodes:
+          type: array
+          maxItems: 100
+          items:
+            type: object
+            description: Tiempo QTime, SNR, delta, mensaje, low_confidence y off_air.
+        invalid_packets:
+          type: integer
+        ignored_packets:
+          type: integer
+        commands_enabled:
+          const: false
+    DeviceInventory:
+      type: object
+      required: [api_version, schema_version, devices]
+      properties:
+        api_version:
+          type: string
+          const: v1
+        schema_version:
+          type: string
+          const: "1.0"
+        devices:
+          type: array
+          maxItems: 256
+          items:
+            type: object
+            required: [port, description, hwid, vid, pid, manufacturer, product, interface, classification]
+            properties:
+              port:
+                type: string
+                maxLength: 256
+              description:
+                type: [string, "null"]
+                maxLength: 256
+              hwid:
+                type: "null"
+                description: Omitido para evitar exponer identificadores únicos.
+              vid:
+                type: [string, "null"]
+                pattern: "^[0-9A-F]{4}$"
+              pid:
+                type: [string, "null"]
+                pattern: "^[0-9A-F]{4}$"
+              manufacturer:
+                type: [string, "null"]
+                maxLength: 256
+              product:
+                type: [string, "null"]
+                maxLength: 256
+              interface:
+                type: [string, "null"]
+                maxLength: 256
+              classification:
+                type: string
+                const: unknown

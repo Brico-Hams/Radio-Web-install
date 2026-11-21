@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Bricohams Radio Workspace - Remote Station</string>
+    <string name="title_activity_main">Bricohams Radio Workspace - Remote Station</string>
+    <string name="package_name">org.bricohams.remotestation</string>
+    <string name="custom_url_scheme">org.bricohams.remotestation</string>
+</resources>

@@ -64,5 +64,7 @@ inline fun <T : Any> requireNotNullUi(value: T?, text: () -> UiText): T {
 }
 
 /** Localized text for an error: resource-backed for [LocalizedError], raw diagnostic otherwise. */
-fun Context.errorText(error: Throwable?, fallback: Int = R.string.error_unknown): String =
-    if (error is LocalizedError) error.text.resolve(this) else error?.message ?: getString(fallback)
+fun Context.errorText(error: Throwable?, fallback: Int = R.string.error_unknown): String {
+    if (error != null) AnonymousDiagnostics.record("operation_failed", "native", "error", error)
+    return if (error is LocalizedError) error.text.resolve(this) else error?.message ?: getString(fallback)
+}

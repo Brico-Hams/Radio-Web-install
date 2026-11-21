@@ -4,6 +4,12 @@
 
 # Bricohams Radio Workspace
 
+[Stazione remota integrata](docs/REMOTE_STATION.md): host HTTPS,
+agenti Windows/Linux/macOS/Raspberry Pi e client web/Android/tablet/iPhone/iPad.
+Gli accessi web e RadiCodex separano firmware locale e controllo remoto, con
+consenso esplicito e interblocchi. Hardware e funzioni ancora da verificare
+rimangono documentati, senza dichiarare compatibilita convalidata.
+
 Due ambienti con connettori proprietari WebUSB/Web Serial, operazioni locali e backup automatico prima di abilitare le scritture.
 
 ## Organizzazione e prove di distribuzione

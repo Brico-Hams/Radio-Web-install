@@ -1,0 +1,15 @@
+<resources>
+    <string name="anon_diag_title">Diagnóstico remoto de software</string>
+    <string name="anon_diag_privacy">Registros técnicos acotados: versión, plataforma genérica, códigos y líneas de código. Sin tokens, indicativos, QSO, frecuencias, audio, ubicación, puertos ni identificadores del dispositivo o instalación. El receptor HTTPS puede conocer la IP y metadatos de conexión. Envío desactivado por defecto; al permitirlo se envían las últimas 16 entradas en primer plano. Credencial solo en memoria; reiniciar la app desactiva el envío. No conecta radio ni activa TX. Los informes USB detallados antiguos siguen siendo privados y nunca se envían automáticamente.</string>
+    <string name="anon_diag_host">URL base HTTPS del receptor</string>
+    <string name="anon_diag_token">Token exclusivo de diagnóstico (mínimo 32 caracteres)</string>
+    <string name="anon_diag_enable">Permitir envío remoto en esta sesión</string>
+    <string name="anon_diag_disable">Desactivar envío remoto</string>
+    <string name="anon_diag_inspect">Revisar informe técnico</string>
+    <string name="anon_diag_clear">Borrar solo registros técnicos y desactivar envío</string>
+    <string name="anon_diag_enabled">Envío permitido en esta sesión; requiere receptor HTTPS configurado. No confirma entrega.</string>
+    <string name="anon_diag_disabled">Envío remoto desactivado; solo registro técnico local.</string>
+    <string name="anon_diag_invalid">Configuración rechazada: URL HTTPS base sin credenciales/ruta/parámetros y token exclusivo válido.</string>
+    <string name="anon_diag_empty">No hay registros técnicos.</string>
+    <string name="anon_diag_failure">Fallo de almacenamiento o entrega; no se confirma recepción. Consulta HTTPS, permisos y configuración.</string>
+</resources>

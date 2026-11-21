@@ -1,0 +1,15 @@
+<resources>
+    <string name="remote_title">Estación remota</string>
+    <string name="remote_help">Host HTTPS de Bricohams Radio Workspace. Tokens solo en memoria del cliente. No abre USB local. Al salir se cierra la sesión; vuelve a conectar explícitamente. PTT y audio requieren configuración local y pruebas RF.</string>
+    <string name="remote_host">URL HTTPS del host</string>
+    <string name="remote_connect">Conectar estación remota</string>
+    <string name="remote_disconnect">Cerrar cliente remoto</string>
+    <string name="remote_loading">Cargando el host HTTPS; inicia sesión en el cliente.</string>
+    <string name="remote_ready">Cliente HTTPS cargado; inicia sesión y comprueba el estado del agente.</string>
+    <string name="remote_permission_denied">Permiso de micrófono denegado. No se prepara audio ni se inicia transmisión.</string>
+    <string name="remote_stopped">Cliente remoto cerrado. Comprueba RX en la radio si transmitías; el watchdog no sustituye una parada física.</string>
+    <string name="remote_invalid">URL no permitida. Usa HTTPS sin credenciales, ruta, parámetros ni fragmentos; no se permite navegar a otro origen.</string>
+    <string name="remote_tls_error">Certificado TLS rechazado. No se omite su validación.</string>
+    <string name="remote_load_error">No se pudo cargar el host. Revisa URL, certificado y red.</string>
+    <string name="remote_permission_retry">Permiso procesado. Vuelve a conectar y prepara el micrófono explícitamente; no se inicia automáticamente.</string>
+</resources>

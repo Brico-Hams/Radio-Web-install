@@ -91,6 +91,7 @@
       $("radio-log").scrollTop = $("radio-log").scrollHeight;
     };
     const fail = error => {
+      R.recordDiagnostic?.("usb", error);
       if (error.code === "FLASH_READ_UNSUPPORTED") {
         status.textContent = error.message;
         delete status.dataset.error;
