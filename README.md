@@ -14,6 +14,8 @@ Acceso desde la web y RadiCodex; mantiene separados firmware local y control
 remoto, con opt-ins e interlocks. Hardware y funciones pendientes se documentan
 sin elevarlas a compatibilidad verificada.
 
+[Mapa técnico, gráfico de componentes y desarrollo multilingüe](docs/MAPA-TECNICO-PROYECTO.md).
+
 Dos espacios con conectores propios WebUSB/Web Serial, operaciones locales y respaldo automatico antes de habilitar escrituras.
 
 ## Organización y pruebas de distribución

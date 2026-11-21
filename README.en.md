@@ -10,6 +10,8 @@ Web and RadiCodex entry points keep local firmware separate from remote control,
 with opt-ins and interlocks. Pending hardware and features are documented,
 not promoted to verified compatibility.
 
+[Technical map, component diagram and multilingual development](docs/MAPA-TECNICO-PROYECTO.md) (Spanish).
+
 Two workspaces with their own WebUSB/Web Serial connectors, local operations, and automatic backup before enabling writes.
 
 ## Project layout and distribution testing

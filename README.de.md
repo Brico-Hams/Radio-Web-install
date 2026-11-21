@@ -10,6 +10,8 @@ Web und RadiCodex trennen lokale Firmware vom Fernzugriff, mit ausdruecklicher
 Freigabe und Verriegelungen. Offene Hardware- und Funktionspruefungen bleiben
 dokumentiert und gelten nicht als bestaetigte Kompatibilitaet.
 
+[Technische Übersicht, Komponentendiagramm und mehrsprachige Entwicklung](docs/MAPA-TECNICO-PROYECTO.md) (auf Spanisch).
+
 Zwei Bereiche mit jeweils eigenen Anschlüssen WebUSB/Web Serial, lokale Vorgänge und automatische Sicherung, bevor Schreibvorgänge zugelassen werden.
 
 ## Projektstruktur und Distributionstests

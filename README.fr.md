@@ -10,6 +10,8 @@ Les acces web et RadiCodex separent firmware local et controle distant, avec
 consentement explicite et interverrouillages. Materiel et fonctions en attente
 restent documentes, sans devenir une compatibilite validee.
 
+[Carte technique, diagramme des composants et développement multilingue](docs/MAPA-TECNICO-PROYECTO.md) (en espagnol).
+
 Deux espaces de travail avec leurs propres connecteurs WebUSB/Web Serial, des opérations locales et une sauvegarde automatique avant toute écriture.
 
 ## Organisation et essais de distribution

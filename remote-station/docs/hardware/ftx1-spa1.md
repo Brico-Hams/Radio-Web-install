@@ -97,6 +97,21 @@ ST0 observado no resuelve esa discrepancia. El parser estricto rechaza IF y
 las guardas PTT no se relajan: no se fabrica una confirmación de estado seguro.
 La lectura de los otros comandos no acredita TX ni compatibilidad completa.
 
+### Repetición de lectura y exclusión en Windows (2026-11-21)
+
+Con la misma interfaz Enhanced identificada por Windows como COM5 y a
+38400/8N1, el transporte `SerialCat` identificó `0840` y leyó el estado RX.
+Decodificó FA, FB, MD0, MD1, PC, AC, FT, ST, KS, KP, KR, BI y VX; el
+decoder estricto volvió a rechazar IF. No se registraron frecuencias ni
+respuestas completas. No se enviaron setters, PTT, CW ni órdenes de sintonía;
+RTS/DTR se configuraron desactivados en software, sin medición eléctrica.
+
+Con el primer transporte manteniendo COM5 abierto, una segunda instancia no
+pudo abrirlo y la primera siguió respondiendo a ID. Tres ciclos de cierre y
+reapertura del transporte leyeron ID y RX correctamente. Esto comprueba la
+exclusión observada en ese Windows y la reapertura controlada, no una
+desconexión USB física, recuperación automática ni comportamiento en POSIX.
+
 ## Datos aún no verificados
 
 - Aplicabilidad del manual 2508-C al firmware instalado y sus erratas posteriores.
