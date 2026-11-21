@@ -167,6 +167,7 @@ jobs:
             android/app/build/outputs/apk/androidTest/github/debug/app-github-debug-androidTest.apk
             android/app/build/outputs/apk/SHA256SUMS
             android/app/build/reports
+            android/station-agent/build/outputs/apk/debug/*.apk
           if-no-files-found: error
 
   release:
