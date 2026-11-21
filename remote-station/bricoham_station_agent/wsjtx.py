@@ -187,6 +187,8 @@ class WsjtxReceiver:
                         continue
                     if self._peer is None and kind in (0, 1):
                         self._peer = peer
+                if self._closed:
+                    self._decodes.clear()
                 self._last_seen = time.monotonic()
                 self._schema = int.from_bytes(packet[4:8], "big")
                 self._last_message_type = kind

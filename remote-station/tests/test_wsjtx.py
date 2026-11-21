@@ -284,6 +284,77 @@ class WsjtxTests(unittest.TestCase):
             sender.close()
             receiver.close()
 
+    def test_closed_history_is_preserved_until_valid_session_reopens(self) -> None:
+        heartbeat = packet(0, struct.pack(">I", 3) + text("2.7") + text("test"))
+        for reopening in (heartbeat, status_packet()):
+            with self.subTest(message_type=int.from_bytes(reopening[8:12], "big")):
+                receiver = WsjtxReceiver(0, "WSJT-X", commands_enabled=True)
+                with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sender:
+                    try:
+                        address = ("127.0.0.1", receiver.port)
+                        for data in (status_packet(), decode_packet(), packet(6)):
+                            sender.sendto(data, address)
+                        deadline = time.monotonic() + 2
+                        while receiver.snapshot()["last_message_type"] != 6:
+                            if time.monotonic() >= deadline:
+                                self.fail("WSJT-X close not received")
+                            time.sleep(0.01)
+                        closed = receiver.snapshot()
+                        self.assertFalse(closed["connected"])
+                        self.assertEqual(len(closed["decodes"]), 1)
+                        self.assertIsNone(closed["status"])
+                        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as other:
+                            other.sendto(reopening, address)
+                            deadline = time.monotonic() + 2
+                            while receiver.snapshot()["ignored_packets"] == 0:
+                                if time.monotonic() >= deadline:
+                                    self.fail("Unpinned reopening was not rejected")
+                                time.sleep(0.01)
+                        self.assertEqual(len(receiver.snapshot()["decodes"]), 1)
+                        sender.sendto(reopening, address)
+                        deadline = time.monotonic() + 2
+                        while not receiver.snapshot()["connected"]:
+                            if time.monotonic() >= deadline:
+                                self.fail("Pinned reopening was not received")
+                            time.sleep(0.01)
+                        reopened = receiver.snapshot()
+                        self.assertEqual(reopened["decodes"], [])
+                        self.assertEqual(
+                            reopened["status"] is not None, reopening == status_packet()
+                        )
+                        sender.sendto(decode_packet(), address)
+                        deadline = time.monotonic() + 2
+                        while len(receiver.snapshot()["decodes"]) != 1:
+                            if time.monotonic() >= deadline:
+                                self.fail("New session decode was not received")
+                            time.sleep(0.01)
+                    finally:
+                        receiver.close()
+
+    def test_receive_only_session_also_drops_history_on_reopening(self) -> None:
+        receiver = WsjtxReceiver(0, "WSJT-X")
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sender:
+            try:
+                address = ("127.0.0.1", receiver.port)
+                for data in (status_packet(), decode_packet(), packet(6)):
+                    sender.sendto(data, address)
+                deadline = time.monotonic() + 2
+                while receiver.snapshot()["last_message_type"] != 6:
+                    if time.monotonic() >= deadline:
+                        self.fail("WSJT-X close not received")
+                    time.sleep(0.01)
+                self.assertEqual(len(receiver.snapshot()["decodes"]), 1)
+                sender.sendto(status_packet(), address)
+                deadline = time.monotonic() + 2
+                while not receiver.snapshot()["connected"]:
+                    if time.monotonic() >= deadline:
+                        self.fail("WSJT-X status not received")
+                    time.sleep(0.01)
+                self.assertEqual(receiver.snapshot()["decodes"], [])
+                self.assertFalse(receiver.snapshot()["commands_ready"])
+            finally:
+                receiver.close()
+
     def test_status_age_does_not_refresh_on_heartbeat_or_decode(self) -> None:
         receiver = WsjtxReceiver(0, "WSJT-X")
         sender = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)

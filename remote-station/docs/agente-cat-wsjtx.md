@@ -101,7 +101,10 @@ el CAT directo del agente; compartirlo mediante un broker queda pendiente.
   estado puede estar desactualizado, incluso si sigue llegando tráfico. WSJT-X
   suele emitir Status cuando cambia, por lo que la edad no prueba un fallo.
 - Después de Close se ignoran decodes y Clear atrasados; solo un nuevo heartbeat
-  o Status del origen fijado puede reabrir la sesión y permitir órdenes opt-in.
+  o Status puede reabrir la sesión. Si se activaron órdenes, debe proceder del
+  origen fijado. Las decodificaciones anteriores permanecen como histórico
+  mientras la sesión está cerrada y se descartan al reabrirla; las nuevas
+  decodificaciones se almacenan por separado. Esto no autentica la sesión.
   La edad sigue siendo telemetría UDP no autenticada, nunca un enclavamiento RF.
 - Contadores de paquetes inválidos o no implementados; datagramas mayores de
   8192 bytes y otros esquemas se rechazan.
