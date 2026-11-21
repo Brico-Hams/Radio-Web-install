@@ -3,6 +3,7 @@ precompiled/chirp/* -text
 android/Bricohams-Android/** -text
 # Pinned third-party sources and licences ship byte for byte (SHA-256 checked in tests): never convert line endings.
 android/app/src/main/assets/** -text
+android/station-core/src/main/assets/diagnostic-contract.json -text
 examples/firmware/** -text
 hardware/rotor/firmware-patch/*.patch -text
 # The Gradle wrapper is a POSIX shell script: CRLF breaks its shebang under bash on Windows.
