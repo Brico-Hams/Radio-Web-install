@@ -279,6 +279,60 @@
 </ul>
 <p><strong>Come ripristinare, in concetto.</strong> Rimettere il codice di regione originale (salvato nel dump preventivo) con lo stesso strumento e riavviare la radio. Se la calibrazione è stata danneggiata, ripristinare dal dump completo o rivolgersi a un servizio tecnico Yaesu.</p>
 <p><strong>In questo progetto.</strong> <code>SPR</code>/<code>SPW</code>, i cambi di regione o limiti di TX e ogni scrittura di calibrazione sono esclusi di proposito.</p>
+<h3 id="ficha-de-la-herramienta">Scheda dello strumento</h3>
+<p>Link: <a href="https://github.com/Evgeny161rus/ftx1-region-tool/" target="_blank" rel="noopener noreferrer">repository originale</a> e <a href="https://github.com/Brico-Hams/Radio-Web-install/tree/main/third_party/ftx1/Evgeny161rus-ftx1-region-tool" target="_blank" rel="noopener noreferrer">copia inclusa in questo progetto</a>. Questa scheda si limita a descrivere; non contiene indirizzi EEPROM, valori dei codici di regione, sintassi del frame di scrittura né una procedura passo passo.</p>
+<p><strong>Linguaggio e requisiti.</strong></p>
+<ul>
+<li>Un solo script Python (<code>ftx1_region.py</code>), firmato &quot;R6AAF&quot;, che richiede Python 3.8 o superiore e la libreria <code>pyserial</code>. Si installa da sola la prima volta con <code>pip</code> (con <code>--user</code> se serve, o <code>ensurepip</code>), a meno che sia definito <code>FTX1_NO_AUTOINSTALL=1</code> [Evgeny161rus-ftx1-region-tool:README.md] [Evgeny161rus-ftx1-region-tool:requirements.txt].</li>
+<li>Funziona su Windows, Linux e macOS tramite il normale cavo USB del CAT: va usata la porta &quot;Enhanced&quot; del CP2105 (38400 baud per impostazione predefinita, <code>--baud</code> la cambia, <code>--port</code> forza la porta). Non serve aprire la radio.</li>
+<li>Senza argomenti apre un menu interattivo. L&#39;interfaccia è russa, inglese o entrambe; la scelta si salva in <code>~/.ftx1_region_lang</code> e <code>--lang</code> la cambia solo per quella volta [Evgeny161rus-ftx1-region-tool:ftx1_region.py].</li>
+<li>Il repository include anche una guida passo passo in russo, che qui non si riassume.</li>
+</ul>
+<p><strong>Firmware supportato.</strong></p>
+<ul>
+<li>È pensata per l&#39;FTX-1 con MAIN V01.13: da quell&#39;immagine provengono la tabella delle regioni e le tabelle degli intervalli di TX che usa. Su altre versioni bisogna prima fare un dump e verificare con <code>info</code>, perché indirizzi e codici possono differire [Evgeny161rus-ftx1-region-tool:README.md].</li>
+<li>La lettura della versione usa <code>VE</code>; l&#39;identificazione usa <code>ID</code> (l&#39;FTX-1 risponde <code>ID0840</code>).</li>
+<li>Raggiunge solo i primi 64 KiB della EEPROM (indirizzo a 16 bit), dei 128 KiB del chip; regione, calibrazione e impostazioni sono all&#39;inizio.</li>
+</ul>
+<p><strong>Profilo FT-710.</strong> Con <code>--radio ft710</code> (o scegliendolo nel menu) lo stesso strumento usa un altro profilo: EEPROM SPI da 32 KiB, altra posizione del codice e di un indicatore &quot;4K&quot;, identificazione <code>ID0710</code> e copia sempre completa prima di scrivere. Serve per fare dump, sondare, cambiare regione e analizzare file dell&#39;FT-710 [Evgeny161rus-ftx1-region-tool:ftx1_region.py]. Sull&#39;FT-710 il cambio di regione usa inoltre un comando <code>JP</code>; sull&#39;FTX-1 quel comando è uno scheletro che risponde <code>?;</code>, per questo qui si usano gli ordini di servizio EEPROM.</p>
+<p><strong>Sottocomandi che solo leggono</strong> (non cambiano la radio):</p>
+<ul>
+<li><code>ports</code>: elenca le porte seriali e segna quella del CAT.</li>
+<li><code>info</code>: legge <code>ID</code>, la versione e il codice di regione attuale; mostra il suo nome e gli intervalli di TX che il firmware consente per quel codice.</li>
+<li><code>list</code>: tabella dei codici di regione noti (nome, se è &quot;ampio&quot; e una descrizione); è locale e non parla con la radio.</li>
+<li><code>dump</code>: scarica la EEPROM in un <code>.bin</code> e in un <code>.txt</code> (vedi sotto).</li>
+<li><code>read</code>: legge un solo byte di EEPROM.</li>
+<li><code>probe</code> (pensato per l&#39;FT-710): richieste di sola lettura di <code>ID</code>, <code>VE</code>, <code>JP</code> e letture di EEPROM; salva un registro nella cartella dei dump e dice se il dump completo via CAT è possibile.</li>
+<li><code>analyze</code>: analizza offline un <code>.bin</code> già salvato (dimensione, regione, blocchi non vuoti) e con <code>--diff</code> lo confronta con un altro.</li>
+<li><code>hardware</code>: stampa solo istruzioni per un dump con programmatore esterno (chip SPI dell&#39;FT-710, CH341A e clip SOP8, due dump e confronto dell&#39;impronta, non applicare 5 V a un chip da 3,3 V).</li>
+<li><code>patch</code>: offline, cambia il codice di regione dentro una copia di un dump e salva un file nuovo; non tocca la radio, ma il risultato è pensato per essere scritto con un programmatore esterno (<strong>REGION/LIMITES TX</strong>).</li>
+</ul>
+<p><strong>Sottocomandi che scrivono:</strong></p>
+<ul>
+<li><code>set</code>: cambia il codice di regione (<strong>ESCRIBE EN LA RADIO</strong> <strong>REGION/LIMITES TX</strong>). Accetta il codice o il nome, oppure lo chiede mostrando la tabella.</li>
+<li><code>write</code>: scrive un solo byte in qualsiasi posizione della EEPROM, compresa la calibrazione (<strong>ESCRIBE EN LA RADIO</strong> <strong>REGION/LIMITES TX</strong> <strong>CALIBRACION</strong>); è un&#39;opzione per esperti e non va usata alla cieca.</li>
+<li>La voce di menu &quot;set&quot; (senza argomenti) fa lo stesso di <code>set</code>.</li>
+</ul>
+<p><strong>Dump e copie.</strong></p>
+<ul>
+<li>Il dump si legge byte per byte, a circa 12 ms per byte: il dump normale (i primi 4 KiB: intestazione, calibrazione e regione) richiede circa 50 s e quello completo da 64 KiB (<code>--full</code>) circa 13 minuti. <code>--double</code> legge due volte e confronta.</li>
+<li>Accanto al <code>.bin</code> salva un <code>.txt</code> con data, porta, identificazione, firmware, regione, somma SHA-256 e numero di byte con errore.</li>
+<li>Senza <code>--out</code>, i dump vanno nella cartella <code>dumps</code> accanto allo script, e le copie automatiche precedenti alla scrittura nella cartella <code>backups</code>; entrambe si creano da sole e il percorso completo si stampa alla fine.</li>
+<li>La copia automatica precedente a <code>set</code> copre i primi 512 byte della EEPROM (intestazione, calibrazione e regione); sull&#39;FT-710 è sempre la EEPROM completa.</li>
+</ul>
+<p><strong>Salvaguardie.</strong></p>
+<ul>
+<li><code>set --dry-run</code>: mostra il codice attuale e quello nuovo con i loro intervalli e si ferma senza scrivere nulla.</li>
+<li>Se il codice attuale è sconosciuto, rifiuta di scrivere salvo <code>--force</code>.</li>
+<li>Copia automatica preventiva e sua verifica: se un byte non si legge o la regione della copia non coincide con quella attuale, annulla (<code>--no-backup</code> la omette).</li>
+<li>Conferma esplicita (bisogna scrivere <code>yes</code>; <code>--yes</code> la omette).</li>
+<li>Rilettura dopo la scrittura, con tentativi e pause, perché il firmware cambia tabelle subito dopo; se non si riesce a leggere, avvisa con <code>write sent, but the readback failed</code> (non è un errore di scrittura).</li>
+<li>Bisogna spegnere e riaccendere completamente la radio e riguardare con <code>info</code>. Se il codice torna indietro, il firmware lo ripristina all&#39;avvio e servirebbe un programmatore esterno.</li>
+<li>Gli errori CAT non chiudono il menu; vengono solo stampati.</li>
+</ul>
+<p><strong>Difetti noti e corretti.</strong> Il 2026-11-09 è stata corretta la lettura di <code>SPR</code>: la risposta veniva letta fino al primo <code>;</code>, ma quel byte può essere anche un dato o la somma di controllo, così il flusso si sfasava e le risposte successive corrispondevano a indirizzi precedenti con la somma corretta. Risultato: dump e copie corrotti, e <code>set</code> che scriveva e poi falliva la verifica. Ora si legge una risposta di lunghezza fissa, si svuota il buffer e si ritenta, si verifica la copia preventiva e anche <code>ID</code>. I dump precedenti sono stati marcati come <code>_CORRUPT</code> e non servono per ripristinare [Evgeny161rus-ftx1-region-tool:README.md].</p>
+<p><strong>Comandi CAT nascosti che documenta.</strong> Dopo la tabella ordinata dei comandi del firmware MAIN, lo strumento descrive un blocco di comandi nascosti: <code>DP</code>, <code>SP</code>, <code>EO</code>, <code>FD</code>, <code>KT</code>, <code>PE</code>, <code>ZZ</code>, <code>VE</code>, <code>JP</code>, <code>A0</code>, <code>A1</code>, <code>A2</code>, <code>RL</code>, <code>EX</code> e <code>SW</code>. Si citano solo i nomi; quelli usati dallo strumento sono <code>SPR</code> e <code>SPW</code> (lettura e scrittura di un byte di EEPROM), e <code>SPIR</code> risponde sulla radio reale [Evgeny161rus-ftx1-region-tool:README.md].</p>
+<p><strong>Avvertenze legali e d&#39;uso.</strong> Trasmettere solo dove la licenza lo consente; cambiare la regione può violare l&#39;omologazione di tipo e la garanzia; si scrive EEPROM di servizio accanto alla calibrazione, quindi bisogna fare un dump prima della prima scrittura; è offerto &quot;così com&#39;è&quot;, senza garanzia, e l&#39;autore declina ogni responsabilità per danni, perdita di dati, apparecchiature rovinate o violazione di leggi locali [Evgeny161rus-ftx1-region-tool:README.md].</p>
 <h2 id="firmware-reid-n0rc">Firmware (Reid-n0rc)</h2>
 <p>Solo riepilogo. <strong>FIRMWARE</strong>. Questo progetto non carica, non applica patch e non prepara firmware.</p>
 <p>Fatti del repository <code>Reid-n0rc-FTX-1_Firmware</code> [Reid-n0rc-FTX-1_Firmware:README.md] [Reid-n0rc-FTX-1_Firmware:AGENTS.md]:</p>
@@ -305,6 +359,24 @@
 <li>Rischi: un aggiornamento fallito può far perdere le impostazioni o rendere la radio inutilizzabile; le salvaguardie &quot;non possono garantire protezione da ogni guasto&quot;; se il TX persiste, spegnere la radio. Ripristinare: reinstallare MAIN e DISPLAY originali e fare il reset di fabbrica (cancella le impostazioni utente).</li>
 </ul>
 <p>Altre menzioni di hardware: accordatore esterno mAT-30 tramite il connettore TUNER/LINEAR con cavo mAT-CY [hatandspecs-ftx1-tuner-sweep:docs/usage.md]; un programmatore esterno CH341A come risorsa dello strumento di regione [Evgeny161rus-ftx1-region-tool:README.md].</p>
+<h3 id="herramienta-web-de-sq9pd-ftx-1-mod-sq9pd-pl">Strumento web di sq9pd (ftx-1-mod.sq9pd.pl)</h3>
+<p><strong>FIRMWARE</strong>. Link: <a href="https://ftx-1-mod.sq9pd.pl/" target="_blank" rel="noopener noreferrer">sito web</a> e <a href="https://github.com/sq9pd/Yaesu-FTX-1-mod" target="_blank" rel="noopener noreferrer">repository</a>. Il sito non si è potuto scaricare automaticamente (HTTP 403, 2026-11-17). Questa descrizione deriva dalla cartella <code>site/</code> del repository: un&#39;applicazione web statica (<code>index.html</code>, <code>app.js</code>, <code>content.js</code>, <code>patch-core.js</code>, <code>patch-data.js</code>, più foglio di stile e immagini) che sembra essere ciò che serve il sito (non verificato) [sq9pd-Yaesu-FTX-1-mod:site/index.html] [sq9pd-Yaesu-FTX-1-mod:site/app.js] [sq9pd-Yaesu-FTX-1-mod:site/content.js] [sq9pd-Yaesu-FTX-1-mod:site/patch-core.js] [sq9pd-Yaesu-FTX-1-mod:site/patch-data.js]. Questo progetto non la usa né riproduce patch.</p>
+<ul>
+<li><strong>Cosa ottiene l&#39;utente.</strong> Una pagina in polacco (predefinito) o inglese che spiega la modifica con tre schermate (schermata principale, configurazione dei pulsanti e grafico di SWR SCAN), le istruzioni e i limiti di SWR SCAN, come tornare al firmware originale e due selettori di file (MAIN e DISPLAY) che generano i file <code>.SFL</code> modificati da scaricare. La pagina non programma la radio: il caricamento lo fa l&#39;utente con il processo di aggiornamento Yaesu [sq9pd-Yaesu-FTX-1-mod:README.md] [sq9pd-Yaesu-FTX-1-mod:READMEPL.md].</li>
+<li><strong>Dove viene eseguito.</strong> Tutto nel browser, sul computer dell&#39;utente: la pagina dice che i file non vengono mai caricati su un server, che la verifica SHA-256 e il patching sono locali, senza analitica né librerie esterne. In coerenza con ciò, la politica di sicurezza dei contenuti della pagina vieta qualsiasi connessione di rete (<code>connect-src &#39;none&#39;</code>) e il codice non fa richieste. Richiede Web Crypto (HTTPS o localhost) e una casella di consenso prima del patching. I file originali e quelli già modificati non sono inclusi nel repository.</li>
+<li><strong>Quale versione accetta.</strong> La consegna &quot;FTX-1 MAIN V40 + DISPLAY V35&quot;, basata sui firmware Yaesu MAIN 01-13 e DISPLAY 01-10: solo i file ufficiali esatti <code>FTX-1_MAIN_V0113.SFL</code> e <code>FTX-1_DISPLAY_V0110.SFL</code>. Altre versioni non sono supportate. V40 e V35 sono versioni della modifica (i nomi dei file mantengono i numeri di fabbrica) e non include la correzione audio CW di MAIN V41 [sq9pd-Yaesu-FTX-1-mod:manifest.json].</li>
+<li><strong>Modifiche, a livello di funzioni.</strong></li>
+<li>Quattro pagine di cinque pulsanti configurabili nella riga inferiore (si assegnano nelle impostazioni dello schermo), con 70 funzioni assegnabili e disposizione predefinita.</li>
+<li>Orologio nella barra superiore; funzioni non legate allo spettro disponibili con lo spettro nascosto.</li>
+<li>Scorciatoie: APRS (modem, elenchi di stazioni e messaggi, beacon), 3DSS, accordatore e antenna, larghezza e spostamento del filtro, notch, contour, NB, AMC, e impostazioni che attivano la manopola FUNC.</li>
+<li>Scan nativo del ricevitore selezionato; elenchi di banda e di modo con pressione breve e azione alternativa con pressione lunga.</li>
+<li><strong>SWR SCAN</strong>: scansione di adattamento dell&#39;antenna a 101 punti attorno alla frequenza del VFO, con quattro larghezze di scansione; <strong>trasmette RF</strong> e non è un misuratore calibrato in modo indipendente (<strong>REGION/LIMITES TX</strong>: l&#39;intera scansione deve essere consentita). Ha codici di errore propri.</li>
+<li>Due correzioni del firmware originale (bip muti con BEEP LEVEL = 0 e un errata di menu).</li>
+<li><strong>Controlli di sicurezza.</strong> Si controlla lo SHA-256 del file alla selezione, la sua dimensione, l&#39;intestazione, l&#39;etichetta di dimensione e il CRC del formato SFL, l&#39;hash del payload decodificato e che i byte originali coincidano prima di applicare le differenze; poi si verificano il CRC e lo SHA-256 del risultato rispetto all&#39;atteso. Un file di un&#39;altra versione, già modificato o corrotto viene rifiutato; il download si attiva solo con un risultato verificato e si mostrano gli hash atteso e reale. La versione in Python ripete gli stessi controlli e non salva il risultato se falliscono [sq9pd-Yaesu-FTX-1-mod:patch.py] [sq9pd-Yaesu-FTX-1-mod:SHA256SUMS.txt].</li>
+<li><strong>Stato dei test.</strong> Il file dei risultati dà &quot;PASS&quot; nella verifica offline: i risultati di Python e JavaScript sono identici byte per byte per MAIN e DISPLAY, i casi negativi passano e l&#39;interfaccia (polacco e inglese, layout stretto) si vede bene. Il patching interattivo nel browser risulta &quot;not yet tested in browser; Python and JS engine verified&quot; [sq9pd-Yaesu-FTX-1-mod:TEST_RESULTS.json]. Qui non si è provato nulla di tutto questo.</li>
+<li><strong>Come tornare al firmware di fabbrica.</strong> Salvare prima impostazioni e memorie, reinstallare i MAIN e DISPLAY originali con il processo Yaesu e fare il reset di fabbrica (cancella le impostazioni utente); reinstallare il firmware originale non sostituisce il reset [sq9pd-Yaesu-FTX-1-mod:README.md].</li>
+<li><strong>Avvertenze.</strong> Modifica non ufficiale né approvata da Yaesu, a responsabilità dell&#39;utente e senza garanzia; un errore o un aggiornamento interrotto può far perdere le impostazioni o rendere la radio inutilizzabile; le salvaguardie software non garantiscono protezione da ogni guasto e, se la radio continua a trasmettere, va spenta. Lo strumento non è un compilatore né un editor generale di firmware.</li>
+</ul>
 <h2 id="barrido-del-acoplador-tuner-sweep">Scansione dell&#39;accordatore (tuner sweep)</h2>
 <p><strong>ATTENZIONE: ogni passo TRASMETTE.</strong> <strong>ESCRIBE EN LA RADIO</strong> (cambia il VFO in diretta e attiva il TX; non scrive memoria, menu né EEPROM) [hatandspecs-ftx1-tuner-sweep:README.md]. Questo progetto non implementa la scansione né avvia l&#39;accordatore.</p>
 <p><code>hatandspecs-ftx1-tuner-sweep</code> è un&#39;applicazione locale in Flask (<code>http://127.0.0.1:5000</code>) che percorre il VFO dell&#39;FTX-1 sulle bande scelte e fa partire un accordatore automatico esterno perché salvi una memoria per frequenza (provato con un mAT-30, FTX-1 Optima, 15 m e 12 m) [hatandspecs-ftx1-tuner-sweep:README.md] [hatandspecs-ftx1-tuner-sweep:docs/usage.md].</p>
