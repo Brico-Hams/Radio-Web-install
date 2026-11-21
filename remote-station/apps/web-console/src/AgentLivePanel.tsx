@@ -28,11 +28,92 @@ function isLive(payload: unknown): payload is LivePayload {
           record.allowed_operations[0] === 'replay' && record.allowed_operations[1] === 'halt_tx')) &&
       record.authenticated === false && record.suitable_for_control === false &&
       record.trust === 'untrusted_local_udp' &&
-      typeof record.connected === 'boolean' && Array.isArray(record.decodes)) ||
+      typeof record.connected === 'boolean' && Array.isArray(record.decodes) &&
+      record.decodes.length <= 100) ||
     (record.status === 'experimental' && record.tx_control_enabled === false &&
       typeof record.model === 'string' && Array.isArray(record.queries) &&
       record.queries.every((query: unknown) => typeof query === 'string'))
   )
+}
+
+function readableText(value: unknown, unknown: string): string {
+  return typeof value === 'string' && value.length > 0 && value.length <= 2048 ? value : unknown
+}
+
+function readableInteger(value: unknown, unknown: string): string {
+  return typeof value === 'number' && Number.isSafeInteger(value) ? String(value) : unknown
+}
+
+function readableFrequency(value: unknown, unknown: string): string {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
+    ? String(value) : unknown
+}
+
+function decodeTime(value: unknown, unknown: string): string {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 0 || value >= 86_400_000) {
+    return unknown
+  }
+  const hours = Math.floor(value / 3_600_000)
+  const minutes = Math.floor((value % 3_600_000) / 60_000)
+  const seconds = Math.floor((value % 60_000) / 1000)
+  const millis = value % 1000
+  return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:` +
+    `${String(seconds).padStart(2, '0')}.${String(millis).padStart(3, '0')}`
+}
+
+function DigitalReadout({ data }: { data: LivePayload }) {
+  const { t } = useLanguage()
+  const unknown = t('digitalUnknown')
+  const status = isRecord(data.status) ? data.status : null
+  const decodes = Array.isArray(data.decodes) ? data.decodes : []
+  const reportedFlag = (value: unknown) =>
+    value === true ? t('digitalYes') : value === false ? t('digitalNo') : unknown
+
+  return <>
+    <p>{t('digitalSnapshotNotice')}</p>
+    <h3>{t('digitalReportedStatus')}</h3>
+    {status ? <dl className="digital-status">
+      <div><dt>{t('digitalDialFrequency')}</dt>
+        <dd>{readableFrequency(status.dial_frequency_hz, unknown)} Hz</dd></div>
+      <div><dt>{t('digitalMode')}</dt><dd>{readableText(status.mode, unknown)}</dd></div>
+      <div><dt>{t('digitalTxEnabled')}</dt><dd>{reportedFlag(status.tx_enabled_in_wsjtx)}</dd></div>
+      <div><dt>{t('digitalTransmitting')}</dt><dd>{reportedFlag(status.transmitting_in_wsjtx)}</dd></div>
+      <div><dt>{t('digitalLocalCall')}</dt><dd>{readableText(status.de_call, unknown)}</dd></div>
+      <div><dt>{t('digitalRemoteCall')}</dt><dd>{readableText(status.dx_call, unknown)}</dd></div>
+    </dl> : <p>{t('digitalStatusUnavailable')}</p>}
+    <h3>{t('digitalDecodes')}</h3>
+    {decodes.length === 0 ? <p>{t('digitalNoDecodes')}</p> : <div className="table-scroll">
+      <table className="qso-table">
+        <caption>{t('digitalDecodesCaption')}</caption>
+        <thead><tr>
+          <th scope="col">{t('digitalTime')}</th><th scope="col">SNR (dB)</th>
+          <th scope="col">{t('digitalOffset')}</th><th scope="col">{t('digitalMode')}</th>
+          <th scope="col">{t('digitalMessage')}</th><th scope="col">{t('digitalMarkers')}</th>
+        </tr></thead>
+        <tbody>{decodes.map((value, index) => {
+          const row = isRecord(value) ? value : {}
+          const markers = [
+            row.new === true ? t('digitalNew') : row.new === false ? t('digitalReplayMarker') : unknown,
+            row.low_confidence === true ? t('digitalLowConfidence') :
+              row.low_confidence === false ? t('digitalNotLowConfidence') : unknown,
+            row.off_air === true ? t('digitalOffAir') :
+              row.off_air === false ? t('digitalOnAirReported') : unknown,
+          ]
+          return <tr key={index}>
+            <td>{decodeTime(row.time_since_midnight_ms, unknown)}</td>
+            <td>{readableInteger(row.snr_db, unknown)}</td>
+            <td>{readableFrequency(row.delta_frequency_hz, unknown)}</td>
+            <td>{readableText(row.mode, unknown)}</td>
+            <td className="digital-message">{readableText(row.message, unknown)}</td>
+            <td className="digital-markers">{markers.join(' · ')}</td>
+          </tr>
+        })}</tbody>
+      </table>
+    </div>}
+    <details><summary>{t('digitalRawDetails')}</summary>
+      <pre className="live-data">{JSON.stringify(data, null, 2)}</pre>
+    </details>
+  </>
 }
 
 type DigitalCommandResult = {
@@ -152,7 +233,7 @@ export function AgentLivePanel({ token }: { token: string }) {
               onClick={() => void operateDigital('halt_tx')}>{t('digitalHaltTx')}</button>
           </div> : null}
           {digital.commands_enabled ? <p role="note">{t('digitalDeliveryWarning')}</p> : null}
-          <pre className="live-data">{JSON.stringify(digital, null, 2)}</pre>
+          <DigitalReadout data={digital} />
         </div>
       ) : null}
       {commandResult ? <p role="status">

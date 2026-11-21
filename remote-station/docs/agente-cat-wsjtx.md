@@ -164,6 +164,13 @@ respuestas que pretendan confirmar parada RF; no ejecutan WSJT-X ni prueban RF.
 El panel **CAT experimental y WSJT-X** consulta estas rutas bajo demanda, sin
 sondeos automáticos. Admin y operador pueden acceder; oyente e invitado no.
 La demostración del panel principal sigue separada y etiquetada.
+La vista digital presenta estado **informado** y tabla de decodificaciones:
+hora, SNR, desplazamiento, modo, mensaje y marcas de Replay, baja confianza
+y audio desde archivo. Campos ausentes o inválidos se indican como desconocidos,
+no como `false`. Las marcas no validan por sí mismas una señal real y la
+información sigue siendo UDP no autenticado. La instantánea no se actualiza
+sola; el usuario debe volver a consultar. Los datos técnicos originales están
+disponibles en un desplegable y no se importan contactos automáticamente.
 
 Referencias públicas consultadas, implementación original:
 

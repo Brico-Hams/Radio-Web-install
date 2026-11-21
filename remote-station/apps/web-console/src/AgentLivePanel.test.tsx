@@ -1,4 +1,4 @@
-import { fireEvent, render as renderComponent, screen } from '@testing-library/react'
+import { fireEvent, render as renderComponent, screen, within } from '@testing-library/react'
 import type { ReactNode } from 'react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -148,6 +148,70 @@ describe('agent live panel', () => {
     expect(await screen.findByText(/último estado WSJT-X tiene más de 60 segundos/)).toBeTruthy()
     fireEvent.change(screen.getByLabelText('Idioma'), { target: { value: 'en' } })
     expect(screen.getByText(/last WSJT-X status is over 60 seconds old/)).toBeTruthy()
+  })
+
+  it('renders reported WSJT-X status and safe decode markers without initiating TX', async () => {
+    const fetch = vi.fn(async () => json({
+      api_version: 'v1', data_is_simulated: false, source: 'wsjtx_udp',
+      commands_enabled: false, connected: true, authenticated: false,
+      suitable_for_control: false, trust: 'untrusted_local_udp',
+      status: {
+        dial_frequency_hz: 14074000, mode: 'FT8', de_call: 'EA1ABC', dx_call: 'N0CALL',
+        tx_enabled_in_wsjtx: true, transmitting_in_wsjtx: false,
+      },
+      decodes: [
+        { new: false, time_since_midnight_ms: 43200123, snr_db: -12,
+          delta_frequency_hz: 1500, mode: '~', message: 'CQ N0CALL AA00',
+          low_confidence: true, off_air: true },
+        { new: true, time_since_midnight_ms: 0, snr_db: -1,
+          delta_frequency_hz: 0, mode: '~', message: '<img src=x onerror=alert(1)>',
+          low_confidence: false, off_air: null },
+      ],
+    }))
+    vi.stubGlobal('fetch', fetch)
+    const user = userEvent.setup()
+    render(<><LanguageSelector /><AgentLivePanel token="test-token" /></>)
+    await user.click(screen.getByRole('button', { name: 'Consultar WSJT-X' }))
+    expect(await screen.findByText('14074000 Hz')).toBeTruthy()
+    expect(screen.getByText('TX habilitado según WSJT-X').nextElementSibling?.textContent).toBe('Sí')
+    expect(screen.getByText('Transmitiendo según WSJT-X').nextElementSibling?.textContent).toBe('No')
+    const table = screen.getByRole('table')
+    expect(within(table).getByText('12:00:00.123')).toBeTruthy()
+    expect(within(table).getByText('CQ N0CALL AA00')).toBeTruthy()
+    expect(within(table).getByText(/Histórica \/ Replay · Baja confianza · Desde archivo/)).toBeTruthy()
+    expect(within(table).getByText(/Nueva · Sin marca de baja confianza · Desconocido/)).toBeTruthy()
+    expect(within(table).getByText('<img src=x onerror=alert(1)>')).toBeTruthy()
+    expect(table.querySelector('img')).toBeNull()
+    expect(screen.getByText(/no confirman el estado RF/)).toBeTruthy()
+    fireEvent.change(screen.getByLabelText('Idioma'), { target: { value: 'en' } })
+    expect(within(table).getByText(/Historical \/ Replay · Low confidence · From file/)).toBeTruthy()
+    fireEvent.change(screen.getByLabelText('Language'), { target: { value: 'fr' } })
+    expect(within(table).getByText(/Historique \/ Replay · Faible confiance · Depuis fichier/)).toBeTruthy()
+    fireEvent.change(screen.getByLabelText('Langue'), { target: { value: 'pt' } })
+    expect(within(table).getByText(/Histórica \/ Replay · Baixa confiança · De ficheiro/)).toBeTruthy()
+    expect(fetch).toHaveBeenCalledOnce()
+    expect(screen.queryByRole('button', { name: /transmitir|ptt/i })).toBeNull()
+  })
+
+  it('shows unknown values rather than inventing fields or false flags', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => json({
+      api_version: 'v1', data_is_simulated: false, source: 'wsjtx_udp',
+      commands_enabled: false, connected: false, authenticated: false,
+      suitable_for_control: false, trust: 'untrusted_local_udp',
+      status: { dial_frequency_hz: -1, tx_enabled_in_wsjtx: 'false' },
+      decodes: [{ new: null, time_since_midnight_ms: 86400000, snr_db: '0',
+        delta_frequency_hz: -1, low_confidence: null }],
+    })))
+    const user = userEvent.setup()
+    render(<AgentLivePanel token="test-token" />)
+    await user.click(screen.getByRole('button', { name: 'Consultar WSJT-X' }))
+    expect(await screen.findByText('Desconocido Hz')).toBeTruthy()
+    expect(screen.getByText('TX habilitado según WSJT-X').nextElementSibling?.textContent)
+      .toBe('Desconocido')
+    const row = within(screen.getByRole('table')).getAllByRole('row')[1]
+    expect(within(row).getAllByText('Desconocido').length).toBeGreaterThanOrEqual(4)
+    expect(within(row).getByText('Desconocido · Desconocido · Desconocido')).toBeTruthy()
+    expect(screen.getByText(/cualquier dato retenido es histórico/)).toBeTruthy()
   })
 
   it('surfaces the agent error code instead of substituting simulated data', async () => {

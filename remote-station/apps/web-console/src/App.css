@@ -179,6 +179,17 @@
   white-space: nowrap;
 }
 
+.digital-status {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 150px), 1fr));
+  gap: 12px;
+}
+
+.digital-status dt { color: var(--muted); font-size: 13px; }
+.digital-status dd { margin: 4px 0 0; overflow-wrap: anywhere; }
+.qso-table .digital-message,
+.qso-table .digital-markers { white-space: normal; overflow-wrap: anywhere; min-width: 160px; }
+
 .protocol-queries {
   padding-left: 20px;
   line-height: 1.8;
