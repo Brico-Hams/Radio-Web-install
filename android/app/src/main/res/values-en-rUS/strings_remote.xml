@@ -3,7 +3,7 @@
     <string name="tool_remote_title">Remote shack</string>
     <string name="tool_remote_desc">Control your radio through the RadiCodex remote agent on your PC.</string>
     <string name="tool_remote_help">Pair the phone with the RadiCodex remote agent (local network or Tailscale) and open its console. Only private addresses are accepted and the certificate must match the paired fingerprint.</string>
-    <string name="remote_title">Remote shack</string>
+    <string name="remote_shack_title">Remote shack</string>
     <string name="remote_pair_help">Paste the pairing link (radicodex-remote://pair…) or the console URL shown by the RadiCodex agent on the PC.</string>
     <string name="remote_pair_hint">Pairing link</string>
     <string name="remote_paste">Paste</string>

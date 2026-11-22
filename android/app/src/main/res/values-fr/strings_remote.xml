@@ -3,7 +3,7 @@
     <string name="tool_remote_title">Shack distant</string>
     <string name="tool_remote_desc">Pilotez votre radio via l’agent distant RadiCodex sur le PC.</string>
     <string name="tool_remote_help">Associe le téléphone à l’agent distant RadiCodex (réseau local ou Tailscale) et ouvre sa console. Seules les adresses privées sont acceptées et le certificat doit correspondre à l’empreinte associée.</string>
-    <string name="remote_title">Shack distant</string>
+    <string name="remote_shack_title">Shack distant</string>
     <string name="remote_pair_help">Collez le lien d’association (radicodex-remote://pair…) ou l’URL de la console affichée par l’agent RadiCodex sur le PC.</string>
     <string name="remote_pair_hint">Lien d’association</string>
     <string name="remote_paste">Coller</string>

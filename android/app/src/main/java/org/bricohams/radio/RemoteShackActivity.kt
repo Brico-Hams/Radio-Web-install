@@ -100,7 +100,7 @@ class RemoteShackActivity : LocalizedActivity() {
     private fun pairingScreen() {
         val pad = Brand.dp(this, 16)
         val layout = root().apply { setPadding(pad, pad, pad, pad) }
-        layout.addView(Brand.heading(this, getString(R.string.remote_title)))
+        layout.addView(Brand.heading(this, getString(R.string.remote_shack_title)))
         val staged = pending
         if (staged != null) {
             layout.addView(Brand.text(this, 15f).apply { text = describe(staged); setPadding(0, pad, 0, pad) })

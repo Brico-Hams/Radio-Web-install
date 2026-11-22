@@ -3,7 +3,7 @@
     <string name="tool_remote_title">Remote-Shack</string>
     <string name="tool_remote_desc">Steuern Sie Ihr Funkgerät über den RadiCodex-Remote-Agenten auf dem PC.</string>
     <string name="tool_remote_help">Koppelt das Telefon mit dem RadiCodex-Remote-Agenten (lokales Netz oder Tailscale) und öffnet dessen Konsole. Nur private Adressen werden akzeptiert, und das Zertifikat muss zum gekoppelten Fingerabdruck passen.</string>
-    <string name="remote_title">Remote-Shack</string>
+    <string name="remote_shack_title">Remote-Shack</string>
     <string name="remote_pair_help">Fügen Sie den Kopplungslink (radicodex-remote://pair…) oder die Konsolen-URL ein, die der RadiCodex-Agent am PC anzeigt.</string>
     <string name="remote_pair_hint">Kopplungslink</string>
     <string name="remote_paste">Einfügen</string>
