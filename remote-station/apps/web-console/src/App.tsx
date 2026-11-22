@@ -283,7 +283,8 @@ function App() {
             onClick={() => setPage(target)}>{t(target)}</button>)}
         </nav>
         {page === 'help' ? <HelpPanel /> : null}
-        {page === 'settings' ? <><ConfigurationPanel /><HostConfigurationPanel /><DiagnosticPanel token={activeToken} /></> : null}
+        {/* The mobile app is only a client of the remote station: no agent or host setup on the phone. */}
+        {page === 'settings' ? <>{nativeClient ? null : <><ConfigurationPanel /><HostConfigurationPanel /></>}<DiagnosticPanel token={activeToken} /></> : null}
 
         {!activeToken && page === 'console' ? (
           <section className="connect-card" aria-labelledby="connect-title">

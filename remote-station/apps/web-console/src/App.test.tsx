@@ -265,6 +265,19 @@ describe('web console', () => {
     expect(document.body.textContent).not.toContain('secret-token-value')
   })
 
+  it('native clients only connect: no agent or host setup in settings', async () => {
+    const native = vi.spyOn(Capacitor, 'isNativePlatform').mockReturnValue(true)
+    try {
+      const user = userEvent.setup()
+      render(<App />)
+      await user.click(screen.getByRole('button', { name: 'Configuración' }))
+      expect(document.getElementById('setup-title')).toBeNull()
+      expect(document.getElementById('host-setup-title')).toBeNull()
+    } finally {
+      native.mockRestore()
+    }
+  })
+
   it('requires HTTPS in native clients before sending the token', async () => {
     const native = vi.spyOn(Capacitor, 'isNativePlatform').mockReturnValue(true)
     try {
