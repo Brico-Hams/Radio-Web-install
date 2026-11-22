@@ -279,6 +279,60 @@
 </ul>
 <p><strong>How to revert, in concept.</strong> Put the original region code back (saved in the prior dump) with the same tool, and restart the radio. If the calibration was damaged, restore from the full dump or turn to a Yaesu technical service.</p>
 <p><strong>In this project.</strong> <code>SPR</code>/<code>SPW</code>, region or TX limit changes and any calibration write are excluded on purpose.</p>
+<h3 id="ficha-de-la-herramienta">Tool profile</h3>
+<p>Links: <a href="https://github.com/Evgeny161rus/ftx1-region-tool/" target="_blank" rel="noopener noreferrer">original repository</a> and <a href="https://github.com/Brico-Hams/Radio-Web-install/tree/main/third_party/ftx1/Evgeny161rus-ftx1-region-tool" target="_blank" rel="noopener noreferrer">copy included in this project</a>. This profile only describes; it contains no EEPROM addresses, region code values, write frame syntax or step-by-step procedure.</p>
+<p><strong>Language and requirements.</strong></p>
+<ul>
+<li>A single Python script (<code>ftx1_region.py</code>), signed &quot;R6AAF&quot;, which needs Python 3.8 or later and the <code>pyserial</code> library. It installs it by itself the first time with <code>pip</code> (with <code>--user</code> if needed, or <code>ensurepip</code>), unless <code>FTX1_NO_AUTOINSTALL=1</code> is set [Evgeny161rus-ftx1-region-tool:README.md] [Evgeny161rus-ftx1-region-tool:requirements.txt].</li>
+<li>It works on Windows, Linux and macOS over the normal CAT USB cable: you must use the &quot;Enhanced&quot; port of the CP2105 (38400 baud by default, <code>--baud</code> changes it, <code>--port</code> forces the port). The radio does not need to be opened.</li>
+<li>With no arguments it opens an interactive menu. The interface is Russian, English or both; the choice is saved in <code>~/.ftx1_region_lang</code> and <code>--lang</code> changes it for that run only [Evgeny161rus-ftx1-region-tool:ftx1_region.py].</li>
+<li>The repository also includes a step-by-step guide in Russian, which is not summarised here.</li>
+</ul>
+<p><strong>Supported firmware.</strong></p>
+<ul>
+<li>It is made for the FTX-1 with MAIN V01.13: the region table and the TX range tables it uses come from that image. On other versions you must dump first and check with <code>info</code>, because the addresses and codes may differ [Evgeny161rus-ftx1-region-tool:README.md].</li>
+<li>Reading the version uses <code>VE</code>; identification uses <code>ID</code> (the FTX-1 answers <code>ID0840</code>).</li>
+<li>It reaches only the first 64 KiB of the EEPROM (16-bit address), out of the chip&#39;s 128 KiB; the region, the calibration and the settings are at the start.</li>
+</ul>
+<p><strong>FT-710 profile.</strong> With <code>--radio ft710</code> (or choosing it in the menu) the same tool uses another profile: 32 KiB SPI EEPROM, another position for the code and for a &quot;4K&quot; flag, identification <code>ID0710</code> and an always-complete backup before writing. It serves to dump, probe, change region and analyse FT-710 files [Evgeny161rus-ftx1-region-tool:ftx1_region.py]. On the FT-710 the region change also uses a <code>JP</code> command; on the FTX-1 that command is a stub that answers <code>?;</code>, which is why the EEPROM service commands are used here.</p>
+<p><strong>Subcommands that only read</strong> (they do not change the radio):</p>
+<ul>
+<li><code>ports</code>: lists the serial ports and marks the CAT one.</li>
+<li><code>info</code>: reads <code>ID</code>, the version and the current region code; shows its name and the TX ranges the firmware allows for that code.</li>
+<li><code>list</code>: table of the known region codes (name, whether it is &quot;wide&quot; and a description); it is local and does not talk to the radio.</li>
+<li><code>dump</code>: dumps the EEPROM to a <code>.bin</code> and a <code>.txt</code> (see below).</li>
+<li><code>read</code>: reads a single EEPROM byte.</li>
+<li><code>probe</code> (meant for the FT-710): read-only queries of <code>ID</code>, <code>VE</code>, <code>JP</code> and EEPROM reads; it saves a log in the dumps folder and says whether a full dump over CAT is possible.</li>
+<li><code>analyze</code>: analyses offline a <code>.bin</code> already saved (size, region, non-empty blocks) and with <code>--diff</code> compares it with another.</li>
+<li><code>hardware</code>: only prints instructions for a dump with an external programmer (FT-710 SPI chip, CH341A and SOP8 clip, two dumps and compare the fingerprint, do not apply 5 V to a 3.3 V chip).</li>
+<li><code>patch</code>: offline, changes the region code inside a copy of a dump and saves a new file; it does not touch the radio, but the result is meant to be written with an external programmer (<strong>REGION/LIMITES TX</strong>).</li>
+</ul>
+<p><strong>Subcommands that write:</strong></p>
+<ul>
+<li><code>set</code>: changes the region code (<strong>ESCRIBE EN LA RADIO</strong> <strong>REGION/LIMITES TX</strong>). It accepts the code or the name, or asks for it showing the table.</li>
+<li><code>write</code>: writes a single byte at any EEPROM position, including the calibration (<strong>ESCRIBE EN LA RADIO</strong> <strong>REGION/LIMITES TX</strong> <strong>CALIBRACION</strong>); it is an expert option and must not be used blindly.</li>
+<li>The menu option &quot;set&quot; (with no arguments) does the same as <code>set</code>.</li>
+</ul>
+<p><strong>Dump and backups.</strong></p>
+<ul>
+<li>The dump is read byte by byte, at about 12 ms per byte: the normal dump (the first 4 KiB: header, calibration and region) takes about 50 s and the full 64 KiB one (<code>--full</code>) about 13 minutes. <code>--double</code> reads twice and compares.</li>
+<li>Next to the <code>.bin</code> it saves a <code>.txt</code> with the date, the port, the identification, the firmware, the region, the SHA-256 sum and the number of failed bytes.</li>
+<li>Without <code>--out</code>, dumps go to the <code>dumps</code> folder next to the script, and the automatic backups made before writing go to the <code>backups</code> folder; both are created by themselves and the full path is printed at the end.</li>
+<li>The automatic backup before <code>set</code> covers the first 512 bytes of the EEPROM (header, calibration and region); on the FT-710 it is always the whole EEPROM.</li>
+</ul>
+<p><strong>Safeguards.</strong></p>
+<ul>
+<li><code>set --dry-run</code>: shows the current and new code with their ranges and stops without writing anything.</li>
+<li>If the current code is unknown, it refuses to write unless <code>--force</code>.</li>
+<li>Automatic backup and its verification: if a byte cannot be read or the region of the backup does not match the current one, it aborts (<code>--no-backup</code> skips it).</li>
+<li>Explicit confirmation (you must type <code>yes</code>; <code>--yes</code> skips it).</li>
+<li>Read-back after writing, with retries and pauses, because the firmware switches tables right afterwards; if it cannot be read, it warns with <code>write sent, but the readback failed</code> (it is not a write error).</li>
+<li>The radio must be fully powered off and on and checked again with <code>info</code>. If the code goes back, the firmware restores it at boot and an external programmer would be needed.</li>
+<li>CAT errors do not close the menu; they are only printed.</li>
+</ul>
+<p><strong>Known and fixed failures.</strong> On 2026-11-09 the reading of <code>SPR</code> was fixed: the reply was read up to the first <code>;</code>, but that byte can also be data or the checksum, so the stream shifted and the following replies corresponded to earlier addresses with the correct checksum. Result: corrupt dumps and backups, and <code>set</code> that wrote and then failed to verify. Now a fixed-length reply is read, the buffer is cleared and it retries, the prior backup is verified and so is <code>ID</code>. Earlier dumps were marked <code>_CORRUPT</code> and are not usable for restoring [Evgeny161rus-ftx1-region-tool:README.md].</p>
+<p><strong>Hidden CAT commands it documents.</strong> After the sorted table of MAIN firmware commands, the tool describes a block of hidden commands: <code>DP</code>, <code>SP</code>, <code>EO</code>, <code>FD</code>, <code>KT</code>, <code>PE</code>, <code>ZZ</code>, <code>VE</code>, <code>JP</code>, <code>A0</code>, <code>A1</code>, <code>A2</code>, <code>RL</code>, <code>EX</code> and <code>SW</code>. Only the names are cited; the ones the tool uses are <code>SPR</code> and <code>SPW</code> (read and write of one EEPROM byte), and <code>SPIR</code> answers on the real radio [Evgeny161rus-ftx1-region-tool:README.md].</p>
+<p><strong>Legal and usage warnings.</strong> Transmit only where the licence allows it; changing the region may breach the type approval and the warranty; service EEPROM is written next to the calibration, so a dump must be made before the first write; it is offered &quot;as is&quot;, with no warranty, and the author disclaims all liability for damage, data loss, a ruined device or breach of local laws [Evgeny161rus-ftx1-region-tool:README.md].</p>
 <h2 id="firmware-reid-n0rc">Firmware (Reid-n0rc)</h2>
 <p>Summary only. <strong>FIRMWARE</strong>. This project does not load, patch or prepare firmware.</p>
 <p>Facts from the <code>Reid-n0rc-FTX-1_Firmware</code> repository [Reid-n0rc-FTX-1_Firmware:README.md] [Reid-n0rc-FTX-1_Firmware:AGENTS.md]:</p>
@@ -305,6 +359,24 @@
 <li>Risks: a failed update can lose settings or leave the radio unusable; the safeguards &quot;cannot guarantee protection against every failure&quot;; if TX persists, turn the radio off. To revert: reinstall the original MAIN and DISPLAY and do a factory reset (it erases the user settings).</li>
 </ul>
 <p>Other hardware mentions: external mAT-30 tuner through the TUNER/LINEAR connector with a mAT-CY cable [hatandspecs-ftx1-tuner-sweep:docs/usage.md]; an external CH341A programmer as a resource of the region tool [Evgeny161rus-ftx1-region-tool:README.md].</p>
+<h3 id="herramienta-web-de-sq9pd-ftx-1-mod-sq9pd-pl">sq9pd web tool (ftx-1-mod.sq9pd.pl)</h3>
+<p><strong>FIRMWARE</strong>. Links: <a href="https://ftx-1-mod.sq9pd.pl/" target="_blank" rel="noopener noreferrer">website</a> and <a href="https://github.com/sq9pd/Yaesu-FTX-1-mod" target="_blank" rel="noopener noreferrer">repository</a>. The site could not be downloaded automatically (HTTP 403, 2026-11-17). This description comes from the <code>site/</code> folder of the repository: a static web application (<code>index.html</code>, <code>app.js</code>, <code>content.js</code>, <code>patch-core.js</code>, <code>patch-data.js</code>, plus a stylesheet and images) that seems to be what the site serves (not verified) [sq9pd-Yaesu-FTX-1-mod:site/index.html] [sq9pd-Yaesu-FTX-1-mod:site/app.js] [sq9pd-Yaesu-FTX-1-mod:site/content.js] [sq9pd-Yaesu-FTX-1-mod:site/patch-core.js] [sq9pd-Yaesu-FTX-1-mod:site/patch-data.js]. This project does not use it or reproduce patches.</p>
+<ul>
+<li><strong>What the user gets.</strong> A page in Polish (default) or English that explains the modification with three screenshots (main screen, button configuration and SWR SCAN graph), the SWR SCAN instructions and limits, how to go back to the original firmware and two file pickers (MAIN and DISPLAY) that generate the modified <code>.SFL</code> files for download. The page does not program the radio: the user loads them with Yaesu&#39;s update process [sq9pd-Yaesu-FTX-1-mod:README.md] [sq9pd-Yaesu-FTX-1-mod:READMEPL.md].</li>
+<li><strong>Where it runs.</strong> Entirely in the browser, on the user&#39;s computer: the page says files are never uploaded to a server, that the SHA-256 verification and the patching are local, with no analytics or external libraries. Consistent with that, the page&#39;s content security policy forbids any network connection (<code>connect-src &#39;none&#39;</code>) and the code makes no requests. It requires Web Crypto (HTTPS or localhost) and a consent checkbox before patching. The original and the already patched files are not included in the repository.</li>
+<li><strong>Which version it accepts.</strong> The &quot;FTX-1 MAIN V40 + DISPLAY V35&quot; release, based on Yaesu firmware MAIN 01-13 and DISPLAY 01-10: only the exact official files <code>FTX-1_MAIN_V0113.SFL</code> and <code>FTX-1_DISPLAY_V0110.SFL</code>. Other versions are not supported. V40 and V35 are versions of the modification (the file names keep the factory numbers) and it does not include the MAIN V41 CW audio fix [sq9pd-Yaesu-FTX-1-mod:manifest.json].</li>
+<li><strong>Modifications, at feature level.</strong></li>
+<li>Four pages of five configurable buttons in the bottom row (assigned in the display settings), with 70 assignable functions and a default layout.</li>
+<li>Clock in the top bar; functions unrelated to the spectrum available with the spectrum hidden.</li>
+<li>Shortcuts: APRS (modem, station and message lists, beacon), 3DSS, tuner and antenna, filter width and shift, notch, contour, NB, AMC, and settings that enable the FUNC knob.</li>
+<li>Native scan of the selected receiver; band and mode lists with a short press and an alternative action on a long press.</li>
+<li><strong>SWR SCAN</strong>: antenna matching sweep of 101 points around the VFO frequency, with four sweep widths; it <strong>transmits RF</strong> and is not an independently calibrated meter (<strong>REGION/LIMITES TX</strong>: the whole sweep must be allowed). It has its own error codes.</li>
+<li>Two fixes to the original firmware (silent beeps with BEEP LEVEL = 0 and a menu typo).</li>
+<li><strong>Safety checks.</strong> The file&#39;s SHA-256, its size, the header, the size label and the SFL format CRC are checked when it is selected, then the hash of the decoded payload and that the original bytes match before applying the differences; afterwards the CRC and SHA-256 of the result are checked against the expected one. A file of another version, already modified or corrupt is rejected; the download is only enabled with a verified result and the expected and actual hashes are shown. The Python version repeats the same checks and does not save the result if they fail [sq9pd-Yaesu-FTX-1-mod:patch.py] [sq9pd-Yaesu-FTX-1-mod:SHA256SUMS.txt].</li>
+<li><strong>Test status.</strong> The results file gives &quot;PASS&quot; on the offline verification: the Python and JavaScript results are byte-for-byte identical for MAIN and DISPLAY, the negative cases pass and the interface (Polish and English, narrow layout) displays correctly. Interactive patching in the browser is listed as &quot;not yet tested in browser; Python and JS engine verified&quot; [sq9pd-Yaesu-FTX-1-mod:TEST_RESULTS.json]. None of this has been tested here.</li>
+<li><strong>How to go back to factory firmware.</strong> First save the settings and memories, reinstall the original MAIN and DISPLAY with Yaesu&#39;s process and do a factory reset (it erases the user settings); reinstalling the original firmware does not replace the reset [sq9pd-Yaesu-FTX-1-mod:README.md].</li>
+<li><strong>Warnings.</strong> Unofficial modification not approved by Yaesu, at the user&#39;s own responsibility and with no warranty; an error or an interrupted update can lose settings or leave the radio unusable; the software safeguards do not guarantee protection against every failure and, if the radio keeps transmitting, it must be turned off. The tool is not a compiler or a general firmware editor.</li>
+</ul>
 <h2 id="barrido-del-acoplador-tuner-sweep">Tuner sweep</h2>
 <p><strong>WARNING: every step TRANSMITS.</strong> <strong>ESCRIBE EN LA RADIO</strong> (it changes the VFO live and activates TX; it does not write memory, menu or EEPROM) [hatandspecs-ftx1-tuner-sweep:README.md]. This project does not implement the sweep or start the tuner.</p>
 <p><code>hatandspecs-ftx1-tuner-sweep</code> is a local Flask application (<code>http://127.0.0.1:5000</code>) that steps the FTX-1&#39;s VFO through the chosen bands and triggers an external automatic tuner so that it stores a memory per frequency (tested with a mAT-30, FTX-1 Optima, 15 m and 12 m) [hatandspecs-ftx1-tuner-sweep:README.md] [hatandspecs-ftx1-tuner-sweep:docs/usage.md].</p>
