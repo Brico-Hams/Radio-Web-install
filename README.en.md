@@ -386,6 +386,10 @@ Do not disconnect or close the browser during an operation. Do not connect an ex
 
 ## Remote shack (remote CAT control)
 
+> **Which one to use.** There are two separate implementations with different names in the interface:
+> **«Remote shack (rigctld, desktop)»** (this section: `remote-agent.cjs`/`remote-station.cjs`, Hamlib `rigctld`, console `remoto.html`, desktop app/APK only) to control over CAT a radio connected to the PC or Raspberry Pi with a Node service;
+> **«Remote station (Python host/agent)»** ([docs/REMOTE_STATION.md](docs/REMOTE_STATION.md), `remote-station/`, page `station.html`) for the coordinating HTTPS host, headless Python agents and the web/Android/iOS clients. They are independent (they share no ports or configuration), and TX stays disabled by default in both. The radio catalogs and the FTX-1 CAT analysis exist in both and have not been unified.
+
 An agent next to the radio controls it over CAT with Hamlib `rigctld` and provides a web console (phone, tablet or PC). `server.cjs` is unchanged and still listens only on `127.0.0.1`.
 
 1. Start `rigctld` with your radio: `rigctld -m <modelo> -r <puerto>` (for example `rigctld -m 1035 -r COM5`; list models with `rigctld -l`). It listens on `127.0.0.1:4532`.

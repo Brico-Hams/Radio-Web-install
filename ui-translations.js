@@ -1980,7 +1980,6 @@ Bloquear PTT y sintonia|Lock PTT and tuning|Verrouiller le PTT et l’accord|PTT
 Sintonia por arrastre|Drag to tune|Accord par glissement|Abstimmen durch Ziehen
 Frecuencia en MHz (o con k, m, Hz)|Frequency in MHz (or with k, m, Hz)|Fréquence en MHz (ou avec k, m, Hz)|Frequenz in MHz (oder mit k, m, Hz)
 Frecuencia no valida.|Invalid frequency.|Fréquence non valide.|Ungültige Frequenz.
-Estacion remota|Remote station|Station distante|Fernstation
 Volver a RadiCodex|Back to RadiCodex|Retour à RadiCodex|Zurück zu RadiCodex
 Activa JavaScript para configurar la estacion remota.|Enable JavaScript to set up the remote station.|Activez JavaScript pour configurer la station distante.|Aktiviere JavaScript, um die Fernstation einzurichten.
 Radio de la estacion|Station radio|Radio de la station|Funkgerät der Station

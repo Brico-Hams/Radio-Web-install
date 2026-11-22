@@ -149,7 +149,7 @@ const navItem = (file, label, key, extra = "", children = "", itemAttrs = "") =>
   `<li${itemAttrs}><a href="${file}"${page === key ? ' aria-current="page"' : ""}${extra}>${label}</a>${children}</li>`;
 const nav = (key, label) => navItem(`${key}.html`, label, key);
 const sidebarNav = () => `<nav aria-label="Navegacion principal"><ul class="nav-list">${navItem("index.html", "Inicio", "home")}${navItem("herramientas.html", "Estacion", "estacion", page === "herramientas" ? ' class="nav-ancestor"' : "",
-  `<ul class="nav-sub" aria-label="Herramientas de estacion">${navItem("herramientas.html", "Herramientas de radio", "herramientas", "", "", DESKTOP_ONLY)}${navItem("remoto.html", "Remote shack (rigctld, desktop)", "remoto", "", "", DESKTOP_ONLY)}</ul>`, DESKTOP_ONLY)}${navItem("satelites.html", "Satelites", "satelites")}${navItem("radios.html", "Radios", "radios", isModel ? ' class="nav-ancestor"' : "",
+  `<ul class="nav-sub" aria-label="Herramientas de estacion">${navItem("herramientas.html", "Herramientas de radio", "herramientas", "", "", DESKTOP_ONLY)}${navItem("remoto.html", "Remote shack", "remoto", "", "", DESKTOP_ONLY)}</ul>`, DESKTOP_ONLY)}${navItem("satelites.html", "Satelites", "satelites")}${navItem("radios.html", "Radios", "radios", isModel ? ' class="nav-ancestor"' : "",
   `<ul class="nav-sub" aria-label="Modelos de radio">${nav("opengd77", "OpenGD77")}${nav("quansheng", "Quansheng")}${nav("anytone", "AnyTone Beta")}${nav("ftx1", "Yaesu FTX-1")}${nav("icom", "Icom transversores")}</ul>`)}${navItem("station.html", "Estación remota (host/agente Python)", "station")}${navItem("ayuda.html", "Ayuda", "ayuda")}</ul></nav>`;
 function readStorage(key) {
   try { return JSON.parse(localStorage.getItem(key)); } catch { return null; }

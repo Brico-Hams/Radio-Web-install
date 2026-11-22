@@ -306,6 +306,10 @@ Trenne während einer Operation nicht den Browser und schließe ihn nicht. Schli
 
 ## Remote shack (CAT-Fernsteuerung)
 
+> **Welche Variante.** Es gibt zwei getrennte Implementierungen mit unterschiedlichen Namen in der Oberfläche:
+> **«Remote shack (rigctld, desktop)»** (dieser Abschnitt: `remote-agent.cjs`/`remote-station.cjs`, Hamlib `rigctld`, Konsole `remoto.html`, nur Desktop-App/APK) steuert per CAT ein am PC oder Raspberry Pi angeschlossenes Funkgerät mit einem Node-Dienst;
+> **«Remote-Station (Python-Host/-Agent)»** ([docs/REMOTE_STATION.md](docs/REMOTE_STATION.md), `remote-station/`, Seite `station.html`) für den koordinierenden HTTPS-Host, headless Python-Agenten und die Web-/Android-/iOS-Clients. Beide sind unabhängig (keine gemeinsamen Ports oder Konfiguration), und TX bleibt in beiden standardmäßig deaktiviert. Die Funkgerätekataloge und die FTX-1-CAT-Analyse existieren in beiden und wurden nicht vereinheitlicht.
+
 Ein Agent neben dem Funkgerät steuert es per CAT mit Hamlib `rigctld` und stellt eine Webkonsole bereit (Smartphone, Tablet oder PC). `server.cjs` bleibt unverändert und hört weiterhin nur auf `127.0.0.1`.
 
 1. Starte `rigctld` mit deinem Funkgerät: `rigctld -m <modelo> -r <puerto>` (zum Beispiel `rigctld -m 1035 -r COM5`; Modellliste mit `rigctld -l`). Es hört auf `127.0.0.1:4532`.

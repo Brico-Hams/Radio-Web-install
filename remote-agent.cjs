@@ -347,7 +347,6 @@ function createRemoteAgent(options = {}) {
       txStart = now();
       tx = { po: null, swr: null, alc: null, powerSetW: null, source: cat ? "raw" : "hamlib", fraction: { po: null, swr: null, alc: null } };
       swrSince = 0;
-      swrTripped = false;
       meterCycle = 0;
       setImmediate(pollTxMeters);
     }
@@ -636,6 +635,7 @@ function createRemoteAgent(options = {}) {
   async function startCatTune(clientId) {
     const run = { owner: clientId, startedAt: now(), hiSwrSince: 0, seen: false };
     tune = run;
+    swrTripped = false;
     setRigPtt(true);
     agentTx = true;
     txStart = run.startedAt;
@@ -874,6 +874,7 @@ function createRemoteAgent(options = {}) {
           if (command.value) {
             if (tune) return { status: 409, body: { error: "Sintonía en curso." } };
             await client.setPtt(true);
+            swrTripped = false;
             setRigPtt(true);
             agentTx = true;
             txStart = now();
