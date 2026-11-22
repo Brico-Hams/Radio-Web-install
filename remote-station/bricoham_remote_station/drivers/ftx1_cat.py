@@ -129,7 +129,8 @@ def parse_main_information(frame: bytes) -> Ftx1MainInformation:
         or payload[22:23] not in (b"0", b"1", b"2", b"3", b"5")
         or payload[23:24] not in (b"0", b"1", b"2", b"3", b"4", b"5")
         or payload[24:26] != b"00"
-        or payload[26:27] not in (b"0", b"1", b"2")
+        # 3 = ARS: undocumented in the IF section, sent by a real FTX-1 (see docs/FTX1-KNOWLEDGE.md).
+        or payload[26:27] not in (b"0", b"1", b"2", b"3")
     ):
         raise ValueError("Invalid FTX-1 MAIN information layout (2508-C).")
     return Ftx1MainInformation(

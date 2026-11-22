@@ -85,7 +85,11 @@ class PttTests(unittest.TestCase):
         self.assertEqual((info.frequency_hz, info.mode), (14_250_000, ftx.Ftx1Mode.USB))
         self.assertTrue(info.is_vfo and info.simplex)
         self.assertFalse(info.tx_clarifier_enabled)
-        for malformed in (frame + b"TX1;", frame[:-2] + b"3;", frame.replace(b"+", b"x")):
+        # Real FTX-1 frame with ARS shift 3: readable, but never simplex, so PTT stays refused.
+        ars = ftx.parse_main_information(b"IF00000028450000+000000200003;")
+        self.assertEqual((ars.frequency_hz, ars.mode), (28_450_000, ftx.Ftx1Mode.USB))
+        self.assertFalse(ars.simplex)
+        for malformed in (frame + b"TX1;", frame[:-2] + b"4;", frame.replace(b"+", b"x")):
             with self.assertRaises(ValueError):
                 ftx.parse_main_information(malformed)
         self.assertEqual(ftx.build_tx_set(False), b"TX0;")
