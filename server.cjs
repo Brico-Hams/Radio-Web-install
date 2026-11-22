@@ -49,6 +49,7 @@ const BASE_FILES = [
   "ayuda-opengd77.html", "ayuda-opengd77-modelos.html", "ayuda-karina.html",
   "ayuda-anytone.html", "ayuda-ftx1.html", "ayuda-icom.html", "ayuda-icom-internals.html", "ayuda-icom-parches.html", "ayuda-referencias.html", "ayuda-arquitectura.html", "ayuda-marca.html", "ayuda-ftx1-conocimiento.html",
   "ayuda-decisiones.html", "ayuda-despliegue.html",
+  "ayuda-estacion-remota.html", "ayuda-diagnostico.html", "ayuda-rotor.html", "ayuda-aprs-chat-radios.html", "ayuda-karina-v3-k1.html", "ayuda-tk11.html",
   "ayuda-bricohams.html", "ayuda-entrega.html", "ayuda-android.html", "ayuda-tutoriales-android.html", "ayuda-validacion-v3-android.html", "help-docs.css",
   "ayuda-egzumer.html", "ayuda-pack-dim0s.html", "ayuda-atlas-uv-k5-v3.html",
   "ayuda-dm32uv.html", "ayuda-enlaces-comunidad.html", "ayuda-binarios-terceros.html", "ayuda-ejemplos.html",

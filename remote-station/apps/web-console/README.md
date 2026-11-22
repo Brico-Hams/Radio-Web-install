@@ -26,7 +26,7 @@ npm run dev
 ```
 
 Abre `http://127.0.0.1:5173`. Vite reenvía `/api` y `/healthz` al coordinador
-`127.0.0.1:8787`; no se habilita CORS.
+`127.0.0.1:8790`; no se habilita CORS.
 
 ## Build y pruebas
 

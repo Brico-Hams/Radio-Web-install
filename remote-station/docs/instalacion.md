@@ -28,7 +28,7 @@ $env:BRICOHAM_ADMIN_TOKEN = py -3.12 -c "import secrets; print(secrets.token_url
 bricoham-coordinator --logbook-database ".\logbook.sqlite3"
 ```
 
-La consola incluida se sirve en `http://127.0.0.1:8787/` sin depender del
+La consola incluida se sirve en `http://127.0.0.1:8790/` sin depender del
 directorio actual. El constructor solo incorpora módulos Python, metadatos de
 distribución y recursos compilados de la consola, no bases de contactos ni tokens.
 No convierte el software en un servicio del sistema ni habilita CAT o acceso remoto.
@@ -57,7 +57,7 @@ No convierte el software en un servicio del sistema ni habilita CAT o acceso rem
    py -3.12 -m bricoham_station_agent
    ```
 
-6. Comprueba `http://127.0.0.1:8787/healthz`.
+6. Comprueba `http://127.0.0.1:8790/healthz`.
 7. Para generar la consola estática, en otra terminal ejecuta:
 
    ```powershell
@@ -66,7 +66,7 @@ No convierte el software en un servicio del sistema ni habilita CAT o acceso rem
    npm run build
    ```
 
-   Luego abre `http://127.0.0.1:8787/`. Para desarrollo con Vite consulta
+   Luego abre `http://127.0.0.1:8790/`. Para desarrollo con Vite consulta
    [apps/web-console/README.md](../apps/web-console/README.md).
 
 ## Linux, Raspberry Pi, macOS y FreeBSD

@@ -1,0 +1,284 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <meta name="description" content="TK-11: ingegneria dell&#39;interoperabilità e percorso verso un firmware proprio: aiuto Bricohams per modello e versione.">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>TK-11: ingegneria dell&#39;interoperabilità e percorso verso un firmware proprio | Bricohams Radio Workspace</title>
+  <link rel="icon" href="bricohams-logo.png" type="image/png">
+  <link rel="stylesheet" href="styles.css">
+  <script src="appearance.js" defer></script>
+  <link rel="stylesheet" href="help-docs.css">
+  <link rel="alternate" hreflang="es" href="ayuda-tk11.html">
+  <link rel="alternate" hreflang="en-US" href="ayuda-tk11.en.html">
+  <link rel="alternate" hreflang="de" href="ayuda-tk11.de.html">
+  <link rel="alternate" hreflang="it" href="ayuda-tk11.it.html">
+  <link rel="alternate" hreflang="fr" href="ayuda-tk11.fr.html">
+</head>
+<body>
+  <a class="skip" href="#main">Vai al contenuto</a>
+  <main id="main" class="firmware-help">
+    <header><a href="index.html"><img src="bricohams-logo.png" alt="Bricohams" width="240" height="89"></a>
+      <nav aria-label="Aiuto"><a href="ayuda-referencias.it.html">Documentazione e riferimenti</a> · <a href="ayuda-firmwares.it.html">Libreria firmware</a> · <a href="ayuda-atlas-uv-k5-v3.it.html">Atlas UV-K5 V3</a> · <a href="quansheng.html">Quansheng</a> · <a href="opengd77.html">OpenGD77</a></nav>
+      <nav class="languages" aria-label="Lingua"><a href="ayuda-tk11.html" hreflang="es" lang="es">Español</a> · <a href="ayuda-tk11.en.html" hreflang="en-US" lang="en-US">English (US)</a> · <a href="ayuda-tk11.de.html" hreflang="de" lang="de">Deutsch</a> · <a href="ayuda-tk11.it.html" hreflang="it" lang="it" aria-current="page">Italiano</a> · <a href="ayuda-tk11.fr.html" hreflang="fr" lang="fr">Français</a></nav>
+    </header>
+    <nav class="panel" aria-label="Contenuto di questa guida"><h2>In questa guida</h2><ul><li><a href="#alcance-y-reglas">Ambito e regole</a></li><li><a href="#fuentes">Fonti</a></li><li><a href="#hardware">Hardware</a></li><li><a href="#protocolo-cps">Protocollo CPS</a></li><li><a href="#mapa-de-memoria">Mappa di memoria</a></li><li><a href="#formato-csv-del-tk-11">Formato CSV del TK-11</a></li><li><a href="#que-expone-tk-11-manager">Cosa espone TK-11 Manager</a></li><li><a href="#camino-hacia-firmware-funcional">Percorso verso un firmware funzionante</a></li><li><a href="#procedimiento-de-hardware-radio-de-pruebas">Procedura hardware (radio di prova)</a></li><li><a href="#que-se-puede-hacer-sin-radio-sacrificable">Che cosa si può fare senza una radio sacrificabile</a></li><li><a href="#registro-de-cambios">Registro delle modifiche</a></li></ul></nav>
+    <article class="panel"><h1 id="tk-11-ingenieria-de-interoperabilidad-y-camino-hacia-un-firmware-propio">TK-11: ingegneria dell&#39;interoperabilità e percorso verso un firmware proprio</h1>
+<p>Base di conoscenza sul Quansheng TK-11. Ogni dato riporta la sua fonte; ciò che non è confermato è contrassegnato come <strong>UNVERIFIED</strong>. Questo progetto non flasha firmware sul TK-11 e questo documento non lo cambia.</p>
+<h2 id="alcance-y-reglas">Ambito e regole</h2>
+<ul>
+<li>Si usano solo fonti pubbliche e l&#39;implementazione di questo repository. Non è stato decompilato alcun binario né copiato codice di TK-11 Manager.</li>
+<li>Il codice di CHIRP-to-TK11-csv è GPL-3.0 ed è portato con attribuzione in <code>ACKNOWLEDGEMENTS.md</code>. Il driver di CHIRP è GPL-2.0-or-later.</li>
+<li>Di TK-11 Manager si descrive solo il comportamento pubblicato nella sua presentazione. La sua licenza non è nota.</li>
+<li>Nulla di quanto scritto qui è stato provato su una radio reale, tranne ciò che già fa <code>tk11-connector.js</code>.</li>
+</ul>
+<h2 id="fuentes">Fonti</h2>
+<div class="table-scroll"><table><thead><tr><th scope="col">Id</th><th scope="col">Fonte</th><th scope="col">Contenuto</th></tr></thead><tbody>
+<tr><td><a href="https://urez.org/tk-11-manager-la-herramienta-definitiva-para-programar-tu-quansheng-tk-11-desde-el-pc/" target="_blank" rel="noopener noreferrer">F1</a></td><td>Articolo di URZ su TK-11 Manager</td><td>Funzioni e misure di sicurezza dello strumento</td></tr>
+<tr><td><a href="https://github.com/nikantgr/CHIRP-to-TK11-csv/blob/main/convert_chirp_to_tk11.py" target="_blank" rel="noopener noreferrer">F2</a></td><td>CHIRP-to-TK11-csv (GPL-3.0)</td><td>Formato CSV di importazione del TK-11</td></tr>
+<tr><td><a href="https://github.com/kk7ds/chirp/blob/master/chirp/drivers/tk11.py" target="_blank" rel="noopener noreferrer">F3</a></td><td>Driver tk11.py di CHIRP</td><td>Protocollo CPS e mappa di memoria</td></tr>
+<tr><td><a href="https://github.com/armel/tk11-teardown" target="_blank" rel="noopener noreferrer">F4</a></td><td>Teardown di armel (Apache-2.0)</td><td>MCU, memoria e mancanza di documentazione</td></tr>
+<tr><td>F5</td><td><code>tk11-connector.js</code> e <code>tk11-ui.js</code> di questo repository</td><td>Implementazione indipendente basata su F3</td></tr>
+<tr><td><a href="https://github.com/spm81/Multi-UVTools" target="_blank" rel="noopener noreferrer">F6</a></td><td>Multi-UVTools di spm81 (senza LICENSE)</td><td>Affermazioni sugli offset del TK-11; solo dati, senza riutilizzare codice; fonte unica, <strong>UNVERIFIED</strong>; si basa sul modulo TK11 di CHIRP, quindi non è indipendente da F3 negli offset condivisi</td></tr>
+<tr><td><a href="https://github.com/armel/tk11-teardown/blob/main/datasheet/AP8048B-MVSILICON.pdf" target="_blank" rel="noopener noreferrer">F7</a></td><td>Datasheet AP8048B di MVSilicon</td><td>Pin, SWD, cifratura del codice nella Flash SPI, aggiornamento via SD/USB</td></tr>
+<tr><td><a href="https://github.com/armel/tk11-teardown/blob/main/datasheet/AP8048C-MVSILICON.pdf" target="_blank" rel="noopener noreferrer">F8</a></td><td>Datasheet AP8048C di MVSilicon</td><td>Come F7 per la variante C</td></tr>
+<tr><td><a href="https://github.com/rob-w/tk11-firmware-custom" target="_blank" rel="noopener noreferrer">F9</a></td><td>rob-w/tk11-firmware-custom (fork di F4)</td><td>Descritto come reimplementazione aperta del firmware, ma contiene solo README, LICENSE, PDF e JPG; nessun codice né binario; ultimo push 2025-04-29</td></tr>
+<tr><td><a href="https://github.com/qshosfw/hermes" target="_blank" rel="noopener noreferrer">F10</a></td><td>README di qshosfw/hermes (GPL-3.0)</td><td>Fonte secondaria che definisce il TK-11 una radio con Beken BK4819</td></tr>
+<tr><td><a href="https://github.com/armel/tk11-teardown/blob/main/teardown/TK11_VIEW_A_VERSO_PCB_V2.0.jpg" target="_blank" rel="noopener noreferrer">F11</a></td><td>Foto del teardown, vista A retro della PCB V2.0</td><td>Osservazione visiva dell&#39;autore di questo documento</td></tr>
+</tbody></table></div>
+<h2 id="hardware">Hardware</h2>
+<div class="table-scroll"><table><thead><tr><th scope="col">Elemento</th><th scope="col">Dato</th><th scope="col">Fonte</th></tr></thead><tbody>
+<tr><td>MCU</td><td>AP8048 di MVSilicon, basato su Arm Cortex-M3</td><td><a href="https://github.com/armel/tk11-teardown" target="_blank" rel="noopener noreferrer">F4</a></td></tr>
+<tr><td>Flash interna</td><td>2 MB</td><td><a href="https://github.com/armel/tk11-teardown" target="_blank" rel="noopener noreferrer">F4</a></td></tr>
+<tr><td>SRAM interna</td><td>128 KB</td><td><a href="https://github.com/armel/tk11-teardown" target="_blank" rel="noopener noreferrer">F4</a></td></tr>
+<tr><td>EEPROM o Flash SPI esterna</td><td>Nessuna identificata sulla PCB</td><td><a href="https://github.com/armel/tk11-teardown" target="_blank" rel="noopener noreferrer">F4</a></td></tr>
+<tr><td>Dati persistenti</td><td>Bootloader, firmware, calibrazione, impostazioni e 999 canali risiederebbero nella Flash interna; è una deduzione dell&#39;autore del teardown, <strong>UNVERIFIED</strong></td><td><a href="https://github.com/armel/tk11-teardown" target="_blank" rel="noopener noreferrer">F4</a></td></tr>
+<tr><td>Datasheet</td><td>Non esiste un datasheet pubblico completo; i dettagli sono forniti solo sotto NDA</td><td><a href="https://github.com/armel/tk11-teardown" target="_blank" rel="noopener noreferrer">F4</a></td></tr>
+<tr><td>SDK e strumenti</td><td>Secondo F4 non esistono SDK né toolchain pubblici per l&#39;AP8048. Ricerche su GitHub (2026-11-09) di <code>AP8048</code> e <code>tk11 firmware</code>: 0 repository; non sono stati trovati su github.com, urez.org né spm81.github.io sorgenti di firmware, file di aggiornamento, protocollo di aggiornamento né combinazione di tasti del bootloader. Esiste un SDK di MVSilicon per un chip fratello, leadercxn/bp1048_sdk_v0.1.12 (non esaminato; licenza sconosciuta). F9 non fornisce codice</td><td><a href="https://github.com/armel/tk11-teardown" target="_blank" rel="noopener noreferrer">F4</a>, <a href="https://github.com/rob-w/tk11-firmware-custom" target="_blank" rel="noopener noreferrer">F9</a></td></tr>
+<tr><td>Variante della MCU</td><td>In F4 ci sono datasheet di AP8048A, B e C. Quale monti il TK-11 è <strong>UNVERIFIED</strong>: la marcatura nella foto non è leggibile</td><td><a href="https://github.com/armel/tk11-teardown/tree/main/datasheet" target="_blank" rel="noopener noreferrer">F4</a>, <a href="https://github.com/armel/tk11-teardown/blob/main/teardown/TK11_VIEW_A_VERSO_PCB_V2.0.jpg" target="_blank" rel="noopener noreferrer">F11</a></td></tr>
+<tr><td>Porta SWD</td><td>I datasheet di B e C (LQFP48 7x7 mm) elencano &quot;Serial wire debug (SWD) interface&quot;: GPIO_C[13] = SWCLK, GPIO_C[14] = SWDIO, sui pin 2 (SWCLK) e 3 (SWDIO) in B e C. Massa DVSS: pin 38 (B), pin 39 (C); IOVDD 3,3 V: pin 40 (B). Contraddizione: il README di F4 dice che il chip non ha interfaccia esterna di programmazione o debug. Se SWD sia attivo o bloccato nel TK-11 è <strong>UNVERIFIED</strong></td><td><a href="https://github.com/armel/tk11-teardown/blob/main/datasheet/AP8048B-MVSILICON.pdf" target="_blank" rel="noopener noreferrer">F7</a>, <a href="https://github.com/armel/tk11-teardown/blob/main/datasheet/AP8048C-MVSILICON.pdf" target="_blank" rel="noopener noreferrer">F8</a>, <a href="https://github.com/armel/tk11-teardown" target="_blank" rel="noopener noreferrer">F4</a></td></tr>
+<tr><td>Reset</td><td>Nessuna delle due tabelle dei pin elenca un pin NRST; pin POWER_KEY: 17 in B e C</td><td><a href="https://github.com/armel/tk11-teardown/blob/main/datasheet/AP8048B-MVSILICON.pdf" target="_blank" rel="noopener noreferrer">F7</a>, <a href="https://github.com/armel/tk11-teardown/blob/main/datasheet/AP8048C-MVSILICON.pdf" target="_blank" rel="noopener noreferrer">F8</a></td></tr>
+<tr><td>Interfaccia Flash SPI e cifratura del codice</td><td>Pin GPIO_A[13..18] = FSH_HOLD, FSH_SCK, FSH_SI, FSH_WP, FSH_SO, FSH_CS = pin da 21 a 26 in entrambe le varianti. L&#39;elenco delle caratteristiche include &quot;Code encryption mechanism in SPI-flash&quot;. Che la &quot;Flash interna da 2 MB&quot; sia una Flash SPI nel package che usa quei pin è una <strong>deduzione</strong> dai datasheet, <strong>UNVERIFIED</strong></td><td><a href="https://github.com/armel/tk11-teardown/blob/main/datasheet/AP8048B-MVSILICON.pdf" target="_blank" rel="noopener noreferrer">F7</a>, <a href="https://github.com/armel/tk11-teardown/blob/main/datasheet/AP8048C-MVSILICON.pdf" target="_blank" rel="noopener noreferrer">F8</a></td></tr>
+<tr><td>Canale di aggiornamento secondo il datasheet</td><td>&quot;Firmware updatable through SD/USB drive&quot; (B e C); quello dell&#39;AP8048A parla di avvio da Flash SPI e aggiornamento tramite disco SD o USB. Non si sa se il TK-11 lo usi: <strong>UNVERIFIED</strong></td><td><a href="https://github.com/armel/tk11-teardown/blob/main/datasheet/AP8048B-MVSILICON.pdf" target="_blank" rel="noopener noreferrer">F7</a>, <a href="https://github.com/armel/tk11-teardown/blob/main/datasheet/AP8048C-MVSILICON.pdf" target="_blank" rel="noopener noreferrer">F8</a></td></tr>
+<tr><td>Core e memoria secondo il datasheet</td><td>Cortex-M3 a 96 MHz e 128 KB di SRAM</td><td><a href="https://github.com/armel/tk11-teardown/blob/main/datasheet/AP8048B-MVSILICON.pdf" target="_blank" rel="noopener noreferrer">F7</a>, <a href="https://github.com/armel/tk11-teardown/blob/main/datasheet/AP8048C-MVSILICON.pdf" target="_blank" rel="noopener noreferrer">F8</a></td></tr>
+<tr><td>Chip RF</td><td>F4 include datasheet di BK4819 e BK4829 (Beken). Osservazione dalla foto: due chip QFN con logo Beken in zone schermate, coerente con BK4819/BK4829; i riferimenti esatti sono <strong>UNVERIFIED</strong>. F10 definisce il TK-11 una radio Beken BK4819 (fonte secondaria)</td><td><a href="https://github.com/armel/tk11-teardown/tree/main/datasheet" target="_blank" rel="noopener noreferrer">F4</a>, <a href="https://github.com/armel/tk11-teardown/blob/main/teardown/TK11_VIEW_A_VERSO_PCB_V2.0.jpg" target="_blank" rel="noopener noreferrer">F11</a>, <a href="https://github.com/qshosfw/hermes" target="_blank" rel="noopener noreferrer">F10</a></td></tr>
+<tr><td>Ricevitore FM</td><td>F4 include il datasheet dell&#39;RDA5807M; la foto mostra un chip SOP con marcatura &quot;5807M&quot; (osservazione)</td><td><a href="https://github.com/armel/tk11-teardown/tree/main/datasheet" target="_blank" rel="noopener noreferrer">F4</a>, <a href="https://github.com/armel/tk11-teardown/blob/main/teardown/TK11_VIEW_A_VERSO_PCB_V2.0.jpg" target="_blank" rel="noopener noreferrer">F11</a></td></tr>
+<tr><td>Footprint SOP-8 non montato</td><td>Osservazione dalla foto: un footprint SOP-8 vuoto accanto alla MCU; la sua funzione è <strong>UNVERIFIED</strong> (di solito una Flash SPI o EEPROM opzionale)</td><td><a href="https://github.com/armel/tk11-teardown/blob/main/teardown/TK11_VIEW_A_VERSO_PCB_V2.0.jpg" target="_blank" rel="noopener noreferrer">F11</a></td></tr>
+<tr><td>Pad di test</td><td>Osservazione dalla foto: a quella risoluzione non si vedono pad SWD etichettati</td><td><a href="https://github.com/armel/tk11-teardown/blob/main/teardown/TK11_VIEW_A_VERSO_PCB_V2.0.jpg" target="_blank" rel="noopener noreferrer">F11</a></td></tr>
+<tr><td>Collegamento del CPS</td><td>Seriale a 38400 baud con DTR attivo</td><td><a href="https://github.com/kk7ds/chirp/blob/master/chirp/drivers/tk11.py" target="_blank" rel="noopener noreferrer">F3</a></td></tr>
+<tr><td>Display e audio</td><td>Non identificati in questo documento: <strong>UNVERIFIED</strong></td><td>F5</td></tr>
+</tbody></table></div>
+<h2 id="protocolo-cps">Protocollo CPS</h2>
+<h3 id="trama">Trama</h3>
+<p>Ogni messaggio contiene intestazione, payload, CRC e chiusura. Il payload e il CRC sono mascherati con uno XOR ciclico di 16 byte e il CRC è calcolato sul payload in chiaro (<a href="https://github.com/kk7ds/chirp/blob/master/chirp/drivers/tk11.py" target="_blank" rel="noopener noreferrer">F3</a>).</p>
+<pre><code>AB CD LL LL [carga util][CRC16-XMODEM LE]  DC BA
+LL LL = longitud de la carga util (u16 LE)
+clave XOR = 16 6C 14 E6 2E 91 0D 40 21 35 D5 40 13 03 E9 80</code></pre>
+<p>Il valore &quot;magic&quot; a 32 bit è generato a caso dal CPS ufficiale; con un valore fisso (5) la radio risponde ugualmente, ma deve essere lo stesso in tutta la sessione (<a href="https://github.com/kk7ds/chirp/blob/master/chirp/drivers/tk11.py" target="_blank" rel="noopener noreferrer">F3</a>).</p>
+<h3 id="tabla-de-comandos">Tabella dei comandi</h3>
+<div class="table-scroll"><table><thead><tr><th scope="col">Id</th><th scope="col">Nome</th><th scope="col">Payload</th><th scope="col">Fonte</th></tr></thead><tbody>
+<tr><td><code>0x01F4</code></td><td>Richiesta di connessione</td><td>Tipo u16, lunghezza 4, magic u32</td><td><a href="https://github.com/kk7ds/chirp/blob/master/chirp/drivers/tk11.py" target="_blank" rel="noopener noreferrer">F3</a></td></tr>
+<tr><td><code>0x01F5</code></td><td>Risposta di connessione</td><td>Stringa del firmware nei byte da 4 a 19; l&#39;analisi è di F5, <strong>UNVERIFIED</strong> rispetto al CPS ufficiale</td><td>F5</td></tr>
+<tr><td><code>0x01FB</code></td><td>Lettura della memoria</td><td>Tipo u16, lunghezza 12, indirizzo u32 (<code>0x080000</code> più l&#39;offset), dimensione u16, 2 byte a zero, magic u32</td><td><a href="https://github.com/kk7ds/chirp/blob/master/chirp/drivers/tk11.py" target="_blank" rel="noopener noreferrer">F3</a></td></tr>
+<tr><td><code>0x01FC</code></td><td>Risposta di lettura</td><td>12 byte di intestazione e i dati; massimo <code>0x200</code> per blocco</td><td><a href="https://github.com/kk7ds/chirp/blob/master/chirp/drivers/tk11.py" target="_blank" rel="noopener noreferrer">F3</a></td></tr>
+<tr><td><code>0x01FD</code></td><td>Scrittura della memoria</td><td>La stessa intestazione di 16 byte e i dati; massimo <code>0x200</code> per blocco</td><td><a href="https://github.com/kk7ds/chirp/blob/master/chirp/drivers/tk11.py" target="_blank" rel="noopener noreferrer">F3</a></td></tr>
+<tr><td><code>0x01FE</code></td><td>Risposta di scrittura</td><td>Trama di 16 byte in totale; il successo si verifica dal codice</td><td><a href="https://github.com/kk7ds/chirp/blob/master/chirp/drivers/tk11.py" target="_blank" rel="noopener noreferrer">F3</a></td></tr>
+<tr><td><code>0x05DD</code></td><td>Riavvio</td><td>Solo tipo e lunghezza; il driver lo definisce e il suo uso reale nel CPS ufficiale è <strong>UNVERIFIED</strong></td><td><a href="https://github.com/kk7ds/chirp/blob/master/chirp/drivers/tk11.py" target="_blank" rel="noopener noreferrer">F3</a></td></tr>
+<tr><td>Altri</td><td>Qualsiasi comando di aggiornamento, calibrazione o bootloader</td><td>Non documentato: <strong>UNVERIFIED</strong></td><td>F5</td></tr>
+</tbody></table></div>
+<p>Il limite di memoria del driver è <code>0x23000</code> (140 KiB) a partire dalla base <code>0x080000</code> (<a href="https://github.com/kk7ds/chirp/blob/master/chirp/drivers/tk11.py" target="_blank" rel="noopener noreferrer">F3</a>). Non si sa se <code>0x080000</code> sia un indirizzo reale della Flash o un indirizzo logico del CPS: <strong>UNVERIFIED</strong>.</p>
+<h2 id="mapa-de-memoria">Mappa di memoria</h2>
+<p>Gli offset sono relativi alla base <code>0x080000</code> (<a href="https://github.com/kk7ds/chirp/blob/master/chirp/drivers/tk11.py" target="_blank" rel="noopener noreferrer">F3</a>).</p>
+<div class="table-scroll"><table><thead><tr><th scope="col">Offset</th><th scope="col">Dimensione</th><th scope="col">Contenuto</th><th scope="col">Fonte</th></tr></thead><tbody>
+<tr><td><code>0x00000</code></td><td>999 × 64 B (<code>0xF9C0</code>)</td><td>Canali</td><td><a href="https://github.com/kk7ds/chirp/blob/master/chirp/drivers/tk11.py" target="_blank" rel="noopener noreferrer">F3</a></td></tr>
+<tr><td>Da <code>0x0F9C0</code> a <code>0x10FFF</code></td><td><code>0x1640</code></td><td>Non documentato; può contenere la calibrazione, <strong>UNVERIFIED</strong></td><td>F5</td></tr>
+<tr><td><code>0x11000</code></td><td>1011 B</td><td>Indicatore di utilizzo per canale (<code>0xFF</code> è vuoto); gli ultimi 12 non sono identificati</td><td><a href="https://github.com/kk7ds/chirp/blob/master/chirp/drivers/tk11.py" target="_blank" rel="noopener noreferrer">F3</a></td></tr>
+<tr><td><code>0x12000</code></td><td><code>0x48</code></td><td>Radio FM: VFO, id del canale, indicatore di memoria e 32 frequenze</td><td><a href="https://github.com/kk7ds/chirp/blob/master/chirp/drivers/tk11.py" target="_blank" rel="noopener noreferrer">F3</a></td></tr>
+<tr><td><code>0x13000</code></td><td><code>0xF8</code></td><td>Impostazioni generali</td><td><a href="https://github.com/kk7ds/chirp/blob/master/chirp/drivers/tk11.py" target="_blank" rel="noopener noreferrer">F3</a></td></tr>
+<tr><td><code>0x14000</code></td><td><code>0x70</code></td><td>Impostazioni generali 2: codici di cancellazione e riattivazione, nome dell&#39;apparato</td><td><a href="https://github.com/kk7ds/chirp/blob/master/chirp/drivers/tk11.py" target="_blank" rel="noopener noreferrer">F3</a></td></tr>
+<tr><td><code>0x15000</code></td><td><code>0x10</code></td><td>Selezione corrente: 8 valori u16 di A, B, frequenza, canale e NOAA</td><td><a href="https://github.com/kk7ds/chirp/blob/master/chirp/drivers/tk11.py" target="_blank" rel="noopener noreferrer">F3</a></td></tr>
+<tr><td><code>0x16000</code></td><td>32 × <code>0x80</code></td><td>Liste di scansione; terminano esattamente a <code>0x17000</code></td><td><a href="https://github.com/kk7ds/chirp/blob/master/chirp/drivers/tk11.py" target="_blank" rel="noopener noreferrer">F3</a></td></tr>
+<tr><td><code>0x17000</code></td><td>4 B</td><td>Password di accensione di 6 cifre, u32 little endian, secondo Multi-UVTools; <strong>UNVERIFIED</strong>, lacuna di CHIRP</td><td><a href="https://github.com/spm81/Multi-UVTools" target="_blank" rel="noopener noreferrer">F6</a></td></tr>
+<tr><td><code>0x1A000</code></td><td>16 × 24 B</td><td>Contatti DTMF: nome di 16 B e codice di 8 B</td><td><a href="https://github.com/kk7ds/chirp/blob/master/chirp/drivers/tk11.py" target="_blank" rel="noopener noreferrer">F3</a></td></tr>
+<tr><td><code>0x1A800</code></td><td>16 × 24 B</td><td>Contatti a 5 toni: come DTMF</td><td><a href="https://github.com/kk7ds/chirp/blob/master/chirp/drivers/tk11.py" target="_blank" rel="noopener noreferrer">F3</a></td></tr>
+<tr><td><code>0x22000</code></td><td>16 × 40 B</td><td>Indirizzi di decodifica NOAA SAME: 8 B di indirizzo e 32 B di testo</td><td><a href="https://github.com/kk7ds/chirp/blob/master/chirp/drivers/tk11.py" target="_blank" rel="noopener noreferrer">F3</a></td></tr>
+<tr><td><code>0x22280</code></td><td>128 B</td><td>Controllo degli eventi NOAA SAME</td><td><a href="https://github.com/kk7ds/chirp/blob/master/chirp/drivers/tk11.py" target="_blank" rel="noopener noreferrer">F3</a></td></tr>
+<tr><td><code>0x23000</code></td><td>Fine</td><td>Limite di memoria del CPS</td><td><a href="https://github.com/kk7ds/chirp/blob/master/chirp/drivers/tk11.py" target="_blank" rel="noopener noreferrer">F3</a></td></tr>
+<tr><td>Resto</td><td>Spazi tra le strutture</td><td>Non documentato; vengono sempre conservati</td><td>F5</td></tr>
+<tr><td><code>0x0D6008</code></td><td>1024 B</td><td>Logo di avvio 128x64 monocromatico secondo Multi-UVTools (relativo alla base <code>0x080000</code>, come il resto); fuori dalla finestra di <code>0x23000</code> del CPS; <strong>UNVERIFIED</strong></td><td><a href="https://github.com/spm81/Multi-UVTools" target="_blank" rel="noopener noreferrer">F6</a></td></tr>
+</tbody></table></div>
+<h3 id="calibracion-resolucion-del-solape">Calibrazione: risoluzione della sovrapposizione</h3>
+<p>Multi-UVTools (<a href="https://github.com/spm81/Multi-UVTools" target="_blank" rel="noopener noreferrer">F6</a>, fonte unica, <strong>UNVERIFIED</strong>) afferma che la calibrazione del TK-11 occupa <code>0x010000</code>-<code>0x021000</code> (68 KB) e che il suo pulitore di EEPROM conserva <code>0x010000</code>-<code>0x015010</code> e <code>0x020000</code>-<code>0x021000</code>. Il suo codice dichiara di basarsi sul modulo TK11 di CHIRP, quindi non è indipendente da F3 negli offset condivisi. L&#39;intervallo <code>0x11000</code>-<code>0x1A980</code> si scontra con strutture di CHIRP (utilizzo, FM, impostazioni, liste, contatti), per cui non può essere tutto calibrazione. Le parti che cadono in lacune di CHIRP sono <code>0x10000</code>-<code>0x10FFF</code> e <code>0x20000</code>-<code>0x20FFF</code>: candidate, <strong>UNVERIFIED</strong>. <code>tk11-connector.js</code> non scrive mai in nessuna di queste zone (l&#39;elenco <code>UNVERIFIED_REGIONS</code> serve solo a nominarle nel confronto tra copie) né nel logo.</p>
+<p>Il VFO principale (da A-F01 a A-F11 e da B-F01 a B-F11 nei menu di CHIRP) non ha una struttura propria nel driver: dove siano salvate le frequenze del VFO è <strong>UNVERIFIED</strong>. L&#39;unico VFO documentato è quello della radio FM. Le &quot;zone&quot; non compaiono in nessuna fonte: la cosa più simile sono le 32 liste di scansione, ciascuna con un nome di 16 B, due priorità u16 e 48 canali u16 (<a href="https://github.com/kk7ds/chirp/blob/master/chirp/drivers/tk11.py" target="_blank" rel="noopener noreferrer">F3</a>); se il TK-11 abbia zone come il DMR è <strong>UNVERIFIED</strong>.</p>
+<h3 id="registro-de-canal-64-bytes">Record di canale (64 byte)</h3>
+<p>Le frequenze si salvano in unità di 10 Hz e i toni CTCSS in decimi di hertz; i codici DCS si salvano come il numero ottale letto in decimale (<a href="https://github.com/kk7ds/chirp/blob/master/chirp/drivers/tk11.py" target="_blank" rel="noopener noreferrer">F3</a>).</p>
+<div class="table-scroll"><table><thead><tr><th scope="col">Byte</th><th scope="col">Campo</th><th scope="col">Note</th></tr></thead><tbody>
+<tr><td>0</td><td><code>rx_freq</code></td><td>u32</td></tr>
+<tr><td>4</td><td><code>freq_diff</code></td><td>u32, shift</td></tr>
+<tr><td>8</td><td><code>tx_non_standard_1</code></td><td>Non documentato</td></tr>
+<tr><td>9</td><td><code>tx_non_standard_2</code></td><td>Non documentato</td></tr>
+<tr><td>10</td><td><code>rx_qt_type</code></td><td>0 nessuno, 1 CTCSS, 2 DCS normale, 3 DCS invertito</td></tr>
+<tr><td>11</td><td><code>tx_qt_type</code></td><td>Come il precedente</td></tr>
+<tr><td>12</td><td><code>freq_dir</code></td><td>0 simplex, 1 più, 2 meno</td></tr>
+<tr><td>13</td><td><code>band</code></td><td>Il nibble basso a 1 è banda stretta (secondo F5)</td></tr>
+<tr><td>14</td><td><code>step</code></td><td>Passo</td></tr>
+<tr><td>15</td><td><code>encrypt</code></td><td>Da 0 a 10</td></tr>
+<tr><td>16</td><td><code>power</code></td><td>0 bassa, 1 media, 2 alta</td></tr>
+<tr><td>17</td><td><code>busy</code></td><td>Blocco per canale occupato</td></tr>
+<tr><td>18</td><td><code>reverse</code></td><td>Inversione delle frequenze</td></tr>
+<tr><td>19</td><td><code>dtmf_decode_flag</code></td><td>Decodifica della segnalazione</td></tr>
+<tr><td>20</td><td><code>ptt_id</code></td><td>Da 0 a 3</td></tr>
+<tr><td>21</td><td><code>mode</code></td><td>0 FM, 1 AM, 2 LSB, 3 USB, 4 CW</td></tr>
+<tr><td>22</td><td><code>scan_list</code></td><td><code>0xFF</code> nessuna</td></tr>
+<tr><td>23</td><td><code>sq</code></td><td>Da 0 a 8</td></tr>
+<tr><td>24</td><td><code>name</code></td><td>16 byte ASCII</td></tr>
+<tr><td>40</td><td><code>rx_qt</code></td><td>u32</td></tr>
+<tr><td>44</td><td><code>tx_qt</code></td><td>u32</td></tr>
+<tr><td>48</td><td><code>unknown</code></td><td>8 byte non documentati</td></tr>
+<tr><td>56</td><td><code>tx_qt2</code></td><td>u32 non documentato</td></tr>
+<tr><td>60</td><td><code>signal</code></td><td>0 DTMF, 1 5 toni</td></tr>
+<tr><td>61</td><td><code>unknown_2</code></td><td>3 byte non documentati</td></tr>
+</tbody></table></div>
+<h3 id="ajustes-generales-0x13000">Impostazioni generali (<code>0x13000</code>)</h3>
+<div class="table-scroll"><table><thead><tr><th scope="col">Byte</th><th scope="col">Campi</th><th scope="col">Fonte</th></tr></thead><tbody>
+<tr><td>Da 0 a 16</td><td>Canale A/B, squelch NOAA, TOT, scansione NOAA, blocco tastiera, VOX, microfono, modalità frequenza, visualizzazione, AGC, risparmio, doppio ascolto, retroilluminazione, canale di chiamata (u16), beep</td><td><a href="https://github.com/kk7ds/chirp/blob/master/chirp/drivers/tk11.py" target="_blank" rel="noopener noreferrer">F3</a></td></tr>
+<tr><td>Da 17 a 27</td><td>Quattro azioni dei tasti laterali, modalità di scansione, blocco automatico, schermata di avvio, allarme, tono di fine TX, coda del ripetitore, tono di coda</td><td><a href="https://github.com/kk7ds/chirp/blob/master/chirp/drivers/tk11.py" target="_blank" rel="noopener noreferrer">F3</a></td></tr>
+<tr><td>Da 28 a 40</td><td>Riduzione del rumore, trasposizione, volumi A e B, tono dei tasti, lingua, NOAA SAME, barra del segnale</td><td><a href="https://github.com/kk7ds/chirp/blob/master/chirp/drivers/tk11.py" target="_blank" rel="noopener noreferrer">F3</a></td></tr>
+<tr><td>Da 41 a 55</td><td>Luminosità, codice di cancellazione, tono laterale DTMF, risposta DTMF, ricerca del tono, tono CW (u16)</td><td><a href="https://github.com/kk7ds/chirp/blob/master/chirp/drivers/tk11.py" target="_blank" rel="noopener noreferrer">F3</a></td></tr>
+<tr><td>Da 56 a 127</td><td>Blocco DTMF: separatore, gruppo, tempi, identificatore di 8 B e codici di salita e discesa</td><td><a href="https://github.com/kk7ds/chirp/blob/master/chirp/drivers/tk11.py" target="_blank" rel="noopener noreferrer">F3</a></td></tr>
+<tr><td>Da 128 a 215</td><td>Blocco a 5 toni: come DTMF più protocollo e 15 frequenze utente</td><td><a href="https://github.com/kk7ds/chirp/blob/master/chirp/drivers/tk11.py" target="_blank" rel="noopener noreferrer">F3</a></td></tr>
+<tr><td>Da 216 a 247</td><td>Due righe di 16 caratteri del testo di benvenuto</td><td><a href="https://github.com/kk7ds/chirp/blob/master/chirp/drivers/tk11.py" target="_blank" rel="noopener noreferrer">F3</a></td></tr>
+</tbody></table></div>
+<h2 id="formato-csv-del-tk-11">Formato CSV del TK-11</h2>
+<p>Il CSV che importa TK-11 Manager e che genera il convertitore di nikantgr ha un&#39;intestazione fissa. Che TK-11 Manager lo importi così com&#39;è è <strong>UNVERIFIED</strong> da parte mia: <a href="https://urez.org/tk-11-manager-la-herramienta-definitiva-para-programar-tu-quansheng-tk-11-desde-el-pc/" target="_blank" rel="noopener noreferrer">F1</a> dice solo che esporta e importa CSV, e <a href="https://github.com/nikantgr/CHIRP-to-TK11-csv/blob/main/convert_chirp_to_tk11.py" target="_blank" rel="noopener noreferrer">F2</a> lo descrive come il formato del software di Quansheng.</p>
+<pre><code>No.,Name,RX Freq[MHZ],TX Freq[MHZ],QT Encode Type,QT Encode1,QT Decode Type,QT Decode,MSW,Band,Powrer,Busy Lock,ScanList,Demode,Freq Reverse,SQ,Encrypt,Signaling Decode,PTTID,Signal
+1,PMR01,446.00625,0.15300,Null,Null,Null,Null,2K,12.5K,Low,OFF,1,FM,OFF,3,OFF,OFF,OFF,DTMF
+2,,,,,,,,,,,,,,,,,,,</code></pre>
+<h3 id="columnas">Colonne</h3>
+<p>L&#39;intestazione scrive &quot;Powrer&quot; con quell&#39;errore di battitura e lo si conserva così com&#39;è. I valori predefiniti sono quelli fissati dal convertitore.</p>
+<div class="table-scroll"><table><thead><tr><th scope="col">Colonna</th><th scope="col">Valori osservati</th><th scope="col">Note</th><th scope="col">Fonte</th></tr></thead><tbody>
+<tr><td><code>No.</code></td><td>1, 2, 3, …</td><td>Progressivo da 1; gli spazi sono righe vuote</td><td><a href="https://github.com/nikantgr/CHIRP-to-TK11-csv/blob/main/convert_chirp_to_tk11.py" target="_blank" rel="noopener noreferrer">F2</a></td></tr>
+<tr><td><code>Name</code></td><td>Testo</td><td>Massimo 12 caratteri secondo l&#39;autore (&quot;i think&quot;), <strong>UNVERIFIED</strong>; la memoria ne ammette 16</td><td><a href="https://github.com/nikantgr/CHIRP-to-TK11-csv/blob/main/convert_chirp_to_tk11.py" target="_blank" rel="noopener noreferrer">F2</a></td></tr>
+<tr><td><code>RX Freq[MHZ]</code></td><td>446.00625</td><td>MHz con 5 decimali</td><td><a href="https://github.com/nikantgr/CHIRP-to-TK11-csv/blob/main/convert_chirp_to_tk11.py" target="_blank" rel="noopener noreferrer">F2</a></td></tr>
+<tr><td><code>TX Freq[MHZ]</code></td><td>145.07500</td><td>Frequenza assoluta; <code>0.15300</code> significa senza TX</td><td><a href="https://github.com/nikantgr/CHIRP-to-TK11-csv/blob/main/convert_chirp_to_tk11.py" target="_blank" rel="noopener noreferrer">F2</a></td></tr>
+<tr><td><code>QT Encode Type</code></td><td>Null, Ctcss, NDCS, IDCS</td><td>NDCS è DCS normale e IDCS invertito</td><td><a href="https://github.com/nikantgr/CHIRP-to-TK11-csv/blob/main/convert_chirp_to_tk11.py" target="_blank" rel="noopener noreferrer">F2</a></td></tr>
+<tr><td><code>QT Encode1</code></td><td>Null, 77.0, 023</td><td>Tono CTCSS o codice DCS</td><td><a href="https://github.com/nikantgr/CHIRP-to-TK11-csv/blob/main/convert_chirp_to_tk11.py" target="_blank" rel="noopener noreferrer">F2</a></td></tr>
+<tr><td><code>QT Decode Type</code></td><td>Null, Ctcss, NDCS, IDCS</td><td>Come la codifica</td><td><a href="https://github.com/nikantgr/CHIRP-to-TK11-csv/blob/main/convert_chirp_to_tk11.py" target="_blank" rel="noopener noreferrer">F2</a></td></tr>
+<tr><td><code>QT Decode</code></td><td>Null, 77.0, 023</td><td>Come la codifica</td><td><a href="https://github.com/nikantgr/CHIRP-to-TK11-csv/blob/main/convert_chirp_to_tk11.py" target="_blank" rel="noopener noreferrer">F2</a></td></tr>
+<tr><td><code>MSW</code></td><td>2K</td><td>Significato <strong>UNVERIFIED</strong>; CHIRP elenca da 2K a 5K</td><td><a href="https://github.com/nikantgr/CHIRP-to-TK11-csv/blob/main/convert_chirp_to_tk11.py" target="_blank" rel="noopener noreferrer">F2</a></td></tr>
+<tr><td><code>Band</code></td><td>12.5K, 25K</td><td>Larghezza di banda: stretta o larga</td><td><a href="https://github.com/nikantgr/CHIRP-to-TK11-csv/blob/main/convert_chirp_to_tk11.py" target="_blank" rel="noopener noreferrer">F2</a></td></tr>
+<tr><td><code>Powrer</code></td><td>Low, Middle, High</td><td>Potenza</td><td><a href="https://github.com/nikantgr/CHIRP-to-TK11-csv/blob/main/convert_chirp_to_tk11.py" target="_blank" rel="noopener noreferrer">F2</a></td></tr>
+<tr><td><code>Busy Lock</code></td><td>ON, OFF</td><td>Blocco per canale occupato</td><td><a href="https://github.com/nikantgr/CHIRP-to-TK11-csv/blob/main/convert_chirp_to_tk11.py" target="_blank" rel="noopener noreferrer">F2</a></td></tr>
+<tr><td><code>ScanList</code></td><td>1</td><td>Il convertitore scrive sempre 1; la numerazione da 1 a 32 e il valore senza lista sono <strong>UNVERIFIED</strong></td><td><a href="https://github.com/nikantgr/CHIRP-to-TK11-csv/blob/main/convert_chirp_to_tk11.py" target="_blank" rel="noopener noreferrer">F2</a></td></tr>
+<tr><td><code>Demode</code></td><td>FM, AM, LSB, USB, CW</td><td>Modulazione</td><td><a href="https://github.com/nikantgr/CHIRP-to-TK11-csv/blob/main/convert_chirp_to_tk11.py" target="_blank" rel="noopener noreferrer">F2</a></td></tr>
+<tr><td><code>Freq Reverse</code></td><td>ON, OFF</td><td>Inversione delle frequenze</td><td><a href="https://github.com/nikantgr/CHIRP-to-TK11-csv/blob/main/convert_chirp_to_tk11.py" target="_blank" rel="noopener noreferrer">F2</a></td></tr>
+<tr><td><code>SQ</code></td><td>3</td><td>Squelch da 0 a 8</td><td><a href="https://github.com/nikantgr/CHIRP-to-TK11-csv/blob/main/convert_chirp_to_tk11.py" target="_blank" rel="noopener noreferrer">F2</a></td></tr>
+<tr><td><code>Encrypt</code></td><td>OFF</td><td>Cifratura; il convertitore scrive solo OFF</td><td><a href="https://github.com/nikantgr/CHIRP-to-TK11-csv/blob/main/convert_chirp_to_tk11.py" target="_blank" rel="noopener noreferrer">F2</a></td></tr>
+<tr><td><code>Signaling Decode</code></td><td>OFF</td><td>Il convertitore scrive solo OFF</td><td><a href="https://github.com/nikantgr/CHIRP-to-TK11-csv/blob/main/convert_chirp_to_tk11.py" target="_blank" rel="noopener noreferrer">F2</a></td></tr>
+<tr><td><code>PTTID</code></td><td>OFF</td><td>Altri valori <strong>UNVERIFIED</strong>; si usano quelli di CHIRP</td><td><a href="https://github.com/nikantgr/CHIRP-to-TK11-csv/blob/main/convert_chirp_to_tk11.py" target="_blank" rel="noopener noreferrer">F2</a></td></tr>
+<tr><td><code>Signal</code></td><td>DTMF, 5TONE</td><td>Tipo di segnalazione</td><td><a href="https://github.com/nikantgr/CHIRP-to-TK11-csv/blob/main/convert_chirp_to_tk11.py" target="_blank" rel="noopener noreferrer">F2</a></td></tr>
+</tbody></table></div>
+<h3 id="conversion-desde-chirp">Conversione da CHIRP</h3>
+<p>Il convertitore (<a href="https://github.com/nikantgr/CHIRP-to-TK11-csv/blob/main/convert_chirp_to_tk11.py" target="_blank" rel="noopener noreferrer">F2</a>) fa quanto segue ed è portato in <code>tk11-connector.js</code>:</p>
+<ul>
+<li>Rinumera da 1 tra la memoria più bassa e la più alta, e lascia righe vuote negli spazi.</li>
+<li>Calcola la frequenza TX con il duplex: meno e più sottraggono e sommano lo shift, split prende lo shift come TX, off scrive <code>0.15300</code> e il resto copia la RX.</li>
+<li>Converte Tone in CTCSS di codifica, TSQL in CTCSS su entrambi i lati, DTCS e DTCS-R secondo la polarità (N normale, R invertita) e Cross secondo la modalità incrociata.</li>
+<li>NFM dà banda di 12.5K e qualsiasi altra modalità 25K; la demodulazione ammette solo FM, AM, LSB, USB e CW.</li>
+<li>Pubblica varianti con virgolette, con virgola decimale e con il separatore dell&#39;impostazione regionale. Qui si portano le prime due e la terza no.</li>
+<li>Modifiche di questo repository: la potenza si prende da CHIRP (Low e High; il resto è Middle).</li>
+</ul>
+<p>Le funzioni pubbliche di <code>R.TK11</code> sono <code>channelsToTk11Csv</code>, <code>channelsFromCsv</code> (rileva TK-11 o CHIRP dall&#39;intestazione) e <code>chirpCsvToTk11Csv</code>. L&#39;importazione riempie solo la tabella della pagina; la radio non cambia finché non si preme il pulsante di scrittura dei canali, che richiede prima una copia verificata. Le righe non valide vengono scartate indicandone il motivo.</p>
+<h2 id="que-expone-tk-11-manager">Cosa espone TK-11 Manager</h2>
+<p>Tutto quanto segue proviene da <a href="https://urez.org/tk-11-manager-la-herramienta-definitiva-para-programar-tu-quansheng-tk-11-desde-el-pc/" target="_blank" rel="noopener noreferrer">F1</a>; lo strumento non è stato eseguito né analizzato.</p>
+<div class="table-scroll"><table><thead><tr><th scope="col">Capacità</th><th scope="col">Dettaglio pubblicato</th><th scope="col">Confronto con CHIRP</th></tr></thead><tbody>
+<tr><td>Esecuzione</td><td>Nel browser, senza Internet né invio di dati</td><td>Stesso protocollo; CHIRP è per desktop</td></tr>
+<tr><td>Protocollo</td><td>Basato sul driver TK11 di CHIRP, secondo l&#39;articolo</td><td>Stessa mappa di memoria</td></tr>
+<tr><td>Canali</td><td>Gestione completa dei 999</td><td>Uguale</td></tr>
+<tr><td>Impostazioni</td><td>Generali, tasti e funzioni rapide</td><td>Uguale</td></tr>
+<tr><td>Liste di scansione</td><td>Sì</td><td>Uguale; le zone non sono menzionate</td></tr>
+<tr><td>DTMF e 5 toni</td><td>Contatti e segnali</td><td>Uguale</td></tr>
+<tr><td>Radio FM</td><td>Sì</td><td>Uguale</td></tr>
+<tr><td>Copie</td><td>Automatica a ogni lettura; ripristino</td><td>Non è automatica in CHIRP</td></tr>
+<tr><td>Sicurezza</td><td>Verifica il firmware prima di modificare, scrive solo i blocchi cambiati e verifica byte per byte</td><td>Miglioramento del metodo, non del formato</td></tr>
+<tr><td>Strumenti avanzati</td><td>Visualizzatore di memoria</td><td>Nessun visualizzatore in CHIRP</td></tr>
+<tr><td>Dati</td><td>Esporta e importa CSV e apre immagini di CHIRP</td><td>Uguale per il CSV</td></tr>
+<tr><td>Aggiornamento del firmware</td><td>Non menzionato</td><td>Nessuno strumento pubblico lo offre</td></tr>
+<tr><td>Interfaccia</td><td>Walkie virtuale e sette temi più uno personalizzabile</td><td>Nessun equivalente</td></tr>
+</tbody></table></div>
+<p>Conclusione: l&#39;articolo non rivela nessuna regione di memoria, impostazione né comando che non sia nel driver di CHIRP. Che cosa significhi &quot;verificare il firmware&quot; e come lo faccia è <strong>UNVERIFIED</strong>.</p>
+<h2 id="camino-hacia-firmware-funcional">Percorso verso un firmware funzionante</h2>
+<h3 id="pasos">Passi</h3>
+<p>Tutti i passi sono <strong>UNVERIFIED</strong> finché non vengono eseguiti con una radio di prova. Nessuno viene implementato in questa applicazione.</p>
+<ol>
+<li><strong>Accesso SWD e protezione in lettura.</strong> Secondo i datasheet di AP8048B e AP8048C (<a href="https://github.com/armel/tk11-teardown/blob/main/datasheet/AP8048B-MVSILICON.pdf" target="_blank" rel="noopener noreferrer">F7</a>, <a href="https://github.com/armel/tk11-teardown/blob/main/datasheet/AP8048C-MVSILICON.pdf" target="_blank" rel="noopener noreferrer">F8</a>), SWCLK è il pin 2 e SWDIO il pin 3 del LQFP48; massa sul pin 38 (B) o 39 (C) e IOVDD da 3,3 V sul pin 40 (B). Non c&#39;è pin NRST. Collegare una sonda (ST-Link, J-Link o CMSIS-DAP) con OpenOCD e leggere solo l&#39;IDCODE e la lista degli AP (vedere &quot;Procedura hardware&quot;). Non eseguire mai uno sblocco o una cancellazione totale: in molte MCU distrugge la Flash.</li>
+<li><strong>Dump completo della Flash.</strong> Se il debug è aperto, leggere i 2 MB con la sonda, due volte, e confrontare gli SHA-256. Conservare il dump come copia privata e non ridistribuirlo. Poi cercarvi un record di canale noto per sapere se <code>0x080000</code> è un indirizzo reale.</li>
+<li><strong>Identificare il bootloader.</strong> Vedere nel dump la tabella dei vettori, la dimensione e l&#39;indirizzo del loader, e se verifica firma o CRC.</li>
+<li><strong>Catturare il protocollo di aggiornamento.</strong> Con l&#39;updater ufficiale e un analizzatore USB (USBPcap con Wireshark, oppure un analizzatore hardware), catturare un aggiornamento completo di una radio di prova: come entra in modalità loader, se riutilizza la trama AB CD, XOR e CRC, e il formato del file (intestazione, cifratura, firma). Bisogna confrontare due versioni. Non si deve rinviare nessuna scrittura catturata a una radio.</li>
+<li><strong>Toolchain e SDK dell&#39;AP8048.</strong> Un compilatore <code>arm-none-eabi-gcc</code> per Cortex-M3 va bene per il core, ma le periferiche (clock, GPIO, LCD, tastiera, audio, RF) sono solo nell&#39;SDK di MVSilicon o in documentazione sotto NDA (<a href="https://github.com/armel/tk11-teardown" target="_blank" rel="noopener noreferrer">F4</a>). Se non c&#39;è SDK, i registri andranno dedotti dalla scheda.</li>
+<li><strong>Prova minima di lampeggio e LCD.</strong> Caricare un piccolo programma nella SRAM da 128 KB con il debugger ed eseguirlo senza scrivere nella Flash, per accendere la retroilluminazione o la torcia e poi disegnare sull&#39;LCD. Così non si tocca nulla di permanente.</li>
+<li><strong>Porting.</strong> Solo con il passo 6 risolto: scrivere i driver di display, tastiera, audio e RF, conservare il bootloader e mantenere la stessa mappa di memoria e lo stesso protocollo CPS in modo che CHIRP e TK-11 Manager continuino a funzionare. Il firmware K5 di F4HWN non si può portare così com&#39;è: ha un&#39;altra MCU (Cortex-M0), un&#39;altra mappa di memoria e EEPROM esterna (<a href="https://github.com/armel/tk11-teardown" target="_blank" rel="noopener noreferrer">F4</a>).</li>
+</ol>
+<h3 id="veredicto-de-viabilidad">Verdetto di fattibilità</h3>
+<p>Un firmware proprio completo oggi non è fattibile. Ci sono tre blocchi duri: l&#39;AP8048 non ha SDK pubblico (<a href="https://github.com/armel/tk11-teardown" target="_blank" rel="noopener noreferrer">F4</a>), non esiste un protocollo di aggiornamento pubblico e non si sa se il debug SWD sia aperto. Il datasheet del produttore declassa il blocco di SWD da &quot;sconosciuto&quot; a &quot;documentato dal produttore, stato nel TK-11 non verificato&quot; (<a href="https://github.com/armel/tk11-teardown/blob/main/datasheet/AP8048B-MVSILICON.pdf" target="_blank" rel="noopener noreferrer">F7</a>, <a href="https://github.com/armel/tk11-teardown/blob/main/datasheet/AP8048C-MVSILICON.pdf" target="_blank" rel="noopener noreferrer">F8</a>). Compare un nuovo blocco: la cifratura del codice nella Flash SPI citata da quei datasheet. L&#39;obiettivo realistico è un traguardo di avvio (lampeggio e LCD dalla SRAM) con una radio sacrificabile, e solo se il passo 1 va bene. Un firmware completo con RF, audio e menu sarebbe un progetto di mesi con reverse engineering dell&#39;hardware, e comunque senza garanzia che il chip lo consenta.</p>
+<h2 id="procedimiento-de-hardware-radio-de-pruebas">Procedura hardware (radio di prova)</h2>
+<p>Tutto è <strong>UNVERIFIED</strong> finché non viene fatto. Solo con una radio di prova, mai con la radio di uso quotidiano.</p>
+<ol>
+<li>Identificare la variante (A, B o C) dalla marcatura del chip con una lente.</li>
+<li>Individuare per continuità i pin 2 (SWCLK), 3 (SWDIO), massa e 3,3 V dal LQFP48 (punto del pin 1) fino a pad di test o via. Preferire una via piuttosto che saldare sul pin.</li>
+<li>Preparare una sonda CMSIS-DAP, ST-Link o J-Link con la radio alimentata dalla propria batteria, VTref a 3,3 V e velocità di 100 kHz.</li>
+<li>Sessione OpenOCD di sola lettura, che legge solo l&#39;IDCODE del DP e la lista degli AP:</li>
+</ol>
+<pre><code>openocd -f interface/cmsis-dap.cfg -c &quot;transport select swd&quot; -c &quot;adapter speed 100&quot; -c &quot;swd newdap ap8048 cpu -enable&quot; -c &quot;dap create ap8048.dap -chain-position ap8048.cpu&quot; -c &quot;init&quot; -c &quot;dap info&quot; -c &quot;shutdown&quot;</code></pre>
+<ol>
+<li>Poiché non c&#39;è NRST, collegarsi con la radio in funzione (senza &quot;connect under reset&quot;).</li>
+<li>Solo se l&#39;AP risponde: creare un target cortex_m, eseguire <code>mdw 0x00000000 8</code> per vedere la tabella dei vettori e fare <code>dump_image</code> della regione di codice due volte, confrontando gli SHA-256.</li>
+<li>Cercare nel dump un record di canale noto per mettere in relazione l&#39;offset 0 del CPS con un indirizzo di Flash.</li>
+<li>Vietato: qualsiasi comando di cancellazione, sblocco, scrittura in Flash, byte di opzione o cancellazione totale. La radio va su un carico fittizio e non trasmette mai.</li>
+<li>Cattura USB, solo se compaiono un updater ufficiale e il suo file: USBPcap e Wireshark sul cavo del CPS, confrontare due versioni e non rinviare mai scritture catturate.</li>
+<li>Opzionale: analizzatore logico sui pin da 21 a 26 (FSH) durante l&#39;avvio per vedere se le letture della Flash passano da lì; secondo il datasheet ci si aspetta che i dati siano cifrati.</li>
+</ol>
+<h2 id="que-se-puede-hacer-sin-radio-sacrificable">Che cosa si può fare senza una radio sacrificabile</h2>
+<ul>
+<li>(a) Copie di sicurezza di sola lettura con il CPS più lo strumento &quot;Confronta due copie&quot; di questo pannello: cambiare un&#39;opzione di menu nella radio, fare una copia nuova e confrontarle serve a mappare campi sconosciuti e a confermare o respingere gli offset di Multi-UVTools (per <code>0x17000</code>: impostare una password di accensione, fare la copia e confrontare). Richiede un TK-11, ma non scrive mai.</li>
+<li>(b) Sonda SWD di sola lettura dell&#39;IDCODE (obbliga ad aprire la radio; influisce sulla garanzia).</li>
+<li>(c) Ricerca a tavolino sui datasheet.</li>
+</ul>
+<p>Tutto il resto richiede una radio sacrificabile.</p>
+<h3 id="riesgos">Rischi</h3>
+<div class="table-scroll"><table><thead><tr><th scope="col">Rischio</th><th scope="col">Effetto</th><th scope="col">Mitigazione</th></tr></thead><tbody>
+<tr><td>Cancellazione della Flash allo sblocco del debug</td><td>Si perdono bootloader, calibrazione e canali</td><td>Non sbloccare mai; fare prima il dump con il debug aperto</td></tr>
+<tr><td>Calibrazione fuori dalla copia del CPS</td><td>Radio fuori specifica dopo un errore</td><td>Il CPS non la espone (la mappa arriva a <code>0x23000</code>); serve il dump completo</td></tr>
+<tr><td>Sovrascrittura del bootloader</td><td>Radio inutilizzabile senza sonda</td><td>Flashare solo la regione applicativa e conservare il dump</td></tr>
+<tr><td>Catture di aggiornamento rinviate</td><td>Una versione incompatibile blocca la radio</td><td>Non rinviare scritture catturate</td></tr>
+<tr><td>Diritti d&#39;autore e NDA</td><td>Problemi legali nel pubblicare dump o datasheet</td><td>Non ridistribuire dump né documenti sotto NDA; consultare la legge locale sul reverse engineering</td></tr>
+<tr><td>Conformità radioelettrica</td><td>Un firmware proprio può emettere fuori banda o senza omologazione</td><td>Rispettare i limiti delle bande e la normativa locale</td></tr>
+<tr><td>Falsa sicurezza dei test</td><td>I test di questo repository coprono solo il CPS simulato</td><td>Provare sempre su una radio di prova</td></tr>
+</tbody></table></div>
+<h2 id="registro-de-cambios">Registro delle modifiche</h2>
+<h3 id="2026-11-09">2026-11-09</h3>
+<p>Cosa si è appreso:</p>
+<ul>
+<li>Il driver di CHIRP è GPL-2.0-or-later, non GPL-3.0-or-later; ultimo commit del file 2026-03-19 (<a href="https://raw.githubusercontent.com/kk7ds/chirp/master/chirp/drivers/tk11.py" target="_blank" rel="noopener noreferrer">F3</a>).</li>
+<li>Le liste di scansione di CHIRP terminano esattamente a <code>0x17000</code> (32 × <code>0x80</code> da <code>0x16000</code>).</li>
+<li>Multi-UVTools non ha LICENSE e le sue affermazioni sul TK-11 sono di fonte unica e non indipendenti da CHIRP (<a href="https://github.com/spm81/Multi-UVTools" target="_blank" rel="noopener noreferrer">F6</a>).</li>
+<li>rob-w/tk11-firmware-custom non contiene codice né binari (<a href="https://github.com/rob-w/tk11-firmware-custom" target="_blank" rel="noopener noreferrer">F9</a>).</li>
+<li>armel/tk11-teardown include datasheet di AP8048A/B/C, BK4819, BK4829 e RDA5807M (<a href="https://github.com/armel/tk11-teardown/tree/main/datasheet" target="_blank" rel="noopener noreferrer">F4</a>).</li>
+<li>I datasheet di AP8048B e AP8048C elencano SWD (pin 2 e 3), cifratura del codice nella Flash SPI e aggiornamento via SD/USB, e non elencano NRST (<a href="https://github.com/armel/tk11-teardown/blob/main/datasheet/AP8048B-MVSILICON.pdf" target="_blank" rel="noopener noreferrer">F7</a>, <a href="https://github.com/armel/tk11-teardown/blob/main/datasheet/AP8048C-MVSILICON.pdf" target="_blank" rel="noopener noreferrer">F8</a>).</li>
+<li>Osservazioni dalla foto: MCU mVsilicon AP8048 LQFP48, due QFN Beken, un SOP &quot;5807M&quot; e un footprint SOP-8 vuoto (<a href="https://github.com/armel/tk11-teardown/blob/main/teardown/TK11_VIEW_A_VERSO_PCB_V2.0.jpg" target="_blank" rel="noopener noreferrer">F11</a>).</li>
+<li>F10 definisce il TK-11 una radio Beken BK4819 (fonte secondaria) (<a href="https://github.com/qshosfw/hermes" target="_blank" rel="noopener noreferrer">F10</a>).</li>
+<li>Ricerche su GitHub di <code>AP8048</code> e <code>tk11 firmware</code>: 0 repository; nessuna fonte, file o protocollo di aggiornamento del firmware pubblici.</li>
+<li>urez.org ha solo l&#39;articolo su TK-11 Manager e non dice nulla del firmware (<a href="https://urez.org/tk-11-manager-la-herramienta-definitiva-para-programar-tu-quansheng-tk-11-desde-el-pc/" target="_blank" rel="noopener noreferrer">F1</a>).</li>
+</ul>
+<p>Modifiche al codice:</p>
+<ul>
+<li>Licenza di CHIRP corretta in GPL-2.0-or-later in <code>tk11-connector.js</code>.</li>
+<li>Nuovo elenco <code>UNVERIFIED_REGIONS</code> (mai scrivibile) e funzioni <code>describeOffset</code> e <code>diffImages</code> in <code>R.TK11</code>.</li>
+<li>Pulsante &quot;Confronta due copie&quot; nel pannello TK-11: sola lettura, non tocca la radio.</li>
+</ul></article>
+    <footer><p class="translation-note">Traduzione dell&#39;originale spagnolo. In caso di discrepanza prevale la versione spagnola.</p><p>Documento generato dal Markdown versionato. Consulta le fonti e i limiti di ogni guida. <a href="ayuda-firmwares.it.html">Torna all&#39;indice</a>.</p></footer>
+  </main>
+</body>
+</html>

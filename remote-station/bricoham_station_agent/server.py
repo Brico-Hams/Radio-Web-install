@@ -529,7 +529,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
             "BricoHams Station Agent — base URL http://127.0.0.1:<port>; "
-            "default loopback port 8788. "
+            "default loopback port 8791. "
             f"Read-only inventory: GET {DEVICES_PATH}."
         )
     )
@@ -537,8 +537,8 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--port",
         type=int,
-        default=8788,
-        help="Loopback port (default: 8788).",
+        default=8791,
+        help="Loopback port (default: 8791).",
     )
     parser.add_argument("--enable-experimental-cat", action="store_true")
     parser.add_argument("--host", default="127.0.0.1")

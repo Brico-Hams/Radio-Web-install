@@ -36,7 +36,7 @@ describe('multilingual help and configuration', () => {
     fireEvent.click(screen.getByRole('button', { name:'Configuración' }))
     fireEvent.click(screen.getAllByRole('button', { name:'Preparar comando local' })[0])
     expect(screen.getByRole('status').textContent).toBe('Comando preparado; no ejecutado.')
-    expect(screen.getByText("py -3.12 'bricoham-station-agent.pyz' '--port' '8788'")).toBeTruthy()
+    expect(screen.getByText("py -3.12 'bricoham-station-agent.pyz' '--port' '8791'")).toBeTruthy()
     fireEvent.change(screen.getByLabelText('Archivo del agente ZIPAPP'), { target:{ value:'other.pyz' } })
     expect(screen.queryByRole('status')).toBeNull()
     expect(fetch).not.toHaveBeenCalled()

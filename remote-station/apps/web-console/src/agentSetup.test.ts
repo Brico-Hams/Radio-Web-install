@@ -2,21 +2,21 @@ import { describe, expect, it } from 'vitest'
 import { buildAgentCommand, buildHostCommand, type AgentSetup, type HostSetup } from './agentSetup'
 
 const agent: AgentSetup = {
-  os:'windows', agentFile:"C:\\Radio's tools\\agent.pyz", port:'8788', remote:false, listenHost:'127.0.0.1',
+  os:'windows', agentFile:"C:\\Radio's tools\\agent.pyz", port:'8791', remote:false, listenHost:'127.0.0.1',
   certificate:'', privateKey:'', clientCa:'', cat:false, model:'', serialPort:'', baud:'', stopBits:'1',
 }
 const host: HostSetup = {
-  os:'windows', port:'8787', certificate:'host.crt', privateKey:'host.key',
-  agentUrl:'https://station.example.org:8788', agentCa:'ca.crt',
+  os:'windows',   port:'8790', certificate:'host.crt', privateKey:'host.key',
+    agentUrl:'https://station.example.org:8791', agentCa:'ca.crt',
   clientCertificate:'client.crt', clientKey:'client.key',
   origins:'https://localhost, capacitor://localhost',
 }
 
 describe('local setup commands', () => {
   it('quotes paths and shell metacharacters without enabling CAT or transmission by default', () => {
-    expect(buildAgentCommand(agent)).toBe("py -3.12 'C:\\Radio''s tools\\agent.pyz' '--port' '8788'")
+    expect(buildAgentCommand(agent)).toBe("py -3.12 'C:\\Radio''s tools\\agent.pyz' '--port' '8791'")
     expect(buildAgentCommand({ ...agent, os:'posix', agentFile:"radio's;$HOME/agent.pyz" }))
-      .toBe(`python3 'radio'"'"'s;$HOME/agent.pyz' '--port' '8788'`)
+      .toBe(`python3 'radio'"'"'s;$HOME/agent.pyz' '--port' '8791'`)
   })
   it('requires explicit supported CAT parameters and validates their boundaries', () => {
     const cat = { ...agent, cat:true, model:'KX2', serialPort:'COM7', baud:'38400' }
@@ -40,7 +40,7 @@ describe('local setup commands', () => {
     }
   })
   it('prepares a verified TLS/mTLS host link but rejects unsafe URLs and incomplete identities', () => {
-    expect(buildHostCommand(host)).toContain("'--station-agent-url' 'https://station.example.org:8788' '--station-agent-ca' 'ca.crt'")
+    expect(buildHostCommand(host)).toContain("'--station-agent-url' 'https://station.example.org:8791' '--station-agent-ca' 'ca.crt'")
     expect(buildHostCommand(host)).toContain("'--station-agent-client-cert' 'client.crt' '--station-agent-client-key' 'client.key'")
     expect(buildHostCommand(host)).toContain("'--client-origin' 'https://localhost' '--client-origin' 'capacitor://localhost'")
     for (const agentUrl of ['http://station','https://user:secret@station','https://station/api','https://station?token=secret','https://station#secret']) {

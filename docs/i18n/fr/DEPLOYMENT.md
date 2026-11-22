@@ -9,7 +9,7 @@ Le point d'entrée public officiel est <https://brico-hams.github.io/Radio-Web-i
 - Node.js 22 ou ultérieur **uniquement pour l'exécution depuis les sources, Arch et FreeBSD**. Les paquets `.deb` et le ZIP Windows incluent Node.
 - Git uniquement pour cloner et mettre à jour une installation depuis les sources.
 - Chrome, Edge ou Brave de bureau, pour WebUSB/Web Serial. Firefox et Safari ne sont pas compatibles.
-- Les pilotes USB requis par la radio : voir [Aide › Pilotes](../../../ayuda.html#drivers).
+- Les pilotes USB requis par la radio : voir [Aide › Pilotes](../../../ayuda.fr.html#drivers).
 
 ## Installation depuis les sources
 
@@ -134,7 +134,7 @@ L'installation nécessite root et des dépôts `pkg` disponibles pour installer 
 
 - Toujours ouvrir <http://127.0.0.1:8787> dans le même navigateur et profil : les sauvegardes appartiennent à cette origine, pas au dossier d'installation. Le badge doit afficher **Local · installé**.
 - Les lanceurs démarrent le serveur en arrière-plan ; fermer l'onglet ne l'arrête pas. Aucun démarrage automatique à l'ouverture de session n'est configuré. Depuis les sources, `npm start` reste dans le terminal et s'arrête avec `Ctrl+C`.
-- L'installateur ne configure ni pilotes ni autorisations USB. Voir [Aide › Pilotes](../../../ayuda.html#drivers) : WinUSB si nécessaire sous Windows, règles udev et groupe `dialout`/`uucp` selon la distribution Linux. Rouvrir la session après changement de groupe et ne pas exécuter le navigateur en root.
+- L'installateur ne configure ni pilotes ni autorisations USB. Voir [Aide › Pilotes](../../../ayuda.fr.html#drivers) : WinUSB si nécessaire sous Windows, règles udev et groupe `dialout`/`uucp` selon la distribution Linux. Rouvrir la session après changement de groupe et ne pas exécuter le navigateur en root.
 - Si le port est occupé, identifier le processus avant de l'arrêter. Sous Windows : `Get-NetTCPConnection -LocalPort 8787 -State Listen | Select-Object OwningProcess`, puis `Get-Process -Id <PID>` et, uniquement s'il s'agit du serveur Bricohams, `Stop-Process -Id <PID>`. Sous Linux, utiliser `ss -lptn 'sport = :8787'` ; sous FreeBSD, `sockstat -4 -l`. Confirmer la commande et l'utilisateur du PID, et n'arrêter que ce processus avec `kill <PID>`.
 - Les journaux Linux/FreeBSD se trouvent dans `${XDG_STATE_HOME:-$HOME/.local/state}/radicodex/server.log`. Sous Windows, en cas d'échec du démarrage, exécuter depuis PowerShell `& "$env:LOCALAPPDATA\Programs\RadiCodex\runtime\node.exe" "$env:LOCALAPPDATA\Programs\RadiCodex\app\server.cjs"` pour afficher l'erreur.
 - Internet n'est pas nécessaire pour servir l'interface et modifier des fichiers locaux. Les requêtes aux fournisseurs et téléchargements de firmware l'exigent.

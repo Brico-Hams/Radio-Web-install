@@ -145,13 +145,13 @@ Prima di ogni scrittura, il backup viene riletto e confrontato con gli hash del 
 - **kotlin:S1143:** il `throw` dentro `finally` è rimosso in `RigActivity` e `SstvTransmit`.
 - **kotlin:S899:** il risultato di `delete` ora è controllato in `OtaPlatform` e `SatelliteCatalog`.
 - **java:S3034 / java:S2184:** aritmetica `byte`/`long` corretta (cast espliciti e maschere prima dell'operazione) in `Osd174`, `FtxFrames`, `FtxReceiver`, `Unpack77` e `Ldpc174`.
-- **javascript:S2871:** i comparatori di `sort` ora sono espliciti.
-- **javascript:S9383:** le promise fluttuanti sono attese o gestite.
-- **javascript:S6324:** i caratteri di controllo sono rimossi dalle espressioni regolari.
-- **javascript:S6544:** l'uso improprio delle promise è corretto.
-- **javascript:S1143:** il `throw` dentro `finally` è rimosso in `quansheng-factory`.
-- **javascript:S7727:** i callback di `map` sono corretti.
+- **JS S2871:** i comparatori di `sort` ora sono espliciti.
+- **JS S9383:** le promise fluttuanti sono attese o gestite.
+- **JS S6324:** i caratteri di controllo sono rimossi dalle espressioni regolari.
+- **JS S6544:** l'uso improprio delle promise è corretto.
+- **JS S1143:** il `throw` dentro `finally` è rimosso in `quansheng-factory`.
+- **JS S7727:** i callback di `map` sono corretti.
 - **xml:S6358 / xml:S5332:** il manifest del flavor fdroid dichiara `android:allowBackup="false"` e `android:usesCleartextTraffic="false"`.
-- **javascript:S4036:** il `PATH` di build è attendibile; marcato con `NOSONAR`.
+- **JS S4036:** il `PATH` di build è attendibile; marcato con `NOSONAR`.
 - **kotlin:S2245:** l'RNG a seme fisso dei test è deterministico di proposito; marcato con `NOSONAR`.
 - **kotlin:S7204:** R8 resta come `TODO` (in attesa di regole keep e prove su dispositivo).

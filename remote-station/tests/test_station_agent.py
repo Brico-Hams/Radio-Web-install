@@ -64,7 +64,7 @@ class StationAgentTests(unittest.TestCase):
         self.assertEqual(set(previous), set(installed))
 
     def test_cli_default_override_and_help(self) -> None:
-        self.assertEqual(_parse_args([]).port, 8788)
+        self.assertEqual(_parse_args([]).port, 8791)
         self.assertEqual(_parse_args(["--port", "0"]).port, 0)
 
         help_output = io.StringIO()
@@ -73,7 +73,7 @@ class StationAgentTests(unittest.TestCase):
         self.assertEqual(exit_info.exception.code, 0)
         normalized_help = " ".join(help_output.getvalue().split())
         self.assertIn("127.0.0.1:<port>", normalized_help)
-        self.assertIn("default loopback port 8788", normalized_help)
+        self.assertIn("default loopback port 8791", normalized_help)
         self.assertIn("GET /api/v1/devices", normalized_help)
 
     def test_inventory_omits_unique_hardware_identifiers(self) -> None:

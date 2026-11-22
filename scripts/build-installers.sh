@@ -26,6 +26,7 @@ app_files=(
   ayuda-opengd77.html ayuda-opengd77-modelos.html ayuda-karina.html ayuda-bricohams.html
   ayuda-anytone.html ayuda-ftx1.html ayuda-icom.html ayuda-icom-internals.html ayuda-icom-parches.html ayuda-referencias.html ayuda-arquitectura.html ayuda-marca.html ayuda-ftx1-conocimiento.html
   ayuda-decisiones.html ayuda-despliegue.html
+  ayuda-estacion-remota.html ayuda-diagnostico.html ayuda-rotor.html ayuda-aprs-chat-radios.html ayuda-karina-v3-k1.html ayuda-tk11.html
   remote-station.cjs remote-catalog.cjs remote-agent.cjs remote-tls.cjs rigctld-client.cjs remote-relay.cjs remote-ws.cjs remote-audio.cjs
   remote.html remote-ui.js remote.css remote-audio-core.js remote-audio-worklet.js remoto.html remoto-ui.js remoto.css
   ayuda-entrega.html ayuda-android.html ayuda-tutoriales-android.html ayuda-validacion-v3-android.html
@@ -38,7 +39,7 @@ app_files=(
   firmware-service.cjs data-service.cjs f4hwn-options.js custom-firmware-ui.js
   precompiled-catalog.js quansheng-factory.js quansheng-live.js quansheng-tools.js
   channel-templates.js channel-template-ui.js channel-template-worker.js
-  ota.html ota.css ota.js firmware-signature.js
+  ota.html ota.css ota.js radicodex-update.json firmware-signature.js
 )
 
 stage_app() {

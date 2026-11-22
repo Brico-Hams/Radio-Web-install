@@ -5,7 +5,7 @@ import { useLanguage } from './i18n'
 export function HostConfigurationPanel() {
   const { t } = useLanguage()
   const [form, setForm] = useState<HostSetup>({
-    os:'windows', port:'8787', certificate:'', privateKey:'', agentUrl:'',
+    os:'windows', port:'8790', certificate:'', privateKey:'', agentUrl:'',
     agentCa:'', clientCertificate:'', clientKey:'', origins:'',
   })
   const [command, setCommand] = useState('')
@@ -39,7 +39,7 @@ export function HostConfigurationPanel() {
           required={key === 'certificate' || key === 'privateKey' || key === 'agentCa'}
           onChange={(event) => update(key, event.target.value)} /></label>)}
       <label>{t('agentUrl')}<input required type="url" value={form.agentUrl} autoComplete="off"
-        placeholder="https://station.example.org:8788" onChange={(event) => update('agentUrl', event.target.value)} /></label>
+        placeholder="https://station.example.org:8791" onChange={(event) => update('agentUrl', event.target.value)} /></label>
       <button className="button button-primary" type="submit">{t('prepare')}</button>
     </form>
     {error ? <p role="alert">{t(error)}</p> : null}

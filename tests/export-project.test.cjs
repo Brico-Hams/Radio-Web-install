@@ -104,13 +104,20 @@ test("la exportacion excluye configuracion privada, respaldos, caches y datos de
   for (const name of ["README.md", "LICENSE", "scripts/export-project.cjs", "firmware/bricohams/ardf.c",
     "docs/ESTADO-ENTREGA.md", "anytone.html", "android/app/src/main/AndroidManifest.xml",
     "android/gradle/wrapper/gradle-wrapper.jar", "data/satellites.config.json",
-    "precompiled/apps/catalog.json", "precompiled/apps/SystemInfo.app"]) assert.equal(projectSource(name), true, name);
+    "precompiled/apps/catalog.json", "precompiled/apps/SystemInfo.app", "data/world-land-110m.txt",
+    "data/channel-templates/ES.json", "data/channel-templates/ES-passes.json", "data/firmware-catalog-fallback.json",
+    "data/remote-station-catalog.json", "templates/repeaters/index.json", "templates/repeaters/uvk5v3/ES.csv",
+    "third_party/icom-custom-firmware/LICENSE", "third_party/icom-custom-firmware/docs/js/worker.js",
+    "third_party/icom-custom-firmware/docs/patches/index.json"]) assert.equal(projectSource(name), true, name);
   for (const name of [".env", ".env.local", ".git/config", ".vscode/settings.json",
     "node_modules/dependency/index.js", "firmware-builds/test/file.c", "dist/app.js", "radio.g77",
     "backup.rwb.json", "radio.bin", "certificate.p12", "docs/private.key", "data/users.json",
     "data/satellites.json", "studio.html", "tests/tmp/file.json", "android/.gradle/cache",
     "android/local.properties", "android/app/build/app.apk", "android/release.jks",
-    "precompiled/apps/private.app", "precompiled/apps/EPIRB406.app"]) assert.equal(projectSource(name), false, name);
+    "precompiled/apps/private.app", "precompiled/apps/EPIRB406.app", "data/third-party/reference.pdf",
+    "data/third-party/notes.json", "data/channel-templates/notes.txt", "data/channel-templates/ES.key",
+    "templates/repeaters/private.key", "templates/node_modules/x.json",
+    "third_party/ftx1/Eugen68-Yaesu-FTX1-CAT-Control/README.md", "third_party/icom-custom-firmware/docs/js/app.js"]) assert.equal(projectSource(name), false, name);
   for (const name of ["../secret", "/absolute", "C:/secret", "docs\\secret", "docs/../secret", "docs//file", "docs/file\nname", ""]) {
     assert.throws(() => safeRelative(name), /Ruta/);
   }

@@ -362,7 +362,7 @@ verified. Each phase explains when it is complete. Phases 9 and 10 are optional.
 | Phase | What you do | Complete when | Details |
 | --- | --- | --- | --- |
 | 0. Identify | Check label under the battery, SysInf, and bootloader version | You know whether it is UV-K5 V3, UV-K1, or another revision | [Versions](ATLAS-UV-K5-V3.md#versions-and-how-to-identify-them) |
-| 1. Prepare PC | Desktop Chrome or Edge, USB-C data cable or Kenwood cable, driver | Port appears and no other application is using it | [Drivers](../../../ayuda.html#drivers) and [USB](AYUDA-CONFIGURACION.md#usb-connection-do-not-confuse-modes) |
+| 1. Prepare PC | Desktop Chrome or Edge, USB-C data cable or Kenwood cable, driver | Port appears and no other application is using it | [Drivers](../../../ayuda.en.html#drivers) and [USB](AYUDA-CONFIGURACION.md#usb-connection-do-not-confuse-modes) |
 | 2. Backups | Calibration (512 bytes), configuration, and, if firmware allows, full Flash | Files are outside the browser and have SHA-256 hashes | [Calibration](ATLAS-UV-K5-V3.md#calibration) |
 | 3. Choose firmware | Version and edition (Fusion, FieldOps, Transfer, Labs) for your hardware | `.bin` file downloaded from the official release with its hash checked | [Editions](#which-edition-to-choose) and [versions](#version-and-format-matrix) |
 | 4. Flash | Radio off, hold PTT while powering on, use UV Studio or Bricohams Studio | Tool confirms every page and the radio restarts | [Bootloader](ATLAS-UV-K5-V3.md#bootloader-and-flashing) |

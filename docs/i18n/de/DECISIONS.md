@@ -14,7 +14,7 @@ Jede Entscheidung nennt Kontext, Beschluss, verworfene Alternativen und Folgen.
 - **Kontext:** OpenGD77 MK22/STM32 stellt CDC über USB bereit; DM-32/UV008 und Quansheng verwenden eine serielle Schnittstelle.
 - **Entscheidung:** WebUSB für `1FC9:0094` und Web Serial für serielle Kabel, wie beim Referenz-Web-CPS.
 - **Alternativen:** native Anwendung (Installation und Signierung je Betriebssystem) oder Electron (große Angriffsfläche).
-- **Folgen:** funktioniert nur in Chrome, Edge und Brave auf dem Desktop. Unter Windows benötigt OpenGD77 USB WinUSB (siehe [Hilfe](../../../ayuda.html#drivers)).
+- **Folgen:** funktioniert nur in Chrome, Edge und Brave auf dem Desktop. Unter Windows benötigt OpenGD77 USB WinUSB (siehe [Hilfe](../../../ayuda.de.html#drivers)).
 
 ## ADR-003 · Lokaler Node-Server mit einer einzigen Abhängigkeit
 

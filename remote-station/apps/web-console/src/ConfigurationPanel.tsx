@@ -6,7 +6,7 @@ import { useLanguage } from './i18n'
 export function ConfigurationPanel() {
   const { t } = useLanguage()
   const [form, setForm] = useState<AgentSetup>({
-    os: 'windows', agentFile: 'bricoham-station-agent.pyz', port: '8788', remote: false, listenHost: '127.0.0.1',
+    os: 'windows', agentFile: 'bricoham-station-agent.pyz', port: '8791', remote: false, listenHost: '127.0.0.1',
     certificate: '', privateKey: '', clientCa: '', cat: false, model: '', serialPort: '', baud: '', stopBits: '1',
   })
   const [command, setCommand] = useState('')

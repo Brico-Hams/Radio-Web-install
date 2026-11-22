@@ -4,7 +4,7 @@
 
 # Bricohams Radio Workspace
 
-[Stazione remota integrata](docs/REMOTE_STATION.md): host HTTPS,
+[Stazione remota integrata](docs/i18n/it/REMOTE_STATION.md): host HTTPS,
 agenti Windows/Linux/macOS/Raspberry Pi e client web/Android/tablet/iPhone/iPad.
 Gli accessi web e RadiCodex separano firmware locale e controllo remoto, con
 consenso esplicito e interblocchi. Hardware e funzioni ancora da verificare
@@ -379,7 +379,7 @@ Non scollegare né chiudere il browser durante un’operazione. Non collegare co
 
 > **Quale usare.** Esistono due implementazioni separate, con nomi diversi nell’interfaccia:
 > **«Remote shack (rigctld, desktop)»** (questa sezione: `remote-agent.cjs`/`remote-station.cjs`, Hamlib `rigctld`, console `remoto.html`, solo app desktop/APK) per controllare via CAT una radio collegata al PC o al Raspberry Pi con un servizio Node;
-> **«Stazione remota (host/agente Python)»** ([docs/REMOTE_STATION.md](docs/REMOTE_STATION.md), `remote-station/`, pagina `station.html`) per l’host HTTPS coordinatore, gli agenti Python headless e i client web/Android/iOS. Sono indipendenti (nessuna porta o configurazione condivisa), e il TX resta disattivato per impostazione predefinita in entrambe. I cataloghi delle radio e l’analisi CAT FTX-1 esistono in entrambe e non sono stati unificati.
+> **«Stazione remota (host/agente Python)»** ([docs/REMOTE_STATION.md](docs/i18n/it/REMOTE_STATION.md), `remote-station/`, pagina `station.html`) per l’host HTTPS coordinatore, gli agenti Python headless e i client web/Android/iOS. Sono indipendenti (nessuna porta o configurazione condivisa), e il TX resta disattivato per impostazione predefinita in entrambe. I cataloghi delle radio e l’analisi CAT FTX-1 esistono in entrambe e non sono stati unificati.
 
 Un agente accanto alla radio la controlla via CAT con Hamlib `rigctld` e offre una console web (smartphone, tablet o PC). `server.cjs` non cambia e continua ad ascoltare solo su `127.0.0.1`.
 

@@ -4,7 +4,7 @@
 
 # Bricohams Radio-Arbeitsbereich
 
-[Integrierte Remote-Station](docs/REMOTE_STATION.md): HTTPS-Host,
+[Integrierte Remote-Station](docs/i18n/de/REMOTE_STATION.md): HTTPS-Host,
 Windows/Linux/macOS/Raspberry-Pi-Agenten und Web/Android/Tablet/iPhone/iPad-Clients.
 Web und RadiCodex trennen lokale Firmware vom Fernzugriff, mit ausdruecklicher
 Freigabe und Verriegelungen. Offene Hardware- und Funktionspruefungen bleiben
@@ -308,7 +308,7 @@ Trenne während einer Operation nicht den Browser und schließe ihn nicht. Schli
 
 > **Welche Variante.** Es gibt zwei getrennte Implementierungen mit unterschiedlichen Namen in der Oberfläche:
 > **«Remote shack (rigctld, desktop)»** (dieser Abschnitt: `remote-agent.cjs`/`remote-station.cjs`, Hamlib `rigctld`, Konsole `remoto.html`, nur Desktop-App/APK) steuert per CAT ein am PC oder Raspberry Pi angeschlossenes Funkgerät mit einem Node-Dienst;
-> **«Remote-Station (Python-Host/-Agent)»** ([docs/REMOTE_STATION.md](docs/REMOTE_STATION.md), `remote-station/`, Seite `station.html`) für den koordinierenden HTTPS-Host, headless Python-Agenten und die Web-/Android-/iOS-Clients. Beide sind unabhängig (keine gemeinsamen Ports oder Konfiguration), und TX bleibt in beiden standardmäßig deaktiviert. Die Funkgerätekataloge und die FTX-1-CAT-Analyse existieren in beiden und wurden nicht vereinheitlicht.
+> **«Remote-Station (Python-Host/-Agent)»** ([docs/REMOTE_STATION.md](docs/i18n/de/REMOTE_STATION.md), `remote-station/`, Seite `station.html`) für den koordinierenden HTTPS-Host, headless Python-Agenten und die Web-/Android-/iOS-Clients. Beide sind unabhängig (keine gemeinsamen Ports oder Konfiguration), und TX bleibt in beiden standardmäßig deaktiviert. Die Funkgerätekataloge und die FTX-1-CAT-Analyse existieren in beiden und wurden nicht vereinheitlicht.
 
 Ein Agent neben dem Funkgerät steuert es per CAT mit Hamlib `rigctld` und stellt eine Webkonsole bereit (Smartphone, Tablet oder PC). `server.cjs` bleibt unverändert und hört weiterhin nur auf `127.0.0.1`.
 

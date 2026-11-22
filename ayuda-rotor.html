@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <meta name="description" content="Rotor AZ/EL Bricohams desde la app Android: ayuda de Bricohams por modelo y version.">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>Rotor AZ/EL Bricohams desde la app Android | Bricohams Radio Workspace</title>
+  <link rel="icon" href="bricohams-logo.png" type="image/png">
+  <link rel="stylesheet" href="styles.css">
+  <script src="appearance.js" defer></script>
+  <link rel="stylesheet" href="help-docs.css">
+  <link rel="alternate" hreflang="es" href="ayuda-rotor.html">
+  <link rel="alternate" hreflang="en-US" href="ayuda-rotor.en.html">
+  <link rel="alternate" hreflang="de" href="ayuda-rotor.de.html">
+  <link rel="alternate" hreflang="it" href="ayuda-rotor.it.html">
+  <link rel="alternate" hreflang="fr" href="ayuda-rotor.fr.html">
+</head>
+<body>
+  <a class="skip" href="#main">Saltar al contenido</a>
+  <main id="main" class="firmware-help">
+    <header><a href="index.html?lang=es"><img src="bricohams-logo.png" alt="Bricohams" width="240" height="89"></a>
+      <nav aria-label="Ayuda"><a href="ayuda-referencias.html">Documentacion y referencias</a> · <a href="ayuda-firmwares.html">Biblioteca de firmware</a> · <a href="ayuda-atlas-uv-k5-v3.html">Atlas UV-K5 V3</a> · <a href="quansheng.html?lang=es">Quansheng</a> · <a href="opengd77.html?lang=es">OpenGD77</a></nav>
+      <nav class="languages" aria-label="Idioma"><a href="ayuda-rotor.html" hreflang="es" lang="es" aria-current="page">Español</a> · <a href="ayuda-rotor.en.html" hreflang="en-US" lang="en-US">English (US)</a> · <a href="ayuda-rotor.de.html" hreflang="de" lang="de">Deutsch</a> · <a href="ayuda-rotor.it.html" hreflang="it" lang="it">Italiano</a> · <a href="ayuda-rotor.fr.html" hreflang="fr" lang="fr">Français</a></nav>
+    </header>
+    <nav class="panel" aria-label="Contenido de esta guia"><h2>En esta guia</h2><ul><li><a href="#requisitos">Requisitos</a></li><li><a href="#flujo-de-uso">Flujo de uso</a></li><li><a href="#avisos-del-plan">Avisos del plan</a></li><li><a href="#seguridad">Seguridad</a></li><li><a href="#detalles-tecnicos">Detalles técnicos</a></li><li><a href="#validacion">Validación</a></li></ul></nav>
+    <article class="panel"><h1 id="rotor-az-el-bricohams-desde-la-app-android">Rotor AZ/EL Bricohams desde la app Android</h1>
+<p>Integra la app Android con el rotor del proyecto hermano <a href="https://github.com/Brico-Hams/antenaSatCommrotor" target="_blank" rel="noopener noreferrer">Brico-Hams/antenaSatCommrotor</a> (ESP32 + dos motores paso a paso + finales de carrera). Juntos forman la estación de satélites Bricohams completa:</p>
+<pre><code> Satélites (SGP4, TLE, pases) ──► Rotor AZ/EL (ESP32, SGP4 propio) ──► antena
+          │                         ▲  Wi-Fi 192.168.4.1 o BLE seguro
+          └──► CAT USB (Doppler) ───┼──► radio Quansheng con firmware Bricohams
+                                    └── móvil: hora UTC, ubicación, norte (brújula), nivel</code></pre>
+<p>El móvil hace de <strong>GPS, reloj, brújula e inclinómetro</strong> del rotor, así que la estación no necesita esos módulos. El rotor sigue el pase con su propio SGP4 y sus limitadores de seguridad; la app lo prepara, lo arma y lo vigila mientras CAT corrige el Doppler de la radio en paralelo.</p>
+<h2 id="requisitos">Requisitos</h2>
+<ul>
+<li>Rotor con el firmware de antenaSatCommrotor <code>0.3.0-prototype</code> o posterior (API 2, integra el cambio de <a href="https://github.com/Brico-Hams/Radio-Web-install/blob/main/hardware/rotor/README.md" target="_blank" rel="noopener noreferrer">hardware/rotor</a>) para usar la hora del móvil. Con firmware anterior (API 1) la app funciona, pero la hora UTC debe venir del GNSS del rotor.</li>
+<li>Token de control configurado por USB en el rotor (24-128 caracteres) y, para BLE, el PIN de 6 dígitos del rotor.</li>
+<li>Ubicación configurada en Satélites › Ajustes (o la del pase seleccionado).</li>
+</ul>
+<h2 id="flujo-de-uso">Flujo de uso</h2>
+<ol>
+<li>En <strong>Satélites</strong>, abre un pase y pulsa <strong>Rotor AZ/EL: preparar y seguir este pase</strong>. La pantalla calcula la trayectoria (300 puntos) y la compara con la mecánica del rotor.</li>
+<li>Elige <strong>Wi-Fi del rotor</strong> (conéctate antes a su red; la app fuerza el tráfico por la Wi-Fi aunque no tenga internet) o <strong>Bluetooth seguro</strong> (empareja con el PIN la primera vez). Escribe el token y pulsa <strong>Conectar</strong>.</li>
+<li><strong>Homing</strong>: busca los finales de carrera de AZ y EL. Tras el homing la antena queda a EL 0° apuntando al <strong>corte de cable</strong> (AZ mecánico -180°).</li>
+<li>Antes de calibrar, la app indica <strong>hacia qué rumbo verdadero dejar el corte de cable</strong> para que el pase no lo cruce (mitad del arco del cielo que el pase no visita). Gira el trípode hacia ese rumbo.</li>
+<li><strong>Calibrar norte y nivel con el móvil</strong>: apoya el móvil plano sobre el boom, con la parte superior hacia los elementos. La app usa el vector de rotación, corrige la declinación magnética con el modelo WMM de Android y promedia las últimas lecturas; también comprueba que el móvil esté nivelado (±1°). Puedes escribir el azimut a mano si no hay brújula o hay metales cerca.</li>
+<li><strong>Preparar pase</strong>: envía hora UTC y ubicación, carga el TLE (solo ese satélite, id 0), lo selecciona y lleva la antena al punto de AOS.</li>
+<li><strong>Seguir automáticamente desde AOS</strong>: la app mantiene la pantalla encendida y, desde 1 s antes de AOS, pide <code>/api/track</code> cada 2 s. Si el rotor responde que la antena está a más de 15° (adquisición), la reapunta a donde estará el satélite y reintenta. Se desarma en LOS o si el rotor entra en fallo.</li>
+<li>Abre <strong>CAT</strong> en el mismo pase para el Doppler de la radio: ambos funcionan a la vez.</li>
+</ol>
+<p><strong>PARAR motores</strong> está siempre arriba y desarma el seguimiento automático.</p>
+<h2 id="avisos-del-plan">Avisos del plan</h2>
+<ul>
+<li><strong>Cable</strong>: el firmware se detiene si el azimut mecánico cruzaría ±180°. Con el rotor calibrado la app avisa y propone el nuevo rumbo del corte.</li>
+<li><strong>Velocidad</strong>: si el pase exige más °/s que el perfil del motor, el rotor se para cerca del máximo. El perfil <code>esp32_nema17</code> del firmware sube de 2,25 a ~5,9°/s.</li>
+<li><strong>Cénit</strong>: por encima de 89° el firmware detiene el seguimiento.</li>
+<li>Se muestra el porcentaje de pase que se puede seguir sin paradas.</li>
+</ul>
+<h2 id="seguridad">Seguridad</h2>
+<ul>
+<li>Ten a mano la seta de emergencia física: la app no la sustituye.</li>
+<li>Con BLE, si el enlace cae con el rotor en movimiento, el firmware entra en <strong>fallo</strong> a propósito; hay que <strong>Borrar fallo</strong>, repetir homing y calibrar.</li>
+<li>La hora enviada por la app vale <strong>10 minutos</strong>; mientras la pantalla del rotor esté abierta la app la reenvía cada 60 s. Si el rotor tiene GNSS válido, este tiene prioridad.</li>
+<li>Solo hay un dueño del movimiento: si otro cliente (web, BLE) controla el rotor, la app recibe 409 y lo muestra.</li>
+</ul>
+<h2 id="detalles-tecnicos">Detalles técnicos</h2>
+<div class="table-scroll"><table><thead><tr><th scope="col">Pieza</th><th scope="col">Archivo</th></tr></thead><tbody>
+<tr><td>Protocolo (JSON HTTP/BLE, tramas de 20 bytes, TLE 3LE)</td><td><code>android/.../RotorProtocol.kt</code></td></tr>
+<tr><td>Cliente tipado y transporte HTTP ligado a la Wi-Fi</td><td><code>RotorClient.kt</code></td></tr>
+<tr><td>Transporte BLE con emparejamiento cifrado (MITM)</td><td><code>RotorBle.kt</code></td></tr>
+<tr><td>Plan de cable, velocidad, cénit y corte sugerido</td><td><code>RotorPlanner.kt</code></td></tr>
+<tr><td>Brújula + nivel con declinación</td><td><code>RotorCompass.kt</code></td></tr>
+<tr><td>Pantalla</td><td><code>RotorActivity.kt</code></td></tr>
+</tbody></table></div>
+<ul>
+<li>HTTP en texto claro solo hacia <code>192.168.4.1</code> (<code>network_security_config.xml</code>); el resto de la app sigue exigiendo HTTPS. Cada petición lleva <code>X-Control-Token</code>.</li>
+<li>Permisos nuevos: <code>ACCESS_NETWORK_STATE</code>, <code>BLUETOOTH_SCAN</code> (sin ubicación), <code>BLUETOOTH_CONNECT</code> y, hasta Android 11, <code>BLUETOOTH</code>/<code>BLUETOOTH_ADMIN</code> y ubicación para escanear.</li>
+</ul>
+<h2 id="validacion">Validación</h2>
+<ul>
+<li>Pruebas host (Robolectric): <code>RotorTest</code> (tramas, reensamblado y preferencia de STOP, límites, TLE, estados API 1/2, cliente, planificador) y <code>RotorActivityTest</code> (conexión con transporte simulado, preparar pase, parar, errores) y el botón desde <code>SatelliteActivityTest</code>.</li>
+<li>Firmware <code>0.3.0-prototype</code>: <code>esp32</code> y <code>esp32_nema17</code> compilan con PlatformIO.</li>
+<li><strong>Pendiente</strong>: prueba con rotor físico, Wi-Fi y BLE reales y brújula de móvil real.</li>
+</ul></article>
+    <footer><p>Documento generado desde el Markdown versionado. Consulta las fuentes y limites de cada guia. <a href="ayuda-firmwares.html">Volver al indice</a>.</p></footer>
+  </main>
+</body>
+</html>

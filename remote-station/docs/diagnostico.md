@@ -19,7 +19,7 @@ fallos ni anonimato absoluto de IP/metadatos de conexión.
 | El arranque rechaza el token | Menos de 32 caracteres, caracteres no ASCII, espacios externos o token duplicado entre roles | Genera un secreto nuevo y asigna uno distinto por rol |
 | `401 unauthorized` | Falta el bearer token o no coincide | Envía `Authorization: Bearer <token>`; no lo pongas en una URL |
 | `403 forbidden` | El rol no permite esa ruta | Invitados solo leen capacidades; diagnóstico requiere admin/operador |
-| `/api/v1/devices` responde `503 station_agent_unavailable` | El agente local no está iniciado en `127.0.0.1:8788` | Inícialo con `py -3.12 -m bricoham_station_agent`; la UI seguirá funcionando sin el agente |
+| `/api/v1/devices` responde `503 station_agent_unavailable` | El agente local no está iniciado en `127.0.0.1:8791` | Inícialo con `py -3.12 -m bricoham_station_agent`; la UI seguirá funcionando sin el agente |
 | `405 method_not_allowed` | Se intentó un método no permitido | Radio/inventario solo lectura; únicamente logbook opt-in admite POST |
 | `/healthz` responde pero no hay estación real | El proceso solo expone simulación | El estado declara `data_is_simulated: true` y `hardware_connected: false` |
 | El catálogo indica `unsupported` para CAT/scope/audio/PTT | No existe implementación BricoHams de hardware | Consulta la ficha del modelo; no conectes RF ni habilites señales |

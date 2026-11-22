@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en-US">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <meta name="description" content="Review of karina-v3-k1 and integration into BricoHams (UV-5K V3): Bricohams help by model and version.">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>Review of karina-v3-k1 and integration into BricoHams (UV-5K V3) | Bricohams Radio Workspace</title>
+  <link rel="icon" href="bricohams-logo.png" type="image/png">
+  <link rel="stylesheet" href="styles.css">
+  <script src="appearance.js" defer></script>
+  <link rel="stylesheet" href="help-docs.css">
+  <link rel="alternate" hreflang="es" href="ayuda-karina-v3-k1.html">
+  <link rel="alternate" hreflang="en-US" href="ayuda-karina-v3-k1.en.html">
+  <link rel="alternate" hreflang="de" href="ayuda-karina-v3-k1.de.html">
+  <link rel="alternate" hreflang="it" href="ayuda-karina-v3-k1.it.html">
+  <link rel="alternate" hreflang="fr" href="ayuda-karina-v3-k1.fr.html">
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+  <main id="main" class="firmware-help">
+    <header><a href="index.html?lang=en-US"><img src="bricohams-logo.png" alt="Bricohams" width="240" height="89"></a>
+      <nav aria-label="Help"><a href="ayuda-referencias.en.html">Documentation and references</a> · <a href="ayuda-firmwares.en.html">Firmware library</a> · <a href="ayuda-atlas-uv-k5-v3.en.html">Atlas UV-K5 V3</a> · <a href="quansheng.html?lang=en-US">Quansheng</a> · <a href="opengd77.html?lang=en-US">OpenGD77</a></nav>
+      <nav class="languages" aria-label="Language"><a href="ayuda-karina-v3-k1.html" hreflang="es" lang="es">Español</a> · <a href="ayuda-karina-v3-k1.en.html" hreflang="en-US" lang="en-US" aria-current="page">English (US)</a> · <a href="ayuda-karina-v3-k1.de.html" hreflang="de" lang="de">Deutsch</a> · <a href="ayuda-karina-v3-k1.it.html" hreflang="it" lang="it">Italiano</a> · <a href="ayuda-karina-v3-k1.fr.html" hreflang="fr" lang="fr">Français</a></nav>
+    </header>
+    <nav class="panel" aria-label="Contents of this guide"><h2>In this guide</h2><ul><li><a href="#revision-upstream-registrada">Recorded upstream review</a></li><li><a href="#metodo-y-licencias">Method and licenses</a></li><li><a href="#inventario">Inventory</a></li><li><a href="#pruebas">Tests</a></li><li><a href="#compilacion-reproducible-spectrum-2026-11-04">Reproducible Spectrum build (2026-11-04)</a></li></ul></nav>
+    <article class="panel"><h1 id="revision-de-karina-v3-k1-e-integracion-en-bricohams-uv-5k-v3">Review of karina-v3-k1 and integration into BricoHams (UV-5K V3)</h1>
+<h2 id="revision-upstream-registrada">Recorded upstream review</h2>
+<div class="table-scroll"><table><thead><tr><th scope="col">Field</th><th scope="col">Value</th></tr></thead><tbody>
+<tr><td>Repository</td><td>https://github.com/autumn1rain/karina-v3-k1</td></tr>
+<tr><td>Revision (HEAD)</td><td><code>0f5dbcba599b3598e6d415352ef9fd234d2d2a79</code> (last push 2026-11-04)</td></tr>
+<tr><td>License</td><td>Apache-2.0</td></tr>
+<tr><td>Releases</td><td><code>v2026.11.02</code> (karina-v3/k1 <code>.bin</code> and <code>.packed.bin</code>, <code>calibration.bin</code>; “fix button lock fn1 fn2 by keyboard lock F”) and <code>v2026.10.30</code></td></tr>
+<tr><td>Declared base</td><td>fagci uv-k5 mod v1.2.1</td></tr>
+<tr><td>Contents</td><td>Only the README (5 languages), PDF manual, LICENSE and documentation site. <strong>There is no firmware source code.</strong></td></tr>
+</tbody></table></div>
+<h2 id="metodo-y-licencias">Method and licenses</h2>
+<p>Upstream does not publish sources, so no binary is copied or decompiled. The ported features are an independent reimplementation (clean-room) based on the behavior described in the public manual, on top of the F4HWN base already pinned in BricoHams. The new code is GPL-3.0-or-later (BricoHams); the Apache-2.0 notices of the base are preserved. autumn1rain/karina-v3-k1 (Apache-2.0) is credited as the origin of the functional ideas. The firmwares remain marked <code>derivedFromKarina:false</code>.</p>
+<h2 id="inventario">Inventory</h2>
+<div class="table-scroll"><table><thead><tr><th scope="col">Karina feature</th><th scope="col">Status in BricoHams</th><th scope="col">Reason</th></tr></thead><tbody>
+<tr><td>Scan lists, CTCSS/DCS scan</td><td>Exists</td><td>F4HWN <code>SCAN_SUBAUDIBLE</code>, scan lists</td></tr>
+<tr><td>Roger, scrambler, AFC, AM fix, LNA, rx_filt, STE</td><td>Exists</td><td>Present in the base</td></tr>
+<tr><td>Keyboard lock and side FN1/FN2 (fix v2026.11.02)</td><td>Exists</td><td><code>set_lck</code> / <code>SET_LCK_ACTIONS</code></td></tr>
+<tr><td>Spectrum with presets, blacklist, RX capture</td><td>Exists</td><td>Spectrum module</td></tr>
+<tr><td><strong>Built-in band presets</strong></td><td><strong>Ported</strong> (spectrum, key 2)</td><td>11 RX windows within 136–174 / 400–470 MHz</td></tr>
+<tr><td><strong>Loot (capture list)</strong></td><td><strong>Ported</strong> (spectrum, keys 1/7 in capture)</td><td>32 entries, no age; RX only</td></tr>
+<tr><td>Auto-beacons F+1/2/3, DCS→dBm table, PTT-Holder, randomizer</td><td>Incompatible</td><td>TX: conflicts with the RF limits; ARDF/Satellite/Spectrum disable the beacon</td></tr>
+<tr><td>Tx3k, DEV, 03t, c0db, SCR registers, F_Corr/PWR</td><td>Incompatible</td><td>They write calibration or RF registers</td></tr>
+<tr><td>Configuration presets 0/1/2, Sql2, FN1/FN2 map</td><td>Incompatible</td><td>They change the memory/prior configuration layout</td></tr>
+<tr><td>CB, 10 m, 7 m, 6 m, Air, Sat 240, Riv 300, LoRa, GSM, 23 cm presets</td><td>Incompatible</td><td>Outside the module&#39;s RX guard</td></tr>
+<tr><td>25/100 kHz steps in spectrum</td><td>Incompatible</td><td>The module supports 1.25/2.5/6.25/12.5 kHz and 128 bins</td></tr>
+<tr><td>Turbo, ECO, Mult, hybrid squelch, dynamic volume, modem, AM tone</td><td>Not ported</td><td>No flash/RAM margin (spectrum: 1364 B free) or undocumented algorithm</td></tr>
+<tr><td>Karina K1/V1 builds, own bootloader</td><td>Out of scope</td><td>Different hardware/bootloader</td></tr>
+</tbody></table></div>
+<p>The band windows use 128 bins at 12.5 kHz (6.25 kHz in PMR), not Karina&#39;s 80–160 steps at 25 kHz.</p>
+<h2 id="pruebas">Tests</h2>
+<p>Software (executed): <code>bands_loot_test</code>, <code>spectrum_adapter_test</code> (11-band cycle, RF limits, loot with dedupe, scroll and blacklist), <code>presets_test</code>, <code>spectrum_test</code> with <code>-Wall -Wextra -Wconversion -Werror</code>; <code>node --test tests/bricohams-build.test.cjs</code> (15/15); ARM GCC 13.3.1 build of the spectrum variant.</p>
+<p>Spectrum build: image 119,468 B (slot 120,832 B, 1,364 B free), RAM 13,600 B (2,784 B free). Calibration, RF limits and vectors unchanged; no new persistent writes.</p>
+<p>Pending on hardware (UV-5K V3): boot, LCD/keys, actual band and loot behavior. The fusion, labs, ardf and satellite variants do not include these sources and have not been rebuilt.</p>
+<h2 id="compilacion-reproducible-spectrum-2026-11-04">Reproducible Spectrum build (2026-11-04)</h2>
+<p>Two independent builds with <code>--preset FieldOps --module spectrum --option ENABLE_FEAT_F4HWN_BEACON=OFF</code> (ARM GCC 13.3.1, F4HWN base v6.1.0 <code>f556a96</code>, unpublished local Fusion61 sources) produced an identical <code>bricohams.fieldops.spectrum.v6.1.0.bin</code>: 120,284 B (slot 120,832 B, 548 B free), SHA-256 <code>CF5E8C52B9599D4CF68D1F003991D758A92B2FFD6BB4E30DFC090333261A8145</code>. The <code>.elf</code> and <code>build-info.json</code> also match. 11/11 firmware host tests passed. <strong>The binary is not in the signed catalog</strong>: there is no physical test on a UV-5K V3 and no CI signature. Published on 2026-11-05 only as an unsigned pre-release (<code>fw-spectrum-presets-v6.1.0</code>).</p>
+<p>Steps pending on a real radio (no blind flashing): 1) full backup of the radio with the Web Install F4HWN flow and verification of its CRC; 2) load the image only with a bootloader/Multiboot that supports the slot and with a recovery cable; 3) check boot, LCD/keys, key 2 (11 bands, RX only) and keys 1/7 in capture (Loot); 4) restore the backup and confirm F4HWN identification and automatic backup with a noisy UART frame.</p></article>
+    <footer><p class="translation-note">Translation of the Spanish original. If there is any discrepancy, the Spanish version prevails.</p><p>Document generated from the versioned Markdown. Check the sources and limits of each guide. <a href="ayuda-firmwares.en.html">Back to the index</a>.</p></footer>
+  </main>
+</body>
+</html>

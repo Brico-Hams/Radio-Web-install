@@ -109,7 +109,7 @@ $env:BRICOHAM_ADMIN_TOKEN = py -3.12 -c "import secrets; print(secrets.token_url
 py -3.12 -m bricoham_remote_station
 ```
 
-El coordinador usa `127.0.0.1:8787` por defecto. Otra interfaz requiere TLS
+El coordinador usa `127.0.0.1:8790` por defecto. Otra interfaz requiere TLS
 explícito según la guía de despliegue. El token vive solo en la sesión actual.
 
 En otra terminal, configura el mismo token e inicia el agente local:
@@ -119,21 +119,21 @@ $env:BRICOHAM_ADMIN_TOKEN = "<el mismo token admin>"
 py -3.12 -m bricoham_station_agent
 ```
 
-El agente usa por defecto `127.0.0.1:8788`, enumera interfaces serie sin abrirlas
+El agente usa por defecto `127.0.0.1:8791`, enumera interfaces serie sin abrirlas
 y no cambia RTS/DTR. La consola muestra las interfaces como no clasificadas; un
 puerto enumerado no se considera un puerto CAT.
 
-Con el build presente, abre `http://127.0.0.1:8787/`; el coordinador sirve la
+Con el build presente, abre `http://127.0.0.1:8790/`; el coordinador sirve la
 consola estática en el mismo origen. Para desarrollo con recarga en caliente,
 consulta [la guía de la consola web](apps/web-console/README.md).
 
 En otra terminal, consulta el servicio:
 
 ```powershell
-Invoke-RestMethod http://127.0.0.1:8787/healthz
-Invoke-RestMethod http://127.0.0.1:8787/api/v1/status `
+Invoke-RestMethod http://127.0.0.1:8790/healthz
+Invoke-RestMethod http://127.0.0.1:8790/api/v1/status `
   -Headers @{ Authorization = "Bearer $env:BRICOHAM_ADMIN_TOKEN" }
-Invoke-RestMethod http://127.0.0.1:8787/api/v1/capabilities `
+Invoke-RestMethod http://127.0.0.1:8790/api/v1/capabilities `
   -Headers @{ Authorization = "Bearer $env:BRICOHAM_ADMIN_TOKEN" }
 ```
 

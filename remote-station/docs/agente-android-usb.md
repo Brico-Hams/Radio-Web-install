@@ -27,7 +27,7 @@ usuario ni de diagnóstico. No introducir secretos en URLs o argumentos:
 ```powershell
 $env:BRICOHAM_ADMIN_TOKEN = "<token-usuario-distinto>"
 $env:BRICOHAM_ANDROID_AGENT_TOKEN = "<token-exclusivo-agente>"
-bricohams-station-host --host 0.0.0.0 --port 8787 --tls-cert host.crt --tls-key host.key --android-agent
+bricohams-station-host --host 0.0.0.0 --port 8790 --tls-cert host.crt --tls-key host.key --android-agent
 ```
 
 Se exige HTTPS incluso en loopback y no se combina con `--station-agent-url`.

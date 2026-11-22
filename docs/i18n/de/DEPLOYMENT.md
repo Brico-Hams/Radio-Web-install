@@ -9,7 +9,7 @@ Der offizielle öffentliche Einstiegspunkt ist <https://brico-hams.github.io/Rad
 - Node.js 22 oder neuer **nur für den Betrieb aus dem Quellcode, Arch und FreeBSD**. Die `.deb`-Pakete und das Windows-ZIP enthalten Node.
 - Git nur zum Klonen und Aktualisieren einer Quellcodeinstallation.
 - Chrome, Edge oder Brave auf dem Desktop für WebUSB/Web Serial. Firefox und Safari werden nicht unterstützt.
-- Die vom Funkgerät benötigten USB-Treiber: siehe [Hilfe › Treiber](../../../ayuda.html#drivers).
+- Die vom Funkgerät benötigten USB-Treiber: siehe [Hilfe › Treiber](../../../ayuda.de.html#drivers).
 
 ## Installation aus dem Quellcode
 
@@ -134,7 +134,7 @@ Die Installation benötigt root und verfügbare `pkg`-Repositorys, um bei Bedarf
 
 - Öffne <http://127.0.0.1:8787> immer im selben Browser und Profil: Sicherungen gehören zu diesem Origin, nicht zum Installationsordner. Das Kennzeichen muss **Lokal · installiert** anzeigen.
 - Die Starter starten den Server im Hintergrund; das Schließen des Tabs beendet ihn nicht. Automatischer Start bei der Anmeldung wird nicht eingerichtet. Aus dem Quellcode bleibt `npm start` im Terminal und wird mit `Ctrl+C` beendet.
-- Der Installer konfiguriert keine USB-Treiber oder Berechtigungen. Siehe [Hilfe › Treiber](../../../ayuda.html#drivers): gegebenenfalls WinUSB unter Windows, udev-Regeln und die Gruppe `dialout`/`uucp` je nach Linux-Distribution. Nach Gruppenänderungen neu anmelden und den Browser nicht als root ausführen.
+- Der Installer konfiguriert keine USB-Treiber oder Berechtigungen. Siehe [Hilfe › Treiber](../../../ayuda.de.html#drivers): gegebenenfalls WinUSB unter Windows, udev-Regeln und die Gruppe `dialout`/`uucp` je nach Linux-Distribution. Nach Gruppenänderungen neu anmelden und den Browser nicht als root ausführen.
 - Ist der Port belegt, identifiziere den Prozess vor dem Beenden. Unter Windows: `Get-NetTCPConnection -LocalPort 8787 -State Listen | Select-Object OwningProcess`, dann `Get-Process -Id <PID>` und nur beim Bricohams-Server `Stop-Process -Id <PID>`. Unter Linux `ss -lptn 'sport = :8787'`, unter FreeBSD `sockstat -4 -l`. Prüfe Befehl und Benutzer der PID und beende nur diesen Prozess mit `kill <PID>`.
 - Linux-/FreeBSD-Protokolle liegen in `${XDG_STATE_HOME:-$HOME/.local/state}/radicodex/server.log`. Bei Startproblemen unter Windows führe in PowerShell `& "$env:LOCALAPPDATA\Programs\RadiCodex\runtime\node.exe" "$env:LOCALAPPDATA\Programs\RadiCodex\app\server.cjs"` aus, um den Fehler zu sehen.
 - Für Oberfläche und Bearbeitung lokaler Dateien ist kein Internet nötig. Anbieterabfragen und Firmwaredownloads benötigen es.

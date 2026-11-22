@@ -10,25 +10,25 @@
       howtoText: "La app comprueba la firma Ed25519 del manifiesto, el SHA-256 y que el APK esté firmado con el mismo certificado que la instalada. Esta página repite la comprobación de la firma en tu navegador.",
       manifest: "Manifiesto firmado (radicodex-update.json)", valid: "Firma verificada", invalid: "Firma NO válida: no descargues este APK",
       unsupported: "Este navegador no puede comprobar Ed25519; la app sí lo hará antes de instalar.", missing: "Todavía no hay ninguna versión publicada.",
-      bytes: "bytes" },
+      bytes: "bytes", unavailable: "No se pudo cargar el manifiesto de actualización; comprueba tu conexión o consulta la página de versiones." },
     en: { title: "RadiCodex: latest release", loading: "Loading the signed manifest…", version: "Version", sha: "APK SHA-256",
       size: "Size", signature: "Manifest signature", download: "Download APK", notes: "What's new", howto: "How it is verified",
       howtoText: "The app checks the manifest's Ed25519 signature, the SHA-256 and that the APK is signed with the same certificate as the installed one. This page repeats the signature check in your browser.",
       manifest: "Signed manifest (radicodex-update.json)", valid: "Signature verified", invalid: "Signature NOT valid: do not download this APK",
       unsupported: "This browser cannot check Ed25519; the app will do it before installing.", missing: "No release has been published yet.",
-      bytes: "bytes" },
+      bytes: "bytes", unavailable: "The update manifest could not be loaded; check your connection or the releases page." },
     fr: { title: "RadiCodex : dernière version", loading: "Chargement du manifeste signé…", version: "Version", sha: "SHA-256 de l'APK",
       size: "Taille", signature: "Signature du manifeste", download: "Télécharger l'APK", notes: "Nouveautés", howto: "Comment c'est vérifié",
       howtoText: "L'application vérifie la signature Ed25519 du manifeste, le SHA-256 et que l'APK est signé avec le même certificat que celui installé. Cette page refait la vérification de la signature dans votre navigateur.",
       manifest: "Manifeste signé (radicodex-update.json)", valid: "Signature vérifiée", invalid: "Signature NON valide : ne téléchargez pas cet APK",
       unsupported: "Ce navigateur ne peut pas vérifier Ed25519 ; l'application le fera avant l'installation.", missing: "Aucune version n'est encore publiée.",
-      bytes: "octets" },
+      bytes: "octets", unavailable: "Le manifeste de mise à jour n'a pas pu être chargé ; vérifiez votre connexion ou la page des versions." },
     de: { title: "RadiCodex: neueste Version", loading: "Signiertes Manifest wird geladen…", version: "Version", sha: "SHA-256 der APK",
       size: "Größe", signature: "Manifest-Signatur", download: "APK herunterladen", notes: "Neuigkeiten", howto: "So wird geprüft",
       howtoText: "Die App prüft die Ed25519-Signatur des Manifests, den SHA-256 und dass die APK mit demselben Zertifikat wie die installierte signiert ist. Diese Seite wiederholt die Signaturprüfung in Ihrem Browser.",
       manifest: "Signiertes Manifest (radicodex-update.json)", valid: "Signatur verifiziert", invalid: "Signatur NICHT gültig: diese APK nicht herunterladen",
       unsupported: "Dieser Browser kann Ed25519 nicht prüfen; die App tut es vor der Installation.", missing: "Es wurde noch keine Version veröffentlicht.",
-      bytes: "Bytes" },
+      bytes: "Bytes", unavailable: "Das Update-Manifest konnte nicht geladen werden; prüfen Sie Ihre Verbindung oder die Versionsseite." },
   };
 
   // Must stay identical to canonical() in scripts/ota-manifest.cjs and OtaManifestParser.canonical in the app.
@@ -110,15 +110,15 @@
     apply();
     try {
       const response = await root.fetch("radicodex-update.json", { cache: "no-store", credentials: "omit", signal: AbortSignal.timeout(15000) });
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      if (!response.ok) throw Object.assign(new Error(`HTTP ${response.status}`), { status: response.status });
       const manifest = await response.json();
       if (manifest.package !== "org.bricohams.radicodex" || typeof manifest.apk?.sha256 !== "string") throw new Error("manifest");
       signed = manifest;
       statusKey = null;
       status = await verifyManifest(manifest);
       apply();
-    } catch (_) {
-      statusKey = "missing";
+    } catch (error) {
+      statusKey = error?.status === 404 ? "missing" : "unavailable";
       apply();
     }
   }

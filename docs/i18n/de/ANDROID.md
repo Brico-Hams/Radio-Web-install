@@ -410,7 +410,7 @@ die Rotorsteuerung von [antenaSatCommrotor](https://github.com/Brico-Hams/antena
 PIN-verschlüsseltes BLE. Das Telefon sendet UTC-Zeit, Standort, TLE und
 Nord-/Neigungskalibrierung per Kompass; die App warnt vor Kabelanschlag-Querungen,
 zu schnellen oder Zenit-Überflügen, fährt die Antenne zum AOS und aktiviert die
-automatische Nachführung, während CAT den Doppler korrigiert. Vollständige Anleitung in [ROTOR.md](../../ROTOR.md);
+automatische Nachführung, während CAT den Doppler korrigiert. Vollständige Anleitung in [ROTOR.md](ROTOR.md);
 Firmware-Patch und günstige Bauvariante in
 [hardware/rotor](../../../hardware/rotor/README.md). Nicht mit einem echten Rotor getestet.
 

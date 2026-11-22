@@ -20,7 +20,7 @@ al ordenador de estación. En Raspberry Pi/Linux/macOS usa `python3` en lugar de
 `py -3.12`. La portabilidad del archivo no certifica esos sistemas, adaptadores
 USB ni hardware ARM: su aceptación específica sigue pendiente.
 
-Por defecto escucha solo en `127.0.0.1:8788`, con CAT y WSJT-X desactivados.
+Por defecto escucha solo en `127.0.0.1:8791`, con CAT y WSJT-X desactivados.
 Las opciones de [CAT y WSJT-X](agente-cat-wsjtx.md) siguen siendo opt-in.
 También lo son [rotor](control-rotores.md), [ajustes por modelo](control-potencia-acoplador.md)
 y [audio RX](audio-rx.md). Este último requiere el extra de audio en el entorno
@@ -42,7 +42,7 @@ Los tokens se suministran por entorno o por el gestor de secretos del sistema:
 ```powershell
 # BRICOHAM_ADMIN_TOKEN: secreto administrativo propio del agente.
 # BRICOHAM_OPERATOR_TOKEN: secreto dedicado al enlace host-agente.
-py -3.12 .\bricoham-station-agent.pyz --host 192.168.10.20 --port 8788 `
+py -3.12 .\bricoham-station-agent.pyz --host 192.168.10.20 --port 8791 `
   --tls-cert C:\BricoHams\certs\agent-chain.pem --tls-key C:\BricoHams\certs\agent-key.pem
 ```
 
@@ -51,9 +51,9 @@ En el host:
 ```powershell
 # BRICOHAM_ADMIN_TOKEN y otros roles: secretos de los usuarios del host.
 # BRICOHAM_STATION_AGENT_TOKEN: mismo valor que el operador dedicado del agente.
-bricoham-coordinator --host 192.168.10.10 --port 8787 `
+bricoham-coordinator --host 192.168.10.10 --port 8790 `
   --tls-cert C:\BricoHams\certs\host-chain.pem --tls-key C:\BricoHams\certs\host-key.pem `
-  --station-agent-url https://station.example.org:8788 `
+  --station-agent-url https://station.example.org:8791 `
   --station-agent-ca C:\BricoHams\certs\station-ca.pem
 ```
 
@@ -66,7 +66,7 @@ enlace, no la identidad individual del usuario: la autorización del usuario
 permanece en el coordinador; no equivale a identidad individual distribuida.
 El mTLS opcional autentica además el equipo de enlace, como se explica abajo.
 
-Abre el cliente web en `https://host.example.org:8787/`. Las APIs exigen bearer
+Abre el cliente web en `https://host.example.org:8790/`. Las APIs exigen bearer
 y la consola mantiene los tokens solo en memoria. HTTP sin TLS solo se admite
 en IPv4 loopback; escuchar en otra IPv4 requiere certificado/clave explícitos.
 La salud del servicio sigue siendo pública, sin datos de estación.
@@ -141,7 +141,7 @@ instalador ejecutado ni validado en Raspberry Pi. Necesita:
 5. Copiar la unidad a `/etc/systemd/system/`, ejecutar
    `sudo systemctl daemon-reload` y `sudo systemctl enable --now bricoham-agent`.
 6. Comprobar `systemctl status bricoham-agent` y
-   `curl http://127.0.0.1:8788/healthz`. Inspeccionar fallos con
+   `curl http://127.0.0.1:8791/healthz`. Inspeccionar fallos con
    `journalctl -u bricoham-agent`.
 
 La plantilla no activa CAT, WSJT-X ni red remota. Configura esos argumentos con

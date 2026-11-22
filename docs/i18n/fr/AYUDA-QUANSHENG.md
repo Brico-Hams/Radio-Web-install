@@ -365,7 +365,7 @@ Chaque phase indique le critère de fin. Les phases 9 et 10 sont facultatives.
 | Phase | Action | Terminée lorsque | Détails |
 | --- | --- | --- | --- |
 | 0. Identifier | Étiquette sous la batterie, SysInf et version du bootloader | Vous savez s’il s’agit d’une UV-K5 V3, UV-K1 ou d’une autre révision | [Versions](ATLAS-UV-K5-V3.md#versions-et-identification) |
-| 1. Préparer le PC | Chrome ou Edge pour ordinateur, câble USB-C de données ou câble Kenwood, pilote | Le port apparaît et aucune autre application ne l’utilise | [Pilotes](../../../ayuda.html#drivers) et [USB](AYUDA-CONFIGURACION.md#connexion-usb-sans-confondre-les-modes) |
+| 1. Préparer le PC | Chrome ou Edge pour ordinateur, câble USB-C de données ou câble Kenwood, pilote | Le port apparaît et aucune autre application ne l’utilise | [Pilotes](../../../ayuda.fr.html#drivers) et [USB](AYUDA-CONFIGURACION.md#connexion-usb-sans-confondre-les-modes) |
 | 2. Sauvegardes | Étalonnage (512 octets), configuration et, si le firmware le permet, Flash complète | Vous avez les fichiers hors du navigateur avec leur SHA-256 | [Étalonnage](ATLAS-UV-K5-V3.md#calibration) |
 | 3. Choisir le firmware | Version et édition (Fusion, FieldOps, Transfer, Labs) correspondant au matériel | Fichier `.bin` téléchargé depuis la release officielle avec hash vérifié | [Éditions](#quelle-édition-choisir) et [versions](#matrice-des-versions-et-formats) |
 | 4. Flasher | Radio éteinte, PTT maintenu à l’allumage, UV Studio ou Bricohams Studio | L’outil confirme toutes les pages et la radio redémarre | [Bootloader](ATLAS-UV-K5-V3.md#bootloader-et-flashage) |

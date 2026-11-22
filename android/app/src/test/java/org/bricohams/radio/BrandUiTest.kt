@@ -121,6 +121,7 @@ class BrandUiTest {
             val nav = buttons.single { it.text == activity.getString(R.string.tab_logbook) }
             assertTrue(nav.performClick())
             assertTrue(nav.isSelected)
+            assertFalse(homeNav.isSelected)
             assertNotNull(activity.findViewById<EditText>(R.id.contact_call))
             val root = activity.findViewById<View>(android.R.id.content)
             root.measure(View.MeasureSpec.makeMeasureSpec(320, View.MeasureSpec.EXACTLY),

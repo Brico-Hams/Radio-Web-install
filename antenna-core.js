@@ -722,7 +722,7 @@
     { id: "ftx1", label: "Yaesu FTX-1", source: null, note: "Las fuentes del repositorio discrepan y no fijan los limites de TX (docs/FTX1-KNOWLEDGE.md)." },
     { id: "trusdx", label: "(tr)uSDX", source: null },
     { id: "qmx", label: "QRP Labs QMX / QMX+", source: null },
-    { id: "uvk5-th", label: "Kenwood TH-D75", source: null },
+    { id: "thd75", label: "Kenwood TH-D75", source: null },
     { id: "tk11", label: "TK11", source: null }
   );
   function bandsForRadio(id) {

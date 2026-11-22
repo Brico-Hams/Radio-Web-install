@@ -325,7 +325,7 @@ Die Phasen 9 und 10 sind optional.
 | Phase | Aufgabe | Abgeschlossen, wenn | Details |
 | --- | --- | --- | --- |
 | 0. Identifizieren | Aufkleber unter dem Akku, SysInf und Bootloader-Version | UV-K5 V3, UV-K1 oder andere Revision bekannt | [Versionen](ATLAS-UV-K5-V3.md#versionen-und-ihre-identifikation) |
-| 1. PC vorbereiten | Desktop-Chrome oder -Edge, USB-C-Datenkabel oder Kenwood-Kabel, Treiber | Anschluss erscheint und wird von keiner anderen App verwendet | [Treiber](../../../ayuda.html#drivers) und [USB](AYUDA-CONFIGURACION.md#usb-verbindung-betriebsarten-nicht-verwechseln) |
+| 1. PC vorbereiten | Desktop-Chrome oder -Edge, USB-C-Datenkabel oder Kenwood-Kabel, Treiber | Anschluss erscheint und wird von keiner anderen App verwendet | [Treiber](../../../ayuda.de.html#drivers) und [USB](AYUDA-CONFIGURACION.md#usb-verbindung-betriebsarten-nicht-verwechseln) |
 | 2. Sicherungen | Kalibrierung (512 Byte), Konfiguration und, sofern Firmware dies zulässt, vollständiger Flash | Dateien samt SHA-256 außerhalb des Browsers vorhanden | [Kalibrierung](ATLAS-UV-K5-V3.md#kalibrierung) |
 | 3. Firmware wählen | Version und Edition (Fusion, FieldOps, Transfer, Labs) für Hardware | `.bin` aus offiziellem Release heruntergeladen und Hash geprüft | [Editionen](#welche-edition-wählen) und [Versionen](#versions--und-formatmatrix) |
 | 4. Flashen | Funkgerät aus, PTT beim Einschalten gedrückt, UV Studio oder Bricohams Studio | Tool bestätigt alle Seiten und Funkgerät startet neu | [Bootloader](ATLAS-UV-K5-V3.md#bootloader-und-flashen) |

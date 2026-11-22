@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <meta name="description" content="Bricohams-AZ/EL-Rotor über die Android-App: Bricohams-Hilfe nach Modell und Version.">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>Bricohams-AZ/EL-Rotor über die Android-App | Bricohams Radio Workspace</title>
+  <link rel="icon" href="bricohams-logo.png" type="image/png">
+  <link rel="stylesheet" href="styles.css">
+  <script src="appearance.js" defer></script>
+  <link rel="stylesheet" href="help-docs.css">
+  <link rel="alternate" hreflang="es" href="ayuda-rotor.html">
+  <link rel="alternate" hreflang="en-US" href="ayuda-rotor.en.html">
+  <link rel="alternate" hreflang="de" href="ayuda-rotor.de.html">
+  <link rel="alternate" hreflang="it" href="ayuda-rotor.it.html">
+  <link rel="alternate" hreflang="fr" href="ayuda-rotor.fr.html">
+</head>
+<body>
+  <a class="skip" href="#main">Zum Inhalt springen</a>
+  <main id="main" class="firmware-help">
+    <header><a href="index.html?lang=de"><img src="bricohams-logo.png" alt="Bricohams" width="240" height="89"></a>
+      <nav aria-label="Hilfe"><a href="ayuda-referencias.de.html">Dokumentation und Referenzen</a> · <a href="ayuda-firmwares.de.html">Firmware-Bibliothek</a> · <a href="ayuda-atlas-uv-k5-v3.de.html">Atlas UV-K5 V3</a> · <a href="quansheng.html?lang=de">Quansheng</a> · <a href="opengd77.html?lang=de">OpenGD77</a></nav>
+      <nav class="languages" aria-label="Sprache"><a href="ayuda-rotor.html" hreflang="es" lang="es">Español</a> · <a href="ayuda-rotor.en.html" hreflang="en-US" lang="en-US">English (US)</a> · <a href="ayuda-rotor.de.html" hreflang="de" lang="de" aria-current="page">Deutsch</a> · <a href="ayuda-rotor.it.html" hreflang="it" lang="it">Italiano</a> · <a href="ayuda-rotor.fr.html" hreflang="fr" lang="fr">Français</a></nav>
+    </header>
+    <nav class="panel" aria-label="Inhalt dieser Anleitung"><h2>In dieser Anleitung</h2><ul><li><a href="#requisitos">Voraussetzungen</a></li><li><a href="#flujo-de-uso">Ablauf</a></li><li><a href="#avisos-del-plan">Warnungen des Plans</a></li><li><a href="#seguridad">Sicherheit</a></li><li><a href="#detalles-tecnicos">Technische Details</a></li><li><a href="#validacion">Validierung</a></li></ul></nav>
+    <article class="panel"><h1 id="rotor-az-el-bricohams-desde-la-app-android">Bricohams-AZ/EL-Rotor über die Android-App</h1>
+<p>Bindet die Android-App an den Rotor des Schwesterprojekts <a href="https://github.com/Brico-Hams/antenaSatCommrotor" target="_blank" rel="noopener noreferrer">Brico-Hams/antenaSatCommrotor</a> (ESP32 + zwei Schrittmotoren + Endschalter) an. Zusammen bilden sie die komplette Bricohams-Satellitenstation:</p>
+<pre><code> Satélites (SGP4, TLE, pases) ──► Rotor AZ/EL (ESP32, SGP4 propio) ──► antena
+          │                         ▲  Wi-Fi 192.168.4.1 o BLE seguro
+          └──► CAT USB (Doppler) ───┼──► radio Quansheng con firmware Bricohams
+                                    └── móvil: hora UTC, ubicación, norte (brújula), nivel</code></pre>
+<p>Das Smartphone dient als <strong>GPS, Uhr, Kompass und Neigungsmesser</strong> des Rotors, sodass die Station diese Module nicht braucht. Der Rotor verfolgt den Überflug mit seinem eigenen SGP4 und seinen Sicherheitsbegrenzern; die App bereitet ihn vor, schärft ihn scharf und überwacht ihn, während CAT den Doppler des Funkgeräts parallel korrigiert.</p>
+<h2 id="requisitos">Voraussetzungen</h2>
+<ul>
+<li>Rotor mit der Firmware von antenaSatCommrotor <code>0.3.0-prototype</code> oder neuer (API 2, enthält die Änderung aus <a href="https://github.com/Brico-Hams/Radio-Web-install/blob/main/hardware/rotor/README.md" target="_blank" rel="noopener noreferrer">hardware/rotor</a>), um die Uhrzeit des Smartphones zu nutzen. Mit älterer Firmware (API 1) funktioniert die App, aber die UTC-Zeit muss vom GNSS des Rotors kommen.</li>
+<li>Über USB am Rotor eingerichtetes Steuer-Token (24-128 Zeichen) und, für BLE, die 6-stellige PIN des Rotors.</li>
+<li>Standort in Satelliten › Einstellungen eingerichtet (oder der des ausgewählten Überflugs).</li>
+</ul>
+<h2 id="flujo-de-uso">Ablauf</h2>
+<ol>
+<li>Öffne unter <strong>Satelliten</strong> einen Überflug und tippe auf <strong>Rotor AZ/EL: diesen Überflug vorbereiten und verfolgen</strong>. Der Bildschirm berechnet die Bahn (300 Punkte) und vergleicht sie mit der Mechanik des Rotors.</li>
+<li>Wähle <strong>Rotor-WLAN</strong> (verbinde dich vorher mit seinem Netz; die App erzwingt den Datenverkehr über das WLAN, auch wenn es kein Internet hat) oder <strong>Sicheres Bluetooth</strong> (beim ersten Mal mit der PIN koppeln). Gib das Token ein und tippe auf <strong>Verbinden</strong>.</li>
+<li><strong>Homing</strong>: sucht die Endschalter von AZ und EL. Nach dem Homing steht die Antenne auf EL 0° und zeigt auf den <strong>Kabelschnitt</strong> (mechanisches AZ -180°).</li>
+<li>Vor dem Kalibrieren gibt die App an, <strong>auf welche wahre Peilung der Kabelschnitt gelegt werden soll</strong>, damit ihn der Überflug nicht kreuzt (Mitte des Himmelsbogens, den der Überflug nicht besucht). Drehe das Stativ in diese Richtung.</li>
+<li><strong>Norden und Wasserwaage mit dem Smartphone kalibrieren</strong>: Lege das Smartphone flach auf den Boom, die Oberseite zu den Elementen. Die App nutzt den Rotationsvektor, korrigiert die magnetische Missweisung mit dem WMM-Modell von Android und mittelt die letzten Messwerte; außerdem prüft sie, ob das Smartphone waagerecht liegt (±1°). Du kannst den Azimut von Hand eingeben, wenn es keinen Kompass gibt oder Metall in der Nähe ist.</li>
+<li><strong>Überflug vorbereiten</strong>: sendet UTC-Zeit und Standort, lädt das TLE (nur dieser Satellit, id 0), wählt ihn aus und fährt die Antenne zum AOS-Punkt.</li>
+<li><strong>Ab AOS automatisch verfolgen</strong>: Die App hält den Bildschirm eingeschaltet und fragt ab 1 s vor AOS alle 2 s <code>/api/track</code> ab. Antwortet der Rotor, dass die Antenne mehr als 15° abweicht (Erfassung), richtet sie die Antenne auf die Stelle neu aus, an der der Satellit sein wird, und versucht es erneut. Sie wird bei LOS oder bei einem Rotorfehler entschärft.</li>
+<li>Öffne <strong>CAT</strong> im selben Überflug für den Doppler des Funkgeräts: Beides läuft gleichzeitig.</li>
+</ol>
+<p><strong>Motoren STOPP</strong> ist immer oben und entschärft die automatische Verfolgung.</p>
+<h2 id="avisos-del-plan">Warnungen des Plans</h2>
+<ul>
+<li><strong>Kabel</strong>: Die Firmware hält an, wenn der mechanische Azimut ±180° überschreiten würde. Bei kalibriertem Rotor warnt die App und schlägt die neue Peilung des Schnitts vor.</li>
+<li><strong>Geschwindigkeit</strong>: Verlangt der Überflug mehr °/s als das Motorprofil, hält der Rotor nahe am Maximum an. Das Profil <code>esp32_nema17</code> der Firmware steigt von 2,25 auf ~5,9°/s.</li>
+<li><strong>Zenit</strong>: Oberhalb von 89° stoppt die Firmware die Verfolgung.</li>
+<li>Es wird der Prozentsatz des Überflugs angezeigt, der ohne Stopps verfolgt werden kann.</li>
+</ul>
+<h2 id="seguridad">Sicherheit</h2>
+<ul>
+<li>Halte den physischen Not-Aus griffbereit: Die App ersetzt ihn nicht.</li>
+<li>Bricht bei BLE die Verbindung ab, während sich der Rotor bewegt, geht die Firmware absichtlich in <strong>Fehler</strong>; du musst den <strong>Fehler löschen</strong>, das Homing wiederholen und kalibrieren.</li>
+<li>Die von der App gesendete Uhrzeit gilt <strong>10 Minuten</strong>; solange der Rotor-Bildschirm geöffnet ist, sendet die App sie alle 60 s erneut. Hat der Rotor ein gültiges GNSS, hat dieses Vorrang.</li>
+<li>Es gibt nur einen Besitzer der Bewegung: Steuert ein anderer Client (Web, BLE) den Rotor, erhält die App 409 und zeigt es an.</li>
+</ul>
+<h2 id="detalles-tecnicos">Technische Details</h2>
+<div class="table-scroll"><table><thead><tr><th scope="col">Baustein</th><th scope="col">Datei</th></tr></thead><tbody>
+<tr><td>Protokoll (JSON HTTP/BLE, 20-Byte-Frames, TLE 3LE)</td><td><code>android/.../RotorProtocol.kt</code></td></tr>
+<tr><td>Typisierter Client und an das WLAN gebundener HTTP-Transport</td><td><code>RotorClient.kt</code></td></tr>
+<tr><td>BLE-Transport mit verschlüsselter Kopplung (MITM)</td><td><code>RotorBle.kt</code></td></tr>
+<tr><td>Plan für Kabel, Geschwindigkeit, Zenit und vorgeschlagenen Schnitt</td><td><code>RotorPlanner.kt</code></td></tr>
+<tr><td>Kompass + Wasserwaage mit Missweisung</td><td><code>RotorCompass.kt</code></td></tr>
+<tr><td>Bildschirm</td><td><code>RotorActivity.kt</code></td></tr>
+</tbody></table></div>
+<ul>
+<li>HTTP im Klartext nur zu <code>192.168.4.1</code> (<code>network_security_config.xml</code>); der Rest der App verlangt weiterhin HTTPS. Jede Anfrage trägt <code>X-Control-Token</code>.</li>
+<li>Neue Berechtigungen: <code>ACCESS_NETWORK_STATE</code>, <code>BLUETOOTH_SCAN</code> (ohne Standort), <code>BLUETOOTH_CONNECT</code> und, bis Android 11, <code>BLUETOOTH</code>/<code>BLUETOOTH_ADMIN</code> sowie Standort zum Scannen.</li>
+</ul>
+<h2 id="validacion">Validierung</h2>
+<ul>
+<li>Host-Tests (Robolectric): <code>RotorTest</code> (Frames, Wiederzusammensetzung und Vorrang von STOPP, Grenzen, TLE, API-1/2-Zustände, Client, Planer) und <code>RotorActivityTest</code> (Verbindung mit simuliertem Transport, Überflug vorbereiten, stoppen, Fehler) sowie die Schaltfläche aus <code>SatelliteActivityTest</code>.</li>
+<li>Firmware <code>0.3.0-prototype</code>: <code>esp32</code> und <code>esp32_nema17</code> lassen sich mit PlatformIO kompilieren.</li>
+<li><strong>Ausstehend</strong>: Test mit physischem Rotor, echtem WLAN und BLE sowie echtem Smartphone- Kompass.</li>
+</ul></article>
+    <footer><p class="translation-note">Übersetzung des spanischen Originals. Bei Abweichungen gilt die spanische Fassung.</p><p>Aus dem versionierten Markdown erzeugtes Dokument. Beachte die Quellen und Grenzen jeder Anleitung. <a href="ayuda-firmwares.de.html">Zurück zum Index</a>.</p></footer>
+  </main>
+</body>
+</html>

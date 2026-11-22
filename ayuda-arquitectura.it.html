@@ -151,6 +151,22 @@
 <li><strong>kotlin:S1313 (LOW)</strong> — <code>android/app/src/main/java/org/bricohams/radio/RotorProtocol.kt:14</code>. <code>AP_HOST = &quot;192.168.4.1&quot;</code> è l&#39;indirizzo di fabbrica dell&#39;access point del rotore ESP32; spostarlo nella configurazione romperebbe la connessione predefinita.</li>
 <li><strong>kotlin:S2245 (MEDIUM)</strong> — <code>android/app/src/test/java/org/bricohams/radio/FtxEnhancedDecoderTest.kt:59</code>. È un test unitario con seme fisso <code>Random(7)</code> per riprodurre lo schema di errori; non è un contesto di sicurezza e <code>SecureRandom</code> renderebbe il test non deterministico.</li>
 <li><strong>kotlin:S7204 (HIGH)</strong> — <code>android/app/build.gradle.kts:52</code>. Attivare <code>isMinifyEnabled</code> richiede regole ProGuard/R8 (non esiste alcun <code>proguard-rules.pro</code>) e verificare su un dispositivo che reflection/JSON/BLE funzionino ancora; non è garantibile senza prove fisiche. Decisione: creare le regole keep e provare un APK release minificato.</li>
+</ul>
+<h3 id="corregido-sonarqube-2026-11-14">Corretto (SonarQube 2026-11-14)</h3>
+<ul>
+<li><strong>kotlin:S1143:</strong> il <code>throw</code> dentro <code>finally</code> è rimosso in <code>RigActivity</code> e <code>SstvTransmit</code>.</li>
+<li><strong>kotlin:S899:</strong> il risultato di <code>delete</code> ora è controllato in <code>OtaPlatform</code> e <code>SatelliteCatalog</code>.</li>
+<li><strong>java:S3034 / java:S2184:</strong> aritmetica <code>byte</code>/<code>long</code> corretta (cast espliciti e maschere prima dell&#39;operazione) in <code>Osd174</code>, <code>FtxFrames</code>, <code>FtxReceiver</code>, <code>Unpack77</code> e <code>Ldpc174</code>.</li>
+<li><strong>JS S2871:</strong> i comparatori di <code>sort</code> ora sono espliciti.</li>
+<li><strong>JS S9383:</strong> le promise fluttuanti sono attese o gestite.</li>
+<li><strong>JS S6324:</strong> i caratteri di controllo sono rimossi dalle espressioni regolari.</li>
+<li><strong>JS S6544:</strong> l&#39;uso improprio delle promise è corretto.</li>
+<li><strong>JS S1143:</strong> il <code>throw</code> dentro <code>finally</code> è rimosso in <code>quansheng-factory</code>.</li>
+<li><strong>JS S7727:</strong> i callback di <code>map</code> sono corretti.</li>
+<li><strong>xml:S6358 / xml:S5332:</strong> il manifest del flavor fdroid dichiara <code>android:allowBackup=&quot;false&quot;</code> e <code>android:usesCleartextTraffic=&quot;false&quot;</code>.</li>
+<li><strong>JS S4036:</strong> il <code>PATH</code> di build è attendibile; marcato con <code>NOSONAR</code>.</li>
+<li><strong>kotlin:S2245:</strong> l&#39;RNG a seme fisso dei test è deterministico di proposito; marcato con <code>NOSONAR</code>.</li>
+<li><strong>kotlin:S7204:</strong> R8 resta come <code>TODO</code> (in attesa di regole keep e prove su dispositivo).</li>
 </ul></article>
     <footer><p class="translation-note">Traduzione dell&#39;originale spagnolo. In caso di discrepanza prevale la versione spagnola.</p><p>Documento generato dal Markdown versionato. Consulta le fonti e i limiti di ogni guida. <a href="ayuda-firmwares.it.html">Torna all&#39;indice</a>.</p></footer>
   </main>

@@ -10,7 +10,10 @@ require("../custom-firmware-ui.js");
 
 const root = path.join(__dirname, "..");
 const sha = bytes => createHash("sha256").update(bytes).digest("hex");
-const sourceDirectories = new Set([".github", "docs", "firmware", "android", "installers", "scripts", "tests", "data", "branding", "remote-station"]);
+const sourceDirectories = new Set([".github", "docs", "firmware", "android", "installers", "scripts", "tests", "data", "branding", "remote-station", "templates"]);
+// Runtime files only; data/third-party/ (gitignored third-party references) and other vendored material stay out.
+const runtimeData = /^data\/(?:satellites\.config\.json|remote-station-catalog\.json|firmware-catalog-fallback\.json|world-land-110m\.txt|channel-templates\/[A-Za-z-]+\.json)$/;
+const icomRuntime = /^third_party\/icom-custom-firmware\/(?:LICENSE|docs\/js\/(?:worker|md5|codec|patch)\.js|docs\/patches\/[\w.-]+\.json)$/;
 const privateName = /^(?:\.env(?:\..*)?|node_modules|\.git|\.vscode|\.gradle|\.kotlin|\.venv|__pycache__|\.ruff_cache|\.pytest_cache|\.mypy_cache|.+\.egg-info|build|local\.properties|dist|firmware-builds|coverage|tmp)$/i;
 const privateFile = /(?:\.bin|\.apk|\.aab|\.jks|\.keystore|\.g77|\.rwb\.json|\.provenance\.json|\.log|\.jsonl(?:\.tmp)?|\.sqlite3(?:-wal|-shm|-journal)?|\.tle|\.pem|\.key|\.p12|\.pfx|\.bundle|\.pyc|\.pyo|\.pyz|\.whl)$/i;
 
@@ -29,7 +32,8 @@ function projectSource(name) {
   const parts = name.split("/");
   if (parts.some(part => privateName.test(part)) || privateFile.test(name)) return false;
   if (name === "studio.html") return false;
-  if (parts[0] === "data") return name === "data/satellites.config.json" || name === "data/remote-station-catalog.json";
+  if (parts[0] === "data") return runtimeData.test(name);
+  if (parts[0] === "third_party") return icomRuntime.test(name);
   return parts.length === 1 ? /^(?:LICENSE|\.gitignore)$|\.(?:md|js|cjs|mjs|mts|json|html|css|png)$/.test(name) :
     sourceDirectories.has(parts[0]);
 }

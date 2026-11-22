@@ -9,6 +9,8 @@ dependencies = ["pyserial==3.5", "wsproto==1.3.2", "h11==0.16.0"]
 audio = ["sounddevice==0.5.3"]
 
 [project.scripts]
+# Canonical names: bricohams-station-host / bricohams-station-agent.
+# bricoham-coordinator / bricoham-station-agent are kept as aliases for backwards compatibility.
 bricohams-station-host = "bricoham_remote_station.server:main"
 bricohams-station-agent = "bricoham_station_agent.server:main"
 bricoham-coordinator = "bricoham_remote_station.server:main"

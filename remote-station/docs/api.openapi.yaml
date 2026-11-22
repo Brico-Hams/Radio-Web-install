@@ -8,8 +8,8 @@ info:
     las otras operaciones físicas devuelven 501 android_agent_operation_unsupported,
     sin fallback al agente Python. Véase agente-android-usb.md.
 servers:
-  - url: http://127.0.0.1:8787
-  - url: https://host.example.org:8787
+  - url: http://127.0.0.1:8790
+  - url: https://host.example.org:8790
     description: TLS explícito; CORS solo para orígenes HTTPS/Capacitor configurados.
 paths:
   /api/v1/android-agent/connect:
@@ -545,7 +545,7 @@ paths:
     get:
       operationId: getDeviceInventory
       description: >
-        Proxy de solo lectura al agente local 127.0.0.1:8788. Requiere rol
+        Proxy de solo lectura al agente local 127.0.0.1:8791. Requiere rol
         admin u operador. Las interfaces se devuelven sin clasificar y no se abren.
       security:
         - bearerAuth: []

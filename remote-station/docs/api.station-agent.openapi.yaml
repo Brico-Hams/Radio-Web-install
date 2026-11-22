@@ -6,8 +6,8 @@ info:
     Inventario local, CAT serie experimental opt-in, recepción pasiva WSJT-X y rotor rotctld.
     El inventario no abre puertos. CAT requiere modelo/puerto/baud explícitos.
 servers:
-  - url: http://127.0.0.1:8788
-  - url: https://station.example.org:8788
+  - url: http://127.0.0.1:8791
+  - url: https://station.example.org:8791
     description: Requiere certificado/clave explícitos, TLS y cortafuegos configurados.
 paths:
   /api/v1/audio/tx:

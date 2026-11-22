@@ -384,7 +384,7 @@ via son Wi-Fi (`192.168.4.1`, seule destination HTTP sans TLS autorisée) ou via
 BLE chiffré par PIN. Le téléphone envoie l'heure UTC, la position, les TLE et la
 calibration nord/niveau avec sa boussole ; l'app signale les franchissements de butée de câble,
 les passages trop rapides ou zénithaux, amène l'antenne à l'AOS et arme le suivi
-automatique pendant que CAT corrige le Doppler. Guide complet dans [ROTOR.md](../../ROTOR.md) ;
+automatique pendant que CAT corrige le Doppler. Guide complet dans [ROTOR.md](ROTOR.md) ;
 patch du firmware et version économique dans
 [hardware/rotor](../../../hardware/rotor/README.md). Non testé avec un rotor physique.
 

@@ -9,7 +9,7 @@ The official public entry point is <https://brico-hams.github.io/Radio-Web-insta
 - Node.js 22 or later **only for running from source, Arch, and FreeBSD**. The `.deb` packages and Windows ZIP include Node.
 - Git only for cloning and updating an installation from source.
 - Desktop Chrome, Edge, or Brave, for WebUSB/Web Serial. Firefox and Safari are not supported.
-- The USB drivers required by the radio: see [Help › Drivers](../../../ayuda.html#drivers).
+- The USB drivers required by the radio: see [Help › Drivers](../../../ayuda.en.html#drivers).
 
 ## Installing from source
 
@@ -134,7 +134,7 @@ Installation needs root and available `pkg` repositories to install `node22` if 
 
 - Always open <http://127.0.0.1:8787> in the same browser and profile: backups belong to that origin, not the installation folder. The badge should show **Local · installed**.
 - Launchers start the server in the background; closing the tab does not stop it. No automatic startup at login is configured. From source, `npm start` stays in the terminal and is stopped with `Ctrl+C`.
-- The installer does not configure USB drivers or permissions. See [Help › Drivers](../../../ayuda.html#drivers): WinUSB where applicable on Windows; udev rules and the `dialout`/`uucp` group depending on the Linux distribution. Log out and back in after changing groups, and do not run the browser as root.
+- The installer does not configure USB drivers or permissions. See [Help › Drivers](../../../ayuda.en.html#drivers): WinUSB where applicable on Windows; udev rules and the `dialout`/`uucp` group depending on the Linux distribution. Log out and back in after changing groups, and do not run the browser as root.
 - If the port is occupied, identify the process before stopping it. On Windows: `Get-NetTCPConnection -LocalPort 8787 -State Listen | Select-Object OwningProcess`, then `Get-Process -Id <PID>` and, only if it is the Bricohams server, `Stop-Process -Id <PID>`. On Linux use `ss -lptn 'sport = :8787'`; on FreeBSD, `sockstat -4 -l`. Confirm the PID's command and user, and stop only that process with `kill <PID>`.
 - Linux/FreeBSD logs are in `${XDG_STATE_HOME:-$HOME/.local/state}/radicodex/server.log`. On Windows, if startup fails, run `& "$env:LOCALAPPDATA\Programs\RadiCodex\runtime\node.exe" "$env:LOCALAPPDATA\Programs\RadiCodex\app\server.cjs"` from PowerShell to see the error.
 - Internet access is not needed to serve the interface and edit local files. Provider queries and firmware downloads do require it.

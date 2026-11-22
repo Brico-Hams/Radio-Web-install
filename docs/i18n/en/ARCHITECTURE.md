@@ -145,13 +145,13 @@ Before any write, the backup is reread and compared with the hashes in the permi
 - **kotlin:S1143:** the `throw` inside `finally` is removed in `RigActivity` and `SstvTransmit`.
 - **kotlin:S899:** the result of `delete` is now checked in `OtaPlatform` and `SatelliteCatalog`.
 - **java:S3034 / java:S2184:** `byte`/`long` arithmetic fixed (explicit casts and masks before operating) in `Osd174`, `FtxFrames`, `FtxReceiver`, `Unpack77` and `Ldpc174`.
-- **javascript:S2871:** `sort` comparators are now explicit.
-- **javascript:S9383:** floating promises are awaited or handled.
-- **javascript:S6324:** control characters are removed from regular expressions.
-- **javascript:S6544:** promise misuse is fixed.
-- **javascript:S1143:** the `throw` inside `finally` is removed in `quansheng-factory`.
-- **javascript:S7727:** `map` callbacks are fixed.
+- **JS S2871:** `sort` comparators are now explicit.
+- **JS S9383:** floating promises are awaited or handled.
+- **JS S6324:** control characters are removed from regular expressions.
+- **JS S6544:** promise misuse is fixed.
+- **JS S1143:** the `throw` inside `finally` is removed in `quansheng-factory`.
+- **JS S7727:** `map` callbacks are fixed.
 - **xml:S6358 / xml:S5332:** the fdroid flavor manifest declares `android:allowBackup="false"` and `android:usesCleartextTraffic="false"`.
-- **javascript:S4036:** the build `PATH` is trusted; marked with `NOSONAR`.
+- **JS S4036:** the build `PATH` is trusted; marked with `NOSONAR`.
 - **kotlin:S2245:** the seeded test RNG is deterministic on purpose; marked with `NOSONAR`.
 - **kotlin:S7204:** R8 is left as a `TODO` (pending keep rules and on-device tests).

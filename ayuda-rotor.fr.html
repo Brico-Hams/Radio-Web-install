@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <meta name="description" content="Rotor AZ/EL Bricohams depuis l&#39;application Android: aide Bricohams par modèle et version.">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>Rotor AZ/EL Bricohams depuis l&#39;application Android | Bricohams Radio Workspace</title>
+  <link rel="icon" href="bricohams-logo.png" type="image/png">
+  <link rel="stylesheet" href="styles.css">
+  <script src="appearance.js" defer></script>
+  <link rel="stylesheet" href="help-docs.css">
+  <link rel="alternate" hreflang="es" href="ayuda-rotor.html">
+  <link rel="alternate" hreflang="en-US" href="ayuda-rotor.en.html">
+  <link rel="alternate" hreflang="de" href="ayuda-rotor.de.html">
+  <link rel="alternate" hreflang="it" href="ayuda-rotor.it.html">
+  <link rel="alternate" hreflang="fr" href="ayuda-rotor.fr.html">
+</head>
+<body>
+  <a class="skip" href="#main">Aller au contenu</a>
+  <main id="main" class="firmware-help">
+    <header><a href="index.html?lang=fr"><img src="bricohams-logo.png" alt="Bricohams" width="240" height="89"></a>
+      <nav aria-label="Aide"><a href="ayuda-referencias.fr.html">Documentation et références</a> · <a href="ayuda-firmwares.fr.html">Bibliothèque de firmware</a> · <a href="ayuda-atlas-uv-k5-v3.fr.html">Atlas UV-K5 V3</a> · <a href="quansheng.html?lang=fr">Quansheng</a> · <a href="opengd77.html?lang=fr">OpenGD77</a></nav>
+      <nav class="languages" aria-label="Langue"><a href="ayuda-rotor.html" hreflang="es" lang="es">Español</a> · <a href="ayuda-rotor.en.html" hreflang="en-US" lang="en-US">English (US)</a> · <a href="ayuda-rotor.de.html" hreflang="de" lang="de">Deutsch</a> · <a href="ayuda-rotor.it.html" hreflang="it" lang="it">Italiano</a> · <a href="ayuda-rotor.fr.html" hreflang="fr" lang="fr" aria-current="page">Français</a></nav>
+    </header>
+    <nav class="panel" aria-label="Contenu de ce guide"><h2>Dans ce guide</h2><ul><li><a href="#requisitos">Prérequis</a></li><li><a href="#flujo-de-uso">Déroulement d&#39;utilisation</a></li><li><a href="#avisos-del-plan">Avertissements du plan</a></li><li><a href="#seguridad">Sécurité</a></li><li><a href="#detalles-tecnicos">Détails techniques</a></li><li><a href="#validacion">Validation</a></li></ul></nav>
+    <article class="panel"><h1 id="rotor-az-el-bricohams-desde-la-app-android">Rotor AZ/EL Bricohams depuis l&#39;application Android</h1>
+<p>Intègre l&#39;application Android au rotor du projet frère <a href="https://github.com/Brico-Hams/antenaSatCommrotor" target="_blank" rel="noopener noreferrer">Brico-Hams/antenaSatCommrotor</a> (ESP32 + deux moteurs pas à pas + fins de course). Ensemble, ils forment la station satellite Bricohams complète :</p>
+<pre><code> Satélites (SGP4, TLE, pases) ──► Rotor AZ/EL (ESP32, SGP4 propio) ──► antena
+          │                         ▲  Wi-Fi 192.168.4.1 o BLE seguro
+          └──► CAT USB (Doppler) ───┼──► radio Quansheng con firmware Bricohams
+                                    └── móvil: hora UTC, ubicación, norte (brújula), nivel</code></pre>
+<p>Le mobile joue le rôle de <strong>GPS, d&#39;horloge, de boussole et d&#39;inclinomètre</strong> du rotor, de sorte que la station n&#39;a pas besoin de ces modules. Le rotor suit le passage avec son propre SGP4 et ses limiteurs de sécurité ; l&#39;application le prépare, l&#39;arme et le surveille pendant que CAT corrige le Doppler de la radio en parallèle.</p>
+<h2 id="requisitos">Prérequis</h2>
+<ul>
+<li>Rotor avec le firmware d&#39;antenaSatCommrotor <code>0.3.0-prototype</code> ou ultérieur (API 2, intègre la modification de <a href="https://github.com/Brico-Hams/Radio-Web-install/blob/main/hardware/rotor/README.md" target="_blank" rel="noopener noreferrer">hardware/rotor</a>) pour utiliser l&#39;heure du mobile. Avec un firmware plus ancien (API 1), l&#39;application fonctionne, mais l&#39;heure UTC doit provenir du GNSS du rotor.</li>
+<li>Jeton de contrôle configuré par USB sur le rotor (24-128 caractères) et, pour le BLE, le code PIN à 6 chiffres du rotor.</li>
+<li>Position configurée dans Satellites › Réglages (ou celle du passage sélectionné).</li>
+</ul>
+<h2 id="flujo-de-uso">Déroulement d&#39;utilisation</h2>
+<ol>
+<li>Dans <strong>Satellites</strong>, ouvre un passage et appuie sur <strong>Rotor AZ/EL : préparer et suivre ce passage</strong>. L&#39;écran calcule la trajectoire (300 points) et la compare à la mécanique du rotor.</li>
+<li>Choisis <strong>Wi-Fi du rotor</strong> (connecte-toi d&#39;abord à son réseau ; l&#39;application force le trafic par le Wi-Fi même sans internet) ou <strong>Bluetooth sécurisé</strong> (appaire avec le PIN la première fois). Saisis le jeton et appuie sur <strong>Connecter</strong>.</li>
+<li><strong>Homing</strong> : cherche les fins de course d&#39;AZ et d&#39;EL. Après le homing, l&#39;antenne reste à EL 0° pointée vers la <strong>coupure de câble</strong> (AZ mécanique -180°).</li>
+<li>Avant de calibrer, l&#39;application indique <strong>vers quel cap vrai placer la coupure de câble</strong> pour que le passage ne la franchisse pas (moitié de l&#39;arc de ciel que le passage ne visite pas). Tourne le trépied vers ce cap.</li>
+<li><strong>Calibrer le nord et le niveau avec le mobile</strong> : pose le mobile à plat sur le boom, le haut vers les éléments. L&#39;application utilise le vecteur de rotation, corrige la déclinaison magnétique avec le modèle WMM d&#39;Android et fait la moyenne des dernières mesures ; elle vérifie aussi que le mobile est de niveau (±1°). Tu peux saisir l&#39;azimut à la main s&#39;il n&#39;y a pas de boussole ou s&#39;il y a des métaux à proximité.</li>
+<li><strong>Préparer le passage</strong> : envoie l&#39;heure UTC et la position, charge le TLE (uniquement ce satellite, id 0), le sélectionne et amène l&#39;antenne au point d&#39;AOS.</li>
+<li><strong>Suivre automatiquement dès l&#39;AOS</strong> : l&#39;application garde l&#39;écran allumé et, à partir de 1 s avant l&#39;AOS, demande <code>/api/track</code> toutes les 2 s. Si le rotor répond que l&#39;antenne est à plus de 15° (acquisition), elle la repointe là où sera le satellite et réessaie. Elle se désarme au LOS ou si le rotor passe en défaut.</li>
+<li>Ouvre <strong>CAT</strong> sur le même passage pour le Doppler de la radio : les deux fonctionnent en même temps.</li>
+</ol>
+<p><strong>ARRÊT moteurs</strong> est toujours en haut et désarme le suivi automatique.</p>
+<h2 id="avisos-del-plan">Avertissements du plan</h2>
+<ul>
+<li><strong>Câble</strong> : le firmware s&#39;arrête si l&#39;azimut mécanique franchissait ±180°. Avec le rotor calibré, l&#39;application avertit et propose le nouveau cap de la coupure.</li>
+<li><strong>Vitesse</strong> : si le passage exige plus de °/s que le profil du moteur, le rotor s&#39;arrête près du maximum. Le profil <code>esp32_nema17</code> du firmware passe de 2,25 à ~5,9°/s.</li>
+<li><strong>Zénith</strong> : au-dessus de 89°, le firmware arrête le suivi.</li>
+<li>Le pourcentage du passage qui peut être suivi sans arrêts est affiché.</li>
+</ul>
+<h2 id="seguridad">Sécurité</h2>
+<ul>
+<li>Garde à portée de main le bouton d&#39;arrêt d&#39;urgence physique : l&#39;application ne le remplace pas.</li>
+<li>Avec le BLE, si la liaison tombe alors que le rotor est en mouvement, le firmware passe en <strong>défaut</strong> volontairement ; il faut <strong>Effacer le défaut</strong>, répéter le homing et calibrer.</li>
+<li>L&#39;heure envoyée par l&#39;application est valable <strong>10 minutes</strong> ; tant que l&#39;écran du rotor est ouvert, l&#39;application la renvoie toutes les 60 s. Si le rotor a un GNSS valide, celui-ci est prioritaire.</li>
+<li>Il n&#39;y a qu&#39;un seul maître du mouvement : si un autre client (web, BLE) contrôle le rotor, l&#39;application reçoit 409 et l&#39;affiche.</li>
+</ul>
+<h2 id="detalles-tecnicos">Détails techniques</h2>
+<div class="table-scroll"><table><thead><tr><th scope="col">Élément</th><th scope="col">Fichier</th></tr></thead><tbody>
+<tr><td>Protocole (JSON HTTP/BLE, trames de 20 octets, TLE 3LE)</td><td><code>android/.../RotorProtocol.kt</code></td></tr>
+<tr><td>Client typé et transport HTTP lié au Wi-Fi</td><td><code>RotorClient.kt</code></td></tr>
+<tr><td>Transport BLE avec appairage chiffré (MITM)</td><td><code>RotorBle.kt</code></td></tr>
+<tr><td>Plan de câble, vitesse, zénith et coupure suggérée</td><td><code>RotorPlanner.kt</code></td></tr>
+<tr><td>Boussole + niveau avec déclinaison</td><td><code>RotorCompass.kt</code></td></tr>
+<tr><td>Écran</td><td><code>RotorActivity.kt</code></td></tr>
+</tbody></table></div>
+<ul>
+<li>HTTP en clair uniquement vers <code>192.168.4.1</code> (<code>network_security_config.xml</code>) ; le reste de l&#39;application continue d&#39;exiger HTTPS. Chaque requête porte <code>X-Control-Token</code>.</li>
+<li>Nouvelles permissions : <code>ACCESS_NETWORK_STATE</code>, <code>BLUETOOTH_SCAN</code> (sans localisation), <code>BLUETOOTH_CONNECT</code> et, jusqu&#39;à Android 11, <code>BLUETOOTH</code>/<code>BLUETOOTH_ADMIN</code> et la localisation pour scanner.</li>
+</ul>
+<h2 id="validacion">Validation</h2>
+<ul>
+<li>Tests hôte (Robolectric) : <code>RotorTest</code> (trames, réassemblage et priorité du STOP, limites, TLE, états API 1/2, client, planificateur) et <code>RotorActivityTest</code> (connexion avec transport simulé, préparer le passage, arrêter, erreurs) et le bouton depuis <code>SatelliteActivityTest</code>.</li>
+<li>Firmware <code>0.3.0-prototype</code> : <code>esp32</code> et <code>esp32_nema17</code> compilent avec PlatformIO.</li>
+<li><strong>En attente</strong> : test avec un rotor physique, un Wi-Fi et un BLE réels et une boussole de mobile réelle.</li>
+</ul></article>
+    <footer><p class="translation-note">Traduction de l&#39;original espagnol. En cas de divergence, la version espagnole fait foi.</p><p>Document généré à partir du Markdown versionné. Consultez les sources et les limites de chaque guide. <a href="ayuda-firmwares.fr.html">Retour à l&#39;index</a>.</p></footer>
+  </main>
+</body>
+</html>

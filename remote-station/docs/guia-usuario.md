@@ -14,7 +14,7 @@ comandos para Windows, Linux/macOS/Raspberry Pi, sin ejecutarlos ni activar TX.
 
 Consulta [el arranque local del README](../README.md#arranque-local-powershell).
 El servidor escucha en loopback y exige un token para los datos de estación.
-Después de compilar el frontend, abre `http://127.0.0.1:8787/`, introduce el token
+Después de compilar el frontend, abre `http://127.0.0.1:8790/`, introduce el token
 en el formulario y pulsa **Conectar**. El token solo se mantiene en memoria de la
 pestaña; **Actualizar datos** vuelve a consultar la API y **Desconectar** borra
 el estado de sesión local.

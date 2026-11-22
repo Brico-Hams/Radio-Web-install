@@ -144,13 +144,13 @@ Antes de cualquier escritura se relee la copia y se compara con los hashes del p
 - **kotlin:S1143:** se elimina el `throw` dentro de `finally` en `RigActivity` y `SstvTransmit`.
 - **kotlin:S899:** se comprueba el resultado de `delete` en `OtaPlatform` y `SatelliteCatalog`.
 - **java:S3034 / java:S2184:** aritmética de `byte`/`long` corregida (conversión explícita y máscaras antes de operar) en `Osd174`, `FtxFrames`, `FtxReceiver`, `Unpack77` y `Ldpc174`.
-- **javascript:S2871:** los comparadores de `sort` ahora son explícitos.
-- **javascript:S9383:** las promesas flotantes se esperan o se gestionan.
-- **javascript:S6324:** se eliminan los caracteres de control de las expresiones regulares.
-- **javascript:S6544:** se corrige el uso indebido de promesas.
-- **javascript:S1143:** se elimina el `throw` dentro de `finally` en `quansheng-factory`.
-- **javascript:S7727:** se corrigen los callbacks de `map`.
+- **JS S2871:** los comparadores de `sort` ahora son explícitos.
+- **JS S9383:** las promesas flotantes se esperan o se gestionan.
+- **JS S6324:** se eliminan los caracteres de control de las expresiones regulares.
+- **JS S6544:** se corrige el uso indebido de promesas.
+- **JS S1143:** se elimina el `throw` dentro de `finally` en `quansheng-factory`.
+- **JS S7727:** se corrigen los callbacks de `map`.
 - **xml:S6358 / xml:S5332:** el manifiesto del flavor fdroid declara `android:allowBackup="false"` y `android:usesCleartextTraffic="false"`.
-- **javascript:S4036:** el `PATH` de compilación es de confianza; se marca con `NOSONAR`.
+- **JS S4036:** el `PATH` de compilación es de confianza; se marca con `NOSONAR`.
 - **kotlin:S2245:** el RNG con semilla de los tests es determinista a propósito; se marca con `NOSONAR`.
 - **kotlin:S7204:** R8 se deja como `TODO` (pendiente de reglas keep y pruebas en dispositivo).

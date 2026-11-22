@@ -42,7 +42,13 @@ const pages = Object.freeze({
   "ARCHITECTURE.md": "ayuda-arquitectura.html",
   "BRANDING.md": "ayuda-marca.html",
   "DECISIONS.md": "ayuda-decisiones.html",
-  "DEPLOYMENT.md": "ayuda-despliegue.html"
+  "DEPLOYMENT.md": "ayuda-despliegue.html",
+  "REMOTE_STATION.md": "ayuda-estacion-remota.html",
+  "DIAGNOSTICS.md": "ayuda-diagnostico.html",
+  "ROTOR.md": "ayuda-rotor.html",
+  "APRS-CHAT-RADIOS.md": "ayuda-aprs-chat-radios.html",
+  "KARINA-V3-K1-INTEGRACION.md": "ayuda-karina-v3-k1.html",
+  "TK11-INGENIERIA.md": "ayuda-tk11.html"
 });
 // Spanish is the original; the other languages are translations kept in docs/i18n/<lang>/ with the same file names.
 const LANGS = Object.freeze(["es", "en", "de", "it", "fr"]);

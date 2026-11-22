@@ -191,7 +191,7 @@ test("advisor suggestions carry the number they come from", () => {
 test("band filter returns only repository-sourced bands and pendiente de fuente otherwise", () => {
   const none = A.bandsForRadio("");
   assert.equal(none.status, "none"); assert.equal(none.bands.length, 0);
-  for (const id of ["ftx1", "trusdx", "qmx", "tk11"]) {
+  for (const id of ["ftx1", "trusdx", "qmx", "thd75", "tk11"]) {
     const info = A.bandsForRadio(id);
     assert.equal(info.status, "pending"); assert.equal(info.message, "pendiente de fuente"); assert.equal(info.bands.length, 0);
   }

@@ -377,7 +377,7 @@ over its Wi-Fi (`192.168.4.1`, the only allowed plain HTTP destination) or over
 PIN-encrypted BLE. The phone sends UTC time, location, TLE and north/level
 calibration from its compass; the app warns about cable-stop crossings, passes
 that are too fast or overhead, moves the antenna to AOS and arms automatic
-tracking while CAT corrects Doppler. Full guide in [ROTOR.md](../../ROTOR.md);
+tracking while CAT corrects Doppler. Full guide in [ROTOR.md](ROTOR.md);
 firmware patch and low-cost build in
 [hardware/rotor](../../../hardware/rotor/README.md). Not tested with a physical rotor.
 

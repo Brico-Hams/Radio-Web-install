@@ -254,8 +254,8 @@ class MainActivity : LocalizedActivity() {
         content.removeAllViews()
         val colors = Brand.Palette(this)
         navigation.forEach { (name, button) ->
-            // ARDF and Morse are reached from Home, so Inicio stays selected while they are open.
-            val active = name == tab || (name == TAB_HOME && (tab == TAB_ARDF || tab == TAB_MORSE))
+            // Only the open tab is highlighted: Inicio is not kept selected while ARDF, Morse or another tab is open.
+            val active = name == tab
             button.isSelected = active
             button.setTextColor(if (active) colors.onAccent else colors.text)
             button.background = BrandUi.interactive(this,

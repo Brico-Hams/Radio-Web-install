@@ -300,7 +300,7 @@ function App() {
                 <>
                   <label htmlFor="coordinator-url">{t('host')}</label>
                   <input id="coordinator-url" type="url" required
-                    autoComplete="off" placeholder="https://estacion.example.org:8787"
+                    autoComplete="off" placeholder="https://estacion.example.org:8790"
                     value={serverInput} onChange={(event) => setServerInput(event.target.value)} />
                 </>
               ) : null}

@@ -264,6 +264,15 @@
     ["Seguimiento CAT de satelites", "CAT satellite tracking", "Suivi CAT des satellites", "CAT-Satellitenverfolgung"],
     ["/ Satelites", "/ Satellites", "/ Satellites", "/ Satelliten"],
     ["/ Radios", "/ Radios", "/ Radios", "/ Funkgeräte"],
+    ["/ Antenas", "/ Antennas", "/ Antennes", "/ Antennen"],
+    ["/ Inicio", "/ Home", "/ Accueil", "/ Start"],
+    ["/ Estacion / Herramientas de radio", "/ Station / Radio tools", "/ Station / Outils radio", "/ Station / Funk-Werkzeuge"],
+    ["/ Estación remota (host/agente Python)", "/ Remote station (Python host/agent)", "/ Station distante (hôte/agent Python)", "/ Remote-Station (Python-Host/-Agent)"],
+    ["/ Ayuda y soporte", "/ Help and support", "/ Aide et assistance", "/ Hilfe und Support"],
+    ["/ AnyTone Beta", "/ AnyTone Beta", "/ AnyTone Bêta", "/ AnyTone Beta"],
+    ["/ Yaesu FTX-1", "/ Yaesu FTX-1", "/ Yaesu FTX-1", "/ Yaesu FTX-1"],
+    ["/ Icom transversores", "/ Icom transverters", "/ Transverters Icom", "/ Icom-Transverter"],
+    ["/ Remote shack", "/ Remote shack", "/ Remote shack", "/ Remote Shack"],
     ["Proximo pase", "Next pass", "Prochain passage", "Nächster Überflug"],
     ["Calculando el proximo pase...", "Calculating the next pass...", "Calcul du prochain passage...", "Nächster Überflug wird berechnet..."],
     ["Configura tu ubicacion para ver el proximo pase.", "Set your location to see the next pass.", "Configurez votre position pour voir le prochain passage.", "Lege deinen Standort fest, um den nächsten Überflug zu sehen."],
@@ -1589,7 +1598,6 @@ Se borrara el firmware de la ranura {0}, NO sus ajustes.|The firmware in slot {0
   // Icom transverter firmware page (icom.html, icom-ui.js).
   entries.push(...`
 Icom transversores|Icom transverters|Transverters Icom|Icom-Transverter
-/ Icom transversores|/ Icom transverters|/ Transverters Icom|/ Icom-Transverter
 SIN PROBAR|UNTESTED|NON TESTÉ|UNGETESTET
 Prepara el firmware personalizado IC-705 / IC-9700 en tu navegador.|Prepare the IC-705 / IC-9700 custom firmware in your browser.|Préparez le firmware personnalisé IC-705 / IC-9700 dans votre navigateur.|Bereite die Custom-Firmware für IC-705 / IC-9700 in deinem Browser vor.
 Abrir la pagina Icom|Open the Icom page|Ouvrir la page Icom|Icom-Seite öffnen
@@ -1859,7 +1867,6 @@ Introduce una ganancia de antena valida.|Enter a valid antenna gain.|Saisissez u
 Introduce una frecuencia valida mayor que 0 MHz.|Enter a valid frequency greater than 0 MHz.|Saisissez une fréquence valide supérieure à 0 MHz.|Gib eine gültige Frequenz größer als 0 MHz ein.
 El factor de velocidad debe estar entre 0,5 y 1.|The velocity factor must be between 0.5 and 1.|Le facteur de vitesse doit être compris entre 0,5 et 1.|Der Verkürzungsfaktor muss zwischen 0,5 und 1 liegen.
 Region IARU no valida (1, 2 o 3).|Invalid IARU region (1, 2 or 3).|Région IARU non valide (1, 2 ou 3).|Ungültige IARU-Region (1, 2 oder 3).
-/ Estacion / Herramientas de radio|/ Station / Radio tools|/ Station / Outils radio|/ Station / Funkwerkzeuge
 Herramientas de estacion|Station tools|Outils de station|Stationswerkzeuge
 Esta herramienta esta en la app de escritorio RadiCodex y en la app Android.|This tool is in the RadiCodex desktop app and the Android app.|Cet outil se trouve dans l’application de bureau RadiCodex et dans l’application Android.|Dieses Werkzeug gibt es in der RadiCodex-Desktop-App und in der Android-App.
 Convierte coordenadas en locator Maidenhead y al reves.|Converts coordinates to a Maidenhead locator and back.|Convertit des coordonnées en locator Maidenhead et inversement.|Wandelt Koordinaten in einen Maidenhead-Locator um und zurück.

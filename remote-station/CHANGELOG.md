@@ -2,6 +2,11 @@
 
 ## No publicado — Consola web local
 
+- Puertos por defecto movidos para evitar colisiones con Workspace de escritorio
+  (`server.cjs`, 8787) y el agente Node `remote-station.cjs` (8788): el host/coordinador
+  Python pasa de 8787 a 8790 y el agente Python de 8788 a 8791. Quien dependa
+  de los valores anteriores debe pasar `--port` explícito.
+
 - Ayuda original ES/EN/FR/PT: diez temas, índices y manuales completos
   generados desde una fuente común; descarga offline y comprobación reproducible.
   Conexión, navegación y asistentes locales de configuración de agente/host

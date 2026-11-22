@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <meta name="description" content="Chat APRS sur les radios prises en charge par RadiCodex: aide Bricohams par modèle et version.">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>Chat APRS sur les radios prises en charge par RadiCodex | Bricohams Radio Workspace</title>
+  <link rel="icon" href="bricohams-logo.png" type="image/png">
+  <link rel="stylesheet" href="styles.css">
+  <script src="appearance.js" defer></script>
+  <link rel="stylesheet" href="help-docs.css">
+  <link rel="alternate" hreflang="es" href="ayuda-aprs-chat-radios.html">
+  <link rel="alternate" hreflang="en-US" href="ayuda-aprs-chat-radios.en.html">
+  <link rel="alternate" hreflang="de" href="ayuda-aprs-chat-radios.de.html">
+  <link rel="alternate" hreflang="it" href="ayuda-aprs-chat-radios.it.html">
+  <link rel="alternate" hreflang="fr" href="ayuda-aprs-chat-radios.fr.html">
+</head>
+<body>
+  <a class="skip" href="#main">Aller au contenu</a>
+  <main id="main" class="firmware-help">
+    <header><a href="index.html?lang=fr"><img src="bricohams-logo.png" alt="Bricohams" width="240" height="89"></a>
+      <nav aria-label="Aide"><a href="ayuda-referencias.fr.html">Documentation et références</a> · <a href="ayuda-firmwares.fr.html">Bibliothèque de firmware</a> · <a href="ayuda-atlas-uv-k5-v3.fr.html">Atlas UV-K5 V3</a> · <a href="quansheng.html?lang=fr">Quansheng</a> · <a href="opengd77.html?lang=fr">OpenGD77</a></nav>
+      <nav class="languages" aria-label="Langue"><a href="ayuda-aprs-chat-radios.html" hreflang="es" lang="es">Español</a> · <a href="ayuda-aprs-chat-radios.en.html" hreflang="en-US" lang="en-US">English (US)</a> · <a href="ayuda-aprs-chat-radios.de.html" hreflang="de" lang="de">Deutsch</a> · <a href="ayuda-aprs-chat-radios.it.html" hreflang="it" lang="it">Italiano</a> · <a href="ayuda-aprs-chat-radios.fr.html" hreflang="fr" lang="fr" aria-current="page">Français</a></nav>
+    </header>
+    <nav class="panel" aria-label="Contenu de ce guide"><h2>Dans ce guide</h2><ul><li><a href="#estado-por-radio">État par radio</a></li><li><a href="#rt-950-pro-transmision">RT-950 Pro : émission</a></li><li><a href="#seguridad-de-transmision">Sécurité de l&#39;émission</a></li><li><a href="#pendiente-de-fuente">Source en attente</a></li><li><a href="#pruebas-en-radio">Tests sur radio</a></li><li><a href="#diagnostico-final-rt-950-pro-2026-11-14">Diagnostic final RT-950 Pro (2026-11-14)</a></li></ul></nav>
+    <article class="panel"><h1 id="chat-aprs-en-las-radios-que-soporta-radicodex">Chat APRS sur les radios prises en charge par RadiCodex</h1>
+<p>État du chat APRS (écran <strong>Chat APRS</strong> du menu principal). Le chat ne parle que <strong>KISS</strong> : il utilise <code>Aprs.kt</code> (<code>Kiss</code>, <code>KissDecoder</code>, <code>Ax25Frame</code>, <code>AprsText</code>, <code>AprsMessenger</code>) sur un <code>KissLink</code> (<code>KissLink.kt</code>). Une radio sans APRS/KISS accessible depuis l&#39;application <strong>n&#39;est pas simulée</strong> et n&#39;apparaît pas comme source du chat. Le même tableau est affiché dans l&#39;application (<code>AprsChatRadios.kt</code>).</p>
+<p>Liaisons disponibles :</p>
+<ul>
+<li><strong>RT-950 Pro (KISS par BLE)</strong> : <code>Rt950BleKissLink</code>, sur <code>BleRt950Transport</code> (<code>ffe1</code>). Comportement des trames identique à celui d&#39;avant l&#39;extraction du chat de <code>Rt950Activity</code>.</li>
+<li><strong>KISS TCP (TNC externe)</strong> : <code>TcpKissLink</code>, socket TCP non chiffré vers un hôte et un port saisis par l&#39;utilisateur (Direwolf, un pont TNC). C&#39;est la voie générique pour les radios sans KISS natif ; la radio est gérée par ce TNC, pas par RadiCodex. Délai de connexion 5 s, lecture avec délai d&#39;attente de 500 ms, socket fermé en quittant l&#39;écran.</li>
+</ul>
+<h2 id="estado-por-radio">État par radio</h2>
+<div class="table-scroll"><table><thead><tr><th scope="col">radio</th><th scope="col">voie APRS/KISS</th><th scope="col">état</th><th scope="col">source</th></tr></thead><tbody>
+<tr><td>Radtel RT-950 Pro, réception</td><td>KISS par BLE (<code>ffe1</code>), avec les options « KISS TNC over BLE (RX)/(TX) » activées dans la radio</td><td>en attente de test sur radio</td><td>le texte <code>strings_rt950.xml:57</code> la donne pour vérifiée, mais il n&#39;existe aucun test enregistré de cette version sur une radio ; <code>Rt950Ble.kt:23-27</code> ; <code>ACKNOWLEDGEMENTS.md:34</code></td></tr>
+<tr><td>Radtel RT-950 Pro, émission RF</td><td>KISS par BLE</td><td><strong>désactivée par défaut (blocage du firmware)</strong> ; uniquement avec l&#39;interrupteur « TX expérimental » (Avancé)</td><td><code>strings_rt950.xml:57</code> (TX « INFÉRENCE non vérifiée ») ; lalmonte/radiochat-aprs@9c7b092 ; erkanz/radtel-RT950PRO@51c84d4 ; SP3ARK/Radtel-950-Pro-Bluetooth-Programmator@a8bb41a <code>README.md:235-238</code> ; incident du 2026-11-12</td></tr>
+<tr><td>N&#39;importe quelle radio + TNC KISS externe</td><td>KISS par TCP</td><td>en attente de test sur radio</td><td><code>KissLink.kt</code> (<code>TcpKissLink</code>) ; test unitaire avec <code>ServerSocket</code> dans <code>AprsChatTest.kt</code> (ce n&#39;est pas un test sur radio)</td></tr>
+<tr><td>Quansheng UV-K5 / BricoHams Satellite</td><td>aucune dans RadiCodex (clonage/CAT)</td><td>non pris en charge</td><td><code>Diagnostics.kt:12</code></td></tr>
+<tr><td>Quansheng UV-K10 Pro</td><td>aucune ; APRS uniquement comme plan de firmware, sans firmware</td><td>non pris en charge</td><td><code>docs/UV-K10-PRO-VIABILIDAD.md:7,55</code></td></tr>
+<tr><td>Quansheng TK-11</td><td>aucune (clonage sur le web)</td><td>non pris en charge</td><td><code>docs/TK11-INGENIERIA.md</code> (sans APRS/KISS)</td></tr>
+<tr><td>OpenGD77 (GD-77, GD-77S, DM-1801, RD-5R, MD-9600, MD-UV380, MD-380, DM-1701, MD-2017, DM-32, UV008)</td><td>uniquement une balise APRS FM en TX dans le firmware ; sans réception AX.25 ni TNC</td><td>non pris en charge</td><td><code>OpenGd77.kt:25-38</code> ; <code>docs/AYUDA-OPENGD77.md:384-386</code></td></tr>
+<tr><td>AnyTone D878</td><td>aucune ; uniquement un modèle de canaux</td><td>non pris en charge</td><td><code>ChannelTemplates.kt:39,265</code> ; <code>docs/AYUDA-ANYTONE.md</code></td></tr>
+<tr><td>Yaesu FT-817/818/857/897</td><td>uniquement CAT</td><td>non pris en charge</td><td><code>RigCat.kt:15-18</code></td></tr>
+<tr><td>Yaesu FTX-1</td><td>uniquement CAT dans RadiCodex</td><td>non pris en charge</td><td><code>RigCat.kt:21</code> ; <code>Diagnostics.kt:13</code></td></tr>
+<tr><td>Icom IC-705 (CI-V)</td><td>uniquement CAT dans RadiCodex</td><td>non pris en charge</td><td><code>RigCat.kt:19</code></td></tr>
+<tr><td>(tr)uSDX, QRP Labs QMX/QMX+ et QDX/QDX-M</td><td>uniquement CAT (HF)</td><td>non pris en charge</td><td><code>RigCat.kt:23-26</code></td></tr>
+</tbody></table></div>
+<p>« Non pris en charge » signifie que RadiCodex n&#39;a aujourd&#39;hui aucune voie APRS/KISS pour cette radio, et non que le matériel ne dispose pas d&#39;APRS. Si le matériel propose son propre TNC KISS (par exemple par Bluetooth ou USB), RadiCodex ne l&#39;atteint pas : <strong>source en attente</strong>. Avec un TNC externe en réseau, on utilise la voie TCP.</p>
+<h2 id="rt-950-pro-transmision">RT-950 Pro : émission</h2>
+<ul>
+<li>Le fait que l&#39;écriture BLE soit confirmée <strong>ne prouve pas</strong> que la radio émette en RF. L&#39;émission doit être confirmée avec un <strong>second récepteur</strong>.</li>
+<li>Selon le README de <a href="https://github.com/lalmonte/radiochat-aprs/tree/9c7b092" target="_blank" rel="noopener noreferrer">lalmonte/radiochat-aprs@9c7b092</a>, certains firmwares acceptent l&#39;écriture KISS sans activer le PTT.</li>
+<li><a href="https://github.com/erkanz/radtel-RT950PRO/tree/51c84d4" target="_blank" rel="noopener noreferrer">erkanz/radtel-RT950PRO@51c84d4</a> signale une TX fonctionnelle avec une v0.29 patchée.</li>
+<li>Les deux README sont cités tels que la commande les a mentionnés ; RadiCodex n&#39;a vérifié ni leur contenu ni leurs licences (<strong>source en attente</strong> ; aucun code n&#39;est réutilisé).</li>
+<li>Le chat n&#39;écrit pas dans la mémoire de la radio. Les canaux 961–990 (<code>0x7800–0x7BFF</code>) restent protégés comme l&#39;indique <code>docs/RADTEL-RT950-PRO.md</code>.</li>
+</ul>
+<h2 id="seguridad-de-transmision">Sécurité de l&#39;émission</h2>
+<ul>
+<li>Avant chaque envoi, l&#39;application affiche un avertissement indiquant que le message <strong>sera émis en RF</strong>, avec l&#39;origine, le destinataire, le texte et la note de la liaison, et exige une confirmation.</li>
+<li>L&#39;indicatif propre est obligatoire et validé avec <code>Ax25Address.isValid</code> (1–6 caractères A–Z/0–9, SSID 0–15). L&#39;accusé de réception automatique (ack) est également désactivé sans indicatif valide.</li>
+<li>Sans ack, <code>AprsMessenger</code> renvoie jusqu&#39;à 3 fois toutes les 30 s (<code>Aprs.kt</code>).</li>
+<li>Limites déjà présentes dans le dépôt : texte de 1 à 67 caractères ASCII sans <code>{ | ~</code> (<code>AprsText</code>), chemin de jusqu&#39;à 8 répéteurs (<code>Ax25Frame.encode</code>).</li>
+<li>Limites de la liaison RT-950 Pro, selon le README de erkanz/radtel-RT950PRO@51c84d4 (elles ne sont pas dans le dépôt) : maximum 182 octets AX.25, 6 répéteurs et 127 octets d&#39;information. Elles sont appliquées dans <code>Rt950BleKissLink</code> (<code>Ax25Limits.RT950</code>). Pour un TNC TCP générique, seule la limite de 8 répéteurs s&#39;applique ; autres limites : <strong>source en attente</strong>.</li>
+<li>Émettre exige une licence de radioamateur.</li>
+<li><strong>RT-950 Pro, réception seule par défaut :</strong> <code>Rt950BleKissLink.send()</code> refuse d&#39;écrire sauf si l&#39;interrupteur « TX expérimental (risque de blocage du firmware) » (Avancé, désactivé, avec avertissement) est actif. Sans lui, il n&#39;y a ni ack automatique ni renvois. Les renvois sont annulés immédiatement si la liaison BLE se ferme ou si une écriture échoue. Le TNC KISS TCP n&#39;est pas concerné.</li>
+<li>Après toute session de clonage/copie/écriture (<code>Rt950Activity</code>), il est demandé d&#39;éteindre et de rallumer la radio avant d&#39;utiliser KISS ; l&#39;avertissement apparaît aussi dans le chat jusqu&#39;à ce que l&#39;utilisateur confirme « J&#39;ai redémarré la radio ».</li>
+</ul>
+<h2 id="pendiente-de-fuente">Source en attente</h2>
+<ul>
+<li>Contenu et licence des README de lalmonte/radiochat-aprs@9c7b092 et erkanz/radtel-RT950PRO@51c84d4 (cités, non vérifiés).</li>
+<li>Émission RF du RT-950 Pro avec l&#39;option « KISS TNC over BLE (TX) » sur chaque firmware.</li>
+<li>Voie KISS/APRS propre du FTX-1, de l&#39;IC-705, de l&#39;UV-K10 Pro, de l&#39;AnyTone D878 et du TK-11.</li>
+<li>Limites AX.25 d&#39;un TNC externe concret.</li>
+</ul>
+<h2 id="pruebas-en-radio">Tests sur radio</h2>
+<div class="table-scroll"><table><thead><tr><th scope="col">Date</th><th scope="col">Radio</th><th scope="col">Test</th><th scope="col">Résultat</th></tr></thead><tbody>
+<tr><td>2026-11-12 07:30</td><td>Radtel RT-950 Pro (firmware non identifié), S20 FE, liaison KISS par BLE</td><td>Message APRS de EA5KAO à EA5KAO, « RadiCodex prueba APRS 1 », avec 3 tentatives à intervalles de 30 s. Second récepteur : SDR BricoHams, récepteur 3, 144,800 MHz, packet.</td><td><strong>Non concluant.</strong> L&#39;application a écrit la trame par BLE, mais le SDR de contrôle était sur 436,795 MHz NFM (profil satellites 70 cm) et non sur 144,800 MHz packet, il ne pouvait donc pas la recevoir.</td></tr>
+<tr><td>2026-11-12 07:50</td><td>Radtel RT-950 Pro (firmware non identifié), avec l&#39;APRS de la radio sur le canal A à 144,800 MHz</td><td>Le même message, « RadiCodex prueba APRS 2 », avec 3 tentatives.</td><td><strong>Non concluant.</strong> La trame a été écrite par BLE, mais le SDR de contrôle était toujours sur 436,795 MHz NFM et non sur 144,800 MHz packet ; répéter avec le récepteur sur 144,800 packet.</td></tr>
+<tr><td>2026-11-12 09:44</td><td>Radtel RT-950 Pro, APRS sur le canal A à 144,800 MHz</td><td>« RadiCodex prueba APRS 3 », 4 tentatives entre 09:44:10 et 09:45:40. Second récepteur : SDR BricoHams, V3, profil « 144,800 MHz · APRS 2 m », NFM avec décodage packet secondaire ; panneau de paquets surveillé depuis le navigateur.</td><td><strong>Non reçu.</strong> Le panneau n&#39;a montré aucune trame en environ 5 minutes, ni de EA5KAO ni d&#39;autres stations. La chaîne de décodage du SDR (antenne du V3 en 2 m et direwolf) n&#39;est donc pas vérifiée non plus. Il reste à faire un contrôle indépendant : écouter l&#39;audio du SDR pendant l&#39;émission ou regarder la LED de TX de la radio.</td></tr>
+<tr><td>2026-11-12 10:13</td><td>Radtel RT-950 Pro, nouveau mode KISS (commit 9064001) : sans déverrouillage <code>ff31</code>, écriture sur <strong>FF31</strong></td><td>« RadiCodex prueba APRS 4 », 4 tentatives. GATT réel : MTU 23 (refuse 247), <code>ff31</code> écriture avec réponse uniquement, <code>ffe1</code> lecture, écriture avec et sans réponse, et notification.</td><td><strong>Non reçu</strong> sur le SDR (V3, 144,800, packet).</td></tr>
+<tr><td>2026-11-12 10:21</td><td>Idem, écriture sur <strong>FFE1</strong></td><td>« RadiCodex prueba APRS 5 », 4 tentatives.</td><td><strong>Non reçu.</strong> Le SDR n&#39;a décodé aucune trame APRS de personne depuis 09:41 : la chaîne de réception du SDR en 2 m reste non vérifiée.</td></tr>
+<tr><td>2026-11-12 10:24</td><td>Radtel RT-950 Pro, sans RadiCodex : balise lancée depuis le menu APRS propre de la radio, avec le canal A à 144,800 MHz</td><td>Contrôle de référence.</td><td><strong>La radio n&#39;émet pas :</strong> la LED de TX ne s&#39;allume pas et le SDR ne reçoit rien. Avec cette configuration ou ce firmware, la TX APRS de l&#39;unité ne fonctionne pas, même depuis son propre menu. C&#39;est pourquoi les tests 1–5 ne permettent pas d&#39;évaluer RadiCodex.</td></tr>
+<tr><td>2026-11-12 (après-midi)</td><td>Radtel RT-950 Pro, envoi depuis RadiCodex par KISS BLE</td><td>Envoi d&#39;un message APRS depuis le chat.</td><td><strong>Incident : le firmware de la radio s&#39;est figé</strong> (rapport de l&#39;utilisateur). Depuis, la liaison RT-950 est en réception seule par défaut.</td></tr>
+</tbody></table></div>
+<p><strong>Conclusion (2026-11-12) :</strong> la TX APRS du RT-950 Pro de cette unité reste <strong>non prise en charge dans son état actuel</strong>. Le défaut est dans la radio (configuration ou firmware non identifié), pas dans RadiCodex. Avant de retester le chat, il faut obtenir que la balise propre de la radio allume la LED de TX et apparaisse sur un second récepteur, par exemple en identifiant le firmware ou en essayant le patch d&#39;erkanz pour la v0.29. Depuis RadiCodex, il faut utiliser le mode KISS sans déverrouillage (commit 9064001).</p>
+<h2 id="diagnostico-final-rt-950-pro-2026-11-14">Diagnostic final RT-950 Pro (2026-11-14)</h2>
+<p>Réalisé selon le manuel officiel du fabricant (<a href="https://cdn.shopify.com/s/files/1/0564/8855/8800/files/radtel-950PRO_2.pdf?v=1756451146" target="_blank" rel="noopener noreferrer">radtel-950PRO_2.pdf</a>, tableau des menus : APRS Set → 1. APRS ON/OFF ; 5. Advanced → 5. TNC Type OFF/KISS ; User Key → PF2 → Beacon TX) :</p>
+<div class="table-scroll"><table><thead><tr><th scope="col">Vérification</th><th scope="col">Résultat</th></tr></thead><tbody>
+<tr><td>APRS ON, TNC Type = KISS, Beacon Setup avec indicatif et position fixe, PF2 = Beacon TX</td><td>Configuré dans la radio</td></tr>
+<tr><td>PTT A sur 145,500 MHz (voix)</td><td><strong>Émet</strong> (LED rouge)</td></tr>
+<tr><td>PF2 (Beacon TX) avec le canal A sur 144,800 MHz</td><td><strong>N&#39;émet pas</strong> (pas de LED rouge) ; le SDR (V3, 144,800 MHz, packet) ne reçoit rien</td></tr>
+</tbody></table></div>
+<p><strong>Conclusion :</strong> la radio émet sur le canal A, mais n&#39;émet pas d&#39;APRS, pas même sa propre balise. C&#39;est un défaut de cette unité ou de son firmware (version non identifiée), pas de RadiCodex. Dans RadiCodex, la TX vers le RT-950 reste désactivée par défaut, avec la liaison KISS en réception seule. Pour réessayer, il faut identifier le firmware et consulter Radtel ou essayer un firmware qui documente la TX APRS, comme le patch d&#39;erkanz pour la v0.29.</p></article>
+    <footer><p class="translation-note">Traduction de l&#39;original espagnol. En cas de divergence, la version espagnole fait foi.</p><p>Document généré à partir du Markdown versionné. Consultez les sources et les limites de chaque guide. <a href="ayuda-firmwares.fr.html">Retour à l&#39;index</a>.</p></footer>
+  </main>
+</body>
+</html>

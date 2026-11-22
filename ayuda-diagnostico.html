@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <meta name="description" content="Diagnostico remoto / Remote diagnostics / Diagnostic distant / Ferndiagnose: ayuda de Bricohams por modelo y version.">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>Diagnostico remoto / Remote diagnostics / Diagnostic distant / Ferndiagnose | Bricohams Radio Workspace</title>
+  <link rel="icon" href="bricohams-logo.png" type="image/png">
+  <link rel="stylesheet" href="styles.css">
+  <script src="appearance.js" defer></script>
+  <link rel="stylesheet" href="help-docs.css">
+  <link rel="alternate" hreflang="es" href="ayuda-diagnostico.html">
+  <link rel="alternate" hreflang="en-US" href="ayuda-diagnostico.en.html">
+  <link rel="alternate" hreflang="de" href="ayuda-diagnostico.de.html">
+  <link rel="alternate" hreflang="it" href="ayuda-diagnostico.it.html">
+  <link rel="alternate" hreflang="fr" href="ayuda-diagnostico.fr.html">
+</head>
+<body>
+  <a class="skip" href="#main">Saltar al contenido</a>
+  <main id="main" class="firmware-help">
+    <header><a href="index.html?lang=es"><img src="bricohams-logo.png" alt="Bricohams" width="240" height="89"></a>
+      <nav aria-label="Ayuda"><a href="ayuda-referencias.html">Documentacion y referencias</a> · <a href="ayuda-firmwares.html">Biblioteca de firmware</a> · <a href="ayuda-atlas-uv-k5-v3.html">Atlas UV-K5 V3</a> · <a href="quansheng.html?lang=es">Quansheng</a> · <a href="opengd77.html?lang=es">OpenGD77</a></nav>
+      <nav class="languages" aria-label="Idioma"><a href="ayuda-diagnostico.html" hreflang="es" lang="es" aria-current="page">Español</a> · <a href="ayuda-diagnostico.en.html" hreflang="en-US" lang="en-US">English (US)</a> · <a href="ayuda-diagnostico.de.html" hreflang="de" lang="de">Deutsch</a> · <a href="ayuda-diagnostico.it.html" hreflang="it" lang="it">Italiano</a> · <a href="ayuda-diagnostico.fr.html" hreflang="fr" lang="fr">Français</a></nav>
+    </header>
+    <nav class="panel" aria-label="Contenido de esta guia"><h2>En esta guia</h2><ul><li><a href="#es-privacidad-y-funcionamiento">ES - Privacidad y funcionamiento</a></li><li><a href="#en-user-guide">EN - User guide</a></li><li><a href="#fr-guide-utilisateur">FR - Guide utilisateur</a></li><li><a href="#de-benutzerhilfe">DE - Benutzerhilfe</a></li><li><a href="#pt-guia-do-utilizador">PT - Guia do utilizador</a></li></ul></nav>
+    <article class="panel"><h1 id="diagnostico-remoto-remote-diagnostics-diagnostic-distant-ferndiagnose">Diagnostico remoto / Remote diagnostics / Diagnostic distant / Ferndiagnose</h1>
+<h2 id="es-privacidad-y-funcionamiento">ES - Privacidad y funcionamiento</h2>
+<p>El sistema registra <strong>datos tecnicos minimizados</strong>, no telemetria oculta. El envio remoto esta desactivado por defecto y requiere consentimiento y un receptor HTTPS configurado por el administrador. No se presupone un servicio central de BricoHams.</p>
+<p>El contrato acepta exclusivamente version de software, componente, plataforma generica y hasta 16 eventos con codigo, area, severidad, categoria del error y numero de linea. No admite mensajes, valores de excepciones, rutas, nombres de usuario, tokens, indicativos, QSO, frecuencias, audio, ubicacion, puertos ni identificadores del dispositivo o instalacion. Los campos adicionales se rechazan: no se intenta limpiar texto arbitrario para despues enviarlo.</p>
+<p><strong>No se promete anonimato absoluto.</strong> El receptor, su proveedor o un proxy pueden conocer IP, credencial de autorizacion, hora y metadatos de conexion. El operador del receptor debe configurar sus propios registros y politica de retencion.</p>
+<h3 id="clientes">Clientes</h3>
+<ul>
+<li>Consola de estacion web, Android/tablet e iPhone/iPad: Configuracion permite revisar, descargar, importar, enviar una vez, activar envio automatico en primer plano y borrar registros locales. El consentimiento automatico no se guarda; desconectar o reiniciar lo desactiva. Se usa el host HTTPS de esa sesion.</li>
+<li>RadiCodex: la tarjeta de diagnostico permite revisar y autorizar el envio con URL HTTPS y token exclusivo en memoria. Solo envia en primer plano; desactivar o reiniciar impide nuevos envios. Una peticion ya iniciada puede haber llegado.</li>
+<li>Workspace HTML5: cada pagina de herramienta ofrece vista JSON, descarga, borrado local y envio manual mediante el servidor local autorizado. GitHub Pages no recibe informes: descargar e importar en el cliente HTTPS.</li>
+<li>Los antiguos informes USB detallados son privados y no se envian por estos mecanismos. Revisarlos por separado antes de compartirlos manualmente.</li>
+</ul>
+<p>El registro nativo y la validacion de origen HTTPS residen en la biblioteca Android <code>station-core</code>, reutilizable sin dependencias de la interfaz RadiCodex. Cada aplicacion inicializa el registro con su componente del contrato cerrado y su version publica; esa identidad no puede cambiar durante la misma aplicacion. RadiCodex conserva <code>radicodex</code> y su version compilada. El agente independiente utilizara <code>station-agent</code>, sin identificadores USB en los informes. El contrato JSON se genera desde la misma definicion Python y se empaqueta con la biblioteca. Esta extraccion no implementa por si sola el agente OTG ni cambia consentimiento, limites, retencion, validacion TLS o confirmacion HTTPS de recepcion.</p>
+<p>Los clientes JS conservan hasta 128 eventos y RadiCodex hasta 500 entradas. La caducidad logica es de siete dias, comprobada al leer/escribir; un dispositivo apagado no ejecuta una purga. Borrar aqui elimina solo registros locales: no retira informes ya recibidos ni garantiza borrado fisico de copias de seguridad. Los errores de almacenamiento y de entrega se muestran; permitir envio no equivale a entrega confirmada.</p>
+<h3 id="receptor-y-agentes-python">Receptor y agentes Python</h3>
+<p>El coordinador habilita la recepcion con:</p>
+<pre><code>bricohams-station-host --diagnostic-report-database &lt;ruta-privada&gt;/reports.sqlite3</code></pre>
+<p>Agregar los argumentos TLS y de estacion habituales; el ejemplo no sustituye la configuracion HTTPS. Cuando conviva con Workspace local (puerto 8787), usar un puerto diferente para el coordinador, por ejemplo <code>--port 8443</code>.</p>
+<p>Configurar <code>BRICOHAM_DIAGNOSTIC_REPORTER_TOKEN</code> con una credencial aleatoria exclusiva de al menos 32 caracteres. El rol <code>diagnostic_reporter</code> puede entregar informes, pero no controla RF ni consulta informes. Administrador/operador tambien pueden entregar; solo administrador consulta <code>GET /api/v1/diagnostic-reports</code>. La recepcion esta deshabilitada si no se configura la base de datos.</p>
+<p>Host y agente generan registros locales en <code>~/.bricohams/diagnostics</code>, configurable con <code>--diagnostic-directory</code>. Para autorizar envio a un receptor:</p>
+<pre><code>--diagnostics-opt-in --diagnostics-url https://diagnostic.example.org</code></pre>
+<p>El secreto se proporciona mediante <code>BRICOHAM_DIAGNOSTICS_TOKEN</code>, nunca en URL, argumentos del informe ni codigo fuente. No reutilizar credenciales de control de estacion; el arranque rechaza esa reutilizacion en los agentes Python. <code>--diagnostics-ca &lt;archivo&gt;</code> permite confiar en una CA propia sin omitir TLS. Las colas en memoria son acotadas a 128 eventos; ante saturacion se notifica el descarte de los mas antiguos. El worker no hace I/O en la ruta de logging RF. Los registros locales sobreviven al reinicio; la cola remota no es un outbox duradero y se reconstruye con eventos nuevos, no con todo el historico.</p>
+<p>El almacen receptor limita 500 informes, entrega los ultimos 50 al administrador y aplica siete dias de retencion logica y limite de paginas SQLite. No guarda IP en el informe. La API limita 4096 bytes por informe y 60 entregas por minuto. Ante fallo HTTPS/confirmacion se reintenta con espera entre 60 y 600 segundos. Solo HTTP 202 con exactamente <code>{&quot;accepted&quot;:true}</code> confirma recepcion.</p>
+<h3 id="workspace-node-local">Workspace Node local</h3>
+<p><code>npm start</code> genera historial minimizado local, separado de las salidas originales de consola, que pueden contener diagnostico detallado y permanecen privadas. El historial JSONL mantiene como maximo 128 informes y caducidad logica de siete dias. No se expone por una API de lectura publica.</p>
+<p>Configurar en el entorno del proceso:</p>
+<pre><code>BRICOHAM_DIAGNOSTICS_OPT_IN=1
+BRICOHAM_DIAGNOSTICS_URL=https://diagnostic.example.org
+BRICOHAM_DIAGNOSTICS_TOKEN=&lt;secreto-exclusivo&gt;
+BRICOHAM_DIAGNOSTICS_CA=&lt;archivo-CA-opcional&gt;</code></pre>
+<p>La autorizacion habilita los logs tecnicos del host y el relevo de un informe del navegador cuando se pulsa Enviar. Sin ella no hay red de diagnostico. El POST local exige origen exacto, JSON cerrado y limite de tamano. El servidor continua en loopback; no es un proxy de CAT, PTT ni firmware remoto.</p>
+<h2 id="en-user-guide">EN - User guide</h2>
+<p>Remote sending is off by default. Review the JSON before consenting. Only public software metadata and fixed error categories are allowed; messages, secrets, callsigns, QSOs, frequencies, audio, location and device/installation IDs are excluded. HTTPS does not hide your IP or connection metadata from the receiver.</p>
+<p>Use Settings in the shared station client, Diagnostics in RadiCodex, or the technical panel in Workspace. Pages users download and import the JSON into the HTTPS station client. Automatic client consent is session-only and foreground-only. Clearing local logs does not recall delivered reports or erase backups physically. Bounded logs expire logically after seven days, when the application is active. Legacy detailed USB exports are private and never automatically uploaded.</p>
+<p>Deployment uses the exact flags/environment variables above. Configure your own HTTPS receiver, dedicated diagnostic credential, CA if needed, retention and proxy logging. The reporter role cannot control radio hardware. No public BricoHams collector, absolute anonymity, confirmed delivery without acknowledgement or physical hardware validation is assumed.</p>
+<h2 id="fr-guide-utilisateur">FR - Guide utilisateur</h2>
+<p>L&#39;envoi distant est desactive par defaut. Examinez le JSON avant de consentir. Seules les metadonnees publiques du logiciel et categories d&#39;erreur fixes sont autorisees : ni messages, secrets, indicatifs, QSO, frequences, audio, localisation ou identifiants d&#39;appareil/installation. HTTPS ne masque pas votre IP ou les metadonnees de connexion au recepteur.</p>
+<p>Utilisez Configuration du client de station, Diagnostic de RadiCodex ou le panneau technique Workspace. Sur Pages, telechargez puis importez le JSON dans le client HTTPS. Le consentement automatique des clients ne vaut que pour la session et le premier plan. L&#39;effacement local ne retire pas les rapports recus et n&#39;efface pas physiquement les sauvegardes. La retention logique de sept jours est appliquee lorsque l&#39;application est active. Les anciens exports USB detailles restent prives.</p>
+<p>Le deploiement utilise exactement les options et variables ci-dessus. Configurez votre propre recepteur HTTPS, secret de diagnostic exclusif, CA si necessaire, retention et journaux du proxy. Le role reporter ne controle pas la radio. Aucun collecteur public BricoHams, anonymat absolu ou validation materielle n&#39;est presume.</p>
+<h2 id="de-benutzerhilfe">DE - Benutzerhilfe</h2>
+<p>Der Fernversand ist standardmaessig aus. JSON vor der Zustimmung pruefen. Erlaubt sind nur oeffentliche Softwaremetadaten und feste Fehlerkategorien: keine Meldungen, Geheimnisse, Rufzeichen, QSOs, Frequenzen, Audiodaten, Standorte oder Geraete- und Installationskennungen. HTTPS verbirgt IP und Verbindungsmetadaten nicht vor dem Empfaenger.</p>
+<p>Stationsclient-Einstellungen, RadiCodex-Diagnose oder das technische Workspace-Panel verwenden. Auf Pages JSON herunterladen und im HTTPS-Client importieren. Automatische Client-Zustimmung gilt nur fuer die Sitzung im Vordergrund. Lokales Loeschen ruft gesendete Berichte nicht zurueck und loescht Sicherungen nicht physisch. Begrenzte Protokolle verfallen logisch nach sieben Tagen bei aktiver Anwendung. Alte detaillierte USB-Exporte bleiben privat und werden nie automatisch gesendet.</p>
+<p>Deployment verwendet die oben angegebenen Optionen und Umgebungsvariablen. Eigenen HTTPS-Empfaenger, exklusives Diagnosegeheimnis, gegebenenfalls CA, Aufbewahrung und Proxy-Protokolle konfigurieren. Reporter darf keine Funkhardware steuern. Es werden kein oeffentlicher BricoHams-Empfaenger, absolute Anonymitaet oder Hardwarevalidierung vorausgesetzt.</p>
+<h2 id="pt-guia-do-utilizador">PT - Guia do utilizador</h2>
+<p>O envio remoto esta desativado por defeito. Reveja o JSON antes de autorizar. So sao permitidos metadados publicos do software e categorias fixas de erros: sem mensagens, segredos, indicativos, QSO, frequencias, audio, localizacao ou identificadores do dispositivo/instalacao. HTTPS nao oculta o IP ou metadados de ligacao ao recetor.</p>
+<p>Use Configuracao do cliente de estacao, Diagnostico do RadiCodex ou o painel tecnico Workspace. Em Pages descarregue e importe o JSON no cliente HTTPS. O consentimento automatico do cliente vale apenas durante a sessao em primeiro plano. Apagar registos locais nao retira relatorios enviados nem apaga fisicamente copias de seguranca. Os registos limitados expiram logicamente apos sete dias quando a aplicacao esta ativa. Exportacoes USB detalhadas antigas continuam privadas.</p>
+<p>Use as opcoes e variaveis acima para configurar recetor HTTPS proprio, segredo exclusivo, CA opcional, retencao e registos do proxy. O papel reporter nao controla a radio. Nao se pressupoe recetor publico BricoHams, anonimato absoluto ou validacao fisica do hardware.</p></article>
+    <footer><p>Documento generado desde el Markdown versionado. Consulta las fuentes y limites de cada guia. <a href="ayuda-firmwares.html">Volver al indice</a>.</p></footer>
+  </main>
+</body>
+</html>

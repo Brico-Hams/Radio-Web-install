@@ -24,7 +24,7 @@ flowchart LR
   end
 
   subgraph Station["Agente local (inventario implementado)"]
-    AgentAPI["API read-only 127.0.0.1:8788"]
+    AgentAPI["API read-only 127.0.0.1:8791"]
     Ports["pyserial list_ports"]
   end
 

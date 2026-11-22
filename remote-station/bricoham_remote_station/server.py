@@ -86,7 +86,7 @@ ADIF_PATH = f"{LOGBOOK_PATH}/adif"
 _READ_ROLES = frozenset({Role.ADMIN, Role.OPERATOR, Role.LISTENER})
 _DIAGNOSTIC_ROLES = frozenset({Role.ADMIN, Role.OPERATOR})
 _CAPABILITY_ROLES = frozenset(Role)
-_STATION_AGENT_PORT = 8788
+_STATION_AGENT_PORT = 8791
 _MAX_AGENT_RESPONSE_BYTES = 1_000_000
 _PACKAGED_WEB_DIRECTORY = Path(__file__).resolve().parent / "web_console"
 _WEB_CONSOLE_DIRECTORY = (
@@ -1182,7 +1182,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--station-agent-client-cert", type=Path)
     parser.add_argument("--station-agent-client-key", type=Path)
     parser.add_argument("--client-origin", action="append", default=[])
-    parser.add_argument("--port", type=int, default=8787, help="Puerto de escucha")
+    parser.add_argument("--port", type=int, default=8790, help="Puerto de escucha")
     parser.add_argument(
         "--logbook-database",
         type=Path,

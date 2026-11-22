@@ -170,7 +170,7 @@ class SecureTransportTests(unittest.TestCase):
             {"tls_context": self.ip_context, "android_agent_token": "x" * 31},
             {"tls_context": self.ip_context, "android_agent_token": "x" * 32 + "\t"},
             {"tls_context": self.ip_context,
-             "agent_link": AgentLink("https://localhost:8788", "z" * 32, self.cert)},
+             "agent_link": AgentLink("https://localhost:8791", "z" * 32, self.cert)},
         ):
             with self.subTest(kwargs=tuple(kwargs)):
                 config = {"android_agent_token": self.link_token, **kwargs}
