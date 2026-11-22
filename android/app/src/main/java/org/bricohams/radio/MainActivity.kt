@@ -56,6 +56,16 @@ class MainActivity : LocalizedActivity() {
     private var fix: Fix? = null
     private var fixElapsedNanos: Long = 0
     private var listening = false
+    private val hunts by lazy { HuntStore(this) }
+    private var huntId: String? = null
+    private var huntLocation: PhoneLocation? = null
+    private var huntLat: EditText? = null
+    private var huntLon: EditText? = null
+    private var huntReference: Spinner? = null
+    private var huntExportKind: String? = null
+    private var compass: PointingSensor? = null
+    private var compassAzimuth: Double? = null
+    private var compassText: String? = null
     private val handler = Handler(Looper.getMainLooper())
     private val timeout = Runnable {
         stopLocation()
@@ -265,7 +275,7 @@ class MainActivity : LocalizedActivity() {
         userAction {
             when (tab) {
                 TAB_LOGBOOK -> logbook()
-                TAB_ARDF -> ardf()
+                TAB_ARDF -> { ardf(); triangulation() }
                 TAB_MORSE -> morse()
                 else -> home()
             }
@@ -647,6 +657,206 @@ class MainActivity : LocalizedActivity() {
         }
         button(R.string.ardf_export_json) { export("json") }
     }
+    private fun decimal(field: EditText, error: Int): Double? {
+        val value = field.text.toString().trim().replace(',', '.')
+        if (value.isEmpty()) return null
+        return value.toDoubleOrNull()?.takeIf { it.isFinite() } ?: throw LocalizedArgumentException(UiText(error))
+    }
+    private fun signed(field: EditText) = field.apply {
+        inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL or InputType.TYPE_NUMBER_FLAG_SIGNED
+    }
+    private fun f(value: Double, decimals: Int = 1) = String.format(Locale.ROOT, "%.${decimals}f", value)
+
+    /** "Triangulación": fox-hunt bearings from several observers, shared as files/text (no server), least-squares estimate and plot. */
+    private fun triangulation() {
+        content.addView(Brand.heading(this, getString(R.string.tri_title)))
+        text(R.string.tri_intro)
+        val name = input(R.string.tri_hunt_name, View.generateViewId())
+        val target = input(R.string.tri_hunt_frequency, View.generateViewId(), "", true)
+        button(R.string.tri_hunt_create) {
+            val title = name.text.toString().trim()
+            requireUi(title.isNotEmpty()) { UiText(R.string.tri_err_name) }
+            val frequency = decimal(target, R.string.tri_err_frequency)?.also { requireUi(it > 0.0) { UiText(R.string.tri_err_frequency) } }
+            val created = HuntSession(name = title.take(80), frequencyMhz = frequency)
+            hunts.update(created); huntId = created.id; render()
+        }
+        button(R.string.tri_import_text) { importHuntText() }
+        button(R.string.tri_import_file) {
+            startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).apply { addCategory(Intent.CATEGORY_OPENABLE); type = "*/*" }, 51)
+        }
+        val sessions = hunts.sessions()
+        if (sessions.isEmpty()) { text(R.string.tri_no_hunts); return }
+        val hunt = sessions.firstOrNull { it.id == huntId } ?: sessions.first().also { huntId = it.id }
+        button(getString(R.string.tri_select, hunt.name)) {
+            AlertDialog.Builder(this).setTitle(R.string.tri_session_title)
+                .setItems(sessions.map { it.name }.toTypedArray()) { _, index -> huntId = sessions[index].id; render() }.show()
+        }
+        val profile = ProfileStore.load(this)
+        val home = profile.observer()?.takeIf { it.latitude.isFinite() && it.longitude.isFinite() }
+        val result = Triangulation.estimate(hunt.observations)
+        content.addView(TriangulationView(this).apply {
+            observations = hunt.observations; this.result = result
+            contentDescription = if (result.hasEstimate) getString(R.string.tri_plot_description_estimate, hunt.observations.size, result.locator ?: "")
+                else getString(R.string.tri_plot_description, hunt.observations.size)
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
+        })
+        text(huntSummary(hunt, result, profile.callsign, home))
+        for (o in hunt.observations.asReversed().take(100)) {
+            val strength = o.strength?.let { " ${f(it)} " + getString(if (o.strengthUnit == StrengthUnit.S_UNITS) R.string.tri_unit_s else R.string.tri_unit_dbm) } ?: ""
+            text(getString(R.string.tri_obs_line, o.callsign, o.utc.toString().take(19) + "Z", f(o.bearingTrueDeg, 0), f(o.uncertaintyDeg, 0)) + strength)
+            button(getString(R.string.tri_delete, o.callsign)) {
+                hunts.update(hunt.copy(observations = hunt.observations.filter { it.id != o.id })); render()
+            }
+        }
+
+        text(R.string.tri_bearing_note)
+        val call = input(R.string.tri_callsign, View.generateViewId(), profile.callsign)
+        val lat = signed(input(R.string.tri_latitude, View.generateViewId(), home?.let { f(it.latitude, 6) } ?: "", true))
+        val lon = signed(input(R.string.tri_longitude, View.generateViewId(), home?.let { f(it.longitude, 6) } ?: "", true))
+        huntLat = lat; huntLon = lon
+        val locator = input(R.string.tri_locator, View.generateViewId(), "")
+        button(R.string.tri_use_gps) {
+            if (!PhoneLocation.hasPermission(this)) requestPermissions(PhoneLocation.PERMISSIONS, 11) else startHuntLocation()
+        }
+        val bearing = input(R.string.tri_bearing, View.generateViewId(), "", true)
+        val referenceId = View.generateViewId()
+        text(R.string.tri_ref_label).labelFor = referenceId
+        huntReference = spinner(referenceId, listOf(getString(R.string.tri_ref_true), getString(R.string.tri_ref_magnetic)), getString(R.string.tri_ref_true))
+        button(R.string.tri_compass) { toggleCompass(lat, lon, bearing) }
+        val uncertainty = input(R.string.tri_uncertainty, View.generateViewId(), f(BearingObservation.DEFAULT_UNCERTAINTY_DEG, 0), true)
+        val strength = signed(input(R.string.tri_strength, View.generateViewId(), "", true))
+        val unit = View.generateViewId()
+        text(R.string.tri_strength_unit).labelFor = unit
+        val unitSpinner = spinner(unit, listOf(getString(R.string.tri_unit_s), getString(R.string.tri_unit_dbm)), getString(R.string.tri_unit_s))
+        val frequency = input(R.string.tri_frequency, View.generateViewId(), hunt.frequencyMhz?.toString() ?: "", true)
+        val notes = input(R.string.tri_notes, View.generateViewId())
+        button(R.string.tri_save) {
+            val position = if (lat.text.isNotBlank() || lon.text.isNotBlank()) {
+                val la = decimal(lat, R.string.tri_err_position); val lo = decimal(lon, R.string.tri_err_position)
+                requireUi(la != null && lo != null) { UiText(R.string.tri_err_position) }
+                Maidenhead.LatLon(la, lo)
+            } else {
+                requireUi(locator.text.isNotBlank()) { UiText(R.string.tri_err_position) }
+                Maidenhead.toLatLon(locator.text.toString())
+            }
+            val entered = decimal(bearing, R.string.tri_err_bearing)
+            requireUi(entered != null && entered >= 0.0 && entered <= 360.0) { UiText(R.string.tri_err_bearing) }
+            val magnetic = huntReference?.selectedItemPosition == 1
+            val declination = if (!magnetic) 0.0 else android.hardware.GeomagneticField(
+                position.latitude.toFloat(), position.longitude.toFloat(), 0f, System.currentTimeMillis()).declination.toDouble()
+            val dbm = unitSpinner.selectedItemPosition == 1
+            val source = when {
+                magnetic -> BearingSource.MANUAL_MAGNETIC_CORRECTED
+                bearing.text.toString() == compassText -> BearingSource.COMPASS_TRUE
+                else -> BearingSource.MANUAL_TRUE
+            }
+            val observation = BearingObservation(
+                callsign = call.text.toString(), latitude = position.latitude, longitude = position.longitude,
+                bearingTrueDeg = ((entered + declination) % 360.0 + 360.0) % 360.0,
+                uncertaintyDeg = decimal(uncertainty, R.string.tri_err_uncertainty) ?: BearingObservation.DEFAULT_UNCERTAINTY_DEG,
+                strength = decimal(strength, R.string.tri_err_strength),
+                strengthUnit = if (dbm) StrengthUnit.DBM else StrengthUnit.S_UNITS,
+                frequencyMhz = decimal(frequency, R.string.tri_err_frequency),
+                utc = Instant.now().truncatedTo(ChronoUnit.SECONDS), source = source, notes = notes.text.toString().trim()
+            ).validated()
+            hunts.update(hunt.copy(observations = hunt.observations + observation))
+            compassText = null
+            render()
+            message(getString(R.string.tri_saved))
+        }
+
+        button(R.string.tri_share_text) {
+            startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain")
+                .putExtra(Intent.EXTRA_SUBJECT, hunt.name).putExtra(Intent.EXTRA_TEXT, HuntCodec.encode(hunt)),
+                getString(R.string.tri_share_text)))
+        }
+        for ((kind, label) in listOf("json" to R.string.tri_export_json, "csv" to R.string.tri_export_csv, "gpx" to R.string.tri_export_gpx)) {
+            button(label) {
+                huntExportKind = kind
+                startActivityForResult(Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+                    addCategory(Intent.CATEGORY_OPENABLE)
+                    type = when (kind) { "csv" -> "text/csv"; "gpx" -> "application/gpx+xml"; else -> "application/json" }
+                    putExtra(Intent.EXTRA_TITLE, "hunt-${hunt.name.replace(Regex("[^A-Za-z0-9-]+"), "_")}.$kind")
+                }, 50)
+            }
+        }
+    }
+    private fun huntSummary(hunt: HuntSession, result: TriangulationResult, callsign: String, home: ObserverPosition?): String = buildString {
+        appendLine(getString(R.string.tri_count_line, hunt.observations.size, hunt.frequencyMhz?.toString() ?: "-"))
+        if (!result.hasEstimate) appendLine(getString(R.string.tri_result_none))
+        else {
+            val la = checkNotNull(result.latitude); val lo = checkNotNull(result.longitude)
+            appendLine(getString(R.string.tri_result_estimate, f(la, 5), f(lo, 5), result.locator ?: "-"))
+            appendLine(getString(R.string.tri_result_accuracy, f(result.radius95M, 0), f(result.semiMajorM, 0), f(result.semiMinorM, 0),
+                f(result.majorAxisAzimuthDeg, 0)))
+            val mine = hunt.observations.lastOrNull { callsign.isNotBlank() && it.callsign.equals(callsign, true) }
+            val from = mine?.let { Pair(it.latitude, it.longitude) } ?: home?.let { Pair(it.latitude, it.longitude) }
+            if (from != null) {
+                val rb = Triangulation.rangeBearing(from.first, from.second, la, lo)
+                appendLine(getString(R.string.tri_result_from_me, f(rb.distanceKm, 2), f(rb.bearingDeg, 0)))
+            }
+        }
+        for (w in result.warnings) appendLine(when (w.kind) {
+            TriangulationWarningKind.TOO_FEW -> getString(R.string.tri_warn_too_few)
+            TriangulationWarningKind.NEAR_PARALLEL -> getString(R.string.tri_warn_parallel)
+            TriangulationWarningKind.NEAR_PARALLEL_PAIR -> getString(R.string.tri_warn_pair, w.first ?: "", w.second ?: "")
+            TriangulationWarningKind.BEHIND_OBSERVER -> getString(R.string.tri_warn_behind, w.first ?: "")
+        })
+        Triangulation.signalRanking(hunt.observations).firstOrNull()?.let {
+            appendLine(getString(R.string.tri_signal_hint, it.observation.callsign, f(it.dbm, 0)))
+        }
+    }.trim()
+    private fun importHuntText() {
+        val paste = EditText(this).apply { hint = getString(R.string.tri_import_title); minLines = 4; contentDescription = hint }
+        AlertDialog.Builder(this).setTitle(R.string.tri_import_title).setView(paste)
+            .setNegativeButton(R.string.action_cancel, null)
+            .setPositiveButton(R.string.action_import) { _, _ -> userAction { mergeHunt(HuntCodec.decode(paste.text.toString())) } }.show()
+    }
+    private fun mergeHunt(incoming: HuntSession) {
+        val existing = hunts.sessions().firstOrNull { it.id == incoming.id }
+        huntId = incoming.id
+        if (existing == null) {
+            hunts.update(incoming)
+            message(getString(R.string.tri_imported_new, incoming.observations.size))
+        } else {
+            val merged = existing.merge(incoming)
+            hunts.update(merged.session)
+            message(getString(R.string.tri_imported, merged.added, merged.duplicates))
+        }
+        render()
+    }
+    private fun startHuntLocation() {
+        huntLocation?.stop()
+        message(getString(R.string.tri_gps_waiting))
+        huntLocation = PhoneLocation(this, onResult = { fix, _ ->
+            if (fix == null) message(getString(R.string.tri_gps_none)) else {
+                huntLat?.setText(f(fix.latitude, 6)); huntLon?.setText(f(fix.longitude, 6))
+                message(getString(R.string.tri_gps_fix, (fix.accuracyM ?: 0f).toInt()))
+            }
+        }).also { it.start() }
+    }
+    /** First press starts the sensor (declination applied for the observer position, so the azimuth is true); the second takes it. */
+    private fun toggleCompass(lat: EditText, lon: EditText, bearing: EditText) {
+        val running = compass
+        if (running == null) {
+            val sensor = PointingSensor(this) { compassAzimuth = it.trueAzimuth }
+            require(sensor.available) { getString(R.string.tri_compass_missing) }
+            val la = lat.text.toString().trim().replace(',', '.').toDoubleOrNull()
+            val lo = lon.text.toString().trim().replace(',', '.').toDoubleOrNull()
+            compassAzimuth = null
+            sensor.start(if (la != null && lo != null) ObserverPosition(la, lo, 0.0) else null)
+            compass = sensor
+            message(getString(R.string.tri_compass_hint))
+        } else {
+            running.stop(); compass = null
+            val azimuth = compassAzimuth
+            if (azimuth == null) { message(getString(R.string.tri_compass_missing)); return }
+            compassText = f(azimuth, 0)
+            bearing.setText(compassText)
+            huntReference?.setSelection(0)
+            message(getString(R.string.tri_compass_taken, compassText))
+        }
+    }
     private fun morse() {
         text(R.string.morse_text_help)
         val code = input(R.string.morse_code_label, R.id.morse_input, "... --- ...")
@@ -705,6 +915,9 @@ class MainActivity : LocalizedActivity() {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode == 10) userAction {
             if (tab == TAB_ARDF && hasWindowFocus()) startLocation()
+        }
+        if (requestCode == 11) userAction {
+            if (tab == TAB_ARDF && hasWindowFocus() && PhoneLocation.hasPermission(this)) startHuntLocation()
             else message(getString(R.string.gps_return_to_ardf))
         }
     }
@@ -824,6 +1037,48 @@ class MainActivity : LocalizedActivity() {
             }
             return
         }
+        if (requestCode == 51) {
+            val uri = data?.data
+            if (resultCode != RESULT_OK || uri == null) { message(getString(R.string.json_cancelled)); return }
+            thread(name = "bricohams-hunt-import") {
+                try {
+                    val text = String(contentResolver.readDocument(uri, HuntCodec.MAX_CHARS), Charsets.UTF_8)
+                    val incoming = HuntCodec.decode(text)
+                    runOnUiThread { if (!isDestroyed) userAction { mergeHunt(incoming) } }
+                } catch (error: IllegalArgumentException) {
+                    exportError(errorText(error, R.string.tri_err_import))
+                } catch (error: IOException) {
+                    exportError(getString(R.string.json_read_error, errorText(error)))
+                } catch (error: SecurityException) {
+                    exportError(getString(R.string.json_permission_error, errorText(error)))
+                }
+            }
+            return
+        }
+        if (requestCode == 50) {
+            val kind = huntExportKind
+            huntExportKind = null
+            val uri = data?.data
+            val hunt = hunts.sessions().firstOrNull { it.id == huntId }
+            if (resultCode != RESULT_OK || uri == null || kind == null || hunt == null) { message(getString(R.string.export_cancelled)); return }
+            val body = when (kind) {
+                "csv" -> HuntCodec.csv(hunt)
+                "gpx" -> HuntCodec.gpx(hunt, Triangulation.estimate(hunt.observations))
+                else -> HuntCodec.encode(hunt)
+            }
+            thread(name = "bricohams-hunt-export") {
+                try {
+                    val stream = contentResolver.openOutputStream(uri, "wt") ?: throw IOException(getString(R.string.provider_no_stream))
+                    stream.bufferedWriter(Charsets.UTF_8).use { it.write(body) }
+                    runOnUiThread { if (!isDestroyed) message(getString(R.string.export_saved)) }
+                } catch (error: IOException) {
+                    exportError(getString(R.string.export_write_error, errorText(error)))
+                } catch (error: SecurityException) {
+                    exportError(getString(R.string.export_permission_error, errorText(error)))
+                }
+            }
+            return
+        }
         if (requestCode != 20) return
         val kind = exportKind
         exportKind = null
@@ -901,6 +1156,8 @@ class MainActivity : LocalizedActivity() {
     override fun onStop() {
         super.onStop()
         stopLocation()
+        huntLocation?.stop()
+        compass?.stop(); compass = null
         fix = null
     }
     override fun onDestroy() {

@@ -205,6 +205,7 @@ class ProfileTest {
         assertTrue(ProfileRadio.FT817.supports(Tool.RIG_CAT))
         assertTrue(ProfileRadio.UVK5.supports(Tool.CHANNELS))
         assertFalse(ProfileRadio.UVK5.supports(Tool.RIG_CAT))
+        assertEquals(CatTransport.USB_CDC, ProfileRadio.UVK5.transports.first())
         assertTrue(ProfileRadio.values().all { it.supports(Tool.SSTV) })
         assertTrue((null as ProfileRadio?).allows(Tool.CHANNELS))
 
