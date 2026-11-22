@@ -2049,6 +2049,109 @@ Entrada de audio de la radio (códec USB)|Radio audio input (USB codec)|Entrée 
 Salida de audio hacia la radio (códec USB)|Audio output to the radio (USB codec)|Sortie audio vers la radio (codec USB)|Audioausgang zum Funkgerät (USB-Codec)
 Sin audio|No audio|Sans audio|Kein Audio
 En el Yaesu FTX-1 el códec USB aparece como "USB Audio Device" (C-Media 0D8C:0016). Ajusta el origen de modulación USB de la radio según su manual para voz o datos por USB.|On the Yaesu FTX-1 the USB codec appears as "USB Audio Device" (C-Media 0D8C:0016). Set the radio's USB modulation source per its manual for voice or data over USB.|Sur le Yaesu FTX-1, le codec USB apparaît comme « USB Audio Device » (C-Media 0D8C:0016). Réglez la source de modulation USB de la radio selon son manuel pour la voix ou les données par USB.|Beim Yaesu FTX-1 erscheint der USB-Codec als „USB Audio Device“ (C-Media 0D8C:0016). Stelle die USB-Modulationsquelle des Funkgeräts gemäß Handbuch für Sprache oder Daten über USB ein.
+Antenas|Antennas|Antennes|Antennen
+Disenador y analizador de antenas de hilo para HF y VHF. Los calculos se hacen en este navegador.|Wire antenna designer and analyzer for HF and VHF. Calculations run in this browser.|Concepteur et analyseur d’antennes filaires pour HF et VHF. Les calculs se font dans ce navigateur.|Entwurfs- und Analysewerkzeug für Drahtantennen für KW und UKW. Die Berechnungen laufen in diesem Browser.
+Solo simulacion: conductores perfectos, sin suelo con perdidas. Comprueba la antena con un analizador antes de transmitir y no transmitas nunca sin una antena o carga adaptada.|Simulation only: perfect conductors, no lossy ground. Check the antenna with an analyzer before transmitting and never transmit without a matched antenna or load.|Simulation uniquement : conducteurs parfaits, pas de sol avec pertes. Vérifiez l’antenne avec un analyseur avant d’émettre et n’émettez jamais sans antenne ou charge adaptée.|Nur Simulation: ideale Leiter, kein verlustbehafteter Boden. Antenne vor dem Senden mit einem Analysator prüfen und nie ohne angepasste Antenne oder Last senden.
+Radio y bandas|Radio and bands|Radio et bandes|Funkgerät und Bänder
+Elige una radio|Choose a radio|Choisissez une radio|Funkgerät wählen
+Sin banda|No band|Aucune bande|Kein Band
+Elige una radio para limitar las bandas a las que puede transmitir.|Choose a radio to limit the bands to those it can transmit on.|Choisissez une radio pour limiter les bandes à celles sur lesquelles elle peut émettre.|Funkgerät wählen, um die Bänder auf die Sendebänder zu beschränken.
+Bandas de TX: pendiente de fuente.|TX bands: pendiente de fuente (no source).|Bandes TX : pendiente de fuente (aucune source).|TX-Bänder: pendiente de fuente (keine Quelle).
+Plantilla|Template|Modèle|Vorlage
+Tipo de antena|Antenna type|Type d’antenne|Antennentyp
+Dipolo de media onda|Half-wave dipole|Dipôle demi-onde|Halbwellendipol
+V invertida|Inverted V|V inversé|Inverted-V
+Dipolo multibanda con trampas|Multiband trap dipole|Dipôle multibande à trappes|Mehrband-Trapdipol
+Frecuencia (MHz)|Frequency (MHz)|Fréquence (MHz)|Frequenz (MHz)
+Altura sobre el suelo (m)|Height above ground (m)|Hauteur au-dessus du sol (m)|Höhe über Grund (m)
+Impedancia de referencia (ohm)|Reference impedance (ohm)|Impédance de référence (ohm)|Bezugsimpedanz (Ohm)
+Radio del hilo (mm)|Wire radius (mm)|Rayon du fil (mm)|Drahtradius (mm)
+Tierra perfecta (sin perdidas del suelo)|Perfect ground (no ground loss)|Sol parfait (sans pertes du sol)|Perfekter Boden (ohne Bodenverluste)
+Bandas (MHz, de 2 a 5, separadas por comas)|Bands (MHz, 2 to 5, comma separated)|Bandes (MHz, de 2 à 5, séparées par des virgules)|Bänder (MHz, 2 bis 5, durch Komma getrennt)
+Fijar en las trampas|Fix in the traps|Fixer dans les trappes|In den Traps festlegen
+Condensador C (calcula L)|Capacitor C (computes L)|Condensateur C (calcule L)|Kondensator C (berechnet L)
+Bobina L (calcula C)|Coil L (computes C)|Bobine L (calcule C)|Spule L (berechnet C)
+Valor fijado (pF o uH)|Fixed value (pF or uH)|Valeur fixée (pF ou uH)|Festgelegter Wert (pF oder uH)
+Q de la bobina (0 = sin perdidas)|Coil Q (0 = lossless)|Q de la bobine (0 = sans pertes)|Spulengüte Q (0 = verlustfrei)
+Crear plantilla|Create template|Créer le modèle|Vorlage erstellen
+Hilos y cargas|Wires and loads|Fils et charges|Drähte und Lasten
+Tabla de hilos|Wire table|Tableau des fils|Drahttabelle
+Tabla de cargas|Load table|Tableau des charges|Lasttabelle
+N.|No.|N°|Nr.
+x1 (m)|x1 (m)|x1 (m)|x1 (m)
+y1 (m)|y1 (m)|y1 (m)|y1 (m)
+z1 (m)|z1 (m)|z1 (m)|z1 (m)
+x2 (m)|x2 (m)|x2 (m)|x2 (m)
+y2 (m)|y2 (m)|y2 (m)|y2 (m)
+z2 (m)|z2 (m)|z2 (m)|z2 (m)
+Radio (m)|Radius (m)|Rayon (m)|Radius (m)
+Segmentos|Segments|Segments|Segmente
+Accion|Action|Action|Aktion
+Anadir hilo|Add wire|Ajouter un fil|Draht hinzufügen
+Hilo de alimentacion|Feed wire|Fil d’alimentation|Speisedraht
+Posicion de la alimentacion (0 a 1)|Feed position (0 to 1)|Position de l’alimentation (0 à 1)|Speiseposition (0 bis 1)
+Hilo|Wire|Fil|Draht
+Posicion|Position|Position|Position
+R (ohm)|R (ohm)|R (ohm)|R (Ohm)
+L (uH)|L (uH)|L (uH)|L (uH)
+C (pF)|C (pF)|C (pF)|C (pF)
+Serie|Series|Série|Reihe
+Paralelo|Parallel|Parallèle|Parallel
+Trampa LC|LC trap|Trappe LC|LC-Trap
+Anadir carga|Add load|Ajouter une charge|Last hinzufügen
+Geometria|Geometry|Géométrie|Geometrie
+2D planta (XY)|2D plan (XY)|2D plan (XY)|2D Draufsicht (XY)
+2D alzado (XZ)|2D elevation (XZ)|2D élévation (XZ)|2D Aufriss (XZ)
+Giro (grados)|Rotation (degrees)|Rotation (degrés)|Drehung (Grad)
+Elevacion de la vista (grados)|View elevation (degrees)|Élévation de la vue (degrés)|Ansichtselevation (Grad)
+Analisis|Analysis|Analyse|Analyse
+Frecuencia inicial (MHz)|Start frequency (MHz)|Fréquence de début (MHz)|Startfrequenz (MHz)
+Frecuencia final (MHz)|End frequency (MHz)|Fréquence de fin (MHz)|Endfrequenz (MHz)
+Puntos|Points|Points|Punkte
+Ajuste automatico|Automatic tuning|Réglage automatique|Automatische Abstimmung
+Escala global|Global scale|Échelle globale|Globale Skalierung
+Escala por hilo|Scale per wire|Échelle par fil|Skalierung pro Draht
+Calcular barrido|Run sweep|Calculer le balayage|Wobbelung berechnen
+Ajustar a SWR minimo|Tune for minimum SWR|Régler pour un ROS minimal|Auf minimales SWR abstimmen
+Calcular radiacion|Compute radiation|Calculer le rayonnement|Strahlung berechnen
+Progreso del calculo|Calculation progress|Progression du calcul|Berechnungsfortschritt
+Curva de SWR: sin datos.|SWR curve: no data.|Courbe de ROS : aucune donnée.|SWR-Kurve: keine Daten.
+Resistencia y reactancia: sin datos.|Resistance and reactance: no data.|Résistance et réactance : aucune donnée.|Wirk- und Blindwiderstand: keine Daten.
+Carta de Smith: sin datos.|Smith chart: no data.|Abaque de Smith : aucune donnée.|Smith-Diagramm: keine Daten.
+Radiacion|Radiation|Rayonnement|Strahlung
+Sin calcular.|Not computed.|Non calculé.|Nicht berechnet.
+Corte en azimut: sin datos.|Azimuth cut: no data.|Coupe en azimut : aucune donnée.|Azimutschnitt: keine Daten.
+Corte en elevacion: sin datos.|Elevation cut: no data.|Coupe en élévation : aucune donnée.|Elevationsschnitt: keine Daten.
+Diagrama 3D: sin datos.|3D pattern: no data.|Diagramme 3D : aucune donnée.|3D-Diagramm: keine Daten.
+Adaptacion y coaxial|Matching and coax|Adaptation et coaxial|Anpassung und Koax
+Balun o unun|Balun or unun|Balun ou unun|Balun oder Unun
+Factor de velocidad|Velocity factor|Facteur de vélocité|Verkürzungsfaktor
+Perdida (dB por 100 m)|Loss (dB per 100 m)|Perte (dB par 100 m)|Dämpfung (dB pro 100 m)
+Longitud del coaxial (m)|Coax length (m)|Longueur du coaxial (m)|Koaxlänge (m)
+Impedancia del coaxial (ohm)|Coax impedance (ohm)|Impédance du coaxial (ohm)|Koaximpedanz (Ohm)
+Calcular adaptacion|Compute matching|Calculer l’adaptation|Anpassung berechnen
+Medida|Measurement|Mesure|Messung
+Importar medida (CSV)|Import measurement (CSV)|Importer une mesure (CSV)|Messung importieren (CSV)
+Sin medida importada.|No measurement imported.|Aucune mesure importée.|Keine Messung importiert.
+Asesor de antena|Antenna advisor|Conseiller d’antenne|Antennenberater
+Cada sugerencia indica el numero calculado del que parte.|Every suggestion shows the computed number it comes from.|Chaque suggestion indique le nombre calculé dont elle provient.|Jeder Vorschlag nennt die berechnete Zahl, aus der er stammt.
+Revisar el diseno|Review the design|Examiner la conception|Entwurf prüfen
+Plantilla creada. Calcula el barrido para ver el SWR.|Template created. Run the sweep to see the SWR.|Modèle créé. Calculez le balayage pour voir le ROS.|Vorlage erstellt. Wobbelung berechnen, um das SWR zu sehen.
+Calculando el barrido...|Running the sweep...|Calcul du balayage...|Wobbelung wird berechnet...
+Barrido terminado.|Sweep finished.|Balayage terminé.|Wobbelung abgeschlossen.
+Ajustando las dimensiones...|Tuning the dimensions...|Réglage des dimensions...|Abmessungen werden abgestimmt...
+Ajuste terminado.|Tuning finished.|Réglage terminé.|Abstimmung abgeschlossen.
+Calculando la radiacion...|Computing the radiation...|Calcul du rayonnement...|Strahlung wird berechnet...
+Radiacion calculada.|Radiation computed.|Rayonnement calculé.|Strahlung berechnet.
+Calcula primero el barrido.|Run the sweep first.|Calculez d’abord le balayage.|Zuerst die Wobbelung berechnen.
+Resonancia en {0} MHz, por debajo de la banda (objetivo {1} MHz): acorta cada brazo {2} mm (brazo actual {3} m).|Resonance at {0} MHz, below the band (target {1} MHz): shorten each arm by {2} mm (current arm {3} m).|Résonance à {0} MHz, sous la bande (cible {1} MHz) : raccourcissez chaque brin de {2} mm (brin actuel {3} m).|Resonanz bei {0} MHz, unter dem Band (Ziel {1} MHz): jeden Arm um {2} mm kürzen (aktueller Arm {3} m).
+Resonancia en {0} MHz, por encima de la banda (objetivo {1} MHz): alarga cada brazo {2} mm (brazo actual {3} m).|Resonance at {0} MHz, above the band (target {1} MHz): lengthen each arm by {2} mm (current arm {3} m).|Résonance à {0} MHz, au-dessus de la bande (cible {1} MHz) : allongez chaque brin de {2} mm (brin actuel {3} m).|Resonanz bei {0} MHz, über dem Band (Ziel {1} MHz): jeden Arm um {2} mm verlängern (aktueller Arm {3} m).
+Sin cruce de X en el barrido: X = {0} ohm a {1} MHz con pendiente {2} ohm/MHz; la resonancia queda hacia {3} MHz.|No X zero crossing in the sweep: X = {0} ohm at {1} MHz with slope {2} ohm/MHz; resonance lies near {3} MHz.|Pas de passage à zéro de X dans le balayage : X = {0} ohm à {1} MHz, pente {2} ohm/MHz ; la résonance se situe vers {3} MHz.|Kein Nulldurchgang von X in der Wobbelung: X = {0} Ohm bei {1} MHz, Steigung {2} Ohm/MHz; die Resonanz liegt bei etwa {3} MHz.
+R = {0} ohm a {1} MHz con Z0 = {2} ohm: el transformador 1:{3} lleva R a {4} ohm (SWR resistivo {5}).|R = {0} ohm at {1} MHz with Z0 = {2} ohm: the 1:{3} transformer brings R to {4} ohm (resistive SWR {5}).|R = {0} ohm à {1} MHz avec Z0 = {2} ohm : le transformateur 1:{3} ramène R à {4} ohm (ROS résistif {5}).|R = {0} Ohm bei {1} MHz mit Z0 = {2} Ohm: der 1:{3}-Übertrager bringt R auf {4} Ohm (resistives SWR {5}).
+Trampa de {0} MHz: L y C resuenan en {1} MHz; con C = {2} pF usa L = {3} uH.|Trap for {0} MHz: L and C resonate at {1} MHz; with C = {2} pF use L = {3} uH.|Trappe de {0} MHz : L et C résonnent à {1} MHz ; avec C = {2} pF utilisez L = {3} uH.|Trap für {0} MHz: L und C schwingen bei {1} MHz; mit C = {2} pF L = {3} uH verwenden.
+Red L a {0} MHz para Z = {1} ohm hacia Z0 = {2} ohm: serie {3}, paralelo {4}.|L-network at {0} MHz for Z = {1} ohm to Z0 = {2} ohm: series {3}, shunt {4}.|Réseau en L à {0} MHz pour Z = {1} ohm vers Z0 = {2} ohm : série {3}, parallèle {4}.|L-Netzwerk bei {0} MHz für Z = {1} Ohm auf Z0 = {2} Ohm: Reihe {3}, parallel {4}.
+SWR {0} a {1} MHz (limite {2}): no hay correcciones que proponer.|SWR {0} at {1} MHz (limit {2}): no corrections to suggest.|ROS {0} à {1} MHz (limite {2}) : aucune correction à proposer.|SWR {0} bei {1} MHz (Grenze {2}): keine Korrekturen vorzuschlagen.
+SWR minimo {0} en {1} MHz, fuera de la banda {2}-{3} MHz.|Minimum SWR {0} at {1} MHz, outside the {2}-{3} MHz band.|ROS minimal {0} à {1} MHz, hors de la bande {2}-{3} MHz.|Minimales SWR {0} bei {1} MHz, außerhalb des Bandes {2}-{3} MHz.
 `.trim().split("\n").map(line => line.split("|")));
   root.BricohamsUITranslations = entries;
   if (typeof module === "object" && module.exports) module.exports = entries;

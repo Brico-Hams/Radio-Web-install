@@ -38,6 +38,7 @@ const pages = Object.freeze({
   "EJEMPLOS.md": "ayuda-ejemplos.html",
   "INICIACION-SATELITE.md": "ayuda-iniciacion-satelite.html",
   "ANTENAS-SATELITE.md": "ayuda-antenas-satelite.html",
+  "ANTENAS-HF.md": "ayuda-antenas-hf.html",
   "ARCHITECTURE.md": "ayuda-arquitectura.html",
   "BRANDING.md": "ayuda-marca.html",
   "DECISIONS.md": "ayuda-decisiones.html",

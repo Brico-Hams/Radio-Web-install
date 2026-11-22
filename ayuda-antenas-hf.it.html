@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <meta name="description" content="Antenne filari HF/VHF: progettazione e analisi: aiuto Bricohams per modello e versione.">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>Antenne filari HF/VHF: progettazione e analisi | Bricohams Radio Workspace</title>
+  <link rel="icon" href="bricohams-logo.png" type="image/png">
+  <link rel="stylesheet" href="styles.css">
+  <script src="appearance.js" defer></script>
+  <link rel="stylesheet" href="help-docs.css">
+  <link rel="alternate" hreflang="es" href="ayuda-antenas-hf.html">
+  <link rel="alternate" hreflang="en-US" href="ayuda-antenas-hf.en.html">
+  <link rel="alternate" hreflang="de" href="ayuda-antenas-hf.de.html">
+  <link rel="alternate" hreflang="it" href="ayuda-antenas-hf.it.html">
+  <link rel="alternate" hreflang="fr" href="ayuda-antenas-hf.fr.html">
+</head>
+<body>
+  <a class="skip" href="#main">Vai al contenuto</a>
+  <main id="main" class="firmware-help">
+    <header><a href="index.html"><img src="bricohams-logo.png" alt="Bricohams" width="240" height="89"></a>
+      <nav aria-label="Aiuto"><a href="ayuda-referencias.it.html">Documentazione e riferimenti</a> · <a href="ayuda-firmwares.it.html">Libreria firmware</a> · <a href="ayuda-atlas-uv-k5-v3.it.html">Atlas UV-K5 V3</a> · <a href="quansheng.html">Quansheng</a> · <a href="opengd77.html">OpenGD77</a></nav>
+      <nav class="languages" aria-label="Lingua"><a href="ayuda-antenas-hf.html" hreflang="es" lang="es">Español</a> · <a href="ayuda-antenas-hf.en.html" hreflang="en-US" lang="en-US">English (US)</a> · <a href="ayuda-antenas-hf.de.html" hreflang="de" lang="de">Deutsch</a> · <a href="ayuda-antenas-hf.it.html" hreflang="it" lang="it" aria-current="page">Italiano</a> · <a href="ayuda-antenas-hf.fr.html" hreflang="fr" lang="fr">Français</a></nav>
+    </header>
+    <nav class="panel" aria-label="Contenuto di questa guida"><h2>In questa guida</h2><ul><li><a href="#limites-y-seguridad">Limiti e sicurezza</a></li><li><a href="#funciones">Funzioni</a></li><li><a href="#plantillas-y-trampas">Modelli e trappole</a></li><li><a href="#formato-csv-de-medida">Formato CSV della misura</a></li><li><a href="#bandas-por-radio">Bande per radio</a></li></ul></nav>
+    <article class="panel"><h1 id="antenas-de-hilo-hf-vhf-disenador-y-analizador">Antenne filari HF/VHF: progettazione e analisi</h1>
+<p>Pagina <strong>Antenne</strong> dell’applicazione. Integra le <a href="ayuda-antenas-satelite.it.html">antenne per satelliti</a> e usa lo stesso risolutore a metodo dei momenti (<code>hardware/antenas/mom.py</code>), portato in JavaScript in <code>antenna-core.js</code>. Tutto viene calcolato nel browser e funziona senza connessione.</p>
+<h2 id="limites-y-seguridad">Limiti e sicurezza</h2>
+<ul>
+<li>È <strong>solo simulazione</strong>: conduttori perfetti, filo sottile e nessuna perdita ohmica.</li>
+<li>Non c’è un suolo con perdite: l’altezza dal suolo è modellata nello spazio libero o con un piano di terra perfetto (immagine) a z = 0.</li>
+<li>Verifica sempre l’antenna con un analizzatore prima di trasmettere.</li>
+<li>Non trasmettere mai senza un’antenna o un carico adattato.</li>
+<li>I valori di trappole, balun e cavo coassiale li inserisce l’utente; non esiste un database dei cavi.</li>
+</ul>
+<h2 id="funciones">Funzioni</h2>
+<div class="table-scroll"><table><thead><tr><th scope="col">Funzione</th><th scope="col">Cosa fa</th><th scope="col">Origine dei numeri</th></tr></thead><tbody>
+<tr><td>Geometria</td><td>Vista 2D/3D, tabelle modificabili di fili e carichi</td><td>Dati dell’utente</td></tr>
+<tr><td>Scansione e regolazione</td><td>SWR, R, X, carta di Smith e regolazione Nelder-Mead per SWR minimo</td><td>Modello dei momenti</td></tr>
+<tr><td>Radiazione</td><td>Sezioni in azimut ed elevazione, diagramma 3D, guadagno in dBi e correnti</td><td>Modello dei momenti</td></tr>
+<tr><td>Adattamento</td><td>Balun 1:1, 1:2, 1:4, 1:6, 1:9, rete a L e coassiale</td><td>Formule di linea e di circuito</td></tr>
+</tbody></table></div>
+<h2 id="plantillas-y-trampas">Modelli e trappole</h2>
+<p>Sono disponibili modelli per un dipolo a mezz’onda, una V invertita e un dipolo multibanda con trappole (da 2 a 5 bande e fino a 8 trappole LC in parallelo). Fissa C per calcolare L, oppure L per calcolare C, con la risonanza <code>f = 1/(2π√(LC))</code>. Ogni sezione parte da c/(4f) senza fattori di accorciamento inventati: usa il consulente e la regolazione automatica.</p>
+<h2 id="formato-csv-de-medida">Formato CSV della misura</h2>
+<p>Il file dell’analizzatore può contenere colonne di frequenza e SWR, oppure frequenza, R e X. Vengono rilevati l’intestazione, le unità Hz, kHz o MHz, il separatore (virgola, punto e virgola o tabulazione) e la virgola decimale. Esempio: <code>frecuencia;swr</code>.</p>
+<h2 id="bandas-por-radio">Bande per radio</h2>
+<p>L’elenco delle bande è limitato a quelle su cui la radio può trasmettere secondo i dati del repository: Icom IC-705 e IC-9700 (piani di banda di <code>FREQUENCY_RANGES.md</code>), OpenGD77 (limiti predefiniti, né piano di banda né autorizzazione), Quansheng e AnyTone. Se una radio non ha dati TX nel repository viene mostrato «pendiente de fuente».</p></article>
+    <footer><p class="translation-note">Traduzione dell&#39;originale spagnolo. In caso di discrepanza prevale la versione spagnola.</p><p>Documento generato dal Markdown versionato. Consulta le fonti e i limiti di ogni guida. <a href="ayuda-firmwares.it.html">Torna all&#39;indice</a>.</p></footer>
+  </main>
+</body>
+</html>

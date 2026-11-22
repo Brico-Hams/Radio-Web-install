@@ -38,7 +38,7 @@ const BASE_FILES = [
   ...["SystemInfo", "BroadcastFM", "Cube3D", "Tetris", "Breakout", "Minesweeper"].map(id => `precompiled/apps/${id}.app`),
   ...["bricohams-ardf", "bricohams-satellite", "bricohams-spectrum", "bricohams-labs", "bricohams-fusion",
     "f4hwn-fusion", "f4hwn-fieldops", "f4hwn-transfer", "f4hwn-labs"].map(id => `precompiled/${id}.bin`),
-  "radios.html", "satelites.html", "satellite-ui.js", "satellites.css", "data/world-land-110m.txt",
+  "radios.html", "satelites.html", "satellite-ui.js", "satellites.css", "antenna.html", "antenna-core.js", "antenna-ui.js", "antenna-worker.js", "antenna.css", "data/world-land-110m.txt",
   "herramientas.html", "tools-core.js", "tools-ui.js", "tools.css",
   "remoto.html", "remoto-ui.js", "remoto.css",
   "index.html", "opengd77.html", "quansheng.html", "ayuda.html", "ayuda.en.html", "ayuda.fr.html", "ayuda.de.html", "bricohams-logo.png", "styles.css", "appearance.js", "app.js", "radio-core.js", "ui-i18n.js", "ui-translations.js",
@@ -52,7 +52,7 @@ const BASE_FILES = [
   "ayuda-bricohams.html", "ayuda-entrega.html", "ayuda-android.html", "ayuda-tutoriales-android.html", "ayuda-validacion-v3-android.html", "help-docs.css",
   "ayuda-egzumer.html", "ayuda-pack-dim0s.html", "ayuda-atlas-uv-k5-v3.html",
   "ayuda-dm32uv.html", "ayuda-enlaces-comunidad.html", "ayuda-binarios-terceros.html", "ayuda-ejemplos.html",
-    "ayuda-iniciacion-satelite.html", "ayuda-antenas-satelite.html",
+    "ayuda-iniciacion-satelite.html", "ayuda-antenas-satelite.html", "ayuda-antenas-hf.html",
     ...["pase-orbital", "doppler", "estacion-bh", "memorias-fm", "antena-yagi", "antena-dipolo-v", "piezas-stl"]
       .map(id => `docs/atlas/sat-${id}.svg`),
     "docs/atlas/bloques-v3.svg", "docs/atlas/flash-interna-v3.svg", "docs/atlas/flash-externa-v3.svg",

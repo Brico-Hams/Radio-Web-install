@@ -20,7 +20,7 @@ app_files=(
   anytone.html anytone-core.js anytone-ui.js
   ftx1.html ftx1-menu.js ftx1-core.js ftx1-ui.js
   herramientas.html tools-core.js tools-ui.js tools.css
-  icom.html icom-ui.js index.html opengd77.html quansheng.html ayuda.html ayuda.en.html ayuda.fr.html ayuda.de.html bricohams-logo.png styles.css satelites.html radios.html satellite-ui.js satellites.css
+  icom.html icom-ui.js index.html opengd77.html quansheng.html ayuda.html ayuda.en.html ayuda.fr.html ayuda.de.html bricohams-logo.png styles.css satelites.html radios.html satellite-ui.js satellites.css antenna.html antenna-core.js antenna-ui.js antenna-worker.js antenna.css
   ayuda-firmwares.html ayuda-configuracion.html ayuda-quansheng.html help-docs.css
   ayuda-opciones-f4hwn.html ayuda-presets-f4hwn.html ayuda-ardf.html ayuda-manual-f4hwn.html
   ayuda-opengd77.html ayuda-opengd77-modelos.html ayuda-karina.html ayuda-bricohams.html
@@ -31,7 +31,7 @@ app_files=(
   ayuda-entrega.html ayuda-android.html ayuda-tutoriales-android.html ayuda-validacion-v3-android.html
   ayuda-egzumer.html ayuda-pack-dim0s.html ayuda-atlas-uv-k5-v3.html
   ayuda-dm32uv.html ayuda-enlaces-comunidad.html ayuda-binarios-terceros.html ayuda-ejemplos.html
-  ayuda-iniciacion-satelite.html ayuda-antenas-satelite.html
+  ayuda-iniciacion-satelite.html ayuda-antenas-satelite.html ayuda-antenas-hf.html
   app.js appearance.js ui-i18n.js ui-translations.js radio-core.js transports.js quansheng-connector.js tk11-connector.js tk11-ui.js quansheng-channels.js gd77-connector.js
   backup-store.js codeplug-editor.js radio-ui.js firmware-core.js firmware-catalog.js
   planning-core.js radioid-csv.js planning-ui.js runtime-mode.js server.cjs studio-pin.cjs studio.html studio.lock.json

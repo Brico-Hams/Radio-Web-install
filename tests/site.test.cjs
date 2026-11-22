@@ -8,7 +8,7 @@ const { createServer } = require("../server.cjs");
 
 const root = path.join(__dirname, "..");
 const read = name => fs.readFileSync(path.join(root, name), "utf8");
-const pages = ["index.html", "radios.html", "satelites.html", "herramientas.html", "opengd77.html", "quansheng.html", "anytone.html", "ftx1.html", "ayuda.html"];
+const pages = ["index.html", "radios.html", "satelites.html", "antenna.html", "herramientas.html", "opengd77.html", "quansheng.html", "anytone.html", "ftx1.html", "ayuda.html"];
 const docs = ["README.md", "AUTHORS.md", "ACKNOWLEDGEMENTS.md", "SUPPORT.md", "SECURITY.md",
   "docs/ARCHITECTURE.md", "docs/DECISIONS.md", "docs/DEPLOYMENT.md", "docs/BRANDING.md"];
 const helpSections = ["inicio", "funcionamiento", "opengd77", "quansheng", "codeplug", "firmware",
@@ -296,7 +296,7 @@ test("the sidebar markup lists Inicio, Satelites, Radios and Ayuda in task order
   const markup = app.slice(start, app.indexOf("</ul></nav>`", start));
   assert.ok(start > 0 && markup.includes('<nav aria-label="Navegacion principal">'));
   let position = -1;
-  for (const href of ["index.html", "herramientas.html", "satelites.html", "radios.html", "ayuda.html"]) {
+  for (const href of ["index.html", "herramientas.html", "satelites.html", "antenna.html", "radios.html", "ayuda.html"]) {
     const found = markup.indexOf(`navItem("${href}"`);
     assert.ok(found > position, `${href} out of order in the sidebar`);
     position = found;
