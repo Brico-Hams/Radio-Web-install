@@ -139,3 +139,19 @@ Before any write, the backup is reread and compared with the hashes in the permi
 - **kotlin:S1313 (LOW)** — `android/app/src/main/java/org/bricohams/radio/RotorProtocol.kt:14`. `AP_HOST = "192.168.4.1"` is the factory address of the ESP32 rotor access point; moving it to configuration would break the default connection.
 - **kotlin:S2245 (MEDIUM)** — `android/app/src/test/java/org/bricohams/radio/FtxEnhancedDecoderTest.kt:59`. It is a unit test with a fixed-seed `Random(7)` to reproduce the error pattern; it is not a security context and `SecureRandom` would make the test non-deterministic.
 - **kotlin:S7204 (HIGH)** — `android/app/build.gradle.kts:52`. Enabling `isMinifyEnabled` requires ProGuard/R8 rules (there is no `proguard-rules.pro`) and validating on a device that reflection/JSON/BLE still work; this cannot be guaranteed without physical tests. Decision: create the keep rules and test a minified release APK.
+
+### Fixed (SonarQube 2026-11-14)
+
+- **kotlin:S1143:** the `throw` inside `finally` is removed in `RigActivity` and `SstvTransmit`.
+- **kotlin:S899:** the result of `delete` is now checked in `OtaPlatform` and `SatelliteCatalog`.
+- **java:S3034 / java:S2184:** `byte`/`long` arithmetic fixed (explicit casts and masks before operating) in `Osd174`, `FtxFrames`, `FtxReceiver`, `Unpack77` and `Ldpc174`.
+- **javascript:S2871:** `sort` comparators are now explicit.
+- **javascript:S9383:** floating promises are awaited or handled.
+- **javascript:S6324:** control characters are removed from regular expressions.
+- **javascript:S6544:** promise misuse is fixed.
+- **javascript:S1143:** the `throw` inside `finally` is removed in `quansheng-factory`.
+- **javascript:S7727:** `map` callbacks are fixed.
+- **xml:S6358 / xml:S5332:** the fdroid flavor manifest declares `android:allowBackup="false"` and `android:usesCleartextTraffic="false"`.
+- **javascript:S4036:** the build `PATH` is trusted; marked with `NOSONAR`.
+- **kotlin:S2245:** the seeded test RNG is deterministic on purpose; marked with `NOSONAR`.
+- **kotlin:S7204:** R8 is left as a `TODO` (pending keep rules and on-device tests).

@@ -52,7 +52,7 @@
       return out + '"';
     }
     if (Array.isArray(value)) return "[" + value.map(canonical).join(",") + "]";
-    return "{" + Object.keys(value).sort().map(key => canonical(key) + ":" + canonical(value[key])).join(",") + "}";
+    return "{" + Object.keys(value).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)).map(key => canonical(key) + ":" + canonical(value[key])).join(",") + "}";
   }
 
   const hexBytes = hex => Uint8Array.from(hex.match(/../g), pair => parseInt(pair, 16));
@@ -125,5 +125,5 @@
 
   const api = { canonical, verifyManifest, isDownloadUrl, PUBLIC_KEY_HEX, TEXT };
   if (typeof module !== "undefined") module.exports = api;
-  if (typeof document !== "undefined") main(document);
+  if (typeof document !== "undefined") void main(document);
 })(globalThis);

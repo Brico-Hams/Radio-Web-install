@@ -334,7 +334,7 @@
     channels.forEach((channel, index) => rows.push([index, R.asciiName(channel.name, 10), channel.rx, "off", "0.000000",
       "", "88.5", "88.5", "023", "NN", "023", "Tone->Tone", templateModulation(channel) === "AM" ? "AM" : channel.narrow ? "NFM" : "FM", "5.00", "",
       `RX ONLY. Zone: ${channel.zone}. TX nominal ${channel.tx}; tono de proveedor ${channel.tone || "sin dato"}. ${channel.source || ""} ${channel.notes || ""} ${channel.attribution || ""} ${channel.license || ""}`]));
-    return rows.map(row => row.map(R.csvCell).join(",")).join("\r\n") + "\r\n";
+    return rows.map(row => row.map(cell => R.csvCell(cell)).join(",")).join("\r\n") + "\r\n";
   }
   function referenceCSV(plan, profile) {
     const { layout } = profile;
@@ -347,7 +347,7 @@
       rows.push([c.name, c.rx, c.tx, templateModulation(c), "Yes", c.country || "", c.regionId || "",
         c.city || "", c.callsign || c.ident || "", c.key, c.source || "", c.notes || "", ...numbers]);
     }
-    return rows.map(row => row.map(R.csvCell).join(",")).join("\r\n") + "\r\n";
+    return rows.map(row => row.map(cell => R.csvCell(cell)).join(",")).join("\r\n") + "\r\n";
   }
   function anytoneProject(channels) {
     return { format: "bricohams-anytone-project", version: 1, profile: "D878", airband: false, fmBroadcast: false,

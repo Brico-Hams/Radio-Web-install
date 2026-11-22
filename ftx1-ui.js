@@ -554,7 +554,7 @@
     bindVfo("vfo-mode", "change", () => cat.setMode($("vfo-mode").value), "Modo MAIN verificado.");
     bindVfo("vfo-split", "change", () => cat.setSplit($("vfo-split").checked), "Split verificado.");
     bind("ctl-poll", "change", () => {
-      if ($("ctl-poll").checked) pollMeters();
+      if ($("ctl-poll").checked) void pollMeters();
       else stopPolling();
     });
     const baseRefresh = refresh;

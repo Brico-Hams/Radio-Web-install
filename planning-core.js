@@ -497,14 +497,14 @@
       this.stopPromise = null;
     }
     async start() {
-      R.assert(!this.started && !this.stopPromise, "Crea una sesion CAT nueva para cada inicio.");
+      R.assert(!this.started && this.stopPromise == null, "Crea una sesion CAT nueva para cada inicio.");
       this.started = true;
       catPassTarget(this.plan.orbital, this.plan.transmitter, this.plan.pass, this.plan.observer, this.clock(), this.plan.uplinkHz);
       this.active = true;
       return this.step();
     }
     async step() {
-      R.assert(this.active && !this.inFlight, "Seguimiento CAT inactivo u ocupado.");
+      R.assert(this.active && this.inFlight == null, "Seguimiento CAT inactivo u ocupado.");
       const task = async () => {
         const time = this.clock();
         R.assert(this.lastTime === null || time > this.lastTime && time - this.lastTime <= 2000,
@@ -532,7 +532,7 @@
     }
     async finishStop() {
       const errors = [];
-      if (this.inFlight) {
+      if (this.inFlight != null) {
         try { await this.inFlight; } catch (error) { errors.push(error); }
       }
       if (this.connector.connected) {

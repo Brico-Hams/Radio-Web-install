@@ -53,7 +53,7 @@ public final class FtxFrames {
             for (int i = 0; i < 4; i++) tones[33 * b + i] = FT4_SYNC[b][i];
         }
         for (int k = 0; k < 87; k++) {
-            int v = (codeword174[2 * k] << 1) | codeword174[2 * k + 1];
+            int v = ((codeword174[2 * k] & 0xff) << 1) | (codeword174[2 * k + 1] & 0xff);
             int at = k < 29 ? 4 + k : (k < 58 ? 8 + k : 12 + k);
             tones[at] = FT4_GRAY[v];
         }

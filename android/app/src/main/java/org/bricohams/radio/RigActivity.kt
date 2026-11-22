@@ -1656,6 +1656,7 @@ class RigActivity : LocalizedActivity() {
         requireUi(audio.isNotEmpty() && audio.size * 1000L / rate <= MAX_TX_MS) { UiText(R.string.err_audio_length, MAX_TX_MS / 1000, 120) }
         val sink = AudioTrackSink(rate, applicationContext)
         var failure: Throwable? = null
+        var cleanupFailure: Exception? = null
         try {
             checkUi(sink.requestFocus()) { UiText(R.string.err_audio_focus) }
             pttHeld = true
@@ -1693,11 +1694,12 @@ class RigActivity : LocalizedActivity() {
             try {
                 if (pttHeld) releasePtt(r)
             } catch (cleanup: Exception) {
-                if (failure == null) throw cleanup else failure.addSuppressed(cleanup)
+                if (failure == null) cleanupFailure = cleanup else failure.addSuppressed(cleanup)
             } finally {
                 try { sink.abandonFocus() } finally { sink.close() }
             }
         }
+        cleanupFailure?.let { throw it }
     }
 
     private fun startReceive() {

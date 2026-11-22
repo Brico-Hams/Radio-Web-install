@@ -122,6 +122,7 @@ internal class CatTransmitter(
             throw error
         }
         var failure: Throwable? = null
+        var deferred: Throwable? = null
         activeSink = sink
         try {
             var state = cat.pttKey()
@@ -175,13 +176,13 @@ internal class CatTransmitter(
             try {
                 try { sink.abandonFocus() } finally { sink.close() }
             } catch (error: RuntimeException) {
-                if (failure == null && cleanup == null) throw error
+                if (failure == null && cleanup == null) deferred = error
             }
             if (cleanup != null) {
-                if (failure == null) throw cleanup
-                failure.addSuppressed(cleanup)
+                if (failure == null) deferred = cleanup else failure.addSuppressed(cleanup)
             }
         }
+        deferred?.let { throw it }
     }
     private fun releasePtt(): Throwable? {
         var last: Throwable? = null

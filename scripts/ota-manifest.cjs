@@ -40,7 +40,7 @@ function canonical(value) {
     return out + '"';
   }
   if (Array.isArray(value)) return "[" + value.map(canonical).join(",") + "]";
-  return "{" + Object.keys(value).sort().map((key) => canonical(key) + ":" + canonical(value[key])).join(",") + "}";
+  return "{" + Object.keys(value).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)).map((key) => canonical(key) + ":" + canonical(value[key])).join(",") + "}";
 }
 
 function parseArgs(argv) {

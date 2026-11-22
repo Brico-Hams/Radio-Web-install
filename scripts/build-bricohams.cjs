@@ -66,7 +66,7 @@ function resolvePlan(catalog, preset, changes) {
   assert(!options.DEV, "No se admiten builds de desarrollo.");
   for (const name of REQUIRED) assert(options[name], `${name} debe estar ON para este perfil Multiboot.`);
   const delta = Object.keys(options).filter(name => options[name] !== defaults[name])
-    .sort().map(name => `${name}=${options[name] ? "ON" : "OFF"}`);
+    .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)).map(name => `${name}=${options[name] ? "ON" : "OFF"}`);
   return { options, delta };
 }
 

@@ -139,3 +139,19 @@ Prima di ogni scrittura, il backup viene riletto e confrontato con gli hash del 
 - **kotlin:S1313 (LOW)** — `android/app/src/main/java/org/bricohams/radio/RotorProtocol.kt:14`. `AP_HOST = "192.168.4.1"` è l'indirizzo di fabbrica dell'access point del rotore ESP32; spostarlo nella configurazione romperebbe la connessione predefinita.
 - **kotlin:S2245 (MEDIUM)** — `android/app/src/test/java/org/bricohams/radio/FtxEnhancedDecoderTest.kt:59`. È un test unitario con seme fisso `Random(7)` per riprodurre lo schema di errori; non è un contesto di sicurezza e `SecureRandom` renderebbe il test non deterministico.
 - **kotlin:S7204 (HIGH)** — `android/app/build.gradle.kts:52`. Attivare `isMinifyEnabled` richiede regole ProGuard/R8 (non esiste alcun `proguard-rules.pro`) e verificare su un dispositivo che reflection/JSON/BLE funzionino ancora; non è garantibile senza prove fisiche. Decisione: creare le regole keep e provare un APK release minificato.
+
+### Corretto (SonarQube 2026-11-14)
+
+- **kotlin:S1143:** il `throw` dentro `finally` è rimosso in `RigActivity` e `SstvTransmit`.
+- **kotlin:S899:** il risultato di `delete` ora è controllato in `OtaPlatform` e `SatelliteCatalog`.
+- **java:S3034 / java:S2184:** aritmetica `byte`/`long` corretta (cast espliciti e maschere prima dell'operazione) in `Osd174`, `FtxFrames`, `FtxReceiver`, `Unpack77` e `Ldpc174`.
+- **javascript:S2871:** i comparatori di `sort` ora sono espliciti.
+- **javascript:S9383:** le promise fluttuanti sono attese o gestite.
+- **javascript:S6324:** i caratteri di controllo sono rimossi dalle espressioni regolari.
+- **javascript:S6544:** l'uso improprio delle promise è corretto.
+- **javascript:S1143:** il `throw` dentro `finally` è rimosso in `quansheng-factory`.
+- **javascript:S7727:** i callback di `map` sono corretti.
+- **xml:S6358 / xml:S5332:** il manifest del flavor fdroid dichiara `android:allowBackup="false"` e `android:usesCleartextTraffic="false"`.
+- **javascript:S4036:** il `PATH` di build è attendibile; marcato con `NOSONAR`.
+- **kotlin:S2245:** l'RNG a seme fisso dei test è deterministico di proposito; marcato con `NOSONAR`.
+- **kotlin:S7204:** R8 resta come `TODO` (in attesa di regole keep e prove su dispositivo).

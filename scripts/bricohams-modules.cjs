@@ -13,7 +13,7 @@ function modulePlan(modules, options) {
     assert(!options.ENABLE_FEAT_F4HWN_OVERLAY_APPS, "El modulo requiere Fox Hunt residente, no overlay.");
     assert(!options.ENABLE_FEAT_F4HWN_BEACON, "El modulo requiere ENABLE_FEAT_F4HWN_BEACON=OFF.");
   }
-  return [...modules].sort();
+  return [...modules].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
 }
 
 function replaceOnce(text, before, after, file) {

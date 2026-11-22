@@ -139,3 +139,19 @@ Vor jedem Schreibvorgang wird die Sicherung erneut gelesen und mit den Hashes de
 - **kotlin:S1313 (LOW)** — `android/app/src/main/java/org/bricohams/radio/RotorProtocol.kt:14`. `AP_HOST = "192.168.4.1"` ist die Werksadresse des Access Points des ESP32-Rotors; sie in die Konfiguration zu verschieben, würde die Standardverbindung brechen.
 - **kotlin:S2245 (MEDIUM)** — `android/app/src/test/java/org/bricohams/radio/FtxEnhancedDecoderTest.kt:59`. Es ist ein Unit-Test mit festem Seed `Random(7)`, um das Fehlermuster zu reproduzieren; kein Sicherheitskontext, und `SecureRandom` würde den Test nicht deterministisch machen.
 - **kotlin:S7204 (HIGH)** — `android/app/build.gradle.kts:52`. `isMinifyEnabled` zu aktivieren erfordert ProGuard/R8-Regeln (es gibt keine `proguard-rules.pro`) und eine Prüfung auf dem Gerät, dass Reflection/JSON/BLE weiter funktionieren; ohne physische Tests nicht garantierbar. Entscheidung: Keep-Regeln anlegen und ein minifiziertes Release-APK testen.
+
+### Behoben (SonarQube 2026-11-14)
+
+- **kotlin:S1143:** das `throw` in `finally` wird in `RigActivity` und `SstvTransmit` entfernt.
+- **kotlin:S899:** das Ergebnis von `delete` wird in `OtaPlatform` und `SatelliteCatalog` nun geprüft.
+- **java:S3034 / java:S2184:** `byte`/`long`-Arithmetik korrigiert (explizite Casts und Masken vor der Berechnung) in `Osd174`, `FtxFrames`, `FtxReceiver`, `Unpack77` und `Ldpc174`.
+- **javascript:S2871:** `sort`-Comparatoren sind jetzt explizit.
+- **javascript:S9383:** schwebende Promises werden abgewartet oder behandelt.
+- **javascript:S6324:** Steuerzeichen werden aus regulären Ausdrücken entfernt.
+- **javascript:S6544:** die falsche Verwendung von Promises ist behoben.
+- **javascript:S1143:** das `throw` in `finally` wird in `quansheng-factory` entfernt.
+- **javascript:S7727:** `map`-Callbacks sind korrigiert.
+- **xml:S6358 / xml:S5332:** das Manifest des fdroid-Flavors deklariert `android:allowBackup="false"` und `android:usesCleartextTraffic="false"`.
+- **javascript:S4036:** der Build-`PATH` ist vertrauenswürdig; mit `NOSONAR` markiert.
+- **kotlin:S2245:** der Test-RNG mit festem Seed ist absichtlich deterministisch; mit `NOSONAR` markiert.
+- **kotlin:S7204:** R8 bleibt als `TODO` (ausstehend: Keep-Regeln und Tests auf dem Gerät).

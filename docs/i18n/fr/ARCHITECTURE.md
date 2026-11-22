@@ -139,3 +139,19 @@ Avant toute écriture, la sauvegarde est relue et comparée aux empreintes de l'
 - **kotlin:S1313 (LOW)** — `android/app/src/main/java/org/bricohams/radio/RotorProtocol.kt:14`. `AP_HOST = "192.168.4.1"` est l'adresse d'usine du point d'accès du rotor ESP32 ; la déplacer dans la configuration casserait la connexion par défaut.
 - **kotlin:S2245 (MEDIUM)** — `android/app/src/test/java/org/bricohams/radio/FtxEnhancedDecoderTest.kt:59`. C'est un test unitaire avec une graine fixe `Random(7)` pour reproduire le motif d'erreurs ; ce n'est pas un contexte de sécurité et `SecureRandom` rendrait le test non déterministe.
 - **kotlin:S7204 (HIGH)** — `android/app/build.gradle.kts:52`. Activer `isMinifyEnabled` exige des règles ProGuard/R8 (il n'existe aucun `proguard-rules.pro`) et de vérifier sur un appareil que réflexion/JSON/BLE fonctionnent toujours ; impossible à garantir sans essais physiques. Décision : créer les règles keep et tester un APK release minifié.
+
+### Corrigé (SonarQube 2026-11-14)
+
+- **kotlin:S1143 :** le `throw` dans `finally` est supprimé dans `RigActivity` et `SstvTransmit`.
+- **kotlin:S899 :** le résultat de `delete` est désormais vérifié dans `OtaPlatform` et `SatelliteCatalog`.
+- **java:S3034 / java:S2184 :** arithmétique `byte`/`long` corrigée (conversions explicites et masques avant l'opération) dans `Osd174`, `FtxFrames`, `FtxReceiver`, `Unpack77` et `Ldpc174`.
+- **javascript:S2871 :** les comparateurs de `sort` sont désormais explicites.
+- **javascript:S9383 :** les promesses flottantes sont attendues ou gérées.
+- **javascript:S6324 :** les caractères de contrôle sont retirés des expressions régulières.
+- **javascript:S6544 :** le mauvais usage des promesses est corrigé.
+- **javascript:S1143 :** le `throw` dans `finally` est supprimé dans `quansheng-factory`.
+- **javascript:S7727 :** les callbacks de `map` sont corrigés.
+- **xml:S6358 / xml:S5332 :** le manifeste du flavor fdroid déclare `android:allowBackup="false"` et `android:usesCleartextTraffic="false"`.
+- **javascript:S4036 :** le `PATH` de compilation est de confiance ; marqué `NOSONAR`.
+- **kotlin:S2245 :** le RNG à graine fixe des tests est déterministe volontairement ; marqué `NOSONAR`.
+- **kotlin:S7204 :** R8 reste en `TODO` (règles keep et essais sur appareil à faire).

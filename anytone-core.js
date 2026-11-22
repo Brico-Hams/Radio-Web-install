@@ -72,7 +72,7 @@
       "RX_Only", "FM_Broadcast_RX", "Zone", "Source", "Notes"]];
     checked.channels.forEach(c => rows.push([c.name, c.rx, c.tx, c.mode, c.colorCode, c.timeslot,
       c.talkgroup, c.bandwidth, "Yes", c.broadcastOnly ? "Yes" : "No", c.zone, c.source, c.notes]));
-    return rows.map(row => row.map(R.csvCell).join(",")).join("\r\n") + "\r\n";
+    return rows.map(row => row.map(cell => R.csvCell(cell)).join(",")).join("\r\n") + "\r\n";
   }
   function radioIDRepeaters(payload) {
     R.assert(payload && Array.isArray(payload.rptrs) && payload.rptrs.length <= 100000, "Registro RadioID: se requiere rptrs.");

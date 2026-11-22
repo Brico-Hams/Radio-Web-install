@@ -294,6 +294,7 @@
       const dfu = new QuanshengFactoryDFU();
       dfu.onProgress = onProgress;
       let operationError = null;
+      let closeError = null;
       try {
         await dfu.openFactory(stageModel);
         const result = await dfu.flashFactory(stage, word);
@@ -310,14 +311,12 @@
       } catch (error) {
         operationError = error;
         $(mainFirmware ? "qs-main-firmware-status" : "qs-factory-native-status").textContent = `ERROR DFU: ${error.message}. No cierres esta pagina; conserva el respaldo. Se puede repetir DFU con la misma imagen y la misma radio.`;
-        throw error;
       } finally {
         try { await dfu.disconnect(); }
-        catch (error) {
-          if (operationError) throw new AggregateError([operationError, error], "Fallo DFU y cierre del puerto.");
-          throw error;
-        }
+        catch (error) { closeError = error; }
       }
+      if (operationError && closeError) throw new AggregateError([operationError, closeError], "Fallo DFU y cierre del puerto.");
+      if (operationError || closeError) throw operationError || closeError;
     });
     for (const id of ["qs-factory-flash-source", "qs-factory-firmware-source"]) {
       $(id).addEventListener("click", event => {

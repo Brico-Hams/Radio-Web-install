@@ -147,7 +147,7 @@ class OtaUpdater(
             if (!part.renameTo(apk)) throw IOException("rename")
             return apk
         } catch (error: Exception) {
-            part.delete()
+            if (!part.delete() && part.exists()) part.deleteOnExit()
             throw error
         }
     }

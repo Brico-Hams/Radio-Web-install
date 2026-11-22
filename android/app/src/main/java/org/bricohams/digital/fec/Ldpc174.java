@@ -166,7 +166,7 @@ public final class Ldpc174 {
             for (int b = 0; b < K; b++) {
                 char c = text.charAt(i + b);
                 if (c != '0' && c != '1') throw new IOException("Generator row " + r + " is not 91 binary characters");
-                long bit = c - '0';
+                long bit = (long) c - '0';
                 if (b < 64) high |= bit << (63 - b);
                 else low |= bit << (127 - b);
             }
