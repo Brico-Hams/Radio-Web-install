@@ -17,6 +17,7 @@
       "Journal local limité ; sans jetons, indicatifs, QSO, fréquences, audio, localisation ni identifiants d’appareil. Examinez le JSON avant l’envoi. Le récepteur HTTPS peut connaître l’IP et les métadonnées de connexion. Sur Pages, téléchargez le rapport et importez-le dans la configuration du client HTTPS ; la CSP reste intacte et GitHub n’est pas récepteur.",
       "Begrenztes lokales Protokoll; keine Tokens, Rufzeichen, QSOs, Frequenzen, Audiodaten, Standorte oder Gerätekennungen. JSON vor dem Senden prüfen. Der HTTPS-Empfänger kann IP und Verbindungsmetadaten kennen. Auf Pages Bericht herunterladen und in HTTPS-Client-Einstellungen importieren; CSP bleibt unverändert und GitHub ist kein Empfänger."],
     ["Estacion remota", "Remote station", "Station distante", "Remote-Station"],
+    ["Estación remota (host/agente Python)", "Remote station (Python host/agent)", "Station distante (hôte/agent Python)", "Remote-Station (Python-Host/-Agent)"],
     ["Radio y agente", "Radio and agent", "Radio et agent", "Funkgerät und Agent"],
     ["Conecta la radio por USB al agente de la estacion; configura el modelo y el puerto CAT correcto.", "Connect the radio by USB to the station agent; configure the model and the correct CAT port.", "Connectez la radio par USB à l’agent de station ; configurez le modèle et le bon port CAT.", "Funkgerät per USB mit dem Stationsagenten verbinden; Modell und richtigen CAT-Port konfigurieren."],
     ["Host HTTPS", "HTTPS host", "Hôte HTTPS", "HTTPS-Host"],
@@ -1513,6 +1514,9 @@ Soltar PTT|Release PTT|Relâcher le PTT|PTT loslassen
 Transmitir CAT TX|Transmit CAT TX|Émettre CAT TX|CAT-TX senden
 Soltar PTT CAT TX|Release CAT TX PTT|Relâcher le PTT CAT TX|CAT-TX-PTT loslassen
 PTT CAT sin usar.|CAT PTT unused.|PTT CAT inutilisé.|CAT-PTT unbenutzt.
+Relé: no configurado|Relay: not configured|Relais : non configuré|Relay: nicht konfiguriert
+Relé: conectado|Relay: connected|Relais : connecté|Relay: verbunden
+Relé: desconectado|Relay: disconnected|Relais : déconnecté|Relay: getrennt
 Ranuras de firmware|Firmware slots|Emplacements de firmware|Firmware-Slots
 Guarda varios firmwares F4HWN compatibles en la radio y elige uno al arrancar (manten MENU). La escritura solo afecta a la Flash externa; la radio sigue utilizable.|Store several compatible F4HWN firmwares on the radio and choose one at power-on (hold MENU). Writing only affects the external Flash; the radio remains usable.|Enregistrez plusieurs firmwares F4HWN compatibles dans la radio et choisissez-en un au démarrage (maintenez MENU). L’écriture n’affecte que la Flash externe ; la radio reste utilisable.|Speichere mehrere kompatible F4HWN-Firmwares im Funkgerät und wähle beim Start eine aus (MENU halten). Das Schreiben betrifft nur den externen Flash; das Funkgerät bleibt nutzbar.
 Actualizar ranuras|Refresh slots|Actualiser les emplacements|Slots aktualisieren
@@ -1735,8 +1739,317 @@ TX / subida|TX / uplink|TX / montée|TX / Uplink
 Sin bajada|No downlink|Pas de descente|Kein Downlink
 Sin subida|No uplink|Pas de montée|Kein Uplink
 Doppler calculado: {0} MHz (sin control de radio)|Calculated Doppler: {0} MHz (no radio control)|Doppler calculé : {0} MHz (sans contrôle de la radio)|Berechneter Doppler: {0} MHz (ohne Funkgerätesteuerung)
+/ Herramientas|/ Tools|/ Outils|/ Werkzeuge
+Herramientas de radio|Radio tools|Outils radio|Funkwerkzeuge
+Calculadoras de radioaficionado. Los calculos se hacen en este navegador.|Amateur radio calculators. Calculations run in this browser.|Calculateurs pour radioamateurs. Les calculs se font dans ce navigateur.|Rechner für den Amateurfunk. Die Berechnungen laufen in diesem Browser.
+Calcular|Calculate|Calculer|Berechnen
+De coordenadas a locator|From coordinates to locator|Des coordonnées au locator|Von Koordinaten zum Locator
+Calcular locator|Calculate locator|Calculer le locator|Locator berechnen
+Locator de 6 caracteres|6-character locator|Locator à 6 caractères|Locator mit 6 Zeichen
+Locator de 8 caracteres|8-character locator|Locator à 8 caractères|Locator mit 8 Zeichen
+De locator a coordenadas|From locator to coordinates|Du locator aux coordonnées|Vom Locator zu Koordinaten
+Calcular coordenadas|Calculate coordinates|Calculer les coordonnées|Koordinaten berechnen
+Distancia y rumbo|Distance and bearing|Distance et cap|Entfernung und Peilung
+Mi locator|My locator|Mon locator|Mein Locator
+Locator de la otra estacion|Other station’s locator|Locator de l’autre station|Locator der Gegenstation
+Calcular distancia|Calculate distance|Calculer la distance|Entfernung berechnen
+Camino corto|Short path|Chemin court|Kurzer Weg
+Camino largo|Long path|Chemin long|Langer Weg
+Rumbo|Bearing|Cap|Peilung
+Rumbo inverso|Reverse bearing|Cap inverse|Gegenpeilung
+ROE (relacion de ondas estacionarias)|SWR (standing wave ratio)|ROS (rapport d’ondes stationnaires)|SWR (Stehwellenverhältnis)
+ROE|SWR|ROS|SWR
+Perdida de retorno|Return loss|Perte de retour|Rückflussdämpfung
+Perdida por desadaptacion|Mismatch loss|Perte par désadaptation|Fehlanpassungsdämpfung
+Potencia reflejada|Reflected power|Puissance réfléchie|Reflektierte Leistung
+Desde potencia directa y reflejada|From forward and reflected power|À partir de la puissance directe et réfléchie|Aus Vorwärts- und Rückwärtsleistung
+Potencia directa (W)|Forward power (W)|Puissance directe (W)|Vorwärtsleistung (W)
+Potencia reflejada (W)|Reflected power (W)|Puissance réfléchie (W)|Rückwärtsleistung (W)
+Calcular ROE|Calculate SWR|Calculer le ROS|SWR berechnen
+Desde el valor de ROE|From the SWR value|À partir de la valeur du ROS|Aus dem SWR-Wert
+ROE (1 o mas)|SWR (1 or more)|ROS (1 ou plus)|SWR (1 oder mehr)
+Calcular desde ROE|Calculate from SWR|Calculer à partir du ROS|Aus SWR berechnen
+Perdida en el cable|Cable loss|Perte dans le câble|Kabeldämpfung
+Cable|Cable|Câble|Kabel
+Otro (dB/100 m)|Other (dB/100 m)|Autre (dB/100 m)|Andere (dB/100 m)
+Atenuacion (dB/100 m)|Attenuation (dB/100 m)|Atténuation (dB/100 m)|Dämpfung (dB/100 m)
+Frecuencia (MHz)|Frequency (MHz)|Fréquence (MHz)|Frequenz (MHz)
+Longitud (m)|Length (m)|Longueur (m)|Länge (m)
+Potencia (W)|Power (W)|Puissance (W)|Leistung (W)
+Calcular perdida|Calculate loss|Calculer la perte|Dämpfung berechnen
+Atenuacion|Attenuation|Atténuation|Dämpfung
+Potencia en la antena|Power at the antenna|Puissance à l’antenne|Leistung an der Antenne
+Eficiencia|Efficiency|Rendement|Wirkungsgrad
+Valores tipicos de catalogo; consulta el fabricante.|Typical catalogue values; check with the manufacturer.|Valeurs typiques du catalogue ; consultez le fabricant.|Typische Katalogwerte; frage den Hersteller.
+Conversion de unidades|Unit conversion|Conversion d’unités|Einheitenumrechnung
+Unidad|Unit|Unité|Einheit
+Convertir|Convert|Convertir|Umrechnen
+Vatios|Watts|Watts|Watt
+PRA (ERP) y PIRE (EIRP)|ERP and EIRP|PAR (ERP) et PIRE (EIRP)|ERP und EIRP
+Potencia del equipo (W)|Transmitter power (W)|Puissance de l’émetteur (W)|Senderleistung (W)
+Perdida del cable (dB)|Cable loss (dB)|Perte du câble (dB)|Kabeldämpfung (dB)
+Ganancia de antena (dBd)|Antenna gain (dBd)|Gain d’antenne (dBd)|Antennengewinn (dBd)
+Calcular PRA|Calculate ERP|Calculer la PAR|ERP berechnen
+PRA (ERP)|ERP|PAR (ERP)|ERP
+PIRE (EIRP)|EIRP|PIRE (EIRP)|EIRP
+Antena|Antenna|Antenne|Antenne
+Calcular longitudes|Calculate lengths|Calculer les longueurs|Längen berechnen
+Factor de velocidad (0,5 a 1)|Velocity factor (0.5 to 1)|Facteur de vitesse (0,5 à 1)|Verkürzungsfaktor (0,5 bis 1)
+Longitud de onda|Wavelength|Longueur d’onde|Wellenlänge
+Dipolo de media onda|Half-wave dipole|Dipôle demi-onde|Halbwellendipol
+Vertical de cuarto de onda|Quarter-wave vertical|Verticale quart d’onde|Viertelwellen-Vertikalantenne
+Plan de bandas|Band plan|Plan de bandes|Bandplan
+Limites segun el Reglamento de Radiocomunicaciones de la UIT; las normas nacionales pueden ser mas estrictas.|Limits per the ITU Radio Regulations; national rules may be narrower.|Limites selon le Règlement des radiocommunications de l’UIT ; les règles nationales peuvent être plus strictes.|Grenzen gemäß ITU-Vollzugsordnung für den Funkdienst; nationale Regeln können enger sein.
+Buscar banda|Find band|Chercher la bande|Band suchen
+Region IARU|IARU region|Région IARU|IARU-Region
+Region 1: Europa, Africa y Oriente Medio|Region 1: Europe, Africa and Middle East|Région 1 : Europe, Afrique et Moyen-Orient|Region 1: Europa, Afrika und Naher Osten
+Region 2: America|Region 2: the Americas|Région 2 : Amériques|Region 2: Amerika
+Region 3: Asia y Pacifico|Region 3: Asia and Pacific|Région 3 : Asie et Pacifique|Region 3: Asien und Pazifik
+Fuera de banda de aficionado|Outside amateur bands|Hors des bandes radioamateur|Außerhalb der Amateurfunkbänder
+Desde (MHz)|From (MHz)|De (MHz)|Von (MHz)
+Hasta (MHz)|To (MHz)|À (MHz)|Bis (MHz)
+Codigo RST|RST code|Code RST|RST-Code
+Cifra|Digit|Chiffre|Ziffer
+Significado|Meaning|Signification|Bedeutung
+Legibilidad (R)|Readability (R)|Lisibilité (R)|Lesbarkeit (R)
+Intensidad de la senal (S)|Signal strength (S)|Force du signal (S)|Signalstärke (S)
+Tono (T, solo CW)|Tone (T, CW only)|Tonalité (T, CW uniquement)|Ton (T, nur CW)
+Ilegible|Unreadable|Illisible|Unlesbar
+Apenas legible, algunas palabras|Barely readable, occasional words distinguishable|À peine lisible, quelques mots distinguables|Kaum lesbar, einzelne Wörter erkennbar
+Legible con dificultad|Readable with considerable difficulty|Lisible avec difficulté|Mit Mühe lesbar
+Legible sin dificultad|Readable with practically no difficulty|Lisible sans difficulté|Ohne Mühe lesbar
+Perfectamente legible|Perfectly readable|Parfaitement lisible|Perfekt lesbar
+Apenas perceptible|Faint, barely perceptible|À peine perceptible|Kaum wahrnehmbar
+Muy debil|Very weak|Très faible|Sehr schwach
+Debil|Weak|Faible|Schwach
+Regular|Fair|Passable|Mäßig
+Bastante buena|Fairly good|Assez bon|Ziemlich gut
+Buena|Good|Bon|Gut
+Moderadamente fuerte|Moderately strong|Moyennement fort|Mäßig stark
+Fuerte|Strong|Fort|Stark
+Extremadamente fuerte|Extremely strong|Extrêmement fort|Extrem stark
+Zumbido de red muy aspero|Very rough mains hum|Ronflement secteur très rugueux|Sehr rauer Netzbrumm
+Zumbido aspero y ancho|Rough, broad hum|Ronflement rugueux et large|Rauer, breiter Brumm
+Tono aspero, rectificacion sin filtrar|Rough tone, unfiltered rectification|Tonalité rugueuse, redressement non filtré|Rauer Ton, ungefilterte Gleichrichtung
+Tono aspero, algo filtrado|Rough tone, some filtering|Tonalité rugueuse, légèrement filtrée|Rauer Ton, etwas gefiltert
+Tono filtrado, muy modulado por rizado|Filtered tone, strongly ripple-modulated|Tonalité filtrée, fortement modulée par l’ondulation|Gefilterter Ton, stark brummmoduliert
+Tono filtrado, ligero rizado|Filtered tone, slight ripple|Tonalité filtrée, légère ondulation|Gefilterter Ton, leichte Welligkeit
+Tono casi puro, rastro de rizado|Near-pure tone, trace of ripple|Tonalité quasi pure, trace d’ondulation|Fast reiner Ton, Spur von Welligkeit
+Tono casi perfecto, ligera modulacion|Near-perfect tone, slight modulation|Tonalité quasi parfaite, légère modulation|Fast perfekter Ton, leichte Modulation
+Tono perfecto, sin rizado|Perfect tone, no ripple|Tonalité parfaite, sans ondulation|Perfekter Ton, keine Welligkeit
+Latitud no valida (-90 a 90).|Invalid latitude (-90 to 90).|Latitude non valide (−90 à 90).|Ungültiger Breitengrad (−90 bis 90).
+Longitud no valida (-180 a 180).|Invalid longitude (-180 to 180).|Longitude non valide (−180 à 180).|Ungültiger Längengrad (−180 bis 180).
+Longitud de locator no valida (4, 6 u 8).|Invalid locator length (4, 6 or 8).|Longueur de locator non valide (4, 6 ou 8).|Ungültige Locator-Länge (4, 6 oder 8).
+Coordenadas no validas.|Invalid coordinates.|Coordonnées non valides.|Ungültige Koordinaten.
+Locator Maidenhead no valido.|Invalid Maidenhead locator.|Locator Maidenhead non valide.|Ungültiger Maidenhead-Locator.
+Introduce potencias validas: directa mayor que 0 y reflejada 0 o mas.|Enter valid powers: forward greater than 0 and reflected 0 or more.|Saisissez des puissances valides : directe supérieure à 0 et réfléchie égale ou supérieure à 0.|Gib gültige Leistungen ein: vorwärts größer als 0 und rückwärts 0 oder mehr.
+La potencia reflejada debe ser menor que la directa.|Reflected power must be lower than forward power.|La puissance réfléchie doit être inférieure à la puissance directe.|Die reflektierte Leistung muss kleiner als die Vorwärtsleistung sein.
+La ROE debe ser un numero igual o mayor que 1.|SWR must be a number equal to or greater than 1.|Le ROS doit être un nombre égal ou supérieur à 1.|Das SWR muss eine Zahl gleich oder größer als 1 sein.
+Cable no reconocido.|Unknown cable.|Câble non reconnu.|Kabel nicht erkannt.
+Frecuencia fuera de la tabla del cable; introduce la atenuacion del fabricante.|Frequency outside the cable table; enter the manufacturer’s attenuation.|Fréquence hors du tableau du câble ; saisissez l’atténuation du fabricant.|Frequenz außerhalb der Kabeltabelle; gib die Dämpfung des Herstellers ein.
+Introduce una longitud valida (0 m o mas).|Enter a valid length (0 m or more).|Saisissez une longueur valide (0 m ou plus).|Gib eine gültige Länge ein (0 m oder mehr).
+Introduce una potencia valida (0 W o mas).|Enter a valid power (0 W or more).|Saisissez une puissance valide (0 W ou plus).|Gib eine gültige Leistung ein (0 W oder mehr).
+Introduce una atenuacion valida (0 dB/100 m o mas).|Enter a valid attenuation (0 dB/100 m or more).|Saisissez une atténuation valide (0 dB/100 m ou plus).|Gib eine gültige Dämpfung ein (0 dB/100 m oder mehr).
+Introduce un valor de potencia valido.|Enter a valid power value.|Saisissez une valeur de puissance valide.|Gib einen gültigen Leistungswert ein.
+Unidad no reconocida.|Unknown unit.|Unité non reconnue.|Einheit nicht erkannt.
+La potencia en W debe ser mayor que 0.|Power in W must be greater than 0.|La puissance en W doit être supérieure à 0.|Die Leistung in W muss größer als 0 sein.
+La potencia debe ser mayor que 0 W.|Power must be greater than 0 W.|La puissance doit être supérieure à 0 W.|Die Leistung muss größer als 0 W sein.
+La perdida del cable debe ser 0 dB o mas.|Cable loss must be 0 dB or more.|La perte du câble doit être de 0 dB ou plus.|Die Kabeldämpfung muss 0 dB oder mehr betragen.
+Introduce una ganancia de antena valida.|Enter a valid antenna gain.|Saisissez un gain d’antenne valide.|Gib einen gültigen Antennengewinn ein.
+Introduce una frecuencia valida mayor que 0 MHz.|Enter a valid frequency greater than 0 MHz.|Saisissez une fréquence valide supérieure à 0 MHz.|Gib eine gültige Frequenz größer als 0 MHz ein.
+El factor de velocidad debe estar entre 0,5 y 1.|The velocity factor must be between 0.5 and 1.|Le facteur de vitesse doit être compris entre 0,5 et 1.|Der Verkürzungsfaktor muss zwischen 0,5 und 1 liegen.
+Region IARU no valida (1, 2 o 3).|Invalid IARU region (1, 2 or 3).|Région IARU non valide (1, 2 ou 3).|Ungültige IARU-Region (1, 2 oder 3).
+/ Estacion / Herramientas de radio|/ Station / Radio tools|/ Station / Outils radio|/ Station / Funkwerkzeuge
+Herramientas de estacion|Station tools|Outils de station|Stationswerkzeuge
+Esta herramienta esta en la app de escritorio RadiCodex y en la app Android.|This tool is in the RadiCodex desktop app and the Android app.|Cet outil se trouve dans l’application de bureau RadiCodex et dans l’application Android.|Dieses Werkzeug gibt es in der RadiCodex-Desktop-App und in der Android-App.
+Convierte coordenadas en locator Maidenhead y al reves.|Converts coordinates to a Maidenhead locator and back.|Convertit des coordonnées en locator Maidenhead et inversement.|Wandelt Koordinaten in einen Maidenhead-Locator um und zurück.
+Distancia por el camino corto y el largo, y el rumbo para orientar la antena.|Distance by the short and long path, and the bearing to aim the antenna.|Distance par le chemin court et le chemin long, et cap pour orienter l’antenne.|Entfernung über den kurzen und langen Weg sowie die Peilung zum Ausrichten der Antenne.
+Cuanto menor es la ROE, menos potencia vuelve al equipo; hasta 1,5 se considera buena.|The lower the SWR, the less power returns to the radio; up to 1.5 is considered good.|Plus le ROS est faible, moins de puissance revient vers l’émetteur ; jusqu’à 1,5 il est jugé bon.|Je niedriger das SWR, desto weniger Leistung kehrt zum Gerät zurück; bis 1,5 gilt als gut.
+Estima la potencia que llega a la antena segun el cable, la frecuencia y la longitud.|Estimates the power reaching the antenna from the cable, frequency and length.|Estime la puissance qui arrive à l’antenne selon le câble, la fréquence et la longueur.|Schätzt die an der Antenne ankommende Leistung je nach Kabel, Frequenz und Länge.
+Convierte entre vatios, dBm y dBW y calcula la PRA y la PIRE.|Converts between watts, dBm and dBW and calculates ERP and EIRP.|Convertit entre watts, dBm et dBW et calcule la PAR et la PIRE.|Rechnet zwischen Watt, dBm und dBW um und berechnet ERP und EIRP.
+Longitud de un dipolo de media onda y de una vertical de cuarto de onda con su factor de velocidad.|Length of a half-wave dipole and a quarter-wave vertical using the velocity factor.|Longueur d’un dipôle demi-onde et d’une verticale quart d’onde avec le facteur de vitesse.|Länge eines Halbwellendipols und einer Viertelwellen-Vertikalantenne mit dem Verkürzungsfaktor.
+Otra estacion|Other station|Autre station|Gegenstation
+Alimentacion|Feed point|Point d’alimentation|Speisepunkt
+Radiales|Radials|Radians|Radials
+Mapa del mundo: introduce dos locators para ver el camino|World map: enter two locators to see the path|Carte du monde : saisissez deux locators pour voir le chemin|Weltkarte: Gib zwei Locators ein, um den Weg zu sehen
+Mapa del camino entre {0} y {1}: {2} km, rumbo {3}|Map of the path between {0} and {1}: {2} km, bearing {3}|Carte du chemin entre {0} et {1} : {2} km, cap {3}|Karte des Weges zwischen {0} und {1}: {2} km, Peilung {3}
+Rosa de los vientos: sin datos|Compass rose: no data|Rose des vents : aucune donnée|Windrose: keine Daten
+Rosa de los vientos: rumbo corto {0}, rumbo largo {1}|Compass rose: short-path bearing {0}, long-path bearing {1}|Rose des vents : cap chemin court {0}, cap chemin long {1}|Windrose: Peilung kurzer Weg {0}, Peilung langer Weg {1}
+Indicador de ROE: sin datos|SWR gauge: no data|Indicateur de ROS : aucune donnée|SWR-Anzeige: keine Daten
+Indicador de ROE: {0}, zona verde (buena)|SWR gauge: {0}, green zone (good)|Indicateur de ROS : {0}, zone verte (bon)|SWR-Anzeige: {0}, grüner Bereich (gut)
+Indicador de ROE: {0}, zona ambar (aceptable)|SWR gauge: {0}, amber zone (acceptable)|Indicateur de ROS : {0}, zone orange (acceptable)|SWR-Anzeige: {0}, gelber Bereich (akzeptabel)
+Indicador de ROE: {0}, zona roja (mala)|SWR gauge: {0}, red zone (poor)|Indicateur de ROS : {0}, zone rouge (mauvais)|SWR-Anzeige: {0}, roter Bereich (schlecht)
+Potencia reflejada: sin datos|Reflected power: no data|Puissance réfléchie : aucune donnée|Reflektierte Leistung: keine Daten
+Potencia reflejada: {0} %|Reflected power: {0} %|Puissance réfléchie : {0} %|Reflektierte Leistung: {0} %
+Curva de atenuacion: elige un cable de la tabla|Attenuation curve: choose a cable from the table|Courbe d’atténuation : choisissez un câble du tableau|Dämpfungskurve: Wähle ein Kabel aus der Tabelle
+Atenuacion de {0} segun la frecuencia: de {1} a {2} dB/100 m|{0} attenuation by frequency: {1} to {2} dB/100 m|Atténuation du {0} selon la fréquence : de {1} à {2} dB/100 m|Dämpfung von {0} nach Frequenz: {1} bis {2} dB/100 m
+Atenuacion de {0} segun la frecuencia: {1} dB/100 m a {2} MHz|{0} attenuation by frequency: {1} dB/100 m at {2} MHz|Atténuation du {0} selon la fréquence : {1} dB/100 m à {2} MHz|Dämpfung von {0} nach Frequenz: {1} dB/100 m bei {2} MHz
+Reparto de potencia: introduce frecuencia, longitud y potencia|Power split: enter frequency, length and power|Répartition de la puissance : saisissez fréquence, longueur et puissance|Leistungsaufteilung: Frequenz, Länge und Leistung eingeben
+Reparto de potencia: {0} W en la antena y {1} W perdidos en el cable|Power split: {0} W at the antenna and {1} W lost in the cable|Répartition de la puissance : {0} W à l’antenne et {1} W perdus dans le câble|Leistungsaufteilung: {0} W an der Antenne und {1} W im Kabel verloren
+Escala de potencia: sin datos|Power scale: no data|Échelle de puissance : aucune donnée|Leistungsskala: keine Daten
+Escala de potencia: {0} dBm|Power scale: {0} dBm|Échelle de puissance : {0} dBm|Leistungsskala: {0} dBm
+Dibujo de antenas: introduce una frecuencia|Antenna drawing: enter a frequency|Schéma des antennes : saisissez une fréquence|Antennenzeichnung: Frequenz eingeben
+Dipolo de media onda de {0} m y vertical de cuarto de onda de {1} m con radiales|Half-wave dipole of {0} m and quarter-wave vertical of {1} m with radials|Dipôle demi-onde de {0} m et verticale quart d’onde de {1} m avec radians|Halbwellendipol von {0} m und Viertelwellen-Vertikalantenne von {1} m mit Radials
+Plan de bandas de la region {0}: {1} bandas, ninguna resaltada|Band plan for region {0}: {1} bands, none highlighted|Plan de bandes de la région {0} : {1} bandes, aucune en surbrillance|Bandplan der Region {0}: {1} Bänder, keines hervorgehoben
+Plan de bandas de la region {0}: {1} MHz esta en la banda {2}|Band plan for region {0}: {1} MHz is in the {2} band|Plan de bandes de la région {0} : {1} MHz est dans la bande {2}|Bandplan der Region {0}: {1} MHz liegt im {2}-Band
+Plan de bandas de la region {0}: {1} MHz esta fuera de las bandas|Band plan for region {0}: {1} MHz is outside the bands|Plan de bandes de la région {0} : {1} MHz est hors des bandes|Bandplan der Region {0}: {1} MHz liegt außerhalb der Bänder
 E|E|E|O
 O|W|O|W
+Frecuencia en Hz. Flechas arriba y abajo cambian el digito.|Frequency in Hz. Up and down arrows change the digit.|Fréquence en Hz. Les flèches haut et bas modifient le chiffre.|Frequenz in Hz. Pfeil hoch und runter ändern die Ziffer.
+Bajar un paso|Step down|Descendre d’un pas|Einen Schritt tiefer
+Subir un paso|Step up|Monter d’un pas|Einen Schritt höher
+Paso|Step|Pas|Schritt
+Senal (S-meter)|Signal (S-meter)|Signal (S-mètre)|Signal (S-Meter)
+Senal recibida|Received signal|Signal reçu|Empfangenes Signal
+Transmision|Transmission|Émission|Senden
+Mantener para hablar|Hold to talk|Maintenir pour parler|Zum Sprechen halten
+Mantener para transmitir|Hold to transmit|Maintenir pour émettre|Zum Senden halten
+Transmitiendo...|Transmitting...|Émission en cours...|Sendet...
+Sintonizando...|Tuning...|Accord en cours...|Abstimmung läuft...
+Parar|Stop|Arrêter|Stopp
+Parar la sintonía|Stop tuning|Arrêter l’accord|Abstimmung stoppen
+Sintonía iniciada|Tuning started|Accord démarré|Abstimmung gestartet
+Sintonía terminada|Tuning finished|Accord terminé|Abstimmung beendet
+Al soltar, perder la conexion o cambiar de pestana se corta la transmision.|Releasing, losing the connection or switching tabs stops the transmission.|Relâcher, perdre la connexion ou changer d’onglet coupe l’émission.|Loslassen, Verbindungsverlust oder Tabwechsel beendet das Senden.
+Sin operador|No operator|Aucun opérateur|Kein Bediener
+Tienes el control|You have control|Vous avez le contrôle|Du hast die Kontrolle
+Otro operador tiene el control|Another operator has control|Un autre opérateur a le contrôle|Ein anderer Bediener hat die Kontrolle
+Otro operador tiene el control.|Another operator has control.|Un autre opérateur a le contrôle.|Ein anderer Bediener hat die Kontrolle.
+Radio conectada|Radio connected|Radio connectée|Funkgerät verbunden
+Radio sin conexion|Radio offline|Radio hors ligne|Funkgerät offline
+Sin conexion|Offline|Hors ligne|Offline
+Reconectando...|Reconnecting...|Reconnexion...|Verbinde neu...
+Espectro de la radio|Radio spectrum|Spectre de la radio|Funkgerät-Spektrum
+Disponible próximamente para este modelo|Coming soon for this model|Bientôt disponible pour ce modèle|Demnächst für dieses Modell verfügbar
+Llegará con el audio remoto (banda de paso)|Coming with remote audio (passband)|Arrivera avec l’audio distant (bande passante)|Kommt mit dem Remote-Audio (Durchlassbereich)
+Este modelo no ofrece espectro|This model offers no spectrum|Ce modèle n’offre pas de spectre|Dieses Modell bietet kein Spektrum
+Token no valido.|Invalid token.|Jeton non valide.|Ungültiges Token.
+Falta el token. Abre la direccion completa que muestra el agente (con #token=...).|Token missing. Open the full address shown by the agent (with #token=...).|Jeton manquant. Ouvrez l’adresse complète affichée par l’agent (avec #token=...).|Token fehlt. Öffne die vollständige vom Agenten angezeigte Adresse (mit #token=...).
+Latencia: --|Latency: --|Latence : --|Latenz: --
+Latencia: Baja ({0} ms)|Latency: Low ({0} ms)|Latence : faible ({0} ms)|Latenz: niedrig ({0} ms)
+Latencia: Media ({0} ms)|Latency: Medium ({0} ms)|Latence : moyenne ({0} ms)|Latenz: mittel ({0} ms)
+Latencia: Alta ({0} ms)|Latency: High ({0} ms)|Latence : élevée ({0} ms)|Latenz: hoch ({0} ms)
+Fin|End|Fin|Ende
+Paneles de control|Control panels|Panneaux de commande|Bedienfelder
+Niveles|Levels|Niveaux|Pegel
+Registro|Log|Journal|Protokoll
+Bandas|Bands|Bandes|Bänder
+Filtros|Filters|Filtres|Filter
+Funciones del receptor|Receiver functions|Fonctions du récepteur|Empfängerfunktionen
+Banda 160 m|160 m band|Bande 160 m|160-m-Band
+Banda 80 m|80 m band|Bande 80 m|80-m-Band
+Banda 60 m|60 m band|Bande 60 m|60-m-Band
+Banda 40 m|40 m band|Bande 40 m|40-m-Band
+Banda 30 m|30 m band|Bande 30 m|30-m-Band
+Banda 20 m|20 m band|Bande 20 m|20-m-Band
+Banda 17 m|17 m band|Bande 17 m|17-m-Band
+Banda 15 m|15 m band|Bande 15 m|15-m-Band
+Banda 12 m|12 m band|Bande 12 m|12-m-Band
+Banda 10 m|10 m band|Bande 10 m|10-m-Band
+Banda 6 m|6 m band|Bande 6 m|6-m-Band
+Banda 2 m|2 m band|Bande 2 m|2-m-Band
+Banda 70 cm|70 cm band|Bande 70 cm|70-cm-Band
+Filtro 1|Filter 1|Filtre 1|Filter 1
+Filtro 2|Filter 2|Filtre 2|Filter 2
+Filtro 3|Filter 3|Filtre 3|Filter 3
+Volumen|Volume|Volume|Lautstärke
+Ganancia RF|RF gain|Gain RF|HF-Verstärkung
+Potencia TX|TX power|Puissance TX|Sendeleistung
+Preamplificador|Preamplifier|Préamplificateur|Vorverstärker
+Atenuador|Attenuator|Atténuateur|Abschwächer
+AGC apagado|AGC off|AGC désactivé|AGC aus
+AGC rapido|AGC fast|AGC rapide|AGC schnell
+AGC medio|AGC medium|AGC moyen|AGC mittel
+AGC lento|AGC slow|AGC lent|AGC langsam
+AGC activo|AGC active|AGC actif|AGC aktiv
+Supresor de ruido impulsivo (NB)|Noise blanker (NB)|Réducteur de bruit impulsif (NB)|Störaustaster (NB)
+Reduccion de ruido (NR)|Noise reduction (NR)|Réduction de bruit (NR)|Rauschminderung (NR)
+Acoplador de antena (ATU)|Antenna tuner (ATU)|Boîte d’accord (ATU)|Antennentuner (ATU)
+Sintonizar el acoplador (TUNE)|Tune the antenna tuner (TUNE)|Lancer l’accord (TUNE)|Tuner abstimmen (TUNE)
+Ultimos cambios de esta sesion|Latest changes this session|Derniers changements de cette session|Letzte Änderungen dieser Sitzung
+Sin eventos todavia.|No events yet.|Aucun événement pour l’instant.|Noch keine Ereignisse.
+Modo cambiado a {0}|Mode changed to {0}|Mode changé en {0}|Betriebsart geändert auf {0}
+Sintonizada {0} Hz|Tuned to {0} Hz|Accordé sur {0} Hz|Abgestimmt auf {0} Hz
+TX iniciado|TX started|TX démarré|TX gestartet
+TX terminado ({0} s)|TX ended ({0} s)|TX terminé ({0} s)|TX beendet ({0} s)
+Audio|Audio|Audio|Audio
+Próximamente|Coming soon|Bientôt disponible|Demnächst
+Bloquear|Lock|Verrouiller|Sperren
+Bloqueado|Locked|Verrouillé|Gesperrt
+Bloquear PTT y sintonia|Lock PTT and tuning|Verrouiller le PTT et l’accord|PTT und Abstimmung sperren
+Sintonia por arrastre|Drag to tune|Accord par glissement|Abstimmen durch Ziehen
+Frecuencia en MHz (o con k, m, Hz)|Frequency in MHz (or with k, m, Hz)|Fréquence en MHz (ou avec k, m, Hz)|Frequenz in MHz (oder mit k, m, Hz)
+Frecuencia no valida.|Invalid frequency.|Fréquence non valide.|Ungültige Frequenz.
+Estacion remota|Remote station|Station distante|Fernstation
+Volver a RadiCodex|Back to RadiCodex|Retour à RadiCodex|Zurück zu RadiCodex
+Activa JavaScript para configurar la estacion remota.|Enable JavaScript to set up the remote station.|Activez JavaScript pour configurer la station distante.|Aktiviere JavaScript, um die Fernstation einzurichten.
+Radio de la estacion|Station radio|Radio de la station|Funkgerät der Station
+Buscar radio|Search radio|Rechercher une radio|Funkgerät suchen
+Enlace|Link|Liaison|Verbindung
+USB / serie|USB / serial|USB / série|USB / seriell
+Red (LAN / WiFi)|Network (LAN / WiFi)|Réseau (LAN / WiFi)|Netzwerk (LAN / WLAN)
+Puerto serie|Serial port|Port série|Serieller Port
+Velocidad (baudios)|Speed (baud)|Vitesse (bauds)|Geschwindigkeit (Baud)
+Direccion de red (equipo:puerto)|Network address (host:port)|Adresse réseau (hôte:port)|Netzwerkadresse (Host:Port)
+Radios USB detectadas|Detected USB radios|Radios USB détectées|Erkannte USB-Funkgeräte
+Buscar de nuevo|Search again|Rechercher à nouveau|Erneut suchen
+No se detecto ninguna radio USB.|No USB radio detected.|Aucune radio USB détectée.|Kein USB-Funkgerät erkannt.
+Usar|Use|Utiliser|Verwenden
+Rotor (opcional)|Rotator (optional)|Rotor (facultatif)|Rotor (optional)
+Rotor|Rotator|Rotor|Rotor
+Sin rotor|No rotator|Sans rotor|Kein Rotor
+Puerto del rotor|Rotator port|Port du rotor|Rotor-Port
+Rele (opcional)|Relay (optional)|Relais (facultatif)|Relais (optional)
+URL del rele|Relay URL|URL du relais|Relais-URL
+Nombre de la estacion|Station name|Nom de la station|Name der Station
+Secreto del rele|Relay secret|Secret du relais|Relais-Geheimnis
+Deja vacio para conservar el secreto guardado.|Leave empty to keep the saved secret.|Laissez vide pour conserver le secret enregistré.|Leer lassen, um das gespeicherte Geheimnis zu behalten.
+Escucha del agente|Agent listening|Écoute de l’agent|Lauschen des Agenten
+Solo este equipo|This computer only|Cet ordinateur uniquement|Nur dieser Computer
+Red local (LAN)|Local network (LAN)|Réseau local (LAN)|Lokales Netzwerk (LAN)
+Guardar configuracion|Save settings|Enregistrer la configuration|Einstellungen speichern
+Iniciar estacion|Start station|Démarrer la station|Station starten
+Detener estacion|Stop station|Arrêter la station|Station stoppen
+Configuracion guardada.|Settings saved.|Configuration enregistrée.|Einstellungen gespeichert.
+Estacion en marcha.|Station running.|Station en marche.|Station läuft.
+Estacion detenida.|Station stopped.|Station arrêtée.|Station gestoppt.
+Activo|Active|Actif|Aktiv
+Parado|Stopped|Arrêté|Gestoppt
+Agente remoto|Remote agent|Agent distant|Fernagent
+Conectado|Connected|Connecté|Verbunden
+Desconectado|Disconnected|Déconnecté|Getrennt
+Rele|Relay|Relais|Relais
+Sin rele|No relay|Sans relais|Kein Relais
+Consola web|Web console|Console web|Web-Konsole
+Enlaces de emparejamiento|Pairing links|Liens d’appairage|Kopplungslinks
+PIN de configuracion|Setup PIN|PIN de configuration|Einrichtungs-PIN
+Entrar|Sign in|Entrer|Anmelden
+Escribe el PIN de configuracion que aparece en la consola de la estacion.|Enter the setup PIN shown on the station console.|Saisissez le PIN de configuration affiché sur la console de la station.|Gib die Einrichtungs-PIN ein, die auf der Konsole der Station angezeigt wird.
+Activar audio de la radio|Turn on radio audio|Activer l’audio de la radio|Funkgerät-Audio einschalten
+Detener audio de la radio|Turn off radio audio|Arrêter l’audio de la radio|Funkgerät-Audio ausschalten
+Audio no configurado|Audio not configured|Audio non configuré|Audio nicht konfiguriert
+Este navegador no permite audio de transmisión|This browser does not support transmit audio|Ce navigateur ne permet pas l’audio d’émission|Dieser Browser unterstützt kein Sendeaudio
+No se pudo conectar el audio.|Could not connect the audio.|Impossible de connecter l’audio.|Audio konnte nicht verbunden werden.
+Volumen local|Local volume|Volume local|Lokale Lautstärke
+Nivel de recepción|Receive level|Niveau de réception|Empfangspegel
+Nivel del micrófono|Microphone level|Niveau du microphone|Mikrofonpegel
+Ganancia de micrófono|Microphone gain|Gain du microphone|Mikrofonverstärkung
+Medidores de transmisión|Transmit meters|Indicateurs d’émission|Sendeanzeigen
+PO|PO|PO|PO
+ALC|ALC|ALC|ALC
+ROE alta|High SWR|ROS élevé|Hohes SWR
+La radio no ha iniciado la sintonía (revisa el sintonizador/ATAS en el equipo)|The radio did not start tuning (check the tuner/ATAS on the unit)|La radio n’a pas lancé l’accord (vérifiez le coupleur/ATAS sur l’appareil)|Das Funkgerät hat den Abstimmvorgang nicht gestartet (Tuner/ATAS am Gerät prüfen)
+ROE alta: transmisión cortada|High SWR: transmission cut|ROS élevé : émission coupée|Hohes SWR: Sendung abgebrochen
+Búfer de audio: {0} ms|Audio buffer: {0} ms|Tampon audio : {0} ms|Audiopuffer: {0} ms
+No se pudo acceder al micrófono.|Could not access the microphone.|Impossible d’accéder au microphone.|Zugriff auf das Mikrofon nicht möglich.
+La transmisión de audio no está permitida.|Audio transmission is not allowed.|La transmission audio n’est pas autorisée.|Audioübertragung ist nicht erlaubt.
+Activa el audio para ver el espectro de la banda de paso.|Turn on audio to see the passband spectrum.|Activez l’audio pour voir le spectre de la bande passante.|Schalte das Audio ein, um das Durchlassbereich-Spektrum zu sehen.
+Espectro de audio de la banda de paso|Passband audio spectrum|Spectre audio de la bande passante|Audiospektrum des Durchlassbereichs
+Audio de la radio|Radio audio|Audio de la radio|Funkgerät-Audio
+Entrada de audio de la radio (códec USB)|Radio audio input (USB codec)|Entrée audio de la radio (codec USB)|Audioeingang des Funkgeräts (USB-Codec)
+Salida de audio hacia la radio (códec USB)|Audio output to the radio (USB codec)|Sortie audio vers la radio (codec USB)|Audioausgang zum Funkgerät (USB-Codec)
+Sin audio|No audio|Sans audio|Kein Audio
+En el Yaesu FTX-1 el códec USB aparece como "USB Audio Device" (C-Media 0D8C:0016). Ajusta el origen de modulación USB de la radio según su manual para voz o datos por USB.|On the Yaesu FTX-1 the USB codec appears as "USB Audio Device" (C-Media 0D8C:0016). Set the radio's USB modulation source per its manual for voice or data over USB.|Sur le Yaesu FTX-1, le codec USB apparaît comme « USB Audio Device » (C-Media 0D8C:0016). Réglez la source de modulation USB de la radio selon son manuel pour la voix ou les données par USB.|Beim Yaesu FTX-1 erscheint der USB-Codec als „USB Audio Device“ (C-Media 0D8C:0016). Stelle die USB-Modulationsquelle des Funkgeräts gemäß Handbuch für Sprache oder Daten über USB ein.
 `.trim().split("\n").map(line => line.split("|")));
   root.BricohamsUITranslations = entries;
   if (typeof module === "object" && module.exports) module.exports = entries;

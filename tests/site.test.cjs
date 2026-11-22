@@ -8,7 +8,7 @@ const { createServer } = require("../server.cjs");
 
 const root = path.join(__dirname, "..");
 const read = name => fs.readFileSync(path.join(root, name), "utf8");
-const pages = ["index.html", "radios.html", "satelites.html", "opengd77.html", "quansheng.html", "anytone.html", "ftx1.html", "ayuda.html"];
+const pages = ["index.html", "radios.html", "satelites.html", "herramientas.html", "opengd77.html", "quansheng.html", "anytone.html", "ftx1.html", "ayuda.html"];
 const docs = ["README.md", "AUTHORS.md", "ACKNOWLEDGEMENTS.md", "SUPPORT.md", "SECURITY.md",
   "docs/ARCHITECTURE.md", "docs/DECISIONS.md", "docs/DEPLOYMENT.md", "docs/BRANDING.md"];
 const helpSections = ["inicio", "funcionamiento", "opengd77", "quansheng", "codeplug", "firmware",
@@ -254,7 +254,7 @@ test("el logotipo conserva exactamente el PNG original de Bricohams Studio", () 
   assert.match(read("app.js"), /class="brand-logo" src="bricohams-logo\.png" alt="Bricohams" width="1200" height="446"/);
   assert.match(read("styles.css"), /\.brand-logo\{[^}]*max-width:100%;height:auto/);
   assert.match(read("scripts/build-installers.sh"), /bricohams-logo\.png/);
-  assert.match(read("installers/linux/bricohams-radio.desktop"), /Icon=.*bricohams-logo\.png/);
+  assert.match(read("installers/linux/radicodex.desktop"), /Icon=.*bricohams-logo\.png/);
   assert.equal(fs.existsSync(path.join(root, "bricohams-logo.svg")), false);
 });
 
@@ -296,12 +296,12 @@ test("the sidebar markup lists Inicio, Satelites, Radios and Ayuda in task order
   const markup = app.slice(start, app.indexOf("</ul></nav>`", start));
   assert.ok(start > 0 && markup.includes('<nav aria-label="Navegacion principal">'));
   let position = -1;
-  for (const href of ["index.html", "satelites.html", "radios.html", "ayuda.html"]) {
+  for (const href of ["index.html", "herramientas.html", "satelites.html", "radios.html", "ayuda.html"]) {
     const found = markup.indexOf(`navItem("${href}"`);
     assert.ok(found > position, `${href} out of order in the sidebar`);
     position = found;
   }
   for (const model of ["opengd77", "quansheng", "anytone", "ftx1"]) assert.ok(markup.includes(`nav("${model}"`), `${model} under Radios`);
   const { ALLOWED_FILES } = require("../server.cjs");
-  for (const file of ["radios.html", "satelites.html"]) assert.ok(ALLOWED_FILES.includes(file), file);
+  for (const file of ["radios.html", "satelites.html", "herramientas.html", "tools-core.js", "tools-ui.js", "tools.css"]) assert.ok(ALLOWED_FILES.includes(file), file);
 });

@@ -19,12 +19,15 @@ app_files=(
   LICENSE AUTHORS.md ACKNOWLEDGEMENTS.md SUPPORT.md SECURITY.md
   anytone.html anytone-core.js anytone-ui.js
   ftx1.html ftx1-menu.js ftx1-core.js ftx1-ui.js
+  herramientas.html tools-core.js tools-ui.js tools.css
   icom.html icom-ui.js index.html opengd77.html quansheng.html ayuda.html ayuda.en.html ayuda.fr.html ayuda.de.html bricohams-logo.png styles.css satelites.html radios.html satellite-ui.js satellites.css
   ayuda-firmwares.html ayuda-configuracion.html ayuda-quansheng.html help-docs.css
   ayuda-opciones-f4hwn.html ayuda-presets-f4hwn.html ayuda-ardf.html ayuda-manual-f4hwn.html
   ayuda-opengd77.html ayuda-opengd77-modelos.html ayuda-karina.html ayuda-bricohams.html
   ayuda-anytone.html ayuda-ftx1.html ayuda-icom.html ayuda-icom-internals.html ayuda-icom-parches.html ayuda-referencias.html ayuda-arquitectura.html ayuda-marca.html ayuda-ftx1-conocimiento.html
   ayuda-decisiones.html ayuda-despliegue.html
+  remote-station.cjs remote-catalog.cjs remote-agent.cjs remote-tls.cjs rigctld-client.cjs remote-relay.cjs remote-ws.cjs remote-audio.cjs
+  remote.html remote-ui.js remote.css remote-audio-core.js remote-audio-worklet.js remoto.html remoto-ui.js remoto.css
   ayuda-entrega.html ayuda-android.html ayuda-tutoriales-android.html ayuda-validacion-v3-android.html
   ayuda-egzumer.html ayuda-pack-dim0s.html ayuda-atlas-uv-k5-v3.html
   ayuda-dm32uv.html ayuda-enlaces-comunidad.html ayuda-binarios-terceros.html ayuda-ejemplos.html
@@ -70,6 +73,10 @@ stage_app() {
   fi
   cp "$root/data/firmware-catalog-fallback.json" "$destination/data/firmware-catalog-fallback.json"
   cp "$root/data/world-land-110m.txt" "$destination/data/world-land-110m.txt"
+  cp "$root/data/remote-station-catalog.json" "$destination/data/remote-station-catalog.json"
+  # Windows audio helper spawned by remote-audio.cjs.
+  mkdir -p "$destination/scripts"
+  cp "$root/scripts/winaudio-out.ps1" "$destination/scripts/winaudio-out.ps1"
   mkdir -p "$destination/node_modules"
   cp -R "$root/node_modules/satellite.js" "$destination/node_modules/satellite.js"
   node - "$destination" <<'NODE'
@@ -111,26 +118,33 @@ build_deb() {
   local package_root="$work/deb-$deb_arch"
   local node_archive="tar.xz"
   download_node "linux-${node_arch}" "$node_archive"
-  mkdir -p "$package_root/opt/bricohams-radio-workspace/app" "$package_root/opt/bricohams-radio-workspace/runtime/node/bin"
-  stage_app "$package_root/opt/bricohams-radio-workspace/app"
+  mkdir -p "$package_root/opt/radicodex/app" "$package_root/opt/radicodex/runtime/node/bin"
+  stage_app "$package_root/opt/radicodex/app"
   tar -xJf "$work/node-v${node_version}-linux-${node_arch}.tar.xz" -C "$work"
-  install -m 755 "$work/node-v${node_version}-linux-${node_arch}/bin/node" "$package_root/opt/bricohams-radio-workspace/runtime/node/bin/node"
-  install -m 644 "$work/node-v${node_version}-linux-${node_arch}/LICENSE" "$package_root/opt/bricohams-radio-workspace/runtime/node/LICENSE"
-  install -D -m 755 "$root/installers/unix/bricohams-radio" "$package_root/usr/bin/bricohams-radio"
-  install -D -m 644 "$root/installers/linux/bricohams-radio.desktop" "$package_root/usr/share/applications/bricohams-radio.desktop"
+  install -m 755 "$work/node-v${node_version}-linux-${node_arch}/bin/node" "$package_root/opt/radicodex/runtime/node/bin/node"
+  install -m 644 "$work/node-v${node_version}-linux-${node_arch}/LICENSE" "$package_root/opt/radicodex/runtime/node/LICENSE"
+  install -D -m 755 "$root/installers/unix/radicodex" "$package_root/usr/bin/radicodex"
+  install -D -m 644 "$root/installers/linux/radicodex.desktop" "$package_root/usr/share/applications/radicodex.desktop"
+  # Optional headless station: the unit is shipped but never enabled by the package.
+  install -D -m 755 "$root/installers/unix/radicodex-station" "$package_root/usr/bin/radicodex-station"
+  install -D -m 644 "$root/installers/linux/radicodex-station.service" "$package_root/lib/systemd/system/radicodex-station.service"
   mkdir -p "$package_root/DEBIAN"
+  install -m 755 "$root/installers/linux/radicodex-station.postinst" "$package_root/DEBIAN/postinst"
   cat > "$package_root/DEBIAN/control" <<EOF
-Package: bricohams-radio-workspace
+Package: radicodex
 Version: ${version#v}
 Section: hamradio
 Priority: optional
 Architecture: $deb_arch
 Depends: libc6 (>= 2.28), libstdc++6, libatomic1
+Provides: bricohams-radio-workspace
+Replaces: bricohams-radio-workspace
+Conflicts: bricohams-radio-workspace
 Maintainer: Bricohams
-Description: Local radio programming workspace
- Bricohams Radio Workspace local application and Node.js runtime.
+Description: RadiCodex by BricoHams, local radio programming workspace
+ RadiCodex by BricoHams local application and Node.js runtime.
 EOF
-  dpkg-deb --root-owner-group --build "$package_root" "$output/bricohams-radio-workspace-${version}-${deb_arch}.deb" >/dev/null
+  dpkg-deb --root-owner-group --build "$package_root" "$output/radicodex-${version}-${deb_arch}.deb" >/dev/null
 }
 
 build_deb amd64 x64
@@ -139,37 +153,40 @@ build_deb armhf armv7l
 
 source_root="$work/arch-source/app"
 stage_app "$source_root"
-install -D -m 755 "$root/installers/unix/bricohams-radio" "$work/arch-source/bricohams-radio"
-install -D -m 644 "$root/installers/linux/bricohams-radio.desktop" "$work/arch-source/bricohams-radio.desktop"
-tar -czf "$output/bricohams-radio-workspace-${version#v}-arch-source.tar.gz" -C "$work/arch-source" .
-arch_sha=$(sha256sum "$output/bricohams-radio-workspace-${version#v}-arch-source.tar.gz" | awk '{print $1}')
+install -D -m 755 "$root/installers/unix/radicodex" "$work/arch-source/radicodex"
+install -D -m 644 "$root/installers/linux/radicodex.desktop" "$work/arch-source/radicodex.desktop"
+tar -czf "$output/radicodex-${version#v}-arch-source.tar.gz" -C "$work/arch-source" .
+arch_sha=$(sha256sum "$output/radicodex-${version#v}-arch-source.tar.gz" | awk '{print $1}')
 mkdir -p "$work/arch-package"
 cat > "$work/arch-package/PKGBUILD" <<EOF
-pkgname=bricohams-radio-workspace
+pkgname=radicodex
 pkgver=${version#v}
 pkgrel=1
-pkgdesc='Local radio programming workspace'
+pkgdesc='RadiCodex by BricoHams, local radio programming workspace'
 arch=('x86_64' 'aarch64')
 url='https://github.com/Brico-Hams/Radio-Web-install'
 license=('GPL-3.0-or-later')
 depends=('nodejs')
-source=("bricohams-radio-workspace-\${pkgver}-arch-source.tar.gz::https://github.com/Brico-Hams/Radio-Web-install/releases/download/${version}/bricohams-radio-workspace-\${pkgver}-arch-source.tar.gz")
+provides=('bricohams-radio-workspace')
+replaces=('bricohams-radio-workspace')
+conflicts=('bricohams-radio-workspace')
+source=("radicodex-\${pkgver}-arch-source.tar.gz::https://github.com/Brico-Hams/Radio-Web-install/releases/download/${version}/radicodex-\${pkgver}-arch-source.tar.gz")
 sha256sums=('$arch_sha')
 
 package() {
-  install -d "\$pkgdir/opt/bricohams-radio-workspace/app" "\$pkgdir/usr/bin"
-  cp -R "\$srcdir/app/." "\$pkgdir/opt/bricohams-radio-workspace/app/"
-  install -m 755 "\$srcdir/bricohams-radio" "\$pkgdir/usr/bin/bricohams-radio"
-  install -D -m 644 "\$srcdir/bricohams-radio.desktop" "\$pkgdir/usr/share/applications/bricohams-radio.desktop"
+  install -d "\$pkgdir/opt/radicodex/app" "\$pkgdir/usr/bin"
+  cp -R "\$srcdir/app/." "\$pkgdir/opt/radicodex/app/"
+  install -m 755 "\$srcdir/radicodex" "\$pkgdir/usr/bin/radicodex"
+  install -D -m 644 "\$srcdir/radicodex.desktop" "\$pkgdir/usr/share/applications/radicodex.desktop"
 }
 EOF
-tar -czf "$output/bricohams-radio-workspace-${version}-arch.tar.gz" -C "$work/arch-package" .
+tar -czf "$output/radicodex-${version}-arch.tar.gz" -C "$work/arch-package" .
 
 freebsd_root="$work/freebsd"
 stage_app "$freebsd_root/app"
 install -m 755 "$root/installers/freebsd/install.sh" "$freebsd_root/install.sh"
-install -m 755 "$root/installers/unix/bricohams-radio" "$freebsd_root/bricohams-radio"
-tar -czf "$output/bricohams-radio-workspace-${version}-freebsd-amd64.tar.gz" -C "$freebsd_root" .
+install -m 755 "$root/installers/unix/radicodex" "$freebsd_root/radicodex"
+tar -czf "$output/radicodex-${version}-freebsd-amd64.tar.gz" -C "$freebsd_root" .
 
 download_node "win-x64" "zip"
 windows_root="$work/windows"
@@ -181,10 +198,10 @@ install -m 644 "$root/installers/windows/Install.ps1" "$windows_root/Install.ps1
 install -m 644 "$root/installers/windows/Start.ps1" "$windows_root/Start.ps1"
 (
   cd "$windows_root"
-  zip -qr "$output/bricohams-radio-workspace-${version}-windows-x64.zip" .
+  zip -qr "$output/radicodex-${version}-windows-x64.zip" .
 )
 
 (
   cd "$output"
-  sha256sum bricohams-radio-workspace-"${version}"-* bricohams-radio-workspace-"${version#v}"-arch-source.tar.gz > SHA256SUMS
+  sha256sum radicodex-"${version}"-* radicodex-"${version#v}"-arch-source.tar.gz > SHA256SUMS
 )

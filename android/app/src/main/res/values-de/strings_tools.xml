@@ -1,0 +1,155 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Radio tools (ToolsActivity.kt, ToolsViews.kt, RadioTools.kt) -->
+    <string name="tools_title">Funktools</string>
+    <string name="tools_help">Amateurfunk-Rechner mit Grafiken. Die Berechnungen laufen offline auf dem Handy. Gib Werte ein, die Ergebnisse aktualisieren sich sofort.</string>
+    <string name="home_group_station">Station</string>
+    <string name="home_group_station_help">Alles für deine Station an einem Ort. Funktioniert offline und ohne verbundenes Funkgerät.</string>
+    <string name="tool_radio_tools_title">Funktools</string>
+    <string name="tool_radio_tools_desc">Locator, Entfernung, SWR, Kabel, Leistung, Antenne und Bänder.</string>
+    <string name="tool_radio_tools_help">Rechner mit Grafiken: Maidenhead-Locator, Entfernung und Peilung, SWR, Kabeldämpfung, Leistung und ERP, Antennenlänge, Bandplan und RST-Code. Es wird nicht gesendet.</string>
+
+    <string name="tools_sec_locator">Maidenhead-Locator</string>
+    <string name="tools_sec_distance">Entfernung und Peilung</string>
+    <string name="tools_sec_swr">SWR (Stehwellenverhältnis)</string>
+    <string name="tools_sec_coax">Kabeldämpfung</string>
+    <string name="tools_sec_power">Leistung und ERP</string>
+    <string name="tools_sec_antenna">Antenne</string>
+    <string name="tools_sec_bands">Bandplan</string>
+    <string name="tools_sec_rst">RST-Code</string>
+
+    <string name="tools_latitude">Breite (-90 bis 90)</string>
+    <string name="tools_longitude">Länge (-180 bis 180)</string>
+    <string name="tools_use_gps">Meinen Standort verwenden</string>
+    <string name="tools_sub_locator_to_coords">Von Locator zu Koordinaten</string>
+    <string name="tools_locator_input">Maidenhead-Locator (4, 6 oder 8 Zeichen)</string>
+    <string name="tools_locator6">Locator mit 6 Zeichen: %1$s</string>
+    <string name="tools_locator8">Locator mit 8 Zeichen: %1$s</string>
+    <string name="tools_coords_result">Breite %1$s, Länge %2$s</string>
+
+    <string name="tools_my_locator">Mein Locator</string>
+    <string name="tools_other_locator">Locator der Gegenstation</string>
+    <string name="tools_short_path">Kurzer Weg: %1$s km</string>
+    <string name="tools_long_path">Langer Weg: %1$s km</string>
+    <string name="tools_bearing">Peilung: %1$s°</string>
+    <string name="tools_reverse_bearing">Rückpeilung: %1$s°</string>
+    <string name="tools_legend_short">Kurz</string>
+    <string name="tools_legend_long">Lang</string>
+    <string name="tools_cardinal_n">N</string>
+    <string name="tools_cardinal_e">O</string>
+    <string name="tools_cardinal_s">S</string>
+    <string name="tools_cardinal_w">W</string>
+    <string name="tools_cd_map">Karte mit der Strecke zwischen %1$s und %2$s: %3$s km</string>
+    <string name="tools_cd_map_empty">Weltkarte; gib zwei Locator ein, um die Strecke zu sehen</string>
+    <string name="tools_cd_compass">Kompassrose: kurzer Weg %1$s°, langer Weg %2$s°</string>
+    <string name="tools_cd_compass_empty">Kompassrose ohne Daten</string>
+
+    <string name="tools_swr_forward">Vorlaufende Leistung (W)</string>
+    <string name="tools_swr_reflected">Rücklaufende Leistung (W)</string>
+    <string name="tools_swr_ratio">Bekanntes SWR (1 oder mehr)</string>
+    <string name="tools_swr_result">SWR: %1$s</string>
+    <string name="tools_return_loss">Rückflussdämpfung: %1$s dB</string>
+    <string name="tools_mismatch_loss">Fehlanpassungsverlust: %1$s dB</string>
+    <string name="tools_reflected_percent">Reflektierte Leistung: %1$s %%</string>
+    <string name="tools_swr_good">gute Anpassung</string>
+    <string name="tools_swr_fair">akzeptabel</string>
+    <string name="tools_swr_poor">hoch: Antenne und Kabel prüfen</string>
+    <string name="tools_cd_swr">SWR-Anzeige: %1$s, %2$s</string>
+    <string name="tools_cd_swr_empty">SWR-Anzeige ohne Daten</string>
+
+    <string name="tools_cable">Kabel</string>
+    <string name="tools_cable_custom">Anderes (dB/100 m)</string>
+    <string name="tools_attenuation">Dämpfung (dB/100 m)</string>
+    <string name="tools_frequency_mhz">Frequenz (MHz)</string>
+    <string name="tools_length_m">Länge (m)</string>
+    <string name="tools_power_w">Leistung (W)</string>
+    <string name="tools_coax_attenuation_result">Dämpfung: %1$s dB/100 m</string>
+    <string name="tools_coax_loss_result">Kabelverlust: %1$s dB</string>
+    <string name="tools_coax_out_result">Leistung an der Antenne: %1$s W</string>
+    <string name="tools_coax_eff_result">Wirkungsgrad: %1$s %%</string>
+    <string name="tools_coax_note">Typische Katalogwerte; prüfe die Herstellerangaben.</string>
+    <string name="tools_cd_coax">Dämpfungsdiagramm von %1$s über der Frequenz (logarithmisch), von %2$s bis %3$s dB pro 100 m</string>
+    <string name="tools_cd_coax_at">Markierung: %1$s dB/100 m bei %2$s MHz.</string>
+    <string name="tools_cd_coax_empty">Kabeldämpfungsdiagramm ohne Daten</string>
+
+    <string name="tools_sub_conversion">Einheitenumrechnung</string>
+    <string name="tools_value">Wert</string>
+    <string name="tools_unit">Einheit</string>
+    <string name="tools_power_watts">Watt: %1$s W</string>
+    <string name="tools_power_levels">Pegel: %1$s dBm, %2$s dBW</string>
+    <string name="tools_sub_erp">ERP und EIRP</string>
+    <string name="tools_equipment_power">Senderleistung (W)</string>
+    <string name="tools_cable_loss_db">Kabelverlust (dB)</string>
+    <string name="tools_gain_dbd">Antennengewinn (dBd)</string>
+    <string name="tools_erp_result">ERP: %1$s W</string>
+    <string name="tools_eirp_result">EIRP: %1$s W</string>
+    <string name="tools_cd_power">Leistungsskala von 0 bis 60 dBm; aktueller Wert %1$s dBm</string>
+    <string name="tools_cd_power_empty">Leistungsskala von 0 bis 60 dBm ohne Wert</string>
+
+    <string name="tools_velocity_factor">Verkürzungsfaktor (0,5 bis 1)</string>
+    <string name="tools_wavelength">Wellenlänge: %1$s m</string>
+    <string name="tools_half_wave">Halbwellendipol: %1$s m</string>
+    <string name="tools_quarter_wave">Viertelwellen-Vertikal: %1$s m</string>
+    <string name="tools_diagram_dipole">Dipol</string>
+    <string name="tools_diagram_vertical">Vertikal</string>
+    <string name="tools_cd_antenna">Antennenzeichnung: Halbwellendipol mit %1$s m und Viertelwellen-Vertikal mit %2$s m</string>
+    <string name="tools_cd_antenna_empty">Antennenzeichnung ohne Daten</string>
+
+    <string name="tools_region">IARU-Region</string>
+    <string name="tools_region_chip">Region %1$d</string>
+    <string name="tools_region_1">Region 1: Europa, Afrika und Naher Osten</string>
+    <string name="tools_region_2">Region 2: Amerika</string>
+    <string name="tools_region_3">Region 3: Asien und Pazifik</string>
+    <string name="tools_band_note">Die Grenzen folgen der ITU-Vollzugsordnung für den Funkdienst; nationale Vorschriften können strenger sein.</string>
+    <string name="tools_band_result">Band: %1$s</string>
+    <string name="tools_band_none">Außerhalb der Amateurfunkbänder dieser Region</string>
+    <string name="tools_cd_bands">Bandplan der Region %1$d</string>
+    <string name="tools_cd_bands_active">Bandplan der Region %1$d; Band der Frequenz: %2$s</string>
+
+    <string name="tools_rst_readability">Lesbarkeit (R)</string>
+    <string name="tools_rst_strength">Signalstärke (S)</string>
+    <string name="tools_rst_tone">Tonqualität (T, nur CW)</string>
+    <string name="rst_r1">Unlesbar</string>
+    <string name="rst_r2">Kaum lesbar, einzelne Worte erkennbar</string>
+    <string name="rst_r3">Mit erheblicher Mühe lesbar</string>
+    <string name="rst_r4">Praktisch ohne Mühe lesbar</string>
+    <string name="rst_r5">Perfekt lesbar</string>
+    <string name="rst_s1">Kaum wahrnehmbar</string>
+    <string name="rst_s2">Sehr schwach</string>
+    <string name="rst_s3">Schwach</string>
+    <string name="rst_s4">Mäßig</string>
+    <string name="rst_s5">Ziemlich gut</string>
+    <string name="rst_s6">Gut</string>
+    <string name="rst_s7">Mäßig stark</string>
+    <string name="rst_s8">Stark</string>
+    <string name="rst_s9">Extrem stark</string>
+    <string name="rst_t1">Netzbrumm, sehr rau und breit</string>
+    <string name="rst_t2">Sehr raues Brummen, hart und breit</string>
+    <string name="rst_t3">Raue tiefe Note, gleichgerichtet, ungefiltert</string>
+    <string name="rst_t4">Raue Note, leichte Filterung erkennbar</string>
+    <string name="rst_t5">Gefiltert, aber stark brummmoduliert</string>
+    <string name="rst_t6">Gefilterter Ton, deutliche Brummmodulation</string>
+    <string name="rst_t7">Fast reiner Ton, Spur von Brummmodulation</string>
+    <string name="rst_t8">Fast perfekter Ton, leichte Modulation</string>
+    <string name="rst_t9">Perfekter Ton, ohne Brummen oder Modulation</string>
+
+    <string name="tools_err_number">Gib eine gültige Zahl ein.</string>
+    <string name="tools_err_coordinates">Ungültige Koordinaten.</string>
+    <string name="tools_err_locator_length">Ungültige Locator-Länge (4, 6 oder 8).</string>
+    <string name="tools_err_swr_power">Gib gültige Leistungen ein: vorlaufend größer als 0, rücklaufend 0 oder mehr.</string>
+    <string name="tools_err_swr_reflected">Die rücklaufende Leistung muss kleiner als die vorlaufende sein.</string>
+    <string name="tools_err_swr_ratio">Das SWR muss eine Zahl von mindestens 1 sein.</string>
+    <string name="tools_err_cable">Unbekanntes Kabel.</string>
+    <string name="tools_err_freq_range">Frequenz außerhalb der Kabeltabelle (%1$s bis %2$s MHz); wähle „Anderes“ und gib die Herstellerdämpfung ein.</string>
+    <string name="tools_err_length">Gib eine gültige Länge ein (0 m oder mehr).</string>
+    <string name="tools_err_power_nonneg">Gib eine gültige Leistung ein (0 W oder mehr).</string>
+    <string name="tools_err_attenuation">Gib eine gültige Dämpfung ein (0 dB/100 m oder mehr).</string>
+    <string name="tools_err_power_value">Gib einen gültigen Leistungswert ein.</string>
+    <string name="tools_err_power_w">Die Leistung in W muss größer als 0 sein.</string>
+    <string name="tools_err_erp_power">Die Leistung muss größer als 0 W sein.</string>
+    <string name="tools_err_erp_loss">Der Kabelverlust muss 0 dB oder mehr betragen.</string>
+    <string name="tools_err_erp_gain">Gib einen gültigen Antennengewinn ein.</string>
+    <string name="tools_err_antenna_freq">Gib eine gültige Frequenz größer als 0 MHz ein.</string>
+    <string name="tools_err_vf">Der Verkürzungsfaktor muss zwischen 0,5 und 1 liegen.</string>
+    <string name="tools_err_region">Ungültige IARU-Region (1, 2 oder 3).</string>
+</resources>

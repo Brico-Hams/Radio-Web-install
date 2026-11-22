@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="referrer" content="no-referrer">
+  <meta name="color-scheme" content="dark">
+  <title>Remote shack - BricoHams</title>
+  <link rel="icon" href="bricohams-logo.png" type="image/png">
+  <link rel="stylesheet" href="remote.css">
+  <script src="ui-translations.js" defer></script>
+  <script src="ui-i18n.js" defer></script>
+  <script src="remote-audio-core.js" defer></script>
+  <script src="remote-ui.js" defer></script>
+</head>
+<body>
+  <header class="topbar">
+    <h1 class="sr-only">Remote shack</h1>
+    <div class="brand">
+      <img class="logo" src="bricohams-logo.png" alt="BricoHams">
+      <span id="callsign" class="callsign" translate="no">--</span>
+    </div>
+    <div class="topbar-right">
+      <span id="relay" class="pill" role="status" aria-live="off">Rel&eacute;: no configurado</span>
+      <span id="latency" class="pill lat" role="status" aria-live="off">Latencia: --</span>
+      <span id="status" class="pill" role="status" aria-live="polite">Sin conexion</span>
+    </div>
+  </header>
+
+  <main class="console">
+    <p id="notice" class="notice" role="alert" hidden></p>
+
+    <section id="rig" class="card rig" aria-labelledby="rig-title">
+      <h2 id="rig-title" class="sr-only">Radio</h2>
+      <div class="rig-head">
+        <span id="rig-model" class="chip" translate="no">--</span>
+        <span id="rig-mode" class="chip chip-mode" translate="no">-- &middot; --</span>
+        <span id="rig-trx" class="chip chip-rx">RX</span>
+        <span id="operator" class="chip chip-op">Sin operador</span>
+      </div>
+      <div id="freq" class="freq" role="group" aria-label="Frecuencia en Hz. Flechas arriba y abajo cambian el digito."></div>
+      <div class="tune-row">
+        <button id="step-down" type="button" class="big" aria-label="Bajar un paso">&minus;</button>
+        <div id="tuner" class="tuner" role="slider" tabindex="0" aria-label="Sintonia por arrastre"
+             aria-valuemin="30000" aria-valuemax="3000000000" aria-valuenow="30000" aria-valuetext="--"></div>
+        <button id="step-up" type="button" class="big" aria-label="Subir un paso">+</button>
+        <label class="step-field">Paso
+          <select id="step">
+            <option value="10">10 Hz</option>
+            <option value="100">100 Hz</option>
+            <option value="1000" selected>1 kHz</option>
+            <option value="5000">5 kHz</option>
+            <option value="10000">10 kHz</option>
+            <option value="100000">100 kHz</option>
+          </select>
+        </label>
+      </div>
+      <div id="rx-meters" class="smeter">
+        <div id="smeter" class="smeter-bar" role="meter" aria-label="Senal recibida"
+             aria-valuemin="0" aria-valuemax="114" aria-valuenow="0" aria-valuetext="--">
+          <div id="smeter-fill" class="smeter-fill"></div>
+        </div>
+        <output id="smeter-text" class="smeter-text" aria-live="off">--</output>
+        <div id="smeter-scale" class="smeter-scale" aria-hidden="true"></div>
+      </div>
+      <div id="tx-meters" class="tx-meters" role="group" aria-label="Medidores de transmisión" hidden>
+        <div class="tx-meter">
+          <span id="txm-po-label">PO</span>
+          <div id="txm-po" class="level-meter" role="meter" aria-labelledby="txm-po-label" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-valuetext="--"><div id="txm-po-fill" class="level-fill"></div></div>
+          <output id="txm-po-text" aria-live="off">--</output>
+        </div>
+        <div class="tx-meter">
+          <span id="txm-swr-label">ROE</span>
+          <div id="txm-swr" class="level-meter" role="meter" aria-labelledby="txm-swr-label" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-valuetext="--"><div id="txm-swr-fill" class="level-fill"></div></div>
+          <output id="txm-swr-text" aria-live="off">--</output>
+        </div>
+        <div class="tx-meter">
+          <span id="txm-alc-label">ALC</span>
+          <div id="txm-alc" class="level-meter" role="meter" aria-labelledby="txm-alc-label" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-valuetext="--"><div id="txm-alc-fill" class="level-fill"></div></div>
+          <output id="txm-alc-text" aria-live="off">--</output>
+        </div>
+      </div>
+      <p id="swr-alert" class="swr-alert" role="alert" hidden>ROE alta</p>
+      <p class="hint">Al soltar, perder la conexion o cambiar de pestana se corta la transmision.</p>
+    </section>
+
+    <section id="spectrum" class="card spectrum" aria-labelledby="spectrum-title">
+      <h2 id="spectrum-title">Espectro de la radio</h2>
+      <p id="spectrum-note" class="hint empty">Este modelo no ofrece espectro</p>
+      <div id="scope" class="scope" hidden>
+        <canvas id="scope-line" class="scope-line" width="640" height="90" role="img" aria-label="Espectro de audio de la banda de paso"></canvas>
+        <canvas id="scope-fall" class="scope-fall" width="640" height="160" aria-hidden="true"></canvas>
+        <p id="scope-axis" class="hint scope-axis" aria-live="off"></p>
+      </div>
+
+      <div id="audio-panel" class="audio-panel" role="group" aria-labelledby="audio-title" hidden>
+        <h3 id="audio-title" class="audio-title">Audio de la radio</h3>
+      <p id="audio-note" class="hint" role="status"></p>
+      <label class="slider" for="audio-volume"><span>Volumen local</span><output id="out-audio-volume">80 %</output></label>
+      <input id="audio-volume" type="range" min="0" max="100" step="1" value="80">
+      <label class="slider" for="mic-gain"><span>Ganancia de micrófono</span><output id="out-mic-gain">50 %</output></label>
+      <input id="mic-gain" type="range" min="0" max="100" step="1" value="50">
+      <div class="meter-row">
+        <span id="rx-meter-label">Nivel de recepción</span>
+        <div id="rx-meter" class="level-meter" role="meter" aria-labelledby="rx-meter-label" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div id="rx-meter-fill" class="level-fill"></div></div>
+      </div>
+      <div id="mic-row" class="meter-row" hidden>
+        <span id="mic-meter-label">Nivel del micrófono</span>
+        <div id="mic-meter" class="level-meter" role="meter" aria-labelledby="mic-meter-label" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div id="mic-meter-fill" class="level-fill"></div></div>
+      </div>
+      </div>
+    </section>
+
+    <div class="tabs" role="tablist" aria-label="Paneles de control">
+      <button id="tab-band" type="button" role="tab" aria-selected="true" aria-controls="panel-band">Banda</button>
+      <button id="tab-levels" type="button" role="tab" aria-selected="false" aria-controls="panel-levels" tabindex="-1">Niveles</button>
+      <button id="tab-log" type="button" role="tab" aria-selected="false" aria-controls="panel-log" tabindex="-1">Registro</button>
+    </div>
+
+    <section id="panel-band" class="card panel" role="tabpanel" aria-labelledby="tab-band" data-active="true">
+      <h2 class="panel-title">Banda</h2>
+      <div id="bands" class="grid bands" role="group" aria-label="Bandas">
+        <button type="button" data-band="160" aria-pressed="false" aria-label="Banda 160 m">160</button>
+        <button type="button" data-band="80" aria-pressed="false" aria-label="Banda 80 m">80</button>
+        <button type="button" data-band="60" aria-pressed="false" aria-label="Banda 60 m">60</button>
+        <button type="button" data-band="40" aria-pressed="false" aria-label="Banda 40 m">40</button>
+        <button type="button" data-band="30" aria-pressed="false" aria-label="Banda 30 m">30</button>
+        <button type="button" data-band="20" aria-pressed="false" aria-label="Banda 20 m">20</button>
+        <button type="button" data-band="17" aria-pressed="false" aria-label="Banda 17 m">17</button>
+        <button type="button" data-band="15" aria-pressed="false" aria-label="Banda 15 m">15</button>
+        <button type="button" data-band="12" aria-pressed="false" aria-label="Banda 12 m">12</button>
+        <button type="button" data-band="10" aria-pressed="false" aria-label="Banda 10 m">10</button>
+        <button type="button" data-band="6" aria-pressed="false" aria-label="Banda 6 m">6</button>
+        <button type="button" data-band="2" aria-pressed="false" aria-label="Banda 2 m">2</button>
+        <button type="button" data-band="70" aria-pressed="false" aria-label="Banda 70 cm">70</button>
+      </div>
+      <h3 class="sub">Modo</h3>
+      <div id="modes" class="grid modes" role="group" aria-label="Modo">
+        <button type="button" data-mode="LSB" aria-pressed="false">LSB</button>
+        <button type="button" data-mode="USB" aria-pressed="false">USB</button>
+        <button type="button" data-mode="CW" aria-pressed="false">CW</button>
+        <button type="button" data-mode="CWR" aria-pressed="false">CW-R</button>
+        <button type="button" data-mode="AM" aria-pressed="false">AM</button>
+        <button type="button" data-mode="FM" aria-pressed="false">FM</button>
+        <button type="button" data-mode="RTTY" aria-pressed="false">RTTY</button>
+        <button type="button" data-mode="DATA" aria-pressed="false">DATA</button>
+      </div>
+      <h3 class="sub">Filtros</h3>
+      <div id="filters" class="grid filters" role="group" aria-label="Filtros">
+        <button type="button" data-filter="0" aria-pressed="false" aria-label="Filtro 1">FIL1</button>
+        <button type="button" data-filter="1" aria-pressed="false" aria-label="Filtro 2">FIL2</button>
+        <button type="button" data-filter="2" aria-pressed="false" aria-label="Filtro 3">FIL3</button>
+      </div>
+    </section>
+
+    <section id="panel-levels" class="card panel" role="tabpanel" aria-labelledby="tab-levels" data-active="false">
+      <h2 class="panel-title">Niveles</h2>
+      <div class="sliders">
+        <label class="slider" for="lvl-af">Volumen <output id="out-af" for="lvl-af">--</output></label>
+        <input id="lvl-af" data-level="AF" type="range" min="0" max="100" step="1" value="0" disabled>
+        <label class="slider" for="lvl-rf">Ganancia RF <output id="out-rf" for="lvl-rf">--</output></label>
+        <input id="lvl-rf" data-level="RF" type="range" min="0" max="100" step="1" value="0" disabled>
+        <label class="slider" for="lvl-rfpower">Potencia TX <output id="out-rfpower" for="lvl-rfpower">--</output></label>
+        <input id="lvl-rfpower" data-level="RFPOWER" type="range" min="0" max="100" step="1" value="0" disabled>
+      </div>
+      <div id="toggles" class="toggles" role="group" aria-label="Funciones del receptor">
+        <button id="btn-preamp" type="button" class="toggle" aria-pressed="false" aria-label="Preamplificador" disabled>P.AMP</button>
+        <button id="btn-att" type="button" class="toggle" aria-pressed="false" aria-label="Atenuador" disabled>ATT</button>
+        <button id="btn-agc" type="button" class="toggle" aria-pressed="false" aria-label="AGC apagado" disabled>AGC</button>
+        <button id="btn-nb" type="button" class="toggle" aria-pressed="false" aria-label="Supresor de ruido impulsivo (NB)" disabled>NB</button>
+        <button id="btn-nr" type="button" class="toggle" aria-pressed="false" aria-label="Reduccion de ruido (NR)" disabled>NR</button>
+        <button id="btn-atu" type="button" class="toggle" aria-pressed="false" aria-label="Acoplador de antena (ATU)" disabled>ATU</button>
+        <button id="btn-tune" type="button" aria-label="Sintonizar el acoplador (TUNE)" disabled>TUNE</button>
+      </div>
+    </section>
+
+    <section id="panel-log" class="card panel" role="tabpanel" aria-labelledby="tab-log" data-active="false">
+      <h2 class="panel-title">Registro</h2>
+      <ol id="log" class="log" aria-label="Ultimos cambios de esta sesion">
+        <li class="empty">Sin eventos todavia.</li>
+      </ol>
+    </section>
+  </main>
+
+  <footer class="dock">
+    <span class="audio-wrap">
+      <button id="audio" type="button" class="audio" aria-pressed="false" aria-label="Activar audio de la radio" title="Activar audio de la radio">Audio</button>
+    </span>
+    <button id="tune-stop" type="button" class="tune-stop" aria-label="Parar la sintonía" hidden>Parar</button>
+    <button id="ptt" type="button" class="ptt" aria-pressed="false" aria-label="Mantener para transmitir" disabled>
+      <span id="ptt-label">Mantener para hablar</span>
+      <span id="tx-timer" class="tx-timer" aria-hidden="true" hidden>0:00</span>
+    </button>
+    <button id="lock" type="button" class="lock" aria-pressed="false" aria-label="Bloquear PTT y sintonia">Bloquear</button>
+  </footer>
+</body>
+</html>

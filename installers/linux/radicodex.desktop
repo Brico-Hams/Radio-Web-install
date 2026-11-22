@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=RadiCodex
+Comment=RadiCodex de BricoHams: herramientas locales para radios compatibles
+Exec=/usr/bin/radicodex
+Icon=/opt/radicodex/app/bricohams-logo.png
+Terminal=false
+Categories=Utility;HamRadio;

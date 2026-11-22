@@ -161,7 +161,7 @@ test("el ZIP Beta conserva fuentes, historial y artefactos verificables y no sob
   const installers = path.join(directory, "installers");
   const suffixes = ["windows-x64.zip", "amd64.deb", "arm64.deb", "armhf.deb",
     "arch.tar.gz", "arch-source.tar.gz", "freebsd-amd64.tar.gz"];
-  const packages = suffixes.map(suffix => `bricohams-radio-workspace-v0.0.0-beta-${suffix}`);
+  const packages = suffixes.map(suffix => `radicodex-v0.0.0-beta-${suffix}`);
   for (const name of packages) write(installers, name, `fixture ${name}`);
   sums(installers, packages);
   const android = path.join(directory, "android-delivery");

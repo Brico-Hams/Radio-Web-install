@@ -7,10 +7,27 @@ sin caches, SDK locales, secretos ni binarios de compilación.
 La licencia raíz GPL-3.0-or-later y los avisos MIT del componente se conservan;
 no se cambian las licencias de dependencias ni de recursos de terceros.
 
+## Cuándo usar cada implementación remota
+
+El proyecto contiene dos estaciones remotas independientes:
+
+| Nombre en la interfaz | Código | Usar cuando |
+| --- | --- | --- |
+| **Estación remota (host/agente Python)** | `remote-station/`, `station.html` | Necesitas host HTTPS coordinador, agentes headless Python y clientes web/Android/iOS. El cliente Android solo se conecta. |
+| **Remote shack (rigctld, desktop)** | `remote-agent.cjs`, `remote-station.cjs`, `remote-relay.cjs`, `remoto.html` (README: «Remote shack») | Quieres controlar una radio por Hamlib `rigctld` desde la app de escritorio/Raspberry Pi, con relé propio, audio Opus y sintonizador FTX-1. |
+
+No comparten puertos ni configuración (la segunda usa `~/.radicodex/`). Los
+catálogos de radios y el análisis CAT FTX-1 están duplicados a propósito: no se
+han unificado porque los formatos difieren. Las protecciones TX (TX
+desactivado por defecto, protección de ROE alta, límites de tiempo de
+ATAS/sintonía, parada de emergencia y vigilantes de PTT) se mantienen en ambas.
+
 ## Integración y límites
 
-- La navegación web incluye **Estación remota**. Prepara una URL HTTPS validada
-  y abre el cliente servido por el host; no recoge ni envía tokens.
+- La navegación web enlaza **Estación remota (host/agente Python)** una sola vez.
+  Prepara una URL HTTPS validada
+  y abre el cliente servido por el host; no recoge ni envía tokens. La entrada
+  **Remote shack (rigctld, desktop)** aparece solo en el escritorio.
 - RadiCodex Android incluye una pantalla HTTPS interna: sin puentes JavaScript
   nativos, acceso a ficheros ni contenido mixto. Fija el origen seleccionado,
   rechaza certificados inválidos y solicita permiso únicamente para micrófono.

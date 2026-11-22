@@ -29,7 +29,7 @@ function projectSource(name) {
   const parts = name.split("/");
   if (parts.some(part => privateName.test(part)) || privateFile.test(name)) return false;
   if (name === "studio.html") return false;
-  if (parts[0] === "data") return name === "data/satellites.config.json";
+  if (parts[0] === "data") return name === "data/satellites.config.json" || name === "data/remote-station-catalog.json";
   return parts.length === 1 ? /^(?:LICENSE|\.gitignore)$|\.(?:md|js|cjs|mjs|mts|json|html|css|png)$/.test(name) :
     sourceDirectories.has(parts[0]);
 }
@@ -205,7 +205,7 @@ async function exportProject({ project = root, firmware, installers, withoutInst
       throw new Error("Faltan instalables de alguna plataforma en SHA256SUMS.");
     }
     for (const name of packages) {
-      if (!/^bricohams-radio-workspace-[a-z0-9._-]+\.(?:zip|deb|tar\.gz)$/i.test(name)) {
+      if (!/^(?:radicodex|bricohams-radio-workspace)-[a-z0-9._-]+\.(?:zip|deb|tar\.gz)$/i.test(name)) {
         throw new Error(`Archivo no reconocido como instalable: ${name}`);
       }
     }

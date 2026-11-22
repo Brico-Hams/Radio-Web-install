@@ -2,14 +2,14 @@
 set -eu
 
 # Shared launcher: Debian/Arch install under /opt, FreeBSD under /usr/local/libexec.
-install_root=${BRICOHAMS_INSTALL_ROOT:-}
+install_root=${RADICODEX_INSTALL_ROOT:-${BRICOHAMS_INSTALL_ROOT:-}}
 if [ -z "$install_root" ]; then
-  for candidate in /opt/bricohams-radio-workspace /usr/local/libexec/bricohams-radio-workspace; do
+  for candidate in /opt/radicodex /usr/local/libexec/radicodex; do
     if [ -f "$candidate/app/server.cjs" ]; then install_root=$candidate; break; fi
   done
 fi
 if [ -z "$install_root" ] || [ ! -f "$install_root/app/server.cjs" ]; then
-  printf '%s\n' "No se encuentra la instalacion de Bricohams Radio Workspace. Reinstala el paquete." >&2
+  printf '%s\n' "No se encuentra la instalacion de RadiCodex. Reinstala el paquete." >&2
   exit 1
 fi
 app_dir=$install_root/app
@@ -19,11 +19,11 @@ if [ ! -x "$node_bin" ]; then
   node_bin=$(command -v node || true)
 fi
 if [ -z "$node_bin" ] || ! "$node_bin" -e 'process.exit(Number(process.versions.node.split(".")[0]) < 22 ? 1 : 0)' >/dev/null 2>&1; then
-  printf '%s\n' "Bricohams Radio Workspace requiere Node.js 22 o superior." >&2
+  printf '%s\n' "RadiCodex requiere Node.js 22 o superior." >&2
   exit 1
 fi
 
-state_dir=${XDG_STATE_HOME:-"$HOME/.local/state"}/bricohams-radio
+state_dir=${XDG_STATE_HOME:-"$HOME/.local/state"}/radicodex
 mkdir -p "$state_dir"
 
 server_is_running() {

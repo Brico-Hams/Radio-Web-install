@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="tool_remote_title">Remote-Shack</string>
+    <string name="tool_remote_desc">Steuern Sie Ihr Funkgerät über den RadiCodex-Remote-Agenten auf dem PC.</string>
+    <string name="tool_remote_help">Koppelt das Telefon mit dem RadiCodex-Remote-Agenten (lokales Netz oder Tailscale) und öffnet dessen Konsole. Nur private Adressen werden akzeptiert, und das Zertifikat muss zum gekoppelten Fingerabdruck passen.</string>
+    <string name="remote_title">Remote-Shack</string>
+    <string name="remote_pair_help">Fügen Sie den Kopplungslink (radicodex-remote://pair…) oder die Konsolen-URL ein, die der RadiCodex-Agent am PC anzeigt.</string>
+    <string name="remote_pair_hint">Kopplungslink</string>
+    <string name="remote_paste">Einfügen</string>
+    <string name="remote_pair">Koppeln</string>
+    <string name="remote_pair_invalid">Ungültiger Link: Prüfen Sie privaten Host, Port, Token und Fingerabdruck.</string>
+    <string name="remote_clipboard_empty">Die Zwischenablage ist leer.</string>
+    <string name="remote_reload">Neu laden</string>
+    <string name="remote_forget">Kopplung vergessen</string>
+    <string name="remote_cert_mismatch">Zertifikat stimmt nicht überein: erneut koppeln</string>
+    <string name="remote_cert_invalid">Relay-Zertifikat ungültig: Verbindung abgelehnt</string>
+    <string name="remote_detected_direct">Erkannter Modus: direkt (lokales Netz / Tailscale)\nZiel: %1$s:%2$d</string>
+    <string name="remote_detected_relay">Erkannter Modus: BricoHams-Relay\nRelay: %1$s\nStation: %2$s</string>
+    <string name="remote_pair_confirm">Speichern und öffnen</string>
+    <string name="remote_pair_cancel">Abbrechen</string>
+    <string name="remote_mic_denied">Mikrofon nicht erlaubt: Du kannst nur Audio empfangen.</string>
+</resources>

@@ -50,21 +50,21 @@ Télécharger le fichier de votre système et `SHA256SUMS` dans les **Assets** d
 
 Les `.deb` et le ZIP Windows incluent Node.js 22. Arch utilise le paquet `nodejs` de sa distribution. FreeBSD nécessite `pkg` et le paquet `node22`. Raspberry Pi OS 32 bits exige un processeur ARMv7 ou ultérieur. L'installateur ne configure pas de démarrage automatique et n'élève pas les privilèges pour lancer l'application.
 
-Après installation, lancer **Bricohams Radio Workspace** depuis le menu des applications/Démarrer ou exécuter `bricohams-radio` sur Arch et FreeBSD. Le serveur reste lié à `127.0.0.1:8787` ; ne pas l'exposer au réseau. Sur FreeBSD, Chromium peut ne pas proposer WebUSB/Web Serial : l'accès aux radios est donc fourni au mieux, sans garantie.
+Après installation, lancer **RadiCodex** depuis le menu des applications/Démarrer ou exécuter `radicodex` sur Arch et FreeBSD. Le serveur reste lié à `127.0.0.1:8787` ; ne pas l'exposer au réseau. Sur FreeBSD, Chromium peut ne pas proposer WebUSB/Web Serial : l'accès aux radios est donc fourni au mieux, sans garantie.
 
 ### Vérifier le téléchargement
 
 Vérifier l'empreinte avant d'exécuter l'installateur. Dans PowerShell :
 
 ```powershell
-Get-FileHash .\bricohams-radio-workspace-v0.3.0-windows-x64.zip -Algorithm SHA256
+Get-FileHash .\radicodex-v0.3.0-windows-x64.zip -Algorithm SHA256
 Get-Content .\SHA256SUMS
 ```
 
 Comparer l'empreinte complète à la ligne du même nom dans `SHA256SUMS` (la casse n'importe pas). Sous Linux :
 
 ```sh
-sha256sum bricohams-radio-workspace-v0.3.0-amd64.deb
+sha256sum radicodex-v0.3.0-amd64.deb
 cat SHA256SUMS
 ```
 
@@ -80,7 +80,7 @@ Sous FreeBSD, utiliser `sha256 nombre-del-archivo`. Remplacer le nom/la version 
    powershell -NoProfile -ExecutionPolicy Bypass -File .\Install.ps1
    ```
 
-4. L'installation se fait dans `%LOCALAPPDATA%\Programs\Bricohams Radio Workspace` et crée **Bricohams Radio Workspace** dans le menu Démarrer. Ni UAC ni installation séparée de Node ne sont nécessaires.
+4. L'installation se fait dans `%LOCALAPPDATA%\Programs\RadiCodex` et crée **RadiCodex** dans le menu Démarrer (si vous aviez la version précédente « Bricohams Radio Workspace », l'installateur la supprime ; elle ne contenait aucune donnée utilisateur). Ni UAC ni installation séparée de Node ne sont nécessaires.
 5. Ouvrir ce raccourci. Si le navigateur par défaut n'est ni Chrome, ni Edge, ni Brave, ouvrir manuellement <http://127.0.0.1:8787> dans l'un d'eux.
 
 `ExecutionPolicy Bypass` n'affecte que le processus exécutant la commande ; ne pas modifier définitivement la stratégie PowerShell. Une stratégie d'entreprise peut bloquer les scripts même avec cette option : consulter l'administrateur. L'installateur actuel est un ZIP avec scripts, pas un `.exe`/MSI signé, et n'installe pas de pilotes WinUSB.
@@ -98,22 +98,22 @@ Télécharger uniquement le `.deb` dont le suffixe correspond : `amd64`, `arm64`
 Depuis le dossier des téléchargements, pour un ordinateur amd64 et la version initiale :
 
 ```sh
-sudo apt install ./bricohams-radio-workspace-v0.3.0-amd64.deb
-bricohams-radio
+sudo apt install ./radicodex-v0.3.0-amd64.deb
+radicodex
 ```
 
-Remplacer le nom par celui de votre fichier. Node est inclus dans `/opt/bricohams-radio-workspace` ; le lanceur apparaît aussi dans le menu des applications. Ne pas exécuter `bricohams-radio` avec `sudo` : les sauvegardes et autorisations du navigateur doivent appartenir à votre utilisateur.
+Remplacer le nom par celui de votre fichier. Node est inclus dans `/opt/radicodex` ; le lanceur apparaît aussi dans le menu des applications. Si vous aviez le paquet précédent `bricohams-radio-workspace`, celui-ci le remplace automatiquement. Ne pas exécuter `radicodex` avec `sudo` : les sauvegardes et autorisations du navigateur doivent appartenir à votre utilisateur.
 
 ### Arch Linux
 
 ```sh
 sudo pacman -S --needed base-devel nodejs
 mkdir bricohams-installer
-tar -xzf bricohams-radio-workspace-v0.3.0-arch.tar.gz -C bricohams-installer
+tar -xzf radicodex-v0.3.0-arch.tar.gz -C bricohams-installer
 cd bricohams-installer
 less PKGBUILD
 makepkg -si
-bricohams-radio
+radicodex
 ```
 
 Exécuter `makepkg` en tant qu'utilisateur normal. L'archive `*-arch.tar.gz` contient la recette ; `*-arch-source.tar.gz` contient l'application que cette recette télécharge depuis la même Release et vérifie par SHA-256. Ce n'est ni un paquet binaire prêt pour `pacman -U`, ni un paquet publié dans AUR. La construction nécessite Internet et Node.js 22 ou ultérieur.
@@ -122,13 +122,13 @@ Exécuter `makepkg` en tant qu'utilisateur normal. L'archive `*-arch.tar.gz` con
 
 ```sh
 mkdir bricohams-installer
-tar -xzf bricohams-radio-workspace-v0.3.0-freebsd-amd64.tar.gz -C bricohams-installer
+tar -xzf radicodex-v0.3.0-freebsd-amd64.tar.gz -C bricohams-installer
 cd bricohams-installer
 su -c './install.sh'
-bricohams-radio
+radicodex
 ```
 
-L'installation nécessite root et des dépôts `pkg` disponibles pour installer `node22` s'il manque. Le programme s'installe dans `/usr/local/libexec/bricohams-radio-workspace`, avec lanceur `/usr/local/bin/bricohams-radio`. Revenir à votre utilisateur normal pour le démarrer. Ce n'est ni un paquet natif `.pkg` ni un port officiel. Le serveur local et l'édition de fichiers ne garantissent pas la connexion radio : elle dépend des API et autorisations USB/série offertes par Chromium.
+L'installation nécessite root et des dépôts `pkg` disponibles pour installer `node22` s'il manque. Le programme s'installe dans `/usr/local/libexec/radicodex`, avec lanceur `/usr/local/bin/radicodex` ; si l'installation précédente (`bricohams-radio-workspace`) existait, l'installateur la supprime. Revenir à votre utilisateur normal pour le démarrer. Ce n'est ni un paquet natif `.pkg` ni un port officiel. Le serveur local et l'édition de fichiers ne garantissent pas la connexion radio : elle dépend des API et autorisations USB/série offertes par Chromium.
 
 ### Premier démarrage, autorisations et arrêt
 
@@ -136,7 +136,7 @@ L'installation nécessite root et des dépôts `pkg` disponibles pour installer 
 - Les lanceurs démarrent le serveur en arrière-plan ; fermer l'onglet ne l'arrête pas. Aucun démarrage automatique à l'ouverture de session n'est configuré. Depuis les sources, `npm start` reste dans le terminal et s'arrête avec `Ctrl+C`.
 - L'installateur ne configure ni pilotes ni autorisations USB. Voir [Aide › Pilotes](../../../ayuda.html#drivers) : WinUSB si nécessaire sous Windows, règles udev et groupe `dialout`/`uucp` selon la distribution Linux. Rouvrir la session après changement de groupe et ne pas exécuter le navigateur en root.
 - Si le port est occupé, identifier le processus avant de l'arrêter. Sous Windows : `Get-NetTCPConnection -LocalPort 8787 -State Listen | Select-Object OwningProcess`, puis `Get-Process -Id <PID>` et, uniquement s'il s'agit du serveur Bricohams, `Stop-Process -Id <PID>`. Sous Linux, utiliser `ss -lptn 'sport = :8787'` ; sous FreeBSD, `sockstat -4 -l`. Confirmer la commande et l'utilisateur du PID, et n'arrêter que ce processus avec `kill <PID>`.
-- Les journaux Linux/FreeBSD se trouvent dans `${XDG_STATE_HOME:-$HOME/.local/state}/bricohams-radio/server.log`. Sous Windows, en cas d'échec du démarrage, exécuter depuis PowerShell `& "$env:LOCALAPPDATA\Programs\Bricohams Radio Workspace\runtime\node.exe" "$env:LOCALAPPDATA\Programs\Bricohams Radio Workspace\app\server.cjs"` pour afficher l'erreur.
+- Les journaux Linux/FreeBSD se trouvent dans `${XDG_STATE_HOME:-$HOME/.local/state}/radicodex/server.log`. Sous Windows, en cas d'échec du démarrage, exécuter depuis PowerShell `& "$env:LOCALAPPDATA\Programs\RadiCodex\runtime\node.exe" "$env:LOCALAPPDATA\Programs\RadiCodex\app\server.cjs"` pour afficher l'erreur.
 - Internet n'est pas nécessaire pour servir l'interface et modifier des fichiers locaux. Les requêtes aux fournisseurs et téléchargements de firmware l'exigent.
 
 ## Configuration
@@ -158,7 +158,7 @@ $env:RB_APPROVED = "yes"
 npm start
 ```
 
-Avec le ZIP installé, définir ces variables dans PowerShell puis exécuter `& "$env:LOCALAPPDATA\Programs\Bricohams Radio Workspace\Start.ps1"` depuis la même session. Arrêter d'abord tout serveur déjà lancé : un processus existant conserve son ancien environnement. Aucun écran de réglages ne sauvegarde encore ces clés ; ne pas les coller dans le navigateur ou des fichiers publics.
+Avec le ZIP installé, définir ces variables dans PowerShell puis exécuter `& "$env:LOCALAPPDATA\Programs\RadiCodex\Start.ps1"` depuis la même session. Arrêter d'abord tout serveur déjà lancé : un processus existant conserve son ancien environnement. Aucun écran de réglages ne sauvegarde encore ces clés ; ne pas les coller dans le navigateur ou des fichiers publics.
 
 ## Mise à jour
 
@@ -197,14 +197,14 @@ Sous Windows, comme tâche planifiée à l'ouverture de session :
 ```powershell
 $action = New-ScheduledTaskAction -Execute "node.exe" -Argument "server.cjs" -WorkingDirectory "C:\ruta\Radio-Web-install"
 $trigger = New-ScheduledTaskTrigger -AtLogOn
-Register-ScheduledTask -TaskName "Bricohams Radio Workspace" -Action $action -Trigger $trigger
+Register-ScheduledTask -TaskName "RadiCodex" -Action $action -Trigger $trigger
 ```
 
-Sous Linux, comme service utilisateur systemd (`~/.config/systemd/user/bricohams-radio.service`) :
+Sous Linux, comme service utilisateur systemd (`~/.config/systemd/user/radicodex.service`) :
 
 ```ini
 [Unit]
-Description=Bricohams Radio Workspace
+Description=RadiCodex
 
 [Service]
 WorkingDirectory=%h/Radio-Web-install
@@ -215,7 +215,7 @@ Restart=on-failure
 WantedBy=default.target
 ```
 
-L'activer avec `systemctl --user enable --now bricohams-radio`.
+L'activer avec `systemctl --user enable --now radicodex`.
 
 <a id="web-pública-en-github-pages"></a>
 ## Web public sur GitHub Pages
@@ -366,10 +366,10 @@ conditions de livraison indépendantes.
 
 Exporter d'abord les sauvegardes et arrêter uniquement le processus serveur identifié comme expliqué plus haut.
 
-- **Windows :** supprimer le dossier `%LOCALAPPDATA%\Programs\Bricohams Radio Workspace` et son raccourci du menu Démarrer (`%APPDATA%\Microsoft\Windows\Start Menu\Programs\Bricohams Radio Workspace.lnk`). L'installateur ZIP n'enregistre pas de désinstallateur dans « Applications installées ».
-- **Debian/Ubuntu/Raspberry Pi OS :** `sudo apt remove bricohams-radio-workspace`.
-- **Arch :** `sudo pacman -R bricohams-radio-workspace`.
-- **FreeBSD :** l'installateur n'enregistre pas de paquet d'application dans `pkg`. Supprimer uniquement `/usr/local/libexec/bricohams-radio-workspace` et `/usr/local/bin/bricohams-radio` en root. Ne pas désinstaller Node si d'autres applications l'utilisent.
+- **Windows :** supprimer le dossier `%LOCALAPPDATA%\Programs\RadiCodex` et son raccourci du menu Démarrer (`%APPDATA%\Microsoft\Windows\Start Menu\Programs\RadiCodex.lnk`). Si vous avez installé avant que le nom RadiCodex n'existe, le dossier et le raccourci anciens s'appellent `Bricohams Radio Workspace`. L'installateur ZIP n'enregistre pas de désinstallateur dans « Applications installées ».
+- **Debian/Ubuntu/Raspberry Pi OS :** `sudo apt remove radicodex` (anciennes versions : `bricohams-radio-workspace`).
+- **Arch :** `sudo pacman -R radicodex` (anciennes versions : `bricohams-radio-workspace`).
+- **FreeBSD :** l'installateur n'enregistre pas de paquet d'application dans `pkg`. Supprimer uniquement `/usr/local/libexec/radicodex` et `/usr/local/bin/radicodex` en root (anciennes versions : `/usr/local/libexec/bricohams-radio-workspace` et `/usr/local/bin/bricohams-radio`). Ne pas désinstaller Node si d'autres applications l'utilisent.
 - **Sources :** supprimer votre copie du dépôt et, si configuré, sa tâche planifiée ou son service utilisateur.
 
 La désinstallation ne supprime pas les sauvegardes du navigateur. Pour les effacer aussi, **exporter d'abord les fichiers**, puis supprimer les données du site `http://127.0.0.1:8787` dans le navigateur. Les journaux utilisateur Linux/FreeBSD peuvent être supprimés séparément après examen.

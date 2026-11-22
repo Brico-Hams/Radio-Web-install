@@ -39,6 +39,8 @@ const BASE_FILES = [
   ...["bricohams-ardf", "bricohams-satellite", "bricohams-spectrum", "bricohams-labs", "bricohams-fusion",
     "f4hwn-fusion", "f4hwn-fieldops", "f4hwn-transfer", "f4hwn-labs"].map(id => `precompiled/${id}.bin`),
   "radios.html", "satelites.html", "satellite-ui.js", "satellites.css", "data/world-land-110m.txt",
+  "herramientas.html", "tools-core.js", "tools-ui.js", "tools.css",
+  "remoto.html", "remoto-ui.js", "remoto.css",
   "index.html", "opengd77.html", "quansheng.html", "ayuda.html", "ayuda.en.html", "ayuda.fr.html", "ayuda.de.html", "bricohams-logo.png", "styles.css", "appearance.js", "app.js", "radio-core.js", "ui-i18n.js", "ui-translations.js",
   "transports.js", "quansheng-connector.js", "tk11-connector.js", "tk11-ui.js", "quansheng-channels.js", "quansheng-live.js", "quansheng-tools.js", "gd77-connector.js", "backup-store.js",
   "codeplug-editor.js", "radio-ui.js", "firmware-core.js", "firmware-catalog.js", "planning-core.js", "radioid-csv.js", "planning-ui.js", "satellite.min.js", "runtime-mode.js", "f4hwn-options.js", "custom-firmware-ui.js",
@@ -65,6 +67,8 @@ const BASE_FILES = [
 const ALLOWED_FILES = Object.freeze([...BASE_FILES, ...["en", "de", "it", "fr"].flatMap(lang =>
   BASE_FILES.filter(file => /^ayuda-.+\.html$/.test(file)).map(file => file.replace(/\.html$/, `.${lang}.html`)))]);
 const allowed = new Set(ALLOWED_FILES);
+// Station tools ship only in the desktop app and the Android APK; the GitHub Pages build skips them.
+const DESKTOP_ONLY_FILES = Object.freeze(["herramientas.html", "tools-core.js", "tools-ui.js", "tools.css", "remoto.html", "remoto-ui.js", "remoto.css"]);
 const { verify: verifyStudio } = require("./studio-pin.cjs");
 // Studio is a single self-contained page with inline scripts: it gets its own CSP that only admits those exact
 // scripts (hashes pinned in studio.lock.json) and no network access.
@@ -72,7 +76,11 @@ function studioCSP(lock) {
   return `default-src 'none'; script-src ${lock.scriptHashes.map(hash => `'${hash}'`).join(" ")}; style-src 'unsafe-inline'; img-src data: blob:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`;
 }
 const defaultStudio = () => ({ file: path.join(__dirname, "studio.html"), lock: require("./studio.lock.json") });
-function createServer(firmware = new FirmwareService(), providers = new DataService(), studio = defaultStudio(), diagnostics = null) {
+function remoteLog(message) { console.log(`[remote] ${message}`); }
+// diagnostics (4th) and the rigctld remote shack controller (5th) are optional; the controller is created lazily.
+function createServer(firmware = new FirmwareService(), providers = new DataService(), studio = defaultStudio(), diagnostics = null, remote = null) {
+let remoteController = remote;
+const remoteStation = () => remoteController || (remoteController = require("./remote-station.cjs").createController({ log: remoteLog }));
 return http.createServer(async (request, response) => {
   response.setHeader("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob: data:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'");
   response.setHeader("Permissions-Policy", "usb=(self), serial=(self), camera=(), microphone=(), geolocation=(self)");
@@ -135,6 +143,15 @@ return http.createServer(async (request, response) => {
     } catch (error) {
       response.writeHead(error.status || 400, { "Content-Type": "application/json; charset=utf-8" });
       response.end(JSON.stringify({ error: error.message }));
+    }
+    return;
+  }
+  if (request.url.startsWith("/api/remote/")) {
+    try {
+      await require("./remote-station.cjs").handleRemoteApi(remoteStation(), request, response, new URL(request.url, "http://127.0.0.1"));
+    } catch (error) {
+      console.error(`Estacion remota: ${error.message}`);
+      if (!response.headersSent) { response.writeHead(500, { "Content-Type": "application/json; charset=utf-8" }); response.end(JSON.stringify({ error: "Estacion remota no disponible." })); }
     }
     return;
   }
@@ -278,13 +295,21 @@ void (async () => {
       args.find(value => value instanceof Error));
     original[level](...args);
   };
-  const server = createServer(undefined, undefined, undefined, diagnostics);
+  const remote = require("./remote-station.cjs").createController({ log: remoteLog });
+  const server = createServer(undefined, undefined, undefined, diagnostics, remote);
   server.on("close", () => { void diagnostics.close(); });
+  for (const signal of ["SIGINT", "SIGTERM"]) {
+    process.on(signal, () => { remote.stop().catch(() => {}).finally(() => process.exit(0)); });
+  }
   server.on("error", error => {
     console.error(`Error de servidor: ${error.message}`);
     process.exitCode = 1;
   });
-  server.listen(8787, "127.0.0.1", () => console.log("Bricohams Radio Workspace: http://127.0.0.1:8787 (solo equipo local)"));
+  // PORT / --port only exist so tests can avoid 8787; the host is always loopback.
+  const portArg = process.argv.indexOf("--port");
+  const requestedPort = Number(portArg > 0 ? process.argv[portArg + 1] : process.env.PORT);
+  const port = Number.isInteger(requestedPort) && requestedPort >= 0 && requestedPort <= 65535 && (portArg > 0 || process.env.PORT) ? requestedPort : 8787;
+  server.listen(port, "127.0.0.1", () => console.log(`RadiCodex (BricoHams): http://127.0.0.1:${server.address().port} (solo equipo local)`));
 })().catch(() => { console.error("No se pudo iniciar el servidor o su diagnostico configurado."); process.exitCode = 1; });
 }
-module.exports = { createServer, ALLOWED_FILES };
+module.exports = { createServer, ALLOWED_FILES, DESKTOP_ONLY_FILES };

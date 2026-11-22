@@ -162,9 +162,9 @@ Après l’installation, pour préparer une Quansheng, suivez le [parcours de 0 
 et consultez l’[atlas technique UV-K5 V3](docs/i18n/fr/ATLAS-UV-K5-V3.md).
 
 - Windows 11 x64 : extrayez tout le contenu de `*-windows-x64.zip`, ouvrez PowerShell dans ce dossier et exécutez `powershell -NoProfile -ExecutionPolicy Bypass -File .\Install.ps1`. Node.js est inclus ; aucun droit administrateur n’est requis. Lancez l’application depuis le menu Démarrer.
-- Debian, Ubuntu et Raspberry Pi OS : vérifiez `dpkg --print-architecture`, téléchargez **uniquement** le fichier `.deb` correspondant à votre architecture (amd64, arm64 ou armhf), puis exécutez `sudo apt install ./nombre-del-paquete.deb`. Node.js est inclus ; armhf nécessite un processeur ARMv7 ou ultérieur. Ouvrez l’application depuis le menu ou lancez `bricohams-radio`.
-- Arch Linux : installez `base-devel` et `nodejs` avec pacman, extrayez `*-arch.tar.gz`, vérifiez `PKGBUILD` et exécutez `makepkg -si` en tant qu’utilisateur normal. Lancez avec `bricohams-radio`.
-- FreeBSD 14 amd64 : extrayez `*-freebsd-amd64.tar.gz`, ouvrez le dossier et exécutez `su -c './install.sh'` (Node 22 est installé avec `pkg` s’il manque). Lancez `bricohams-radio` en tant qu’utilisateur normal.
+- Debian, Ubuntu et Raspberry Pi OS : vérifiez `dpkg --print-architecture`, téléchargez **uniquement** le fichier `.deb` correspondant à votre architecture (amd64, arm64 ou armhf), puis exécutez `sudo apt install ./nombre-del-paquete.deb`. Node.js est inclus ; armhf nécessite un processeur ARMv7 ou ultérieur. Ouvrez l’application depuis le menu ou lancez `radicodex`.
+- Arch Linux : installez `base-devel` et `nodejs` avec pacman, extrayez `*-arch.tar.gz`, vérifiez `PKGBUILD` et exécutez `makepkg -si` en tant qu’utilisateur normal. Lancez avec `radicodex`.
+- FreeBSD 14 amd64 : extrayez `*-freebsd-amd64.tar.gz`, ouvrez le dossier et exécutez `su -c './install.sh'` (Node 22 est installé avec `pkg` s’il manque). Lancez `radicodex` en tant qu’utilisateur normal.
 
 Tous les installateurs comprennent **Bricohams Quansheng Studio** (UV-K1 / UV-K5 V3 avec F4HWN Fusion 6), depuis le dépôt [Brico-Hams/Bricohams-Studio](https://github.com/Brico-Hams/Bricohams-Studio). Ouvrez-le sur <http://127.0.0.1:8787/studio.html> ou depuis l’espace Quansheng. La copie est téléchargée lors de la création du package, au commit et avec le SHA-256 épinglés dans `studio.lock.json` ; le serveur la vérifie de nouveau avant de la fournir. Elle est servie avec sa propre CSP, qui n’autorise que les scripts identifiés par hash et lui interdit tout accès réseau. Depuis le code source, exécutez une fois `npm run fetch:studio`. En mode web, le lien renvoie vers la [page publique de Studio](https://brico-hams.github.io/Bricohams-Studio/).
 
@@ -283,6 +283,35 @@ Ne débranchez pas la radio et ne fermez pas le navigateur pendant une opératio
 - Le serveur ne fournit qu’une liste fixe de fichiers de l’application, écoute uniquement sur `127.0.0.1` et envoie CSP, Permissions-Policy, `nosniff` et `no-referrer`. Il ne sert ni configuration de l’éditeur, ni tests, ni chemins arbitraires.
 - Les métadonnées de la radio et les fichiers sont affichés comme texte, pas comme HTML. `eval` n’est pas utilisé.
 - SHA-256 détecte une corruption accidentelle, mais ne prouve pas l’authenticité du firmware. Utilisez des images provenant d’une source fiable. Aucun logiciel ne peut garantir une sécurité absolue ni une récupération après une panne d’alimentation.
+
+## Remote shack (contrôle à distance par CAT)
+
+Un agent placé près de la radio la pilote par CAT avec Hamlib `rigctld` et propose une console web (mobile, tablette ou PC). `server.cjs` ne change pas et écoute toujours uniquement sur `127.0.0.1`.
+
+1. Lancez `rigctld` avec votre radio : `rigctld -m <modelo> -r <puerto>` (par exemple `rigctld -m 1035 -r COM5` ; liste des modèles avec `rigctld -l`). Il écoute sur `127.0.0.1:4532`.
+2. Lancez l’agent : `npm run remote` (options : `--port`, `--rigctld-host`, `--rigctld-port`, `--listen 0.0.0.0` ou la variable `REMOTE_LISTEN` pour LAN/Tailscale). La première fois, il génère un jeton aléatoire dans `~/.radicodex/remote-agent.json` (il y enregistre aussi l’hôte/port de rigctld et `txLimitSeconds`, 180 par défaut).
+3. Ouvrez dans le navigateur l’adresse affichée par l’agent, avec le jeton dans le fragment (`https://<ip>:8788/#token=...&fp=...`). La console conserve le jeton dans la session et le retire (avec `fp`) de la barre d’adresse.
+
+HTTPS : avec `--listen` sur une adresse non locale, l’agent sert HTTPS par défaut avec un certificat auto-signé (ECDSA P-256) stocké dans `~/.radicodex/remote-agent-tls.pem` (0600 ; réutilisé, et régénéré s’il manque, est invalide, expire dans moins de 30 jours ou si les IP locales changent). Le navigateur avertira une fois du certificat ; l’empreinte SHA-256 `fp` affichée permet de le vérifier. `--tls` force HTTPS aussi en loopback et `--no-tls` force le HTTP simple (avec avertissement). Pour l’app Android, l’agent affiche le lien `radicodex-remote://pair` avec hôte, port, jeton et empreinte (jeton et empreinte uniquement dans le fragment).
+
+Relais (sans port ouvert) : l’agent n’établit que des connexions sortantes vers un relais BricoHams que vous hébergez vous-même ; les clients (navigateur, WebView Android) entrent par le relais sur `/s/<id>/`.
+
+1. Sur le serveur du relais, enregistrez la station (3 à 32 caractères `[a-z0-9-]`, par exemple votre indicatif en minuscules) : `node remote-relay.cjs add-station ea5kao`. Le secret n’est affiché qu’une fois ; `~/.radicodex/relay.json` (0600, chemin modifiable avec `--data`) n’en conserve que le hachage SHA-256. `remove-station <id>` et `list-stations` existent aussi.
+2. Démarrez le relais avec votre propre certificat (par exemple Let’s Encrypt) : `node remote-relay.cjs serve --port 8443 --cert fullchain.pem --key privkey.pem` ; ou derrière Caddy/nginx en HTTP simple sur `127.0.0.1` : `node remote-relay.cjs serve --behind-proxy` (seulement alors `X-Forwarded-For` est approuvé, et uniquement depuis loopback). Caddyfile :
+
+```
+relay.example.org {
+	reverse_proxy 127.0.0.1:8443 {
+		flush_interval -1
+	}
+}
+```
+
+3. À la station : `npm run remote -- --relay https://relay.example.org --station ea5kao --station-secret <secret>`. Le secret reste dans `~/.radicodex/remote-agent.json` (0600) et n’est jamais affiché. L’agent affiche `https://relay.example.org/s/ea5kao/#token=...` pour le navigateur et `radicodex-remote://pair` (avec relais, station et jeton) pour Android. La console montre l’état du relais et `/api/state` l’expose dans `relay`.
+
+Le relais termine le TLS et voit le trafic en clair : hébergez-le là où vous avez confiance. Le jeton de l’agent protège toujours le contrôle (le relais ne le connaît pas) et la sécurité TX de l’agent ne change pas.
+
+Sécurité : toute l’API exige le jeton ; un seul opérateur pilote la radio à la fois (30 s d’inactivité libèrent le contrôle) ; l’émission s’arrête automatiquement si les battements manquent pendant 1 s, à l’atteinte de la limite TX, à la perte de `rigctld` ou à la fermeture de l’agent. **N’ouvrez aucun port sur le routeur (pas de redirection de ports)** : pour un accès hors de chez vous, utilisez Tailscale ou WireGuard et `--listen` avec l’IP de ce réseau.
 
 ## Tests et validation
 

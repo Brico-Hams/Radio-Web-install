@@ -143,12 +143,14 @@ const RADIO_TASKS = {
   opengd77: [["Conexion y copias", "opengd77.html#connection"], ["Codeplug", "opengd77.html#radio-operations"], ["Canales y contactos", "opengd77.html#planning-panel"]],
   quansheng: [["Conexion y copias", "quansheng.html#connection"], ["Canales", "quansheng.html#radio-operations"], ["Herramientas", "quansheng.html#qs-native-menu"], ["Seguimiento CAT de satelites", "quansheng.html#plan-sat"]]
 };
-const navItem = (file, label, key, extra = "", children = "") =>
-  `<li><a href="${file}"${page === key ? ' aria-current="page"' : ""}${extra}>${label}</a>${children}</li>`;
+// Entries marked data-desktop-only are removed unless runtime.json reports the desktop app (mode "local").
+const DESKTOP_ONLY = " data-desktop-only";
+const navItem = (file, label, key, extra = "", children = "", itemAttrs = "") =>
+  `<li${itemAttrs}><a href="${file}"${page === key ? ' aria-current="page"' : ""}${extra}>${label}</a>${children}</li>`;
 const nav = (key, label) => navItem(`${key}.html`, label, key);
-const sidebarNav = () => `<nav aria-label="Navegacion principal"><ul class="nav-list">${navItem("index.html", "Inicio", "home")}${navItem("satelites.html", "Satelites", "satelites")}${navItem("radios.html", "Radios", "radios", isModel ? ' class="nav-ancestor"' : "",
-  `<ul class="nav-sub" aria-label="Modelos de radio">${nav("opengd77", "OpenGD77")}${nav("quansheng", "Quansheng")}${nav("anytone", "AnyTone Beta")}${nav("ftx1", "Yaesu FTX-1")}${nav("icom", "Icom transversores")}</ul>`)}${navItem("station.html", "Estacion remota", "station")}${navItem("ayuda.html", "Ayuda", "ayuda")}</ul></nav>`;
-
+const sidebarNav = () => `<nav aria-label="Navegacion principal"><ul class="nav-list">${navItem("index.html", "Inicio", "home")}${navItem("herramientas.html", "Estacion", "estacion", page === "herramientas" ? ' class="nav-ancestor"' : "",
+  `<ul class="nav-sub" aria-label="Herramientas de estacion">${navItem("herramientas.html", "Herramientas de radio", "herramientas", "", "", DESKTOP_ONLY)}${navItem("remoto.html", "Remote shack (rigctld, desktop)", "remoto", "", "", DESKTOP_ONLY)}</ul>`, DESKTOP_ONLY)}${navItem("satelites.html", "Satelites", "satelites")}${navItem("radios.html", "Radios", "radios", isModel ? ' class="nav-ancestor"' : "",
+  `<ul class="nav-sub" aria-label="Modelos de radio">${nav("opengd77", "OpenGD77")}${nav("quansheng", "Quansheng")}${nav("anytone", "AnyTone Beta")}${nav("ftx1", "Yaesu FTX-1")}${nav("icom", "Icom transversores")}</ul>`)}${navItem("station.html", "Estación remota (host/agente Python)", "station")}${navItem("ayuda.html", "Ayuda", "ayuda")}</ul></nav>`;
 function readStorage(key) {
   try { return JSON.parse(localStorage.getItem(key)); } catch { return null; }
 }
@@ -278,10 +280,9 @@ document.getElementById("app").innerHTML = `
     <div class="sidebar-bottom"><span class="local-dot"></span> USB / Serial local<p>Sin envio de datos a servidores.<br>Copias antes de escribir.</p></div>
   </aside>
   <div class="workspace"><header class="topbar">
-    <div class="topbar-left"><span class="crumb">${BRAND.name} <span class="breadcrumb">/ ${current ? current.name : stationTemplate ? "Estacion remota" : anytoneTemplate ? "AnyTone Beta" : ftx1Template ? "Yaesu FTX-1" : icomTemplate ? "Icom transversores" : helpTemplate ? "Ayuda y soporte" : page === "satelites" ? "Satelites" : page === "radios" ? "Radios" : "Inicio"}</span></span>${current ? '<span class="topbar-status"><span class="status-dot" aria-hidden="true"></span><span id="topbar-status">Sin conexion.</span></span>' : ""}</div>
+    <div class="topbar-left"><span class="crumb">${BRAND.name} <span class="breadcrumb">/ ${current ? current.name : stationTemplate ? "Estación remota (host/agente Python)" : anytoneTemplate ? "AnyTone Beta" : ftx1Template ? "Yaesu FTX-1" : icomTemplate ? "Icom transversores" : helpTemplate ? "Ayuda y soporte" : page === "satelites" ? "Satelites" : page === "herramientas" ? "Estacion / Herramientas de radio" : page === "radios" ? "Radios" : "Inicio"}</span></span>${current ? '<span class="topbar-status"><span class="status-dot" aria-hidden="true"></span><span id="topbar-status">Sin conexion.</span></span>' : ""}</div>
     <div class="topbar-right"><span class="pill">BETA - EN VALIDACION</span><span id="mode-badge" class="mode-badge"></span><span class="local-badge">SIN CUENTA &middot; SIN SUBIDAS</span>${current ? '<button id="topbar-connect" class="button primary topbar-connect" type="button" disabled><span aria-hidden="true">⌁</span> Conectar</button>' : ""}</div></header>
-  <main id="main">${current ? detail(current) : stationTemplate || helpTemplate || anytoneTemplate || ftx1Template || icomTemplate || page === "satelites" ? "" : page === "radios" ? radios() : home()}</main>  <footer><span>&copy; 2026 ${BRAND.name} ${BRAND.product} <span class="muted">/ GPL-3.0-or-later / Sin garantia</span></span><span><a href="ayuda-referencias.html">Documentacion de referencia</a> &middot; <a href="ayuda.html#inicio">Instalar en local</a> &middot; <a href="ayuda.html">Ayuda y soporte</a> &middot; <a href="${BRAND.repository}" target="_blank" rel="noopener noreferrer">Codigo fuente</a> &middot; No afiliado a OpenGD77, grid.radio, F4HWN ni Quansheng.</span></footer></div>`;
-
+  <main id="main">${current ? detail(current) : stationTemplate || helpTemplate || anytoneTemplate || ftx1Template || icomTemplate || page === "satelites" || page === "herramientas" ? "" : page === "radios" ? radios() : home()}</main>  <footer><span>&copy; 2026 ${BRAND.name} ${BRAND.product} <span class="muted">/ GPL-3.0-or-later / Sin garantia</span></span><span><a href="ayuda-referencias.html">Documentacion de referencia</a> &middot; <a href="ayuda.html#inicio">Instalar en local</a> &middot; <a href="ayuda.html">Ayuda y soporte</a> &middot; <a href="${BRAND.repository}" target="_blank" rel="noopener noreferrer">Codigo fuente</a> &middot; No afiliado a OpenGD77, grid.radio, F4HWN ni Quansheng.</span></footer></div>`;
 if (anytoneTemplate) {
   document.getElementById("main").append(anytoneTemplate.content.cloneNode(true));
   globalThis.RadioWorkspace.mountAnytoneUI();
@@ -653,6 +654,7 @@ function setupViews() {
 (globalThis.RadioWorkspace?.runtime ?? Promise.resolve({ mode: "web" })).then(({ mode }) => {
   document.body.dataset.mode = mode;
   document.getElementById("mode-badge").textContent = mode === "local" ? "Local · instalado" : "Web · GitHub Pages";
+  if (mode !== "local") document.querySelectorAll("[data-desktop-only]").forEach(item => item.remove());
   // The installers ship a pinned copy of Studio; the static site links to its own GitHub Pages origin.
   const studio = document.getElementById("studio-link");
   if (studio && mode === "local") {

@@ -1,0 +1,28 @@
+[Unit]
+Description=RadiCodex Super Station (rigctld supervisor and remote agent)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=radicodex
+Group=radicodex
+SupplementaryGroups=dialout plugdev
+Environment=HOME=/var/lib/radicodex
+StateDirectory=radicodex
+WorkingDirectory=/var/lib/radicodex
+ExecStart=/usr/bin/radicodex-station
+Restart=always
+RestartSec=10
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/radicodex
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+StandardOutput=journal+console
+StandardError=journal+console
+
+[Install]
+WantedBy=multi-user.target

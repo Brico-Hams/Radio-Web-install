@@ -1,0 +1,13 @@
+#!/bin/sh
+set -e
+
+# The Super Station service is optional and stays disabled; only its account is prepared here.
+if [ "$1" = "configure" ]; then
+  if ! getent passwd radicodex >/dev/null 2>&1; then
+    adduser --system --group --home /var/lib/radicodex --no-create-home --shell /usr/sbin/nologin radicodex >/dev/null 2>&1 || true
+  fi
+  for group in dialout plugdev; do
+    if getent group "$group" >/dev/null 2>&1; then adduser radicodex "$group" >/dev/null 2>&1 || true; fi
+  done
+fi
+exit 0
