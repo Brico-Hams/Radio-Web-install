@@ -3,7 +3,7 @@
 Archivos generados por `npm run templates:build` (sin red) a partir de `data/channel-templates/<CC>.json`. No editar a mano.
 
 - Radios: RadiCodex (`radicodex`, .csv); Radtel RT-950 Pro (`rt950pro`, .csv); Quansheng UV-K5 V3 (`uvk5v3`, .csv); AnyTone AT-D878 (`d878`, .json); Yaesu FTX-1 (`ftx1`, .csv).
-- Paises con datos: 44 de 80. Archivos: 220. Generado: 2026-11-21T12:54:39.546Z.
+- Paises con datos: 45 de 80. Archivos: 225. Generado: 2026-11-22T12:47:01.877Z.
 - Ruta: `templates/repeaters/<radio>/<CC>.<ext>`. `index.json` lista cada archivo con canales, descartados y SHA-256 (`path` es relativo a esta carpeta).
 
 ## Formato
@@ -50,7 +50,6 @@ Los repetidores son canales de solo recepcion: el TX queda bloqueado y la entrad
 - GT Guatemala: HearHam no publica repetidores FM operativos utilizables para este pais.
 - NI Nicaragua: HearHam no publica repetidores FM operativos utilizables para este pais.
 - BS Bahamas: HearHam no publica repetidores FM operativos utilizables para este pais.
-- BB Barbados: HearHam no publica repetidores FM operativos utilizables para este pais.
 - CU Cuba: HearHam no publica repetidores FM operativos utilizables para este pais.
 - GD Granada: HearHam no publica repetidores FM operativos utilizables para este pais.
 - HT Haití: HearHam no publica repetidores FM operativos utilizables para este pais.
