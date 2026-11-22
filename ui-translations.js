@@ -2059,10 +2059,8 @@ Elige una radio para limitar las bandas a las que puede transmitir.|Choose a rad
 Bandas de TX: pendiente de fuente.|TX bands: pendiente de fuente (no source).|Bandes TX : pendiente de fuente (aucune source).|TX-Bänder: pendiente de fuente (keine Quelle).
 Plantilla|Template|Modèle|Vorlage
 Tipo de antena|Antenna type|Type d’antenne|Antennentyp
-Dipolo de media onda|Half-wave dipole|Dipôle demi-onde|Halbwellendipol
 V invertida|Inverted V|V inversé|Inverted-V
 Dipolo multibanda con trampas|Multiband trap dipole|Dipôle multibande à trappes|Mehrband-Trapdipol
-Frecuencia (MHz)|Frequency (MHz)|Fréquence (MHz)|Frequenz (MHz)
 Altura sobre el suelo (m)|Height above ground (m)|Hauteur au-dessus du sol (m)|Höhe über Grund (m)
 Impedancia de referencia (ohm)|Reference impedance (ohm)|Impédance de référence (ohm)|Bezugsimpedanz (Ohm)
 Radio del hilo (mm)|Wire radius (mm)|Rayon du fil (mm)|Drahtradius (mm)
