@@ -17,19 +17,31 @@ documentación, sin prueba del fabricante de ese producto.
 
 | Categoría | Descripción anunciada | Estado BricoHams |
 |---|---|---|
-| Consola web responsive/PWA | Navegación desde teléfono, tablet y ordenador; instalación en pantalla de inicio | No implementada |
-| Control CAT | Frecuencia, VFO/split, bandas, modos, filtros, RIT/XIT y DSP/ganancias según radio | No implementado |
-| Scope y waterfall | Scope de la radio, ajuste y selección de señal para sintonizar | Sin extracción de muestras verificada |
-| Audio | Recepción de baja latencia y audio TX desde micro/headset | No implementado; TX bloqueado |
-| Periféricos de sintonía | FlexControl, CTR2-MIDI y teclado/paddle, según la página pública | No implementado |
-| Accesorios de estación | Amplificadores, tuner, switches, relés, PDU y rotores | No implementado |
-| Multi-radio | Selección de varios equipos por estación | No implementado |
-| Roles/visitas | Invitados con permisos por radio, solo escucha o transmisión y límites | Solo autenticación/roles de lectura local; no hay sesiones remotas |
-| Registro y operación | Logbook ADIF, mapas, premios, DX cluster, alertas, historial TX | No implementado |
-| Modos digitales | CW, RTTY, PSK, SSTV, FT8/FT4/WSPR y RADE, según plan/producto | No implementado |
-| Seguridad TX | Liberación al perder enlace, timeout y exclusión de operador | No hay TX; por tanto no se declara un sistema TX seguro |
-| Red | Agente con conexión saliente, enlace cifrado directo o relay | Solo servidor de loopback; no hay conexión remota |
-| Aplicaciones | Web móvil y aplicación Apple TV de solo escucha | Web/Android no implementados; Apple TV fuera del alcance inicial |
+| Consola web responsive/PWA | Navegación desde teléfono, tablet y ordenador; instalación en pantalla de inicio | Implementada: `remote.webmanifest`, `remoto.webmanifest`, `remote-sw.js` (solo estáticos, nunca `/api` ni tokens) y `remote-station/apps/web-console/public/sw.js` |
+| Control CAT | Frecuencia, VFO/split, bandas, modos, filtros, RIT/XIT y DSP/ganancias según radio | Implementado vía `rigctld` en `remote-agent.cjs`; ampliaciones por radio solo con fuente (`remote-catalog.cjs`) |
+| Scope y waterfall | Scope de la radio, ajuste y selección de señal para sintonizar | Parcial: waterfall local en la consola; sin waterfall en "escucha pública" (pendiente de fuente) |
+| Audio | Recepción de baja latencia y audio TX desde micro/headset | Implementado (RX y TX con lease en `remote-agent.cjs`); TX por invitado exige permiso explícito |
+| Periféricos de sintonía | FlexControl, CTR2-MIDI y teclado/paddle, según la página pública | Pendiente |
+| Accesorios de estación | Amplificadores, tuner, switches, relés, PDU y rotores | Parcial: rotor (`rotor.py`, Android `Rotor*`); resto pendiente |
+| Multi-radio | Selección de varios equipos por estación | Parcial: registro de radios, lease/PTT por radio y `GET /api/radios` en `remote-ops.cjs`; un agente aún maneja un `rigctld` |
+| Roles/visitas | Invitados con permisos por radio, solo escucha o transmisión y límites | Implementado en el agente Node: token propio por invitado, bandas y potencia máx. aplicadas en el agente, revocación (`remote-ops.cjs`, `/api/guests`); sin UI de invitaciones ni Python/Android |
+| Registro y operación | Logbook ADIF, mapas, premios, DX cluster, alertas, historial TX | Parcial: historial TX con CSV (`/api/txlog.csv`); resto pendiente |
+| Modos digitales | CW, RTTY, PSK, SSTV, FT8/FT4/WSPR y RADE, según plan/producto | Parcial: WSJT-X limitado (ver `REMOTE_STATION.md`); resto pendiente |
+| Seguridad TX | Liberación al perder enlace, timeout y exclusión de operador | Implementada: latido 1 s, límite de tiempo, SWR, un operador, liberación al ocultar/perder foco/segundo plano (web y Android) |
+| Encendido/apagado remoto | Encender/apagar la radio | Parcial: apagado FTX-1 `PS0` (`docs/FTX1-KNOWLEDGE.md`) con confirmación en el agente Node; IC-705 `18 00`/`18 01` solo como constructor probado en Python (`icom_civ.py`), sin cablear; resto pendiente de fuente |
+| Escucha pública | Audio de solo escucha | Implementada, desactivada por defecto, sin control y con límite de tasa (`listenLive`) |
+| Actualización del agente | Aviso de nuevas versiones | Implementada, opt-in: solo releases de GitHub, firma Ed25519 + SHA-256, nunca instala sin consentimiento |
+| Red | Agente con conexión saliente, enlace cifrado directo o relay | Implementada (`remote-relay.cjs`, TLS) |
+| Aplicaciones | Web móvil y aplicación Apple TV de solo escucha | Web/Android implementados; Apple TV fuera del alcance |
+
+Comparación de radios: los 44 modelos de la lista del tercero (revisada el
+22 de noviembre de 2026: 17 Icom, 13 FlexRadio, 4 Kenwood, 7 Yaesu, 2 Elecraft y
+Hermes Lite 2) figuran en `data/remote-station-catalog.json` (IC-7850 e IC-7851
+comparten una entrada). BricoHams añade además (tr)uSDX, QMX/QMX+ y QCX/QDX.
+El encendido remoto solo tiene fuente para el apagado del FTX-1 (`PS0`) y para el
+IC-705 (CI-V `18 00`/`18 01`, guía CI-V del IC-705 p. 5 y p. 18; constructores en
+`remote-station/bricoham_remote_station/drivers/icom_civ.py`); el resto sigue
+"pendiente de fuente".
 
 Las capacidades, niveles de plan, precio y compatibilidad descritos pertenecen al
 producto analizado. No se replican como especificación ni se presentan como

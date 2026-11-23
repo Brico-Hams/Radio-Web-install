@@ -255,6 +255,14 @@ und SHA256SUMS aktualisiert. Auf dieses Inkrement und seine Authentifizierungs-/
 beschränkte Sicherheitsprüfung: keine bestätigten Schwachstellen.
 Sie zertifiziert weder das gesamte Produkt noch WSJT-X im realen Betrieb noch Hardware.
 
+## Erweiterter Fernbetrieb
+
+Der Node-Agent (`remote-agent.cjs` + `remote-ops.cjs`) ergänzt Gäste mit eigenem Token
+und Berechtigungen pro Funkgerät (Bänder und Maximalleistung im Agenten erzwungen), ein TX-Protokoll mit
+CSV-Export, Fern-Ausschalten nur mit Quelle (FTX-1 `PS0`, mit Bestätigung),
+optionales öffentliches Mithören (standardmäßig aus), signierte Update-Hinweise
+(keine Installation ohne Zustimmung) und eine installierbare PWA. Niemals ohne angepasste Last oder Antenne senden.
+
 ## Sprachen, ohne aktive Steuerelemente zu unterbrechen
 
 PTT, Rotor, RX-Audio und das CAT/WSJT-X-Panel teilen sich ES/EN/FR/PT, einschließlich

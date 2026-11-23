@@ -264,6 +264,8 @@ class RemoteShackActivity : LocalizedActivity() {
     }
 
     override fun onPause() {
+        // Background or screen lock freezes the WebView: tell the page to release PTT first (the agent's 1 s heartbeat is the backstop).
+        web?.evaluateJavascript("window.dispatchEvent(new Event('radicodex-release'))", null)
         web?.onPause()
         window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         super.onPause()

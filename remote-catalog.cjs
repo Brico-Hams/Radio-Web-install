@@ -61,6 +61,8 @@ function validateCat(cat, fail) {
   }
   if (cat.status !== undefined) command(cat.status, "status");
   if (cat.txOff !== undefined) command(cat.txOff, "txOff");
+  // Sourced power-off CAT string (e.g. FTX-1 PS0, docs/FTX1-KNOWLEDGE.md); sent only by the owner-confirmed /api/power route.
+  if (cat.powerOff !== undefined) command(cat.powerOff, "powerOff");
   command(cat.txState, "txState");
   if (!cat.meters || typeof cat.meters !== "object") fail("cat.meters obligatorio");
   for (const key of ["alc", "po", "swr"]) command(cat.meters[key], `meters.${key}`);
@@ -72,7 +74,7 @@ function validateCat(cat, fail) {
 function catAllowList(cat) {
   if (!cat) return [];
   const tuner = cat.tuner ? [cat.tuner.read, ...Object.values(cat.tuner.atas || {}), ...Object.values(cat.tuner.internal || {})] : [];
-  const list = [cat.txState, cat.power, cat.status, cat.txOff, ...Object.values(cat.meters || {}), ...tuner].filter(Boolean);
+  const list = [cat.txState, cat.power, cat.status, cat.txOff, cat.powerOff, ...Object.values(cat.meters || {}), ...tuner].filter(Boolean);
   return [...new Set(list)];
 }
 

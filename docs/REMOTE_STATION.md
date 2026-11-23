@@ -255,6 +255,14 @@ y SHA256SUMS actualizado. Revision de seguridad limitada a este incremento
 y sus helpers de autenticacion/TLS: sin vulnerabilidades confirmadas.
 No certifica todo el producto, WSJT-X en ejecucion real ni hardware.
 
+## Operación remota ampliada
+
+El agente Node (`remote-agent.cjs` + `remote-ops.cjs`) añade invitados con token propio
+y permisos por radio (bandas y potencia máxima aplicadas en el agente), historial TX con
+exportación CSV, apagado remoto solo donde hay fuente (FTX-1 `PS0`, con confirmación),
+escucha pública opcional (desactivada por defecto), aviso de actualizaciones firmadas
+(nunca instala sin consentimiento) y PWA instalable. No transmita sin carga o antena adaptada.
+
 ## Idiomas sin interrumpir controles activos
 
 PTT, rotor, audio RX y el panel CAT/WSJT-X comparten ES/EN/FR/PT, incluidos

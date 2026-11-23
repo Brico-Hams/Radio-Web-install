@@ -650,7 +650,12 @@
     button.addEventListener("blur", pttUp);
     document.addEventListener("visibilitychange", () => { if (document.hidden) pttUp(); });
     addEventListener("pagehide", pttUp);
+    addEventListener("blur", pttUp);
+    // Dispatched by the Android shell before it freezes the WebView (background / screen lock).
+    addEventListener("radicodex-release", pttUp);
   }
+
+  if (typeof navigator !== "undefined" && navigator.serviceWorker && location.protocol !== "file:") navigator.serviceWorker.register("sw.js").catch(() => {});
 
   // The radio's own spectrum is not rendered yet; the panel only says what to expect for this model.
   const SPECTRUM_TEXT = Object.freeze({

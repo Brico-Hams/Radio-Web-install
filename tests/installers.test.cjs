@@ -109,7 +109,7 @@ test("los instalables incluyen el catalogo y todos los recursos web permitidos",
 test("el .deb incluye la estacion remota con el servicio systemd opcional y sin activarlo", () => {
   const build = read("scripts/build-installers.sh");
   const files = build.match(/app_files=\(([\s\S]*?)\n\)/)[1].trim().split(/\s+/);
-  for (const file of ["remote-station.cjs", "remote-catalog.cjs", "remote-agent.cjs", "remote-tls.cjs", "rigctld-client.cjs", "remoto.html", "remoto-ui.js", "remoto.css"]) {
+  for (const file of ["remote-station.cjs", "remote-catalog.cjs", "remote-agent.cjs", "remote-tls.cjs", "rigctld-client.cjs", "remote-ops.cjs", "remote-sw.js", "remote.webmanifest", "remoto.webmanifest", "remoto.html", "remoto-ui.js", "remoto.css"]) {
     assert.ok(files.includes(file), file);
     assert.ok(fs.existsSync(path.join(root, file)), file);
   }

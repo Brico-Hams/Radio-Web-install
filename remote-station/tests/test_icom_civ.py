@@ -4,10 +4,28 @@ from bricoham_remote_station.drivers.icom_civ import (
     IcomCivMode,
     IcomCivModel,
     IcomReadCommand,
+    build_power_set,
     build_query,
+    parse_ack,
     parse_frequency_reply,
     parse_mode_reply,
 )
+
+
+class IcomPowerTests(unittest.TestCase):
+    def test_ic705_power_frames_follow_the_guide(self) -> None:
+        self.assertEqual(build_power_set(IcomCivModel.IC_705, False), bytes.fromhex("FEFEA4E01800FD"))
+        self.assertEqual(build_power_set(IcomCivModel.IC_705, True), bytes.fromhex("FEFEA4E01801FD"))
+        self.assertTrue(parse_ack(IcomCivModel.IC_705, bytes.fromhex("FEFEE0A4FBFD")))
+        self.assertFalse(parse_ack(IcomCivModel.IC_705, bytes.fromhex("FEFEE0A4FAFD")))
+
+    def test_other_models_and_non_boolean_are_refused(self) -> None:
+        with self.assertRaises(ValueError):
+            build_power_set(IcomCivModel.IC_7300, False)
+        with self.assertRaises(ValueError):
+            build_power_set(IcomCivModel.IC_705, 0)
+        with self.assertRaises(ValueError):
+            parse_ack(IcomCivModel.IC_705, bytes.fromhex("FEFEE0A4FCFD"))
 
 
 class IcomCivProtocolTests(unittest.TestCase):

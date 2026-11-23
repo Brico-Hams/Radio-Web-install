@@ -1,0 +1,12 @@
+{
+  "name": "BricoHams Remote shack (desktop)",
+  "short_name": "Remote shack",
+  "start_url": "remoto.html",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#101418",
+  "theme_color": "#F26B1D",
+  "icons": [
+    { "src": "bricohams-logo.png", "sizes": "any", "type": "image/png", "purpose": "any" }
+  ]
+}
