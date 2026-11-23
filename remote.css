@@ -109,6 +109,21 @@ input[type=range]{width:100%;min-height:36px;accent-color:var(--accent)}
 .audio,.lock,.tune-stop{min-width:84px;min-height:72px}
 .tune-stop{background:var(--tx);border-color:var(--tx);color:var(--on-tx);font-weight:700}
 .tune-stop[hidden]{display:none}
+.chip-tune{border-color:var(--amber);color:var(--amber)}
+.tune-live{position:fixed;left:0;right:0;bottom:var(--dock-h);z-index:4;display:flex;flex-direction:column;gap:.4rem;padding:0 .6rem .4rem;pointer-events:none;max-height:45vh;overflow:auto}
+.tune-live>*{pointer-events:auto;border-radius:10px;padding:.6rem .8rem;background:var(--surface-2);border:2px solid var(--amber);margin:0}
+.tune-live[hidden],.tune-live>[hidden]{display:none}
+.tune-status{display:flex;flex-direction:column;gap:.15rem}
+.tune-status strong{color:var(--amber);font-variant-numeric:tabular-nums}
+.tune-status span,.tune-result p{font-size:.85rem;color:var(--muted);margin:.2rem 0 0}
+.tune-result-head{display:flex;justify-content:space-between;align-items:center;gap:.5rem}
+.tune-result-head button{min-width:72px;min-height:44px}
+.tune-result[data-outcome=success]{border-color:var(--ok)}
+.tune-result[data-outcome=fail]{border-color:var(--bad)}
+.tune-result[data-outcome=timeout]{border-color:var(--warn)}
+.tune-result[data-outcome=success] strong{color:var(--ok)}
+.tune-result[data-outcome=fail] strong{color:var(--bad)}
+.tune-result[data-outcome=timeout] strong{color:var(--warn)}
 .rotor[hidden]{display:none}
 .rotor-row{display:flex;flex-wrap:wrap;gap:.5rem;margin:.6rem 0;align-items:end}
 .rotor-row label,.rotor-file{display:flex;flex-direction:column;gap:.2rem;font-size:.85rem}

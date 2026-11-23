@@ -15,6 +15,7 @@
   <script src="remote-audio-core.js" defer></script>
   <script src="spectrum-core.js" defer></script>
   <script src="remote-rotor-ui.js" defer></script>
+  <script src="remote-tune-ui.js" defer></script>
   <script src="remote-ui.js" defer></script>
 </head>
 <body>
@@ -39,6 +40,7 @@
       <div class="rig-head">
         <span id="rig-model" class="chip" translate="no">--</span>
         <span id="rig-mode" class="chip chip-mode" translate="no">-- &middot; --</span>
+        <span id="rig-tune" class="chip chip-tune" hidden>Modo de ajuste (temporal)</span>
         <span id="rig-trx" class="chip chip-rx">RX</span>
         <span id="operator" class="chip chip-op">Sin operador</span>
       </div>
@@ -86,7 +88,6 @@
       </div>
       <p id="swr-alert" class="swr-alert" role="alert" hidden>ROE alta</p>
       <p id="tx-extra" class="hint" hidden></p>
-      <p id="tune-result" class="hint" role="status" hidden><span id="tune-result-label"></span> <span id="tune-result-swr"></span> <span id="tune-result-tx"></span></p>
       <p class="hint">Nunca transmitas sin una carga adaptada o una antena conectada.</p>
       <p class="hint">Al soltar, perder la conexion o cambiar de pestana se corta la transmision.</p>
     </section>
@@ -272,6 +273,22 @@
       <ul id="settings-list" class="settings-list" aria-label="Ajustes de la radio"></ul>
     </section>
   </main>
+
+  <div id="tune-live" class="tune-live">
+    <div id="tune-status" class="tune-status" role="status" aria-live="polite" hidden>
+      <strong id="tune-status-text"></strong>
+      <span id="tune-status-note"></span>
+    </div>
+    <section id="tune-result" class="tune-result" role="status" aria-live="polite" aria-labelledby="tune-result-label" hidden>
+      <div class="tune-result-head">
+        <strong id="tune-result-label"></strong>
+        <button id="tune-result-close" type="button" aria-label="Cerrar el resultado de la sintonía">Cerrar</button>
+      </div>
+      <p id="tune-result-reason"></p>
+      <p id="tune-result-swr"></p>
+      <p id="tune-result-tx"></p>
+    </section>
+  </div>
 
   <footer class="dock">
     <span class="audio-wrap">

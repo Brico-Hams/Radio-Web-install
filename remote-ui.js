@@ -66,7 +66,7 @@
 
   const view = {
     state: null, linkUp: false, ptt: false, wantPtt: false, heartbeat: null, freqLockUntil: 0, freqTarget: null, freqTimer: null,
-    locked: false, editing: false, tuneBusy: false,
+    locked: false, editing: false, tuneBusy: false, tune: RemoteTuneUI.createTuneTracker(),
     log: [], last: { freq: null, mode: null, ptt: false, txSeconds: 0 }, freqLogTimer: null, bandPending: "", bandTimer: null,
     sliderHold: {}, sliderTimers: {}
   };
@@ -299,7 +299,7 @@
   // Remembers where the operator settled in each band (stable for 1.5 s) for the next jump.
   function rememberBand(state) {
     const key = Number.isSafeInteger(state.freq) ? bandOf(state.freq) : null;
-    if (!key || !state.mode || state.ptt) return;
+    if (!key || !state.mode || state.ptt || state.tune) return;
     const pending = `${key}|${state.freq}|${state.mode}`;
     if (pending === view.bandPending) return;
     view.bandPending = pending;
@@ -411,7 +411,8 @@
   // Session log fed by the SSE state: the first state is only the baseline.
   function trackLog(state) {
     const last = view.last;
-    if (state.mode) {
+    // The radio switches to CW-L by itself during an ATAS tune and restores the mode after it: not an operator change.
+    if (state.mode && !state.tune) {
       if (last.mode !== null && state.mode !== last.mode) addLog(`Modo cambiado a ${modeLabel(state.mode)}`);
       last.mode = state.mode;
     }
@@ -442,17 +443,22 @@
     return `${Math.round((tx.fraction?.alc ?? 0) * 100)} %`;
   }
 
-  const TUNE_LABELS = { success: "Sintonía correcta", fail: "Sintonía fallida", timeout: "Sintonía cortada por tiempo" };
-
   function renderTuneResult(state) {
-    const result = state.tuneResult;
-    const show = Boolean(result) && !state.tune;
-    $("tune-result").hidden = !show;
-    if (!show) return;
-    setText($("tune-result-label"), TUNE_LABELS[result.outcome] || TUNE_LABELS.fail);
-    const swr = result.swr === null || result.swr === undefined ? "" : (result.swr >= 99 ? "∞" : result.swr.toFixed(1));
-    setText($("tune-result-swr"), swr ? `ROE ${swr}:1` : "");
-    setText($("tune-result-tx"), result.txOff ? "TX apagado verificado" : "TX sin verificar: la radio puede seguir transmitiendo");
+    const { status, card } = view.tune.update(state);
+    $("tune-status").hidden = !status;
+    if (status) {
+      setText($("tune-status-text"), status.text);
+      setText($("tune-status-note"), status.note);
+    }
+    $("tune-result").hidden = !card;
+    $("tune-live").hidden = !status && !card;
+    if (!card) return;
+    $("tune-result").dataset.outcome = card.outcome;
+    setText($("tune-result-label"), card.label);
+    setText($("tune-result-reason"), card.reason);
+    $("tune-result-reason").hidden = !card.reason;
+    setText($("tune-result-swr"), card.swr);
+    setText($("tune-result-tx"), card.txText);
   }
 
   function renderExtraMeters(state) {
@@ -565,12 +571,14 @@
     $("tuner").setAttribute("aria-valuetext", known ? `${formatHz(state.freq)} Hz` : "--");
 
     setText($("rig-model"), state.caps?.model || "Radio");
+    const tuning = Boolean(state.tune);
     setText($("rig-mode"), state.mode ? `${modeLabel(state.mode)} \u00b7 ${filterText(state.passband)}` : "-- \u00b7 --");
+    $("rig-tune").hidden = !tuning;
     setText($("rig-trx"), state.ptt ? "TX" : "RX");
     $("rig-trx").classList.toggle("tx", Boolean(state.ptt));
     setText($("operator"), state.operator === "me" ? "Tienes el control" : state.operator === "other" ? "Otro operador tiene el control" : "Sin operador");
 
-    const modeButton = MODE_BUTTON[state.mode];
+    const modeButton = tuning ? null : MODE_BUTTON[state.mode];
     for (const button of document.querySelectorAll("#modes button")) setPressed(button, button.dataset.mode === modeButton);
     const widths = FILTERS[FILTER_GROUP[state.mode]];
     document.querySelectorAll("#filters button").forEach((button, index) => {
@@ -1239,6 +1247,7 @@
       setTimeout(() => { view.tuneBusy = false; refreshControls(); }, 2000);
     });
     $("tune-stop").addEventListener("click", () => { stopTuneBeat(); pttSendOff(); });
+    $("tune-result-close").addEventListener("click", () => { view.tune.dismiss(); $("tune-result").hidden = true; $("tune-live").hidden = !view.state?.tune; });
   }
 
   function connectEvents() {
