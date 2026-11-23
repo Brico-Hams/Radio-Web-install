@@ -1992,6 +1992,17 @@ Supresor de ruido impulsivo (NB)|Noise blanker (NB)|Réducteur de bruit impulsif
 Reduccion de ruido (NR)|Noise reduction (NR)|Réduction de bruit (NR)|Rauschminderung (NR)
 Acoplador de antena (ATU)|Antenna tuner (ATU)|Boîte d’accord (ATU)|Antennentuner (ATU)
 Sintonizar el acoplador (TUNE)|Tune the antenna tuner (TUNE)|Lancer l’accord (TUNE)|Tuner abstimmen (TUNE)
+Accesorios de la estación|Station accessories|Accessoires de la station|Stationszubehör
+Amplificador: pendiente de fuente|Amplifier: pendiente de fuente (no protocol source)|Amplificateur : pendiente de fuente (aucune source de protocole)|Endstufe: pendiente de fuente (keine Protokollquelle)
+Amplificador: STANDBY|Amplifier: STANDBY|Amplificateur : STANDBY|Endstufe: STANDBY
+Amplificador: OPERATE|Amplifier: OPERATE|Amplificateur : OPERATE|Endstufe: OPERATE
+Amplificador: FALLO|Amplifier: FAULT|Amplificateur : DÉFAUT|Endstufe: FEHLER
+Poner el amplificador en OPERATE|Set the amplifier to OPERATE|Mettre l’amplificateur en OPERATE|Endstufe auf OPERATE schalten
+Poner el amplificador en STANDBY|Set the amplifier to STANDBY|Mettre l’amplificateur en STANDBY|Endstufe auf STANDBY schalten
+Nunca transmitas sin una carga o antena adaptada.|Never transmit without a matched load or antenna.|Ne transmettez jamais sans charge ou antenne adaptée.|Sende niemals ohne angepasste Last oder Antenne.
+Acoplador: pendiente de fuente|Tuner: pendiente de fuente (no protocol source)|Coupleur : pendiente de fuente (aucune source de protocole)|Tuner: pendiente de fuente (keine Protokollquelle)
+Acoplador: en reposo|Tuner: idle|Coupleur : au repos|Tuner: Ruhe
+Acoplador: sintonizando|Tuner: tuning|Coupleur : accord en cours|Tuner: Abstimmung läuft
 Ultimos cambios de esta sesion|Latest changes this session|Derniers changements de cette session|Letzte Änderungen dieser Sitzung
 Sin eventos todavia.|No events yet.|Aucun événement pour l’instant.|Noch keine Ereignisse.
 Modo cambiado a {0}|Mode changed to {0}|Mode changé en {0}|Betriebsart geändert auf {0}

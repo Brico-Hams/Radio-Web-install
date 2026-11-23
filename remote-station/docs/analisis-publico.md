@@ -22,7 +22,7 @@ documentación, sin prueba del fabricante de ese producto.
 | Scope y waterfall | Scope de la radio, ajuste y selección de señal para sintonizar | Sin extracción de muestras verificada |
 | Audio | Recepción de baja latencia y audio TX desde micro/headset | No implementado; TX bloqueado |
 | Periféricos de sintonía | FlexControl, CTR2-MIDI y teclado/paddle, según la página pública | No implementado |
-| Accesorios de estación | Amplificadores, tuner, switches, relés, PDU y rotores | No implementado |
+| Accesorios de estación | Amplificadores, tuner, switches, relés, PDU y rotores | Capa común de seguridad implementada ([accesorios-estacion.md](accesorios-estacion.md)); controladores de dispositivos externos `pendiente de fuente` |
 | Multi-radio | Selección de varios equipos por estación | No implementado |
 | Roles/visitas | Invitados con permisos por radio, solo escucha o transmisión y límites | Solo autenticación/roles de lectura local; no hay sesiones remotas |
 | Registro y operación | Logbook ADIF, mapas, premios, DX cluster, alertas, historial TX | No implementado |

@@ -83,6 +83,15 @@ activa el watchdog, no garantiza una parada física. Comprueba RX en la radio.
 No se declara aceptación USB/RF/móvil ni compatibilidad completa por disponer
 de un perfil. CW remoto activo, WSJT-X activo, scope nativo FTX-1 y agente
 Android headless OTG siguen pendientes; no se simulan como funciones reales.
+## Accesorios de estación
+
+La capa de [accesorios de estación](../remote-station/docs/accesorios-estacion.md) supervisa
+acopladores y amplificadores externos en el taller Node y en el agente Python
+(`GET/POST /api/v1/accessories`). El amplificador arranca en STANDBY y vuelve a STANDBY al
+desconectar, con ROE alta, fallo, pérdida de lease, cambio de banda o parada de emergencia.
+La sintonía solo se inicia por orden explícita, con 10 W o menos y tiempo limitado.
+Los dispositivos sin fuente de protocolo (por ejemplo PGXL) figuran como `pendiente de fuente`.
+
 ## Diagnostico
 
 Todos los componentes disponen de registro tecnico minimizado y opciones de envio

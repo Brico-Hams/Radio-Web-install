@@ -83,6 +83,15 @@ aktiviert den Watchdog, garantiert aber keinen physischen Stopp. Prüfe RX am Fu
 Es wird weder eine USB-/HF-/Mobil-Abnahme noch vollständige Kompatibilität erklärt, nur weil
 ein Profil vorhanden ist. Aktives Remote-CW, aktives WSJT-X, nativer FTX-1-Scope und der
 Android-Headless-OTG-Agent stehen weiterhin aus; sie werden nicht als reale Funktionen simuliert.
+## Stationszubehör
+
+Die Ebene für [Stationszubehör](../../../remote-station/docs/accesorios-estacion.md) überwacht
+externe Tuner und Endstufen im Node-Shack und im Python-Agenten
+(`GET/POST /api/v1/accessories`). Die Endstufe startet in STANDBY und kehrt bei
+Trennung, hohem SWR, Fehler, verlorener Lease, Bandwechsel oder Notstopp nach STANDBY zurück.
+Die Abstimmung startet nur auf ausdrückliche Anforderung, mit höchstens 10 W und zeitlich begrenzt.
+Geräte ohne Protokollquelle (zum Beispiel PGXL) erscheinen als `pendiente de fuente`.
+
 ## Diagnose
 
 Alle Komponenten verfügen über ein minimiertes technisches Protokoll und Optionen zum Senden

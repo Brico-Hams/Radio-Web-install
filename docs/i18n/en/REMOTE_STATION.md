@@ -83,6 +83,15 @@ triggers the watchdog, which does not guarantee a physical stop. Check RX on the
 USB/RF/mobile acceptance or full compatibility is not claimed just because
 a profile exists. Active remote CW, active WSJT-X, native FTX-1 scope, and headless
 Android OTG agent are still pending; they are not simulated as real functions.
+## Station accessories
+
+The [station accessories](../../../remote-station/docs/accesorios-estacion.md) layer supervises
+external tuners and amplifiers in the Node shack and in the Python agent
+(`GET/POST /api/v1/accessories`). The amplifier starts in STANDBY and returns to STANDBY on
+disconnect, high SWR, fault, lost lease, band change, or emergency stop.
+Tuning starts only on explicit request, at 10 W or less and time-limited.
+Devices without a protocol source (for example PGXL) are listed as `pendiente de fuente`.
+
 ## Diagnostics
 
 All components have minimized technical logging and options to send it

@@ -175,6 +175,13 @@
         <button id="btn-atu" type="button" class="toggle" aria-pressed="false" aria-label="Acoplador de antena (ATU)" disabled>ATU</button>
         <button id="btn-tune" type="button" aria-label="Sintonizar el acoplador (TUNE)" disabled>TUNE</button>
       </div>
+      <div id="accessories" class="toggles" role="group" aria-label="Accesorios de la estación" hidden>
+        <span id="amp-state">Amplificador: pendiente de fuente</span>
+        <span id="tuner-state">Acoplador: pendiente de fuente</span>
+        <button id="btn-amp-operate" type="button" class="toggle" aria-label="Poner el amplificador en OPERATE" disabled>OPERATE</button>
+        <button id="btn-amp-standby" type="button" class="toggle" aria-label="Poner el amplificador en STANDBY">STANDBY</button>
+        <p id="acc-warning">Nunca transmitas sin una carga o antena adaptada.</p>
+      </div>
     </section>
 
     <section id="panel-log" class="card panel" role="tabpanel" aria-labelledby="tab-log" data-active="false">
