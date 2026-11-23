@@ -9,6 +9,7 @@ const https = require("node:https");
 const os = require("node:os");
 const path = require("node:path");
 const { RigctldClient, VFO_NAMES, stopSequence } = require("./rigctld-client.cjs");
+const { SmartSdrRigClient } = require("./smartsdr-core.cjs");
 const { catAllowList, TUNER_KINDS } = require("./remote-catalog.cjs");
 const radioSettings = require("./radio-settings.cjs");
 const remoteTls = require("./remote-tls.cjs");
@@ -304,16 +305,22 @@ function createRemoteAgent(options = {}) {
   const relayState = { connected: false };
   const relayBackoff = { min: options.relayBackoffMinMs ?? 1000, max: options.relayBackoffMaxMs ?? 30_000 };
 
-  const client = new RigctldClient({
-    host: options.rigctldHost || config.rigctldHost,
-    port: options.rigctldPort ?? config.rigctldPort,
-    socketFactory: options.socketFactory,
-    reconnectMs: options.reconnectMs,
-    timeoutMs: options.rigTimeoutMs,
-    rawAllow: catAllowList(cat),
-    rawMatchers: options.radioId === "yaesu-ftx-1" && cat ? [radioSettings.EX_RAW_MATCHER] : [],
-    rawIdleMs: options.rawIdleMs
-  });
+  const client = options.rigClient || (radioScope === "smartsdr" && options.smartsdr
+    ? new SmartSdrRigClient({
+      host: options.smartsdr.host, port: options.smartsdr.port, udpPort: options.smartsdr.udpPort,
+      allowTx: options.smartsdr.allowTx === true, tunePower: options.smartsdr.tunePower, tuneLimit: options.smartsdr.tuneLimit,
+      txCapMs: Math.min(txLimitMs, tuneMaxMs), swrLimit, reconnectMs: options.reconnectMs
+    })
+    : new RigctldClient({
+      host: options.rigctldHost || config.rigctldHost,
+      port: options.rigctldPort ?? config.rigctldPort,
+      socketFactory: options.socketFactory,
+      reconnectMs: options.reconnectMs,
+      timeoutMs: options.rigTimeoutMs,
+      rawAllow: catAllowList(cat),
+      rawMatchers: options.radioId === "yaesu-ftx-1" && cat ? [radioSettings.EX_RAW_MATCHER] : [],
+      rawIdleMs: options.rawIdleMs
+    }));
 
   const rig = {
     freq: null, mode: null, passband: null, ptt: false, vfo: null, split: false, smeter: null,
@@ -1612,16 +1619,18 @@ function parseArgs(argv, env = process.env) {
     "--listen": "listen", "--port": "port", "--rigctld-host": "rigctldHost", "--rigctld-port": "rigctldPort",
     "--config-dir": "configDir", "--relay": "relayUrl", "--station": "relayStation",
     "--station-secret": "relaySecret", "--audio-input": "audioInput", "--audio-output": "audioOutput",
-    "--rotor-port": "rotorPort", "--rotor-park": "rotorPark", "--rotor-offset": "rotorOffset"
+    "--rotor-port": "rotorPort", "--rotor-park": "rotorPark", "--rotor-offset": "rotorOffset",
+    "--smartsdr-host": "smartsdrHost", "--smartsdr-port": "smartsdrPort"
   };
   for (let i = 0; i < argv.length; i += 1) {
     if (argv[i] === "--tls" || argv[i] === "--no-tls") { args.tls = argv[i] === "--tls"; continue; }
     if (argv[i] === "--rotor-motion") { args.rotorMotion = true; continue; }
+    if (argv[i] === "--smartsdr-allow-tx") { args.smartsdrAllowTx = true; continue; }
     const name = flags[argv[i]];
     if (!name || i + 1 >= argv.length) throw new Error(`Argumento no valido: ${argv[i]}`);
     args[name] = argv[i += 1];
   }
-  for (const key of ["port", "rigctldPort", "rotorPort"]) {
+  for (const key of ["port", "rigctldPort", "rotorPort", "smartsdrPort"]) {
     if (args[key] === undefined) continue;
     const value = Number(args[key]);
     if (!Number.isInteger(value) || value < 0 || value > 65535) throw new Error(`Puerto no valido: ${args[key]}`);
@@ -1658,6 +1667,8 @@ async function main() {
     host: args.listen, port: args.port, rigctldHost: args.rigctldHost, rigctldPort: args.rigctldPort,
     rotor: rotorFromArgs(args),
     configDir: args.configDir, tls: args.tls, relay: Object.keys(relay).length ? relay : undefined,
+    radioScope: args.smartsdrHost ? "smartsdr" : undefined,
+    smartsdr: args.smartsdrHost ? { host: args.smartsdrHost, port: args.smartsdrPort, allowTx: args.smartsdrAllowTx === true } : undefined,
     audio: { input: args.audioInput || "", output: args.audioOutput || "" },
     log: message => console.log(`[remote] ${message}`)
   });

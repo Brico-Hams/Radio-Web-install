@@ -163,6 +163,28 @@ Pages not read (pendiente de fuente):
   The client must unkey explicitly (`transmit tune off`, plus the TX-off
   command once sourced).
 
+## Implementation status
+
+Client code: `drivers/smartsdr_protocol.py` (Python station) and `smartsdr-core.cjs`
+(Node remote shack), both tested with frames built from this document and neither
+tested against a real radio. Wired into the Python station agent
+(`bricoham_station_agent/flex.py`, `/api/v1/flex`, proxied by the coordinator), the
+Node agent (`remote-agent.cjs --smartsdr-host`, `SmartSdrRigClient`) and the React
+console (`FlexPanel`). Android is not wired yet (no Flex profile or Kotlin client);
+pending features are shown greyed as "pendiente de fuente".
+
+- Keepalive: not sent (ping syntax pendiente de fuente); a radio that enabled
+  `keepalive enable` drops an idle client after 15 s.
+- `vox_level`, `vox_delay`, `hwalc_enabled` values: range pendiente de fuente, not
+  exposed. `max_power_level` and region are never written.
+- The legacy discovery string layout and byte order, and VITA-49 stream ID of
+  meter packets: pendiente de fuente; the meter decoder accepts any VITA-49 packet
+  whose payload is ID/int16 words and drops values outside the radio-declared
+  `low`/`hi` (plus 10 %).
+- Meter SWR scale (`/128`), Volts/Amps (`/1024`) and degC (`/64`) are unverified.
+- The VITA-49 discovery class check uses the last class-ID word `0x534CFFFF`
+  (interpretation of "class ID 0x534CFFFF").
+
 ## SmartSDR CAT (Kenwood emulation)
 
 Not described on any page read: pendiente de fuente.

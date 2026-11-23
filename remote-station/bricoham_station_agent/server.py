@@ -36,6 +36,7 @@ from bricoham_station_agent import __version__
 from bricoham_station_agent.audio import AudioCapture, AudioConfig, AudioError
 from bricoham_station_agent.audio_tx import AudioTransmitter, TxAudioConfig
 from bricoham_station_agent.cat import CatConfig, CatError, SerialCat
+from bricoham_station_agent.flex import FlexConfig, FlexController, FlexError
 from bricoham_station_agent.inventory import (
     API_VERSION,
     DeviceEnumerationError,
@@ -55,6 +56,7 @@ DEVICES_PATH = f"/api/{API_VERSION}/devices"
 CAT_PATH = f"/api/{API_VERSION}/cat"
 DIGITAL_PATH = f"/api/{API_VERSION}/digital"
 ROTOR_PATH = f"/api/{API_VERSION}/rotor"
+FLEX_PATH = f"/api/{API_VERSION}/flex"
 SETTINGS_PATH = f"/api/{API_VERSION}/radio-settings"
 PTT_PATH = f"/api/{API_VERSION}/ptt"
 AUDIO_PATH = f"/api/{API_VERSION}/audio"
@@ -82,6 +84,7 @@ class StationAgentHTTPServer(SecureHTTPServer):
         audio: AudioCapture | None = None,
         ptt: PttController | None = None,
         accessories: StationAccessories | None = None,
+        flex: FlexController | None = None,
     ) -> None:
         self.accessories = accessories
         self.authenticator = authenticator
@@ -89,6 +92,7 @@ class StationAgentHTTPServer(SecureHTTPServer):
         self.cat = cat
         self.wsjtx = wsjtx
         self.rotor = rotor
+        self.flex = flex
         self.audio = audio
         self.ptt = ptt
         try:
@@ -111,6 +115,13 @@ class StationAgentHTTPServer(SecureHTTPServer):
                 self._close_other_integrations()
 
     def _close_other_integrations(self) -> None:
+        try:
+            if self.flex is not None:
+                self.flex.close()
+        finally:
+            self._close_audio_and_cat()
+
+    def _close_audio_and_cat(self) -> None:
         if self.audio is not None:
             self.audio.close()
         try:
@@ -160,6 +171,7 @@ class StationAgentRequestHandler(SecureRequestHandler):
             CAT_PATH,
             DIGITAL_PATH,
             ROTOR_PATH,
+            FLEX_PATH,
             SETTINGS_PATH,
             PTT_PATH,
             AUDIO_PATH,
@@ -233,6 +245,21 @@ class StationAgentRequestHandler(SecureRequestHandler):
                 payload = self.server.ptt.snapshot()
             except PttError as error:
                 self._send_error(HTTPStatus.CONFLICT, str(error))
+                return
+            self._send_json(HTTPStatus.OK, payload)
+            return
+
+        if path == FLEX_PATH:
+            if self.server.flex is None:
+                self._send_error(HTTPStatus.SERVICE_UNAVAILABLE, "flex_not_configured")
+                return
+            if urlsplit(self.path).query:
+                self._send_error(HTTPStatus.BAD_REQUEST, "flex_invalid_query")
+                return
+            try:
+                payload = self.server.flex.snapshot()
+            except FlexError as error:
+                self._send_error(HTTPStatus.SERVICE_UNAVAILABLE, str(error))
                 return
             self._send_json(HTTPStatus.OK, payload)
             return
@@ -467,7 +494,7 @@ class StationAgentRequestHandler(SecureRequestHandler):
 
     def do_POST(self) -> None:
         path = urlsplit(self.path).path
-        if path not in (ROTOR_PATH, SETTINGS_PATH, PTT_PATH, DIGITAL_PATH, ACCESSORIES_PATH):
+        if path not in (ROTOR_PATH, SETTINGS_PATH, PTT_PATH, DIGITAL_PATH, ACCESSORIES_PATH, FLEX_PATH):
             self._method_not_allowed()
             return
         self.close_connection = True
@@ -480,6 +507,31 @@ class StationAgentRequestHandler(SecureRequestHandler):
             return
         if path == ACCESSORIES_PATH:
             self._operate_accessories()
+            return
+        if path == FLEX_PATH:
+            if self.server.flex is None:
+                self._send_error(HTTPStatus.SERVICE_UNAVAILABLE, "flex_not_configured")
+                return
+            if urlsplit(self.path).query:
+                self._send_error(HTTPStatus.BAD_REQUEST, "flex_invalid_query")
+                return
+            try:
+                result = self.server.flex.operate(self.request_json())
+            except RequestJsonError as error:
+                self._send_error(error.status, str(error))
+                return
+            except ValueError:
+                self._send_error(HTTPStatus.BAD_REQUEST, "flex_invalid_operation")
+                return
+            except FlexError as error:
+                self._send_error(
+                    HTTPStatus.SERVICE_UNAVAILABLE
+                    if str(error) in ("flex_unreachable", "flex_closed")
+                    else HTTPStatus.CONFLICT,
+                    str(error),
+                )
+                return
+            self._send_json(HTTPStatus.OK, result)
             return
         if path == DIGITAL_PATH:
             if self.server.wsjtx is None:
@@ -717,6 +769,9 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="PROTOCOL:PORT[:BAUD] (dcu1, rotorez, rt21) to drive the rotor over serial "
         "instead of rotctld; the JSON port field is then unused.",
     )
+    parser.add_argument(
+        "--flex-config", type=Path, help="Explicit local FlexRadio SmartSDR JSON (TX default off)."
+    )
     parser.add_argument("--serial-model")
     parser.add_argument("--radio-settings-config", type=Path)
     parser.add_argument("--ptt-config", type=Path, help="Local default-off guarded FTX-1 PTT JSON.")
@@ -828,6 +883,10 @@ def main(argv: list[str] | None = None) -> int:
             port, _, baud = rest.rpartition(":") if rest.count(":") else (rest, "", "4800")
             rotor_backend = open_serial_rotor_backend(protocol, port, int(baud or "4800"))
         rotor = RotorController(rotor_config, rotor_backend) if rotor_config else None
+        flex = None
+        if args.flex_config:
+            flex = FlexController(FlexConfig.load(args.flex_config))
+            flex.start_watchdog()
         ptt = None
         if ptt_config is not None:
             assert cat is not None
@@ -852,6 +911,7 @@ def main(argv: list[str] | None = None) -> int:
             tls_context=tls_context,
             ptt=ptt,
             accessories=accessories,
+            flex=flex,
         )
     except ValueError as error:
         LOGGER.error("Configuración del agente no válida: %s", error)

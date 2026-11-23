@@ -77,6 +77,7 @@ CAT_PATH = f"/api/{API_VERSION}/cat"
 SCOPE_PATH = f"{CAT_PATH}/scope"
 DIGITAL_PATH = f"/api/{API_VERSION}/digital"
 ROTOR_PATH = f"/api/{API_VERSION}/rotor"
+FLEX_PATH = f"/api/{API_VERSION}/flex"
 SETTINGS_PATH = f"/api/{API_VERSION}/radio-settings"
 PTT_PATH = f"/api/{API_VERSION}/ptt"
 ACCESSORIES_PATH = f"/api/{API_VERSION}/accessories"
@@ -321,7 +322,7 @@ class CoordinatorRequestHandler(SecureRequestHandler):
             return
 
         if path in (
-            DEVICES_PATH, CAT_PATH, DIGITAL_PATH, ROTOR_PATH, SETTINGS_PATH, PTT_PATH, ACCESSORIES_PATH
+            DEVICES_PATH, CAT_PATH, DIGITAL_PATH, ROTOR_PATH, FLEX_PATH, SETTINGS_PATH, PTT_PATH, ACCESSORIES_PATH
         ):
             if role not in _DIAGNOSTIC_ROLES:
                 self._send_error(HTTPStatus.FORBIDDEN, "forbidden")
@@ -412,7 +413,7 @@ class CoordinatorRequestHandler(SecureRequestHandler):
             self._accept_diagnostic_report()
             return
         if urlsplit(self.path).path in (
-            ROTOR_PATH, SETTINGS_PATH, PTT_PATH, DIGITAL_PATH, ACCESSORIES_PATH
+            ROTOR_PATH, FLEX_PATH, SETTINGS_PATH, PTT_PATH, DIGITAL_PATH, ACCESSORIES_PATH
         ):
             self._operate_station_agent(urlsplit(self.path).path)
             return
@@ -524,7 +525,7 @@ class CoordinatorRequestHandler(SecureRequestHandler):
                 method == "POST"
                 and path
                 not in (
-                    LOGBOOK_PATH, ROTOR_PATH, SETTINGS_PATH, PTT_PATH, DIGITAL_PATH, ACCESSORIES_PATH
+                    LOGBOOK_PATH, ROTOR_PATH, FLEX_PATH, SETTINGS_PATH, PTT_PATH, DIGITAL_PATH, ACCESSORIES_PATH
                 )
             )
             or requested - {"authorization", "content-type"}
@@ -983,7 +984,7 @@ class CoordinatorRequestHandler(SecureRequestHandler):
         target = path + ("?" + query if query else "")
         timeout = (
             4
-            if path in (ROTOR_PATH, SETTINGS_PATH, PTT_PATH, ACCESSORIES_PATH)
+            if path in (ROTOR_PATH, FLEX_PATH, SETTINGS_PATH, PTT_PATH, ACCESSORIES_PATH)
             else 3 if path == CAT_PATH else 2
         )
         if self.server.agent_link is not None:
@@ -1048,7 +1049,7 @@ class CoordinatorRequestHandler(SecureRequestHandler):
                     if (
                         isinstance(code, str)
                         and len(code) < 64
-                        and code.startswith(("cat_", "wsjtx_", "rotor_", "ptt_", "accessories_"))
+                        and code.startswith(("cat_", "wsjtx_", "rotor_", "ptt_", "accessories_", "flex_"))
                         and code.replace("_", "").isascii()
                         and code.replace("_", "").isalnum()
                     ):
@@ -1181,6 +1182,12 @@ def _is_live_agent_data(path: str, payload: dict[str, object], *, method: str = 
             and amplifier.get("state") in ("standby", "operate", "fault")
             and isinstance(tuner, dict)
             and isinstance(tuner.get("tuning"), bool)
+        )
+    if path == FLEX_PATH:
+        return (
+            payload.get("source") == "smartsdr_tcp"
+            and payload.get("status") == "experimental"
+            and payload.get("hardware_validation_complete") is False
         )
     if path == ROTOR_PATH:
         return (

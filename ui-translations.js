@@ -1947,6 +1947,7 @@ Sin conexion|Offline|Hors ligne|Offline
 Reconectando...|Reconnecting...|Reconnexion...|Verbinde neu...
 Espectro de la radio|Radio spectrum|Spectre de la radio|Funkgerät-Spektrum
 Disponible próximamente para este modelo|Coming soon for this model|Bientôt disponible pour ce modèle|Demnächst für dieses Modell verfügbar
+Espectro Flex: pendiente de fuente (usa el audio para la cascada)|Flex spectrum: pending source (use audio for the waterfall)|Spectre Flex : source en attente (utilisez l’audio pour la cascade)|Flex-Spektrum: Quelle ausstehend (Audio für das Wasserfall nutzen)
 Llegará con el audio remoto (banda de paso)|Coming with remote audio (passband)|Arrivera avec l’audio distant (bande passante)|Kommt mit dem Remote-Audio (Durchlassbereich)
 Este modelo no ofrece espectro|This model offers no spectrum|Ce modèle n’offre pas de spectre|Dieses Modell bietet kein Spektrum
 Token no valido.|Invalid token.|Jeton non valide.|Ungültiges Token.

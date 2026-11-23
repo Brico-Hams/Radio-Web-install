@@ -18,7 +18,16 @@ streams. No son drivers de radio completos ni validación de hardware.
   limita la secuencia y el código a 32 bits, verifica la secuencia esperada y
   conserva el texto de respuesta sin interpretarlo. El código de éxito es cero.
 
-La allowlist solo expone `info`; no acepta comandos CAT, texto arbitrario,
+Desde la integración Flex, `smartsdr_protocol.py` (y su espejo
+`smartsdr-core.cjs` para el taller Node) también incluye descubrimiento
+UDP 4991/4992, sesión TCP 4992, medidores VITA-49, comandos con allowlist y TX
+protegido (desactivado por defecto, con tope de tiempo, disparo por ROE alta y
+desactivación explícita al desconectar). Las fuentes y los puntos "pendiente de
+fuente" (keepalive, panadapter/cascada VITA-49, formato heredado de cadenas)
+están en [FLEX-SMARTSDR-API.md](../FLEX-SMARTSDR-API.md). El texto siguiente
+describe el codec original `info`.
+
+La allowlist de `info` solo expone `info`; no acepta comandos CAT, texto arbitrario,
 consultas adicionales, setters, `xmit` ni PTT. La documentación oficial sitúa
 la API TCP en el puerto 4992. El transporte y el manejo de las respuestas de
 estado asíncronas quedan fuera del codec.

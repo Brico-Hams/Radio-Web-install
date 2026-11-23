@@ -205,6 +205,10 @@ und ausdrücklich ausstehende Funktionen werden von diesen Ergebnissen nicht abg
   werden als Kandidaten ohne Transport hinzugefügt: Adressen, Framing und ausstehende
   Antwortdetails werden nicht von Icom, Kenwood oder Hamlib erraten.
   Der Katalog enthält 68 Kandidaten, nicht 68 zertifizierte Funkgeräte.
+- [FlexRadio SmartSDR](../../../remote-station/docs/FLEX-SMARTSDR-API.md): Client
+  `smartsdr_protocol.py` / `smartsdr-core.cjs` (Discovery, TCP-4992-Sitzung,
+  VITA-49-Messwerte, abgesichertes TX, standardmäßig aus). VITA-49-Panadapter und
+  Wasserfall: Quelle ausstehend.
 - Abschlussverifikation: **223 Python-Tests**, **66 des Clients** und **44 gezielte
   Node-Tests** erfolgreich; Ruff, Lint und Build korrekt. Ein vorübergehender Abbruch
   WinError 10053 eines Rotor-Tests wurde isoliert wiederholt, und die
