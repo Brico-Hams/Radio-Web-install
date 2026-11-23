@@ -24,7 +24,7 @@
       <nav aria-label="Aiuto"><a href="ayuda-referencias.it.html">Documentazione e riferimenti</a> · <a href="ayuda-firmwares.it.html">Libreria firmware</a> · <a href="ayuda-atlas-uv-k5-v3.it.html">Atlas UV-K5 V3</a> · <a href="quansheng.html">Quansheng</a> · <a href="opengd77.html">OpenGD77</a></nav>
       <nav class="languages" aria-label="Lingua"><a href="ayuda-antenas-hf.html" hreflang="es" lang="es">Español</a> · <a href="ayuda-antenas-hf.en.html" hreflang="en-US" lang="en-US">English (US)</a> · <a href="ayuda-antenas-hf.de.html" hreflang="de" lang="de">Deutsch</a> · <a href="ayuda-antenas-hf.it.html" hreflang="it" lang="it" aria-current="page">Italiano</a> · <a href="ayuda-antenas-hf.fr.html" hreflang="fr" lang="fr">Français</a></nav>
     </header>
-    <nav class="panel" aria-label="Contenuto di questa guida"><h2>In questa guida</h2><ul><li><a href="#limites-y-seguridad">Limiti e sicurezza</a></li><li><a href="#funciones">Funzioni</a></li><li><a href="#plantillas-y-trampas">Modelli e trappole</a></li><li><a href="#formato-csv-de-medida">Formato CSV della misura</a></li><li><a href="#bandas-por-radio">Bande per radio</a></li></ul></nav>
+    <nav class="panel" aria-label="Contenuto di questa guida"><h2>In questa guida</h2><ul><li><a href="#limites-y-seguridad">Limiti e sicurezza</a></li><li><a href="#funciones">Funzioni</a></li><li><a href="#plantillas-y-trampas">Modelli e trappole</a></li><li><a href="#formato-csv-de-medida">Formato CSV della misura</a></li><li><a href="#bandas-por-radio">Bande per radio</a></li><li><a href="#medir-swr-desde-la-radio">Misurare il SWR dalla radio</a></li></ul></nav>
     <article class="panel"><h1 id="antenas-de-hilo-hf-vhf-disenador-y-analizador">Antenne filari HF/VHF: progettazione e analisi</h1>
 <p>Pagina <strong>Antenne</strong> dell’applicazione. Integra le <a href="ayuda-antenas-satelite.it.html">antenne per satelliti</a> e usa lo stesso risolutore a metodo dei momenti (<code>hardware/antenas/mom.py</code>), portato in JavaScript in <code>antenna-core.js</code>. Tutto viene calcolato nel browser e funziona senza connessione.</p>
 <h2 id="limites-y-seguridad">Limiti e sicurezza</h2>
@@ -47,7 +47,70 @@
 <h2 id="formato-csv-de-medida">Formato CSV della misura</h2>
 <p>Il file dell’analizzatore può contenere colonne di frequenza e SWR, oppure frequenza, R e X. Vengono rilevati l’intestazione, le unità Hz, kHz o MHz, il separatore (virgola, punto e virgola o tabulazione) e la virgola decimale. Esempio: <code>frecuencia;swr</code>.</p>
 <h2 id="bandas-por-radio">Bande per radio</h2>
-<p>L’elenco delle bande è limitato a quelle su cui la radio può trasmettere secondo i dati del repository: Icom IC-705 e IC-9700 (piani di banda di <code>FREQUENCY_RANGES.md</code>), OpenGD77 (limiti predefiniti, né piano di banda né autorizzazione), Quansheng e AnyTone. Se una radio non ha dati TX nel repository viene mostrato «pendiente de fuente».</p></article>
+<p>L’elenco delle bande è limitato a quelle su cui la radio può trasmettere secondo i dati del repository: Icom IC-705 e IC-9700 (piani di banda di <code>FREQUENCY_RANGES.md</code>), Yaesu FTX-1 (14 bande da <code>third_party/ftx1/rigplane-rigplane-core/rigs/ftx1.toml</code>), TH-D75 (intervalli della banda A), OpenGD77 (limiti predefiniti, né piano di banda né autorizzazione), Quansheng e AnyTone. truSDX e QMX hanno solo l’intervallo di sintonia CAT (non limiti TX). Se una radio non ha dati TX nel repository (es. TK11) viene mostrato «pendiente de fuente».</p>
+<h2 id="medir-swr-desde-la-radio">Misurare il SWR dalla radio</h2>
+<p>L’app non mette mai la radio in trasmissione: trasmetti tu e lo strumento viene letto solo mentre la radio indica TX. I punti (frequenza, SWR) sono sovrapposti alla curva del modello come un CSV importato. Su desktop si usa la stazione remota (<code>GET /api/remote/swr</code>) o, per l’FTX-1, Web Serial diretto (sola lettura di <code>TX;</code>, <code>FA;</code> e <code>RM6;</code>); su Android la schermata antenne (WebView senza rete, CSP rigorosa) legge la radio del profilo via CAT. Non trasmettere mai senza un carico adattato o un’antenna.</p>
+<div class="table-scroll"><table><thead><tr><th scope="col">Radio</th><th scope="col">Strumento SWR via CAT</th><th scope="col">Fonte</th></tr></thead><tbody>
+<tr><td>Icom IC-705</td><td>ok</td><td>CI-V <code>15 12</code> (guida di riferimento CI-V dell’IC-705 p. 5) e TX <code>1C 00</code> (p. 15); <code>rigs/ic705.toml</code></td></tr>
+<tr><td>Icom IC-7300</td><td>parziale (scala fino a SWR 3,0)</td><td>CI-V <code>15 12</code> / <code>1C 00</code> (<code>rigs/ic7300.toml</code>)</td></tr>
+<tr><td>Icom IC-7300MK2</td><td>parziale (scala fino a SWR 3,0)</td><td>CI-V <code>15 12</code> / <code>1C 00</code> (<code>rigs/ic7300mk2.toml</code>)</td></tr>
+<tr><td>Icom IC-7610</td><td>parziale (scala fino a SWR 3,0)</td><td>CI-V <code>15 12</code> / <code>1C 00</code> (<code>rigs/ic7610.toml</code>)</td></tr>
+<tr><td>Icom IC-9700</td><td>parziale (scala fino a SWR 3,0)</td><td>CI-V <code>15 12</code> / <code>1C 00</code> (<code>rigs/ic9700.toml</code>)</td></tr>
+<tr><td>Icom IC-905</td><td>parziale (scala fino a SWR 3,0)</td><td>CI-V <code>15 12</code> / <code>1C 00</code> (<code>rigs/ic905.toml</code>)</td></tr>
+<tr><td>Icom IC-7100</td><td>pendiente de fuente</td><td>nessun comando di lettura SWR nel repository</td></tr>
+<tr><td>Icom IC-7200</td><td>pendiente de fuente</td><td>nessun comando di lettura SWR nel repository</td></tr>
+<tr><td>Icom IC-7410</td><td>pendiente de fuente</td><td>nessun comando di lettura SWR nel repository</td></tr>
+<tr><td>Icom IC-7600</td><td>pendiente de fuente</td><td>nessun comando di lettura SWR nel repository</td></tr>
+<tr><td>Icom IC-7700</td><td>pendiente de fuente</td><td>nessun comando di lettura SWR nel repository</td></tr>
+<tr><td>Icom IC-7760</td><td>pendiente de fuente</td><td>nessun comando di lettura SWR nel repository</td></tr>
+<tr><td>Icom IC-7800</td><td>pendiente de fuente</td><td>nessun comando di lettura SWR nel repository</td></tr>
+<tr><td>Icom IC-7850 / IC-7851</td><td>pendiente de fuente</td><td>nessun comando di lettura SWR nel repository</td></tr>
+<tr><td>Icom IC-9100</td><td>pendiente de fuente</td><td>nessun comando di lettura SWR nel repository</td></tr>
+<tr><td>Icom IC-R8600</td><td>pendiente de fuente</td><td>solo ricevitore, non trasmette</td></tr>
+<tr><td>Yaesu FTX-1</td><td>parziale (scala approssimata)</td><td><code>RM6;</code> in <code>docs/FTX1-KNOWLEDGE.md</code></td></tr>
+<tr><td>Yaesu FT-710</td><td>pendiente de fuente</td><td>nessun comando di lettura SWR nel repository</td></tr>
+<tr><td>Yaesu FT-991A</td><td>pendiente de fuente</td><td>nessun comando di lettura SWR nel repository</td></tr>
+<tr><td>Yaesu FTDX10</td><td>pendiente de fuente</td><td>nessun comando di lettura SWR nel repository</td></tr>
+<tr><td>Yaesu FTDX101D</td><td>pendiente de fuente</td><td>nessun comando di lettura SWR nel repository</td></tr>
+<tr><td>Yaesu FTDX101MP</td><td>pendiente de fuente</td><td>nessun comando di lettura SWR nel repository</td></tr>
+<tr><td>Yaesu FTDX3000</td><td>pendiente de fuente</td><td>nessun comando di lettura SWR nel repository</td></tr>
+<tr><td>Yaesu FT-817</td><td>pendiente de fuente</td><td>nessun comando di lettura SWR nel repository</td></tr>
+<tr><td>Yaesu FT-818</td><td>pendiente de fuente</td><td>nessun comando di lettura SWR nel repository</td></tr>
+<tr><td>Yaesu FT-857</td><td>pendiente de fuente</td><td>nessun comando di lettura SWR nel repository</td></tr>
+<tr><td>Yaesu FT-897</td><td>pendiente de fuente</td><td>nessun comando di lettura SWR nel repository</td></tr>
+<tr><td>Kenwood TS-590S</td><td>pendiente de fuente</td><td>nessun comando di lettura SWR nel repository</td></tr>
+<tr><td>Kenwood TS-590SG</td><td>pendiente de fuente</td><td>nessun comando di lettura SWR nel repository</td></tr>
+<tr><td>Kenwood TS-890S</td><td>pendiente de fuente</td><td>nessun comando di lettura SWR nel repository</td></tr>
+<tr><td>Kenwood TS-990S</td><td>pendiente de fuente</td><td>nessun comando di lettura SWR nel repository</td></tr>
+<tr><td>Kenwood TH-D75</td><td>pendiente de fuente</td><td>nessun comando di lettura SWR nel repository</td></tr>
+<tr><td>Elecraft K3S</td><td>pendiente de fuente</td><td>nessun comando di lettura SWR nel repository</td></tr>
+<tr><td>Elecraft K4</td><td>pendiente de fuente</td><td>nessun comando di lettura SWR nel repository</td></tr>
+<tr><td>FlexRadio FLEX-6400</td><td>pendiente de fuente</td><td>nessun comando di lettura SWR nel repository</td></tr>
+<tr><td>FlexRadio FLEX-6400M</td><td>pendiente de fuente</td><td>nessun comando di lettura SWR nel repository</td></tr>
+<tr><td>FlexRadio FLEX-6600</td><td>pendiente de fuente</td><td>nessun comando di lettura SWR nel repository</td></tr>
+<tr><td>FlexRadio FLEX-6600M</td><td>pendiente de fuente</td><td>nessun comando di lettura SWR nel repository</td></tr>
+<tr><td>FlexRadio FLEX-6700</td><td>pendiente de fuente</td><td>nessun comando di lettura SWR nel repository</td></tr>
+<tr><td>FlexRadio FLEX-8400</td><td>pendiente de fuente</td><td>nessun comando di lettura SWR nel repository</td></tr>
+<tr><td>FlexRadio FLEX-8400M</td><td>pendiente de fuente</td><td>nessun comando di lettura SWR nel repository</td></tr>
+<tr><td>FlexRadio FLEX-8600</td><td>pendiente de fuente</td><td>nessun comando di lettura SWR nel repository</td></tr>
+<tr><td>FlexRadio FLEX-8600M</td><td>pendiente de fuente</td><td>nessun comando di lettura SWR nel repository</td></tr>
+<tr><td>FlexRadio AURORA-510</td><td>pendiente de fuente</td><td>nessun comando di lettura SWR nel repository</td></tr>
+<tr><td>FlexRadio AURORA-510M</td><td>pendiente de fuente</td><td>nessun comando di lettura SWR nel repository</td></tr>
+<tr><td>FlexRadio AURORA-520</td><td>pendiente de fuente</td><td>nessun comando di lettura SWR nel repository</td></tr>
+<tr><td>FlexRadio AURORA-520M</td><td>pendiente de fuente</td><td>nessun comando di lettura SWR nel repository</td></tr>
+<tr><td>QRP Labs QMX / QMX+</td><td>pendiente de fuente</td><td><code>SW;</code> senza scala documentata</td></tr>
+<tr><td>QRP Labs QCX</td><td>pendiente de fuente</td><td>nessun comando di lettura SWR nel repository</td></tr>
+<tr><td>QRP Labs QDX</td><td>pendiente de fuente</td><td>nessun comando di lettura SWR nel repository</td></tr>
+<tr><td>(tr)uSDX</td><td>pendiente de fuente</td><td>nessun comando di lettura SWR nel repository</td></tr>
+<tr><td>Hermes Lite 2</td><td>pendiente de fuente</td><td>nessun comando di lettura SWR nel repository</td></tr>
+<tr><td>Quansheng UV-K5</td><td>pendiente de fuente</td><td>nessun comando di lettura SWR nel repository</td></tr>
+<tr><td>OpenGD77</td><td>pendiente de fuente</td><td>nessun comando di lettura SWR nel repository</td></tr>
+<tr><td>Radtel RT-950 Pro</td><td>pendiente de fuente</td><td>nessun comando di lettura SWR nel repository</td></tr>
+<tr><td>Radtel RT-S10</td><td>pendiente de fuente</td><td>nessun comando di lettura SWR nel repository</td></tr>
+<tr><td>AnyTone D878</td><td>pendiente de fuente</td><td>nessun comando di lettura SWR nel repository</td></tr>
+<tr><td>TK11</td><td>pendiente de fuente</td><td>nessun comando di lettura SWR nel repository</td></tr>
+</tbody></table></div>
+<p>Gli Icom indicati come parziali hanno solo i punti documentati SWR 1,0–3,0 (raw 0–120); un valore raw superiore viene scartato. Il livello <code>SWR</code> di Hamlib letto dalla stazione remota è mostrato per una radio solo se Hamlib lo restituisce; il repository non documenta quali backend lo fanno, quindi le radio sopra restano «pendiente de fuente».</p></article>
     <footer><p class="translation-note">Traduzione dell&#39;originale spagnolo. In caso di discrepanza prevale la versione spagnola.</p><p>Documento generato dal Markdown versionato. Consulta le fonti e i limiti di ogni guida. <a href="ayuda-firmwares.it.html">Torna all&#39;indice</a>.</p></footer>
   </main>
 </body>

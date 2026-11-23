@@ -24,7 +24,7 @@
       <nav aria-label="Ayuda"><a href="ayuda-referencias.html">Documentacion y referencias</a> · <a href="ayuda-firmwares.html">Biblioteca de firmware</a> · <a href="ayuda-atlas-uv-k5-v3.html">Atlas UV-K5 V3</a> · <a href="quansheng.html?lang=es">Quansheng</a> · <a href="opengd77.html?lang=es">OpenGD77</a></nav>
       <nav class="languages" aria-label="Idioma"><a href="ayuda-rotor.html" hreflang="es" lang="es" aria-current="page">Español</a> · <a href="ayuda-rotor.en.html" hreflang="en-US" lang="en-US">English (US)</a> · <a href="ayuda-rotor.de.html" hreflang="de" lang="de">Deutsch</a> · <a href="ayuda-rotor.it.html" hreflang="it" lang="it">Italiano</a> · <a href="ayuda-rotor.fr.html" hreflang="fr" lang="fr">Français</a></nav>
     </header>
-    <nav class="panel" aria-label="Contenido de esta guia"><h2>En esta guia</h2><ul><li><a href="#requisitos">Requisitos</a></li><li><a href="#flujo-de-uso">Flujo de uso</a></li><li><a href="#avisos-del-plan">Avisos del plan</a></li><li><a href="#seguridad">Seguridad</a></li><li><a href="#detalles-tecnicos">Detalles técnicos</a></li><li><a href="#validacion">Validación</a></li></ul></nav>
+    <nav class="panel" aria-label="Contenido de esta guia"><h2>En esta guia</h2><ul><li><a href="#requisitos">Requisitos</a></li><li><a href="#flujo-de-uso">Flujo de uso</a></li><li><a href="#avisos-del-plan">Avisos del plan</a></li><li><a href="#seguridad">Seguridad</a></li><li><a href="#detalles-tecnicos">Detalles técnicos</a></li><li><a href="#validacion">Validación</a></li><li><a href="#rotor-remoto">Rotor remoto</a></li></ul></nav>
     <article class="panel"><h1 id="rotor-az-el-bricohams-desde-la-app-android">Rotor AZ/EL Bricohams desde la app Android</h1>
 <p>Integra la app Android con el rotor del proyecto hermano <a href="https://github.com/Brico-Hams/antenaSatCommrotor" target="_blank" rel="noopener noreferrer">Brico-Hams/antenaSatCommrotor</a> (ESP32 + dos motores paso a paso + finales de carrera). Juntos forman la estación de satélites Bricohams completa:</p>
 <pre><code> Satélites (SGP4, TLE, pases) ──► Rotor AZ/EL (ESP32, SGP4 propio) ──► antena
@@ -82,6 +82,17 @@
 <li>Pruebas host (Robolectric): <code>RotorTest</code> (tramas, reensamblado y preferencia de STOP, límites, TLE, estados API 1/2, cliente, planificador) y <code>RotorActivityTest</code> (conexión con transporte simulado, preparar pase, parar, errores) y el botón desde <code>SatelliteActivityTest</code>.</li>
 <li>Firmware <code>0.3.0-prototype</code>: <code>esp32</code> y <code>esp32_nema17</code> compilan con PlatformIO.</li>
 <li><strong>Pendiente</strong>: prueba con rotor físico, Wi-Fi y BLE reales y brújula de móvil real.</li>
+</ul>
+<h2 id="rotor-remoto">Rotor remoto</h2>
+<ul>
+<li>La consola remota (<code>remote.html</code>, también dentro de <code>RemoteShackActivity</code> y <code>RemoteStationActivity</code>) muestra el panel del rotor: leer, ir a AZ/EL, aparcar y parar, a través de <code>/api/rotor</code>.</li>
+<li>Solo un cliente controla el rotor a la vez (arrendamiento de 3 s renovado cada 1 s); el resto recibe <code>rotor_busy</code>. Parar está disponible para cualquier cliente autenticado.</li>
+<li>Al cerrar la página, perder la conexión o caducar el arrendamiento, el rotor se para. Cada movimiento tiene un tope de 30 s.</li>
+<li>El movimiento está desactivado por defecto (<code>motion</code> en la configuración del rotor); sin él solo se lee.</li>
+<li>Aviso: no transmitas sin carga o antena adaptada.</li>
+<li>Seguimiento de satélite: en el planificador, «Exportar pase para el rotor (.json)» genera <code>radicodex-pass-track</code> (muestras <code>t</code>/<code>az</code>/<code>el</code>, independientes del Doppler). La consola lo importa y solo empieza a mover tras pulsar el botón de seguimiento.</li>
+<li>Velocidad e interruptores de límite: pendiente de fuente (desactivados).</li>
+<li>Soporte: Hamlib <code>rotctld</code> con los modelos del catálogo (<code>data/remote-station-catalog.json</code>) y protocolo BLE/AP Bricohams en Android. GS-232A/B y SPID ROT2PROG: pendiente de fuente.</li>
 </ul></article>
     <footer><p>Documento generado desde el Markdown versionado. Consulta las fuentes y limites de cada guia. <a href="ayuda-firmwares.html">Volver al indice</a>.</p></footer>
   </main>

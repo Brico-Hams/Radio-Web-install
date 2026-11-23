@@ -24,7 +24,7 @@
       <nav aria-label="Help"><a href="ayuda-referencias.en.html">Documentation and references</a> · <a href="ayuda-firmwares.en.html">Firmware library</a> · <a href="ayuda-atlas-uv-k5-v3.en.html">Atlas UV-K5 V3</a> · <a href="quansheng.html?lang=en-US">Quansheng</a> · <a href="opengd77.html?lang=en-US">OpenGD77</a></nav>
       <nav class="languages" aria-label="Language"><a href="ayuda-rotor.html" hreflang="es" lang="es">Español</a> · <a href="ayuda-rotor.en.html" hreflang="en-US" lang="en-US" aria-current="page">English (US)</a> · <a href="ayuda-rotor.de.html" hreflang="de" lang="de">Deutsch</a> · <a href="ayuda-rotor.it.html" hreflang="it" lang="it">Italiano</a> · <a href="ayuda-rotor.fr.html" hreflang="fr" lang="fr">Français</a></nav>
     </header>
-    <nav class="panel" aria-label="Contents of this guide"><h2>In this guide</h2><ul><li><a href="#requisitos">Requirements</a></li><li><a href="#flujo-de-uso">Usage flow</a></li><li><a href="#avisos-del-plan">Plan warnings</a></li><li><a href="#seguridad">Safety</a></li><li><a href="#detalles-tecnicos">Technical details</a></li><li><a href="#validacion">Validation</a></li></ul></nav>
+    <nav class="panel" aria-label="Contents of this guide"><h2>In this guide</h2><ul><li><a href="#requisitos">Requirements</a></li><li><a href="#flujo-de-uso">Usage flow</a></li><li><a href="#avisos-del-plan">Plan warnings</a></li><li><a href="#seguridad">Safety</a></li><li><a href="#detalles-tecnicos">Technical details</a></li><li><a href="#validacion">Validation</a></li><li><a href="#rotor-remoto">Remote rotator</a></li></ul></nav>
     <article class="panel"><h1 id="rotor-az-el-bricohams-desde-la-app-android">Bricohams AZ/EL rotor from the Android app</h1>
 <p>Integrates the Android app with the rotor of the sister project <a href="https://github.com/Brico-Hams/antenaSatCommrotor" target="_blank" rel="noopener noreferrer">Brico-Hams/antenaSatCommrotor</a> (ESP32 + two stepper motors + limit switches). Together they make up the complete Bricohams satellite station:</p>
 <pre><code> Satélites (SGP4, TLE, pases) ──► Rotor AZ/EL (ESP32, SGP4 propio) ──► antena
@@ -82,6 +82,17 @@
 <li>Host tests (Robolectric): <code>RotorTest</code> (frames, reassembly and STOP precedence, limits, TLE, API 1/2 states, client, planner) and <code>RotorActivityTest</code> (connection with simulated transport, prepare pass, stop, errors) and the button from <code>SatelliteActivityTest</code>.</li>
 <li>Firmware <code>0.3.0-prototype</code>: <code>esp32</code> and <code>esp32_nema17</code> build with PlatformIO.</li>
 <li><strong>Pending</strong>: test with a physical rotor, real Wi-Fi and BLE, and a real phone compass.</li>
+</ul>
+<h2 id="rotor-remoto">Remote rotator</h2>
+<ul>
+<li>The remote console (<code>remote.html</code>, also inside <code>RemoteShackActivity</code> and <code>RemoteStationActivity</code>) shows the rotator panel: read, go to AZ/EL, park and stop, through <code>/api/rotor</code>.</li>
+<li>Only one client controls the rotator at a time (3 s lease renewed every 1 s); others get <code>rotor_busy</code>. Stop is available to any authenticated client.</li>
+<li>Closing the page, losing the connection or an expired lease stops the rotator. Each movement is capped at 30 s.</li>
+<li>Motion is off by default (<code>motion</code> in the rotator config); without it the rotator is read-only.</li>
+<li>Warning: never transmit without a matched load or antenna.</li>
+<li>Satellite tracking: in the planner, &quot;Export pass for the rotator (.json)&quot; produces <code>radicodex-pass-track</code> (<code>t</code>/<code>az</code>/<code>el</code> samples, Doppler-independent). The console imports it and only starts moving after the track button is pressed.</li>
+<li>Speed and limit switches: pendiente de fuente (disabled).</li>
+<li>Support: Hamlib <code>rotctld</code> with the catalog models (<code>data/remote-station-catalog.json</code>) and the Bricohams BLE/AP protocol on Android. GS-232A/B and SPID ROT2PROG: pendiente de fuente.</li>
 </ul></article>
     <footer><p class="translation-note">Translation of the Spanish original. If there is any discrepancy, the Spanish version prevails.</p><p>Document generated from the versioned Markdown. Check the sources and limits of each guide. <a href="ayuda-firmwares.en.html">Back to the index</a>.</p></footer>
   </main>

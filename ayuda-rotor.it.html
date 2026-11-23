@@ -24,7 +24,7 @@
       <nav aria-label="Aiuto"><a href="ayuda-referencias.it.html">Documentazione e riferimenti</a> · <a href="ayuda-firmwares.it.html">Libreria firmware</a> · <a href="ayuda-atlas-uv-k5-v3.it.html">Atlas UV-K5 V3</a> · <a href="quansheng.html">Quansheng</a> · <a href="opengd77.html">OpenGD77</a></nav>
       <nav class="languages" aria-label="Lingua"><a href="ayuda-rotor.html" hreflang="es" lang="es">Español</a> · <a href="ayuda-rotor.en.html" hreflang="en-US" lang="en-US">English (US)</a> · <a href="ayuda-rotor.de.html" hreflang="de" lang="de">Deutsch</a> · <a href="ayuda-rotor.it.html" hreflang="it" lang="it" aria-current="page">Italiano</a> · <a href="ayuda-rotor.fr.html" hreflang="fr" lang="fr">Français</a></nav>
     </header>
-    <nav class="panel" aria-label="Contenuto di questa guida"><h2>In questa guida</h2><ul><li><a href="#requisitos">Requisiti</a></li><li><a href="#flujo-de-uso">Flusso d&#39;uso</a></li><li><a href="#avisos-del-plan">Avvisi del piano</a></li><li><a href="#seguridad">Sicurezza</a></li><li><a href="#detalles-tecnicos">Dettagli tecnici</a></li><li><a href="#validacion">Convalida</a></li></ul></nav>
+    <nav class="panel" aria-label="Contenuto di questa guida"><h2>In questa guida</h2><ul><li><a href="#requisitos">Requisiti</a></li><li><a href="#flujo-de-uso">Flusso d&#39;uso</a></li><li><a href="#avisos-del-plan">Avvisi del piano</a></li><li><a href="#seguridad">Sicurezza</a></li><li><a href="#detalles-tecnicos">Dettagli tecnici</a></li><li><a href="#validacion">Convalida</a></li><li><a href="#rotor-remoto">Rotore remoto</a></li></ul></nav>
     <article class="panel"><h1 id="rotor-az-el-bricohams-desde-la-app-android">Rotore AZ/EL Bricohams dall&#39;app Android</h1>
 <p>Integra l&#39;app Android con il rotore del progetto gemello <a href="https://github.com/Brico-Hams/antenaSatCommrotor" target="_blank" rel="noopener noreferrer">Brico-Hams/antenaSatCommrotor</a> (ESP32 + due motori passo-passo + finecorsa). Insieme formano la stazione satellitare Bricohams completa:</p>
 <pre><code> Satélites (SGP4, TLE, pases) ──► Rotor AZ/EL (ESP32, SGP4 propio) ──► antena
@@ -82,6 +82,17 @@
 <li>Test host (Robolectric): <code>RotorTest</code> (frame, riassemblaggio e precedenza di STOP, limiti, TLE, stati API 1/2, client, pianificatore) e <code>RotorActivityTest</code> (connessione con trasporto simulato, preparare il passaggio, fermare, errori) e il pulsante da <code>SatelliteActivityTest</code>.</li>
 <li>Firmware <code>0.3.0-prototype</code>: <code>esp32</code> ed <code>esp32_nema17</code> compilano con PlatformIO.</li>
 <li><strong>In sospeso</strong>: prova con rotore fisico, Wi-Fi e BLE reali e bussola di telefono reale.</li>
+</ul>
+<h2 id="rotor-remoto">Rotore remoto</h2>
+<ul>
+<li>La console remota (<code>remote.html</code>, anche dentro <code>RemoteShackActivity</code> e <code>RemoteStationActivity</code>) mostra il pannello del rotore: leggere, andare ad AZ/EL, parcheggiare e fermare, tramite <code>/api/rotor</code>.</li>
+<li>Un solo client controlla il rotore alla volta (lease di 3 s rinnovato ogni 1 s); gli altri ricevono <code>rotor_busy</code>. Lo stop è disponibile a ogni client autenticato.</li>
+<li>Chiudere la pagina, perdere la connessione o la scadenza del lease ferma il rotore. Ogni movimento è limitato a 30 s.</li>
+<li>Il movimento è disattivato per impostazione predefinita (<code>motion</code> nella configurazione del rotore); senza di esso il rotore è in sola lettura.</li>
+<li>Avviso: non trasmettere mai senza carico o antenna adattati.</li>
+<li>Inseguimento satellite: nel pianificatore, «Esporta passaggio per il rotore (.json)» produce <code>radicodex-pass-track</code> (campioni <code>t</code>/<code>az</code>/<code>el</code>, indipendenti dal Doppler). La console lo importa e inizia a muoversi solo dopo aver premuto il pulsante di inseguimento.</li>
+<li>Velocità e finecorsa: pendiente de fuente (disattivati).</li>
+<li>Supporto: Hamlib <code>rotctld</code> con i modelli del catalogo (<code>data/remote-station-catalog.json</code>) e protocollo BLE/AP Bricohams su Android. GS-232A/B e SPID ROT2PROG: pendiente de fuente.</li>
 </ul></article>
     <footer><p class="translation-note">Traduzione dell&#39;originale spagnolo. In caso di discrepanza prevale la versione spagnola.</p><p>Documento generato dal Markdown versionato. Consulta le fonti e i limiti di ogni guida. <a href="ayuda-firmwares.it.html">Torna all&#39;indice</a>.</p></footer>
   </main>

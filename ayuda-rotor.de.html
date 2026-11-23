@@ -24,7 +24,7 @@
       <nav aria-label="Hilfe"><a href="ayuda-referencias.de.html">Dokumentation und Referenzen</a> · <a href="ayuda-firmwares.de.html">Firmware-Bibliothek</a> · <a href="ayuda-atlas-uv-k5-v3.de.html">Atlas UV-K5 V3</a> · <a href="quansheng.html?lang=de">Quansheng</a> · <a href="opengd77.html?lang=de">OpenGD77</a></nav>
       <nav class="languages" aria-label="Sprache"><a href="ayuda-rotor.html" hreflang="es" lang="es">Español</a> · <a href="ayuda-rotor.en.html" hreflang="en-US" lang="en-US">English (US)</a> · <a href="ayuda-rotor.de.html" hreflang="de" lang="de" aria-current="page">Deutsch</a> · <a href="ayuda-rotor.it.html" hreflang="it" lang="it">Italiano</a> · <a href="ayuda-rotor.fr.html" hreflang="fr" lang="fr">Français</a></nav>
     </header>
-    <nav class="panel" aria-label="Inhalt dieser Anleitung"><h2>In dieser Anleitung</h2><ul><li><a href="#requisitos">Voraussetzungen</a></li><li><a href="#flujo-de-uso">Ablauf</a></li><li><a href="#avisos-del-plan">Warnungen des Plans</a></li><li><a href="#seguridad">Sicherheit</a></li><li><a href="#detalles-tecnicos">Technische Details</a></li><li><a href="#validacion">Validierung</a></li></ul></nav>
+    <nav class="panel" aria-label="Inhalt dieser Anleitung"><h2>In dieser Anleitung</h2><ul><li><a href="#requisitos">Voraussetzungen</a></li><li><a href="#flujo-de-uso">Ablauf</a></li><li><a href="#avisos-del-plan">Warnungen des Plans</a></li><li><a href="#seguridad">Sicherheit</a></li><li><a href="#detalles-tecnicos">Technische Details</a></li><li><a href="#validacion">Validierung</a></li><li><a href="#rotor-remoto">Fernsteuerung des Rotors</a></li></ul></nav>
     <article class="panel"><h1 id="rotor-az-el-bricohams-desde-la-app-android">Bricohams-AZ/EL-Rotor über die Android-App</h1>
 <p>Bindet die Android-App an den Rotor des Schwesterprojekts <a href="https://github.com/Brico-Hams/antenaSatCommrotor" target="_blank" rel="noopener noreferrer">Brico-Hams/antenaSatCommrotor</a> (ESP32 + zwei Schrittmotoren + Endschalter) an. Zusammen bilden sie die komplette Bricohams-Satellitenstation:</p>
 <pre><code> Satélites (SGP4, TLE, pases) ──► Rotor AZ/EL (ESP32, SGP4 propio) ──► antena
@@ -82,6 +82,17 @@
 <li>Host-Tests (Robolectric): <code>RotorTest</code> (Frames, Wiederzusammensetzung und Vorrang von STOPP, Grenzen, TLE, API-1/2-Zustände, Client, Planer) und <code>RotorActivityTest</code> (Verbindung mit simuliertem Transport, Überflug vorbereiten, stoppen, Fehler) sowie die Schaltfläche aus <code>SatelliteActivityTest</code>.</li>
 <li>Firmware <code>0.3.0-prototype</code>: <code>esp32</code> und <code>esp32_nema17</code> lassen sich mit PlatformIO kompilieren.</li>
 <li><strong>Ausstehend</strong>: Test mit physischem Rotor, echtem WLAN und BLE sowie echtem Smartphone- Kompass.</li>
+</ul>
+<h2 id="rotor-remoto">Fernsteuerung des Rotors</h2>
+<ul>
+<li>Die Remote-Konsole (<code>remote.html</code>, auch in <code>RemoteShackActivity</code> und <code>RemoteStationActivity</code>) zeigt das Rotor-Panel: lesen, AZ/EL anfahren, parken und stoppen über <code>/api/rotor</code>.</li>
+<li>Nur ein Client steuert den Rotor gleichzeitig (3-s-Lease, jede 1 s erneuert); andere erhalten <code>rotor_busy</code>. Stopp steht jedem authentifizierten Client offen.</li>
+<li>Schließen der Seite, Verbindungsverlust oder ein abgelaufener Lease stoppt den Rotor. Jede Bewegung ist auf 30 s begrenzt.</li>
+<li>Bewegung ist standardmäßig aus (<code>motion</code> in der Rotor-Konfiguration); ohne sie wird der Rotor nur gelesen.</li>
+<li>Warnung: niemals ohne angepasste Last oder Antenne senden.</li>
+<li>Satellitenverfolgung: im Planer erzeugt „Überflug für den Rotor exportieren (.json)“ <code>radicodex-pass-track</code> (Proben <code>t</code>/<code>az</code>/<code>el</code>, Doppler-unabhängig). Die Konsole importiert die Datei und bewegt erst nach Druck auf die Verfolgungstaste.</li>
+<li>Geschwindigkeit und Endschalter: pendiente de fuente (deaktiviert).</li>
+<li>Unterstützung: Hamlib <code>rotctld</code> mit den Katalogmodellen (<code>data/remote-station-catalog.json</code>) und das Bricohams-BLE/AP-Protokoll auf Android. GS-232A/B und SPID ROT2PROG: pendiente de fuente.</li>
 </ul></article>
     <footer><p class="translation-note">Übersetzung des spanischen Originals. Bei Abweichungen gilt die spanische Fassung.</p><p>Aus dem versionierten Markdown erzeugtes Dokument. Beachte die Quellen und Grenzen jeder Anleitung. <a href="ayuda-firmwares.de.html">Zurück zum Index</a>.</p></footer>
   </main>
