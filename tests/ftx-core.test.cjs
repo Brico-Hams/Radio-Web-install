@@ -130,6 +130,74 @@ test("decodeFt8 rejects a frame whose CRC is wrong even though the LDPC parity h
   assert.deepEqual(decoded, []);
 });
 
+// Seeded white Gaussian noise (mulberry32 + Box-Muller) with variance `variance` per sample.
+function gaussianNoise(length, variance, seed) {
+  let a = seed >>> 0;
+  const uniform = () => {
+    a = (a + 0x6D2B79F5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+  const sigma = Math.sqrt(variance);
+  const out = new Float64Array(length);
+  for (let i = 0; i < length; i += 2) {
+    const radius = Math.sqrt(-2 * Math.log(1 - uniform()));
+    const angle = 2 * Math.PI * uniform();
+    out[i] = sigma * radius * Math.cos(angle);
+    if (i + 1 < length) out[i + 1] = sigma * radius * Math.sin(angle);
+  }
+  return out;
+}
+
+// Brick-wall band-pass through the FFT, like the audio passband of an SSB receiver; the in-band density is unchanged.
+function bandLimit(samples, loHz, hiHz) {
+  const n = samples.length;
+  const re = Float64Array.from(samples);
+  const im = new Float64Array(n);
+  const fft = new F.Fft(n);
+  fft.forward(re, im);
+  for (let k = 0; k <= n / 2; k += 1) {
+    const hz = (k * F.SAMPLE_RATE) / n;
+    if (hz >= loHz && hz <= hiHz) continue;
+    re[k] = 0;
+    im[k] = 0;
+    if (k > 0) { re[n - k] = 0; im[n - k] = 0; }
+  }
+  for (let k = 0; k < n; k += 1) im[k] = -im[k];
+  fft.forward(re, im);
+  return Float32Array.from(re, v => v / n);
+}
+
+// One FT8 frame (tone power 0.125) in seeded noise whose power in 2500 Hz is snrDb below the signal power.
+function snrSlot(snrDb, seed, passband) {
+  const variance = (0.125 * 6000) / 2500 / Math.pow(10, snrDb / 10);
+  let noiseFloor = gaussianNoise(SLOT, variance, seed);
+  if (passband) noiseFloor = bandLimit(noiseFloor, passband[0], passband[1]);
+  const out = Float32Array.from(noiseFloor);
+  const wave = F.encodeFt8("CQ EA1ABC IN80", 1500, ldpc);
+  for (let i = 0; i < wave.length; i += 1) out[NOMINAL_START + i] += wave[i];
+  return out;
+}
+
+test("reported SNR follows the 2500 Hz reference within 3 dB for seeded white noise", () => {
+  for (const [snrDb, seed] of [[-15, 11], [-5, 12], [5, 13]]) {
+    const decoded = F.decodeFt8(snrSlot(snrDb, seed), { ldpc });
+    assert.equal(decoded.length, 1, `decodes at ${snrDb} dB`);
+    assert.equal(decoded[0].text, "CQ EA1ABC IN80");
+    assert.ok(Math.abs(decoded[0].snrDb - snrDb) <= 3, `want ${snrDb} dB, got ${decoded[0].snrDb}`);
+  }
+});
+
+test("reported SNR does not inflate when the receiver passband leaves most of the search band empty", () => {
+  for (const [snrDb, seed] of [[-10, 21], [0, 22]]) {
+    const decoded = F.decodeFt8(snrSlot(snrDb, seed, [300, 2700]), { ldpc });
+    assert.equal(decoded.length, 1, `decodes at ${snrDb} dB`);
+    assert.ok(Math.abs(decoded[0].snrDb - snrDb) <= 3, `want ${snrDb} dB, got ${decoded[0].snrDb}`);
+  }
+});
+
 test("decodeFt8 validates its input and honours an injected work budget clock", () => {
   assert.throws(() => F.decodeFt8(new Float32Array(1000), { ldpc }), { code: "INVALID_AUDIO" });
   assert.throws(() => F.decodeFt8(new Float32Array(SLOT), { ldpc, minHz: 500, maxHz: 400 }), RangeError);
