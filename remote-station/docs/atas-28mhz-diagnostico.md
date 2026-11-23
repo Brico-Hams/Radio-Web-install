@@ -34,6 +34,35 @@ Resumen: todas las fuentes coinciden en `AC123;`/`AC120;`. Ninguna exige `AC121`
 `AC122`, una lectura previa, ni un valor concreto de TUNER SELECT para CAT.
 `AC121/AC122` son pasos manuales de 50 ms, no un arranque.
 
+### 2b. Fuentes de referencia (Hamlib, wfview, wfweb), leídas solo como hechos
+
+Rutas bajo `data/third-party/refs/` (gitignorado, no se versiona ni se copia código).
+
+| Fuente | Hallazgo |
+|---|---|
+| `Hamlib/rigs/yaesu/ftx1/ftx1_tx.c` l.184-197 | `AC P1 P2 P3`; «AC103/AC123 inician sintonía, AC000/AC120 paran, AC121/AC122 empujan el motor ATAS» (comentario «hardware-verified», FTX-1 + ATAS-120A). Un `AC000` se rechaza con `?` si el sintonizador es ATAS. |
+| `.../ftx1_vfo.c` l.327-358 (`RIG_OP_TUNE`) | Con tipo efectivo ATAS envía **solo** `AC123;`; si no, `AC103;`. No escribe antes `AC121`, ni `PC`, ni menús, ni pone TX1. «El tipo debe estar ya seleccionado»; solo se inicia el ciclo. |
+| `.../ftx1_tx.c` l.207-231 (`ftx1_set_tuner(0)`), l.295-316 (`ftx1_atas_ctrl`) | Parada ATAS = `AC120;` (no `AC000;`). Mismo par que nuestro catálogo. |
+| `.../ftx1_tx.c` l.247-262 (`ftx1_get_tuner`) | Con ATAS **no consulta nada**: devuelve «activo» siempre. Hamlib no sondea el fin de la sintonía ATAS; no hay criterio de parada descrito. |
+| `.../ftx1_ext.c` l.285-347 (`ftx1_get_effective_tuner_type`) | Tipo efectivo = EX030701/02 de la antena activa (EX030704), salvo cabezal Field sin SPA-1, que usa EX030104. `ftx1_readme.txt` l.18-24: `PC2xxx` = SPA-1/Optima, `PC1xxx` = Field. Con `PC2010` en este radio el camino de Hamlib es EX030701=3 → ATAS → `AC123;`, igual que el nuestro. |
+| `.../ftx1_ext.c` l.15-19, 255-273; `ftx1_menu.c` l.190 | Hamlib da EX030104 = 0 Option / 1 ATAS («hardware-verified»), distinto del manual CAT (0 INT/1 INT FAST/2 EXT/3 ATAS; l.917). Discrepancia entre fuentes; solo afecta a Field sin SPA-1, que no es este caso. |
+| `Hamlib/rigs/yaesu/newcat.c` l.6393-6404, 7563-7573 | Otros Yaesu (no FTX-1): `AC00x` / `RIG_OP_TUNE` = `AC002;` (`AC003;` FT-710). Sin ATAS; no aplicable al FTX-1 (no se mueven comandos entre modelos). |
+| `wfview/src/radio/yaesucommander.cpp` l.814-830, 1275-1317, 1946-1964 | Solo lee/escribe `AC00x`/`AC01x`/`AC02x`; los valores 020/023 (ATAS) están marcados «unconfirmed» y no hay envío de arranque ATAS. |
+| `wfweb/src/radio/yaesucommander.cpp` l.835-852 | Misma lectura `AC`; sin arranque ATAS ni parada. `wfweb/CLAUDE.md` l.984-998: TUNE = `setTuner 2` genérico. |
+
+Diferencias frente a `remote-agent.cjs` (ninguna con fuente que pruebe que cambie el resultado):
+
+1. Arranque: idéntico (`AC123;` único; parada `AC120;` + `TX0;` en `stopSequence`,
+   `rigctld-client.cjs` l.473-495). No hay `AC121`, ni reenvío de `AC123`.
+2. Tráfico durante la sintonía: nuestro agente consulta `TX`/`RI0` cada 300 ms y
+   medidores `RM4-RM8` (`pollTxMeters`); Hamlib/wfview/wfweb no sondean. Débil como
+   causa: la prueba con serie directa y 1 lectura/s también falló.
+3. Puerta de potencia: el agente exige ≤ `TUNE_POWER_MAX_W` y lee `PC` antes de
+   `AC123;`. Hamlib no lo hace. Es lo único que pudo dejar PC2010 vs PC2100
+   (hipótesis 1); sigue sin fuente que ligue ATAS y potencia.
+4. Ninguna fuente documenta un criterio de parada, memoria por banda ni tiempo de
+   reconocimiento distinto a 28 MHz: el comportamiento depende del firmware.
+
 Código actual: `data/remote-station-catalog.json` (`cat.tuner.atas` = `AC123`/`AC120`),
 `remote-agent.cjs` `startCatTune` (puerta de potencia ≤ `TUNE_POWER_MAX_W`, tope 45 s
 ATAS, el disparo por ROE alta se ignora mientras el motor busca, fin cuando
@@ -99,11 +128,19 @@ Con el mástil ya sintonizado y PC2010: `AC123;`, leer igual cada 1 s.
 **Fase 3 (opcional, 1 transmisión).** Repetir la fase 1 a 50,2161 MHz con `AC123;`
 para confirmar la referencia (~10 s, raw 3).
 
+**Fase 4 (solo si 1 y 2 fallan, 1 transmisión): menú EX030104.** Hamlib lo trata como
+0 Option / 1 ATAS (`ftx1_ext.c` l.16), el manual como 0 INT … 3 ATAS. Solo el operador,
+desde el menú del radio, lo cambia a 1 y repite la fase 1; si tampoco mejora,
+restaurar a 0. No se escribe por CAT ni lo hace el software. Con `PC2xxx` (SPA-1)
+Hamlib no usa este menú para elegir el tipo, así que se espera sin efecto.
+
 No se prueba ninguna variante `AC12x` adicional ni `AC023;`: «pendiente de fuente».
-Total: 2 transmisiones necesarias (fases 1-2), 3 como máximo.
+Total: 2 transmisiones necesarias (fases 1-2), 4 como máximo (fases 3-4 opcionales).
 
 ## 5. Decisión de implementación
 
+Hamlib FTX-1, wfview y wfweb (sección 2b) confirman la misma secuencia
+`AC123;`/`AC120;`; ninguno añade prerrequisito. Causa **no demostrada**.
 Aceptación (2): ninguna fuente demuestra una secuencia requerida → **sin cambios de
 código ni de catálogo**. Aceptación (3): no se añade ningún cambio automático de
 menús ni de potencia. Si el banco demuestra que la potencia es la causa, la
