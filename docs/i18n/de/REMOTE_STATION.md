@@ -336,60 +336,60 @@ Die Matrix `data/remote-feature-parity.json` führt jedes Funkgerät des Remote-
 
 | Funkgerät | Anbindung | Freq./Modus | VFO/Split | PTT | S-Meter | TX-Messwerte | Tune | RX-Audio | TX-Audio | Wasserfall | Rotor | Tuner/PA | Einstellungen |
 | --- | --- | :-: | :-: | :-: | :-: | :-: | :-: | :-: | :-: | :-: | :-: | :-: | :-: |
-| Icom IC-705 | usb/lan/wifi | ✔ | ◐ | ✔ | ✔ | ◐ | ◐ | ✔ | ✔ | ✔ | ✔ | ◐ | ◐ |
-| Icom IC-7100 | usb | ✔ | ◐ | ✔ | ✔ | ◐ | ◐ | ✔ | ✔ | ✔ | ✔ | ◐ | ◐ |
-| Icom IC-7200 | usb | ✔ | ◐ | ✔ | ✔ | ◐ | ◐ | ✔ | ✔ | ✔ | ✔ | ◐ | ◐ |
-| Icom IC-7300 | usb | ✔ | ◐ | ✔ | ✔ | ◐ | ◐ | ✔ | ✔ | ✔ | ✔ | ◐ | ◐ |
+| Icom IC-705 | usb/lan/wifi | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ◐ | ✔ |
+| Icom IC-7100 | usb | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ◐ | ✔ |
+| Icom IC-7200 | usb | ✔ | ◐ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ◐ | ✔ |
+| Icom IC-7300 | usb | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ◐ | ✔ |
 | Icom IC-7300MK2 | usb | ◐ | ◐ | ◐ | ✔ | ◐ | ◐ | ✔ | ✔ | ✔ | ✔ | ◐ | ◐ |
 | Icom IC-7410 | usb | ✔ | ◐ | ✔ | ✔ | ◐ | ◐ | ✔ | ✔ | ✔ | ✔ | ◐ | ◐ |
-| Icom IC-7600 | usb | ✔ | ◐ | ✔ | ✔ | ◐ | ◐ | ✔ | ✔ | ✔ | ✔ | ◐ | ◐ |
-| Icom IC-7610 | usb/lan | ✔ | ◐ | ✔ | ✔ | ◐ | ◐ | ✔ | ✔ | ✔ | ✔ | ◐ | ◐ |
-| Icom IC-7700 | usb | ✔ | ◐ | ✔ | ✔ | ◐ | ◐ | ✔ | ✔ | ✔ | ✔ | ◐ | ◐ |
+| Icom IC-7600 | usb | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ◐ | ✔ |
+| Icom IC-7610 | usb/lan | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ◐ | ✔ |
+| Icom IC-7700 | usb | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ◐ | ✔ |
 | Icom IC-7760 | usb/lan | ◐ | ◐ | ◐ | ✔ | ◐ | ◐ | ✔ | ✔ | ✔ | ✔ | ◐ | ◐ |
-| Icom IC-7800 | usb | ✔ | ◐ | ✔ | ✔ | ◐ | ◐ | ✔ | ✔ | ✔ | ✔ | ◐ | ◐ |
-| Icom IC-7850 / IC-7851 | usb/lan | ✔ | ◐ | ✔ | ✔ | ◐ | ◐ | ✔ | ✔ | ✔ | ✔ | ◐ | ◐ |
-| Icom IC-905 | usb/lan/wifi | ✔ | ◐ | ✔ | ✔ | ◐ | ◐ | ✔ | ✔ | ✔ | ✔ | ◐ | ◐ |
-| Icom IC-9100 | usb | ✔ | ◐ | ✔ | ✔ | ◐ | ◐ | ✔ | ✔ | ✔ | ✔ | ◐ | ◐ |
-| Icom IC-9700 | usb/lan | ✔ | ◐ | ✔ | ✔ | ◐ | ◐ | ✔ | ✔ | ✔ | ✔ | ◐ | ◐ |
-| Icom IC-R8600 | usb/lan | ✔ | ◐ | – | ✔ | – | – | ✔ | – | ✔ | ✔ | – | ◐ |
-| FlexRadio FLEX-6400 | lan/wifi | ✔ | ◐ | ✔ | ✔ | ◐ | ◐ | ✔ | ✔ | ✔ | ✔ | ◐ | ◐ |
-| FlexRadio FLEX-6400M | lan/wifi | ✔ | ◐ | ✔ | ✔ | ◐ | ◐ | ✔ | ✔ | ✔ | ✔ | ◐ | ◐ |
-| FlexRadio FLEX-6600 | lan/wifi | ✔ | ◐ | ✔ | ✔ | ◐ | ◐ | ✔ | ✔ | ✔ | ✔ | ◐ | ◐ |
-| FlexRadio FLEX-6600M | lan/wifi | ✔ | ◐ | ✔ | ✔ | ◐ | ◐ | ✔ | ✔ | ✔ | ✔ | ◐ | ◐ |
-| FlexRadio FLEX-6700 | lan/wifi | ✔ | ◐ | ✔ | ✔ | ◐ | ◐ | ✔ | ✔ | ✔ | ✔ | ◐ | ◐ |
-| FlexRadio FLEX-8400 | lan/wifi | ✔ | ◐ | ✔ | ✔ | ◐ | ◐ | ✔ | ✔ | ✔ | ✔ | ◐ | ◐ |
-| FlexRadio FLEX-8400M | lan/wifi | ✔ | ◐ | ✔ | ✔ | ◐ | ◐ | ✔ | ✔ | ✔ | ✔ | ◐ | ◐ |
-| FlexRadio FLEX-8600 | lan/wifi | ✔ | ◐ | ✔ | ✔ | ◐ | ◐ | ✔ | ✔ | ✔ | ✔ | ◐ | ◐ |
-| FlexRadio FLEX-8600M | lan/wifi | ✔ | ◐ | ✔ | ✔ | ◐ | ◐ | ✔ | ✔ | ✔ | ✔ | ◐ | ◐ |
-| FlexRadio AURORA-510 | lan/wifi | ✔ | ◐ | ✔ | ✔ | ◐ | ◐ | ✔ | ✔ | ✔ | ✔ | ◐ | ◐ |
-| FlexRadio AURORA-510M | lan/wifi | ✔ | ◐ | ✔ | ✔ | ◐ | ◐ | ✔ | ✔ | ✔ | ✔ | ◐ | ◐ |
-| FlexRadio AURORA-520 | lan/wifi | ✔ | ◐ | ✔ | ✔ | ◐ | ◐ | ✔ | ✔ | ✔ | ✔ | ◐ | ◐ |
-| FlexRadio AURORA-520M | lan/wifi | ✔ | ◐ | ✔ | ✔ | ◐ | ◐ | ✔ | ✔ | ✔ | ✔ | ◐ | ◐ |
-| Kenwood TS-590S | usb | ✔ | ◐ | ✔ | ✔ | ◐ | ◐ | ✔ | ✔ | ✔ | ✔ | ◐ | ◐ |
-| Kenwood TS-590SG | usb | ✔ | ◐ | ✔ | ✔ | ◐ | ◐ | ✔ | ✔ | ✔ | ✔ | ◐ | ◐ |
-| Kenwood TS-890S | usb | ✔ | ◐ | ✔ | ✔ | ◐ | ◐ | ✔ | ✔ | ✔ | ✔ | ◐ | ◐ |
-| Kenwood TS-990S | usb | ✔ | ◐ | ✔ | ✔ | ◐ | ◐ | ✔ | ✔ | ✔ | ✔ | ◐ | ◐ |
+| Icom IC-7800 | usb | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ◐ | ✔ |
+| Icom IC-7850 / IC-7851 | usb/lan | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ◐ | ✔ |
+| Icom IC-905 | usb/lan/wifi | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ◐ | ✔ |
+| Icom IC-9100 | usb | ✔ | ✔ | ✔ | ◐ | ◐ | ✔ | ✔ | ✔ | ✔ | ✔ | ◐ | ✔ |
+| Icom IC-9700 | usb/lan | ✔ | ✔ | ✔ | ✔ | ✔ | ◐ | ✔ | ✔ | ✔ | ✔ | ◐ | ✔ |
+| Icom IC-R8600 | usb/lan | ✔ | ◐ | – | ✔ | – | – | ✔ | – | ✔ | ✔ | – | ✔ |
+| FlexRadio FLEX-6400 | lan/wifi | ✔ | ◐ | ✔ | ◐ | ◐ | ◐ | ✔ | ✔ | ✔ | ✔ | ◐ | ◐ |
+| FlexRadio FLEX-6400M | lan/wifi | ✔ | ◐ | ✔ | ◐ | ◐ | ◐ | ✔ | ✔ | ✔ | ✔ | ◐ | ◐ |
+| FlexRadio FLEX-6600 | lan/wifi | ✔ | ◐ | ✔ | ◐ | ◐ | ◐ | ✔ | ✔ | ✔ | ✔ | ◐ | ◐ |
+| FlexRadio FLEX-6600M | lan/wifi | ✔ | ◐ | ✔ | ◐ | ◐ | ◐ | ✔ | ✔ | ✔ | ✔ | ◐ | ◐ |
+| FlexRadio FLEX-6700 | lan/wifi | ✔ | ◐ | ✔ | ◐ | ◐ | ◐ | ✔ | ✔ | ✔ | ✔ | ◐ | ◐ |
+| FlexRadio FLEX-8400 | lan/wifi | ✔ | ◐ | ✔ | ◐ | ◐ | ◐ | ✔ | ✔ | ✔ | ✔ | ◐ | ◐ |
+| FlexRadio FLEX-8400M | lan/wifi | ✔ | ◐ | ✔ | ◐ | ◐ | ◐ | ✔ | ✔ | ✔ | ✔ | ◐ | ◐ |
+| FlexRadio FLEX-8600 | lan/wifi | ✔ | ◐ | ✔ | ◐ | ◐ | ◐ | ✔ | ✔ | ✔ | ✔ | ◐ | ◐ |
+| FlexRadio FLEX-8600M | lan/wifi | ✔ | ◐ | ✔ | ◐ | ◐ | ◐ | ✔ | ✔ | ✔ | ✔ | ◐ | ◐ |
+| FlexRadio AURORA-510 | lan/wifi | ✔ | ◐ | ✔ | ◐ | ◐ | ◐ | ✔ | ✔ | ✔ | ✔ | ◐ | ◐ |
+| FlexRadio AURORA-510M | lan/wifi | ✔ | ◐ | ✔ | ◐ | ◐ | ◐ | ✔ | ✔ | ✔ | ✔ | ◐ | ◐ |
+| FlexRadio AURORA-520 | lan/wifi | ✔ | ◐ | ✔ | ◐ | ◐ | ◐ | ✔ | ✔ | ✔ | ✔ | ◐ | ◐ |
+| FlexRadio AURORA-520M | lan/wifi | ✔ | ◐ | ✔ | ◐ | ◐ | ◐ | ✔ | ✔ | ✔ | ✔ | ◐ | ◐ |
+| Kenwood TS-590S | usb | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ◐ | ✔ |
+| Kenwood TS-590SG | usb | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ◐ | ✔ |
+| Kenwood TS-890S | usb | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ◐ | ◐ |
+| Kenwood TS-990S | usb | ✔ | ✔ | ✔ | ✔ | ◐ | ✔ | ✔ | ✔ | ✔ | ✔ | ◐ | ✔ |
 | Kenwood TH-D75 | usb | ◐ | ✖ | ◐ | ✖ | ✖ | ✖ | ✔ | ✖ | ✔ | ✔ | ✖ | ✖ |
-| Yaesu FT-710 | usb | ✔ | ◐ | ✔ | ✔ | ◐ | ◐ | ✔ | ✔ | ✔ | ✔ | ◐ | ◐ |
-| Yaesu FT-991A | usb | ✔ | ◐ | ✔ | ✔ | ◐ | ◐ | ✔ | ✔ | ✔ | ✔ | ◐ | ◐ |
-| Yaesu FTDX10 | usb | ✔ | ◐ | ✔ | ✔ | ◐ | ◐ | ✔ | ✔ | ✔ | ✔ | ◐ | ◐ |
-| Yaesu FTDX101D | usb | ✔ | ◐ | ✔ | ✔ | ◐ | ◐ | ✔ | ✔ | ✔ | ✔ | ◐ | ◐ |
-| Yaesu FTDX101MP | usb | ✔ | ◐ | ✔ | ✔ | ◐ | ◐ | ✔ | ✔ | ✔ | ✔ | ◐ | ◐ |
-| Yaesu FTDX3000 | usb | ✔ | ◐ | ✔ | ✔ | ◐ | ◐ | ✔ | ✔ | ✔ | ✔ | ◐ | ◐ |
+| Yaesu FT-710 | usb | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ◐ | ✔ |
+| Yaesu FT-991A | usb | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ◐ | ✔ |
+| Yaesu FTDX10 | usb | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ◐ | ✔ |
+| Yaesu FTDX101D | usb | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ◐ | ✔ |
+| Yaesu FTDX101MP | usb | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ◐ | ✔ |
+| Yaesu FTDX3000 | usb | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ◐ | ✔ |
 | Yaesu FTX-1 | usb | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ◐ | ◐ |
 | Yaesu FT-817 / FT-817ND | usb | ◐ | ◐ | ◐ | ✖ | ✖ | ✖ | ✔ | ✖ | ✔ | ✔ | ✖ | ✖ |
 | Yaesu FT-818ND | usb | ◐ | ◐ | ◐ | ✖ | ✖ | ✖ | ✔ | ✖ | ✔ | ✔ | ✖ | ✖ |
 | Yaesu FT-857 / FT-857D | usb | ◐ | ◐ | ◐ | ✖ | ✖ | ✖ | ✔ | ✖ | ✔ | ✔ | ✖ | ✖ |
 | Yaesu FT-897 / FT-897D | usb | ◐ | ◐ | ◐ | ✖ | ✖ | ✖ | ✔ | ✖ | ✔ | ✔ | ✖ | ✖ |
-| Elecraft K3S | usb | ✔ | ◐ | ✔ | ✔ | ◐ | ◐ | ✔ | ✔ | ✔ | ✔ | ◐ | ◐ |
-| Elecraft K4 | usb/lan/wifi | ✔ | ◐ | ✔ | ✔ | ◐ | ◐ | ✔ | ✔ | ✔ | ✔ | ◐ | ◐ |
-| QRP Labs QMX / QMX+ | usb | ✔ | ◐ | ✔ | ✔ | ◐ | ◐ | ✔ | ✔ | ✔ | ✔ | ◐ | ◐ |
-| QRP Labs QCX / QDX | usb | ✔ | ◐ | ✔ | ✔ | ◐ | ◐ | ✔ | ✔ | ✔ | ✔ | ◐ | ◐ |
-| DL2MAN (tr)uSDX | usb | ✔ | ◐ | ✔ | ✔ | ◐ | ◐ | ✔ | ✔ | ✔ | ✔ | ◐ | ◐ |
+| Elecraft K3S | usb | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ◐ | ◐ |
+| Elecraft K4 | usb/lan/wifi | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ◐ | ◐ |
+| QRP Labs QMX / QMX+ | usb | ✔ | ◐ | ✔ | ◐ | ◐ | ◐ | ✔ | ✔ | ✔ | ✔ | ◐ | ◐ |
+| QRP Labs QCX / QDX | usb | ✔ | ✔ | ✔ | ✔ | ◐ | ✔ | ✔ | ✔ | ✔ | ✔ | ◐ | ✔ |
+| DL2MAN (tr)uSDX | usb | ✔ | ◐ | ✔ | ◐ | ◐ | ◐ | ✔ | ✔ | ✔ | ✔ | ◐ | ◐ |
 | Hermes Lite 2 Hermes Lite 2 | lan | ◐ | ◐ | ◐ | ✔ | ◐ | ◐ | ✔ | ✔ | ✔ | ✔ | ◐ | ◐ |
 | Xiegu G90 / G90S | usb | ✖ | ✖ | ✖ | ✖ | ✖ | ✖ | ✔ | ✖ | ✔ | ✔ | ✖ | ✖ |
 | Xiegu X6100 | usb | ✖ | ✖ | ✖ | ✖ | ✖ | ✖ | ✔ | ✖ | ✔ | ✔ | ✖ | ✖ |
-| Xiegu X6200 | usb | ◐ | ◐ | ◐ | ✔ | ◐ | ◐ | ✔ | ✔ | ✔ | ✔ | ◐ | ◐ |
+| Xiegu X6200 | usb | ◐ | ◐ | ◐ | ◐ | ◐ | ◐ | ✔ | ✔ | ✔ | ✔ | ◐ | ◐ |
 | Xiegu X5105 | usb | ✖ | ✖ | ✖ | ✖ | ✖ | ✖ | ✔ | ✖ | ✔ | ✔ | ✖ | ✖ |
 | Xiegu G106 / G106C | usb | ✖ | ✖ | ✖ | ✖ | ✖ | ✖ | ✔ | ✖ | ✔ | ✔ | ✖ | ✖ |
 | Quansheng UV-K5 / UV-K1 (BricoHams Satellite, F4HWN) | usb | ◐ | ✖ | ◐ | ✖ | ✖ | ✖ | ✔ | ✖ | ✔ | ✔ | ✖ | ✖ |
