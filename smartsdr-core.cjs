@@ -12,6 +12,11 @@ const PGXL_TCP_PORT = 9008;
 const DISCOVERY_CLASS_ID = 0x534CFFFF;
 const MAX_FRAME = 16384;
 const MAX_SEQ = 0xFFFFFFFF;
+// Panadapter FFT packets: layout verified on a FLEX-8600 by POTACAT (lib/flex-scope.js).
+const PACKET_CLASS_FFT = 0x8003;
+const PAN_BINS = 850;
+const PAN_Y_PIXELS = 256;
+const PAN_JUNK_FACTOR = 4;
 const SEVERITIES = Object.freeze(["info", "warning", "error", "fatal"]);
 const SLICE_MODES = Object.freeze(["usb", "lsb", "cw", "am", "digu"]);
 const SUBSCRIBE_OBJECTS = Object.freeze(["amplifier", "atu", "meter", "pan", "radio", "slice", "tx", "audio_stream"]);
@@ -151,6 +156,72 @@ function parseLine(line) {
   throw new SmartSdrError("unknown line type");
 }
 
+// --- Panadapter FFT stream (VITA-49 class 0x8003) ---
+// SPDX-License-Identifier: Apache-2.0 (adapted part, GPL-3.0-or-later compatible)
+// Adapted from POTACAT lib/flex-scope.js (Copyright 2026 Casey Stanton, Apache-2.0; see
+// docs/THIRD-PARTY-REUSE.md). Layout, verified there against a FLEX-8600 on v4: 28-byte VITA header,
+// stream ID = pan ID, packet class 0x8003 (low half of the last class word); payload header, big endian:
+// start_bin u16, num_bins u16, bin_size u16 (= 2), total_bins u16, frame_index u32; then num_bins u16 bins.
+// A bin is a Y pixel: 0 = max_dbm (top), y_pixels - 1 = min_dbm. Waterfall tiles: pendiente de fuente.
+
+function parseFftPacket(packet) {
+  if (!Buffer.isBuffer(packet) || packet.length < 4 || (packet[0] & 0xF8) !== 0x38) return null;
+  let vita;
+  try { vita = parseVitaPacket(packet); } catch { return null; }
+  if (vita.classId === null || (vita.classId & 0xFFFF) !== PACKET_CLASS_FFT || vita.streamId === null) return null;
+  const body = vita.payload;
+  if (body.length < 12) return null;
+  const start = body.readUInt16BE(0);
+  const num = body.readUInt16BE(2);
+  const size = body.readUInt16BE(4);
+  const total = body.readUInt16BE(6);
+  const frame = body.readUInt32BE(8);
+  if (size !== 2 || !num || !total || start + num > total || body.length < 12 + num * 2) return null;
+  const bins = new Uint16Array(num);
+  for (let index = 0; index < num; index += 1) bins[index] = body.readUInt16BE(12 + index * 2);
+  return { streamId: vita.streamId, start, num, total, frame, bins };
+}
+
+// A pixel row (0 = top = strongest) -> a 0..255 level (255 = strongest).
+function levelFromPixel(value, yPixels = PAN_Y_PIXELS) {
+  return Math.max(0, Math.min(255, Math.round(255 - (value * 255) / Math.max(1, yPixels - 1))));
+}
+
+// Reassembles FFT packets into whole frames of levels; resize junk frames are dropped.
+class PanFrameAssembler {
+  constructor(yPixels = PAN_Y_PIXELS) {
+    this.yPixels = yPixels;
+    this.dropped = 0;
+    this.frame = -1;
+    this.levels = null;
+    this.have = 0;
+    this.bad = false;
+  }
+
+  feed(packet) {
+    if (!packet) return null;
+    if (packet.frame !== this.frame || !this.levels || this.levels.length !== packet.total) {
+      this.frame = packet.frame;
+      this.levels = new Uint8Array(packet.total);
+      this.have = 0;
+      this.bad = false;
+    }
+    for (let index = 0; index < packet.num; index += 1) {
+      const value = packet.bins[index];
+      // A bin a little past the last row is a noise floor under min_dbm; far past it is junk.
+      if (value >= this.yPixels * PAN_JUNK_FACTOR) this.bad = true;
+      this.levels[packet.start + index] = levelFromPixel(Math.min(value, this.yPixels - 1), this.yPixels);
+    }
+    this.have += packet.num;
+    if (this.have < packet.total) return null;
+    const { levels, bad } = this;
+    this.levels = null;
+    this.frame = -1;
+    if (bad) { this.dropped += 1; return null; }
+    return levels;
+  }
+}
+
 // --- Meters ---
 
 function parseMeterList(message) {
@@ -283,6 +354,10 @@ const Cmd = Object.freeze({
     return `display pan s ${hexId(id, "pan")} ${entries.map(([key, value]) => `${key}=${allowed[key](value)}`).join(" ")}`;
   },
   panRemove: id => `display pan r ${hexId(id, "pan")}`,
+  // `xmit 1|0`: POTACAT lib/smartsdr.js setTransmit; Hamlib rigs/flexradio/smartsdr.c.
+  xmit: on => `xmit ${on ? 1 : 0}`,
+  // Sizes the pan to PAN_BINS x PAN_Y_PIXELS (POTACAT lib/flex-scope.js panSizeCommand).
+  panLayout: (id, fps = 15) => `display pan set ${hexId(id, "pan")} xpixels=${PAN_BINS} ypixels=${PAN_Y_PIXELS} fps=${Math.max(5, Math.min(30, int(fps, 1, 1000, "fps")))}`,
   streamRemoteAudioRx(compression = "opus") {
     if (!["none", "opus"].includes(compression)) throw new SmartSdrError("compression must be none or opus");
     return `stream create type=remote_audio_rx compression=${compression}`;
@@ -304,7 +379,7 @@ function parsePgxlStatus(text) {
 // --- Session ---
 
 // One SmartSDR TCP session. TX needs allowTx (default off) and is time capped. No keepalive is sent:
-// the ping syntax is pendiente de fuente, so a radio expecting one drops the client after 15 s.
+// the ping (keepalive) syntax is in no reference read, so it stays pendiente de fuente and a radio expecting one drops the client after 15 s.
 class SmartSdrSession extends EventEmitter {
   constructor(options = {}) {
     super();
@@ -328,6 +403,9 @@ class SmartSdrSession extends EventEmitter {
     this.txDeadline = null;
     this.swrTripped = false;
     this.txOffUnverified = false;
+    this.xmitKeyed = false;
+    this.panAssembler = new PanFrameAssembler();
+    this.panStreamId = null;
     this.seq = 1;
     this.pending = new Map();
     this.amplifiers = new Set();
@@ -447,17 +525,31 @@ class SmartSdrSession extends EventEmitter {
     this.#armCap();
   }
 
-  // A reply with code 0 to `transmit tune off` counts as verified TX off.
+  // A reply with code 0 to `xmit 0` (when PTT was keyed) and `transmit tune off` counts as verified TX off.
   async unkey(attempts = 3) {
     for (let index = 0; index < attempts; index += 1) {
       try {
+        let ok = true;
+        if (this.xmitKeyed) {
+          ok = (await this.command(Cmd.xmit(false), { timeoutMs: 2000, check: false })).ok;
+          this.xmitKeyed = !ok;
+        }
         const reply = await this.command(Cmd.transmitTune(false), { timeoutMs: 2000, check: false });
-        if (reply.ok) { this.txDeadline = null; this.txOffUnverified = false; clearTimeout(this.timer); return true; }
+        if (reply.ok && ok) { this.txDeadline = null; this.txOffUnverified = false; clearTimeout(this.timer); return true; }
       } catch { /* retry */ }
     }
     this.txOffUnverified = true;
     this.emit("txOffUnverified");
     return false;
+  }
+
+  // Voice PTT (`xmit 1`): same guards and time cap as tune; nothing keys by itself.
+  async pttStart() {
+    if (!this.allowTx) throw new SmartSdrError("TX disabled by configuration");
+    if (this.swrTripped) throw new SmartSdrError("high SWR: reset the alert before transmitting");
+    await this.command(Cmd.xmit(true));
+    this.xmitKeyed = true;
+    this.#armCap();
   }
 
   async tick() {
@@ -515,10 +607,53 @@ class SmartSdrSession extends EventEmitter {
     }
   }
 
+  // Receive-only panadapter: asks the radio for the pan it already owns (none is created: only GUI clients can),
+  // sizes it for the FFT layout and emits "scope" { startHz, endHz, levels } for each whole frame.
+  async startScope(fps = 15) {
+    let panId = null;
+    for (const key of this.status.keys()) {
+      const match = /^display pan (0x[0-9A-Fa-f]{1,8})$/.exec(key);
+      if (match) { panId = match[1]; break; }
+    }
+    if (!panId) {
+      await this.command(Cmd.subscribe("pan"));
+      for (const key of this.status.keys()) {
+        const match = /^display pan (0x[0-9A-Fa-f]{1,8})$/.exec(key);
+        if (match) { panId = match[1]; break; }
+      }
+    }
+    if (!panId) throw new SmartSdrError("no panadapter known: open one in SmartSDR");
+    await this.command(Cmd.panLayout(panId, fps));
+    this.panStreamId = parseInt(panId, 16) >>> 0;
+    this.panId = panId;
+    return panId;
+  }
+
+  stopScope() { this.panStreamId = null; }
+
+  // Whole-frame levels of one UDP datagram, or null (not FFT, other stream, incomplete, junk, no geometry yet).
+  ingestFftPacket(packet) {
+    const fft = parseFftPacket(packet);
+    if (!fft || this.panStreamId === null || fft.streamId !== this.panStreamId) return null;
+    const levels = this.panAssembler.feed(fft);
+    if (!levels) return null;
+    const fields = this.status.get(`display pan ${this.panId}`) || {};
+    const center = Number(fields.center);
+    const bandwidth = Number(fields.bandwidth);
+    if (!(center > 0 && bandwidth > 0)) return null;
+    return { startHz: Math.round((center - bandwidth / 2) * 1e6), endHz: Math.round((center + bandwidth / 2) * 1e6), levels };
+  }
+
   // UDP socket for VITA-49 streams; pass its port to setup({ udpPort }).
   openUdp(port, onNormalized) {
     const socket = dgram.createSocket("udp4");
-    socket.on("message", packet => { try { onNormalized(this.ingestMeterPacket(packet)); } catch (error) { this.emit("parseError", error); } });
+    socket.on("message", packet => {
+      try {
+        const frame = this.ingestFftPacket(packet);
+        if (frame) this.emit("scope", frame);
+        else if (!parseFftPacket(packet)) onNormalized(this.ingestMeterPacket(packet));
+      } catch (error) { this.emit("parseError", error); }
+    });
     socket.bind(port);
     return socket;
   }
@@ -529,8 +664,8 @@ class SmartSdrSession extends EventEmitter {
 const MODE_TO_HAMLIB = Object.freeze({ usb: "USB", lsb: "LSB", cw: "CW", am: "AM", digu: "PKTUSB" });
 const HAMLIB_TO_MODE = Object.freeze(Object.fromEntries(Object.entries(MODE_TO_HAMLIB).map(([key, value]) => [value, key])));
 
-// Exposes one SmartSDR session through the RigctldClient surface used by the agent. PTT (`xmit`) is
-// pendiente de fuente, so keying is only possible through the guarded tune flow (tune()).
+// Exposes one SmartSDR session through the RigctldClient surface used by the agent. PTT (`xmit`) needs
+// allowTx (default off) and keeps the session time cap; the agent's heartbeat unkey applies on top.
 class SmartSdrRigClient extends EventEmitter {
   constructor(options = {}) {
     super();
@@ -629,9 +764,20 @@ class SmartSdrRigClient extends EventEmitter {
   async getPtt() { return Boolean(this.session && this.session.txDeadline !== null); }
 
   async setPtt(on) {
-    if (on) throw new SmartSdrError("PTT (xmit) pendiente de fuente: use TUNE");
+    if (on) { await this.session.pttStart(); return; }
     if (this.session && !(await this.session.unkey())) throw new SmartSdrError("TX off not verified");
   }
+
+  // Receive-only panadapter; "scope" events carry { startHz, endHz, levels } (0..255, 255 = strongest).
+  async startScope(fps) {
+    const session = this.session;
+    if (!session || !this.connected) throw new SmartSdrError("radio not connected");
+    session.removeAllListeners("scope");
+    session.on("scope", frame => this.emit("scope", frame));
+    return session.startScope(fps);
+  }
+
+  stopScope() { this.session?.stopScope(); }
 
   async tune() { await this.session.tuneStart(this.tunePower); }
   async getStrength() { return null; }
@@ -662,5 +808,6 @@ module.exports = {
   SmartSdrRigClient,
   TCP_PORT, DISCOVERY_PORTS, PGXL_TCP_PORT, DISCOVERY_CLASS_ID, ERROR_CODES, METER_SCALES, SLICE_MODES,
   SmartSdrError, SmartSdrSession, Cmd, describeError, frameCommand, parseVitaPacket, parseDiscoveryString, parseDiscoveryPacket,
+  PACKET_CLASS_FFT, PAN_BINS, PAN_Y_PIXELS, parseFftPacket, levelFromPixel, PanFrameAssembler,
   parseLegacyDiscovery, createDiscovery, parseStatus, parseLine, parseMeterList, decodeMeterPayload, scaleMeter, normalizeMeters, parsePgxlStatus
 };

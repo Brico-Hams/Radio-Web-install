@@ -471,7 +471,8 @@ class StationAgentRequestHandler(SecureRequestHandler):
     def _stream_scope(self) -> None:
         """Bounded NDJSON stream of CI-V scope frames (receive-only); ends after `seconds` or on disconnect."""
         cat = self.server.cat
-        if cat is None:
+        flex = self.server.flex
+        if cat is None and flex is None:
             self._send_error(HTTPStatus.SERVICE_UNAVAILABLE, "cat_not_configured")
             return
         try:
@@ -480,10 +481,15 @@ class StationAgentRequestHandler(SecureRequestHandler):
                 raise ValueError("Invalid query")
             seconds = float(params.get("seconds", ["10"])[0])
             fps = float(params.get("fps", ["5"])[0])
-            frames = cat.scope_stream(seconds, fps)
+            # Without a serial CAT the Flex panadapter (VITA-49 FFT) is the scope source.
+            frames = flex.scope_stream(seconds, fps) if cat is None else cat.scope_stream(seconds, fps)
             first = next(frames, None)
         except ValueError:
             self._send_error(HTTPStatus.BAD_REQUEST, "cat_invalid_query")
+            return
+        except FlexError as error:
+            self._send_error(HTTPStatus.SERVICE_UNAVAILABLE, "cat_flex_scope_unavailable")
+            LOGGER.warning("Flex scope unavailable: %s", error)
             return
         except CatError as error:
             self._send_error(

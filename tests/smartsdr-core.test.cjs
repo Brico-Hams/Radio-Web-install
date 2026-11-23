@@ -177,7 +177,7 @@ test("close unkeys and puts amplifiers in standby", async () => {
   assert.equal(socket.destroyed, true);
 });
 
-test("rig client exposes the session to the agent: no xmit PTT, guarded tune, rfpower level", async () => {
+test("rig client: no xmit PTT, guarded tune, rfpower level", async () => {
   const socket = fakeRadio({ "meter list": ["0", METER_LIST] });
   const client = new sdr.SmartSdrRigClient({ sessionFactory: options => new SmartSdrSession({ ...options, socket }), reconnectMs: 60000 });
   const connected = new Promise(resolve => client.once("connect", resolve));
@@ -190,9 +190,77 @@ test("rig client exposes the session to the agent: no xmit PTT, guarded tune, rf
   await client.setMode("PKTUSB");
   await client.setLevel("RFPOWER", 0.5);
   assert.deepEqual(socket.sent.slice(-3), ["slice tune 0 7.074000", "slice set 0 mode=digu", "transmit set rfpower=50"]);
-  await assert.rejects(() => client.setPtt(true), /pendiente de fuente/);
+  await assert.rejects(() => client.setPtt(true), /TX disabled/);
+  assert.equal(socket.sent.includes("xmit 1"), false);
   await assert.rejects(() => client.tune(), /TX disabled/);
   await assert.rejects(() => client.sendRaw("FA;"), /not available/);
   assert.equal((await client.dumpCaps()).tune, true);
+  client.stop();
+});
+
+function fft(streamId, start, bins, total, frame, { size = 2 } = {}) {
+  const body = Buffer.alloc(12 + bins.length * 2);
+  [start, bins.length, size, total].forEach((value, index) => body.writeUInt16BE(value, index * 2));
+  body.writeUInt32BE(frame, 8);
+  bins.forEach((value, index) => body.writeUInt16BE(value, 12 + index * 2));
+  const packet = vita(body, { classWord: 0x534C8003, timestamps: true });
+  packet.writeUInt32BE(streamId, 4);
+  return packet;
+}
+
+test("xmit PTT is guarded, time capped and unkeyed with xmit 0 first", async () => {
+  let { instance, socket } = session();
+  await assert.rejects(() => instance.pttStart(), /TX disabled/);
+  assert.deepEqual(socket.sent, []);
+  let now = 1000;
+  ({ instance, socket } = session({ allowTx: true, txCapMs: 30000, now: () => now }));
+  await instance.pttStart();
+  assert.deepEqual(socket.sent, ["xmit 1"]);
+  now += 31000;
+  await instance.tick();
+  assert.deepEqual(socket.sent.slice(1), ["xmit 0", "transmit tune off"]);
+  assert.equal(instance.txDeadline, null);
+  ({ instance } = session({ allowTx: true }, { "xmit 0": ["50000042", ""] }));
+  await instance.pttStart();
+  assert.equal(await instance.unkey(), false);
+  assert.equal(instance.txOffUnverified, true);
+  await instance.close();
+});
+
+test("FFT packet layout and frame assembly follow POTACAT flex-scope", () => {
+  assert.equal(Cmd.xmit(true), "xmit 1");
+  assert.equal(Cmd.panLayout("0x40000000", 99), "display pan set 0x40000000 xpixels=850 ypixels=256 fps=30");
+  assert.throws(() => Cmd.panLayout("0x4;x"));
+  const first = sdr.parseFftPacket(fft(0x40000000, 0, [0, 255], 4, 7));
+  assert.deepEqual([first.streamId, first.start, first.num, first.total, first.frame], [0x40000000, 0, 2, 4, 7]);
+  const meter = vita(Buffer.alloc(16), { classWord: 0x534C8002, timestamps: true });
+  for (const bad of [meter, Buffer.alloc(8), fft(1, 0, [1, 2], 4, 1, { size: 4 }), fft(1, 3, [1, 2], 4, 1), fft(1, 0, [1, 2], 4, 1).subarray(0, 36)]) {
+    assert.equal(sdr.parseFftPacket(bad), null);
+  }
+  assert.deepEqual([sdr.levelFromPixel(0), sdr.levelFromPixel(255), sdr.levelFromPixel(190)], [255, 0, 65]);
+  const assembler = new sdr.PanFrameAssembler();
+  assert.equal(assembler.feed(first), null);
+  assert.deepEqual([...assembler.feed(sdr.parseFftPacket(fft(0x40000000, 2, [190, 262], 4, 7)))], [255, 0, 65, 0]);
+  assert.equal(assembler.feed(sdr.parseFftPacket(fft(0x40000000, 0, [65000, 1, 1, 1], 4, 8))), null);
+  assert.equal(assembler.dropped, 1);
+});
+
+test("rig client turns the pan FFT into scope frames with the pan's own edges", async () => {
+  const socket = fakeRadio({ "meter list": ["0", METER_LIST] });
+  const client = new sdr.SmartSdrRigClient({ sessionFactory: options => new SmartSdrSession({ ...options, socket }), reconnectMs: 60000 });
+  const connected = new Promise(resolve => client.once("connect", resolve));
+  client.start();
+  socket.emit("data", "V3.4.1.2\nH0000ABCD\nS0|display pan 0x40000000 center=14.100000 bandwidth=0.200000\n");
+  await connected;
+  const frames = [];
+  client.on("scope", frame => frames.push(frame));
+  assert.equal(await client.startScope(15), "0x40000000");
+  assert.equal(socket.sent.at(-1), "display pan set 0x40000000 xpixels=850 ypixels=256 fps=15");
+  const session = client.session;
+  assert.equal(session.ingestFftPacket(fft(0x40000001, 0, [0, 0], 2, 1)), null);
+  assert.equal(session.ingestFftPacket(fft(0x40000000, 0, [0], 2, 2)), null);
+  session.emit("scope", session.ingestFftPacket(fft(0x40000000, 0, [0, 255], 2, 3)));
+  assert.equal(frames.length, 1);
+  assert.deepEqual([frames[0].startHz, frames[0].endHz, [...frames[0].levels]], [14000000, 14200000, [255, 0]]);
   client.stop();
 });
