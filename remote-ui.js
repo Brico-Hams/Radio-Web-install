@@ -49,9 +49,9 @@
   const MIC_GAIN_KEY = "bricohams.remote.micgain";
   const MIC_GAIN_DEFAULT = 50;
   const TABS = Object.freeze(["band", "levels", "cw", "log", "settings"]);
-  const CW_KEY = "bricohams.remote.cwmemories";
   // Placeholders {CALL} (their call, typed in the panel), {MYCALL}, {RST}, {NR} are expanded here and validated again by the agent.
-  const CW_DEFAULTS = Object.freeze(["CQ CQ DE {MYCALL} {MYCALL} K", "{CALL} DE {MYCALL} K", "{CALL} {RST} {RST} {NR}", "{CALL} TU 73 EE", "QRZ? DE {MYCALL}", "AGN?", "{MYCALL}", "73 TU"]);  const $ = id => document.getElementById(id);
+  const CW_DEFAULTS = Object.freeze(["CQ CQ DE {MYCALL} {MYCALL} K", "{CALL} DE {MYCALL} K", "{CALL} {RST} {RST} {NR}", "{CALL} TU 73 EE", "QRZ? DE {MYCALL}", "AGN?", "{MYCALL}", "73 TU"]);
+  const $ = id => document.getElementById(id);
 
   const params = new URLSearchParams(location.hash.slice(1));
   if (params.get("token")) sessionStorage.setItem(TOKEN_KEY, params.get("token"));
@@ -528,6 +528,10 @@
     $("btn-nr").disabled = !funcReady("NR", "nr");
     $("btn-atu").disabled = !funcReady("TUNER", "tuner");
     $("btn-tune").disabled = !(tuning && caps.tune) || view.tuneBusy;
+    const cwReady = free && Boolean(state?.cw?.enabled) && !view.locked && !state.ptt && !state.tune;
+    setText($("cw-status"), !state?.cw?.enabled ? "CW remoto: desactivado en el agente" : state.cw.active ? "CW remoto: transmitiendo" : "CW remoto: listo");
+    $("cw-send").disabled = !cwReady || Boolean(state.cw.active);
+    for (const button of document.querySelectorAll("#cw-memories button")) button.disabled = !cwReady || Boolean(state.cw.active);
   }
 
   function renderRelay(relay) {
@@ -1254,15 +1258,18 @@
   }
 
   // CW goes through the radio's own keyer; the agent refuses it unless the operator enabled it there.
-  function bindCw(callsign) {
-    let stored = null;
-    try { stored = JSON.parse(localStorage.getItem(CW_KEY)); } catch { /* storage may be denied */ }
-    const memories = Array.isArray(stored) && stored.length === 8 && stored.every(item => typeof item === "string") ? stored : [...CW_DEFAULTS];
+  // F1-F8 memories live in the agent, per operator; the browser keeps nothing.
+  async function bindCw(callsign) {
+    let memories = [...CW_DEFAULTS];
+    try {
+      const stored = await api("api/cw/memories");
+      if (Array.isArray(stored?.memories) && stored.memories.length === 8) memories = stored.memories;
+    } catch (error) { notify(error.message); }
     const expand = template => template.replace(/\{(CALL|MYCALL|RST|NR)\}/g, (_, key) => ({
       CALL: $("cw-call").value, MYCALL: callsign, RST: $("cw-rst").value, NR: $("cw-nr").value
     })[key].trim().toUpperCase());
     const send = text => {
-      if (view.locked || !text.trim()) return;
+      if (view.locked || !text.trim() || !view.state?.cw?.enabled) return;
       run({ cmd: "cw", text, wpm: Number($("cw-wpm").value) || 20 });
     };
     const stop = () => run({ cmd: "cwstop" });
@@ -1275,9 +1282,16 @@
       input.value = memory;
       input.maxLength = 50;
       input.setAttribute("aria-label", `F${index + 1}`);
-      input.addEventListener("change", () => {
-        memories[index] = input.value;
-        try { localStorage.setItem(CW_KEY, JSON.stringify(memories)); } catch { /* storage may be denied */ }
+      input.addEventListener("change", async () => {
+        const next = [...memories];
+        next[index] = input.value;
+        try {
+          memories = (await api("api/cw/memories", { method: "POST", body: JSON.stringify({ memories: next }) })).memories;
+          notify("");
+        } catch (error) {
+          input.value = memories[index];
+          notify(error.message);
+        }
       });
       const button = document.createElement("button");
       button.type = "button";
@@ -1287,6 +1301,9 @@
       holder.append(row);
     });
     $("cw-send").addEventListener("click", () => { send($("cw-text").value); });
+    $("cw-text").addEventListener("keydown", event => {
+      if (event.key === "Enter") { event.preventDefault(); send($("cw-text").value); }
+    });
     $("cw-stop").addEventListener("click", stop);
     document.addEventListener("keydown", event => {
       if (event.key === "Escape") { stop(); return; }
@@ -1330,7 +1347,7 @@
     try {
       const config = await api("api/config");
       if (config.callsign) setText($("callsign"), config.callsign);
-      bindCw(config.callsign || "");
+      await bindCw(config.callsign || "");
       showSpectrumPlaceholder(config.radioScope);
     } catch (error) {
       notify(error.status === 401 ? "Token no valido." : error.message);

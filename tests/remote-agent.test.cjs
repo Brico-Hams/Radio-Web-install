@@ -8,6 +8,8 @@ const net = require("node:net");
 const os = require("node:os");
 const path = require("node:path");
 const { createRemoteAgent } = require("../remote-agent.cjs");
+const { loadCatalog } = require("../remote-catalog.cjs");
+const { createMemoryStore } = require("../remote-cw.cjs");
 const { RigctldClient, RigctldError, parseCaps } = require("../rigctld-client.cjs");
 const { connectWs } = require("./ws-client.cjs");
 
@@ -711,5 +713,132 @@ test("a non-owner audio socket closing does not touch the PTT", async () => {
     await sleep(200);
     assert.equal(rig.ptt, 1);
   } finally { await cleanup(); await rig.close(); }
+});
+
+const cwRadio = id => ({ radioId: id, radio: loadCatalog().radios.find(item => item.id === id) });
+const keyerLines = rig => rig.log.filter(line => /^(W (KM|KY)|b )/.test(line));
+
+test("remote CW is refused until the operator enables it and nothing reaches the radio", async () => {
+  const rig = await fakeRigctld();
+  const { call, cleanup } = await startAgent(rig, cwRadio("yaesu-ftx-1"));
+  try {
+    assert.equal((await call("GET", "/api/state")).json.cw.enabled, false);
+    assert.equal((await call("POST", "/api/cmd", { body: { cmd: "cw", text: "CQ" } })).status, 403);
+    assert.deepEqual(keyerLines(rig), []);
+  } finally { await cleanup(); await rig.close(); }
+});
+
+test("remote CW sends through the FTX-1 keyer (KM5 then KY05) and cwstop sends KY00 without needing control", async () => {
+  const rig = await fakeRigctld();
+  const { call, cleanup } = await startAgent(rig, { ...cwRadio("yaesu-ftx-1"), cwEnabled: true, heartbeatTimeoutMs: 60_000 });
+  const as = id => ({ headers: { "X-Client-Id": id } });
+  try {
+    const sent = await call("POST", "/api/cmd", { body: { cmd: "cw", text: "cq test", wpm: 20 }, ...as("client-a") });
+    assert.equal(sent.status, 200);
+    assert.equal(sent.json.state.cw.active, true);
+    assert.deepEqual(keyerLines(rig), ["W KM5CQ TEST; 0", "W KY05; 0"]);
+    assert.equal((await call("POST", "/api/cmd", { body: { cmd: "cw", text: "73" }, ...as("client-a") })).status, 409);
+    assert.equal((await call("POST", "/api/cmd", { body: { cmd: "cw", text: "73" }, ...as("client-b") })).status, 409);
+    const stopped = await call("POST", "/api/cmd", { body: { cmd: "cwstop" }, ...as("client-b") });
+    assert.equal(stopped.status, 200);
+    assert.equal(stopped.json.state.cw.active, false);
+    assert.equal(keyerLines(rig).at(-1), "W KY00; 0");
+  } finally { await cleanup(); await rig.close(); }
+});
+
+test("remote CW refuses texts the radio cannot key, messages over the time cap and a busy PTT", async () => {
+  const rig = await fakeRigctld();
+  const { call, cleanup } = await startAgent(rig, { ...cwRadio("yaesu-ftx-1"), cwEnabled: true, cwMaxSeconds: 3, heartbeatTimeoutMs: 60_000 });
+  try {
+    assert.equal((await call("POST", "/api/cmd", { body: { cmd: "cw", text: "CQ;" } })).status, 400);
+    assert.equal((await call("POST", "/api/cmd", { body: { cmd: "cw", text: "CQ CQ CQ CQ CQ CQ CQ CQ", wpm: 5 } })).status, 400);
+    assert.deepEqual(keyerLines(rig), []);
+    await call("POST", "/api/cmd", { body: { cmd: "ptt", value: true } });
+    assert.equal((await call("POST", "/api/cmd", { body: { cmd: "cw", text: "CQ" } })).status, 409);
+  } finally { await cleanup(); await rig.close(); }
+});
+
+test("PTT off pre-empts a running CW message", async () => {
+  const rig = await fakeRigctld();
+  const { call, cleanup } = await startAgent(rig, { ...cwRadio("yaesu-ftx-1"), cwEnabled: true, heartbeatTimeoutMs: 60_000 });
+  try {
+    assert.equal((await call("POST", "/api/cmd", { body: { cmd: "cw", text: "CQ" } })).status, 200);
+    assert.equal((await call("POST", "/api/cmd", { body: { cmd: "ptt", value: false } })).status, 200);
+    await waitFor(() => keyerLines(rig).at(-1) === "W KY00; 0");
+    assert.equal((await call("GET", "/api/state")).json.cw.active, false);
+  } finally { await cleanup(); await rig.close(); }
+});
+
+test("a message stops when the operator loses control (injected clock)", async () => {
+  const rig = await fakeRigctld();
+  let time = 1_000_000;
+  const { call, cleanup } = await startAgent(rig, { ...cwRadio("yaesu-ftx-1"), cwEnabled: true, cwMaxSeconds: 120, now: () => time });
+  try {
+    assert.equal((await call("POST", "/api/cmd", { body: { cmd: "cw", text: "CQ CQ CQ CQ CQ", wpm: 5 } })).status, 200);
+    time += 30_001;
+    await waitFor(() => keyerLines(rig).at(-1) === "W KY00; 0");
+  } finally { await cleanup(); await rig.close(); }
+});
+
+test("radios without a native keyer command use Hamlib send_morse and refuse unsourced ones", async () => {
+  const rig = await fakeRigctld();
+  const { call, cleanup } = await startAgent(rig, { ...cwRadio("kenwood-ts-590s"), cwEnabled: true });
+  try {
+    assert.equal((await call("POST", "/api/cmd", { body: { cmd: "cw", text: "cq" } })).status, 200);
+    assert.deepEqual(keyerLines(rig), ["b CQ"]);
+    assert.equal((await call("POST", "/api/cmd", { body: { cmd: "cwstop" } })).status, 200);
+    assert.deepEqual(keyerLines(rig), ["b CQ"]);
+  } finally { await cleanup(); await rig.close(); }
+  const receiver = await fakeRigctld();
+  const second = await startAgent(receiver, { ...cwRadio("icom-ic-r8600"), cwEnabled: true });
+  try {
+    assert.equal((await second.call("POST", "/api/cmd", { body: { cmd: "cw", text: "CQ" } })).status, 501);
+  } finally { await second.cleanup(); await receiver.close(); }
+});
+
+test("listen-only guests get no CW and no memories; transmit guests keep their own F1-F8", async () => {
+  const rig = await fakeRigctld();
+  const { agent, call, cleanup } = await startAgent(rig, { ...cwRadio("yaesu-ftx-1"), cwEnabled: true });
+  const permission = transmit => ({ "yaesu-ftx-1": { transmit, bands: [], maxPowerW: null } });
+  const listener = agent.guests.invite({ label: "LISTEN", permissions: permission(false) });
+  const talker = agent.guests.invite({ label: "TALK", permissions: permission(true) });
+  const memories = tag => ["CQ DE {MYCALL}", ...Array.from({ length: 7 }, (_, i) => `${tag}${i}`)];
+  try {
+    assert.equal((await call("POST", "/api/cmd", { token: listener.token, body: { cmd: "cw", text: "CQ" } })).status, 403);
+    assert.equal((await call("GET", "/api/cw/memories", { token: listener.token })).status, 403);
+    assert.equal((await call("POST", "/api/cw/memories", { token: listener.token, body: { memories: memories("L") } })).status, 403);
+    assert.deepEqual(keyerLines(rig), []);
+
+    assert.equal((await call("GET", "/api/cw/memories")).json.memories[0], "CQ CQ DE {MYCALL} {MYCALL} K");
+    assert.equal((await call("POST", "/api/cw/memories", { body: { memories: memories("O") } })).status, 200);
+    assert.equal((await call("POST", "/api/cw/memories", { token: talker.token, body: { memories: memories("T") } })).status, 200);
+    assert.equal((await call("GET", "/api/cw/memories")).json.memories[1], "O0");
+    assert.equal((await call("GET", "/api/cw/memories", { token: talker.token })).json.memories[1], "T0");
+
+    for (const bad of [memories("O").slice(1), ["X;", ...memories("O").slice(1)], ["A".repeat(51), ...memories("O").slice(1)], "nope"]) {
+      assert.equal((await call("POST", "/api/cw/memories", { body: { memories: bad } })).status, 400, JSON.stringify(bad));
+    }
+    assert.equal((await call("POST", "/api/cw/memories", { body: { memories: memories("O") }, headers: { "Content-Type": "text/plain" }, raw: "x" })).status, 415);
+
+    assert.equal((await call("POST", "/api/cmd", { token: talker.token, body: { cmd: "cw", text: "CQ" } })).status, 200);
+    assert.deepEqual(keyerLines(rig), ["W KM5CQ; 0", "W KY05; 0"]);
+  } finally { await cleanup(); await rig.close(); }
+});
+
+test("CW memories persist per operator on disk, hold no credentials and reject bad data", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "radicodex-cw-"));
+  try {
+    const store = createMemoryStore({ dir });
+    const memories = ["CQ", "73", "{CALL} {RST}", "A", "B", "C", "D", "E"];
+    store.set("owner", memories);
+    store.set("guest:g0123456789ab", [...memories].reverse());
+    const again = createMemoryStore({ dir });
+    assert.deepEqual(again.get("owner"), memories);
+    assert.deepEqual(again.get("guest:g0123456789ab"), [...memories].reverse());
+    assert.equal(again.get("guest:gffffffffffff")[0], "CQ CQ DE {MYCALL} {MYCALL} K");
+    assert.throws(() => again.get("../evil"), { code: "operator" });
+    assert.throws(() => again.set("owner", ["x"]), { code: "memory" });
+    assert.doesNotMatch(fs.readFileSync(path.join(dir, "remote-cw-memories.json"), "utf8"), /token|password|secret/i);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
