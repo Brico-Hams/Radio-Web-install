@@ -48,7 +48,7 @@
   const LEVEL_KEYS = Object.freeze({ AF: "af", RF: "rf", RFPOWER: "rfpower" });
   const MIC_GAIN_KEY = "bricohams.remote.micgain";
   const MIC_GAIN_DEFAULT = 50;
-  const TABS = Object.freeze(["band", "levels", "cw", "digital", "dx", "log", "qso", "settings"]);
+  const TABS = Object.freeze(["band", "levels", "digital", "cw", "dx", "log", "qso", "settings"]);
   const CW_KEY = "bricohams.remote.cwmemories";
   // Placeholders {CALL} (their call, typed in the panel), {MYCALL}, {RST}, {NR} are expanded here and validated again by the agent.
   const CW_DEFAULTS = Object.freeze(["CQ CQ DE {MYCALL} {MYCALL} K", "{CALL} DE {MYCALL} K", "{CALL} {RST} {RST} {NR}", "{CALL} TU 73 EE", "QRZ? DE {MYCALL}", "AGN?", "{MYCALL}", "73 TU"]);

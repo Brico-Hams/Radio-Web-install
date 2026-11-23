@@ -142,9 +142,9 @@ class StationAgentHTTPServer(SecureHTTPServer):
         self.ptt = ptt
         if ptt is not None:
             # One shared TX log and revocation check, so a revoked guest is unkeyed by the watchdog itself.
-            if ptt.tx_log is None:
+            if getattr(ptt, "tx_log", None) is None:
                 ptt.tx_log = self.tx_log
-            if ptt.guest_active is None:
+            if getattr(ptt, "guest_active", None) is None:
                 ptt.guest_active = self.guests.is_active_id
             ptt.radio_id = radio_id
         try:
@@ -1044,12 +1044,13 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--state-dir",
         type=Path,
         help="Persist guests (token hashes only) and the TX log here; in memory when omitted.",
-            )
-            parser.add_argument(
+    )
+    parser.add_argument(
         "--power-config",
         type=Path,
         help="Local power-device JSON ({'id','kind':'dli'|'modbus','host','port','enabled','outlets':[{'name','index','role'}]}); "
-        "DLI credentials come from BRICOHAM_POWER_USER/BRICOHAM_POWER_PASSWORD; switching is refused while transmitting.",    )
+        "DLI credentials come from BRICOHAM_POWER_USER/BRICOHAM_POWER_PASSWORD; switching is refused while transmitting.",
+    )
     parser.add_argument(
         "--tx-audio-config",
         type=Path,
