@@ -186,3 +186,69 @@ test("every button in the desktop pages and their scripts carries a styled class
   }
   assert.deepEqual(unstyled, []);
 });
+
+// Navigation polish: no mid-word breaks, list look, scroll offset and the 900px collapse.
+const flatStyles = strip(styles);
+const navRules = blocks(flatStyles).filter(rule => /\.sidebar nav|\.steps button\.step-view|\.step-view/.test(rule.selector));
+
+test("sidebar labels never break inside a word", () => {
+  for (const rule of navRules) {
+    if (/\.step-view|\.sidebar nav a/.test(rule.selector) && /:is\(\.button/.test(rule.selector)) continue;
+    assert.doesNotMatch(rule.body, /overflow-wrap:\s*anywhere|word-break:\s*(break-all|break-word)/, rule.selector);
+  }
+  const own = navRules.filter(rule => rule.selector === ":root .sidebar nav a, :root .steps button.step-view");
+  assert.equal(own.length, 1);
+  assert.equal(declaration(own, "overflow-wrap"), "normal");
+  assert.equal(declaration(own, "word-break"), "normal");
+  assert.equal(declaration(own, "hyphens"), "manual");
+  assert.match(declaration(rulesFor(styles, ".sidebar"), "width") || "", /./);
+});
+
+test("sidebar is wider on desktop through a clamp shared with the workspace offset", () => {
+  const wide = flatStyles.match(/@media \(min-width: 901px\) \{\s*:root \{ --sidebar-w: clamp\((\d+)px, (\d+)vw, (\d+)px\); \}\s*\.sidebar \{ width: var\(--sidebar-w\); \}\s*\.workspace \{ margin-left: var\(--sidebar-w\); \}/);
+  assert.ok(wide, "sidebar width clamp");
+  assert.ok(Number(wide[1]) >= 256 && Number(wide[3]) >= Number(wide[1]));
+});
+
+test("navigation is a clean list: borderless rows, subtle hover, selected item and a thin guide line", () => {
+  const own = navRules.find(rule => rule.selector === ":root .sidebar nav a, :root .steps button.step-view");
+  assert.match(own.body, /--b-bg:\s*transparent/);
+  assert.match(own.body, /--b-bd:\s*transparent/);
+  const base = blocks(flatStyles).find(rule => rule.selector.startsWith(":root :is(.button, .guide-tab") && /min-height: 48px/.test(rule.body));
+  assert.ok(base, "48px rows from the shared button rule");
+  assert.match(flatStyles, /:root \.sidebar nav \.nav-sub \{[^}]*border-left: 1px solid var\(--border\)/);
+  assert.match(flatStyles, /\[aria-current\]:not\(\[aria-current=false\]\)::after \{ content: "\\2713"/);
+  assert.match(flatStyles, /box-shadow: inset 8px 0 0 var\(--btn-selected-bar\)/);
+  assert.match(flatStyles, /\.step-view, \.sidebar nav a, \.backups-panel button, \.icom-drop, \.skip, summary, select, input, textarea\):focus-visible/);
+});
+
+test("the sticky top bar wraps and never covers anchors: scroll offset follows its real height", () => {
+  assert.match(flatStyles, /html \{ scroll-padding-top: calc\(var\(--topbar-h, (\d+)px\) \+ 16px\); \}/);
+  assert.ok(Number(flatStyles.match(/--topbar-h, (\d+)px/)[1]) >= 96);
+  assert.match(flatStyles, /\.topbar \{ flex-wrap: wrap; align-items: center; \}/);
+  assert.match(flatStyles, /\.topbar-right \{[^}]*flex-wrap: wrap/);
+  const narrow = flatStyles.match(/@media \(max-width: 900px\) \{([\s\S]*?)\r?\n\}\r?\n/)[1];
+  assert.match(narrow, /\.topbar \{ position: static; \}/, "non-sticky bar at narrow widths");
+  assert.match(narrow, /html \{ scroll-padding-top: 16px; \}/);
+  const app = read("app.js");
+  assert.match(app, /setProperty\("--topbar-h", `\$\{topbar\.offsetHeight\}px`\)/);
+  assert.match(app, /new ResizeObserver\(syncTopbar\)/);
+});
+
+test("below 900px the sidebar collapses into an accessible drawer opened by a menu button", () => {
+  const narrow = flatStyles.match(/@media \(max-width: 900px\) \{([\s\S]*?)\r?\n\}\r?\n/)[1];
+  assert.match(narrow, /\.sidebar \{[^}]*visibility: hidden; transform: translateX\(-100%\)/);
+  assert.match(narrow, /\.sidebar\[data-open\] \{ visibility: visible; transform: none; \}/);
+  assert.match(narrow, /\.workspace \{ margin-left: 0; \}/);
+  assert.match(narrow, /:root \.button\.nav-toggle \{ display: inline-flex; \}/);
+  assert.match(flatStyles, /:root \.button\.nav-toggle, :root \.sidebar \.button\.nav-close \{ display: none; \}/);
+  assert.doesNotMatch(flatStyles, /@media \(max-width: 900px\)[^}]*\{[^}]*\.sidebar nav a[^}]*white-space: nowrap/);
+  const app = read("app.js");
+  assert.match(app, /<button id="nav-toggle" class="button secondary nav-toggle" type="button" aria-controls="sidebar" aria-expanded="false">/);
+  assert.match(app, /<aside class="sidebar" id="sidebar">/);
+  assert.match(app, /event\.key === "Escape"/);
+  assert.match(app, /toggle\.setAttribute\("aria-expanded", String\(open\)\)/);
+  const translations = read("ui-translations.js");
+  for (const label of ["Cerrar menu"]) assert.match(translations, new RegExp(`\\["${label}", "[^"]+", "[^"]+", "[^"]+"\\]`), label);
+  assert.match(translations, /^Menú\|Menu\|Menu\|Menü$/m);
+});
