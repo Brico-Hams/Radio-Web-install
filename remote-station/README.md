@@ -164,6 +164,14 @@ Rutas de la API:
 | `POST /api/v1/radio-settings` | Admin/operador; lectura/ajuste RF PWR o insertar/bypass ATU, sin iniciar sintonía ni PTT |
 | `GET /api/v1/diagnostics` | Admin y operador |
 
+Rutas directas del agente de estación (no pasan por el coordinador): `GET/POST /api/v1/guests`
+(invitar con `label`, `ttl_hours`, `transmit`, `bands`, `max_power_w`; el token `g_…` se muestra una
+sola vez y solo se guarda su SHA-256), `POST /api/v1/guests/revoke`, `GET /api/v1/txlog` y
+`GET /api/v1/txlog.csv` (registro de TX), todas solo admin. Un invitado «solo escucha» no puede
+emitir; uno con TX queda limitado a sus bandas y potencia máxima, comprobadas contra la radio en
+cada inicio y renovación. Revocar corta el PTT al instante. `--radio-id` y `--state-dir` fijan la
+radio y la persistencia.
+
 Define tokens opcionales `BRICOHAM_OPERATOR_TOKEN`,
 `BRICOHAM_LISTENER_TOKEN` y `BRICOHAM_GUEST_TOKEN` antes de iniciar. Los roles
 configurados requieren secretos distintos de al menos 32 caracteres. El invitado
