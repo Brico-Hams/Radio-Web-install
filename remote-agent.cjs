@@ -505,7 +505,7 @@ function createRemoteAgent(options = {}) {
         const run = tune;
         const value = parseRawMeter(await client.sendRaw(cmd, { read: true, timeoutMs: meterReadMs, abandon: true }), cmd);
         if (!live()) return;
-        if (key === "swr" && run && tune === run && Number.isFinite(value)) run.lastSwr = value;
+        if (key === "swr" && run && tune === run && Number.isFinite(value) && value > 0) run.lastSwr = value; // a 0 reading means the carrier already dropped
         setMeter(key, value);
       } catch (error) {
         if (error.code !== "rejected") throw error;
@@ -694,7 +694,8 @@ function createRemoteAgent(options = {}) {
       rig.mode = mode.mode;
       rig.passband = mode.passband;
       const ptt = await client.getPtt();
-      if (ptt !== rig.ptt && !tune) setRigPtt(ptt);
+      // A PTT read taken while a stop sequence is running may predate it and must not re-arm the TX state.
+      if (ptt !== rig.ptt && !tune && !stopping) setRigPtt(ptt);
       rig.smeter = rig.ptt ? null : await client.getStrength();
       if (pollCount % 4 === 1) {
         try {

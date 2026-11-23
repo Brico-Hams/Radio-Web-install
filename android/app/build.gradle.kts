@@ -78,6 +78,19 @@ val syncChannelTemplates by tasks.registering(Sync::class) {
     into(layout.buildDirectory.dir("generated/channelTemplates/channel-templates"))
 }
 android.sourceSets.getByName("main").assets.srcDir(layout.buildDirectory.dir("generated/channelTemplates"))
+// The antenna designer engine and UI are the desktop files (antenna-core.js, antenna-ui.js, ...): bundled once, never copied into the repo.
+// antenna-android.html is the offline host page of the APK (served as antenna/index.html); the rest comes from the repository root.
+val syncAntennaAssets by tasks.registering(Sync::class) {
+    from(rootProject.projectDir.resolve("../")) {
+        include("antenna-core.js", "antenna-ui.js", "antenna-worker.js", "antenna.css", "styles.css", "ui-i18n.js", "ui-translations.js")
+    }
+    from(rootProject.projectDir.resolve("../")) {
+        include("antenna-android.html")
+        rename("antenna-android.html", "index.html")
+    }
+    into(layout.buildDirectory.dir("generated/antennaAssets/antenna"))
+}
+android.sourceSets.getByName("main").assets.srcDir(layout.buildDirectory.dir("generated/antennaAssets"))
 // Prebuilt per-radio repeater files (templates/repeaters) are bundled the same way; README.md stays out of the APK.
 val syncRepeaterTemplates by tasks.registering(Sync::class) {
     from(rootProject.projectDir.resolve("../templates/repeaters")) { exclude("README.md") }
@@ -91,6 +104,10 @@ tasks.configureEach {
     if (name.startsWith("merge") && name.endsWith("Assets")) dependsOn(syncChannelTemplates)
     // Every lint analysis/model task reads the generated assets folder (lint, lintVital, *LintReportModel, *LintVitalReportModel).
     if (name.startsWith("lintAnalyze") || name.startsWith("lintVitalAnalyze") || name.startsWith("generate") && name.endsWith("ReportModel") && name.contains("Lint")) dependsOn(syncChannelTemplates)
+}
+tasks.configureEach {
+    if (name.startsWith("merge") && name.endsWith("Assets")) dependsOn(syncAntennaAssets)
+    if (name.startsWith("lintAnalyze") || name.startsWith("lintVitalAnalyze") || name.startsWith("generate") && name.endsWith("ReportModel") && name.contains("Lint")) dependsOn(syncAntennaAssets)
 }
 dependencies {
     implementation(project(":station-core"))

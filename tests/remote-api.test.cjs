@@ -61,6 +61,32 @@ test("GET /api/remote/status, catalog y ports responden", async t => {
   assert.equal((await send("GET", "/api/remote/nada", { origin: null })).status, 404);
 });
 
+test("GET /api/remote/swr es de solo lectura y sin estacion no devuelve SWR", async t => {
+  const { send, calls } = await withServer(t);
+  const sample = await send("GET", "/api/remote/swr", { origin: null });
+  assert.equal(sample.status, 200);
+  assert.deepEqual(sample.json, { running: false, connected: false, ptt: false, radioId: null, freqHz: null, swr: null, source: null });
+  assert.equal((await send("POST", "/api/remote/swr", { body: {}, headers: json })).status === 200, false);
+  assert.deepEqual(calls, []);
+});
+
+test("swrSample solo entrega SWR mientras la radio informa TX y nunca transmite", async () => {
+  const { createStation } = require("../remote-station.cjs");
+  let snapshot = { connected: true, freq: 7100000, ptt: false, tx: null };
+  const station = createStation({
+    createAgent: () => ({ start: async () => {}, close: async () => {}, snapshot: () => snapshot }),
+    spawn: () => { throw new Error("not used"); }, findBinary: () => null, configDir: os.tmpdir()
+  });
+  assert.equal(station.swrSample().running, false);
+  await station.start({ radio: "icom-ic-705", link: "lan", netAddress: "127.0.0.1:4532", listen: "local", agentPort: 18080 });
+  assert.equal(station.swrSample().swr, null);
+  snapshot = { connected: true, freq: 7100000, ptt: true, tx: { swr: 48, source: "raw" } };
+  assert.deepEqual(station.swrSample(), { running: true, connected: true, ptt: true, radioId: "icom-ic-705", freqHz: 7100000, swr: 48, source: "raw" });
+  snapshot = { connected: true, freq: 7100000, ptt: false, tx: { swr: 48, source: "raw" } };
+  assert.equal(station.swrSample().swr, null);
+  await station.stop();
+});
+
 test("POST exige Origin igual al host, JSON y 4 KB como maximo", async t => {
   const { send } = await withServer(t);
   assert.equal((await send("POST", "/api/remote/config", { body: goodConfig, headers: json, origin: null })).status, 403);

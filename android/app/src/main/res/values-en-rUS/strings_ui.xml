@@ -75,6 +75,9 @@
     <string name="tool_rotor_title">AZ/EL rotor</string>
     <string name="tool_rotor_desc">Point your antenna with the BricoHams rotor.</string>
     <string name="tool_rotor_help">Connects over Bluetooth to the BricoHams rotor. Make sure the area is clear before moving the antenna.</string>
+    <string name="tool_antenna_title">HF/VHF antennas</string>
+    <string name="tool_antenna_desc">Design and analyze antennas offline.</string>
+    <string name="tool_antenna_help">Computes SWR, pattern and matching without a network. You can measure SWR by reading the radio meter while you transmit; never transmit without a matched load or an antenna.</string>
     <string name="tool_satellites_title">Satellites</string>
     <string name="tool_satellites_desc">Passes, map and Doppler, offline.</string>
     <string name="tool_satellites_help">Computes passes from saved TLEs and your profile position. No radio needed; with CAT it can correct Doppler.</string>

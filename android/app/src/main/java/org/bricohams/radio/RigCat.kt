@@ -75,6 +75,9 @@ interface Rig {
     val supportsTxStatus: Boolean get() = false
     /** True while the radio is transmitting; read only, never keys the radio. */
     fun isTransmitting(): Boolean = unsupported("TX status")
+    /** SWR meter raw 0..255 as the radio reports it; only rigs whose read command is sourced in the repo (IC-705 15 12, FTX-1 RM6). */
+    val supportsSwrMeter: Boolean get() = false
+    fun swrMeter(): Int = unsupported("SWR meter")
     val supportsDataMode: Boolean get() = false
     fun dataModeOn(): Boolean = unsupported("data mode")
     fun setDataMode(on: Boolean): Unit = unsupported("data mode")

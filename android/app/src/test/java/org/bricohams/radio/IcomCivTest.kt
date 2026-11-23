@@ -140,6 +140,8 @@ class IcomCivTest {
         assertThrows(IllegalArgumentException::class.java) { IcomCiv.setRfPower(256) }
         assertThrows(IllegalArgumentException::class.java) { IcomCiv.setRfPower(-1) }
         assertArrayEquals(bytes(0xFE, 0xFE, 0xA4, 0xE0, 0x1C, 0x00, 0xFD), IcomCiv.frame(to, IcomCiv.readTxStatus()))
+        assertArrayEquals(bytes(0xFE, 0xFE, 0xA4, 0xE0, 0x15, 0x12, 0xFD), IcomCiv.frame(to, IcomCiv.readSwr()))
+        assertEquals(120, IcomCiv.decodeLevel(bytes(0x15, 0x12, 0x01, 0x20), 2))
         assertArrayEquals(bytes(0xFE, 0xFE, 0xA4, 0xE0, 0x19, 0x00, 0xFD), IcomCiv.frame(to, IcomCiv.readId()))
         assertArrayEquals(bytes(0x1A, 0x06), IcomCiv.readDataMode())
         assertArrayEquals(bytes(0x1A, 0x06, 0x01, 0x01), IcomCiv.setDataMode(true))

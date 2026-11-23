@@ -2138,6 +2138,22 @@ Calcular adaptacion|Compute matching|Calculer l’adaptation|Anpassung berechnen
 Medida|Measurement|Mesure|Messung
 Importar medida (CSV)|Import measurement (CSV)|Importer une mesure (CSV)|Messung importieren (CSV)
 Sin medida importada.|No measurement imported.|Aucune mesure importée.|Keine Messung importiert.
+Medir SWR desde la radio|Measure SWR from radio|Mesurer le ROS depuis la radio|SWR vom Funkgerät messen
+La aplicacion nunca pone la radio en transmision: transmite tu y la aplicacion solo lee el medidor mientras la radio indique TX. Nunca transmitas sin una carga adaptada o una antena.|The app never keys the radio: you transmit and the app only reads the meter while the radio reports TX. Never transmit without a matched load or an antenna.|L’application ne met jamais la radio en émission : c’est vous qui émettez et elle ne lit l’instrument que lorsque la radio indique TX. N’émettez jamais sans charge adaptée ou antenne.|Die App sendet nie selbst: Sie senden, und sie liest das Messinstrument nur, solange das Funkgerät TX meldet. Senden Sie nie ohne angepasste Last oder Antenne.
+Iniciar medida de SWR|Start SWR measurement|Démarrer la mesure du ROS|SWR-Messung starten
+Parar medida de SWR|Stop SWR measurement|Arrêter la mesure du ROS|SWR-Messung stoppen
+Borrar puntos de SWR|Clear SWR points|Effacer les points de ROS|SWR-Punkte löschen
+Medida de SWR parada.|SWR measurement stopped.|Mesure du ROS arrêtée.|SWR-Messung gestoppt.
+Radio no conectada.|Radio not connected.|Radio non connectée.|Funkgerät nicht verbunden.
+Medidor de SWR por CAT de esta radio: pendiente de fuente.|SWR meter via CAT for this radio: pendiente de fuente (no source).|Instrument de ROS via CAT de cette radio : pendiente de fuente (aucune source).|SWR-Messinstrument per CAT für dieses Funkgerät: pendiente de fuente (keine Quelle).
+Sin lectura de SWR valida.|No valid SWR reading.|Aucune lecture de ROS valide.|Keine gültige SWR-Messung.
+Lectura ignorada.|Reading ignored.|Lecture ignorée.|Messwert ignoriert.
+Conectar FTX-1 por Web Serial|Connect FTX-1 over Web Serial|Connecter le FTX-1 via Web Serial|FTX-1 per Web Serial verbinden
+Desconectar Web Serial|Disconnect Web Serial|Déconnecter Web Serial|Web Serial trennen
+Web Serial no disponible en este navegador.|Web Serial is not available in this browser.|Web Serial n’est pas disponible dans ce navigateur.|Web Serial ist in diesem Browser nicht verfügbar.
+Conectado por Web Serial al FTX-1 (solo lectura).|Connected to the FTX-1 over Web Serial (read only).|Connecté au FTX-1 via Web Serial (lecture seule).|Per Web Serial mit dem FTX-1 verbunden (nur Lesen).
+Conexion Web Serial cerrada.|Web Serial connection closed.|Connexion Web Serial fermée.|Web-Serial-Verbindung geschlossen.
+No se pudo leer el FTX-1 por Web Serial.|Could not read the FTX-1 over Web Serial.|Impossible de lire le FTX-1 via Web Serial.|Der FTX-1 konnte nicht per Web Serial gelesen werden.
 Asesor de antena|Antenna advisor|Conseiller d’antenne|Antennenberater
 Cada sugerencia indica el numero calculado del que parte.|Every suggestion shows the computed number it comes from.|Chaque suggestion indique le nombre calculé dont elle provient.|Jeder Vorschlag nennt die berechnete Zahl, aus der er stammt.
 Revisar el diseno|Review the design|Examiner la conception|Entwurf prüfen

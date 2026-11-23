@@ -297,6 +297,7 @@ class MainActivity : LocalizedActivity() {
         Tool.LIVE_AUDIO -> ToolInfo(R.drawable.ic_mic, R.string.tool_live_title, R.string.tool_live_desc, R.string.tool_live_help, "ayuda-android")
         Tool.ROTOR -> ToolInfo(R.drawable.ic_satellite, R.string.tool_rotor_title, R.string.tool_rotor_desc, R.string.tool_rotor_help, "ayuda-android")
         Tool.RADIO_TOOLS -> ToolInfo(R.drawable.ic_tools, R.string.tool_radio_tools_title, R.string.tool_radio_tools_desc, R.string.tool_radio_tools_help, "ayuda-android")
+        Tool.ANTENNA -> ToolInfo(R.drawable.ic_tools, R.string.tool_antenna_title, R.string.tool_antenna_desc, R.string.tool_antenna_help, "ayuda-android")
     }
 
     private fun home() {
@@ -373,7 +374,7 @@ class MainActivity : LocalizedActivity() {
         fun fixed(tag: String, icon: Int, title: Int, desc: Int, help: Int, page: String, open: () -> Unit) =
             BrandUi.tile(this, tag, icon, getString(title), getString(desc), getString(help), page, open)
 
-        group(R.string.home_group_station, R.string.home_group_station_help, Tool.RADIO_TOOLS,
+        group(R.string.home_group_station, R.string.home_group_station_help, Tool.RADIO_TOOLS, Tool.ANTENNA,
             fixed("tool_remote_shack", R.drawable.ic_radio, R.string.tool_remote_title, R.string.tool_remote_desc,
                 R.string.tool_remote_help, "ayuda-android") { startActivity(Intent(this, RemoteShackActivity::class.java)) })
         group(R.string.home_group_radio, R.string.home_group_radio_help,

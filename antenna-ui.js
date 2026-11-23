@@ -125,6 +125,15 @@
       <div class="ant-field"><label for="ant-csv">Importar medida (CSV)</label><input id="ant-csv" type="file" accept=".csv,.txt,text/csv,text/plain"></div>
     </div>
     <div id="ant-meas" class="ant-results" aria-live="polite">Sin medida importada.</div>
+    <h3>Medir SWR desde la radio</h3>
+    <p class="ant-hint" role="note">La aplicacion nunca pone la radio en transmision: transmite tu y la aplicacion solo lee el medidor mientras la radio indique TX. Nunca transmitas sin una carga adaptada o una antena.</p>
+    <div class="ant-row">
+      <button type="button" id="ant-swr-serial" class="ant-btn">Conectar FTX-1 por Web Serial</button>
+      <button type="button" id="ant-swr-start" class="ant-btn">Iniciar medida de SWR</button>
+      <button type="button" id="ant-swr-stop" class="ant-btn" disabled>Parar medida de SWR</button>
+      <button type="button" id="ant-swr-clear" class="ant-btn">Borrar puntos de SWR</button>
+    </div>
+    <div id="ant-swr-live" class="ant-results" aria-live="polite">Medida de SWR parada.</div>
   </section>
 
   <section class="ant-card" aria-labelledby="ant-adv-title">
@@ -531,16 +540,91 @@
   // ----------------------------------------------------------- measurement
   function importCsv(file) {
     const reader = new root.FileReader();
-    reader.onload = () => {
-      const parsed = core.parseMeasurementCsv(String(reader.result), { z0: state.design.z0 });
-      const out = $("ant-meas");
-      if (!parsed.points.length) { out.textContent = parsed.errors.join(" ") || "No se pudo leer la medida."; return; }
-      state.measured = parsed;
-      out.textContent = `${parsed.points.length} puntos leidos (unidad ${parsed.info.unit}, separador "${parsed.info.separator}"${parsed.info.decimalComma ? ", coma decimal" : ""}).${parsed.errors.length ? ` ${parsed.errors.length} lineas ignoradas.` : ""}`;
-      if (state.sweep.length) showSweep(); else showMeasured();
-    };
+    reader.onload = () => importCsvText(String(reader.result));
     reader.readAsText(file);
   }
+  function importCsvText(text) {
+    const parsed = core.parseMeasurementCsv(text, { z0: state.design.z0 });
+    const out = $("ant-meas");
+    if (!parsed.points.length) { out.textContent = parsed.errors.join(" ") || "No se pudo leer la medida."; return; }
+    state.measured = parsed;
+    out.textContent = `${parsed.points.length} puntos leidos (unidad ${parsed.info.unit}, separador "${parsed.info.separator}"${parsed.info.decimalComma ? ", coma decimal" : ""}).${parsed.errors.length ? ` ${parsed.errors.length} lineas ignoradas.` : ""}`;
+    if (state.sweep.length) showSweep(); else showMeasured();
+  }
+
+  // ----------------------------------------------------------- SWR measured via CAT (read-only; the operator keys the radio)
+  const live = { logger: core.createSwrLogger(), timer: null, busy: false, serial: null };
+  function setLiveText(text) { $("ant-swr-live").textContent = text; }
+  // sample: { running, connected, ptt, radioId, freqHz, swr, source } as served by GET /api/remote/swr or pushed by the Android app.
+  function handleSwrSample(sample) {
+    if (!sample || !sample.running || !sample.connected) { setLiveText("Radio no conectada."); return; }
+    const meter = core.swrMeterInfo(sample.radioId);
+    if (meter.status === "pending") { setLiveText("Medidor de SWR por CAT de esta radio: pendiente de fuente."); return; }
+    if (!sample.ptt) { setLiveText(`Esperando a que transmitas. Puntos: ${live.logger.size}.`); return; }
+    const swr = sample.source === "hamlib" ? sample.swr : core.swrFromMeter(sample.radioId, sample.swr);
+    if (!Number.isFinite(swr)) { setLiveText("Sin lectura de SWR valida."); return; }
+    if (!live.logger.add({ freqHz: sample.freqHz, swr, tx: true })) { setLiveText("Lectura ignorada."); return; }
+    state.measured = { points: live.logger.points(), info: { unit: "SWR (CAT)", separator: ",", decimalComma: false }, errors: [] };
+    $("ant-meas").textContent = `${live.logger.size} puntos de SWR medidos por CAT${meter.status === "partial" ? " (calibracion aproximada)" : ""}.`;
+    setLiveText(`SWR ${fmt(swr)} en ${mhz(sample.freqHz)} MHz. Puntos: ${live.logger.size}.`);
+    if (state.sweep.length) showSweep(); else showMeasured();
+  }
+  async function pollSwr() {
+    if (live.busy) return;
+    live.busy = true;
+    try {
+      if (live.serial) {
+        const reading = await live.serial.session.readSwrSample();
+        handleSwrSample({ running: true, connected: true, ptt: reading.tx, radioId: "ftx1", freqHz: reading.freqHz, swr: reading.meter, source: "raw" });
+      } else {
+        const response = await root.fetch("api/remote/swr", { cache: "no-store" });
+        handleSwrSample(response.ok ? await response.json() : null);
+      }
+    } catch (error) { setLiveText(live.serial ? "No se pudo leer el FTX-1 por Web Serial." : "No se pudo leer la estacion remota."); } finally { live.busy = false; }
+  }
+  // Desktop Web Serial path: the FTX-1 page transport (transports.js + ftx1-core.js); reads only (TX; FA; RM6;), never PTT.
+  async function disconnectSerial() {
+    const serial = live.serial;
+    live.serial = null;
+    $("ant-swr-serial").textContent = "Conectar FTX-1 por Web Serial";
+    if (serial) { try { await serial.port.close(); } catch (error) { /* already closed */ } }
+  }
+  async function toggleSerial() {
+    if (live.serial) { stopSwr(); await disconnectSerial(); setLiveText("Conexion Web Serial cerrada."); return; }
+    const R = root.RadioWorkspace;
+    if (!root.navigator || !root.navigator.serial || !R.SerialTransport || !R.Ftx1Cat) { setLiveText("Web Serial no disponible en este navegador."); return; }
+    const port = new R.SerialTransport();
+    try {
+      await port.open(38400, [{ usbVendorId: 0x10c4 }], { lowControlLines: true });
+      const session = new R.Ftx1Cat(port);
+      await session.connect();
+      port.onDisconnect = () => { if (live.serial && live.serial.port === port) { stopSwr(); live.serial = null; $("ant-swr-serial").textContent = "Conectar FTX-1 por Web Serial"; setLiveText("Conexion Web Serial cerrada."); } };
+      live.serial = { port, session };
+      $("ant-swr-serial").textContent = "Desconectar Web Serial";
+      setLiveText("Conectado por Web Serial al FTX-1 (solo lectura).");
+    } catch (error) {
+      try { await port.close(); } catch (cleanup) { /* the original error is the useful one */ }
+      setLiveText(error && error.message ? error.message : "No se pudo leer el FTX-1 por Web Serial.");
+    }
+  }
+  function startSwr() {
+    if (live.timer) return;
+    live.timer = root.setInterval(pollSwr, 1000);
+    $("ant-swr-start").disabled = true; $("ant-swr-stop").disabled = false;
+    pollSwr();
+  }
+  function stopSwr() {
+    if (live.timer) root.clearInterval(live.timer);
+    live.timer = null;
+    $("ant-swr-start").disabled = false; $("ant-swr-stop").disabled = true;
+    setLiveText("Medida de SWR parada.");
+  }
+  function clearSwr() {
+    live.logger.clear();
+    setLiveText("Puntos de SWR borrados.");
+  }
+  // Hooks for the Android WebView: the native side polls the rig and pushes samples; the page never calls the radio itself.
+  root.AntennaMeasure = { addSample: handleSwrSample, importCsvText, setStatus: setLiveText };
   function showMeasured() {
     const m = state.measured; if (!m) return;
     const out = $("ant-meas");
@@ -596,6 +680,18 @@
     $("ant-run-match").addEventListener("click", runMatch);
     $("ant-run-adv").addEventListener("click", runAdvisor);
     $("ant-csv").addEventListener("change", event => { if (event.target.files[0]) importCsv(event.target.files[0]); });
+    $("ant-swr-start").addEventListener("click", startSwr);
+    $("ant-swr-stop").addEventListener("click", stopSwr);
+    $("ant-swr-clear").addEventListener("click", clearSwr);
+    $("ant-swr-serial").addEventListener("click", toggleSerial);
+    // Android WebView: file picking and the radio link are native (SAF + Rig), the page only gets the active radio id.
+    const bridge = root.AndroidAntenna;
+    if (bridge) {
+      $("ant-csv").addEventListener("click", event => { event.preventDefault(); bridge.importCsv(); });
+      for (const id of ["ant-swr-start", "ant-swr-stop", "ant-swr-serial"]) $(id).hidden = true;
+      const radioId = String(bridge.activeRadioId() || "");
+      if (radioId && [...$("ant-radio").options].some(o => o.value === radioId)) { $("ant-radio").value = radioId; fillBands(); }
+    }
     $("ant-ground").checked = Boolean(state.design.ground);
   }
 

@@ -25,12 +25,14 @@ enum class Tool(val label: Int, val activity: Class<out Activity>) {
     SSTV(R.string.home_open_sstv, SstvActivity::class.java),
     LIVE_AUDIO(R.string.home_open_live, LiveAudioActivity::class.java),
     ROTOR(R.string.rotor_title, RotorActivity::class.java),
-    RADIO_TOOLS(R.string.tools_title, ToolsActivity::class.java)
+    RADIO_TOOLS(R.string.tools_title, ToolsActivity::class.java),
+    ANTENNA(R.string.antenna_title, AntennaActivity::class.java)
 }
 
 // Phone-side tools that work with any radio: SstvActivity decodes WAV files, LiveAudioActivity uses the phone microphone,
-// RotorActivity talks to the separate BricoHams AZ/EL rotor (RotorBle / RotorClient), ToolsActivity is offline calculators.
-private val ANY_RADIO = setOf(Tool.SSTV, Tool.LIVE_AUDIO, Tool.ROTOR, Tool.RADIO_TOOLS)
+// RotorActivity talks to the separate BricoHams AZ/EL rotor (RotorBle / RotorClient), ToolsActivity is offline calculators,
+// AntennaActivity is the offline antenna designer (it only reads SWR when the profile radio has a sourced meter command).
+private val ANY_RADIO = setOf(Tool.SSTV, Tool.LIVE_AUDIO, Tool.ROTOR, Tool.RADIO_TOOLS, Tool.ANTENNA)
 
 /**
  * Single capability table: the radios the code supports and the tools each one can use. Every entry cites the class that

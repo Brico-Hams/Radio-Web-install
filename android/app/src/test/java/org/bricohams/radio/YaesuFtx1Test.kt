@@ -213,6 +213,12 @@ class YaesuFtx1Test {
     @Test fun receiverRepliesParse() {
         assertEquals(120, YaesuFtx1.parseSMeter("SM0120;"))
         assertEquals(200, YaesuFtx1.parseMeter("RM1200000;", 1))
+        assertEquals("RM6;", YaesuFtx1.readMeter(6))
+        assertEquals(96, YaesuFtx1.parseMeter("RM6096000;", 6))
+        assertFalse(YaesuFtx1.parseTxState("TX0;"))
+        assertTrue(YaesuFtx1.parseTxState("TX1;"))
+        assertTrue(YaesuFtx1.parseTxState("TX2;"))
+        assertThrows(IllegalArgumentException::class.java) { YaesuFtx1.parseTxState("TX9;") }
         assertEquals(64, YaesuFtx1.parseAfGain("AG0064;", 0))
         assertEquals(255, YaesuFtx1.parseRfGain("RG0255;", 0))
         assertEquals(3, YaesuFtx1.parseSquelch("SQ0003;", 0))

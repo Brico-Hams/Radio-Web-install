@@ -536,7 +536,21 @@ function createStation(options = {}) {
     };
   }
 
-  return { start, stop, status, get running() { return running; } };
+  // Read-only sample for the antenna page "Measure SWR from radio": never sends anything to the radio. The SWR value is
+  // present only while the radio itself reports TX (rig.ptt comes from polling rigctld) and has a meter reading; "raw" is the
+  // 0-255 RM6 value of a raw-CAT radio (convert with AntennaCore.swrFromMeter), "hamlib" is already an SWR ratio.
+  function swrSample() {
+    const snapshot = agent ? agent.snapshot() : null;
+    if (!snapshot) return { running: false, connected: false, ptt: false, radioId: null, freqHz: null, swr: null, source: null };
+    const transmitting = Boolean(snapshot.ptt && snapshot.tx);
+    const reading = transmitting && Number.isFinite(snapshot.tx.swr) ? snapshot.tx.swr : null;
+    return {
+      running: true, connected: Boolean(snapshot.connected), ptt: Boolean(snapshot.ptt), radioId: active?.radio ?? null,
+      freqHz: Number.isFinite(snapshot.freq) ? snapshot.freq : null, swr: reading, source: reading === null ? null : snapshot.tx.source
+    };
+  }
+
+  return { start, stop, status, swrSample, get running() { return running; } };
 }
 
 // ---- Controller: configuration file + supervisor + detection ----
@@ -576,6 +590,7 @@ function createController(options = {}) {
       writeStationConfig(configDir, config);
       return redactConfig(config);
     },
+    swrSample: () => (station.swrSample ? station.swrSample() : { running: false, connected: false, ptt: false, radioId: null, freqHz: null, swr: null, source: null }),
     async start() {
       const config = readConfig();
       if (!config) throw fail("Guarda primero la configuracion.", 409);
@@ -613,6 +628,7 @@ async function handleRemoteApi(controller, request, response, url, { protocol = 
     "GET /api/remote/catalog": () => controller.catalog(),
     "GET /api/remote/ports": async () => ({ ports: await controller.ports() }),
     "GET /api/remote/devices": async () => controller.devices(),
+    "GET /api/remote/swr": () => controller.swrSample(),
     "POST /api/remote/config": body => controller.saveConfig(body),
     "POST /api/remote/start": () => controller.start(),
     "POST /api/remote/stop": () => controller.stop()

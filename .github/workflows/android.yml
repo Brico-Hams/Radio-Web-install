@@ -7,6 +7,11 @@ on:
     tags: ["v*", "android-v*"]
     paths:
       - "android/**"
+      - "antenna-*.js"
+      - "antenna-android.html"
+      - "antenna.css"
+      - "ui-i18n.js"
+      - "ui-translations.js"
       - "fdroid/**"
       - "fastlane/**"
       - "scripts/check-android-store.cjs"
@@ -15,6 +20,11 @@ on:
   pull_request:
     paths:
       - "android/**"
+      - "antenna-*.js"
+      - "antenna-android.html"
+      - "antenna.css"
+      - "ui-i18n.js"
+      - "ui-translations.js"
       - "fdroid/**"
       - "fastlane/**"
       - "scripts/check-android-store.cjs"

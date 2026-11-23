@@ -228,6 +228,8 @@ object IcomCiv {
     fun setRfPower(level: Int) = body(0x14, 0x0A) + encodeLevel(level)
     // CI-V Reference Guide p.14 "1C 00 Send/read the transceiver's status" (00=RX, 01=TX)
     fun readTxStatus() = body(0x1C, 0x00)
+    // rigplane rigs/ic705.toml get_swr = [0x15, 0x12] (CI-V 15 12 Read SWR meter level, 0000=SWR 1.0 ~ 0255); same level encoding as 15 02
+    fun readSwr() = body(0x15, 0x12)
     // CI-V Reference Guide p.5 "19 00 Read the transceiver ID"
     fun readId() = body(0x19, 0x00)
     // CI-V Reference Guide p.22 "Data mode with filter width settings": 1A 06 <00=OFF/01=ON> <01..03 = FIL1..FIL3>; filter 00 when OFF
@@ -384,6 +386,8 @@ class IcomCivRig(
         checkUi(rfPower() == level) { UiText(R.string.err_rig_unconfirmed) }
     }
     override val supportsTxStatus = true
+    override val supportsSwrMeter = true
+    override fun swrMeter(): Int = IcomCiv.decodeLevel(query(IcomCiv.readSwr(), 4), 2)
     override fun isTransmitting(): Boolean = when (query(IcomCiv.readTxStatus(), 3)[2].toInt() and 255) {
         0 -> false
         1 -> true
@@ -557,6 +561,12 @@ object YaesuFtx1 {
     fun parseMeter(reply: String, meter: Int): Int {
         if (!Regex("RM$meter[0-9]{6};").matches(reply)) invalidReply()
         return reply.substring(3, 6).toInt().also { if (it > 255) invalidReply() }
+    }
+    // FTX-1 CAT Operation Reference Manual 2508-C "TX" (p.25): TX0 = RX, TX1 = CAT TX, TX2 = radio TX (still transmitting)
+    fun parseTxState(reply: String): Boolean = when (reply) {
+        "TX0;" -> false
+        "TX1;", "TX2;" -> true
+        else -> invalidReply()
     }
     // FTX-1 CAT Operation Reference Manual 2508-C "AG AF GAIN": AG P1 P2P2P2; 000-255, read AG P1;
     fun setAfGain(side: Int, value: Int): String = level("AG", side, value)
@@ -832,6 +842,11 @@ class Ftx1Rig(transport: RadioBytes) : Rig {
 
     override val supportsMeter = true
     override fun signalLevel(): Int = signal()
+    // FTX-1 CAT Operation Reference Manual 2508-C "TX" (p.25): TX0 = RX, TX1 = CAT TX, TX2 = radio TX; read only here
+    override val supportsTxStatus = true
+    override fun isTransmitting(): Boolean = YaesuFtx1.parseTxState(link.request("TX;", "TX"))
+    override val supportsSwrMeter = true
+    override fun swrMeter(): Int = meter(6)
     override val supportsRfPower = true
     /** The output power as 0..255 of the maximum of the head the radio reports with PC; (5-10 W or 5-100 W). */
     override fun rfPower(): Int {

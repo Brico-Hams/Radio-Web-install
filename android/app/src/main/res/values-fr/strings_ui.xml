@@ -75,6 +75,9 @@
     <string name="tool_rotor_title">Rotor AZ/EL</string>
     <string name="tool_rotor_desc">Pointez votre antenne avec le rotor BricoHams.</string>
     <string name="tool_rotor_help">Se connecte en Bluetooth au rotor BricoHams. Vérifiez que la zone est dégagée avant de bouger l’antenne.</string>
+    <string name="tool_antenna_title">Antennes HF/VHF</string>
+    <string name="tool_antenna_desc">Concevez et analysez des antennes hors ligne.</string>
+    <string name="tool_antenna_help">Calcule ROS, diagramme et adaptation sans réseau. Vous pouvez mesurer le ROS en lisant l’instrument de la radio pendant que vous émettez ; n’émettez jamais sans charge adaptée ou antenne.</string>
     <string name="tool_satellites_title">Satellites</string>
     <string name="tool_satellites_desc">Passages, carte et Doppler, hors ligne.</string>
     <string name="tool_satellites_help">Calcule les passages avec les TLE enregistrés et la position de votre profil. Aucune radio requise ; avec le CAT, il peut corriger le Doppler.</string>
