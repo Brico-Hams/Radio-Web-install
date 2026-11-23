@@ -519,6 +519,15 @@ export function createControlRequest(token: string) {
   }
 }
 
+export function createScopeRequest(token: string) {
+  const origin = coordinatorUrl
+  return (signal: AbortSignal, seconds = 30, fps = 5) => fetchApi(
+    `${origin}/api/v1/cat/scope?seconds=${seconds}&fps=${fps}`, {
+      method: 'GET', credentials: 'omit', cache: 'no-store', redirect: 'error',
+      referrerPolicy: 'no-referrer', signal, headers: { Authorization: `Bearer ${token}` },
+    })
+}
+
 export function createAudioRequest(token: string) {
   const origin = coordinatorUrl
   return (signal: AbortSignal) => fetchApi(`${origin}/api/v1/audio/stream`, {

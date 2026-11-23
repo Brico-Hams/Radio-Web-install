@@ -1,9 +1,11 @@
-import { useMemo, useState, type FormEvent } from 'react'
+import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import {
   createControlRequest, getApiData, isRadioSettings, isRecord, type RadioSettings,
   isYaesuControlModel, type YaesuControlModel,
 } from './api'
 import { useLanguage } from './i18n'
+import { tuneFromAudioClick } from './spectrum'
+import { onScopeClick, onWaterfallClick } from './tuneBus'
 
 type Receiver = 'MAIN' | 'SUB'
 type ModeOption = { code: string; label: string }
@@ -152,6 +154,37 @@ export function RadioOperatingPanel({ token }: { token: string }) {
 
   const blocked = busy || !verified || observed?.tx_active !== false || observed.tuner_busy
   const options = receiverOptions(config)
+  const clickRef = useRef<(audioHz: number) => void>(() => {})
+  clickRef.current = (audioHz) => {
+    if (!config || !observed || blocked || !config.frequency_adjustment_enabled) {
+      setError(t('specTuneBlocked'))
+      return
+    }
+    const state = observed.receivers[receiver]
+    const label = config.mode_options.find((option) => option.code === state.mode_code)?.label ?? ''
+    const next = tuneFromAudioClick(label, state.frequency_hz, audioHz)
+    if (next === null || next < (config.frequency_min_hz ?? 30_000) || next > (config.frequency_max_hz ?? 470_000_000)) {
+      setError(t('specTuneMode'))
+      return
+    }
+    setFrequency(String(next))
+    void operate({ operation: 'set_frequency', receiver, request_id: crypto.randomUUID(), frequency_hz: next })
+  }
+  useEffect(() => onWaterfallClick((audioHz) => clickRef.current(audioHz)), [])
+  const scopeRef = useRef<(rfHz: number) => void>(() => {})
+  scopeRef.current = (rfHz) => {
+    if (!config || !observed || blocked || !config.frequency_adjustment_enabled) {
+      setError(t('specTuneBlocked'))
+      return
+    }
+    if (rfHz < (config.frequency_min_hz ?? 30_000) || rfHz > (config.frequency_max_hz ?? 470_000_000)) {
+      setError(t('specTuneMode'))
+      return
+    }
+    setFrequency(String(rfHz))
+    void operate({ operation: 'set_frequency', receiver, request_id: crypto.randomUUID(), frequency_hz: rfHz })
+  }
+  useEffect(() => onScopeClick((rfHz) => scopeRef.current(rfHz)), [])
   const modeSupported = options.find((option) => option.receiver === receiver)?.mode_supported === true
   return (
     <section className="content-card operation-panel" aria-labelledby="operating-title">

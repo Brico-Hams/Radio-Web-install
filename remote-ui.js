@@ -652,13 +652,15 @@
     addEventListener("pagehide", pttUp);
   }
 
-  // The radio's own spectrum is not rendered yet; the panel only says what to expect for this model.
+  // The shack talks to the radio through rigctld, which does not expose scope frames, so the native scope is
+  // "pendiente de fuente" here; every radio with an audio path gets the audio-passband waterfall instead.
+  const NATIVE_PENDING = "Escala nativa de la radio: pendiente de fuente. Activa el audio para ver la cascada de la banda de paso.";
   const SPECTRUM_TEXT = Object.freeze({
-    civ: "Disponible próximamente para este modelo",
-    smartsdr: "Disponible próximamente para este modelo",
-    sdr: "Disponible próximamente para este modelo",
+    civ: NATIVE_PENDING,
+    smartsdr: NATIVE_PENDING,
+    sdr: NATIVE_PENDING,
     audio: "Activa el audio para ver el espectro de la banda de paso.",
-    none: "Este modelo no ofrece espectro"
+    none: "Activa el audio para ver el espectro de la banda de paso."
   });
 
   function showSpectrumPlaceholder(scope) {
@@ -692,7 +694,7 @@
   }
 
   function updateScopeVisibility() {
-    const show = audio.scope === "audio" && audio.on && Boolean(audio.hello?.rx);
+    const show = audio.on && Boolean(audio.hello?.rx);
     $("scope").hidden = !show;
     $("spectrum-note").hidden = show;
     if (show) startScope(); else stopScope();
@@ -708,59 +710,64 @@
     audio.raf = 0;
   }
 
-  function heat(value) {
-    const t = value / 255;
-    return [Math.round(255 * Math.min(1, Math.max(0, (t - 0.45) * 2.2))), Math.round(255 * Math.min(1, Math.max(0, (t - 0.15) * 1.6))), Math.round(40 + 215 * Math.min(1, t * 2))];
-  }
+  const Spectrum = window.SpectrumCore;
+  const scopeView = { paused: false, map: "heat", lut: null, renderer: null, floorDb: -100, ceilDb: -20, frame: null };
 
+  // Bounded display: one row every 40 ms (25 fps) at the fixed canvas size; paused keeps the last picture.
   function drawScope(now) {
     audio.raf = 0;
     if (!audio.on || document.hidden || $("scope").hidden) return;
     audio.raf = requestAnimationFrame(drawScope);
-    if (now - audio.lastDraw < 40 || !audio.analyser) return;
+    if (scopeView.paused || now - audio.lastDraw < 40 || !audio.analyser) return;
     audio.lastDraw = now;
     const analyser = audio.analyser;
-    if (!audio.bins) audio.bins = new Uint8Array(analyser.frequencyBinCount);
-    analyser.getByteFrequencyData(audio.bins);
+    if (!audio.bins || audio.bins.length !== analyser.frequencyBinCount) audio.bins = new Float32Array(analyser.frequencyBinCount);
+    analyser.getFloatFrequencyData(audio.bins);
     const span = Core.passbandHz(view.state?.mode);
-    const count = Math.max(2, Math.min(audio.bins.length, Math.floor(span / (analyser.context.sampleRate / analyser.fftSize))));
+    const binHz = analyser.context.sampleRate / analyser.fftSize;
     const line = $("scope-line");
-    const fall = $("scope-fall");
-    const lineCtx = line.getContext("2d");
-    const fallCtx = fall.getContext("2d");
-    const { width, height } = line;
-    lineCtx.fillStyle = "#05080A";
-    lineCtx.fillRect(0, 0, width, height);
-    lineCtx.strokeStyle = "#38434C";
-    lineCtx.fillStyle = "#BAC4CC";
-    lineCtx.font = "12px sans-serif";
-    for (let hz = 0; hz <= span; hz += 1000) {
-      const x = Math.min(width - 1, Math.round((hz / span) * width));
-      lineCtx.beginPath();
-      lineCtx.moveTo(x, 0);
-      lineCtx.lineTo(x, height);
-      lineCtx.stroke();
-      lineCtx.fillText(hz ? `${hz / 1000}k` : "0", Math.min(x + 3, width - 24), height - 4);
-    }
-    lineCtx.strokeStyle = "#FFB52E";
-    lineCtx.beginPath();
-    fallCtx.drawImage(fall, 0, 1);
-    if (!audio.fallRow || audio.fallRow.width !== fall.width) audio.fallRow = fallCtx.createImageData(fall.width, 1);
-    for (let x = 0; x < width; x++) {
-      const value = audio.bins[Math.min(count - 1, Math.floor((x / width) * count))];
-      const y = height - 1 - (value / 255) * (height - 2);
-      if (x) lineCtx.lineTo(x, y); else lineCtx.moveTo(x, y);
-      const [r, g, b] = heat(value);
-      const at = x * 4;
-      audio.fallRow.data[at] = r;
-      audio.fallRow.data[at + 1] = g;
-      audio.fallRow.data[at + 2] = b;
-      audio.fallRow.data[at + 3] = 255;
-    }
-    lineCtx.stroke();
-    fallCtx.putImageData(audio.fallRow, 0, 0);
+    scopeView.renderer ||= Spectrum.createRenderer(line, $("scope-fall"));
+    scopeView.lut ||= Spectrum.colorLut(scopeView.map);
+    scopeView.renderer.draw({
+      columnsDb: Spectrum.resampleRow(audio.bins, binHz, span, line.width),
+      floorDb: scopeView.floorDb, ceilDb: scopeView.ceilDb, axis: { startHz: 0, endHz: span, rf: false }, lut: scopeView.lut
+    });
+    scopeView.frame = { spanHz: span };
     const freq = view.state?.freq;
-    setText($("scope-axis"), `${Number.isFinite(freq) ? Core.formatKhz(freq) : "--"} | 0 - ${span} Hz`);
+    setText($("scope-axis"), `${Number.isFinite(freq) ? Core.formatKhz(freq) : "--"} | 0 - ${span} Hz | ${scopeView.floorDb}..${scopeView.ceilDb} dB`);
+  }
+
+  // Click-to-tune reuses setFrequency (which already refuses while locked or transmitting); SSB only, see SpectrumCore.
+  function bindScopeControls() {
+    $("scope-pause").addEventListener("click", () => {
+      scopeView.paused = !scopeView.paused;
+      setPressed($("scope-pause"), scopeView.paused);
+    });
+    $("scope-map").addEventListener("change", event => {
+      scopeView.map = Spectrum.COLOR_MAPS.includes(event.target.value) ? event.target.value : "heat";
+      scopeView.lut = null;
+    });
+    const range = (id, key) => $(id).addEventListener("input", event => {
+      const value = Number(event.target.value);
+      if (Number.isFinite(value)) scopeView[key] = value;
+      if (scopeView.ceilDb - scopeView.floorDb < 10) scopeView[key === "floorDb" ? "floorDb" : "ceilDb"] = key === "floorDb" ? scopeView.ceilDb - 10 : scopeView.floorDb + 10;
+    });
+    range("scope-floor", "floorDb");
+    range("scope-ceil", "ceilDb");
+    const fall = $("scope-fall");
+    const line = $("scope-line");
+    const click = event => {
+      const state = view.state;
+      const frame = scopeView.frame;
+      if (!frame || !state || !Number.isFinite(state.freq)) return;
+      const rect = event.currentTarget.getBoundingClientRect();
+      if (!rect.width) return;
+      const clickHz = ((event.clientX - rect.left) / rect.width) * frame.spanHz;
+      const next = Spectrum.tuneFromAudioClick({ mode: state.mode, dialHz: view.freqTarget ?? state.freq, clickHz, targetHz: frame.spanHz / 2 });
+      if (next !== null) setFrequency(next);
+    };
+    fall.addEventListener("click", click);
+    line.addEventListener("click", click);
   }
 
   function audioSocketUrl() {
@@ -1109,6 +1116,7 @@
     $("lock").addEventListener("click", () => setLocked(!view.locked));
     bindPtt();
     bindAudio();
+    bindScopeControls();
     bindTuner();
     bindLevels();
     setLocked(read(sessionStorage, LOCK_KEY) === "1");

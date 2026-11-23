@@ -129,6 +129,43 @@ def build_query(model: IcomCivModel, command: IcomReadCommand) -> bytes:
     return _PREAMBLE + bytes((_RADIO_ADDRESSES[model], CONTROLLER_ADDRESS, command.value, _END))
 
 
+# Models whose rigplane profile declares get_scope_wave = 27 00, scope_on = 27 10 and scope_data_output = 27 11
+# (third_party/ftx1/rigplane-rigplane-core/rigs/ic705|ic7300|ic7300mk2|ic7610|ic905|ic9700.toml). The IC-705 guide
+# (local data/third-party/IC-705_ENG_CI-V_6.txt, p.28) gives the 27 00 layout; the others cite their own guides there.
+SCOPE_MODELS = frozenset(
+    {
+        IcomCivModel.IC_705,
+        IcomCivModel.IC_7300,
+        IcomCivModel.IC_7300_MK2,
+        IcomCivModel.IC_7610,
+        IcomCivModel.IC_905,
+        IcomCivModel.IC_9700,
+    }
+)
+
+
+def _scope_switch(model: IcomCivModel, sub: int, on: bool) -> bytes:
+    if model not in SCOPE_MODELS:
+        raise ValueError("CI-V scope is only sourced for IC-705, IC-7300, IC-7300MK2, IC-7610, IC-905 and IC-9700.")
+    if type(on) is not bool:
+        raise ValueError("Scope switching requires an explicit boolean.")
+    return _PREAMBLE + bytes((_RADIO_ADDRESSES[model], CONTROLLER_ADDRESS, 0x27, sub, int(on), _END))
+
+
+def build_scope_on_off(model: IcomCivModel, on: bool) -> bytes:
+    """CI-V 27 10 <00|01>: scope ON/OFF status (IC-705 guide p.27: waveform data is only sent when this and 27 11 are ON)."""
+    return _scope_switch(model, 0x10, on)
+
+
+def build_scope_data_output(model: IcomCivModel, on: bool) -> bytes:
+    """CI-V 27 11 <00|01>: scope waveform output off/on.
+
+    Source: IC-705 CI-V guide p.27 ("Send/read the Scope wave data output", 00=OFF, 01=ON) and
+    third_party/ftx1/rigplane-rigplane-core src/rigplane/commands/scope.py. Receive-only; never keys the radio.
+    """
+    return _scope_switch(model, 0x11, on)
+
+
 def parse_frequency_reply(model: IcomCivModel, frame: bytes) -> int:
     payload = _parse_reply(model, IcomReadCommand.FREQUENCY, frame, (11,))
     if len(payload) != _FREQUENCY_DATA_BYTES:

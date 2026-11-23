@@ -150,6 +150,8 @@ class WebSocketConnection extends EventEmitter {
           this.write(encodeFrame(8, payload.length >= 2 ? payload.subarray(0, 2) : Buffer.alloc(0)));
         }
         this.socket.end();
+        // Report the close at once: owners (PTT unkey) must not wait for the peer's TCP teardown.
+        this.finish(code);
         return;
       }
       case 9:

@@ -16,6 +16,7 @@ from bricoham_remote_station.diagnostic_reports import (
     add_diagnostic_arguments,
     configure_diagnostics,
 )
+from bricoham_remote_station.drivers.icom_scope import ScopeFrame
 from bricoham_remote_station.drivers.yaesu_cat import YaesuModel
 from bricoham_remote_station.secure_http import (
     RequestJsonError,
@@ -57,6 +58,7 @@ SETTINGS_PATH = f"/api/{API_VERSION}/radio-settings"
 PTT_PATH = f"/api/{API_VERSION}/ptt"
 AUDIO_PATH = f"/api/{API_VERSION}/audio"
 AUDIO_STREAM_PATH = f"{AUDIO_PATH}/stream"
+SCOPE_PATH = f"{CAT_PATH}/scope"
 _INVENTORY_ROLES = frozenset({Role.ADMIN, Role.OPERATOR})
 
 
@@ -153,6 +155,7 @@ class StationAgentRequestHandler(SecureRequestHandler):
             PTT_PATH,
             AUDIO_PATH,
             AUDIO_STREAM_PATH,
+            SCOPE_PATH,
         ):
             self._send_error(HTTPStatus.NOT_FOUND, "not_found")
             return
@@ -185,6 +188,10 @@ class StationAgentRequestHandler(SecureRequestHandler):
                 self._send_error(HTTPStatus.SERVICE_UNAVAILABLE, "audio_not_configured")
                 return
             self._stream_audio()
+            return
+
+        if path == SCOPE_PATH:
+            self._stream_scope()
             return
 
         if path == PTT_PATH:
@@ -330,6 +337,69 @@ class StationAgentRequestHandler(SecureRequestHandler):
             finally:
                 if session is not None:
                     session.close()
+
+    def _stream_scope(self) -> None:
+        """Bounded NDJSON stream of CI-V scope frames (receive-only); ends after `seconds` or on disconnect."""
+        cat = self.server.cat
+        if cat is None:
+            self._send_error(HTTPStatus.SERVICE_UNAVAILABLE, "cat_not_configured")
+            return
+        try:
+            params = parse_qs(urlsplit(self.path).query, keep_blank_values=True, max_num_fields=2)
+            if not set(params) <= {"seconds", "fps"} or any(len(v) != 1 for v in params.values()):
+                raise ValueError("Invalid query")
+            seconds = float(params.get("seconds", ["10"])[0])
+            fps = float(params.get("fps", ["5"])[0])
+            frames = cat.scope_stream(seconds, fps)
+            first = next(frames, None)
+        except ValueError:
+            self._send_error(HTTPStatus.BAD_REQUEST, "cat_invalid_query")
+            return
+        except CatError as error:
+            self._send_error(
+                HTTPStatus.NOT_IMPLEMENTED
+                if str(error) == "cat_scope_not_sourced"
+                else HTTPStatus.SERVICE_UNAVAILABLE,
+                str(error),
+            )
+            return
+        self.close_connection = True
+        try:
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", "application/x-ndjson")
+            self.send_header("Transfer-Encoding", "chunked")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Connection", "close")
+            self.end_headers()
+
+            def emit(frame: ScopeFrame) -> None:
+                line = (
+                    json.dumps(
+                        {
+                            "start_hz": frame.start_hz,
+                            "end_hz": frame.end_hz,
+                            "out_of_range": frame.out_of_range,
+                            "pixels": list(frame.pixels),
+                        },
+                        separators=(",", ":"),
+                    )
+                    + "\n"
+                ).encode("ascii")
+                self.wfile.write(f"{len(line):x}\r\n".encode("ascii") + line + b"\r\n")
+                self.wfile.flush()
+
+            if first is not None:
+                emit(first)
+            for frame in frames:
+                emit(frame)
+            self.wfile.write(b"0\r\n\r\n")
+        except CatError as error:
+            LOGGER.warning("Scope stream failed: %s", error)
+        except (OSError, TimeoutError):
+            pass
+        finally:
+            frames.close()
 
     def _stream_audio(self) -> None:
         try:

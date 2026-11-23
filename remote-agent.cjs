@@ -55,6 +55,7 @@ const STATIC_FILES = Object.freeze({
   "/remote.html": ["remote.html", "text/html; charset=utf-8"],
   "/remote-ui.js": ["remote-ui.js", "text/javascript; charset=utf-8"],
   "/remote-audio-core.js": ["remote-audio-core.js", "text/javascript; charset=utf-8"],
+  "/spectrum-core.js": ["spectrum-core.js", "text/javascript; charset=utf-8"],
   "/remote-audio-worklet.js": ["remote-audio-worklet.js", "text/javascript; charset=utf-8"],
   "/remote.css": ["remote.css", "text/css; charset=utf-8"],
   "/bricohams-logo.png": ["bricohams-logo.png", "image/png"],
@@ -292,6 +293,7 @@ function createRemoteAgent(options = {}) {
   let retryTimer = null;
   let meterBusy = false;
   let meterGen = 0;
+  let pttEdges = 0;
   let meterCycle = 0;
   let meterTimer = null;
   let notice = null;
@@ -342,7 +344,7 @@ function createRemoteAgent(options = {}) {
 
   function setRigPtt(on) {
     // Any PTT edge starts a fresh meter generation so a read left over from the previous transmission cannot block or pollute this one.
-    if (on !== rig.ptt) { meterGen += 1; meterBusy = false; }
+    if (on !== rig.ptt) { meterGen += 1; meterBusy = false; pttEdges += 1; }
     if (on && !rig.ptt) {
       txStart = now();
       tx = { po: null, swr: null, alc: null, powerSetW: null, source: cat ? "raw" : "hamlib", fraction: { po: null, swr: null, alc: null } };
@@ -505,7 +507,8 @@ function createRemoteAgent(options = {}) {
         const run = tune;
         const value = parseRawMeter(await client.sendRaw(cmd, { read: true, timeoutMs: meterReadMs, abandon: true }), cmd);
         if (!live()) return;
-        if (key === "swr" && run && tune === run && Number.isFinite(value)) run.lastSwr = value;
+        // A 0 read means the carrier already ended before the agent noticed; it must not replace the last SWR seen while transmitting.
+        if (key === "swr" && run && tune === run && Number.isFinite(value) && (value > 0 || !run.lastSwr)) run.lastSwr = value;
         setMeter(key, value);
       } catch (error) {
         if (error.code !== "rejected") throw error;
@@ -693,8 +696,10 @@ function createRemoteAgent(options = {}) {
       const mode = await client.getMode();
       rig.mode = mode.mode;
       rig.passband = mode.passband;
+      const edgesBefore = pttEdges;
       const ptt = await client.getPtt();
-      if (ptt !== rig.ptt && !tune) setRigPtt(ptt);
+      // A read that was in flight during a local PTT change is stale and must not undo it.
+      if (ptt !== rig.ptt && !tune && edgesBefore === pttEdges) setRigPtt(ptt);
       rig.smeter = rig.ptt ? null : await client.getStrength();
       if (pollCount % 4 === 1) {
         try {
@@ -1071,11 +1076,15 @@ function createRemoteAgent(options = {}) {
     });
     ws.on("pong", () => { state.lastSeen = now(); });
     ws.on("close", () => {
-      clearTimeout(authTimer);
-      clearInterval(pingTimer);
-      audioSockets.delete(ws);
-      unsubscribeRx();
-      if (state.authed && owner === state.cid && (rig.ptt || agentTx)) pttOff("socket de audio cerrado");
+      // Unkey first: nothing may delay or skip T 0 when the PTT owner's socket goes away.
+      try {
+        if (state.authed && owner === state.cid && (rig.ptt || agentTx)) pttOff("socket de audio cerrado");
+      } finally {
+        clearTimeout(authTimer);
+        clearInterval(pingTimer);
+        audioSockets.delete(ws);
+        unsubscribeRx();
+      }
     });
   }
 

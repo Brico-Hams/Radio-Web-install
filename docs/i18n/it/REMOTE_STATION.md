@@ -275,3 +275,84 @@ Wheel reinstallato fuori dall'albero dei sorgenti e APK dedicato ricompilato con
 e firma debug v2 verificati. Lo stesso bundle compare in wheel/APK/Android/iOS
 e SHA256SUMS coincide con i quattro pacchetti. ZIPAPP e APK RadiCodex non cambiano.
 Non si attribuisce accettazione fisica/mobile né compilazione/firma iOS.
+
+## Cascata remota del segnale ricevuto
+
+`spectrum-core.js` (interfaccia del Node remote shack, quindi la WebView Android) e `spectrum.ts` (console web React, quindi il client di stazione remota Android) calcolano una FFT dell'audio RX che arriva già dal canale autenticato `/api/audio` o `/api/v1/audio`; non si apre un secondo ascoltatore audio e non c'è nuovo traffico di rete. Disegnano al massimo 25 righe/s su un canvas fisso da 640 px, con scala dB, tavolozza, pausa e intervallo regolabile. Lo scope nativo della radio si usa solo dove esiste una fonte: `drivers/icom_scope.py` e `SpectrumCore.createScopeAssembler` implementano il frame `27 00` secondo `third_party/ftx1/rigplane-rigplane-core/docs/api/scope.md` (MIT, che cita le guide CI-V di IC-705/7300/7610/9700), e `SerialCat.scope_stream` (agente Python) lo legge live solo su IC-705, IC-7300, IC-7300MK2, IC-7610, IC-905 e IC-9700 (i sei con `27 00`/`27 10`/`27 11` nei profili rigplane; guida CI-V IC-705 pp. 27-28; solo ricevitore principale): attiva lo scope con `27 10 01` e l'uscita con `27 11 01`, riassembla `27 00` a 10 frame/s e 30 s al massimo e la disattiva sempre con `27 11 00` (comandi da `commands/scope.py`, `scope_data_output`; solo ricezione, mai PTT) e la serve su `GET /api/v1/cat/scope?seconds=&fps=` (NDJSON, autenticato). L'agente Node parla con rigctld, che non consegna frame non richiesti: resta «fonte in sospeso» e usa la cascata audio. Un clic sulla cascata sintonizza solo in USB/LSB/PKTUSB/PKTLSB tramite il percorso di frequenza esistente (RF = dial ± tono); non esiste alcun nuovo percorso TX. Non trasmettere senza antenna o carico adattato.
+
+| Radio | Collegamento · fonte | Scope nativo via CAT | Cascata audio | Clic per sintonizzare |
+| --- | --- | --- | --- | --- |
+| Icom IC-705 | usb/lan/wifi · catalog + `icom_civ.py` + `Profile.kt` | ok (agente Python); Node fonte in sospeso | ok (con audio) | SSB |
+| Icom IC-7100 | usb · catalog + `icom_civ.py` | fonte in sospeso | ok (con audio) | SSB |
+| Icom IC-7200 | usb · catalog + `icom_civ.py` | fonte in sospeso | ok (con audio) | SSB |
+| Icom IC-7300 | usb · catalog + `icom_civ.py` | ok (agente Python); Node fonte in sospeso | ok (con audio) | SSB |
+| Icom IC-7300MK2 | usb · catalog + `icom_civ.py` | ok (agente Python); Node fonte in sospeso | ok (con audio) | SSB |
+| Icom IC-7410 | usb · catalog + `icom_civ.py` | fonte in sospeso | ok (con audio) | SSB |
+| Icom IC-7600 | usb · catalog + `icom_civ.py` | fonte in sospeso | ok (con audio) | SSB |
+| Icom IC-7610 | usb/lan · catalog + `icom_civ.py` | ok (agente Python); Node fonte in sospeso | ok (con audio) | SSB |
+| Icom IC-7700 | usb · catalog + `icom_civ.py` | fonte in sospeso | ok (con audio) | SSB |
+| Icom IC-7760 | usb/lan · catalog + `icom_civ.py` | fonte in sospeso | ok (con audio) | SSB |
+| Icom IC-7800 | usb · catalog | fonte in sospeso | ok (con audio) | SSB |
+| Icom IC-7850 | usb/lan · catalog + `icom_civ.py` | fonte in sospeso | ok (con audio) | SSB |
+| Icom IC-7851 | usb/lan · catalog + `icom_civ.py` | fonte in sospeso | ok (con audio) | SSB |
+| Icom IC-905 | usb/lan/wifi · catalog + `icom_civ.py` | ok (agente Python); Node fonte in sospeso | ok (con audio) | SSB |
+| Icom IC-9100 | usb · catalog + `icom_civ.py` | fonte in sospeso | ok (con audio) | SSB |
+| Icom IC-9700 | usb/lan · catalog + `icom_civ.py` | ok (agente Python); Node fonte in sospeso | ok (con audio) | SSB |
+| Icom IC-R8600 | usb/lan · catalog + `icom_civ.py` | fonte in sospeso | ok (con audio) | SSB |
+| FlexRadio FLEX-6400 | lan/wifi · catalog | fonte in sospeso | ok (con audio) | SSB |
+| FlexRadio FLEX-6400M | lan/wifi · catalog | fonte in sospeso | ok (con audio) | SSB |
+| FlexRadio FLEX-6600 | lan/wifi · catalog | fonte in sospeso | ok (con audio) | SSB |
+| FlexRadio FLEX-6600M | lan/wifi · catalog | fonte in sospeso | ok (con audio) | SSB |
+| FlexRadio FLEX-6700 | lan/wifi · catalog | fonte in sospeso | ok (con audio) | SSB |
+| FlexRadio FLEX-8400 | lan/wifi · catalog | fonte in sospeso | ok (con audio) | SSB |
+| FlexRadio FLEX-8400M | lan/wifi · catalog | fonte in sospeso | ok (con audio) | SSB |
+| FlexRadio FLEX-8600 | lan/wifi · catalog | fonte in sospeso | ok (con audio) | SSB |
+| FlexRadio FLEX-8600M | lan/wifi · catalog | fonte in sospeso | ok (con audio) | SSB |
+| FlexRadio AURORA-510 | lan/wifi · catalog | fonte in sospeso | ok (con audio) | SSB |
+| FlexRadio AURORA-510M | lan/wifi · catalog | fonte in sospeso | ok (con audio) | SSB |
+| FlexRadio AURORA-520 | lan/wifi · catalog | fonte in sospeso | ok (con audio) | SSB |
+| FlexRadio AURORA-520M | lan/wifi · catalog | fonte in sospeso | ok (con audio) | SSB |
+| Kenwood TS-590S | usb · catalog + `kenwood_cat.py` | fonte in sospeso | ok (con audio) | SSB |
+| Kenwood TS-590SG | usb · catalog + `kenwood_cat.py` | fonte in sospeso | ok (con audio) | SSB |
+| Kenwood TS-890S | usb · catalog + `kenwood_cat.py` | fonte in sospeso | ok (con audio) | SSB |
+| Kenwood TS-990S | usb · catalog + `kenwood_cat.py` | fonte in sospeso | ok (con audio) | SSB |
+| Yaesu FT-710 | usb · catalog + `yaesu_cat.py` | fonte in sospeso | ok (con audio) | SSB |
+| Yaesu FT-991A | usb · catalog + `yaesu_cat.py` | fonte in sospeso | ok (con audio) | SSB |
+| Yaesu FTDX10 | usb · catalog + `yaesu_cat.py` | fonte in sospeso | ok (con audio) | SSB |
+| Yaesu FTDX101D | usb · catalog + `yaesu_cat.py` | fonte in sospeso | ok (con audio) | SSB |
+| Yaesu FTDX101MP | usb · catalog + `yaesu_cat.py` | fonte in sospeso | ok (con audio) | SSB |
+| Yaesu FTDX3000 | usb · catalog + `yaesu_cat.py` | fonte in sospeso | ok (con audio) | SSB |
+| Yaesu FTX-1 | usb · catalog + `ftx1_cat.py` + `Profile.kt` | fonte in sospeso (`SS` sono impostazioni, non campioni) | ok (con audio) | SSB |
+| Elecraft K3 | driver `elecraft_k3s_cat.py` | fonte in sospeso | ok (con audio) | SSB |
+| Elecraft KX3 | driver `elecraft_k3s_cat.py` | fonte in sospeso | ok (con audio) | SSB |
+| Elecraft KX2 | driver `elecraft_k3s_cat.py` | fonte in sospeso | ok (con audio) | SSB |
+| Elecraft K3S | usb · catalog + `elecraft_k3s_cat.py` | fonte in sospeso | ok (con audio) | SSB |
+| Elecraft K4 | usb/lan/wifi · catalog + `elecraft_k4_cat.py` | fonte in sospeso (dB/bin via Ethernet, protocollo non pubblicato) | ok (con audio) | SSB |
+| QRP Labs QMX | usb · catalog + `qmx_cat.py` + `Profile.kt` | fonte in sospeso | ok (con audio) | SSB |
+| QRP Labs QMX+ | usb · catalog + `qmx_cat.py` | fonte in sospeso | ok (con audio) | SSB |
+| QRP Labs QCX | usb · catalog | fonte in sospeso | ok (con audio) | SSB |
+| QRP Labs QDX | usb · catalog + `Profile.kt` | fonte in sospeso | ok (con audio) | SSB |
+| (tr)uSDX | usb · catalog + `trusdx_cat.py` + `Profile.kt` | fonte in sospeso | ok (con audio) | SSB |
+| Hermes Lite 2 | lan · catalog + `hermes_lite_protocol.py` | fonte in sospeso (IQ, non audio) | ok (con audio) | SSB |
+| OpenGD77 GD-77 | usb · `opengd77_usb.py` + `Profile.kt` | fonte in sospeso | nessun percorso audio | no |
+| OpenGD77 GD-77S | usb · `opengd77_usb.py` | fonte in sospeso | nessun percorso audio | no |
+| OpenGD77 DM-1801 | usb · `opengd77_usb.py` | fonte in sospeso | nessun percorso audio | no |
+| OpenGD77 RD-5R | usb · `opengd77_usb.py` | fonte in sospeso | nessun percorso audio | no |
+| OpenGD77 DM-1801A | usb · `opengd77_usb.py` | fonte in sospeso | nessun percorso audio | no |
+| OpenGD77 MD-9600 | usb · `opengd77_usb.py` | fonte in sospeso | nessun percorso audio | no |
+| OpenGD77 MD-UV380 | usb · `opengd77_usb.py` | fonte in sospeso | nessun percorso audio | no |
+| OpenGD77 MD-380 | usb · `opengd77_usb.py` | fonte in sospeso | nessun percorso audio | no |
+| OpenGD77 DM-1701 | usb · `opengd77_usb.py` | fonte in sospeso | nessun percorso audio | no |
+| OpenGD77 MD-2017 | usb · `opengd77_usb.py` | fonte in sospeso | nessun percorso audio | no |
+| OpenGD77 DM-32 | usb · `opengd77_usb.py` | fonte in sospeso | nessun percorso audio | no |
+| OpenGD77 UV008 | usb · `opengd77_usb.py` | fonte in sospeso | nessun percorso audio | no |
+| Yaesu FT-817 | usb · `Profile.kt` | fonte in sospeso | nessun percorso audio | no |
+| Yaesu FT-818 | usb · `Profile.kt` | fonte in sospeso | nessun percorso audio | no |
+| Yaesu FT-857 | usb · `Profile.kt` | fonte in sospeso | nessun percorso audio | no |
+| Yaesu FT-897 | usb · `Profile.kt` | fonte in sospeso | nessun percorso audio | no |
+| Kenwood TH-D75 | usb · `Profile.kt` | fonte in sospeso | nessun percorso audio | no |
+| Quansheng UV-K5 (BricoHams Satellite) | usb · `Profile.kt` | fonte in sospeso (`firmware/bricohams/spectrum.c` non esporta campioni via UART) | nessun percorso audio | no |
+| Radtel RT-950 Pro | ble · `Profile.kt` | fonte in sospeso | nessun percorso audio | no |
+| Radtel RT-S10 | ble · `Profile.kt` | fonte in sospeso | nessun percorso audio | no |
+| AnyTone D878 | nessuna connessione · `Profile.kt` | fonte in sospeso | nessun percorso audio | no |
+| KISS TNC | rete · `Profile.kt` | fonte in sospeso | nessun percorso audio | no |

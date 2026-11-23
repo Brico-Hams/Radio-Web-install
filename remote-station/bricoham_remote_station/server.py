@@ -74,6 +74,7 @@ PROTOCOLS_PATH = f"/api/{API_VERSION}/protocols"
 DIAGNOSTICS_PATH = f"/api/{API_VERSION}/diagnostics"
 DEVICES_PATH = f"/api/{API_VERSION}/devices"
 CAT_PATH = f"/api/{API_VERSION}/cat"
+SCOPE_PATH = f"{CAT_PATH}/scope"
 DIGITAL_PATH = f"/api/{API_VERSION}/digital"
 ROTOR_PATH = f"/api/{API_VERSION}/rotor"
 SETTINGS_PATH = f"/api/{API_VERSION}/radio-settings"
@@ -309,6 +310,13 @@ class CoordinatorRequestHandler(SecureRequestHandler):
                 self._send_error(HTTPStatus.BAD_REQUEST, "audio_invalid_query")
             else:
                 self._serve_audio(path)
+            return
+
+        if path == SCOPE_PATH:
+            if role not in _DIAGNOSTIC_ROLES:
+                self._send_error(HTTPStatus.FORBIDDEN, "forbidden")
+            else:
+                self._serve_scope()
             return
 
         if path in (DEVICES_PATH, CAT_PATH, DIGITAL_PATH, ROTOR_PATH, SETTINGS_PATH, PTT_PATH):
@@ -786,6 +794,100 @@ class CoordinatorRequestHandler(SecureRequestHandler):
             LOGGER.warning("Audio proxy failed (%s)", type(error).__name__)
             if not started:
                 self._send_error(HTTPStatus.BAD_GATEWAY, "station_agent_audio_failed")
+        finally:
+            if response is not None:
+                response.close()
+            connection.close()
+            with self.server._audio_lock:
+                self.server._audio_connections.pop(self.connection, None)
+
+    def _serve_scope(self) -> None:
+        """Receive-only NDJSON proxy of the agent's CI-V scope stream (bounded by the agent: seconds and fps caps)."""
+        if self.server.android_agent is not None:
+            self._send_error(HTTPStatus.NOT_IMPLEMENTED, "android_agent_operation_unsupported")
+            return
+        try:
+            params = parse_qs(urlsplit(self.path).query, keep_blank_values=True, max_num_fields=2)
+            if not set(params) <= {"seconds", "fps"} or any(len(v) != 1 for v in params.values()):
+                raise ValueError("Invalid query")
+            seconds = float(params.get("seconds", ["10"])[0])
+            fps = float(params.get("fps", ["5"])[0])
+            if not (0 < seconds <= 30 and 0 < fps <= 10):
+                raise ValueError("Invalid query")
+        except ValueError:
+            self._send_error(HTTPStatus.BAD_REQUEST, "cat_invalid_query")
+            return
+        target = f"{SCOPE_PATH}?seconds={seconds:g}&fps={fps:g}"
+        if self.server.agent_link is not None:
+            upstream = urlsplit(self.server.agent_link.url)
+            connection = HTTPSConnection(
+                upstream.hostname,
+                upstream.port or 443,
+                timeout=10,
+                context=self.server.agent_tls_context,
+            )
+            authorization = f"Bearer {self.server.agent_link.token}"
+        else:
+            connection = HTTPConnection("127.0.0.1", self.server.station_agent_port, timeout=10)
+            authorization = self.headers.get("Authorization", "")
+        started = False
+        response = None
+        with self.server._audio_lock:
+            if self.server._audio_stopping:
+                self._send_error(HTTPStatus.SERVICE_UNAVAILABLE, "audio_stopped")
+                return
+            self.server._audio_connections[self.connection] = None
+        try:
+            connection.request("GET", target, headers={"Authorization": authorization})
+            with self.server._audio_lock:
+                if self.server._audio_stopping:
+                    return
+                self.server._audio_connections[self.connection] = connection.sock
+            response = connection.getresponse()
+            if response.status != 200:
+                raw = response.read(4097)
+                try:
+                    code = json.loads(raw)["error"]["code"]
+                except (ValueError, KeyError, TypeError):
+                    code = ""
+                if (
+                    response.status in (400, 403, 409, 501, 503)
+                    and isinstance(code, str)
+                    and code.startswith("cat_")
+                    and len(code) < 64
+                    and code.replace("_", "").isascii()
+                    and code.replace("_", "").isalnum()
+                ):
+                    self._send_error(HTTPStatus(response.status), code)
+                else:
+                    self._send_error(HTTPStatus.BAD_GATEWAY, "station_agent_request_failed")
+                return
+            if response.getheader("Content-Type") != "application/x-ndjson":
+                raise ValueError("Invalid scope stream")
+            self.close_connection = True
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", "application/x-ndjson")
+            self.send_header("Transfer-Encoding", "chunked")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Connection", "close")
+            origin = self.headers.get("Origin")
+            if origin in self.server.client_origins:
+                self.send_header("Access-Control-Allow-Origin", origin)
+                self.send_header("Vary", "Origin")
+            self.end_headers()
+            started = True
+            while True:
+                data = response.read1(8192)
+                if not data:
+                    break
+                self.wfile.write(f"{len(data):x}\r\n".encode("ascii") + data + b"\r\n")
+                self.wfile.flush()
+            self.wfile.write(b"0\r\n\r\n")
+        except (OSError, TimeoutError, HTTPException, ValueError, UnicodeError) as error:
+            LOGGER.warning("Scope proxy failed (%s)", type(error).__name__)
+            if not started:
+                self._send_error(HTTPStatus.BAD_GATEWAY, "station_agent_scope_failed")
         finally:
             if response is not None:
                 response.close()

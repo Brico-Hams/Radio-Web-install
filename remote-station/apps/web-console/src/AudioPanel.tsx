@@ -2,6 +2,8 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { createAudioRequest } from './api'
 import { AudioFraming, AudioFramingError } from './audioFraming'
 import { useLanguage, type Message } from './i18n'
+import { SpectrumPanel, type SpectrumSink } from './SpectrumPanel'
+import { RfScopePanel } from './RfScopePanel'
 
 type AudioStatus = { key: Message; detail?: string }
 
@@ -24,6 +26,7 @@ export function AudioPanel({ token }: { token: string }) {
   const request = useMemo(() => createAudioRequest(token), [token])
   const current = useRef<{ abort: AbortController; context: AudioContext; node?: AudioWorkletNode } | null>(null)
   const [state, setState] = useState<AudioStatus>({ key: 'rxStoppedInitial' })
+  const spectrumSink = useRef<SpectrumSink | null>(null)
 
   function stop() {
     const session = current.current
@@ -63,12 +66,14 @@ export function AudioPanel({ token }: { token: string }) {
       const reader = response.body.getReader()
       const framing = new AudioFraming()
       let accepted: (() => void) | undefined
+      let sessionRate = 0
       setState({ key: 'rxBuffering' })
       while (current.current === session) {
         const { value, done } = await reader.read()
         if (done) throw new AudioDisplayError('rxFlowEnded')
         const decoded = framing.push(value)
         if (decoded.rate) {
+          sessionRate = decoded.rate
           const node = new AudioWorkletNode(context, 'bricoham-rx', {
             processorOptions: { inputRate: decoded.rate },
           })
@@ -87,6 +92,8 @@ export function AudioPanel({ token }: { token: string }) {
         for (const block of decoded.blocks) {
           if (!session.node) throw new AudioDisplayError('rxHeaderMissing')
           const node = session.node
+          // Copy for the display before the block's buffer is transferred to the worklet.
+          if (sessionRate) spectrumSink.current?.(block, sessionRate)
           await new Promise<void>((resolve, reject) => {
             const finish = (error?: Error) => {
               clearTimeout(timer)
@@ -120,5 +127,7 @@ export function AudioPanel({ token }: { token: string }) {
     <button type="button" onClick={() => void start()}>{t('rxListen')}</button>{' '}
     <button type="button" onClick={() => { stop(); setState({ key: 'rxStopped' }) }}>{t('rxStop')}</button>
     <p>{t('rxSafety')}</p>
+    <SpectrumPanel sinkRef={spectrumSink} />
+    <RfScopePanel token={token} />
   </section>
 }

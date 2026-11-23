@@ -275,3 +275,84 @@ Wheel reinstalado fuera del arbol fuente y APK dedicado recompilado con lint
 y firma debug v2 comprobados. El mismo bundle aparece en wheel/APK/Android/iOS
 y SHA256SUMS coincide con los cuatro paquetes. ZIPAPP y APK RadiCodex no cambian.
 No se atribuye aceptacion fisica/movil ni compilacion/firma iOS.
+
+## Cascada remota de la senal recibida
+
+`spectrum-core.js` (UI del Node remote shack, y por tanto la WebView Android) y `spectrum.ts` (consola web React, y por tanto el cliente de estacion remota de Android) calculan una FFT del audio RX que ya llega por el canal autenticado `/api/audio` o `/api/v1/audio`; no se abre un segundo oyente de audio ni hay nuevo trafico de red. Se dibujan a 25 filas/s como maximo en un canvas fijo de 640 px, con escala dB, paleta, pausa y rango ajustable. La escala nativa de la radio solo se usa donde hay fuente: `drivers/icom_scope.py` y `SpectrumCore.createScopeAssembler` implementan la trama `27 00` segun `third_party/ftx1/rigplane-rigplane-core/docs/api/scope.md` (MIT, que cita las guias CI-V de IC-705/7300/7610/9700), y `SerialCat.scope_stream` (agente Python) lo lee en vivo solo en IC-705, IC-7300, IC-7300MK2, IC-7610, IC-905 e IC-9700 (los seis con `27 00`/`27 10`/`27 11` en los perfiles rigplane; guía CI-V IC-705 pp. 27-28; solo el receptor principal): activa el scope con `27 10 01` y la salida con `27 11 01`, reensambla `27 00` a 10 tramas/s y 30 s como maximo y siempre la apaga con `27 11 00` (comandos de `commands/scope.py`, `scope_data_output`; solo recepcion, nunca PTT) y la ofrece en `GET /api/v1/cat/scope?seconds=&fps=` (NDJSON, autenticado). El agente Node habla con rigctld, que no entrega tramas no solicitadas: ahi sigue "pendiente de fuente" y se usa la cascada de audio. Pulsar la cascada sintoniza solo en USB/LSB/PKTUSB/PKTLSB mediante el camino existente de frecuencia (RF = dial ± tono); no hay ningun camino TX nuevo. No transmitas sin antena o carga adaptada.
+
+| Radio | Enlace · fuente | Escala nativa por CAT | Cascada de audio | Pulsar para sintonizar |
+| --- | --- | --- | --- | --- |
+| Icom IC-705 | usb/lan/wifi · catalog + `icom_civ.py` + `Profile.kt` | ok (agente Python); Node pendiente de fuente | ok (con audio) | BLU |
+| Icom IC-7100 | usb · catalog + `icom_civ.py` | pendiente de fuente | ok (con audio) | BLU |
+| Icom IC-7200 | usb · catalog + `icom_civ.py` | pendiente de fuente | ok (con audio) | BLU |
+| Icom IC-7300 | usb · catalog + `icom_civ.py` | ok (agente Python); Node pendiente de fuente | ok (con audio) | BLU |
+| Icom IC-7300MK2 | usb · catalog + `icom_civ.py` | ok (agente Python); Node pendiente de fuente | ok (con audio) | BLU |
+| Icom IC-7410 | usb · catalog + `icom_civ.py` | pendiente de fuente | ok (con audio) | BLU |
+| Icom IC-7600 | usb · catalog + `icom_civ.py` | pendiente de fuente | ok (con audio) | BLU |
+| Icom IC-7610 | usb/lan · catalog + `icom_civ.py` | ok (agente Python); Node pendiente de fuente | ok (con audio) | BLU |
+| Icom IC-7700 | usb · catalog + `icom_civ.py` | pendiente de fuente | ok (con audio) | BLU |
+| Icom IC-7760 | usb/lan · catalog + `icom_civ.py` | pendiente de fuente | ok (con audio) | BLU |
+| Icom IC-7800 | usb · catalog | pendiente de fuente | ok (con audio) | BLU |
+| Icom IC-7850 | usb/lan · catalog + `icom_civ.py` | pendiente de fuente | ok (con audio) | BLU |
+| Icom IC-7851 | usb/lan · catalog + `icom_civ.py` | pendiente de fuente | ok (con audio) | BLU |
+| Icom IC-905 | usb/lan/wifi · catalog + `icom_civ.py` | ok (agente Python); Node pendiente de fuente | ok (con audio) | BLU |
+| Icom IC-9100 | usb · catalog + `icom_civ.py` | pendiente de fuente | ok (con audio) | BLU |
+| Icom IC-9700 | usb/lan · catalog + `icom_civ.py` | ok (agente Python); Node pendiente de fuente | ok (con audio) | BLU |
+| Icom IC-R8600 | usb/lan · catalog + `icom_civ.py` | pendiente de fuente | ok (con audio) | BLU |
+| FlexRadio FLEX-6400 | lan/wifi · catalog | pendiente de fuente | ok (con audio) | BLU |
+| FlexRadio FLEX-6400M | lan/wifi · catalog | pendiente de fuente | ok (con audio) | BLU |
+| FlexRadio FLEX-6600 | lan/wifi · catalog | pendiente de fuente | ok (con audio) | BLU |
+| FlexRadio FLEX-6600M | lan/wifi · catalog | pendiente de fuente | ok (con audio) | BLU |
+| FlexRadio FLEX-6700 | lan/wifi · catalog | pendiente de fuente | ok (con audio) | BLU |
+| FlexRadio FLEX-8400 | lan/wifi · catalog | pendiente de fuente | ok (con audio) | BLU |
+| FlexRadio FLEX-8400M | lan/wifi · catalog | pendiente de fuente | ok (con audio) | BLU |
+| FlexRadio FLEX-8600 | lan/wifi · catalog | pendiente de fuente | ok (con audio) | BLU |
+| FlexRadio FLEX-8600M | lan/wifi · catalog | pendiente de fuente | ok (con audio) | BLU |
+| FlexRadio AURORA-510 | lan/wifi · catalog | pendiente de fuente | ok (con audio) | BLU |
+| FlexRadio AURORA-510M | lan/wifi · catalog | pendiente de fuente | ok (con audio) | BLU |
+| FlexRadio AURORA-520 | lan/wifi · catalog | pendiente de fuente | ok (con audio) | BLU |
+| FlexRadio AURORA-520M | lan/wifi · catalog | pendiente de fuente | ok (con audio) | BLU |
+| Kenwood TS-590S | usb · catalog + `kenwood_cat.py` | pendiente de fuente | ok (con audio) | BLU |
+| Kenwood TS-590SG | usb · catalog + `kenwood_cat.py` | pendiente de fuente | ok (con audio) | BLU |
+| Kenwood TS-890S | usb · catalog + `kenwood_cat.py` | pendiente de fuente | ok (con audio) | BLU |
+| Kenwood TS-990S | usb · catalog + `kenwood_cat.py` | pendiente de fuente | ok (con audio) | BLU |
+| Yaesu FT-710 | usb · catalog + `yaesu_cat.py` | pendiente de fuente | ok (con audio) | BLU |
+| Yaesu FT-991A | usb · catalog + `yaesu_cat.py` | pendiente de fuente | ok (con audio) | BLU |
+| Yaesu FTDX10 | usb · catalog + `yaesu_cat.py` | pendiente de fuente | ok (con audio) | BLU |
+| Yaesu FTDX101D | usb · catalog + `yaesu_cat.py` | pendiente de fuente | ok (con audio) | BLU |
+| Yaesu FTDX101MP | usb · catalog + `yaesu_cat.py` | pendiente de fuente | ok (con audio) | BLU |
+| Yaesu FTDX3000 | usb · catalog + `yaesu_cat.py` | pendiente de fuente | ok (con audio) | BLU |
+| Yaesu FTX-1 | usb · catalog + `ftx1_cat.py` + `Profile.kt` | pendiente de fuente (`SS` son ajustes, no muestras) | ok (con audio) | BLU |
+| Elecraft K3 | driver `elecraft_k3s_cat.py` | pendiente de fuente | ok (con audio) | BLU |
+| Elecraft KX3 | driver `elecraft_k3s_cat.py` | pendiente de fuente | ok (con audio) | BLU |
+| Elecraft KX2 | driver `elecraft_k3s_cat.py` | pendiente de fuente | ok (con audio) | BLU |
+| Elecraft K3S | usb · catalog + `elecraft_k3s_cat.py` | pendiente de fuente | ok (con audio) | BLU |
+| Elecraft K4 | usb/lan/wifi · catalog + `elecraft_k4_cat.py` | pendiente de fuente (dB/bin por Ethernet sin protocolo publicado) | ok (con audio) | BLU |
+| QRP Labs QMX | usb · catalog + `qmx_cat.py` + `Profile.kt` | pendiente de fuente | ok (con audio) | BLU |
+| QRP Labs QMX+ | usb · catalog + `qmx_cat.py` | pendiente de fuente | ok (con audio) | BLU |
+| QRP Labs QCX | usb · catalog | pendiente de fuente | ok (con audio) | BLU |
+| QRP Labs QDX | usb · catalog + `Profile.kt` | pendiente de fuente | ok (con audio) | BLU |
+| (tr)uSDX | usb · catalog + `trusdx_cat.py` + `Profile.kt` | pendiente de fuente | ok (con audio) | BLU |
+| Hermes Lite 2 | lan · catalog + `hermes_lite_protocol.py` | pendiente de fuente (IQ, no audio) | ok (con audio) | BLU |
+| OpenGD77 GD-77 | usb · `opengd77_usb.py` + `Profile.kt` | pendiente de fuente | sin ruta de audio | no |
+| OpenGD77 GD-77S | usb · `opengd77_usb.py` | pendiente de fuente | sin ruta de audio | no |
+| OpenGD77 DM-1801 | usb · `opengd77_usb.py` | pendiente de fuente | sin ruta de audio | no |
+| OpenGD77 RD-5R | usb · `opengd77_usb.py` | pendiente de fuente | sin ruta de audio | no |
+| OpenGD77 DM-1801A | usb · `opengd77_usb.py` | pendiente de fuente | sin ruta de audio | no |
+| OpenGD77 MD-9600 | usb · `opengd77_usb.py` | pendiente de fuente | sin ruta de audio | no |
+| OpenGD77 MD-UV380 | usb · `opengd77_usb.py` | pendiente de fuente | sin ruta de audio | no |
+| OpenGD77 MD-380 | usb · `opengd77_usb.py` | pendiente de fuente | sin ruta de audio | no |
+| OpenGD77 DM-1701 | usb · `opengd77_usb.py` | pendiente de fuente | sin ruta de audio | no |
+| OpenGD77 MD-2017 | usb · `opengd77_usb.py` | pendiente de fuente | sin ruta de audio | no |
+| OpenGD77 DM-32 | usb · `opengd77_usb.py` | pendiente de fuente | sin ruta de audio | no |
+| OpenGD77 UV008 | usb · `opengd77_usb.py` | pendiente de fuente | sin ruta de audio | no |
+| Yaesu FT-817 | usb · `Profile.kt` | pendiente de fuente | sin ruta de audio | no |
+| Yaesu FT-818 | usb · `Profile.kt` | pendiente de fuente | sin ruta de audio | no |
+| Yaesu FT-857 | usb · `Profile.kt` | pendiente de fuente | sin ruta de audio | no |
+| Yaesu FT-897 | usb · `Profile.kt` | pendiente de fuente | sin ruta de audio | no |
+| Kenwood TH-D75 | usb · `Profile.kt` | pendiente de fuente | sin ruta de audio | no |
+| Quansheng UV-K5 (BricoHams Satellite) | usb · `Profile.kt` | pendiente de fuente (`firmware/bricohams/spectrum.c` no exporta muestras por UART) | sin ruta de audio | no |
+| Radtel RT-950 Pro | ble · `Profile.kt` | pendiente de fuente | sin ruta de audio | no |
+| Radtel RT-S10 | ble · `Profile.kt` | pendiente de fuente | sin ruta de audio | no |
+| AnyTone D878 | sin conexion · `Profile.kt` | pendiente de fuente | sin ruta de audio | no |
+| KISS TNC | red · `Profile.kt` | pendiente de fuente | sin ruta de audio | no |
