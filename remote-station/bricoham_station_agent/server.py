@@ -780,6 +780,10 @@ class StationAgentRequestHandler(SecureRequestHandler):
             and isinstance(payload["power_w"], (int, float))
             and not isinstance(payload["power_w"], bool)
         ):
+            refusal = ptt.tune_refusal() if ptt is not None and not transmitting else None
+            if refusal is not None:
+                self._send_error(HTTPStatus.CONFLICT, f"accessories_tx_{refusal.removeprefix('ptt_')}")
+                return
             result = accessories.start_tune(tx=transmitting, power_w=payload["power_w"])
         elif operation == "operate" and set(payload) == {"operation"}:
             result = accessories.operate(tx=transmitting)

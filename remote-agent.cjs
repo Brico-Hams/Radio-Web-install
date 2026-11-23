@@ -16,6 +16,7 @@ const remoteTls = require("./remote-tls.cjs");
 const remoteWs = require("./remote-ws.cjs");
 const remoteAudio = require("./remote-audio.cjs");
 const { TuneCheck, swrFromRaw, normalizeMeter, normalizeLevel, parsePowerFrame, tunePowerCheck } = require("./remote-meters.cjs");
+const { OrphanWatch, parseTxRanges, createTxInhibit } = require("./remote-txsafety.cjs");
 const { createAccessories, loadCatalog: loadAccessoryCatalog, findDevice: findAccessoryDevice } = require("./station-accessories.cjs");
 const { createAmplifierDriver, createTcpTransport } = require("./station-amplifier-drivers.cjs");
 const stationDevicesLib = require("./station-devices.cjs");
@@ -98,6 +99,8 @@ function loadConfig(dir) {
     rigctldHost: typeof stored.rigctldHost === "string" ? stored.rigctldHost : "127.0.0.1",
     rigctldPort: Number.isInteger(stored.rigctldPort) ? stored.rigctldPort : 4532,
     txLimitSeconds: Number(stored.txLimitSeconds) > 0 ? Number(stored.txLimitSeconds) : 180,
+    // Allowed TX ranges [{ startHz, endHz }] set by the operator; empty = out-of-band inhibit not configured (off).
+    txRanges: parseTxRanges(stored.txRanges),
     // Protection thresholds: SWR ratio for radios that report one, raw 0-255 RM6 value for raw-CAT radios (not calibrated).
     swrLimit: Number(stored.swrLimit) > 1 ? Number(stored.swrLimit) : undefined,
     swrRawLimit: Number.isInteger(stored.swrRawLimit) && stored.swrRawLimit >= 1 && stored.swrRawLimit <= 255 ? stored.swrRawLimit : undefined,
@@ -299,6 +302,8 @@ function createRemoteAgent(options = {}) {
   const log = options.log || (() => {});
   const txLimitMs = (options.txLimitSeconds ?? config.txLimitSeconds) * 1000;
   const heartbeatTimeoutMs = options.heartbeatTimeoutMs ?? HEARTBEAT_TIMEOUT_MS;
+  const txInhibit = createTxInhibit({ ranges: options.txRanges ?? config.txRanges, log });
+  const orphanWatch = new OrphanWatch();
   const pollMs = options.pollMs ?? 250;
   const host = options.host || "127.0.0.1";
   const radioScope = SCOPES.includes(options.radioScope) ? options.radioScope : "none";
@@ -482,6 +487,7 @@ function createRemoteAgent(options = {}) {
       cw: { enabled: cwGuard.enabled, active: Boolean(cwGuard.active()), maxSeconds: cwMaxSeconds },
       tune: tune ? { kind: tunerKind, seconds: Math.max(0, Math.floor((now() - tune.startedAt) / 1000)), maxSeconds: Math.round(tuneMaxMs / 1000) } : null,
       tuneResult: tuneResult ? { ...tuneResult } : null,
+      txInhibit: txInhibit.snapshot(),
       meters: metersView(),
       notice: notice && now() - notice.at < NOTICE_MS ? { id: notice.id, text: notice.text } : null,
       accessories: accessories.snapshot(),
@@ -533,6 +539,8 @@ function createRemoteAgent(options = {}) {
 
   async function startCw(command) {
     if (!cwGuard.enabled) return { status: 403, body: { error: "El CW remoto esta desactivado (accion explicita del operador)." } };
+    const outOfBand = txRangeRefusal();
+    if (outOfBand) return outOfBand;
     const radio = options.radio;
     let plan;
     try {
@@ -694,6 +702,27 @@ function createRemoteAgent(options = {}) {
       if (hamlibRun === run) hamlibRun = null;
     })();
     return run.ending;
+  }
+
+  // Out-of-band inhibit (remote-txsafety.cjs): a new key-up needs a known frequency and mode whose emission stays inside a configured range.
+  function txRangeRefusal() {
+    const verdict = txInhibit.evaluate(rig.freq, rig.mode, rig.passband);
+    if (verdict.state === "inside" || verdict.state === "not-configured") return null;
+    const unknown = verdict.state === "unknown";
+    const error = unknown
+      ? "Frecuencia o modo desconocidos: no se transmite sin comprobar los rangos de emisión permitidos."
+      : `Fuera de los rangos de emisión permitidos (${verdict.span.low} a ${verdict.span.high} Hz).`;
+    log(error);
+    return { status: 409, body: { error, code: unknown ? "tx-range-unknown" : "tx-out-of-band", span: verdict.span } };
+  }
+
+  // Cuts a transmission the agent keyed when the emission leaves every range. An unknown reading (one failed poll) never cuts it,
+  // and during a tune the mode the radio reports is not evaluated (the FTX-1 switches to CW-L during an ATAS tune).
+  function checkTxRange() {
+    if (!txInhibit.configured) return;
+    const tuning = tune !== null || hamlibRun !== null;
+    const verdict = txInhibit.observe(rig.freq, rig.mode, rig.passband, { tuning });
+    if (verdict.state === "outside" && !tuning && ((agentTx && rig.ptt) || cwGuard.active())) pttOff("fuera de banda");
   }
 
   async function pttOff(reason) {
@@ -1021,6 +1050,7 @@ function createRemoteAgent(options = {}) {
     const run = newTuneRun(clientId, "hamlib");
     run.check.confirming();
     hamlibRun = run;
+    lastBeat = now();
     hamlibTuneWatch(run);
   }
 
@@ -1070,6 +1100,7 @@ function createRemoteAgent(options = {}) {
       // A read that was in flight while PTT changed or a stop ran is stale and must not re-key the state; the next poll sees the settled state.
       if (ptt !== rig.ptt && !tune && epoch === pttEpoch && genBefore === meterGen && stopping === 0) setRigPtt(ptt);
       rig.smeter = rig.ptt ? null : await client.getStrength();
+      checkTxRange();
       if (pollCount % 4 === 1) {
         try {
           const vfo = await client.getVfo();
@@ -1107,6 +1138,10 @@ function createRemoteAgent(options = {}) {
     if (!tune && accessories.snapshot().tuner.tuning) accessories.stopTune("done", lastTuneSwr).catch(() => {});
     // Lease: a CW message does not outlive the operator's control.
     if (cwGuard.active() && !ownerActive()) cwHalt();
+    // Second line behind the heartbeat: a transmission the agent keyed with nobody holding the lease is released once (OrphanWatch).
+    // A Hamlib G TUNE is keyed by the agent too, but it has no agentTx, so the heartbeat is enforced here as well.
+    if (hamlibRun && now() - lastBeat > heartbeatTimeoutMs) { accessories.standby("lease"); pttOff("sin latido"); return; }
+    if (orphanWatch.observe((agentTx && rig.ptt) || hamlibRun !== null, ownerActive())) { accessories.standby("lease"); pttOff("TX huérfano"); return; }
     if (!agentTx || !rig.ptt) return;
     const time = now();
     if (time - lastBeat > heartbeatTimeoutMs) { accessories.standby("lease"); pttOff("sin latido"); }
@@ -1281,6 +1316,11 @@ function createRemoteAgent(options = {}) {
         case "tune":
           if (!caps.tune) return { status: 501, body: { error: "La radio no admite TUNE." } };
           if (rig.ptt) return { status: 409, body: { error: "Cambio bloqueado durante TX." } };
+          {
+            // Checked once with the operator's mode and frequency: the radio's temporary tune mode is never evaluated.
+            const outOfBand = txRangeRefusal();
+            if (outOfBand) return outOfBand;
+          }
           if (accessories.snapshot().tuner.supported) {
             // A configured tuner goes through the accessories layer: explicit request, low power, time cap, no amplifier in operate.
             const rated = config.accessories?.tuner?.ratedPowerW;
@@ -1319,6 +1359,8 @@ function createRemoteAgent(options = {}) {
         case "ptt":
           if (command.value) {
             if (tune) return { status: 409, body: { error: "Sintonía en curso." } };
+            const outOfBand = txRangeRefusal();
+            if (outOfBand) return outOfBand;
             txLocation = command.location || null;
             if (cwGuard.active()) await cwHalt();
             await client.setPtt(true);
@@ -1504,7 +1546,7 @@ function createRemoteAgent(options = {}) {
     if (route === "POST /api/heartbeat") {
       // Latency probes must not keep an idle operator's control alive; only a held PTT does.
       if (ownerActive() && owner !== clientId) { send(response, 409, { error: "Otro operador tiene el control." }); return; }
-      if (owner === clientId && ((rig.ptt && agentTx) || cwGuard.active())) { lastBeat = now(); ownerSeen = now(); }
+      if (owner === clientId && ((rig.ptt && agentTx) || hamlibRun || cwGuard.active())) { lastBeat = now(); ownerSeen = now(); }
       send(response, 200, { ok: true });
       return;
     }

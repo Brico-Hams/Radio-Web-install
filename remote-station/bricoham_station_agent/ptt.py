@@ -14,6 +14,7 @@ from bricoham_station_agent.audio_tx import AudioTransmitter, TxAudioSession
 from bricoham_station_agent.cat import CatError, Ftx1TransmitChannel, SerialCat
 from bricoham_station_agent.guests import TxLog, guest_tx_refusal
 from bricoham_station_agent.radio_settings import settings_request_identifier
+from bricoham_station_agent.txsafety import TxInhibit, parse_tx_ranges
 
 LOGGER = logging.getLogger("bricoham.station_agent.ptt")
 LEASE_SECONDS = 2.0
@@ -38,8 +39,11 @@ class PttConfig:
     frequency_max_hz: int
     power_max_watts: int
     max_transmit_seconds: int
+    # Optional explicit out-of-band ranges [{"start_hz", "end_hz"}]; empty keeps the inhibit "not-configured".
+    tx_ranges: tuple[tuple[int, int], ...] = ()
 
     def __post_init__(self) -> None:
+        object.__setattr__(self, "tx_ranges", parse_tx_ranges(self.tx_ranges))
         if (
             type(self.enabled) is not bool
             or any(
@@ -62,13 +66,14 @@ class PttConfig:
     @classmethod
     def load(cls, path: Path) -> "PttConfig":
         value = json.loads(path.read_text(encoding="utf-8"))
-        if not isinstance(value, dict) or set(value) != {
+        required = {
             "enabled",
             "frequency_min_hz",
             "frequency_max_hz",
             "power_max_watts",
             "max_transmit_seconds",
-        }:
+        }
+        if not isinstance(value, dict) or set(value) not in (required, required | {"tx_ranges"}):
             raise ValueError("PTT requires exactly the documented local configuration fields.")
         return cls(**value)
 
@@ -101,6 +106,7 @@ class PttController:
         self.tx_log = tx_log
         self.radio_id = radio_id
         self.guest_active = guest_active
+        self.tx_inhibit = TxInhibit(config.tx_ranges)
         self._owner = PttOperator("local")
         self._checked: tuple[int, int | float] | None = None
         self._voice: TxAudioSession | None = None
@@ -133,6 +139,7 @@ class PttController:
             "frequency_min_hz": self.config.frequency_min_hz,
             "frequency_max_hz": self.config.frequency_max_hz,
             "power_max_watts": self.config.power_max_watts,
+            "tx_inhibit": self.tx_inhibit.snapshot(),
         }
 
     def snapshot(self) -> dict[str, object]:
@@ -173,7 +180,11 @@ class PttController:
             raise PttError("ptt_requires_ssb")
         if not self.config.frequency_min_hz <= info.frequency_hz <= self.config.frequency_max_hz:
             raise PttError("ptt_frequency_limit")
-        # Guest band and power limits are checked against the live radio, on start and on every renew.
+        # Explicit out-of-band ranges (off unless configured): the SSB sideband decides which edge matters.
+        if self.tx_inhibit.configured and self.tx_inhibit.observe(
+            info.frequency_hz, info.mode.name
+        ) != "inside":
+            raise PttError("ptt_out_of_band")        # Guest band and power limits are checked against the live radio, on start and on every renew.
         if operator.guest_id is not None:
             refusal = guest_tx_refusal(
                 operator.permission, freq_hz=info.frequency_hz, power_w=power.watts
@@ -186,6 +197,37 @@ class PttController:
                 raise PttError("ptt_disable_vox_locally")
             if self._voice is None or not self._voice.healthy():
                 raise PttError("ptt_audio_unavailable")
+
+    def tune_refusal(self) -> str | None:
+        """Out-of-band check for an ATU tune, done once before it starts with the operator's mode and frequency.
+
+        The radio's own temporary mode during the tune (CW-L on the FTX-1) is never evaluated.
+        """
+        if not self.tx_inhibit.configured:
+            return None
+        if not self._lock.acquire(blocking=False):
+            return "ptt_busy"
+        try:
+            if self._closed or self._lease is not None or self._channel is not None:
+                return "ptt_busy"
+            channel = self.cat.reserve_transmitter()
+            try:
+                info = ftx.parse_main_information(
+                    channel.read(
+                        ftx.Ftx1ReadCommand.MAIN_INFORMATION,
+                        time.monotonic() + TRANSACTION_SECONDS,
+                    )
+                )
+            finally:
+                channel.release()
+        except (CatError, ValueError):
+            # Unknown frequency or mode fails closed for a new key-up.
+            return "ptt_out_of_band_unknown"
+        finally:
+            self._lock.release()
+        if self.tx_inhibit.observe(info.frequency_hz, info.mode.name) != "inside":
+            return "ptt_out_of_band"
+        return None
 
     def _release_channel(self) -> None:
         channel, self._channel = self._channel, None

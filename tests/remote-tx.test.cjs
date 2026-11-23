@@ -415,6 +415,36 @@ test("rigctld replies tolerate surrounding whitespace: ' RPRT 0' is success, any
   } finally { client.stop(); server.closeAllConnections?.(); await new Promise(resolve => server.close(resolve)); }
 });
 
+test("FTX-1 ATAS tune with TX ranges: the temporary CW-L is never evaluated, the tune is not interrupted, a tune out of band is refused", async () => {
+  const rig = await atasRig();
+  rig.tuning = false;
+  rig.freq = 28_500_000;
+  Object.assign(rig.raw, { AC: "AC100;", PC: () => (rig.tuning ? "PC2005;" : "PC2010;") });
+  rig.modeReply = () => (rig.tuning ? "CWR\n500\n" : "USB\n2400\n");
+  const txRanges = [{ startHz: 28_500_000, endHz: 28_502_400 }];
+  const { cmd, call, state, cleanup } = await startAgent(rig, atasOptions({ txRanges, meterMs: 50, tuneMaxSeconds: 20 }));
+  let stopBeat = () => {};
+  try {
+    await waitFor(async () => (await state()).txInhibit?.state === "inside");
+    stopBeat = keepAlive(call);
+    assert.equal((await cmd({ cmd: "tune" })).status, 200);
+    await waitFor(async () => (await state()).mode === "CWR");
+    await sleep(800);
+    assert.ok((await state()).tune);
+    assert.ok(!afterTune(rig).includes("T 0"));
+    rig.tuning = false;
+    await waitFor(async () => (await state()).tuneResult);
+    await waitFor(async () => (await state()).mode === "USB");
+    rig.freq = 28_600_000;
+    await waitFor(async () => (await state()).txInhibit.state === "outside");
+    const before = rig.log.filter(line => line === "W AC123; 0").length;
+    const refused = await cmd({ cmd: "tune" });
+    assert.equal(refused.status, 409);
+    assert.equal(refused.json.code, "tx-out-of-band");
+    assert.equal(rig.log.filter(line => line === "W AC123; 0").length, before);
+  } finally { stopBeat(); await cleanup(); await rig.close(); }
+});
+
 test("FTX-1 ATAS tune: temporary CW-L/5 W and AC100 are not operator changes, RI0/TX follow the tune, raw SWR 255 is bounded by the cap", async () => {
   const rig = await atasRig();
   Object.assign(rig.raw, {
