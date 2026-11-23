@@ -6,6 +6,7 @@ from bricoham_remote_station.drivers import ftx1_cat
 from bricoham_station_agent.accessories import (
     CATALOG_PATH,
     TUNE_POWER_MAX_W,
+    AccessorySupervisor,
     StationAccessories,
     band_of,
     load_catalog,
@@ -183,5 +184,95 @@ class AccessoriesTests(unittest.TestCase):
         self.assertEqual(amp.calls[-1], ("operate", False))
 
 
+class SupervisorTests(unittest.TestCase):
+    def make(self, frequencies, tx=None, amp=None, tuner=None):
+        accessories, amp = build(amp or FakeAmp(reading={}), tuner=tuner)
+        state = {"tx": False, "frequencies": list(frequencies)}
+
+        def read():
+            value = state["frequencies"].pop(0)
+            if isinstance(value, Exception):
+                raise value
+            return value
+
+        supervisor = AccessorySupervisor(
+            accessories, is_transmitting=lambda: state["tx"], read_frequency=read
+        )
+        return supervisor, accessories, amp, state
+
+    def test_frequency_feeds_band_and_busy_radio_changes_nothing(self):
+        supervisor, accessories, amp, _ = self.make([14_200_000, None, 7_100_000])
+        supervisor.step()
+        self.assertEqual(accessories.snapshot()["amplifier"]["band"], "20m")
+        supervisor.step()
+        self.assertEqual(accessories.snapshot()["amplifier"]["band"], "20m")
+        supervisor.step()
+        self.assertEqual(accessories.snapshot()["amplifier"]["band"], "40m")
+
+    def test_radio_link_loss_forces_standby_and_stops_tune(self):
+        tuner = FakeTuner()
+        supervisor, accessories, amp, _ = self.make([14_200_000, OSError("cat_io_failed"), OSError("x")], tuner=tuner)
+        supervisor.step()
+        accessories.operate()
+        supervisor.step()
+        snapshot = accessories.snapshot()["amplifier"]
+        self.assertEqual((snapshot["state"], snapshot["standby_reason"]), ("standby", "disconnect"))
+        accessories.start_tune(power_w=5)
+        supervisor.step()
+        self.assertFalse(accessories.snapshot()["tuner"]["tuning"])
+        self.assertEqual(accessories.snapshot()["tuner"]["last"]["reason"], "disconnect")
+
+    def test_lease_loss_forces_standby_and_band_change_waits_for_rx(self):
+        supervisor, accessories, amp, state = self.make([14_200_000, 7_100_000, 7_100_000])
+        supervisor.step()
+        accessories.operate()
+        state["tx"] = True
+        supervisor.step()
+        self.assertEqual(accessories.snapshot()["amplifier"]["band"], "20m")
+        self.assertEqual(accessories.snapshot()["amplifier"]["state"], "operate")
+        state["tx"] = False
+        supervisor.step()
+        snapshot = accessories.snapshot()["amplifier"]
+        self.assertEqual((snapshot["state"], snapshot["standby_reason"], snapshot["band"]), ("standby", "lease", "40m"))
+
+    def test_swr_trip_forces_standby_and_blocks_operate_until_clear(self):
+        amp = FakeAmp(reading={"swr": 4.0})
+        supervisor, accessories, amp, _ = self.make([14_200_000, 14_200_000], amp=amp)
+        supervisor.step()
+        self.assertEqual(accessories.snapshot()["amplifier"]["standby_reason"], "swr")
+        self.assertEqual(accessories.operate()["reason"], "swr")
+        amp.reading = {"swr": 1.5}
+        supervisor.step()
+        self.assertTrue(accessories.operate()["ok"])
+
+    def test_swr_trip_stops_a_running_tune(self):
+        tuner = FakeTuner()
+        supervisor, accessories, amp, _ = self.make([14_200_000, 14_200_000], amp=FakeAmp(reading={"swr": 1.0}), tuner=tuner)
+        supervisor.step()
+        accessories.start_tune(power_w=5)
+        amp.reading = {"swr": 5.0}
+        supervisor.step()
+        self.assertEqual(accessories.snapshot()["tuner"]["last"]["reason"], "swr")
+
+    def test_unexpected_failure_triggers_emergency_stop(self):
+        supervisor, accessories, amp, _ = self.make([14_200_000])
+        supervisor.step()
+        accessories.operate()
+        supervisor._is_transmitting = lambda: 1 / 0
+
+        class OneShot:
+            calls = 0
+
+            def wait(self, interval):
+                OneShot.calls += 1
+                return OneShot.calls > 1
+
+        supervisor._stop = OneShot()
+        supervisor._run()
+        self.assertEqual(accessories.snapshot()["amplifier"]["state"], "fault")
+        self.assertEqual(amp.calls[-1], ("operate", False))
+
+
 if __name__ == "__main__":
+    unittest.main()
     unittest.main()

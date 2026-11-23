@@ -1,6 +1,7 @@
 import argparse
 import json
 import logging
+import os
 import signal
 import sqlite3
 import ssl
@@ -44,8 +45,9 @@ from bricoham_station_agent.inventory import (
     DeviceInventory,
     enumerate_serial_ports,
 )
-from bricoham_station_agent.accessories import StationAccessories, support_matrix
+from bricoham_station_agent.accessories import AccessorySupervisor, StationAccessories, support_matrix
 from bricoham_station_agent.guests import RADIO_ID, GuestGrant, GuestStore, TxLog
+from bricoham_station_agent.station_devices import DeviceError, PowerDevice, build_power_device
 from bricoham_station_agent.ptt import PttConfig, PttController, PttError, PttOperator
 from bricoham_station_agent.radio_settings import RadioSettingsConfig
 from bricoham_station_agent.rotor import RotorConfig, RotorController, RotorError
@@ -62,6 +64,7 @@ SETTINGS_PATH = f"/api/{API_VERSION}/radio-settings"
 PTT_PATH = f"/api/{API_VERSION}/ptt"
 AUDIO_PATH = f"/api/{API_VERSION}/audio"
 ACCESSORIES_PATH = f"/api/{API_VERSION}/accessories"
+POWER_PATH = f"/api/{API_VERSION}/power"
 AUDIO_STREAM_PATH = f"{AUDIO_PATH}/stream"
 SCOPE_PATH = f"{CAT_PATH}/scope"
 GUESTS_PATH = f"/api/{API_VERSION}/guests"
@@ -71,6 +74,33 @@ TXLOG_CSV_PATH = f"{TXLOG_PATH}.csv"
 _INVENTORY_ROLES = frozenset({Role.ADMIN, Role.OPERATOR})
 # Guest tokens (per-radio, revocable) may only listen, query PTT state or use the PTT/TX-audio paths they are granted.
 _GUEST_PATHS = (AUDIO_PATH, AUDIO_STREAM_PATH, PTT_PATH)
+
+
+def ptt_transmitting(ptt: PttController | None) -> bool:
+    """A held PTT lease counts as TX; an unreadable PTT state fails closed."""
+    if ptt is None:
+        return False
+    try:
+        return bool(ptt.snapshot()["lease_active"])
+    except PttError:
+        return True
+
+
+def cat_frequency_reader(cat: SerialCat):
+    """Live frequency feed: the model's own frequency query; None while the CAT port is busy."""
+    command = next((name for name, query in cat.queries.items() if query.result_name == "frequency_hz"), None)
+    if command is None:
+        return None
+
+    def read() -> float | None:
+        try:
+            return cat.read(command)["frequency_hz"]
+        except CatError as error:
+            if str(error) == "cat_busy":
+                return None
+            raise
+
+    return read
 
 
 class StationAgentHTTPServer(SecureHTTPServer):
@@ -95,10 +125,12 @@ class StationAgentHTTPServer(SecureHTTPServer):
         guests: GuestStore | None = None,
         tx_log: TxLog | None = None,
         radio_id: str = "ftx-1",
+        power: PowerDevice | None = None,
     ) -> None:
         self.guests = guests if guests is not None else GuestStore()
         self.tx_log = tx_log if tx_log is not None else TxLog()
         self.radio_id = radio_id
+        self.power = power
         self.accessories = accessories
         self.authenticator = authenticator
         self.inventory = DeviceInventory(enumerator)
@@ -199,6 +231,7 @@ class StationAgentRequestHandler(SecureRequestHandler):
             AUDIO_PATH,
             AUDIO_STREAM_PATH,
             ACCESSORIES_PATH,
+            POWER_PATH,
             SCOPE_PATH,
         ):
             self._send_error(HTTPStatus.NOT_FOUND, "not_found")
@@ -253,6 +286,19 @@ class StationAgentRequestHandler(SecureRequestHandler):
                     **self.server.accessories.snapshot(),
                     "support": support_matrix(),
                 },
+            )
+            return
+
+        if path == POWER_PATH:
+            if urlsplit(self.path).query:
+                self._send_error(HTTPStatus.BAD_REQUEST, "power_invalid_query")
+                return
+            if self.server.power is None:
+                self._send_error(HTTPStatus.SERVICE_UNAVAILABLE, "power_not_configured")
+                return
+            self._send_json(
+                HTTPStatus.OK,
+                {"api_version": "v1", "data_is_simulated": False, **self.server.power.status()},
             )
             return
 
@@ -526,7 +572,7 @@ class StationAgentRequestHandler(SecureRequestHandler):
         if path in (GUESTS_PATH, GUESTS_REVOKE_PATH):
             self._serve_station_ops(path, "POST")
             return
-        if path not in (ROTOR_PATH, SETTINGS_PATH, PTT_PATH, DIGITAL_PATH, ACCESSORIES_PATH, FLEX_PATH):
+        if path not in (ROTOR_PATH, SETTINGS_PATH, PTT_PATH, DIGITAL_PATH, ACCESSORIES_PATH, POWER_PATH, FLEX_PATH):
             self._method_not_allowed()
             return
         self.close_connection = True
@@ -547,6 +593,9 @@ class StationAgentRequestHandler(SecureRequestHandler):
             operator = PttOperator(guest.label, guest.id, permission)
         if path == ACCESSORIES_PATH:
             self._operate_accessories()
+            return
+        if path == POWER_PATH:
+            self._operate_power()
             return
         if path == FLEX_PATH:
             if self.server.flex is None:
@@ -711,16 +760,20 @@ class StationAgentRequestHandler(SecureRequestHandler):
         operation = payload.get("operation") if isinstance(payload, dict) else None
         # A held PTT lease counts as TX: operate and band changes are refused meanwhile.
         ptt = self.server.ptt
-        try:
-            transmitting = bool(ptt is not None and ptt.snapshot()["lease_active"])
-        except PttError:
-            transmitting = True
+        transmitting = ptt_transmitting(ptt)
         if operation == "standby" and set(payload) == {"operation"}:
             result = accessories.standby("operator")
         elif operation == "emergency_stop" and set(payload) == {"operation"}:
             result = accessories.emergency_stop("emergency")
         elif operation == "stop_tune" and set(payload) == {"operation"}:
             result = accessories.stop_tune("operator")
+        elif (
+            operation == "tune"
+            and set(payload) == {"operation", "power_w"}
+            and isinstance(payload["power_w"], (int, float))
+            and not isinstance(payload["power_w"], bool)
+        ):
+            result = accessories.start_tune(tx=transmitting, power_w=payload["power_w"])
         elif operation == "operate" and set(payload) == {"operation"}:
             result = accessories.operate(tx=transmitting)
         elif (
@@ -831,6 +884,51 @@ class StationAgentRequestHandler(SecureRequestHandler):
             return True
         self._send_json(HTTPStatus.CREATED, {"api_version": API_VERSION, "guest": guest, "token": token})
         return True
+
+    def _operate_power(self) -> None:
+        power = self.server.power
+        if power is None:
+            self._send_error(HTTPStatus.SERVICE_UNAVAILABLE, "power_not_configured")
+            return
+        if urlsplit(self.path).query:
+            self._send_error(HTTPStatus.BAD_REQUEST, "power_invalid_query")
+            return
+        try:
+            payload = self.request_json()
+        except RequestJsonError as error:
+            self._send_error(error.status, str(error))
+            return
+        operation = payload.get("operation") if isinstance(payload, dict) else None
+        valid = (
+            isinstance(payload, dict)
+            and isinstance(payload.get("outlet"), str)
+            and type(payload.get("confirm", False)) is bool
+            and (
+                (operation == "set" and type(payload.get("on")) is bool and set(payload) <= {"operation", "outlet", "on", "confirm"})
+                or (operation == "cycle" and set(payload) <= {"operation", "outlet", "confirm"})
+            )
+        )
+        if not valid:
+            self._send_error(HTTPStatus.BAD_REQUEST, "power_invalid_operation")
+            return
+        # No outlet is switched while the station transmits (any role, not just radio/amp).
+        if ptt_transmitting(self.server.ptt):
+            self._send_error(HTTPStatus.CONFLICT, "power_transmitting")
+            return
+        try:
+            outlet = next((item for item in power.outlets if item.name == payload["outlet"]), None)
+            if outlet is not None and outlet.role == "amp" and self.server.accessories is not None:
+                self.server.accessories.standby("operator")
+            confirm = payload.get("confirm", False)
+            result = (
+                power.set(payload["outlet"], payload["on"], confirm=confirm)
+                if operation == "set"
+                else power.cycle(payload["outlet"], confirm=confirm)
+            )
+        except DeviceError as error:
+            self._send_error(HTTPStatus(error.status), f"power_{error.code}")
+            return
+        self._send_json(HTTPStatus.OK, {"api_version": "v1", "data_is_simulated": False, **result})
 
     def do_PUT(self) -> None:
         self._method_not_allowed()
@@ -946,7 +1044,12 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--state-dir",
         type=Path,
         help="Persist guests (token hashes only) and the TX log here; in memory when omitted.",
-    )
+            )
+            parser.add_argument(
+        "--power-config",
+        type=Path,
+        help="Local power-device JSON ({'id','kind':'dli'|'modbus','host','port','enabled','outlets':[{'name','index','role'}]}); "
+        "DLI credentials come from BRICOHAM_POWER_USER/BRICOHAM_POWER_PASSWORD; switching is refused while transmitting.",    )
     parser.add_argument(
         "--tx-audio-config",
         type=Path,
@@ -1066,6 +1169,15 @@ def main(argv: list[str] | None = None) -> int:
             if args.accessories_config
             else None
         )
+        power = (
+            build_power_device(
+                json.loads(args.power_config.read_text(encoding="utf-8")),
+                dict(os.environ),
+                lambda: ptt_transmitting(ptt),
+            )
+            if args.power_config
+            else None
+        )
         server = StationAgentHTTPServer(
             args.port,
             authenticator,
@@ -1082,6 +1194,7 @@ def main(argv: list[str] | None = None) -> int:
             guests=GuestStore(args.state_dir),
             tx_log=TxLog(args.state_dir / "remote-txlog.jsonl" if args.state_dir else None),
             radio_id=args.radio_id,
+            power=power,
         )
     except ValueError as error:
         LOGGER.error("Configuración del agente no válida: %s", error)
@@ -1133,12 +1246,23 @@ def main(argv: list[str] | None = None) -> int:
                 ptt.config.enabled,
             )
         previous = _install_shutdown_handlers(server)
+        supervisor = None
+        if accessories is not None:
+            supervisor = AccessorySupervisor(
+                accessories,
+                is_transmitting=lambda: ptt_transmitting(ptt),
+                read_frequency=cat_frequency_reader(cat) if cat is not None else None,
+                log=LOGGER.warning,
+            )
+            supervisor.start()
         try:
             server.serve_forever()
         except KeyboardInterrupt:
             LOGGER.info("Agente detenido")
         finally:
             _restore_handlers(previous)
+            if supervisor is not None:
+                supervisor.stop()
             # Always unkey and release the radio, whatever ended the loop.
             if ptt is not None:
                 ptt.close()

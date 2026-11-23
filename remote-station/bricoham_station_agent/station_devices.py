@@ -492,3 +492,42 @@ SUPPORT_MATRIX = (
     ("Hy-Gain DCU2 / DCU3 / YRC-1", "serial 9600", PENDING, "catalog only (Hamlib 406)"),
     *((label, "network", PENDING, "STATION-DEVICES-SOURCES.md") for label, _ in PENDING_DEVICES.values()),
 )
+
+
+def build_power_device(
+    config: dict,
+    environ: dict[str, str],
+    is_transmitting: Callable[[], bool],
+    *,
+    dli_transport: Callable[..., Callable] = urllib_dli_transport,
+    modbus_exchange: Callable[..., Callable] = tcp_modbus_exchange,
+) -> PowerDevice:
+    """Builds the power device from the local agent JSON; DLI credentials come only from the environment."""
+    allowed = {"id", "kind", "host", "port", "enabled", "outlets"}
+    if not isinstance(config, dict) or not {"id", "kind", "host", "outlets"} <= set(config) <= allowed:
+        raise ValueError("Power config needs id, kind, host and outlets (optional port, enabled).")
+    kind = config["kind"]
+    host = config["host"]
+    port = config.get("port")
+    if kind not in ("dli", "modbus") or not isinstance(host, str) or not host or not isinstance(config["id"], str):
+        raise ValueError("Power config has an invalid id, kind or host.")
+    if port is not None and (type(port) is not int or not 1 <= port <= 65535):
+        raise ValueError("Power config port is invalid.")
+    if type(config.get("enabled", False)) is not bool or not isinstance(config["outlets"], list):
+        raise ValueError("Power config enabled/outlets are invalid.")
+    outlets = []
+    for item in config["outlets"]:
+        if not isinstance(item, dict) or not {"name", "index"} <= set(item) <= {"name", "index", "role"}:
+            raise ValueError("Each outlet needs name, index and optional role.")
+        outlets.append(Outlet(item["name"], item["index"], item.get("role", "other")))
+    if kind == "dli":
+        user, password = environ.get("BRICOHAM_POWER_USER"), environ.get("BRICOHAM_POWER_PASSWORD")
+        if not user or not password:
+            raise ValueError("DLI needs BRICOHAM_POWER_USER and BRICOHAM_POWER_PASSWORD in the agent environment.")
+        transport = dli_transport(host, user, password, port or 80)
+    else:
+        transport = modbus_exchange(host, port or MODBUS_PORT)
+    return PowerDevice(
+        config["id"], kind, outlets, transport,
+        enabled=config.get("enabled", False), is_transmitting=is_transmitting,
+    )
