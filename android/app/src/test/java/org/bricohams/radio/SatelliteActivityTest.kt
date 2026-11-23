@@ -59,6 +59,14 @@ class SatelliteActivityTest {
         val checksum = base.sumOf { if (it in '0'..'9') it - '0' else if (it == '-') 1 else 0 } % 10
         return Tle("ISS (ZARYA)", base + checksum, SatellitesTest.tle.line2)
     }
+    // The next pass depends on the wall clock and can be a short one, so check the 10 s sampling against the pass length
+    // instead of a fixed count: AOS and LOS are both sampled and no gap is longer than one step.
+    private fun assertDenseTrack(track: List<SatelliteLook>) {
+        assertTrue("track ${track.size}", track.size >= 2)
+        val seconds = (track.last().time - track.first().time) / 1000.0
+        assertEquals("track ${track.size} over $seconds s", Math.ceil(seconds / PassPointing.DEFAULT_STEP_SECONDS).toInt() + 1, track.size)
+        assertTrue(track.zipWithNext().all { (a, b) -> b.time - a.time in 1..PassPointing.DEFAULT_STEP_SECONDS * 1000L })
+    }
     private fun observer(latitude: String = "40.4168") {
         RuntimeEnvironment.getApplication().getSharedPreferences("satellite-observer", Context.MODE_PRIVATE).edit()
             .putString("latitude", latitude).putString("longitude", "-3.7038").putString("height", "0.667").commit()
@@ -97,7 +105,7 @@ class SatelliteActivityTest {
             val radar = all(activity).filterIsInstance<PassRadarView>().single()
             assertTrue(text(activity), text(activity).contains("Seguimiento en vivo") && text(activity).contains("Az ") && text(activity).contains("El "))
             assertTrue(radar.contentDescription.toString().startsWith("Radar polar del pase."))
-            assertTrue("track ${radar.track.size}", radar.track.size > 20) // 10 s samples over a ~4-10 min pass
+            assertDenseTrack(radar.track)
             assertTrue(text(activity).contains("437.8000 MHz  FM  Repeater"))
             click(activity, MORE_SHOW)
             click(activity, "Conectar CAT: Doppler, SSTV y grabacion")
@@ -142,7 +150,7 @@ class SatelliteActivityTest {
             all(activity).first { it.isClickable && it.contentDescription?.startsWith("ISS (ZARYA) (25544)") == true }.performClick()
             idle(activity)
             val radar = all(activity).filterIsInstance<PassRadarView>().single()
-            assertTrue("track ${radar.track.size}", radar.track.size > 20) // 10 s samples over a ~4-10 min pass
+            assertDenseTrack(radar.track)
             val shown = text(activity)
             assertTrue(shown, shown.contains("Seguimiento en vivo") && Regex("Az [\\d.—]+").containsMatchIn(shown))
             assertTrue(shown, shown.contains("Voice · FM") && shown.contains("Invertido: no"))

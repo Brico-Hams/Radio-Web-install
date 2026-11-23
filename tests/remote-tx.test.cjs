@@ -66,7 +66,7 @@ async function fakeRigctld(capsLines = BASE_CAPS) {
         let reply = "RPRT 0\n";
         if (command === "f") reply = `${rig.freq}\n`;
         if (command === "f" && rig.freqDelay) { setTimeout(() => socket.write(reply), rig.freqDelay); continue; }
-        else if (command === "m") reply = "USB\n2400\n";
+        else if (command === "m") reply = rig.modeReply ? rig.modeReply() : "USB\n2400\n";
         else if (command === "t") reply = `${rig.ptt}\n`;
         else if (command === "l") reply = Object.hasOwn(rig.levels, args[0]) ? `${rig.levels[args[0]]}\n` : "RPRT -11\n";
         else if (command === "u") reply = "0\n";
@@ -383,6 +383,80 @@ const stopOrder = rig => {
   return [tail.indexOf("W AC120; 0"), tail.indexOf("W TX0; 0"), tail.indexOf("T 0")];
 };
 const inOrder = order => order[0] >= 0 && order[0] < order[1] && order[1] < order[2];
+
+test("rigctld replies tolerate surrounding whitespace: ' RPRT 0' is success, any other report or reply still fails", async () => {
+  const server = net.createServer(socket => {
+    socket.on("error", () => {});
+    socket.on("data", chunk => {
+      const line = chunk.toString().trim();
+      if (line === "T 0") socket.write(" RPRT 0\n");
+      else if (line === "T 1") socket.write(" RPRT -9 \n");
+      else socket.write("garbage\n");
+    });
+  });
+  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+  const client = new RigctldClient({ port: server.address().port, reconnectMs: 50 });
+  const connected = new Promise(resolve => client.once("connect", resolve));
+  client.start();
+  try {
+    await connected;
+    await client.setPtt(false);
+    await assert.rejects(client.setPtt(true), error => error instanceof RigctldError && error.code === -9);
+    await assert.rejects(client.setFreq(7100000), error => error instanceof RigctldError && error.code === "protocol");
+  } finally { client.stop(); server.closeAllConnections?.(); await new Promise(resolve => server.close(resolve)); }
+});
+
+test("FTX-1 ATAS tune: temporary CW-L/5 W and AC100 are not operator changes, RI0/TX follow the tune, raw SWR 255 is bounded by the cap", async () => {
+  const rig = await atasRig();
+  Object.assign(rig.raw, {
+    AC: "AC100;",
+    PC: () => (rig.tuning ? "PC2005;" : "PC2010;"),
+    RI0: () => (!rig.tuning ? "RI00000000;" : rig.found ? "RI00010100;" : "RI01010100;"),
+    RM6: () => (!rig.tuning ? "RM6000000;" : rig.found ? "RM6007000;" : "RM6255000;")
+  });
+  rig.found = false;
+  rig.modeReply = () => (rig.tuning ? "CWR\n500\n" : "USB\n2400\n");
+  const { cmd, call, state, cleanup } = await startAgent(rig, atasOptions({ tuneHiSwrMs: 200, tuneMaxSeconds: 20, meterMs: 50 }));
+  let stopBeat = () => {};
+  try {
+    stopBeat = keepAlive(call);
+    assert.equal((await cmd({ cmd: "tune" })).status, 200);
+    await waitFor(async () => (await state()).mode === "CWR");
+    // Hi-SWR flag and raw SWR 255 for well over the trip times: the tune keeps running until the radio finishes it.
+    await sleep(1200);
+    assert.ok((await state()).tune);
+    assert.ok(!afterTune(rig).includes("T 0"));
+    // Match found: HI-SWR cleared and raw SWR low while still tuning; the radio ends the tune only after the agent sampled it.
+    rig.found = true;
+    await waitFor(async () => (await state()).tx?.swr === 7);
+    assert.ok((await state()).tune);
+    assert.ok(!afterTune(rig).includes("T 0"));
+    rig.tuning = false;
+    await waitFor(async () => (await state()).tuneResult);
+    const done = await state();
+    assert.deepEqual([done.tuneResult.outcome, done.tuneResult.txOff], ["success", true]);
+    await waitFor(async () => (await state()).mode === "USB");
+    // The agent never writes mode or power back, and never reads AC to follow the tune.
+    assert.ok(!rig.log.some(line => /^M /.test(line) || /^W (PC|MD)\d/.test(line) || /^L RFPOWER/.test(line)), JSON.stringify(rig.log));
+  } finally { stopBeat(); await cleanup(); await rig.close(); }
+});
+
+test("a tune that never ends keeps raw SWR 255 bounded by the time cap on a real-FTX-1 style tune", async () => {
+  const rig = await atasRig();
+  Object.assign(rig.raw, { AC: "AC100;", PC: "PC2005;", RI0: "RI01010100;", RM6: "RM6255000;" });
+  rig.modeReply = () => "CWR\n500\n";
+  const { cmd, call, state, cleanup } = await startAgent(rig, atasOptions({ tuneHiSwrMs: 200, tuneMaxSeconds: 2, meterMs: 50 }));
+  let stopBeat = () => {};
+  try {
+    stopBeat = keepAlive(call);
+    assert.equal((await cmd({ cmd: "tune" })).status, 200);
+    await sleep(1000);
+    assert.ok((await state()).tune);
+    await waitFor(() => afterTune(rig).includes("T 0"), 5000);
+    assert.ok(inOrder(stopOrder(rig)));
+    assert.ok(!rig.log.some(line => /^M /.test(line) || /^W (PC|MD)\d/.test(line)));
+  } finally { stopBeat(); await cleanup(); await rig.close(); }
+});
 
 test("ATAS tune sends AC123 and completes by itself with AC120", async () => {
   const rig = await atasRig();

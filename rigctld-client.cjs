@@ -239,7 +239,7 @@ class RigctldClient extends EventEmitter {
   consumeRaw(item) {
     this.discardGhostReplies();
     if (!this.buffer) return;
-    const report = /^RPRT (-?\d+)\r?\n/.exec(this.buffer);
+    const report = /^[ \t]*RPRT[ \t]+(-?\d+)[ \t]*\r?\n/.exec(this.buffer);
     if (report) {
       this.buffer = this.buffer.slice(report[0].length);
       const code = Number(report[1]);
@@ -291,7 +291,8 @@ class RigctldClient extends EventEmitter {
   settle() {
     const item = this.current;
     const first = this.lines[0];
-    const report = /^RPRT (-?\d+)$/.exec(first);
+    // Hamlib 4.7.2 can answer " RPRT 0" with a leading space: surrounding whitespace is not an error.
+    const report = /^\s*RPRT\s+(-?\d+)\s*$/.exec(first);
     let done = false;
     let error = null;
     let result = null;
@@ -301,7 +302,7 @@ class RigctldClient extends EventEmitter {
       if (code === 0) result = [];
       else error = new RigctldError(`rigctld error RPRT ${code}`, code);
     } else if (item.block) {
-      const last = /^RPRT (-?\d+)$/.exec(this.lines[this.lines.length - 1]);
+      const last = /^\s*RPRT\s+(-?\d+)\s*$/.exec(this.lines[this.lines.length - 1]);
       if (last) {
         done = true;
         if (Number(last[1]) === 0) result = this.lines.slice(0, -1);

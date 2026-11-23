@@ -100,9 +100,9 @@ function createRotor(options = {}) {
           buffer = buffer.slice(index + 1);
           lines.push(line);
           if (lines.length > 5) { finish(new RotorError("rotor_invalid_response")); return; }
-          if (line.startsWith("RPRT ")) {
+          if (line.trim().startsWith("RPRT ")) {
             if (lines[0].split(":")[0] !== expected) finish(new RotorError("rotor_invalid_response"));
-            else if (line !== "RPRT 0") finish(new RotorError("rotor_backend_error"));
+            else if (line.trim() !== "RPRT 0") finish(new RotorError("rotor_backend_error"));
             else finish(null, lines.slice(1, -1));
             return;
           }
