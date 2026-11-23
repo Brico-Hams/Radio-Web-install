@@ -145,6 +145,15 @@ ni valores de protocolo.
   usa ES/EN/FR/PT; el selector principal del Workspace usa ES/EN-US/FR/DE.
   Los manuales y recursos nativos tienen coberturas propias.
 
+## Procedencia de código y conocimiento de terceros
+
+Todo código adaptado de terceros se registra en [THIRD-PARTY-REUSE.md](THIRD-PARTY-REUSE.md),
+que fija la política de licencias (REUSE o solo hechos), la lista de repositorios de la
+colección y el método para radios nuevas: perfil de placa por modelo y revisión, señales
+clasificadas como documentadas, medidas, inferidas o pendientes (solo las dos primeras pueden
+actuar sobre hardware), procedimiento de portado con pruebas en host antes de TX y un
+coordinador de seguridad para los periféricos de estación. `data/third-party/` no se publica.
+
 ## Compilación, pruebas y continuación
 
 Consulta los requisitos y comandos actualizados de [integración](REMOTE_STATION.md)
