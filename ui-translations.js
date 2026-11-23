@@ -2157,6 +2157,48 @@ Trampa de {0} MHz: L y C resuenan en {1} MHz; con C = {2} pF usa L = {3} uH.|Tra
 Red L a {0} MHz para Z = {1} ohm hacia Z0 = {2} ohm: serie {3}, paralelo {4}.|L-network at {0} MHz for Z = {1} ohm to Z0 = {2} ohm: series {3}, shunt {4}.|Réseau en L à {0} MHz pour Z = {1} ohm vers Z0 = {2} ohm : série {3}, parallèle {4}.|L-Netzwerk bei {0} MHz für Z = {1} Ohm auf Z0 = {2} Ohm: Reihe {3}, parallel {4}.
 SWR {0} a {1} MHz (limite {2}): no hay correcciones que proponer.|SWR {0} at {1} MHz (limit {2}): no corrections to suggest.|ROS {0} à {1} MHz (limite {2}) : aucune correction à proposer.|SWR {0} bei {1} MHz (Grenze {2}): keine Korrekturen vorzuschlagen.
 SWR minimo {0} en {1} MHz, fuera de la banda {2}-{3} MHz.|Minimum SWR {0} at {1} MHz, outside the {2}-{3} MHz band.|ROS minimal {0} à {1} MHz, hors de la bande {2}-{3} MHz.|Minimales SWR {0} bei {1} MHz, außerhalb des Bandes {2}-{3} MHz.
+Pendiente de validar con hardware real. El rotor solo se mueve con una orden tuya y se para al cerrar o perder la conexion.|Not yet validated on real hardware. The rotator only moves on your command and stops when you close or lose the connection.|Pas encore validé sur du matériel réel. Le rotor ne bouge que sur votre ordre et s’arrête à la fermeture ou à la perte de connexion.|Noch nicht an echter Hardware geprüft. Der Rotor bewegt sich nur auf deinen Befehl und stoppt beim Schließen oder Verbindungsverlust.
+Posicion (azimut / elevacion):|Position (azimuth / elevation):|Position (azimut / élévation) :|Position (Azimut / Elevation):
+Limites (azimut / elevacion):|Limits (azimuth / elevation):|Limites (azimut / élévation) :|Grenzen (Azimut / Elevation):
+Calibracion (azimut / elevacion):|Calibration (azimuth / elevation):|Étalonnage (azimut / élévation) :|Kalibrierung (Azimut / Elevation):
+Velocidad y finales de carrera: pendiente de fuente|Speed and limit switches: pending a source|Vitesse et fins de course : en attente de source|Geschwindigkeit und Endschalter: Quelle ausstehend
+La parada del rotor no esta confirmada: pulsa Parar.|The rotator stop is not confirmed: press Stop.|L’arrêt du rotor n’est pas confirmé : appuyez sur Arrêter.|Der Rotor-Stopp ist nicht bestätigt: Stopp drücken.
+Azimut objetivo|Target azimuth|Azimut cible|Zielazimut
+Elevacion objetivo|Target elevation|Élévation cible|Zielelevation
+Leer posicion|Read position|Lire la position|Position lesen
+Aparcar|Park|Parquer|Parken
+Seguimiento de satelite|Satellite tracking|Suivi de satellite|Satellitenverfolgung
+Archivo de pase del planificador|Pass file from the planner|Fichier de passage du planificateur|Passdatei des Planers
+Seguir el pase|Follow the pass|Suivre le passage|Überflug verfolgen
+Dejar de seguir|Stop following|Arrêter le suivi|Verfolgung beenden
+Tienes el control del rotor|You control the rotator|Vous contrôlez le rotor|Du steuerst den Rotor
+Movimiento activado|Motion enabled|Mouvement activé|Bewegung aktiviert
+Otro operador tiene el control del rotor.|Another operator controls the rotator.|Un autre opérateur contrôle le rotor.|Ein anderer Bediener steuert den Rotor.
+El movimiento del rotor esta desactivado en la estacion.|Rotator motion is disabled at the station.|Le mouvement du rotor est désactivé à la station.|Die Rotorbewegung ist an der Station deaktiviert.
+Se perdio el control del rotor.|Rotator control was lost.|Le contrôle du rotor a été perdu.|Die Rotorsteuerung ging verloren.
+No se puede hablar con rotctld.|Cannot talk to rotctld.|Impossible de communiquer avec rotctld.|Kommunikation mit rotctld nicht möglich.
+Respuesta no valida de rotctld.|Invalid reply from rotctld.|Réponse non valide de rotctld.|Ungültige Antwort von rotctld.
+Posicion del rotor no valida.|Invalid rotator position.|Position du rotor non valide.|Ungültige Rotorposition.
+rotctld ha rechazado la orden.|rotctld rejected the command.|rotctld a refusé la commande.|rotctld hat den Befehl abgelehnt.
+Orden de rotor no valida.|Invalid rotator command.|Commande de rotor non valide.|Ungültiger Rotorbefehl.
+No hay posicion de aparcado configurada.|No park position is configured.|Aucune position de parcage n’est configurée.|Keine Parkposition konfiguriert.
+Orden repetida o cancelada.|Repeated or cancelled command.|Commande répétée ou annulée.|Wiederholter oder abgebrochener Befehl.
+El rotor esta cerrado.|The rotator is closed.|Le rotor est fermé.|Der Rotor ist geschlossen.
+Error del rotor.|Rotator error.|Erreur du rotor.|Rotorfehler.
+Archivo de pase no valido.|Invalid pass file.|Fichier de passage non valide.|Ungültige Passdatei.
+El pase dura mas de 30 minutos.|The pass lasts more than 30 minutes.|Le passage dure plus de 30 minutes.|Der Überflug dauert mehr als 30 Minuten.
+Pase terminado.|Pass finished.|Passage terminé.|Überflug beendet.
+Satelite bajo el horizonte: el rotor espera.|Satellite below the horizon: the rotator waits.|Satellite sous l’horizon : le rotor attend.|Satellit unter dem Horizont: der Rotor wartet.
+Azimut fuera de los limites del rotor: el rotor espera.|Azimuth outside the rotator limits: the rotator waits.|Azimut hors des limites du rotor : le rotor attend.|Azimut außerhalb der Rotorgrenzen: der Rotor wartet.
+Exportar pase para el rotor (.json)|Export pass for the rotator (.json)|Exporter le passage pour le rotor (.json)|Überflug für den Rotor exportieren (.json)
+Archivo de pase para el rotor generado.|Rotator pass file generated.|Fichier de passage pour le rotor généré.|Passdatei für den Rotor erzeugt.
+No hay ningun pase seleccionado.|No pass is selected.|Aucun passage n’est sélectionné.|Es ist kein Überflug ausgewählt.
+Permitir mover el rotor|Allow moving the rotator|Autoriser le mouvement du rotor|Rotorbewegung erlauben
+Desactivado por defecto: sin esto el rotor solo se lee.|Off by default: without it the rotator is read-only.|Désactivé par défaut : sans cela le rotor est en lecture seule.|Standardmäßig aus: ohne dies wird der Rotor nur gelesen.
+Aparcado: azimut|Park: azimuth|Parcage : azimut|Parken: Azimut
+Aparcado: elevacion|Park: elevation|Parcage : élévation|Parken: Elevation
+Calibracion: azimut|Calibration: azimuth|Étalonnage : azimut|Kalibrierung: Azimut
+Calibracion: elevacion|Calibration: elevation|Étalonnage : élévation|Kalibrierung: Elevation
 `.trim().split("\n").map(line => line.split("|")));
   root.BricohamsUITranslations = entries;
   if (typeof module === "object" && module.exports) module.exports = entries;

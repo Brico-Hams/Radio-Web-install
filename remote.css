@@ -100,6 +100,11 @@ input[type=range]{width:100%;min-height:36px;accent-color:var(--accent)}
 .audio,.lock,.tune-stop{min-width:84px;min-height:72px}
 .tune-stop{background:var(--tx);border-color:var(--tx);color:var(--on-tx);font-weight:700}
 .tune-stop[hidden]{display:none}
+.rotor[hidden]{display:none}
+.rotor-row{display:flex;flex-wrap:wrap;gap:.5rem;margin:.6rem 0;align-items:end}
+.rotor-row label,.rotor-file{display:flex;flex-direction:column;gap:.2rem;font-size:.85rem}
+.rotor-row input{min-height:44px;width:8rem}
+.rotor-row button{min-height:44px}
 .ptt{flex:1 1 auto;min-height:72px;font-size:1.25rem;font-weight:700;background:var(--accent);border-color:var(--accent);color:var(--on-accent);touch-action:none;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:.1rem}
 .ptt[aria-pressed=true]{background:var(--tx);border-color:var(--tx);color:var(--on-tx)}
 .tx-timer{font-family:ui-monospace,Consolas,monospace;font-size:1rem;font-variant-numeric:tabular-nums}

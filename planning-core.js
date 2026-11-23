@@ -314,6 +314,14 @@
       return { time: point.time, azimuth: point.azimuth, elevation: point.elevation, rangeKm: point.rangeKm };
     });
   }
+  // Hand-off file for the remote rotor console (remote-rotor-ui.js): AZ/EL by UTC time only, independent of Doppler.
+  function passTrackFile(orbital, observer, pass, name = "", points = 120) {
+    const track = passTrack(orbital, observer, pass, points);
+    return {
+      format: "radicodex-pass-track", version: 1, name: String(name).slice(0, 60),
+      samples: track.map(point => ({ t: point.time, az: Math.round(point.azimuth * 10) / 10, el: Math.round(point.elevation * 10) / 10 }))
+    };
+  }
   function subPoint(orbital, time) {
     const { record } = validateTLE(orbital, time);
     const date = new Date(time);
@@ -596,6 +604,6 @@
     R.assert(entries.length > 0 && entries.length <= 1024, "Seleccion TG vacia o superior a 1024. Ajusta el prefijo.");
     return { provider: "BrandMeister", entries };
   }
-  Object.assign(R, { norm, asciiName, validMHz, normalizeRepeaters, filterRecords, channelCSV, parseChannelCSV, validateSatellitePlan, validateTLE, validateSatellitesFile, validateSatelliteEntry, pickSatellite, satelliteAgeWarning, predictPasses, passTrack, subPoint, lookAt, maidenheadToLatLon, passesToIcs, mutualPasses, predictMonthlyPasses, satelliteChannel, dopplerChannels, catPassTarget, CatPassTracker, csvCell, pmrChannels, bricohamsRepeaterChannels, murciaAirportTemplate, murciaBroadcastTemplate, normalizeTalkgroups });
+  Object.assign(R, { norm, asciiName, validMHz, normalizeRepeaters, filterRecords, channelCSV, parseChannelCSV, validateSatellitePlan, validateTLE, validateSatellitesFile, validateSatelliteEntry, pickSatellite, satelliteAgeWarning, predictPasses, passTrack, passTrackFile, subPoint, lookAt, maidenheadToLatLon, passesToIcs, mutualPasses, predictMonthlyPasses, satelliteChannel, dopplerChannels, catPassTarget, CatPassTracker, csvCell, pmrChannels, bricohamsRepeaterChannels, murciaAirportTemplate, murciaBroadcastTemplate, normalizeTalkgroups });
   if (typeof module !== "undefined") module.exports = R;
 })(globalThis);

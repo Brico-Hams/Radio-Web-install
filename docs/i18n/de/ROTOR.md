@@ -103,3 +103,14 @@ den Doppler des Funkgeräts parallel korrigiert.
 - Firmware `0.3.0-prototype`: `esp32` und `esp32_nema17` lassen sich mit PlatformIO kompilieren.
 - **Ausstehend**: Test mit physischem Rotor, echtem WLAN und BLE sowie echtem Smartphone-
   Kompass.
+
+## Fernsteuerung des Rotors
+
+- Die Remote-Konsole (`remote.html`, auch in `RemoteShackActivity` und `RemoteStationActivity`) zeigt das Rotor-Panel: lesen, AZ/EL anfahren, parken und stoppen über `/api/rotor`.
+- Nur ein Client steuert den Rotor gleichzeitig (3-s-Lease, jede 1 s erneuert); andere erhalten `rotor_busy`. Stopp steht jedem authentifizierten Client offen.
+- Schließen der Seite, Verbindungsverlust oder ein abgelaufener Lease stoppt den Rotor. Jede Bewegung ist auf 30 s begrenzt.
+- Bewegung ist standardmäßig aus (`motion` in der Rotor-Konfiguration); ohne sie wird der Rotor nur gelesen.
+- Warnung: niemals ohne angepasste Last oder Antenne senden.
+- Satellitenverfolgung: im Planer erzeugt „Überflug für den Rotor exportieren (.json)“ `radicodex-pass-track` (Proben `t`/`az`/`el`, Doppler-unabhängig). Die Konsole importiert die Datei und bewegt erst nach Druck auf die Verfolgungstaste.
+- Geschwindigkeit und Endschalter: pendiente de fuente (deaktiviert).
+- Unterstützung: Hamlib `rotctld` mit den Katalogmodellen (`data/remote-station-catalog.json`) und das Bricohams-BLE/AP-Protokoll auf Android. GS-232A/B und SPID ROT2PROG: pendiente de fuente.

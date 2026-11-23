@@ -477,6 +477,7 @@ class StationAgentRequestHandler(SecureRequestHandler):
                     "rotor_lease_expired",
                     "rotor_stop_unconfirmed",
                     "rotor_request_cancelled_or_repeated",
+                    "rotor_park_not_configured",
                 )
                 else HTTPStatus.SERVICE_UNAVAILABLE
             )

@@ -156,7 +156,7 @@
   function fillRotors() {
     $.rotor.replaceChildren(el("option", { value: "", text: "Sin rotor" }));
     for (const rotor of state.catalog.rotors) $.rotor.append(el("option", { value: rotor.id, text: `${rotor.maker} ${rotor.model}` }));
-    $.fRotorPort.hidden = !$.rotor.value;
+    syncRotor();
   }
 
   function collect() {
@@ -169,7 +169,12 @@
     } else {
       config.netAddress = $.net.value.trim();
     }
-    if ($.rotor.value) config.rotor = { id: $.rotor.value, port: $.rotorPort.value.trim() };
+    if ($.rotor.value) {
+      config.rotor = { id: $.rotor.value, port: $.rotorPort.value.trim(), motion: $.rotorMotion.checked };
+      if ($.rotorParkAz.value.trim() && $.rotorParkEl.value.trim()) config.rotor.park = { azimuth: Number($.rotorParkAz.value), elevation: Number($.rotorParkEl.value) };
+      if ($.rotorOffAz.value.trim()) config.rotor.azimuthOffset = Number($.rotorOffAz.value);
+      if ($.rotorOffEl.value.trim()) config.rotor.elevationOffset = Number($.rotorOffEl.value);
+    }
     if ($.relayUrl.value.trim()) {
       config.relay = { url: $.relayUrl.value.trim(), station: $.relayStation.value.trim() };
       if ($.relaySecret.value) config.relay.secret = $.relaySecret.value;
@@ -213,7 +218,12 @@
     $.net.value = config.netAddress || "";
     $.rotor.value = config.rotor ? config.rotor.id : "";
     $.rotorPort.value = config.rotor ? config.rotor.port : "";
-    $.fRotorPort.hidden = !$.rotor.value;
+    $.rotorMotion.checked = config.rotor?.motion === true;
+    $.rotorParkAz.value = config.rotor?.park ? String(config.rotor.park.azimuth) : "";
+    $.rotorParkEl.value = config.rotor?.park ? String(config.rotor.park.elevation) : "";
+    $.rotorOffAz.value = config.rotor?.azimuthOffset !== undefined ? String(config.rotor.azimuthOffset) : "";
+    $.rotorOffEl.value = config.rotor?.elevationOffset !== undefined ? String(config.rotor.elevationOffset) : "";
+    syncRotor();
     $.relayUrl.value = config.relay ? config.relay.url : "";
     $.relayStation.value = config.relay ? config.relay.station : "";
     $.relaySecret.value = "";
@@ -283,7 +293,12 @@
     $.net = el("input", { id: "rm-net", type: "text", autocomplete: "off", spellcheck: "false" });
     $.tunerKind = el("select", { id: "rm-tuner" }, el("option", { value: "internal", text: "interno" }), el("option", { value: "atas", text: "ATAS" }));
     $.ports = el("ul", { class: "rm-list" });
-    $.rotor = el("select", { id: "rm-rotor", on: { change: () => { $.fRotorPort.hidden = !$.rotor.value; } } });
+    $.rotorMotion = el("input", { id: "rm-rotor-motion", type: "checkbox" });
+    $.rotorParkAz = el("input", { id: "rm-rotor-park-az", type: "number", step: "any" });
+    $.rotorParkEl = el("input", { id: "rm-rotor-park-el", type: "number", step: "any" });
+    $.rotorOffAz = el("input", { id: "rm-rotor-off-az", type: "number", step: "any", min: -180, max: 180 });
+    $.rotorOffEl = el("input", { id: "rm-rotor-off-el", type: "number", step: "any", min: -180, max: 180 });
+    $.rotor = el("select", { id: "rm-rotor", on: { change: syncRotor } });
     $.rotorPort = el("input", { id: "rm-rotor-port", type: "text", autocomplete: "off", spellcheck: "false" });
     $.relayUrl = el("input", { id: "rm-relay-url", type: "url", autocomplete: "off" });
     $.relayStation = el("input", { id: "rm-relay-station", type: "text", autocomplete: "off" });
@@ -311,7 +326,10 @@
         $.notes),
       el("section", { class: "rm-card" }, el("h2", { text: "Radios USB detectadas" }), $.ports, el("div", { class: "rm-row" }, refresh)),
       el("section", { class: "rm-card" }, el("h2", { text: "Rotor (opcional)" }),
-        el("div", { class: "rm-grid" }, field("rm-rotor", "Rotor", $.rotor), field("rm-rotor-port", "Puerto del rotor", $.rotorPort))),
+        el("div", { class: "rm-grid" }, field("rm-rotor", "Rotor", $.rotor), field("rm-rotor-port", "Puerto del rotor", $.rotorPort),
+          field("rm-rotor-motion", "Permitir mover el rotor", $.rotorMotion, "Desactivado por defecto: sin esto el rotor solo se lee."),
+          field("rm-rotor-park-az", "Aparcado: azimut", $.rotorParkAz), field("rm-rotor-park-el", "Aparcado: elevacion", $.rotorParkEl),
+          field("rm-rotor-off-az", "Calibracion: azimut", $.rotorOffAz), field("rm-rotor-off-el", "Calibracion: elevacion", $.rotorOffEl))),
       el("section", { class: "rm-card" }, el("h2", { text: "Rele (opcional)" }),
         el("div", { class: "rm-grid" }, field("rm-relay-url", "URL del rele", $.relayUrl), field("rm-relay-station", "Nombre de la estacion", $.relayStation),
           field("rm-relay-secret", "Secreto del rele", $.relaySecret, "Deja vacio para conservar el secreto guardado."))),
@@ -325,6 +343,12 @@
       el("section", { class: "rm-card" }, el("h2", { text: "Estado" }), $.status));
     for (const id of ["port", "baud", "net", "tuner"]) $[`f${id[0].toUpperCase()}${id.slice(1)}`] = document.getElementById(`f-rm-${id}`);
     $.fRotorPort = document.getElementById("f-rm-rotor-port");
+    $.fRotorExtra = ["motion", "park-az", "park-el", "off-az", "off-el"].map(id => document.getElementById(`f-rm-rotor-${id}`));
+  }
+
+  function syncRotor() {
+    $.fRotorPort.hidden = !$.rotor.value;
+    for (const node of $.fRotorExtra) node.hidden = !$.rotor.value;
   }
 
   async function loadPorts() {

@@ -103,3 +103,14 @@ corregge il Doppler della radio in parallelo.
 - Firmware `0.3.0-prototype`: `esp32` ed `esp32_nema17` compilano con PlatformIO.
 - **In sospeso**: prova con rotore fisico, Wi-Fi e BLE reali e bussola di telefono
   reale.
+
+## Rotore remoto
+
+- La console remota (`remote.html`, anche dentro `RemoteShackActivity` e `RemoteStationActivity`) mostra il pannello del rotore: leggere, andare ad AZ/EL, parcheggiare e fermare, tramite `/api/rotor`.
+- Un solo client controlla il rotore alla volta (lease di 3 s rinnovato ogni 1 s); gli altri ricevono `rotor_busy`. Lo stop è disponibile a ogni client autenticato.
+- Chiudere la pagina, perdere la connessione o la scadenza del lease ferma il rotore. Ogni movimento è limitato a 30 s.
+- Il movimento è disattivato per impostazione predefinita (`motion` nella configurazione del rotore); senza di esso il rotore è in sola lettura.
+- Avviso: non trasmettere mai senza carico o antenna adattati.
+- Inseguimento satellite: nel pianificatore, «Esporta passaggio per il rotore (.json)» produce `radicodex-pass-track` (campioni `t`/`az`/`el`, indipendenti dal Doppler). La console lo importa e inizia a muoversi solo dopo aver premuto il pulsante di inseguimento.
+- Velocità e finecorsa: pendiente de fuente (disattivati).
+- Supporto: Hamlib `rotctld` con i modelli del catalogo (`data/remote-station-catalog.json`) e protocollo BLE/AP Bricohams su Android. GS-232A/B e SPID ROT2PROG: pendiente de fuente.

@@ -218,3 +218,58 @@ class RotorTests(unittest.TestCase):
         with self.assertRaisesRegex(RotorError, "rotor_request_cancelled_or_repeated"):
             self.rotor.operate(command)
         self.assertEqual(sum(cmd.startswith("+P ") for cmd in self.broker.commands), 1)
+
+
+class RotorExtensionTests(unittest.TestCase):
+    def setUp(self):
+        self.broker = RotorBroker()
+        self.rotor = RotorController(
+            RotorConfig(
+                self.broker.server_address[1], "Ext", 0, 360, 0, 90, True,
+                park_azimuth=180, park_elevation=0, azimuth_offset=5, elevation_offset=0,
+            )
+        )
+
+    def tearDown(self):
+        self.rotor.close()
+        self.broker.stop()
+
+    @staticmethod
+    def op(operation, **fields):
+        return {"operation": operation, "request_id": str(uuid.uuid4()), **fields}
+
+    def test_offset_is_applied_to_reads_and_writes(self):
+        self.assertEqual(self.rotor.snapshot(read_position=True)["position"]["azimuth_deg"], 25)
+        self.rotor.operate(self.op("move", azimuth_deg=100, elevation_deg=10))
+        self.assertEqual(self.broker.position, (95.0, 10.0))
+
+    def test_park_goes_to_configured_position(self):
+        result = self.rotor.operate(self.op("park"))
+        self.assertEqual(result["accepted_target"], {"azimuth_deg": 180.0, "elevation_deg": 0.0})
+        self.assertEqual(self.broker.position, (175.0, 0.0))
+        self.assertTrue(result["capabilities"]["park"])
+
+    def test_park_without_configuration_is_refused_before_backend_io(self):
+        bare = RotorController(RotorConfig(self.broker.server_address[1], "Bare", 0, 360, 0, 0, True))
+        try:
+            with self.assertRaisesRegex(RotorError, "rotor_park_not_configured"):
+                bare.operate(self.op("park"))
+            self.assertFalse(bare.snapshot()["capabilities"]["park"])
+        finally:
+            bare.close()
+        self.assertEqual(self.broker.commands, [])
+
+    def test_tracking_retargets_only_with_the_live_lease(self):
+        lease = self.rotor.operate(self.op("move", azimuth_deg=10, elevation_deg=0))["lease_id"]
+        with self.assertRaisesRegex(RotorError, "rotor_busy"):
+            self.rotor.operate(self.op("move", azimuth_deg=20, elevation_deg=0))
+        with self.assertRaisesRegex(RotorError, "rotor_busy"):
+            self.rotor.operate(self.op("move", azimuth_deg=20, elevation_deg=0, lease_id="other"))
+        result = self.rotor.operate(self.op("move", azimuth_deg=20, elevation_deg=5, lease_id=lease))
+        self.assertEqual(result["lease_id"], lease)
+        self.assertEqual(self.broker.position, (15.0, 5.0))
+
+    def test_invalid_park_or_offset_configuration_is_rejected(self):
+        for kwargs in ({"park_azimuth": 10}, {"azimuth_offset": 181}, {"park_azimuth": 400, "park_elevation": 0}):
+            with self.subTest(kwargs=kwargs), self.assertRaises(ValueError):
+                RotorConfig(1234, "X", 0, 360, 0, 90, True, **kwargs)

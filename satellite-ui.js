@@ -118,6 +118,7 @@
           <a id="sat-act-cat" class="sat-btn" href="quansheng.html#plan-sat">Seguir con CAT en Quansheng</a>
           <a id="sat-act-gd77" class="sat-btn" href="opengd77.html#planning-panel">Preparar memorias en OpenGD77</a>
           <button id="sat-act-ics" type="button" class="sat-btn">Exportar estos pases (.ics)</button>
+          <button id="sat-act-rotor" type="button" class="sat-btn">Exportar pase para el rotor (.json)</button>
         </div>
         <p id="sat-act-msg" class="sat-msg" role="status"></p>
         <p class="sat-hint">Estas acciones solo abren herramientas o descargan un archivo: no transmiten ni escriben en la radio.</p>
@@ -234,7 +235,7 @@
       "sat-list-note", "sat-scroller", "sat-list", "sat-view-radar", "sat-view-map", "sat-panel-radar", "sat-panel-map", "sat-radar", "sat-radar-dyn",
       "sat-map", "sat-land", "sat-graticule", "sat-map-dyn", "sat-map-note", "sat-d-empty", "sat-d-body", "sat-d-name", "sat-d-norad", "sat-d-badge",
       "sat-d-label", "sat-d-value", "sat-d-events", "sat-live", "sat-live-az", "sat-live-el", "sat-live-range", "sat-tx", "sat-tx-empty",
-      "sat-act-cat", "sat-act-gd77", "sat-act-ics", "sat-act-msg"].map(id => [id.slice(4), $(id)]));
+      "sat-act-cat", "sat-act-gd77", "sat-act-ics", "sat-act-rotor", "sat-act-msg"].map(id => [id.slice(4), $(id)]));
 
     const saved = readJSON("sessionStorage", FILTER_KEY) || {};
     const filters = {
@@ -667,6 +668,21 @@
         link.remove();
         root.setTimeout(() => root.URL.revokeObjectURL(url), 1000);
         ui["act-msg"].textContent = "Archivo .ics generado.";
+      } catch (error) { ui["act-msg"].textContent = error.message; }
+    });
+
+    ui["act-rotor"].addEventListener("click", () => {
+      const pass = state.selected;
+      if (!pass) { ui["act-msg"].textContent = "No hay ningun pase seleccionado."; return; }
+      try {
+        const file = R.passTrackFile(pass.sat, observer(), pass.raw, pass.name);
+        const url = root.URL.createObjectURL(new Blob([JSON.stringify(file)], { type: "application/json" }));
+        const link = el("a", { href: url, download: `pase-rotor-${pass.norad}.json` });
+        doc.body.append(link);
+        link.click();
+        link.remove();
+        root.setTimeout(() => root.URL.revokeObjectURL(url), 1000);
+        ui["act-msg"].textContent = "Archivo de pase para el rotor generado.";
       } catch (error) { ui["act-msg"].textContent = error.message; }
     });
 

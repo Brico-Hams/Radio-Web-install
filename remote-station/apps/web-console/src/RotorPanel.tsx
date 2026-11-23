@@ -1,6 +1,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import { ApiError, createControlRequest, getApiData } from './api'
 import { useStableTranslation } from './i18n'
+import {
+  MAX_TRACK_FILE_BYTES,
+  PassTrackError,
+  parsePassTrack,
+  trackTarget,
+  type PassTrack,
+  type RotorLimits,
+  type TrackTarget,
+} from './passTrack'
+
+const RETARGET_DEG = 0.5
 
 type RotorState = {
   api_version: 'v1'
@@ -12,6 +23,7 @@ type RotorState = {
   motion_enabled: boolean
   lease_active: boolean
   stop_failed: boolean
+  park?: { azimuth_deg: number; elevation_deg: number } | null
   lease_id?: string
   limits: {
     azimuth_min: number
@@ -62,12 +74,23 @@ export function RotorPanel({ token }: { token: string }) {
   const generation = useRef(0)
   const moving = useRef(false)
   const requestId = useRef<string | null>(null)
+  const track = useRef<PassTrack | null>(null)
+  const lastTarget = useRef<{ azimuth: number; elevation: number } | null>(null)
+  const limitsRef = useRef<RotorLimits | null>(null)
+  const [pass, setPass] = useState<PassTrack | null>(null)
+  const [following, setFollowing] = useState(false)
+  const [trackInfo, setTrackInfo] = useState('')
 
   const stop = useCallback(async (announce = true) => {
     generation.current += 1
     active.current = null
     moving.current = false
-    if (announce) setLease(null)
+    track.current = null
+    lastTarget.current = null
+    if (announce) {
+      setLease(null)
+      setFollowing(false)
+    }
     try {
       const state = await sendControl('/rotor', {
         operation: 'stop',
@@ -108,9 +131,34 @@ export function RotorPanel({ token }: { token: string }) {
       if (pending || active.current !== lease) return
       pending = true
       try {
-        const state = await sendControl('/rotor', {
-          operation: 'renew', lease_id: lease,
-        }, isRotor)
+        const followed = track.current
+        const limits = limitsRef.current
+        let target: TrackTarget | null = null
+        if (followed && limits) target = trackTarget(followed, Date.now(), limits, lastTarget.current?.azimuth ?? 0)
+        if (target?.phase === 'after') {
+          setTrackInfo(translate('rotorPassFinished'))
+          void stop()
+          return
+        }
+        const last = lastTarget.current
+        let state: RotorState
+        if (target?.phase === 'active' && (!last || Math.abs(target.azimuth - last.azimuth) >= RETARGET_DEG ||
+          Math.abs(target.elevation - last.elevation) >= RETARGET_DEG)) {
+          // Retarget on the live lease: the AZ/EL stream is driven by the clock, never by Doppler.
+          requestId.current = crypto.randomUUID()
+          state = await sendControl('/rotor', {
+            operation: 'move', lease_id: lease, request_id: requestId.current,
+            azimuth_deg: target.azimuth, elevation_deg: target.elevation,
+          }, isRotor)
+          lastTarget.current = { azimuth: target.azimuth, elevation: target.elevation }
+          setTrackInfo(`${followed?.name || translate('rotorPassDefaultName')}: ${target.azimuth.toFixed(1)}° / ${target.elevation.toFixed(1)}°`)
+        } else {
+          state = await sendControl('/rotor', {
+            operation: 'renew', lease_id: lease,
+          }, isRotor)
+          if (target?.phase === 'below') setTrackInfo(translate('rotorPassBelowHorizon'))
+          if (target?.phase === 'limits') setTrackInfo(translate('rotorPassOutOfLimits'))
+        }
         if (active.current === lease) setData(state)
       } catch (renewError) {
         if (active.current === lease) {
@@ -131,6 +179,7 @@ export function RotorPanel({ token }: { token: string }) {
       const result = await getApiData(token, `/rotor${position ? '?command=position' : ''}`, isRotor)
       if (!result.allowed) throw new Error(t('radioPermission'))
       setData(result.data)
+      limitsRef.current = result.data.limits
       if (result.data.limits.elevation_min === result.data.limits.elevation_max) {
         setElevation(String(result.data.limits.elevation_min))
       }
@@ -141,22 +190,14 @@ export function RotorPanel({ token }: { token: string }) {
     }
   }
 
-  async function move(event: FormEvent) {
-    event.preventDefault()
-    if (!azimuth.trim() || !elevation.trim()) {
-      setError(t('rotorBothAngles'))
-      return
-    }
+  async function begin(body: Record<string, unknown>) {
     setBusy(true)
     setError('')
     moving.current = true
     const request = ++generation.current
     try {
       requestId.current = crypto.randomUUID()
-      const state = await sendControl('/rotor', {
-        operation: 'move', request_id: requestId.current,
-        azimuth_deg: Number(azimuth), elevation_deg: Number(elevation),
-      }, isRotor)
+      const state = await sendControl('/rotor', { ...body, request_id: requestId.current }, isRotor)
       if (generation.current !== request) {
         void stop()
         return
@@ -176,6 +217,50 @@ export function RotorPanel({ token }: { token: string }) {
       moving.current = false
       setBusy(false)
     }
+  }
+
+  async function loadPass(file: File | undefined) {
+    setPass(null)
+    setTrackInfo('')
+    if (!file) return
+    try {
+      if (file.size > MAX_TRACK_FILE_BYTES) throw new PassTrackError('invalid')
+      const parsed = parsePassTrack(await file.text())
+      setPass(parsed)
+      const clock = (ms: number) => new Date(ms).toLocaleTimeString()
+      setTrackInfo(`${parsed.name || t('rotorPassDefaultName')}: ${clock(parsed.samples[0].t)} - ${clock(parsed.samples[parsed.samples.length - 1].t)}`)
+    } catch (passError) {
+      setError(t(passError instanceof PassTrackError && passError.code === 'tooLong' ? 'rotorPassTooLong' : 'rotorPassInvalid'))
+    }
+  }
+
+  async function followPass() {
+    if (!pass || !data) return
+    // The first target (the pass position now, or its AOS point) is only sent after this explicit click.
+    const first = trackTarget(pass, Math.max(Date.now(), pass.samples[0].t), data.limits, 0)
+    if (first.phase !== 'active') {
+      setError(t('rotorPassNotReachable'))
+      return
+    }
+    limitsRef.current = data.limits
+    track.current = pass
+    lastTarget.current = { azimuth: first.azimuth, elevation: first.elevation }
+    setFollowing(true)
+    await begin({ operation: 'move', azimuth_deg: first.azimuth, elevation_deg: first.elevation })
+    if (!active.current) {
+      track.current = null
+      lastTarget.current = null
+      setFollowing(false)
+    }
+  }
+
+  function move(event: FormEvent) {
+    event.preventDefault()
+    if (!azimuth.trim() || !elevation.trim()) {
+      setError(t('rotorBothAngles'))
+      return Promise.resolve()
+    }
+    return begin({ operation: 'move', azimuth_deg: Number(azimuth), elevation_deg: Number(elevation) })
   }
 
   return (
@@ -215,7 +300,24 @@ export function RotorPanel({ token }: { token: string }) {
               disabled={busy || !!lease || !data.motion_enabled || data.stop_failed}>
               {t('rotorMove')}
             </button>
+            <button type="button" className="button button-secondary"
+              disabled={busy || !!lease || !data.motion_enabled || data.stop_failed || !data.park}
+              title={data.park ? undefined : t('rotorParkUnavailable')}
+              onClick={() => void begin({ operation: 'park' })}>
+              {t('rotorPark')}
+            </button>
           </form>
+          <h3>{t('rotorTracking')}</h3>
+          <label>{t('rotorPassFile')}
+            <input type="file" accept="application/json,.json" disabled={busy || following}
+              onChange={(event) => void loadPass(event.target.files?.[0])} />
+          </label>
+          <button type="button" className="button button-secondary"
+            disabled={following ? false : busy || !!lease || !pass || !data.motion_enabled || data.stop_failed}
+            onClick={() => (following ? void stop() : void followPass())}>
+            {following ? t('rotorUnfollow') : t('rotorFollow')}
+          </button>
+          {trackInfo ? <p>{trackInfo}</p> : null}
           <p>{lease ? t('rotorLeaseActive') : t('rotorLeaseInactive')}</p>
         </div>
       ) : null}
