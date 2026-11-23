@@ -331,6 +331,41 @@ export function isRadioCandidateCatalog(payload: unknown): payload is RadioCandi
   )
 }
 
+export type FeatureParityStatus = 'ok' | 'partial' | 'pendiente' | 'na'
+export type FeatureParityRadio = {
+  id: string
+  label: string
+  features: Record<string, { status: FeatureParityStatus; reason: string }>
+}
+export type FeatureParityCatalog = {
+  api_version: string
+  feature_order: string[]
+  radios: FeatureParityRadio[]
+}
+
+export function isFeatureParityCatalog(payload: unknown): payload is FeatureParityCatalog {
+  return (
+    isRecord(payload) &&
+    isString(payload.api_version) &&
+    Array.isArray(payload.feature_order) &&
+    payload.feature_order.every(isString) &&
+    Array.isArray(payload.radios) &&
+    payload.radios.every(
+      (radio: unknown) =>
+        isRecord(radio) &&
+        isString(radio.id) &&
+        isString(radio.label) &&
+        isRecord(radio.features) &&
+        Object.values(radio.features).every(
+          (feature) =>
+            isRecord(feature) &&
+            isOneOf(feature.status, ['ok', 'partial', 'pendiente', 'na']) &&
+            isString(feature.reason),
+        ),
+    )
+  )
+}
+
 export function isStationSnapshot(payload: unknown): payload is StationSnapshot {
   return (
     isRecord(payload) &&

@@ -163,7 +163,10 @@
   function renderParity(radio) {
     if (!$.parity) return;
     const items = radio ? parityView(state.catalog.parity, radio.id) : [];
-    $.parity.replaceChildren(...items.map(item => el("li", { class: item.enabled ? "rm-feature" : "rm-feature rm-off", title: item.reason, "aria-disabled": String(!item.enabled), text: `${item.label}: ${item.statusText}${item.enabled || !item.reason ? "" : ` — ${item.reason}`}` })));
+    $.parity.replaceChildren(...items.map(item => el("li", { class: item.enabled ? "rm-feature" : "rm-feature rm-off", title: item.reason, "aria-disabled": String(!item.enabled) },
+      // Separate nodes so ui-i18n translates the label and the status; the reason comes from the matrix.
+      el("span", { text: item.label }), el("span", { text: ": " }), el("span", { text: item.statusText }),
+      ...(item.enabled || !item.reason ? [] : [el("span", { text: " — " }), el("span", { text: item.reason })]))));
   }
 
   function syncLink() {

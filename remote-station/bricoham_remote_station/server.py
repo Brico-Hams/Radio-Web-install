@@ -33,6 +33,7 @@ from bricoham_remote_station.diagnostic_reports import (
     add_diagnostic_arguments,
     configure_diagnostics,
 )
+from bricoham_remote_station.feature_parity import feature_parity_catalog
 from bricoham_remote_station.logbook import (
     ExportLimitError,
     Qso,
@@ -70,6 +71,7 @@ HEALTH_PATH = "/healthz"
 STATUS_PATH = f"/api/{API_VERSION}/status"
 CAPABILITIES_PATH = f"/api/{API_VERSION}/capabilities"
 RADIOS_PATH = f"/api/{API_VERSION}/radios"
+FEATURE_PARITY_PATH = f"/api/{API_VERSION}/feature-parity"
 PROTOCOLS_PATH = f"/api/{API_VERSION}/protocols"
 DIAGNOSTICS_PATH = f"/api/{API_VERSION}/diagnostics"
 DEVICES_PATH = f"/api/{API_VERSION}/devices"
@@ -296,6 +298,16 @@ class CoordinatorRequestHandler(SecureRequestHandler):
                 self._send_error(HTTPStatus.FORBIDDEN, "forbidden")
                 return
             self._send_json(HTTPStatus.OK, radio_candidate_catalog())
+            return
+
+        if path == FEATURE_PARITY_PATH:
+            if role not in _CAPABILITY_ROLES:
+                self._send_error(HTTPStatus.FORBIDDEN, "forbidden")
+                return
+            try:
+                self._send_json(HTTPStatus.OK, feature_parity_catalog())
+            except (OSError, ValueError, KeyError):
+                self._send_error(HTTPStatus.SERVICE_UNAVAILABLE, "feature_parity_unavailable")
             return
 
         if path == PROTOCOLS_PATH:
