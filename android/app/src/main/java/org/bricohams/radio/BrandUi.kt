@@ -5,7 +5,10 @@ import android.content.Context
 import android.content.Intent
 import android.content.res.ColorStateList
 import android.graphics.Color
+import android.graphics.Typeface
 import android.graphics.drawable.Drawable
+import android.graphics.drawable.GradientDrawable
+import android.graphics.drawable.LayerDrawable
 import android.graphics.drawable.RippleDrawable
 import android.graphics.drawable.StateListDrawable
 import android.net.Uri
@@ -32,6 +35,111 @@ object BrandUi {
 
     private fun dp(context: Context, value: Int) = Brand.dp(context, value)
 
+    /** Button roles shared by every native screen: primary, secondary, danger (TX/stop/destructive) and selected. */
+    enum class ButtonKind { PRIMARY, SECONDARY, DANGER, SELECTED }
+    enum class ButtonState { NORMAL, HOVER, PRESSED, DISABLED, FOCUSED }
+
+    /** Fill, label and border for one kind/state; [ring] is the 3 dp focus outline drawn outside a 2 dp gap. */
+    data class ButtonLook(val fill: Int, val text: Int, val border: Int, val ring: Int? = null)
+
+    const val MIN_TARGET_DP = 48
+    const val LABEL_SP = 16f
+    const val BORDER_DP = 2
+    const val RING_DP = 3
+    const val RING_GAP_DP = 2
+
+    fun buttonLook(colors: Brand.Palette, kind: ButtonKind, state: ButtonState): ButtonLook {
+        if (state == ButtonState.DISABLED) return ButtonLook(colors.disabledFill, colors.disabledText, colors.disabledBorder)
+        val look = when (kind) {
+            ButtonKind.PRIMARY -> when (state) {
+                ButtonState.HOVER -> ButtonLook(colors.primaryHover, colors.onAccent, colors.primaryHover)
+                ButtonState.PRESSED -> ButtonLook(colors.primaryPressed, colors.onAccent, colors.primaryPressed)
+                else -> ButtonLook(colors.orange, colors.onAccent, colors.orange)
+            }
+            // Selected adds a graphite border here, a check mark and bold text in styleButton: never colour alone.
+            ButtonKind.SELECTED -> when (state) {
+                ButtonState.HOVER -> ButtonLook(colors.primaryHover, colors.onAccent, colors.onAccent)
+                ButtonState.PRESSED -> ButtonLook(colors.primaryPressed, colors.onAccent, colors.onAccent)
+                else -> ButtonLook(colors.orange, colors.onAccent, colors.onAccent)
+            }
+            ButtonKind.SECONDARY -> when (state) {
+                ButtonState.HOVER -> ButtonLook(colors.secondaryHover, colors.text, colors.borderStrong)
+                ButtonState.PRESSED -> ButtonLook(colors.secondaryPressed, colors.text, colors.borderStrong)
+                else -> ButtonLook(colors.surface, colors.text, colors.borderStrong)
+            }
+            ButtonKind.DANGER -> when (state) {
+                ButtonState.HOVER -> ButtonLook(colors.dangerHover, colors.onDanger, colors.dangerHover)
+                ButtonState.PRESSED -> ButtonLook(colors.dangerPressed, colors.onDanger, colors.dangerPressed)
+                else -> ButtonLook(colors.danger, colors.onDanger, colors.danger)
+            }
+        }
+        return if (state == ButtonState.FOCUSED) look.copy(ring = colors.focus) else look
+    }
+
+    private fun lookShape(context: Context, look: ButtonLook, radius: Int) =
+        Brand.rounded(context, look.fill, radius, look.border)
+
+    /** Layered focus look: 3 dp focus ring, 2 dp gap, then the normal fill and border. */
+    private fun focusedShape(context: Context, look: ButtonLook, radius: Int): Drawable {
+        val ring = GradientDrawable().apply {
+            setColor(Color.TRANSPARENT); cornerRadius = dp(context, radius + 2).toFloat()
+            setStroke(dp(context, RING_DP), requireNotNull(look.ring))
+        }
+        val inset = dp(context, RING_DP + RING_GAP_DP)
+        return LayerDrawable(arrayOf(ring, lookShape(context, look, radius))).apply { setLayerInset(1, inset, inset, inset, inset) }
+    }
+
+    fun buttonBackground(context: Context, kind: ButtonKind, radius: Int = 16): Drawable {
+        val colors = Brand.Palette(context)
+        fun look(state: ButtonState) = buttonLook(colors, kind, state)
+        return StateListDrawable().apply {
+            addState(intArrayOf(-android.R.attr.state_enabled), lookShape(context, look(ButtonState.DISABLED), radius))
+            addState(intArrayOf(android.R.attr.state_focused), focusedShape(context, look(ButtonState.FOCUSED), radius))
+            addState(intArrayOf(android.R.attr.state_pressed), lookShape(context, look(ButtonState.PRESSED), radius))
+            addState(intArrayOf(android.R.attr.state_hovered), lookShape(context, look(ButtonState.HOVER), radius))
+            addState(StateSet.WILD_CARD, lookShape(context, look(ButtonState.NORMAL), radius))
+        }
+    }
+
+    fun buttonTextColors(colors: Brand.Palette, kind: ButtonKind) = ColorStateList(
+        arrayOf(intArrayOf(-android.R.attr.state_enabled), StateSet.WILD_CARD),
+        intArrayOf(colors.disabledText, buttonLook(colors, kind, ButtonState.NORMAL).text))
+
+    /** Applies the shared look: 16 sp semi-bold label that wraps (never truncated), 48 dp minimum, kind-specific states. */
+    fun styleButton(view: TextView, kind: ButtonKind) {
+        val context = view.context
+        val colors = Brand.Palette(context)
+        view.isAllCaps = false
+        view.textSize = LABEL_SP
+        view.typeface = if (kind == ButtonKind.SELECTED) Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+            else if (Build.VERSION.SDK_INT >= 28) Typeface.create(Typeface.DEFAULT, 600, false)
+            else Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+        view.minHeight = dp(context, if (view is Button) 52 else MIN_TARGET_DP)
+        view.minimumHeight = view.minHeight
+        view.minWidth = dp(context, MIN_TARGET_DP)
+        view.minimumWidth = view.minWidth
+        view.maxLines = Int.MAX_VALUE
+        view.ellipsize = null
+        view.setPadding(dp(context, 12), dp(context, 10), dp(context, 12), dp(context, 10))
+        view.setTextColor(buttonTextColors(colors, kind))
+        view.background = buttonBackground(context, kind)
+        view.stateListAnimator = null
+        view.isFocusable = true
+        // Non-colour cue for the selected state: check mark before the label.
+        if (kind == ButtonKind.SELECTED) {
+            context.getDrawable(R.drawable.ic_check)?.mutate()?.let {
+                it.setTint(colors.onAccent)
+                it.setBounds(0, 0, dp(context, 18), dp(context, 18))
+                view.setCompoundDrawablesRelative(it, null, null, null)
+                view.compoundDrawablePadding = dp(context, 6)
+            }
+        } else view.setCompoundDrawablesRelative(null, null, null, null)
+    }
+
+    /** Solid red, white label: only for TX, stop and destructive actions. */
+    fun dangerButton(context: Context, label: CharSequence, action: () -> Unit): Button =
+        Brand.button(context, label, false, action).also { styleButton(it, ButtonKind.DANGER) }
+
     private fun statusColor(colors: Brand.Palette, status: Status) = when (status) {
         Status.OK -> colors.positive
         Status.WARN -> colors.accent
@@ -45,7 +153,7 @@ object BrandUi {
         val ripple = colorStateRipple(colors)
         return StateListDrawable().apply {
             addState(intArrayOf(android.R.attr.state_focused),
-                RippleDrawable(ripple, Brand.rounded(context, fill, radius, colors.focus), null))
+                RippleDrawable(ripple, Brand.rounded(context, fill, radius, colors.focus, RING_DP), null))
             addState(StateSet.WILD_CARD, RippleDrawable(ripple, Brand.rounded(context, fill, radius), null))
         }
     }

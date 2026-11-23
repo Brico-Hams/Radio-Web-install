@@ -20,6 +20,7 @@ import android.view.WindowInsets
 import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.EditText
+import android.widget.HorizontalScrollView
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
@@ -182,13 +183,12 @@ class MainActivity : LocalizedActivity() {
             }.also {
                 if (name == NAV_SATELLITES) it.contentDescription = getString(R.string.home_open_satellites)
                 navigation[name] = it
-                // One line per label: smaller text, tight padding, no min width; ellipsize as a last resort.
-                it.setSingleLine(true); it.ellipsize = android.text.TextUtils.TruncateAt.END
-                it.textSize = 13f; it.minWidth = 0; it.setPadding(dp(4), dp(12), dp(4), dp(12))
-            }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f).apply {
-                val gap = dp(3); setMargins(gap, dp(8), gap, 0)
+            }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+                setMargins(dp(4), dp(8), dp(4), 0)
             })
         }
+        // Five 16 sp labels do not fit a 320 dp phone: the bar scrolls sideways instead of truncating "Satellites".
+        val navScroll = HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(nav) }
         status = Brand.text(this, 14f, Brand.Palette(this).accent).apply {
             setPadding(0, dp(10), 0, dp(14))
             accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
@@ -202,7 +202,7 @@ class MainActivity : LocalizedActivity() {
             addView(content)
         })
         layout.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
-        layout.addView(nav)
+        layout.addView(navScroll)
         setContentView(layout)
         render()
         if (savedInstanceState == null && !ProfileStore.isConfigured(this)) startActivity(Intent(this, ProfileActivity::class.java))
@@ -254,13 +254,10 @@ class MainActivity : LocalizedActivity() {
         content.removeAllViews()
         val colors = Brand.Palette(this)
         navigation.forEach { (name, button) ->
-            // Only the open tab is highlighted: Inicio is not kept selected while ARDF, Morse or another tab is open.
+            // Only the open tab is selected: orange fill, check mark and bold label; Inicio is not kept selected on other tabs.
             val active = name == tab
             button.isSelected = active
-            button.setTextColor(if (active) colors.onAccent else colors.text)
-            button.background = BrandUi.interactive(this,
-                // Brand manual: the active tab is a brand-orange fill with graphite text (colors.accent is the link/text tone).
-                if (active) Brand.ORANGE else colors.surfaceHigh, 16)
+            BrandUi.styleButton(button, if (active) BrandUi.ButtonKind.SELECTED else BrandUi.ButtonKind.SECONDARY)
         }
         val cards = tab == TAB_HOME
         content.background = if (cards) null else Brand.rounded(this, colors.surface, 20)
@@ -553,7 +550,7 @@ class MainActivity : LocalizedActivity() {
                     .setPositiveButton(R.string.action_delete) { _, _ -> userAction {
                         store.deleteContact(editing.id); editingId = null; render(); message(getString(R.string.logbook_deleted))
                     } }.show()
-            }
+            }.also { BrandUi.styleButton(it, BrandUi.ButtonKind.DANGER) }
         }
         button(R.string.net_open_button) { startActivity(Intent(this, NetControlActivity::class.java)) }
         button(R.string.logbook_export_adif) { export("adif") }
@@ -711,7 +708,7 @@ class MainActivity : LocalizedActivity() {
             text(getString(R.string.tri_obs_line, o.callsign, o.utc.toString().take(19) + "Z", f(o.bearingTrueDeg, 0), f(o.uncertaintyDeg, 0)) + strength)
             button(getString(R.string.tri_delete, o.callsign)) {
                 hunts.update(hunt.copy(observations = hunt.observations.filter { it.id != o.id })); render()
-            }
+            }.also { BrandUi.styleButton(it, BrandUi.ButtonKind.DANGER) }
         }
 
         text(R.string.tri_bearing_note)
