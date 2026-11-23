@@ -2273,6 +2273,18 @@ Aparcado: azimut|Park: azimuth|Parcage : azimut|Parken: Azimut
 Aparcado: elevacion|Park: elevation|Parcage : élévation|Parken: Elevation
 Calibracion: azimut|Calibration: azimuth|Étalonnage : azimut|Kalibrierung: Azimut
 Calibracion: elevacion|Calibration: elevation|Étalonnage : élévation|Kalibrierung: Elevation
+Cluster DX|DX cluster|Cluster DX|DX-Cluster
+Spots del cluster DX|DX cluster spots|Spots du cluster DX|DX-Cluster-Spots
+Avisar de spots necesarios|Alert on needed spots|Alerter pour les spots nécessaires|Bei benötigten Spots warnen
+Spot necesario en el cluster DX.|Needed spot on the DX cluster.|Spot nécessaire sur le cluster DX.|Benötigter Spot im DX-Cluster.
+Cluster DX desactivado en el agente.|DX cluster is off at the agent.|Le cluster DX est désactivé sur l’agent.|DX-Cluster ist am Agent deaktiviert.
+Cluster DX sin conexion. Reintentando.|DX cluster not connected. Retrying.|Cluster DX non connecté. Nouvelle tentative.|DX-Cluster nicht verbunden. Neuer Versuch.
+Cluster DX conectado.|DX cluster connected.|Cluster DX connecté.|DX-Cluster verbunden.
+Cluster DX conectado. Sin registro en el agente: no se marca nuevo ni trabajado.|DX cluster connected. No log at the agent: spots are not marked new or worked.|Cluster DX connecté. Pas de journal sur l’agent : les spots ne sont pas marqués nouveau ou travaillé.|DX-Cluster verbunden. Kein Log am Agent: Spots werden nicht als neu oder gearbeitet markiert.
+Sin spots todavia.|No spots yet.|Aucun spot pour l’instant.|Noch keine Spots.
+Nuevo|New|Nouveau|Neu
+Trabajado|Worked|Travaillé|Gearbeitet
+Sin registro|No log|Pas de journal|Kein Log
 `.trim().split("\n").map(line => line.split("|")));
   root.BricohamsUITranslations = entries;
   if (typeof module === "object" && module.exports) module.exports = entries;

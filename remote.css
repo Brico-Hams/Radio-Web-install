@@ -79,6 +79,11 @@ input[type=range]{width:100%;min-height:36px;accent-color:var(--accent)}
 .log li{display:flex;gap:.7rem;padding:.35rem 0;border-bottom:1px solid var(--border)}
 .log time{color:var(--muted);font-variant-numeric:tabular-nums;font-family:ui-monospace,Consolas,monospace}
 .log li.empty{display:block;border:0;color:var(--muted)}
+.dx-spot{display:flex;flex-wrap:wrap;gap:.5rem;align-items:baseline;width:100%;min-height:44px;padding:.35rem .5rem;font:inherit;text-align:left;background:transparent;color:inherit;border:0;cursor:pointer}
+.dx-spot .dx-freq,.dx-spot .dx-call{font-family:ui-monospace,Consolas,monospace}
+.dx-spot .dx-note{color:var(--muted);font-size:.8rem}
+.dx-spot[data-status="new"] .dx-call{font-weight:700;text-decoration:underline}
+.dx-spot[data-status="worked"]{opacity:.65}
 .settings-tools{display:flex;gap:.6rem;align-items:flex-end;flex-wrap:wrap;margin-top:.6rem}
 .settings-warning{color:var(--warn,inherit);font-weight:600}
 .settings-list{list-style:none;margin:.6rem 0 0;padding:0;max-height:60vh;overflow:auto;font-size:.9rem}

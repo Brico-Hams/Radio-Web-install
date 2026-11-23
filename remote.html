@@ -15,6 +15,7 @@
   <script src="remote-audio-core.js" defer></script>
   <script src="spectrum-core.js" defer></script>
   <script src="remote-rotor-ui.js" defer></script>
+  <script src="remote-dxcluster-ui.js" defer></script>
   <script src="remote-ui.js" defer></script>
 </head>
 <body>
@@ -162,6 +163,7 @@
       <button id="tab-band" type="button" role="tab" aria-selected="true" aria-controls="panel-band">Banda</button>
       <button id="tab-levels" type="button" role="tab" aria-selected="false" aria-controls="panel-levels" tabindex="-1">Niveles</button>
       <button id="tab-cw" type="button" role="tab" aria-selected="false" aria-controls="panel-cw" tabindex="-1">CW</button>
+      <button id="tab-dx" type="button" role="tab" aria-selected="false" aria-controls="panel-dx" tabindex="-1">Cluster DX</button>
       <button id="tab-log" type="button" role="tab" aria-selected="false" aria-controls="panel-log" tabindex="-1">Registro</button>
       <button id="tab-settings" type="button" role="tab" aria-selected="false" aria-controls="panel-settings" tabindex="-1">Ajustes</button>
     </div>
@@ -249,6 +251,13 @@
       <label class="slider" for="cw-nr">Numero</label>
       <input id="cw-nr" type="text" maxlength="6" value="001" autocomplete="off">
       <div id="cw-memories" class="cw-memories"></div>
+    </section>
+
+    <section id="panel-dx" class="card panel" role="tabpanel" aria-labelledby="tab-dx" data-active="false">
+      <h2 class="panel-title">Cluster DX</h2>
+      <p id="dx-status" class="hint" role="status">Cluster DX desactivado en el agente.</p>
+      <label class="check"><input id="dx-alert" type="checkbox"> Avisar de spots necesarios</label>
+      <ol id="dx-list" class="log" aria-label="Spots del cluster DX"></ol>
     </section>
 
     <section id="panel-log" class="card panel" role="tabpanel" aria-labelledby="tab-log" data-active="false">

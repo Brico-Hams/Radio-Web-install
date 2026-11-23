@@ -57,4 +57,4 @@ Xiegu n'est ni dans le catalogue, ni dans les pilotes Python, ni dans les profil
 
 ## Pendiente de fuente (désactivé)
 
-Consultation QRZ.com XML, ligne de commande TQSL (LoTW), format des lignes telnet du DX cluster, décodeurs FT8/FT4/WSPR/CW/RTTY/PSK31, SSTV sur la console web, table des préfixes DXCC, FlexControl HID.
+Consultation QRZ.com XML, ligne de commande TQSL (LoTW), décodeurs FT8/FT4/WSPR/CW/RTTY/PSK31, SSTV sur la console web, table des préfixes DXCC, FlexControl HID.

@@ -57,4 +57,18 @@ Xiegu is not in the catalog, the Python drivers or the Android profiles, so ther
 
 ## Pendiente de fuente (disabled)
 
-QRZ.com XML lookup, TQSL command line (LoTW), DX cluster telnet line format, FT8/FT4/WSPR/CW/RTTY/PSK31 decoders, SSTV on the web console, DXCC prefix table, FlexControl HID.
+QRZ.com XML lookup, TQSL command line (LoTW), FT8/FT4/WSPR/CW/RTTY/PSK31 decoders, SSTV on the web console, DXCC prefix table (so spots are marked new/worked per call and band, never per entity), FlexControl HID, TLS/SSH DX cluster transports.
+
+## DX cluster (Node agent)
+
+Read-only telnet client, plain TCP, off by default. The operator sets it in `remote-agent.json` at the agent (nothing is configured from the browser):
+
+```json
+"dxCluster": { "enabled": true, "host": "dxc.example.net", "port": 7300, "callsign": "EA5KAO", "logFile": "remote-log.adi" }
+```
+
+- Only the login callsign line is ever written; the client has no path to PTT, tune, CW or any radio command. Buffers are bounded (512-byte lines, 200 spots, 30 min expiry) and reconnects back off 1, 2, 4 ... 60 s.
+- `GET /api/dxcluster` (token required) returns `{ enabled, connected, logbook, spots }`; host, port and callsign are never sent to clients.
+- Spots are marked `new` or `worked` against the optional ADIF file at the agent (`logFile`, default `~/.radicodex/remote-log.adi`, parsed by `remote-log.cjs`); without it they are `unknown`. Spots carry no mode, so the match is call + band.
+- The console tab "Cluster DX" lists spots; a click sends the existing `freq` command (operator lock applies) and never keys. The needed-spot alert is an opt-in checkbox.
+- Line format and login/backoff behaviour: `third_party/ftx1/rigplane-rigplane-core/src/rigplane/web/dx_cluster.py` and its `tests/test_dx_cluster.py`.

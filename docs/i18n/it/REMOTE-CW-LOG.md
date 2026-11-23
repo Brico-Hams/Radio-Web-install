@@ -57,4 +57,4 @@ Xiegu non è nel catalogo, nei driver Python né nei profili Android, quindi non
 
 ## Pendiente de fuente (disattivato)
 
-Ricerca QRZ.com XML, riga di comando TQSL (LoTW), formato righe telnet del DX cluster, decoder FT8/FT4/WSPR/CW/RTTY/PSK31, SSTV nella console web, tabella prefissi DXCC, FlexControl HID.
+Ricerca QRZ.com XML, riga di comando TQSL (LoTW), decoder FT8/FT4/WSPR/CW/RTTY/PSK31, SSTV nella console web, tabella prefissi DXCC, FlexControl HID.

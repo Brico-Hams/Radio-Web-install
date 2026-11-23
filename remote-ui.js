@@ -48,7 +48,7 @@
   const LEVEL_KEYS = Object.freeze({ AF: "af", RF: "rf", RFPOWER: "rfpower" });
   const MIC_GAIN_KEY = "bricohams.remote.micgain";
   const MIC_GAIN_DEFAULT = 50;
-  const TABS = Object.freeze(["band", "levels", "cw", "log", "settings"]);
+  const TABS = Object.freeze(["band", "levels", "cw", "dx", "log", "settings"]);
   const CW_KEY = "bricohams.remote.cwmemories";
   // Placeholders {CALL} (their call, typed in the panel), {MYCALL}, {RST}, {NR} are expanded here and validated again by the agent.
   const CW_DEFAULTS = Object.freeze(["CQ CQ DE {MYCALL} {MYCALL} K", "{CALL} DE {MYCALL} K", "{CALL} {RST} {RST} {NR}", "{CALL} TU 73 EE", "QRZ? DE {MYCALL}", "AGN?", "{MYCALL}", "73 TU"]);  const $ = id => document.getElementById(id);
@@ -1338,6 +1338,8 @@
     }
     connectEvents();
     if (globalThis.RemoteRotorUI) globalThis.RemoteRotorUI.mount({ doc: document, api, token, clientId, notify });
+    // Click-to-tune uses the same freq command as the frequency display; the panel can never key the radio.
+    if (globalThis.RemoteDxUI) globalThis.RemoteDxUI.mount({ doc: document, api, notify, tune: hz => run({ cmd: "freq", value: hz }) });
     measureLatency();
     setInterval(measureLatency, 3000);
   }
