@@ -106,6 +106,13 @@ class ConnectionPoolTests(unittest.TestCase):
         deadline = threading.Event()
         deadline.wait(0.3)
         self.assertEqual(self.request("POST", "/stop"), 200)
+        # The server releases the reserved slot after the reply is sent; wait for it.
+        released = threading.Event()
+        for _ in range(500):
+            if not self.server._reserved_ips:
+                break
+            released.wait(0.01)
+        self.assertFalse(self.server._reserved_ips)
         self.assertEqual(self.request("GET", "/other"), 503)
 
 

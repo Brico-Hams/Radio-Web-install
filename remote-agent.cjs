@@ -19,6 +19,7 @@ const { TuneCheck, swrFromRaw, normalizeMeter, normalizeLevel, parsePowerFrame, 
 const { createAccessories } = require("./station-accessories.cjs");
 const stationDevicesLib = require("./station-devices.cjs");
 const { createRotor, RotorError } = require("./remote-rotor.cjs");
+const remoteOps = require("./remote-ops.cjs");
 
 const isLoopbackHost = value => value === "localhost" || value === "::1" || /^127\./.test(value);
 
@@ -65,6 +66,8 @@ const STATIC_FILES = Object.freeze({
   "/spectrum-core.js": ["spectrum-core.js", "text/javascript; charset=utf-8"],
   "/remote-audio-worklet.js": ["remote-audio-worklet.js", "text/javascript; charset=utf-8"],
   "/remote.css": ["remote.css", "text/css; charset=utf-8"],
+  "/manifest.webmanifest": ["remote.webmanifest", "application/manifest+json; charset=utf-8"],
+  "/sw.js": ["remote-sw.js", "text/javascript; charset=utf-8"],
   "/bricohams-logo.png": ["bricohams-logo.png", "image/png"],
   "/ui-i18n.js": ["ui-i18n.js", "text/javascript; charset=utf-8"],
   "/ui-translations.js": ["ui-translations.js", "text/javascript; charset=utf-8"]
@@ -90,6 +93,13 @@ function loadConfig(dir) {
     swrRawLimit: Number.isInteger(stored.swrRawLimit) && stored.swrRawLimit >= 1 && stored.swrRawLimit <= 255 ? stored.swrRawLimit : undefined,
     tuneMaxSeconds: Number(stored.tuneMaxSeconds) > 0 ? Math.min(TUNE_MAX_SECONDS_CAP, Number(stored.tuneMaxSeconds)) : undefined,
     tunerKind: TUNER_KINDS.includes(stored.tunerKind) ? stored.tunerKind : undefined,
+    // Radio identity for guests/TX log; rigMaxPowerW is operator-declared (needed to enforce guest watt limits).
+    radioId: typeof stored.radioId === "string" && /^[A-Za-z0-9_-]{1,64}$/.test(stored.radioId) ? stored.radioId : "main",
+    radioLabel: typeof stored.radioLabel === "string" ? stored.radioLabel.slice(0, 40) : "",
+    rigMaxPowerW: Number(stored.rigMaxPowerW) > 0 ? Number(stored.rigMaxPowerW) : undefined,
+    // Optional, off by default: public read-only audio and idle update check of signed GitHub releases.
+    listenLive: stored.listenLive?.enabled === true ? { enabled: true, maxClients: Number(stored.listenLive.maxClients) || 4 } : { enabled: false },
+    updateCheck: stored.updateCheck?.enabled === true && typeof stored.updateCheck.asset === "string" ? { enabled: true, asset: stored.updateCheck.asset } : { enabled: false },
     relay: normalizeRelay(stored.relay),
     accessories: normalizeAccessories(stored.accessories),
     // Station devices (power/relay, rotors); credentials stay in this 0600 file and are never sent to clients.
@@ -144,7 +154,7 @@ function tokenMatches(expected, supplied) {
 const CSP = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
 
 // Extra keys each command may carry besides "cmd"; anything else is rejected.
-const COMMAND_KEYS = Object.freeze({ level: ["name", "value"], func: ["name", "on"], tune: [], mode: ["value", "passband"] });
+const COMMAND_KEYS = Object.freeze({ level: ["name", "value"], func: ["name", "on"], tune: [], mode: ["value", "passband"], ptt: ["value", "location"] });
 
 function validateCommand(body, state) {
   if (!body || typeof body !== "object" || Array.isArray(body)) return { error: "Cuerpo no valido." };
@@ -178,6 +188,12 @@ function validateCommand(body, state) {
       return { cmd };
     case "ptt":
       if (typeof value !== "boolean") return { error: "PTT debe ser booleano." };
+      if (body.location !== undefined) {
+        const loc = body.location;
+        if (!loc || typeof loc !== "object" || !Number.isFinite(loc.lat) || !Number.isFinite(loc.lon) || Math.abs(loc.lat) > 90 || Math.abs(loc.lon) > 180 ||
+          Object.keys(loc).some(key => key !== "lat" && key !== "lon")) return { error: "Ubicacion no valida." };
+        return { cmd, value, location: { lat: loc.lat, lon: loc.lon } };
+      }
       return { cmd, value };
     case "amp":
       if (value !== "operate" && value !== "standby") return { error: "Amplificador: usa operate o standby." };
@@ -290,7 +306,18 @@ function createRemoteAgent(options = {}) {
   });
   const useTls = options.tls ?? !isLoopbackHost(host);
   const identity = useTls ? remoteTls.ensure(configDir) : null;
-
+  const radioId = options.radioId ?? config.radioId;
+  const rigMaxW = options.rigMaxPowerW ?? config.rigMaxPowerW;
+  const guests = options.guestStore || remoteOps.createGuestStore({ dir: configDir, now });
+  const txLog = options.txLog || remoteOps.createTxLog({ file: path.join(configDir, "remote-txlog.jsonl"), now });
+  const listenGate = remoteOps.createListenGate({ ...(options.listenLive ?? config.listenLive), now });
+  const powerOffCmd = cat?.powerOff || null;
+  const wantedUpdate = options.updateCheck ?? config.updateCheck;
+  let ownerLabel = "";
+  let ownerGuestId = null;
+  let txLocation = null;
+  let updateInfo = null;
+  let updateTimer = null;
   if (options.relay) {
     const merged = normalizeRelay({ ...config.relay, ...options.relay });
     if (!merged) throw new Error("Rele no valido: usa --relay <url https>, --station <id> y --station-secret <secreto>.");
@@ -437,10 +464,16 @@ function createRemoteAgent(options = {}) {
       tx = { po: null, swr: null, alc: null, powerSetW: null, source: cat ? "raw" : "hamlib", fraction: { po: null, swr: null, alc: null } };
       swrSince = 0;
       meterCycle = 0;
+      const pct = rig.levels.rfpower;
+      txLog.begin({
+        operator: ownerActive() ? ownerLabel : "local", radio: radioId, freq: rig.freq,
+        powerPct: Number.isFinite(pct) ? pct : null, powerW: Number.isFinite(pct) && rigMaxW ? Math.round(pct * rigMaxW * 10) / 10 : null,
+        location: ownerActive() ? txLocation : null
+      });
       setImmediate(pollTxMeters);
     }
     rig.ptt = on;
-    if (!on) { agentTx = false; tx = null; swrSince = 0; audio.txRelease?.(); }
+    if (!on) { agentTx = false; tx = null; swrSince = 0; txLocation = null; txLog.end(); audio.txRelease?.(); }
   }
 
   // Ordered stop (tuner stop, raw txOff, Hamlib T 0); `tuner` says a tune may be active.
@@ -930,7 +963,8 @@ function createRemoteAgent(options = {}) {
       const genBefore = meterGen;
       const ptt = await client.getPtt();
       // A read that was in flight while PTT changed or a stop ran is stale and must not re-key the state; the next poll sees the settled state.
-      if (ptt !== rig.ptt && !tune && epoch === pttEpoch && genBefore === meterGen && stopping === 0) setRigPtt(ptt);      rig.smeter = rig.ptt ? null : await client.getStrength();
+      if (ptt !== rig.ptt && !tune && epoch === pttEpoch && genBefore === meterGen && stopping === 0) setRigPtt(ptt);
+      rig.smeter = rig.ptt ? null : await client.getStrength();
       if (pollCount % 4 === 1) {
         try {
           const vfo = await client.getVfo();
@@ -968,6 +1002,7 @@ function createRemoteAgent(options = {}) {
     if (!agentTx || !rig.ptt) return;
     const time = now();
     if (time - lastBeat > heartbeatTimeoutMs) { accessories.standby("lease"); pttOff("sin latido"); }
+    else if (ownerGuestId && !guests.isActiveId(ownerGuestId)) { accessories.standby("lease"); pttOff("invitado revocado o caducado"); }
     else if (time - txStart >= txLimitMs) pttOff("limite de TX");
     else if (tune && time - tune.startedAt >= tuneMaxMs) pttOff(`tiempo máximo de sintonía (${Math.round(tuneMaxMs / 1000)} s)`);
     else if (tunerKind !== "atas" && tune?.hiSwrSince && time - tune.hiSwrSince > tuneHiSwrMs) pttOff("Hi-SWR de la radio");
@@ -1002,12 +1037,20 @@ function createRemoteAgent(options = {}) {
     return /^[\w-]{1,64}$/.test(supplied) ? supplied : `ip:${forwarded || request.socket.remoteAddress}`;
   }
 
-  function authorized(request, url) {
+  // Returns { role: "owner" | "guest", label, guest } or null. Guest tokens are separate per invitation and revocable.
+  function identify(request, url) {
     const header = request.headers.authorization || "";
-    const bearer = header.startsWith("Bearer ") ? header.slice(7) : "";
-    if (tokenMatches(config.token, bearer)) return true;
-    return url.pathname === "/api/events" && tokenMatches(config.token, url.searchParams.get("token"));
+    const candidates = [header.startsWith("Bearer ") ? header.slice(7) : ""];
+    if (url.pathname === "/api/events") candidates.push(url.searchParams.get("token") || "");
+    for (const supplied of candidates) {
+      if (tokenMatches(config.token, supplied)) return { role: "owner", label: config.callsign || "owner", guest: null };
+      const guest = guests.authenticate(supplied);
+      if (guest) return { role: "guest", label: guest.label, guest };
+    }
+    return null;
   }
+
+  const guestPerm = who => who.guest?.permissions[radioId] || null;
 
   function send(response, status, body, headers = {}) {
     const payload = typeof body === "string" ? body : JSON.stringify(body);
@@ -1051,16 +1094,31 @@ function createRemoteAgent(options = {}) {
   }
 
   // Returns true when this client may control the rig (and refreshes/claims control).
-  function claimControl(clientId, { acquire = true } = {}) {
+  function claimControl(clientId, { acquire = true, label = "", guestId = null } = {}) {
     if (ownerActive() && owner !== clientId) return false;
-    if (acquire || owner === clientId) { owner = clientId; ownerSeen = now(); }
+    if (acquire || owner === clientId) {
+      owner = clientId;
+      ownerSeen = now();
+      if (acquire) { ownerLabel = label; ownerGuestId = guestId; }
+    }
     return true;
   }
 
-  async function applyCommand(command, clientId) {
+  async function applyCommand(command, clientId, who = null) {
     if (command.cmd === "amp" && command.value === "standby") {
       await accessories.standby("operator");
       return { status: 200, body: { ok: true, state: snapshot(clientId) } };
+    }
+    if (who?.guest) {
+      const perm = guestPerm(who);
+      const keys = (command.cmd === "ptt" && command.value === true) || command.cmd === "tune";
+      let refusal = remoteOps.guestCommandRefusal(perm, command);
+      if (!refusal && keys) refusal = remoteOps.guestTxRefusal(perm, { freq: rig.freq, rfpower: rig.levels.rfpower, rigMaxW });
+      if (!refusal && command.cmd === "level" && command.name === "RFPOWER") {
+        const cap = remoteOps.powerCapFraction(perm, rigMaxW);
+        if (cap === null || command.value > cap + 1e-9) refusal = "Potencia por encima del limite del invitado.";
+      }
+      if (refusal) return { status: 403, body: { error: refusal } };
     }
     if (command.cmd === "ptt" && command.value === true && !client.connected) {
       return { status: 503, body: { error: "Radio sin conexion." } };
@@ -1143,6 +1201,7 @@ function createRemoteAgent(options = {}) {
         case "ptt":
           if (command.value) {
             if (tune) return { status: 409, body: { error: "Sintonía en curso." } };
+            txLocation = command.location || null;
             await client.setPtt(true);
             swrTripped = false;
             setRigPtt(true);
@@ -1161,12 +1220,72 @@ function createRemoteAgent(options = {}) {
   }
 
   async function handleApi(request, response, url) {
-    if (!authorized(request, url)) {
+    const clientIp = request.socket.radicodexTunnel ? String(request.headers["x-forwarded-for"] || "").split(",").pop().trim() || request.socket.remoteAddress : request.socket.remoteAddress;
+    if (request.method === "GET" && url.pathname === "/api/listen/state") {
+      // Public read-only view of "listen live": off by default, rate limited, never any control or token.
+      const gate = listenGate.admit(`ip:${clientIp}`);
+      if (!gate.ok) { send(response, gate.reason === "disabled" ? 404 : 429, { error: gate.reason === "disabled" ? "No encontrado." : "Demasiadas peticiones." }); return; }
+      gate.release();
+      send(response, 200, { radio: radioId, freq: rig.freq, mode: rig.mode, smeter: rig.smeter, audio: { rx: Boolean(audio.rx) } });
+      return;
+    }
+    const who = identify(request, url);
+    if (!who) {
       send(response, 401, { error: "Token no valido." }, { "WWW-Authenticate": "Bearer" });
       return;
     }
+    const owner_ = who.role === "owner";
     const clientId = clientIdOf(request, url);
     const route = `${request.method} ${url.pathname}`;
+    if (who.guest && !guestPerm(who)) { send(response, 403, { error: "Sin permiso en esta radio." }); return; }
+    if (route === "GET /api/radios") {
+      send(response, 200, { radios: [{ id: radioId, label: config.radioLabel || radioId, connected: client.connected, busy: ownerActive(), transmitting: rig.ptt, power: remoteOps.powerSupport(radioId) }] });
+      return;
+    }
+    if (route === "GET /api/me") {
+      const perm = guestPerm(who);
+      send(response, 200, { role: who.role, label: who.label, radio: radioId, transmit: owner_ ? true : perm.transmit, bands: perm?.bands || [], maxPowerW: perm?.maxPowerW ?? null });
+      return;
+    }
+    if (route.startsWith("GET /api/guests") || route.startsWith("POST /api/guests") || route.startsWith("GET /api/txlog") || route === "POST /api/power" || route === "GET /api/update") {
+      if (!owner_) { send(response, 403, { error: "Solo el propietario." }); return; }
+      if (route === "GET /api/guests") { send(response, 200, { guests: guests.list() }); return; }
+      if (route === "GET /api/txlog") { send(response, 200, { entries: txLog.entries() }); return; }
+      if (route === "GET /api/txlog.csv") {
+        send(response, 200, txLog.toCsv(), { "Content-Type": "text/csv; charset=utf-8", "Content-Disposition": 'attachment; filename="tx-log.csv"' });
+        return;
+      }
+      if (route === "GET /api/update") { send(response, 200, { enabled: wantedUpdate.enabled, info: updateInfo }); return; }
+      let body;
+      try { body = await readJson(request); }
+      catch (error) { send(response, error.status || 400, { error: error.message }); return; }
+      if (route === "POST /api/guests") {
+        const result = guests.invite({ label: body?.label, ttlHours: body?.ttlHours, permissions: { [radioId]: { transmit: body?.transmit === true, bands: body?.bands, maxPowerW: body?.maxPowerW } } });
+        if (result.error) { send(response, 400, { error: result.error }); return; }
+        send(response, 201, { guest: result.guest, token: result.token });
+        return;
+      }
+      if (route === "POST /api/guests/revoke") {
+        if (!guests.revoke(body?.id)) { send(response, 404, { error: "Invitado desconocido." }); return; }
+        if (ownerGuestId === body.id && (rig.ptt || agentTx)) await pttOff("invitado revocado");
+        send(response, 200, { ok: true });
+        return;
+      }
+      if (route === "POST /api/power") {
+        if (body?.on !== false && body?.on !== true) { send(response, 400, { error: "Estado no valido." }); return; }
+        if (body.on || !powerOffCmd) { send(response, 501, { error: "Orden de encendido/apagado pendiente de fuente para esta radio." }); return; }
+        if (body.confirm !== true) { send(response, 400, { error: "Confirma el apagado de la radio." }); return; }
+        if (rig.ptt || agentTx || tune) { send(response, 409, { error: "Apagado bloqueado durante TX." }); return; }
+        if (!client.connected) { send(response, 503, { error: "Radio sin conexion." }); return; }
+        if (!claimControl(clientId, { label: who.label })) { send(response, 409, { error: "Otro operador tiene el control." }); return; }
+        try { await client.sendRaw(powerOffCmd); }
+        catch (error) { send(response, 502, { error: `rigctld: ${error.message}` }); return; }
+        send(response, 200, { ok: true });
+        return;
+      }
+      send(response, 404, { error: "No encontrado." });
+      return;
+    }
     if (route === "GET /api/state") { send(response, 200, snapshot(clientId)); return; }
     if (route === "GET /api/config") {
       send(response, 200, { callsign: config.callsign, radioScope, audio: { rx: Boolean(audio.rx), tx: Boolean(audio.tx) } });
@@ -1237,11 +1356,11 @@ function createRemoteAgent(options = {}) {
         commandTimes.push(time);
       }
       if (release) claimControl(clientId, { acquire: false });
-      else if (!claimControl(clientId)) {
+      else if (!claimControl(clientId, { label: who.label, guestId: who.guest?.id || null })) {
         send(response, 409, { error: "Otro operador tiene el control." });
         return;
       }
-      const result = await applyCommand(command, clientId);
+      const result = await applyCommand(command, clientId, who);
       send(response, result.status, result.body);
       return;
     }
@@ -1326,16 +1445,31 @@ function createRemoteAgent(options = {}) {
     function authenticate(message) {
       let body;
       try { body = JSON.parse(message); } catch { body = null; }
-      if (!body || body.type !== "auth" || !tokenMatches(config.token, body.token) || audioSockets.size > AUDIO_MAX_CLIENTS) {
+      const ownerOk = body?.type === "auth" && tokenMatches(config.token, body.token);
+      const guest = body?.type === "auth" && !ownerOk ? guests.authenticate(body.token) : null;
+      const guestOk = Boolean(guest?.permissions[radioId]);
+      // Public listen-live: no token, RX only, gated (off by default, rate limited).
+      let listen = null;
+      if (body?.type === "auth" && !ownerOk && !guestOk && body.listen === true) {
+        const gate = listenGate.admit(fallbackId);
+        if (gate.ok) listen = gate;
+      }
+      if (!body || (!ownerOk && !guestOk && !listen) || audioSockets.size > AUDIO_MAX_CLIENTS) {
+        listen?.release();
         ws.close(4401, "auth");
         return;
       }
+      if (listen) {
+        state.listen = listen;
+        state.canTx = false;
+      } else state.canTx = ownerOk || Boolean(guest.permissions[radioId].transmit);
+      state.guestId = guest?.id || null;
       clearTimeout(authTimer);
       state.authed = true;
-      state.cid = typeof body.cid === "string" && /^[\w-]{1,64}$/.test(body.cid) ? body.cid : fallbackId;
+      state.cid = listen ? `listen:${fallbackId}` : typeof body.cid === "string" && /^[\w-]{1,64}$/.test(body.cid) ? body.cid : fallbackId;
       const hello = { type: "hello" };
       if (audio.rx) hello.rx = { ...AUDIO_FRAME };
-      if (audio.tx || audio.txReason) {
+      if (!listen && (audio.tx || audio.txReason)) {
         hello.tx = { allowed: Boolean(audio.tx), ...AUDIO_FRAME };
         if (!audio.tx) hello.tx.reason = audio.txReason;
       }
@@ -1371,6 +1505,7 @@ function createRemoteAgent(options = {}) {
       if (state.txTimes.length >= AUDIO_TX_RATE) return;
       state.txTimes.push(time);
       if (!audio.tx) { refuse("TX de audio no disponible."); return; }
+      if (!state.canTx) { refuse("Sin permiso de TX."); return; }
       if (owner !== state.cid) { refuse("No tienes el control."); return; }
       if (!rig.ptt || !agentTx) { refuse("PTT apagado."); return; }
       lastBeat = time;
@@ -1404,6 +1539,7 @@ function createRemoteAgent(options = {}) {
         clearTimeout(authTimer);
         clearInterval(pingTimer);
         audioSockets.delete(ws);
+        state.listen?.release();
         unsubscribeRx();
       }
     });
@@ -1546,6 +1682,26 @@ function createRemoteAgent(options = {}) {
     entry.response.write(`data: ${text}\n\n`);
   }
 
+  // Idle-only, opt-in: downloads a signed release asset and tells the operator; installing stays a manual step.
+  async function runUpdateCheck() {
+    const idle = !rig.ptt && !agentTx && !tune && !ownerActive();
+    if (!wantedUpdate.enabled || !idle || closing) return null;
+    const http = async (url, kind) => {
+      const reply = await fetch(url, { headers: { "User-Agent": "BricohamsRemoteShack" }, signal: AbortSignal.timeout(30_000), redirect: "follow" });
+      if (!reply.ok) throw new Error(`HTTP ${reply.status}`);
+      return kind === "json" ? reply.json() : reply.arrayBuffer();
+    };
+    try {
+      updateInfo = await remoteOps.checkForUpdate({
+        currentVersion: options.currentVersion ?? require("./package.json").version, assetName: wantedUpdate.asset,
+        fetchJson: options.updateFetchJson || (url => http(url, "json")), fetchBytes: options.updateFetchBytes || (url => http(url, "bytes")),
+        saveDir: path.join(configDir, "updates")
+      });
+      if (updateInfo.status === "downloaded") setNotice(`Actualizacion ${updateInfo.version} descargada y verificada (SHA-256 ${updateInfo.sha256.slice(0, 12)}...). Instalala manualmente.`);
+    } catch (error) { log(`actualizacion: ${error.message}`); }
+    return updateInfo;
+  }
+
   async function start() {
     await new Promise((resolve, reject) => {
       server.once("error", reject);
@@ -1558,6 +1714,10 @@ function createRemoteAgent(options = {}) {
     sseTimer = setInterval(() => { for (const entry of sseClients) pushState(entry); }, 250);
     keepAliveTimer = setInterval(() => { for (const entry of sseClients) entry.response.write(": keep-alive\n\n"); }, 15_000);
     for (const timer of [watchdog, meterTimer, sseTimer, keepAliveTimer]) timer.unref?.();
+    if (wantedUpdate.enabled) {
+      updateTimer = setInterval(runUpdateCheck, options.updateEveryMs ?? 6 * 3_600_000);
+      updateTimer.unref?.();
+    }
     return server.address();
   }
 
@@ -1569,6 +1729,7 @@ function createRemoteAgent(options = {}) {
     clearInterval(meterTimer);
     clearInterval(sseTimer);
     clearInterval(keepAliveTimer);
+    clearInterval(updateTimer);
     endEmergency();
     // PTT off first; accessories and station devices are made safe even if it fails.
     try {
@@ -1607,7 +1768,7 @@ function createRemoteAgent(options = {}) {
   }
 
   return {
-    server, client, token: config.token, config, start, close, snapshot, relayLinks, notify,
+    server, client, token: config.token, config, start, close, snapshot, relayLinks, notify, guests, txLog, runUpdateCheck,
     tls: useTls, fingerprint: identity ? identity.fingerprint : ""
   };
 }

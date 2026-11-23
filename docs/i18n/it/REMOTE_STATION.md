@@ -298,6 +298,13 @@ Timeout TX, blocco PTT, avvio PTT del tuner, uscite SEND/manipolazione, potenza 
 spegnimento automatico, voci del collegamento CI-V/USB e REF adjust sono di sola lettura; le voci composite 0001 e
 0046 sono pendiente de fuente. Gli agenti Node e Python elencano il modello dell'IC-705 in sola lettura perché
 manca un percorso CI-V grezzo con fonte. Le console web di Android riusano la scheda Impostazioni dell'agente Node.
+## Operazione remota estesa
+
+L'agente Node (`remote-agent.cjs` + `remote-ops.cjs`) aggiunge ospiti con token proprio
+e permessi per radio (bande e potenza massima applicate nell'agente), un registro TX con
+esportazione CSV, spegnimento remoto solo dove c'è una fonte (FTX-1 `PS0`, con conferma),
+ascolto pubblico opzionale (disattivato di default), notifiche di aggiornamento firmate
+(nessuna installazione senza consenso) e una PWA installabile. Non trasmettere mai senza carico o antenna adattati.
 
 ## Lingue senza interrompere i controlli attivi
 

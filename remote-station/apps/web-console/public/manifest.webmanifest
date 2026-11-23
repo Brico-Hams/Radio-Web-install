@@ -1,0 +1,12 @@
+{
+  "name": "Bricohams Radio Workspace - Remote Station",
+  "short_name": "Remote Station",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#101418",
+  "theme_color": "#F26B1D",
+  "icons": [
+    { "src": "/branding/bricohams_mark.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}

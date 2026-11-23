@@ -298,6 +298,13 @@ geprüft). TX-Timeout, PTT-Sperre, Tuner-PTT-Start, SEND-/Tastausgänge, maximal
 Auto-Power-OFF, CI-V/USB-Verbindungseinträge und REF adjust sind nur lesbar; die zusammengesetzten Einträge 0001
 und 0046 sind pendiente de fuente. Die Node- und Python-Agenten listen das IC-705-Modell nur lesbar, da dort keine
 belegte rohe CI-V-Route existiert. Die Android-Webkonsolen nutzen den Einstellungen-Tab des Node-Agenten.
+## Erweiterter Fernbetrieb
+
+Der Node-Agent (`remote-agent.cjs` + `remote-ops.cjs`) ergänzt Gäste mit eigenem Token
+und Berechtigungen pro Funkgerät (Bänder und Maximalleistung im Agenten erzwungen), ein TX-Protokoll mit
+CSV-Export, Fern-Ausschalten nur mit Quelle (FTX-1 `PS0`, mit Bestätigung),
+optionales öffentliches Mithören (standardmäßig aus), signierte Update-Hinweise
+(keine Installation ohne Zustimmung) und eine installierbare PWA. Niemals ohne angepasste Last oder Antenne senden.
 
 ## Sprachen, ohne aktive Steuerelemente zu unterbrechen
 

@@ -299,6 +299,13 @@ borde de banda, apagado automatico, elementos del enlace CI-V/USB y REF adjust s
 compuestos 0001 y 0046 son pendiente de fuente. Los agentes Node y Python listan el modelo de la IC-705 solo en
 lectura porque alli no hay ruta CI-V cruda con fuente. Las consolas web de Android reutilizan la pestana Ajustes
 del agente Node.
+## Operación remota ampliada
+
+El agente Node (`remote-agent.cjs` + `remote-ops.cjs`) añade invitados con token propio
+y permisos por radio (bandas y potencia máxima aplicadas en el agente), historial TX con
+exportación CSV, apagado remoto solo donde hay fuente (FTX-1 `PS0`, con confirmación),
+escucha pública opcional (desactivada por defecto), aviso de actualizaciones firmadas
+(nunca instala sin consentimiento) y PWA instalable. No transmita sin carga o antena adaptada.
 
 ## Idiomas sin interrumpir controles activos
 

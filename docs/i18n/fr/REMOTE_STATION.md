@@ -299,6 +299,13 @@ bip de bord de bande, arrêt automatique, éléments de liaison CI-V/USB et REF 
 éléments composites 0001 et 0046 sont pendiente de fuente. Les agents Node et Python listent le modèle de
 l'IC-705 en lecture seule faute de route CI-V brute sourcée. Les consoles web d'Android réutilisent l'onglet
 Réglages de l'agent Node.
+## Exploitation distante étendue
+
+L'agent Node (`remote-agent.cjs` + `remote-ops.cjs`) ajoute des invités avec leur propre jeton
+et des permissions par radio (bandes et puissance maximale appliquées dans l'agent), un journal TX avec
+export CSV, l'extinction à distance uniquement là où elle est sourcée (FTX-1 `PS0`, avec confirmation),
+l'écoute publique optionnelle (désactivée par défaut), des notifications de mise à jour signées
+(sans installation sans consentement) et une PWA installable. Ne jamais émettre sans charge ou antenne adaptée.
 
 ## Langues sans interrompre les contrôles actifs
 

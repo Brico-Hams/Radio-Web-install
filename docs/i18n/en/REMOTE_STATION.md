@@ -298,6 +298,13 @@ PTT start, SEND/keying outputs, max TX power, band-edge beep, auto power OFF, CI
 adjust are read-only; the composite items 0001 and 0046 are pendiente de fuente. The Node and Python agents
 list the IC-705 model read-only because no sourced raw CI-V route exists there. The Android web consoles
 reuse the Settings tab of the Node agent.
+## Extended remote operation
+
+The Node agent (`remote-agent.cjs` + `remote-ops.cjs`) adds guests with their own token
+and per-radio permissions (bands and maximum power enforced in the agent), a TX log with
+CSV export, remote power-off only where sourced (FTX-1 `PS0`, with confirmation),
+optional public listening (off by default), signed update notifications
+(never installs without consent) and an installable PWA. Never transmit without a matched load or antenna.
 
 ## Languages without interrupting active controls
 

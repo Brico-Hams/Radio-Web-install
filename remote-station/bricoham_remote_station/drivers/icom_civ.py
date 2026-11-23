@@ -216,6 +216,31 @@ def parse_ic705_state_reply(tuner: bool, frame: bytes) -> int:
     return frame[-2]
 
 
+# IC-705 CI-V Reference Guide (data/third-party/IC-705_ENG_CI-V_6.txt, local): command 18 sub 00 turns the
+# transceiver OFF and 18 01 turns it ON (command table, page 5; note *4 on page 18). Only models whose guide
+# has been read are listed; every other Icom stays "pendiente de fuente".
+_POWER_SOURCED = frozenset({IcomCivModel.IC_705})
+
+
+def build_power_set(model: IcomCivModel, on: bool) -> bytes:
+    if not isinstance(model, IcomCivModel) or model not in _POWER_SOURCED:
+        raise ValueError("Power command pendiente de fuente for this Icom model.")
+    if type(on) is not bool:
+        raise ValueError("Power switching requires an explicit boolean.")
+    return _PREAMBLE + bytes((_RADIO_ADDRESSES[model], CONTROLLER_ADDRESS, 0x18, int(on), _END))
+
+
+def parse_ack(model: IcomCivModel, frame: bytes) -> bool:
+    if not isinstance(model, IcomCivModel) or not isinstance(frame, bytes):
+        raise ValueError("Invalid CI-V acknowledgement.")
+    head = _PREAMBLE + bytes((CONTROLLER_ADDRESS, _RADIO_ADDRESSES[model]))
+    if frame == head + b"\xfb\xfd":
+        return True
+    if frame == head + b"\xfa\xfd":
+        return False
+    raise ValueError("Invalid CI-V acknowledgement.")
+
+
 def build_query(model: IcomCivModel, command: IcomReadCommand) -> bytes:
     if not isinstance(model, IcomCivModel):
         raise ValueError("El modelo debe pertenecer a la lista CI-V documentada.")

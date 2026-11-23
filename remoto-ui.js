@@ -1,4 +1,8 @@
 (function () {
+  // Installable shell: caches static assets only (remote-sw.js never touches /api or tokens).
+  if (typeof navigator !== "undefined" && navigator.serviceWorker && /^https?:$/.test(location.protocol)) {
+    navigator.serviceWorker.register("remote-sw.js", { scope: "./remoto.html" }).catch(() => {});
+  }
   "use strict";
   const EMPTY = "—";
   const show = value => (value === null || value === undefined || value === "" ? EMPTY : String(value));

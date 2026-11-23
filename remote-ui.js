@@ -689,7 +689,12 @@
     button.addEventListener("blur", pttUp);
     document.addEventListener("visibilitychange", () => { if (document.hidden) pttUp(); });
     addEventListener("pagehide", pttUp);
+    addEventListener("blur", pttUp);
+    // Dispatched by the Android shell before it freezes the WebView (background / screen lock).
+    addEventListener("radicodex-release", pttUp);
   }
+
+  if (typeof navigator !== "undefined" && navigator.serviceWorker && location.protocol !== "file:") navigator.serviceWorker.register("sw.js").catch(() => {});
 
   // The shack talks to the radio through rigctld, which does not expose scope frames, so the native scope is
   // "pendiente de fuente" here; every radio with an audio path gets the audio-passband waterfall instead.
