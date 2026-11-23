@@ -3,6 +3,7 @@ import math
 import unittest
 from pathlib import Path
 
+from bricoham_remote_station.cat_diagnostics import read_profiles
 from bricoham_remote_station.drivers.ftx1_cat import (
     alc_percent,
     build_meter_query,
@@ -30,6 +31,15 @@ class Ftx1MeterTests(unittest.TestCase):
         self.assertEqual(readings[-1].raw, 201)
         self.assertEqual(parse_smeter_reply(b"SM0000;").key, "smeter")
         self.assertEqual(build_meter_query(6), b"RM6;")
+
+    def test_meter_reads_are_in_the_ftx1_allowlist(self) -> None:
+        queries = read_profiles()["FTX-1"].queries
+        for command in [f"RM{n}" for n in range(1, 9)] + ["SM0", "SM1"]:
+            self.assertIn(command, queries)
+            self.assertIsNotNone(queries[command].decoder)
+        self.assertEqual(queries["RM6"].request, b"RM6;")
+        self.assertEqual(queries["RM8"].decoder(b"RM8201000;").raw, 201)
+        self.assertLessEqual(len(queries), 32)
 
     def test_invalid_frames_are_rejected(self) -> None:
         for frame in (b"RM9000000;", b"RM4300000;", b"RM4000001;", b"RM400;"):

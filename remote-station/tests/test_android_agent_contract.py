@@ -9,7 +9,10 @@ READONLY_CAT = (
     / "android/station-agent/src/main/java/org/bricohams/stationagent/ReadonlyCat.kt"
 )
 # Host queries that the Android agent deliberately does not forward.
-EXCLUDED_HOST_QUERIES: frozenset[str] = frozenset()
+# Meter reads are served by the host agent only; the Android agent keeps its smaller allowlist.
+EXCLUDED_HOST_QUERIES: frozenset[str] = frozenset(
+    {"SM0", "SM1", "RM1", "RM2", "RM3", "RM4", "RM5", "RM6", "RM7", "RM8"}
+)
 
 
 class AndroidAllowlistContractTests(unittest.TestCase):

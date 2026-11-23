@@ -575,6 +575,8 @@ test("ATAS ignores the Hi-SWR flag and is cut at tuneMaxSeconds with the raw SWR
     assert.ok(!afterTune(rig).includes("T 0"));
     await waitFor(() => afterTune(rig).includes("T 0"), 5000);
     assert.ok(inOrder(stopOrder(rig)));
+    // endTune publishes the notice only after the stop sequence and TX-off readback finish.
+    await waitFor(async () => /ROE bruta 255\/255\): la antena no ha sintonizado/.test(JSON.stringify(await state())), 5000);
     assert.match(JSON.stringify(await state()), /ROE bruta 255\/255\): la antena no ha sintonizado/);
   } finally { stopBeat(); await cleanup(); await rig.close(); }
 });
