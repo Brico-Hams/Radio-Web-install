@@ -4,6 +4,7 @@ import java.io.File
 import org.bricohams.digital.CodecException
 import org.bricohams.digital.PcmAudio
 import org.bricohams.digital.WindowedSincResampler
+import org.bricohams.digital.WorkBudget
 import org.bricohams.digital.fec.Ldpc174
 import org.junit.Assert.*
 import org.junit.Test
@@ -89,6 +90,64 @@ class FtxCodecTest {
         for (slot in slots) {
             assertEquals(0L, Math.floorMod(slot.startUtcMs, 15_000L))
             assertEquals(FtxMode.FT8.slotSamples, slot.samples.size)
+        }
+    }
+
+    // One FT8 frame in seeded noise whose power in 2500 Hz is snrDb below the frame's own mean power; with a passband
+    // the noise is a sum of sinusoids of constant density inside it and nothing outside, like an SSB receiver.
+    private fun snrSlot(snrDb: Double, seed: Long, passband: DoubleArray?): FloatArray {
+        val frame = codecs.frame(FtxMode.FT8, "CQ EA1ABC IN80", 1500.0).samples
+        val power = frame.sumOf { it.toDouble() * it.toDouble() } / frame.size
+        val density = power / Math.pow(10.0, snrDb / 10.0) / 2500.0 // per Hz, one-sided
+        val random = java.util.Random(seed) // NOSONAR test-only: seeded Random for reproducible noise
+        val samples = DoubleArray(FtxMode.FT8.slotSamples)
+        if (passband == null) {
+            val sigma = Math.sqrt(density * 6000.0)
+            for (i in samples.indices) samples[i] = random.nextGaussian() * sigma
+        } else {
+            val cell = 2.5
+            val count = ((passband[1] - passband[0]) / cell).toInt()
+            val amplitude = Math.sqrt(2.0 * density * cell)
+            for (k in 0 until count) {
+                val step = 2 * Math.PI * (passband[0] + (k + random.nextDouble()) * cell) / FtxCodecs.RATE
+                val phase = random.nextDouble() * 2 * Math.PI
+                val cosStep = Math.cos(step)
+                val sinStep = Math.sin(step)
+                var re = Math.cos(phase)
+                var im = Math.sin(phase)
+                for (i in samples.indices) {
+                    samples[i] += amplitude * re
+                    val next = re * cosStep - im * sinStep
+                    im = re * sinStep + im * cosStep
+                    re = next
+                }
+            }
+        }
+        val out = FloatArray(samples.size) { samples[it].toFloat() }
+        val lead = (FtxMode.FT8.leadMs * FtxCodecs.RATE / 1000).toInt()
+        for (i in frame.indices) out[lead + i] += frame[i]
+        // The decoder needs samples within [-1, 1]; a common scale leaves the SNR unchanged.
+        val peak = out.maxOf { Math.abs(it) }
+        if (peak > 0.95f) { val scale = 0.95f / peak; for (i in out.indices) out[i] *= scale }
+        return out
+    }
+
+    private fun decodedSnr(audio: FloatArray): Double {
+        val found = codecs.decodeSlot(FtxMode.FT8, audio, 0L, WorkBudget { })
+        val hit = found.firstOrNull { it.text == "CQ EA1ABC IN80" }
+        assertNotNull(found.toString(), hit)
+        return hit!!.snrDb
+    }
+
+    @Test fun ft8SnrFollowsThe2500HzReferenceForWhiteNoise() {
+        for ((snrDb, seed) in listOf(-15.0 to 11L, -5.0 to 12L, 5.0 to 13L)) {
+            assertEquals("snr at $snrDb dB", snrDb, decodedSnr(snrSlot(snrDb, seed, null)), 3.0)
+        }
+    }
+
+    @Test fun ft8SnrDoesNotInflateWhenThePassbandLeavesMostOfTheSearchBandEmpty() {
+        for ((snrDb, seed) in listOf(-10.0 to 21L, 0.0 to 22L)) {
+            assertEquals("snr at $snrDb dB", snrDb, decodedSnr(snrSlot(snrDb, seed, doubleArrayOf(300.0, 2700.0))), 3.0)
         }
     }
 }

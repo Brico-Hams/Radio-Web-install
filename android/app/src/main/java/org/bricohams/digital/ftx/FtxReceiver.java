@@ -30,6 +30,9 @@ public final class FtxReceiver {
     private static final double ADAPTIVE_SIGMAS = 2.5;
     private static final double ADAPTIVE_MIN = 1.12;
     private static final double MARGIN_HZ = 300;
+    // Local noise estimate window beside a signal and the guard kept free of the signal's own tones.
+    private static final double NOISE_SIDE_HZ = 100;
+    private static final double NOISE_GUARD_HZ = 15;
     private static final int TIME_RANGE = 24;
     private static final int COARSE_TIME_STEP = 4;
     private static final double DUPLICATE_HZ = 20;
@@ -336,6 +339,11 @@ public final class FtxReceiver {
         double bandNoise(int bMin, int bMax) {
             int lo = bMin - binLo;
             int hi = Math.min(binHi - binLo, bMax + 2 * p.tones - binLo);
+            return medianPower(lo, hi, 1, 0);
+        }
+
+        /** Median spectrogram power over row indexes lo..hi (skipping skipLo..skipHi) of the frames fully inside the buffer. */
+        double medianPower(int lo, int hi, int skipLo, int skipHi) {
             int frames = power.length;
             float[] buf = new float[frames * (hi - lo + 1)];
             int count = 0;
@@ -343,11 +351,29 @@ public final class FtxReceiver {
                 int first = (minStep + f) * hop;
                 if (first < 0 || first + sps > len) continue;
                 float[] row = power[f];
-                for (int i = lo; i <= hi; i++) buf[count++] = row[i];
+                for (int i = lo; i <= hi; i++) {
+                    if (i >= skipLo && i <= skipHi) continue;
+                    buf[count++] = row[i];
+                }
             }
             if (count == 0) return 0;
             Arrays.sort(buf, 0, count);
             return buf[count / 2];
+        }
+
+        /**
+         * White-noise-equivalent variance around one signal. A receiver passband leaves most of the search band nearly
+         * empty, so the band-wide median underestimates the noise the signal competes with.
+         */
+        double localNoiseSigma2(double hz) {
+            double span = (p.tones - 1) * p.toneSpacingHz;
+            int lo = Math.max(binLo, (int) Math.floor((hz - NOISE_SIDE_HZ) / p.binHz));
+            int hi = Math.min(binHi, (int) Math.ceil((hz + span + NOISE_SIDE_HZ) / p.binHz));
+            int skipLo = (int) Math.floor((hz - NOISE_GUARD_HZ) / p.binHz);
+            int skipHi = (int) Math.ceil((hz + span + NOISE_GUARD_HZ) / p.binHz);
+            if (hi < lo) return noiseSigma2;
+            double median = medianPower(lo - binLo, hi - binLo, skipLo - binLo, skipHi - binLo);
+            return median > 0 ? median / Math.log(2) / (0.375 * sps) : noiseSigma2;
         }
 
         void addHit(List<Hit> hits, Hit hit) {
@@ -769,7 +795,7 @@ public final class FtxReceiver {
             hit.dt = (double) hit.start / SAMPLE_RATE - p.nominalStartSeconds;
             hit.score = c.score;
             hit.tones = p.coreTones(word);
-            hit.snr = snr(hit.tones, bestS);
+            hit.snr = snr(hit.tones, bestS, bestF);
             hit.ap = pattern == null ? null : pattern.tag;
             return hit;
         }
@@ -978,8 +1004,8 @@ public final class FtxReceiver {
         }
 
         /** SNR in the 2500 Hz reference bandwidth from the decoded tones and the band spectrogram noise level. */
-        double snr(int[] tones, int s) {
-            double sigma2 = noiseSigma2;
+        double snr(int[] tones, int s, double hz) {
+            double sigma2 = localNoiseSigma2(hz);
             if (!(sigma2 > 0)) return Double.NaN;
             // Noise bias of a baseband correlation, scaled like the 12 kHz one (filter noise power gain decim * sum h^2).
             double bias = sps * sigma2 * decim * firPower;

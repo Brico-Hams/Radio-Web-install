@@ -2439,6 +2439,7 @@ Ranuras decodificadas:|Slots decoded:|Créneaux décodés :|Dekodierte Slots:
 Ranuras descartadas:|Slots dropped:|Créneaux abandonnés :|Verworfene Slots:
 FT4: todavia no disponible.|FT4: not available yet.|FT4 : pas encore disponible.|FT4: noch nicht verfügbar.
 Sin decodificaciones FT8 todavia.|No FT8 decodes yet.|Aucun décodage FT8 pour l’instant.|Noch keine FT8-Dekodierungen.
+Aviso: el reloj del PC de la estacion probablemente esta desajustado (la mediana del DT absoluto supera 1 s). Sincronizalo con un servidor de hora; el decodificador no corrige el DT ni el reloj.|Warning: the station PC clock is probably off (the median absolute DT is above 1 s). Synchronize it with a time server; the decoder does not correct DT or the clock.|Avertissement : l’horloge du PC de la station est probablement décalée (la médiane du DT absolu dépasse 1 s). Synchronisez-la avec un serveur de temps ; le décodeur ne corrige ni le DT ni l’horloge.|Warnung: Die Uhr des Stations-PCs geht wahrscheinlich falsch (der mittlere absolute DT liegt über 1 s). Mit einem Zeitserver synchronisieren; der Dekoder korrigiert weder DT noch die Uhr.
 UTC|UTC|UTC|UTC
 SNR (dB)|SNR (dB)|SNR (dB)|SNR (dB)
 DT (s)|DT (s)|DT (s)|DT (s)

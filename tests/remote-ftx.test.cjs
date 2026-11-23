@@ -295,6 +295,35 @@ test("console helper: status texts and mounted list rendering", async () => {
   } finally { clearInterval(mounted.state.timer); }
 });
 
+test("clock warning: shown only when the median |DT| of recent decodes is above 1 s, with no correction", () => {
+  const rows = dts => dts.map(dt => ({ utc: "2026-11-23T14:00:15.000Z", snr: -7, dt, hz: 1500, message: "CQ EA1ABC IN80" }));
+  assert.equal(ui.clockWarning(rows([-1.2, -1.7, -1.4, -1.5, 0.2])), ui.CLOCK_WARNING);
+  assert.equal(ui.clockWarning(rows([0.2, -0.1, 0.3, -1.6, 1.3])), "");
+  assert.equal(ui.clockWarning(rows([-1.5, -1.6])), "");
+  assert.equal(ui.clockWarning(rows([1, -1, 1])), "");
+  assert.equal(ui.clockWarning([]), "");
+  assert.ok(Math.abs(ui.medianAbsDt(rows([-1.2, -1.6, 0.4, 2])) - 1.4) < 1e-9);
+  // Only the 20 most recent decodes (list is newest first) count.
+  assert.equal(ui.clockWarning(rows([...new Array(20).fill(0.1), ...new Array(30).fill(-1.5)])), "");
+  const nodes = {};
+  for (const id of ["ftx-toggle", "ftx-status", "ftx-list", "ftx-clock-warning"]) {
+    nodes[id] = { textContent: "", hidden: true, setAttribute() {}, addEventListener() {}, replaceChildren() {} };
+  }
+  const doc = { getElementById: id => nodes[id], createElement: () => ({ textContent: "", children: [], append(...items) { this.children.push(...items); } }) };
+  const mounted = ui.mount({ doc, api: async () => ({ enabled: true, available: true, stats: {}, decodes: rows([-1.5, -1.6, -1.2]) }), notify() {} });
+  try {
+    mounted.render({ enabled: true, available: true, stats: {}, decodes: rows([-1.5, -1.6, -1.2]) });
+    assert.equal(nodes["ftx-clock-warning"].hidden, false);
+    assert.equal(nodes["ftx-clock-warning"].textContent, ui.CLOCK_WARNING);
+    mounted.render({ enabled: true, available: true, stats: {}, decodes: rows([0.1, 0.2, -0.3]) });
+    assert.equal(nodes["ftx-clock-warning"].hidden, true);
+    assert.equal(nodes["ftx-clock-warning"].textContent, "");
+  } finally { clearInterval(mounted.state.timer); }
+  assert.match(read("remote.html"), /id="ftx-clock-warning"/);
+  const row = require("../ui-translations.js").find(item => item[0] === ui.CLOCK_WARNING);
+  assert.ok(row && row.length === 4 && row.every(text => text.length > 20));
+});
+
 test("registration: static route, service worker, page, translations and build lists", () => {
   assert.match(read("remote-agent.cjs"), /"\/remote-ftx-ui\.js"/);
   assert.match(read("remote-agent.cjs"), /GET \/api\/ftx/);

@@ -26,6 +26,9 @@ const TIME_RANGE = 24;
 const COARSE_TIME_STEP = 4;
 const DUPLICATE_HZ = 20;
 const OSD_MAX_ERRORS = 28;
+// Local noise estimate window beside a signal and the guard kept free of the signal's own tones.
+const NOISE_SIDE_HZ = 100;
+const NOISE_GUARD_HZ = 15;
 
 const FT8_GRAY = [0, 1, 3, 2, 5, 6, 4, 7];
 const FT8_COSTAS = [3, 1, 4, 0, 6, 5, 2];
@@ -1072,6 +1075,11 @@ class Run {
     const p = this.p;
     const lo = bMin - this.binLo;
     const hi = Math.min(this.binHi - this.binLo, bMax + 2 * p.tones - this.binLo);
+    return this.medianPower(lo, hi, 1, 0);
+  }
+
+  // Median spectrogram power over row indexes lo..hi (skipping skipLo..skipHi) of the frames fully inside the audio.
+  medianPower(lo, hi, skipLo, skipHi) {
     const frames = this.power.length;
     const buf = new Float32Array(frames * (hi - lo + 1));
     let count = 0;
@@ -1079,12 +1087,28 @@ class Run {
       const first = (this.minStep + f) * this.hop;
       if (first < 0 || first + this.sps > this.len) continue;
       const row = this.power[f];
-      for (let i = lo; i <= hi; i += 1) buf[count++] = row[i];
+      for (let i = lo; i <= hi; i += 1) {
+        if (i >= skipLo && i <= skipHi) continue;
+        buf[count++] = row[i];
+      }
     }
     if (count === 0) return 0;
     const used = buf.subarray(0, count);
     used.sort();
     return used[Math.floor(count / 2)];
+  }
+
+  // White-noise-equivalent variance around one signal. A receiver passband (SSB filter, DSP) leaves most of the
+  // 100..4500 Hz search band nearly empty, so the band-wide median underestimates the noise the signal competes with.
+  localNoiseSigma2(hz) {
+    const p = this.p;
+    const lo = Math.max(this.binLo, Math.floor((hz - NOISE_SIDE_HZ) / p.binHz));
+    const hi = Math.min(this.binHi, Math.ceil((hz + (p.tones - 1) * p.toneSpacingHz + NOISE_SIDE_HZ) / p.binHz));
+    const skipLo = Math.floor((hz - NOISE_GUARD_HZ) / p.binHz);
+    const skipHi = Math.ceil((hz + (p.tones - 1) * p.toneSpacingHz + NOISE_GUARD_HZ) / p.binHz);
+    if (hi < lo) return this.noiseSigma2;
+    const median = this.medianPower(lo - this.binLo, hi - this.binLo, skipLo - this.binLo, skipHi - this.binLo);
+    return median > 0 ? median / Math.log(2) / (0.375 * this.sps) : this.noiseSigma2;
   }
 
   addHit(hits, hit) {
@@ -1404,7 +1428,7 @@ class Run {
       dt: start / SAMPLE_RATE - p.nominalStartSeconds,
       score: c.score,
       tones,
-      snr: this.snr(tones, bestS),
+      snr: this.snr(tones, bestS, bestF),
     };
   }
 
@@ -1471,9 +1495,9 @@ class Run {
   }
 
   // SNR in the 2500 Hz reference bandwidth from the decoded tones and the band spectrogram noise level.
-  snr(tones, s) {
+  snr(tones, s, hz) {
     const p = this.p;
-    const sigma2 = this.noiseSigma2;
+    const sigma2 = this.localNoiseSigma2(hz);
     if (!(sigma2 > 0)) return NaN;
     // Noise bias of a baseband correlation, scaled like the 12 kHz one (filter noise power gain decim * sum h^2).
     const bias = this.sps * sigma2 * p.decim * this.firPower;
