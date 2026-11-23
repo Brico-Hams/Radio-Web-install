@@ -2273,6 +2273,75 @@ Aparcado: azimut|Park: azimuth|Parcage : azimut|Parken: Azimut
 Aparcado: elevacion|Park: elevation|Parcage : élévation|Parken: Elevation
 Calibracion: azimut|Calibration: azimuth|Étalonnage : azimut|Kalibrierung: Azimut
 Calibracion: elevacion|Calibration: elevation|Étalonnage : élévation|Kalibrierung: Elevation
+Libro QSO|QSO book|Carnet QSO|QSO-Buch
+Libro de QSO|QSO book|Carnet de QSO|QSO-Buch
+Los datos de QRZ.com y de LoTW se guardan solo en el agente. Nada se sube sin que pulses el boton.|QRZ.com and LoTW data are kept only at the agent. Nothing is uploaded unless you press the button.|Les données QRZ.com et LoTW restent uniquement sur l’agent. Rien n’est envoyé sans que vous appuyiez sur le bouton.|QRZ.com- und LoTW-Daten bleiben nur im Agenten. Ohne Tastendruck wird nichts hochgeladen.
+RST enviado|RST sent|RST envoyé|RST gesendet
+RST recibido|RST received|RST reçu|RST empfangen
+Locator del corresponsal|Other station locator|Locator du correspondant|Locator der Gegenstation
+Usar frecuencia y modo de la radio|Use the radio's frequency and mode|Utiliser la fréquence et le mode de la radio|Frequenz und Modus des Funkgeräts übernehmen
+Consultar QRZ.com|Look up on QRZ.com|Consulter QRZ.com|Auf QRZ.com abfragen
+Guardar QSO|Save QSO|Enregistrer le QSO|QSO speichern
+Sin contactos todavia.|No contacts yet.|Aucun contact pour l’instant.|Noch keine Kontakte.
+Ultimos contactos|Latest contacts|Derniers contacts|Letzte Kontakte
+ADIF y LoTW|ADIF and LoTW|ADIF et LoTW|ADIF und LoTW
+Importar ADIF|Import ADIF|Importer ADIF|ADIF importieren
+Exportar ADIF|Export ADIF|Exporter ADIF|ADIF exportieren
+Subir a LoTW con TQSL|Upload to LoTW with TQSL|Envoyer vers LoTW avec TQSL|Mit TQSL zu LoTW hochladen
+La consulta QRZ.com esta desactivada: se activa en el agente con tus credenciales.|QRZ.com lookup is off: enable it at the agent with your credentials.|La consultation QRZ.com est désactivée : activez-la sur l’agent avec vos identifiants.|Die QRZ.com-Abfrage ist aus: im Agenten mit deinen Zugangsdaten aktivieren.
+Pendientes de subir a LoTW: {0}|Pending upload to LoTW: {0}|En attente d’envoi vers LoTW : {0}|Ausstehender LoTW-Upload: {0}
+Subida a LoTW: pendiente de fuente. Se activa en el agente con la ruta de TQSL y sus argumentos.|LoTW upload: pending a source. Enable it at the agent with the TQSL path and its arguments.|Envoi LoTW : en attente de source. Activez-le sur l’agent avec le chemin de TQSL et ses arguments.|LoTW-Upload: Quelle ausstehend. Im Agenten mit TQSL-Pfad und Argumenten aktivieren.
+Contactos: {0}. DXCC: {1}. WAS: {2}/{3}. Locators: {4}. POTA: {5}.|Contacts: {0}. DXCC: {1}. WAS: {2}/{3}. Locators: {4}. POTA: {5}.|Contacts : {0}. DXCC : {1}. WAS : {2}/{3}. Locators : {4}. POTA : {5}.|Kontakte: {0}. DXCC: {1}. WAS: {2}/{3}. Locators: {4}. POTA: {5}.
+QSO guardado.|QSO saved.|QSO enregistré.|QSO gespeichert.
+QSO guardado. Repetido: ya contactado en esta banda y modo.|QSO saved. Duplicate: already worked on this band and mode.|QSO enregistré. Doublon : déjà contacté sur cette bande et ce mode.|QSO gespeichert. Doppelt: auf diesem Band und in diesem Modus bereits gearbeitet.
+ADIF importado: {0} nuevos, {1} ya estaban.|ADIF imported: {0} new, {1} already present.|ADIF importé : {0} nouveaux, {1} déjà présents.|ADIF importiert: {0} neu, {1} bereits vorhanden.
+TQSL ha terminado correctamente: {0} QSO.|TQSL finished successfully: {0} QSOs.|TQSL s’est terminé correctement : {0} QSO.|TQSL erfolgreich beendet: {0} QSOs.
+¿Subir a LoTW los contactos pendientes con tu TQSL local? TQSL gestiona tu certificado y su contraseña; esta consola no los ve.|Upload the pending contacts to LoTW with your local TQSL? TQSL handles your certificate and its password; this console never sees them.|Envoyer les contacts en attente vers LoTW avec votre TQSL local ? TQSL gère votre certificat et son mot de passe ; cette console ne les voit jamais.|Ausstehende Kontakte mit deinem lokalen TQSL zu LoTW hochladen? TQSL verwaltet dein Zertifikat und dessen Passwort; diese Konsole sieht sie nie.
+Solo el propietario.|Owner only.|Réservé au propriétaire.|Nur für den Besitzer.
+Cuerpo no valido.|Invalid request body.|Corps de requête non valide.|Ungültiger Anfragetext.
+Error interno.|Internal error.|Erreur interne.|Interner Fehler.
+Indicativo no valido.|Invalid callsign.|Indicatif non valide.|Ungültiges Rufzeichen.
+Fecha UTC no valida.|Invalid UTC date.|Date UTC non valide.|Ungültiges UTC-Datum.
+Frecuencia no valida (MHz).|Invalid frequency (MHz).|Fréquence non valide (MHz).|Ungültige Frequenz (MHz).
+Modo no valido.|Invalid mode.|Mode non valide.|Ungültiger Modus.
+Control RST no valido.|Invalid RST report.|Report RST non valide.|Ungültiger RST-Rapport.
+Las notas solo admiten ASCII (200 caracteres).|Notes accept ASCII only (200 characters).|Les notes n’acceptent que l’ASCII (200 caractères).|Notizen erlauben nur ASCII (200 Zeichen).
+Texto no valido.|Invalid text.|Texte non valide.|Ungültiger Text.
+Locator no valido.|Invalid locator.|Locator non valide.|Ungültiger Locator.
+El libro de QSO esta lleno.|The QSO book is full.|Le carnet de QSO est plein.|Das QSO-Buch ist voll.
+Falta el texto ADIF.|The ADIF text is missing.|Le texte ADIF est manquant.|Der ADIF-Text fehlt.
+ADIF demasiado grande.|ADIF file too large.|Fichier ADIF trop volumineux.|ADIF-Datei zu groß.
+ADIF solo admite ASCII.|ADIF accepts ASCII only.|ADIF n’accepte que l’ASCII.|ADIF erlaubt nur ASCII.
+Texto sobrante tras el ultimo registro.|Extra text after the last record.|Texte superflu après le dernier enregistrement.|Überschüssiger Text nach dem letzten Datensatz.
+Texto suelto entre campos.|Loose text between fields.|Texte isolé entre les champs.|Loser Text zwischen den Feldern.
+Etiqueta truncada.|Truncated tag.|Balise tronquée.|Abgeschnittenes Tag.
+Cabecera fuera de sitio.|Header out of place.|En-tête mal placé.|Kopfbereich an falscher Stelle.
+Registro vacio.|Empty record.|Enregistrement vide.|Leerer Datensatz.
+Demasiados registros.|Too many records.|Trop d’enregistrements.|Zu viele Datensätze.
+Etiqueta ADIF no admitida: {0}|Unsupported ADIF tag: {0}|Balise ADIF non prise en charge : {0}|Nicht unterstütztes ADIF-Tag: {0}
+Demasiados campos en un registro.|Too many fields in one record.|Trop de champs dans un enregistrement.|Zu viele Felder in einem Datensatz.
+Campo truncado: {0}|Truncated field: {0}|Champ tronqué : {0}|Abgeschnittenes Feld: {0}
+Campo duplicado: {0}|Duplicate field: {0}|Champ en double : {0}|Doppeltes Feld: {0}
+Registro {0}: falta {1}.|Record {0}: {1} is missing.|Enregistrement {0} : {1} manque.|Datensatz {0}: {1} fehlt.
+Registro {0}: fecha u hora no validas.|Record {0}: invalid date or time.|Enregistrement {0} : date ou heure non valide.|Datensatz {0}: ungültiges Datum oder ungültige Uhrzeit.
+Falta <EOR> en el ultimo registro.|<EOR> is missing in the last record.|<EOR> manque dans le dernier enregistrement.|<EOR> fehlt im letzten Datensatz.
+El ADIF no contiene contactos.|The ADIF file contains no contacts.|Le fichier ADIF ne contient aucun contact.|Die ADIF-Datei enthält keine Kontakte.
+QRZ.com ha devuelto una respuesta no valida.|QRZ.com returned an invalid reply.|QRZ.com a renvoyé une réponse non valide.|QRZ.com hat eine ungültige Antwort geliefert.
+Solo se permite HTTPS.|Only HTTPS is allowed.|Seul HTTPS est autorisé.|Nur HTTPS ist erlaubt.
+No se puede contactar con QRZ.com.|Cannot reach QRZ.com.|Impossible de joindre QRZ.com.|QRZ.com ist nicht erreichbar.
+QRZ.com no ha respondido a tiempo.|QRZ.com did not answer in time.|QRZ.com n’a pas répondu à temps.|QRZ.com hat nicht rechtzeitig geantwortet.
+QRZ.com ha rechazado las credenciales.|QRZ.com rejected the credentials.|QRZ.com a refusé les identifiants.|QRZ.com hat die Zugangsdaten abgelehnt.
+Indicativo no encontrado en QRZ.com.|Callsign not found on QRZ.com.|Indicatif introuvable sur QRZ.com.|Rufzeichen auf QRZ.com nicht gefunden.
+QRZ.com ha devuelto un error.|QRZ.com returned an error.|QRZ.com a renvoyé une erreur.|QRZ.com hat einen Fehler gemeldet.
+La consulta QRZ.com esta desactivada (accion explicita del operador).|QRZ.com lookup is disabled (explicit operator action).|La consultation QRZ.com est désactivée (action explicite de l’opérateur).|Die QRZ.com-Abfrage ist deaktiviert (ausdrückliche Aktion des Operators).
+Demasiadas consultas.|Too many lookups.|Trop de consultations.|Zu viele Abfragen.
+No se puede ejecutar TQSL.|Cannot run TQSL.|Impossible d’exécuter TQSL.|TQSL kann nicht ausgeführt werden.
+La subida a LoTW esta desactivada: configura TQSL y sus argumentos en el agente (pendiente de fuente).|LoTW upload is disabled: configure TQSL and its arguments at the agent (pending a source).|L’envoi vers LoTW est désactivé : configurez TQSL et ses arguments sur l’agent (en attente de source).|Der LoTW-Upload ist deaktiviert: TQSL und seine Argumente im Agenten konfigurieren (Quelle ausstehend).
+Confirma la subida a LoTW.|Confirm the LoTW upload.|Confirmez l’envoi vers LoTW.|LoTW-Upload bestätigen.
+Ya hay una subida a LoTW en curso.|A LoTW upload is already running.|Un envoi vers LoTW est déjà en cours.|Ein LoTW-Upload läuft bereits.
+No hay contactos pendientes de subir.|No contacts are pending upload.|Aucun contact en attente d’envoi.|Keine Kontakte zum Hochladen ausstehend.
+TQSL no ha terminado a tiempo.|TQSL did not finish in time.|TQSL ne s’est pas terminé à temps.|TQSL wurde nicht rechtzeitig beendet.
+TQSL ha terminado con error.|TQSL finished with an error.|TQSL s’est terminé avec une erreur.|TQSL wurde mit einem Fehler beendet.
 `.trim().split("\n").map(line => line.split("|")));
   root.BricohamsUITranslations = entries;
   if (typeof module === "object" && module.exports) module.exports = entries;

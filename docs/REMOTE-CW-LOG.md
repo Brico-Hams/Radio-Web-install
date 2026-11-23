@@ -55,6 +55,13 @@ Union of `data/remote-station-catalog.json`, the Python drivers and the Android 
 
 Xiegu is not in the catalog, the Python drivers or the Android profiles, so there is no row for it.
 
+## QSO book, QRZ.com and LoTW (Node agent, owner only)
+
+The console tab "Libro QSO" reuses `remote-log.cjs` (ADIF import/export, duplicates, DXCC/WAS/grid/POTA progress) on top of `remote-qsl.cjs`, which stores the book in `qso-log.json` next to `remote-agent.json` (0600).
+
+- QRZ.com lookup is off by default. Enable it in `remote-agent.json`: `"qrz": {"enabled": true, "username": "...", "password": "..."}`. The XML flow follows `third_party/ftx1/Eugen68-Yaesu-FTX1-CAT-Control/.../QrzLookupHelper.java`. HTTPS only, 8 s timeout, 20 lookups per minute. Credentials and session key stay in the agent: never in browser storage, responses, logs or URLs shown to the user.
+- LoTW upload runs your local TQSL: `"lotw": {"tqslPath": "C:\\path\\to\\tqsl.exe", "args": ["...", "{file}"], "timeoutSeconds": 120}`. The TQSL command line is pendiente de fuente in this repo, so you give the argument array yourself; `{file}` is replaced with a temporary ADIF of the pending QSOs. No shell, no stdin, certificate passwords are never handled (TQSL manages them), and nothing is sent without a click plus a confirmation. Exit code 0 marks the QSOs as sent.
+
 ## Pendiente de fuente (disabled)
 
-QRZ.com XML lookup, TQSL command line (LoTW), DX cluster telnet line format, FT8/FT4/WSPR/CW/RTTY/PSK31 decoders, SSTV on the web console, DXCC prefix table, FlexControl HID.
+TQSL command line arguments (operator-configured, see above), DX cluster telnet line format, FT8/FT4/WSPR/CW/RTTY/PSK31 decoders, SSTV on the web console, DXCC prefix table, FlexControl HID.

@@ -21,6 +21,7 @@ const stationDevicesLib = require("./station-devices.cjs");
 const { createRotor, RotorError } = require("./remote-rotor.cjs");
 const remoteOps = require("./remote-ops.cjs");
 const { planCwSend, createCwGuard } = require("./remote-cw.cjs");
+const remoteQsl = require("./remote-qsl.cjs");
 
 const isLoopbackHost = value => value === "localhost" || value === "::1" || /^127\./.test(value);
 
@@ -107,7 +108,11 @@ function loadConfig(dir) {
     devices: Array.isArray(stored.devices) ? stored.devices : [],
     // Remote CW through the radio's own keyer: off unless the operator enables it.
     cwEnabled: stored.cwEnabled === true,
-    cwMaxSeconds: Number(stored.cwMaxSeconds) > 0 ? Math.min(120, Number(stored.cwMaxSeconds)) : undefined
+    cwMaxSeconds: Number(stored.cwMaxSeconds) > 0 ? Math.min(120, Number(stored.cwMaxSeconds)) : undefined,
+    // QRZ.com lookup (off by default, the operator's own credentials) and LoTW upload through the operator's local TQSL.
+    // Both stay in this 0600 file and are never sent to clients.
+    qrz: remoteQsl.normalizeQrzConfig(stored.qrz),
+    lotw: remoteQsl.normalizeLotwConfig(stored.lotw)
   };
   if (!config.token) {
     config.token = crypto.randomBytes(32).toString("base64url");
@@ -148,6 +153,7 @@ const RELAY_STATION = /^[a-z0-9-]{3,32}$/;
 const SESSION_ID = /^[A-Za-z0-9_-]{8,64}$/;
 const RELAY_UPGRADE = "radicodex-tunnel/1";
 const SCOPES = Object.freeze(["civ", "smartsdr", "sdr", "audio", "none"]);
+const QSL_ROUTES = Object.freeze(["GET /api/qso", "POST /api/qso", "POST /api/qso/import", "GET /api/qso.adif", "GET /api/qrz/lookup", "POST /api/lotw/upload"]);
 
 function tokenMatches(expected, supplied) {
   if (typeof supplied !== "string" || !supplied) return false;
@@ -478,6 +484,11 @@ function createRemoteAgent(options = {}) {
   });
   const cwMaxSeconds = options.cwMaxSeconds ?? config.cwMaxSeconds ?? 60;
   let cwTimer = null;
+
+  // QSO book, ADIF, optional QRZ.com lookup and operator-triggered LoTW upload (remote-qsl.cjs). Nothing here keys the radio.
+  const qsl = remoteQsl.createQslService({
+    dir: configDir, config, now, log, request: options.qslRequest, spawn: options.qslSpawn, tmpdir: options.qslTmpdir
+  });
 
   async function cwHalt() {
     clearTimeout(cwTimer);
@@ -1126,16 +1137,16 @@ function createRemoteAgent(options = {}) {
     response.end(payload);
   }
 
-  function readBody(request) {
+  function readBody(request, limit = BODY_LIMIT) {
     return new Promise((resolve, reject) => {
       const tooBig = () => reject(Object.assign(new Error("Cuerpo demasiado grande."), { status: 413 }));
-      if (Number(request.headers["content-length"]) > BODY_LIMIT) { request.resume(); tooBig(); return; }
+      if (Number(request.headers["content-length"]) > limit) { request.resume(); tooBig(); return; }
       let size = 0;
       let rejected = false;
       const chunks = [];
       request.on("data", chunk => {
         size += chunk.length;
-        if (size > BODY_LIMIT) {
+        if (size > limit) {
           // Keep draining so the 413 reaches the client instead of a reset connection.
           if (!rejected) { rejected = true; tooBig(); }
           return;
@@ -1147,11 +1158,11 @@ function createRemoteAgent(options = {}) {
     });
   }
 
-  async function readJson(request) {
+  async function readJson(request, limit = BODY_LIMIT) {
     if (!/^application\/json\s*(?:;|$)/i.test(request.headers["content-type"] || "")) {
       throw Object.assign(new Error("Se requiere application/json."), { status: 415 });
     }
-    try { return JSON.parse(await readBody(request)); }
+    try { return JSON.parse(await readBody(request, limit)); }
     catch (error) {
       if (error.status) throw error;
       throw Object.assign(new Error("JSON no valido."), { status: 400 });
@@ -1360,6 +1371,24 @@ function createRemoteAgent(options = {}) {
         return;
       }
       send(response, 404, { error: "No encontrado." });
+      return;
+    }
+    if (QSL_ROUTES.includes(route)) {
+      // Credentials and TQSL stay at the agent; only the owner reaches the QSO book, the lookup and the LoTW upload.
+      if (!owner_) { send(response, 403, { error: "Solo el propietario." }); return; }
+      let result;
+      if (route === "GET /api/qso") result = qsl.list();
+      else if (route === "GET /api/qso.adif") result = await qsl.exportAdif();
+      else if (route === "GET /api/qrz/lookup") result = await qsl.lookup(url.searchParams.get("call"));
+      else {
+        let body;
+        try { body = await readJson(request, route === "POST /api/qso/import" ? remoteQsl.IMPORT_LIMIT_BYTES : BODY_LIMIT); }
+        catch (error) { send(response, error.status || 400, { error: error.message }); return; }
+        if (route === "POST /api/qso") result = await qsl.add(body);
+        else if (route === "POST /api/qso/import") result = await qsl.importAdif(body);
+        else result = await qsl.uploadLotw(body);
+      }
+      send(response, result.status, result.body, result.headers);
       return;
     }
     if (route === "GET /api/state") { send(response, 200, snapshot(clientId)); return; }

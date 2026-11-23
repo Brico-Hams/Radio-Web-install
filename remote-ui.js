@@ -48,7 +48,7 @@
   const LEVEL_KEYS = Object.freeze({ AF: "af", RF: "rf", RFPOWER: "rfpower" });
   const MIC_GAIN_KEY = "bricohams.remote.micgain";
   const MIC_GAIN_DEFAULT = 50;
-  const TABS = Object.freeze(["band", "levels", "cw", "log", "settings"]);
+  const TABS = Object.freeze(["band", "levels", "cw", "log", "qso", "settings"]);
   const CW_KEY = "bricohams.remote.cwmemories";
   // Placeholders {CALL} (their call, typed in the panel), {MYCALL}, {RST}, {NR} are expanded here and validated again by the agent.
   const CW_DEFAULTS = Object.freeze(["CQ CQ DE {MYCALL} {MYCALL} K", "{CALL} DE {MYCALL} K", "{CALL} {RST} {RST} {NR}", "{CALL} TU 73 EE", "QRZ? DE {MYCALL}", "AGN?", "{MYCALL}", "73 TU"]);  const $ = id => document.getElementById(id);
@@ -1295,6 +1295,118 @@
     });
   }
 
+  // QSO book: entry, ADIF import/export, optional QRZ.com lookup and LoTW upload. Credentials and TQSL stay at the agent;
+  // the console only sends the callsign to look up and an explicit click for the upload.
+  function bindQso() {
+    const status = text => setText($("qso-status"), text);
+    let lookedUp = {};
+    const fail = error => { status(""); notify(error.message); };
+
+    function renderQso(data) {
+      $("qso-lookup").disabled = !data.qrz.enabled;
+      $("qso-lotw").disabled = !data.lotw.configured || data.pendingLotw === 0;
+      setText($("qso-qrz-hint"), data.qrz.enabled ? "" : "La consulta QRZ.com esta desactivada: se activa en el agente con tus credenciales.");
+      setText($("qso-lotw-hint"), data.lotw.configured
+        ? `Pendientes de subir a LoTW: ${data.pendingLotw}`
+        : "Subida a LoTW: pendiente de fuente. Se activa en el agente con la ruta de TQSL y sus argumentos.");
+      const { progress } = data;
+      setText($("qso-progress"), `Contactos: ${data.total}. DXCC: ${progress.dxcc}. WAS: ${progress.was.worked}/${progress.was.total}. Locators: ${progress.grids}. POTA: ${progress.pota}.`);
+      const list = $("qso-list");
+      list.replaceChildren();
+      if (!data.contacts.length) {
+        const empty = document.createElement("li");
+        empty.className = "empty";
+        empty.textContent = "Sin contactos todavia.";
+        list.append(empty);
+        return;
+      }
+      for (const item of data.contacts) {
+        const row = document.createElement("li");
+        const time = document.createElement("time");
+        time.textContent = item.utc.slice(0, 16).replace("T", " ");
+        const text = document.createElement("span");
+        text.translate = false;
+        text.textContent = `${item.call} ${item.frequencyMHz} ${item.mode} ${item.sent}/${item.received}${item.lotwSentAt ? " LoTW" : ""}`;
+        row.append(time, text);
+        list.append(row);
+      }
+    }
+
+    async function refresh() {
+      try { renderQso(await api("api/qso")); }
+      catch (error) { fail(error); }
+    }
+
+    $("qso-fill").addEventListener("click", () => {
+      const state = view.state;
+      if (!state || !Number.isFinite(state.freq)) return;
+      $("qso-freq").value = (state.freq / 1e6).toFixed(6).replace(/0+$/, "").replace(/\.$/, "");
+      $("qso-mode").value = state.mode || "";
+    });
+    $("qso-call").addEventListener("input", () => { lookedUp = {}; });
+    $("qso-lookup").addEventListener("click", async () => {
+      status("");
+      try {
+        const found = await api(`api/qrz/lookup?call=${encodeURIComponent($("qso-call").value.trim())}`);
+        lookedUp = { state: found.state, country: found.country };
+        if (found.grid) $("qso-grid").value = found.grid;
+        setText($("qso-lookup-result"), [found.fname, found.name, found.qth, found.state, found.country, found.grid].filter(Boolean).join(" · "));
+      } catch (error) { fail(error); }
+    });
+    $("qso-add").addEventListener("click", async () => {
+      status("");
+      const body = {
+        call: $("qso-call").value, frequencyMHz: $("qso-freq").value, mode: $("qso-mode").value, sent: $("qso-sent").value,
+        received: $("qso-rcvd").value, notes: $("qso-notes").value, gridsquare: $("qso-grid").value, ...lookedUp
+      };
+      try {
+        const result = await api("api/qso", { method: "POST", body: JSON.stringify(body) });
+        status(result.dupe ? "QSO guardado. Repetido: ya contactado en esta banda y modo." : "QSO guardado.");
+        notify("");
+        for (const id of ["qso-call", "qso-notes", "qso-grid"]) $(id).value = "";
+        setText($("qso-lookup-result"), "");
+        lookedUp = {};
+        await refresh();
+      } catch (error) { fail(error); }
+    });
+    $("qso-import").addEventListener("change", async event => {
+      const file = event.target.files[0];
+      event.target.value = "";
+      if (!file) return;
+      status("");
+      try {
+        const result = await api("api/qso/import", { method: "POST", body: JSON.stringify({ adif: await file.text() }) });
+        status(`ADIF importado: ${result.added} nuevos, ${result.skipped} ya estaban.`);
+        notify("");
+        await refresh();
+      } catch (error) { fail(error); }
+    });
+    $("qso-export").addEventListener("click", async () => {
+      status("");
+      try {
+        const response = await fetch("api/qso.adif", { headers: { Authorization: `Bearer ${token}`, "X-Client-Id": clientId } });
+        if (!response.ok) throw new Error((await response.json().catch(() => null))?.error || `Error ${response.status}`);
+        const link = document.createElement("a");
+        link.href = URL.createObjectURL(await response.blob());
+        link.download = "radicodex.adi";
+        link.click();
+        setTimeout(() => URL.revokeObjectURL(link.href), 10_000);
+        notify("");
+      } catch (error) { fail(error); }
+    });
+    $("qso-lotw").addEventListener("click", async () => {
+      if (!confirm("¿Subir a LoTW los contactos pendientes con tu TQSL local? TQSL gestiona tu certificado y su contraseña; esta consola no los ve.")) return;
+      status("");
+      try {
+        const result = await api("api/lotw/upload", { method: "POST", body: JSON.stringify({ confirm: true }) });
+        status(`TQSL ha terminado correctamente: ${result.uploaded} QSO.`);
+        notify("");
+        await refresh();
+      } catch (error) { fail(error); }
+    });
+    return refresh();
+  }
+
   async function init() {
     buildFrequency();
     buildSmeterScale();
@@ -1326,6 +1438,7 @@
     bindTuner();
     bindLevels();
     bindSettings();
+    bindQso();
     setLocked(read(sessionStorage, LOCK_KEY) === "1");
     try {
       const config = await api("api/config");

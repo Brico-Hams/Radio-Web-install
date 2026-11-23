@@ -502,6 +502,72 @@ test("agent over TLS answers /api/state when the client trusts the generated cer
   }
 });
 
+test("QSO book routes are owner-only, QRZ/TQSL are explicit and credentials never reach a response", async () => {
+  const rig = await fakeRigctld();
+  const configDir = fs.mkdtempSync(path.join(os.tmpdir(), "radicodex-qsl-agent-"));
+  const token = "t".repeat(40);
+  const tqsl = path.resolve("fake-tqsl.exe");
+  fs.writeFileSync(path.join(configDir, "remote-agent.json"), JSON.stringify({
+    token, qrz: { enabled: true, username: "ea4xyz", password: "hunter2-secret" },
+    lotw: { tqslPath: tqsl, args: ["-q", "{file}"], timeoutSeconds: 10 }
+  }));
+  const urls = [];
+  const spawned = [];
+  const qslRequest = async url => {
+    urls.push(url);
+    return { status: 200, body: url.includes("username=") ? "<QRZDatabase><Session><Key>KEY-ABC</Key></Session></QRZDatabase>"
+      : "<QRZDatabase><Callsign><call>F4ABC</call><country>France</country></Callsign><Session><Key>KEY-ABC</Key></Session></QRZDatabase>" };
+  };
+  const qslSpawn = (command, args, options) => {
+    const child = new (require("node:events"))();
+    child.kill = () => {};
+    spawned.push({ command, args, options });
+    setImmediate(() => child.emit("close", 0, null));
+    return child;
+  };
+  const { agent, call, cleanup } = await startAgent(rig, { configDir, qslRequest, qslSpawn });
+  try {
+    assert.equal((await call("GET", "/api/qso", { token: "" })).status, 401);
+    const guest = agent.guests.invite({ label: "g", ttlHours: 1, permissions: { main: { transmit: false, bands: [], maxPowerW: null } } });
+    for (const [method, url] of [["GET", "/api/qso"], ["GET", "/api/qso.adif"], ["GET", "/api/qrz/lookup?call=F4ABC"], ["POST", "/api/lotw/upload"]]) {
+      assert.equal((await call(method, url, { token: guest.token, ...(method === "POST" ? { body: { confirm: true } } : {}) })).status, 403, url);
+    }
+    assert.equal(urls.length, 0);
+    assert.equal(spawned.length, 0);
+
+    const added = await call("POST", "/api/qso", { body: { call: "f4abc", frequencyMHz: "14.074", mode: "FT8", sent: "-10", received: "-12" } });
+    assert.equal(added.status, 201);
+    const listed = await call("GET", "/api/qso");
+    assert.equal(listed.json.total, 1);
+    assert.deepEqual(listed.json.qrz, { enabled: true });
+    assert.deepEqual(listed.json.lotw, { configured: true });
+    const looked = await call("GET", "/api/qrz/lookup?call=f4abc");
+    assert.equal(looked.json.country, "France");
+    const adif = await call("GET", "/api/qso.adif");
+    assert.equal(adif.status, 200);
+    assert.match(adif.text, /<CALL:5>F4ABC/);
+    assert.match(adif.headers["content-disposition"], /radicodex\.adi/);
+    const imported = await call("POST", "/api/qso/import", { body: { adif: adif.text } });
+    assert.deepEqual([imported.json.added, imported.json.skipped], [0, 1]);
+
+    assert.equal((await call("POST", "/api/lotw/upload", { body: {} })).status, 400);
+    assert.equal(spawned.length, 0);
+    const uploaded = await call("POST", "/api/lotw/upload", { body: { confirm: true } });
+    assert.equal(uploaded.json.uploaded, 1);
+    assert.equal(spawned.length, 1);
+    assert.equal(spawned[0].command, tqsl);
+    assert.equal(spawned[0].options.shell, false);
+
+    for (const text of [listed.text, looked.text, adif.text, added.text, uploaded.text, JSON.stringify(agent.snapshot("x"))]) {
+      assert.ok(!text.includes("hunter2-secret") && !text.includes("KEY-ABC"));
+    }
+  } finally {
+    await cleanup();
+    await rig.close();
+    fs.rmSync(configDir, { recursive: true, force: true });
+  }
+});
+
 test("without a relay the state says so", async () => {
   const rig = await fakeRigctld();
   const { call, cleanup } = await startAgent(rig);

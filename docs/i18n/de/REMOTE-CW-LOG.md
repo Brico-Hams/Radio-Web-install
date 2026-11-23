@@ -55,6 +55,13 @@ Vereinigung aus `data/remote-station-catalog.json`, den Python-Treibern und den 
 
 Xiegu ist weder im Katalog noch in den Python-Treibern oder Android-Profilen enthalten, daher gibt es keine Zeile.
 
+## QSO-Buch, QRZ.com und LoTW (Node-Agent, nur Besitzer)
+
+Der Konsolen-Reiter „Libro QSO“ nutzt `remote-log.cjs` (ADIF-Import/-Export, Doppelte, DXCC/WAS/Locator/POTA-Fortschritt) über `remote-qsl.cjs`; das Buch liegt in `qso-log.json` neben `remote-agent.json` (0600).
+
+- Die QRZ.com-Abfrage ist standardmäßig aus. Aktivierung in `remote-agent.json`: `"qrz": {"enabled": true, "username": "...", "password": "..."}`. Der XML-Ablauf folgt `third_party/ftx1/Eugen68-Yaesu-FTX1-CAT-Control/.../QrzLookupHelper.java`. Nur HTTPS, 8 s Zeitlimit, 20 Abfragen pro Minute. Zugangsdaten und Sitzungsschlüssel bleiben im Agenten: nie im Browser-Speicher, in Antworten oder Protokollen.
+- Der LoTW-Upload startet dein lokales TQSL: `"lotw": {"tqslPath": "C:\\Pfad\\tqsl.exe", "args": ["...", "{file}"], "timeoutSeconds": 120}`. Die TQSL-Kommandozeile ist in diesem Repository pendiente de fuente; das Argument-Array legst du selbst fest, `{file}` wird durch ein temporäres ADIF der ausstehenden QSOs ersetzt. Keine Shell, kein stdin, Zertifikatspasswörter werden nie verarbeitet (das übernimmt TQSL), nichts wird ohne Klick und Bestätigung gesendet. Exit-Code 0 markiert die QSOs als gesendet.
+
 ## Pendiente de fuente (deaktiviert)
 
-QRZ.com-XML-Abfrage, TQSL-Kommandozeile (LoTW), DX-Cluster-Telnet-Zeilenformat, FT8/FT4/WSPR/CW/RTTY/PSK31-Decoder, SSTV in der Web-Konsole, DXCC-Präfixtabelle, FlexControl-HID.
+Argumente der TQSL-Kommandozeile (vom Operator konfiguriert, siehe oben), DX-Cluster-Telnet-Zeilenformat, FT8/FT4/WSPR/CW/RTTY/PSK31-Decoder, SSTV in der Web-Konsole, DXCC-Präfixtabelle, FlexControl-HID.
