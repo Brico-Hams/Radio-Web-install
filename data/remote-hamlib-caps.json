@@ -1,0 +1,1753 @@
+{
+ "format": "radicodex-remote-hamlib-caps",
+ "version": 1,
+ "reference": "data/third-party/refs/Hamlib (gitignored, open by exact path; riglist.h model numbers, rigs/<backend>/<file>.c caps structs)",
+ "licence": "Hamlib is LGPL-2.1-or-later; only capability names and handler presence are recorded, no code or calibration tables",
+ "note": "Statuses are derived from these capabilities only where the agent code path reaches them (remote-hamlib-caps.cjs); the running rigctld dump_caps still decides at start-up.",
+ "radios": {
+  "icom-ic-705": {
+   "hamlibModel": 3085,
+   "wired": true
+  },
+  "icom-ic-7100": {
+   "hamlibModel": 3070,
+   "wired": true
+  },
+  "icom-ic-7200": {
+   "hamlibModel": 3061,
+   "wired": true
+  },
+  "icom-ic-7300": {
+   "hamlibModel": 3073,
+   "wired": true
+  },
+  "icom-ic-7300mk2": {
+   "hamlibModel": 3094,
+   "wired": true
+  },
+  "icom-ic-7410": {
+   "hamlibModel": 3067,
+   "wired": true
+  },
+  "icom-ic-7600": {
+   "hamlibModel": 3063,
+   "wired": true
+  },
+  "icom-ic-7610": {
+   "hamlibModel": 3078,
+   "wired": true
+  },
+  "icom-ic-7700": {
+   "hamlibModel": 3062,
+   "wired": true
+  },
+  "icom-ic-7760": {
+   "hamlibModel": 3092,
+   "wired": true
+  },
+  "icom-ic-7800": {
+   "hamlibModel": 3056,
+   "wired": true
+  },
+  "icom-ic-7850-7851": {
+   "hamlibModel": 3075,
+   "wired": true
+  },
+  "icom-ic-905": {
+   "hamlibModel": 3090,
+   "wired": true
+  },
+  "icom-ic-9100": {
+   "hamlibModel": 3068,
+   "wired": true
+  },
+  "icom-ic-9700": {
+   "hamlibModel": 3081,
+   "wired": true
+  },
+  "icom-ic-r8600": {
+   "hamlibModel": 3079,
+   "wired": true
+  },
+  "flex-flex-6400": {
+   "hamlibModel": 23005,
+   "wired": true
+  },
+  "flex-flex-6400m": {
+   "hamlibModel": 23005,
+   "wired": true
+  },
+  "flex-flex-6600": {
+   "hamlibModel": 23005,
+   "wired": true
+  },
+  "flex-flex-6600m": {
+   "hamlibModel": 23005,
+   "wired": true
+  },
+  "flex-flex-6700": {
+   "hamlibModel": 23005,
+   "wired": true
+  },
+  "flex-flex-8400": {
+   "hamlibModel": 23005,
+   "wired": true
+  },
+  "flex-flex-8400m": {
+   "hamlibModel": 23005,
+   "wired": true
+  },
+  "flex-flex-8600": {
+   "hamlibModel": 23005,
+   "wired": true
+  },
+  "flex-flex-8600m": {
+   "hamlibModel": 23005,
+   "wired": true
+  },
+  "flex-aurora-510": {
+   "hamlibModel": 23005,
+   "wired": true
+  },
+  "flex-aurora-510m": {
+   "hamlibModel": 23005,
+   "wired": true
+  },
+  "flex-aurora-520": {
+   "hamlibModel": 23005,
+   "wired": true
+  },
+  "flex-aurora-520m": {
+   "hamlibModel": 23005,
+   "wired": true
+  },
+  "kenwood-ts-590s": {
+   "hamlibModel": 2031,
+   "wired": true
+  },
+  "kenwood-ts-590sg": {
+   "hamlibModel": 2037,
+   "wired": true
+  },
+  "kenwood-ts-890s": {
+   "hamlibModel": 2041,
+   "wired": true
+  },
+  "kenwood-ts-990s": {
+   "hamlibModel": 2039,
+   "wired": true
+  },
+  "yaesu-ft-710": {
+   "hamlibModel": 1049,
+   "wired": true
+  },
+  "yaesu-ft-991a": {
+   "hamlibModel": 1035,
+   "wired": true
+  },
+  "yaesu-ftdx10": {
+   "hamlibModel": 1042,
+   "wired": true
+  },
+  "yaesu-ftdx101d": {
+   "hamlibModel": 1040,
+   "wired": true
+  },
+  "yaesu-ftdx101mp": {
+   "hamlibModel": 1044,
+   "wired": true
+  },
+  "yaesu-ftdx3000": {
+   "hamlibModel": 1037,
+   "wired": true
+  },
+  "yaesu-ftx-1": {
+   "hamlibModel": 1051,
+   "wired": true
+  },
+  "elecraft-k3s": {
+   "hamlibModel": 2043,
+   "wired": true
+  },
+  "elecraft-k4": {
+   "hamlibModel": 2047,
+   "wired": true
+  },
+  "qrplabs-qmx": {
+   "hamlibModel": 2057,
+   "wired": true
+  },
+  "qrplabs-qcx-qdx": {
+   "hamlibModel": 2052,
+   "wired": true
+  },
+  "dl2man-trusdx": {
+   "hamlibModel": 2055,
+   "wired": true
+  },
+  "hl2-hermes-lite-2": {
+   "hamlibModel": 2040,
+   "wired": true
+  },
+  "xiegu-g90": {
+   "hamlibModel": 3088,
+   "wired": false
+  },
+  "xiegu-x6100": {
+   "hamlibModel": 3087,
+   "wired": false
+  },
+  "xiegu-x6200": {
+   "hamlibModel": 3091,
+   "wired": true
+  },
+  "xiegu-x5105": {
+   "hamlibModel": 3089,
+   "wired": false
+  },
+  "yaesu-ft-817": {
+   "hamlibModel": 1020,
+   "wired": false
+  },
+  "yaesu-ft-818": {
+   "hamlibModel": 1041,
+   "wired": false
+  },
+  "yaesu-ft-857": {
+   "hamlibModel": 1022,
+   "wired": false
+  },
+  "yaesu-ft-897": {
+   "hamlibModel": 1043,
+   "wired": false
+  }
+ },
+ "backends": {
+  "1020": {
+   "caps": "ft817_caps",
+   "file": "rigs/yaesu/ft817.c",
+   "line": 311,
+   "modelName": "FT-817",
+   "status": "STABLE",
+   "level": {
+    "get": ["STRENGTH", "RAWSTR", "SWR", "ALC", "RFPOWER_METER_WATTS", "RFPOWER"],
+    "set": []
+   },
+   "func": {
+    "get": [],
+    "set": ["LOCK", "RIT"]
+   },
+   "vfoOps": ["TOGGLE"],
+   "handlers": {
+    "set_split_vfo": true,
+    "get_split_vfo": true,
+    "set_split_freq": false,
+    "get_split_freq": false,
+    "set_vfo": true,
+    "get_vfo": true,
+    "vfo_op": true,
+    "set_level": false,
+    "get_level": true,
+    "set_func": true,
+    "get_func": false,
+    "set_ptt": true,
+    "get_ptt": true
+   },
+   "cal": {
+    "str": "FT817_STR_CAL",
+    "swr": "FT817_SWR_CAL",
+    "alc": "FT817_ALC_CAL",
+    "rfpower_meter": "FT817_PWR_CAL"
+   }
+  },
+  "1022": {
+   "caps": "ft857_caps",
+   "file": "rigs/yaesu/ft857.c",
+   "line": 264,
+   "modelName": "FT-857",
+   "status": "STABLE",
+   "level": {
+    "get": ["STRENGTH", "RFPOWER_METER_WATTS", "RFPOWER", "PREAMP", "ATT"],
+    "set": ["PREAMP", "ATT"]
+   },
+   "func": {
+    "get": [],
+    "set": ["LOCK", "RIT"]
+   },
+   "vfoOps": ["TOGGLE"],
+   "handlers": {
+    "set_split_vfo": true,
+    "get_split_vfo": true,
+    "set_split_freq": false,
+    "get_split_freq": false,
+    "set_vfo": true,
+    "get_vfo": true,
+    "vfo_op": true,
+    "set_level": true,
+    "get_level": true,
+    "set_func": true,
+    "get_func": false,
+    "set_ptt": true,
+    "get_ptt": true
+   },
+   "cal": {
+    "rfpower_meter": "FT857_PWR_CAL"
+   }
+  },
+  "1035": {
+   "caps": "ft991_caps",
+   "file": "rigs/yaesu/ft991.c",
+   "line": 201,
+   "modelName": "FT-991",
+   "status": "STABLE",
+   "level": {
+    "get": ["STRENGTH", "RAWSTR", "SWR", "ALC", "RFPOWER_METER", "RFPOWER_METER_WATTS", "COMP_METER", "ID_METER", "VD_METER", "RFPOWER", "COMP", "AF", "RF", "PREAMP", "ATT", "AGC", "NB", "NR"],
+    "set": ["RFPOWER", "COMP", "AF", "RF", "PREAMP", "ATT", "AGC", "NB", "NR"]
+   },
+   "func": {
+    "get": ["NB", "NR", "TUNER", "COMP", "ANF", "LOCK", "RIT", "XIT"],
+    "set": ["NB", "NR", "TUNER", "COMP", "ANF", "LOCK", "RIT", "XIT"]
+   },
+   "vfoOps": ["TUNE", "XCHG", "CPY", "FROM_VFO", "TO_VFO", "UP", "DOWN", "BAND_UP", "BAND_DOWN"],
+   "handlers": {
+    "set_split_vfo": true,
+    "get_split_vfo": true,
+    "set_split_freq": true,
+    "get_split_freq": true,
+    "set_vfo": true,
+    "get_vfo": true,
+    "vfo_op": true,
+    "set_level": true,
+    "get_level": true,
+    "set_func": true,
+    "get_func": true,
+    "set_ptt": true,
+    "get_ptt": true
+   },
+   "cal": {
+    "str": "FT991_STR_CAL",
+    "rfpower_meter": "FT991_RFPOWER_METER_CAL",
+    "comp_meter": "FT991_COMP_CAL",
+    "vd_meter": "FT991_VD_CAL",
+    "id_meter": "FT991_ID_CAL"
+   }
+  },
+  "1037": {
+   "caps": "ftdx3000_caps",
+   "file": "rigs/yaesu/ft3000.c",
+   "line": 245,
+   "modelName": "FTDX-3000",
+   "status": "STABLE",
+   "level": {
+    "get": ["STRENGTH", "RAWSTR", "SWR", "ALC", "RFPOWER_METER", "RFPOWER_METER_WATTS", "COMP_METER", "ID_METER", "VD_METER", "RFPOWER", "COMP", "AF", "RF", "PREAMP", "ATT", "AGC", "NR"],
+    "set": ["RFPOWER", "COMP", "AF", "RF", "PREAMP", "ATT", "AGC", "NR"]
+   },
+   "func": {
+    "get": ["NB", "NR", "TUNER", "COMP", "ANF", "LOCK", "RIT", "XIT"],
+    "set": ["NB", "NR", "TUNER", "COMP", "ANF", "LOCK", "RIT", "XIT"]
+   },
+   "vfoOps": ["TUNE", "XCHG", "CPY", "FROM_VFO", "TO_VFO", "UP", "DOWN", "BAND_UP", "BAND_DOWN", "TOGGLE"],
+   "handlers": {
+    "set_split_vfo": true,
+    "get_split_vfo": true,
+    "set_split_freq": false,
+    "get_split_freq": false,
+    "set_vfo": true,
+    "get_vfo": true,
+    "vfo_op": true,
+    "set_level": true,
+    "get_level": true,
+    "set_func": true,
+    "get_func": true,
+    "set_ptt": true,
+    "get_ptt": true
+   },
+   "cal": {
+    "str": "FTDX5000_STR_CAL"
+   }
+  },
+  "1040": {
+   "caps": "ftdx101d_caps",
+   "file": "rigs/yaesu/ftdx101.c",
+   "line": 187,
+   "modelName": "FTDX-101D",
+   "status": "STABLE",
+   "level": {
+    "get": ["STRENGTH", "RAWSTR", "SWR", "ALC", "RFPOWER_METER", "RFPOWER_METER_WATTS", "COMP_METER", "ID_METER", "VD_METER", "TEMP_METER", "RFPOWER", "COMP", "AF", "RF", "PREAMP", "ATT", "AGC", "NB", "NR"],
+    "set": ["RFPOWER", "COMP", "AF", "RF", "PREAMP", "ATT", "AGC", "NB", "NR"]
+   },
+   "func": {
+    "get": ["NB", "NR", "TUNER", "COMP", "ANF", "LOCK", "RIT", "XIT"],
+    "set": ["NB", "NR", "TUNER", "COMP", "ANF", "LOCK", "RIT", "XIT"]
+   },
+   "vfoOps": ["TUNE", "XCHG", "CPY", "FROM_VFO", "TO_VFO", "UP", "DOWN", "BAND_UP", "BAND_DOWN", "TOGGLE"],
+   "handlers": {
+    "set_split_vfo": true,
+    "get_split_vfo": true,
+    "set_split_freq": false,
+    "get_split_freq": false,
+    "set_vfo": true,
+    "get_vfo": true,
+    "vfo_op": true,
+    "set_level": true,
+    "get_level": true,
+    "set_func": true,
+    "get_func": true,
+    "set_ptt": true,
+    "get_ptt": true
+   },
+   "cal": {
+    "str": "FTDX101D_STR_CAL",
+    "swr": "FTDX101D_SWR_CAL",
+    "alc": "FTDX101D_ALC_METER_CAL",
+    "rfpower_meter": "FTDX101D_RFPOWER_METER_WATTS_CAL"
+   }
+  },
+  "1041": {
+   "caps": "ft818_caps",
+   "file": "rigs/yaesu/ft817.c",
+   "line": 462,
+   "modelName": "FT-818",
+   "status": "STABLE",
+   "level": {
+    "get": ["STRENGTH", "RAWSTR", "SWR", "ALC", "RFPOWER"],
+    "set": []
+   },
+   "func": {
+    "get": [],
+    "set": ["LOCK", "RIT"]
+   },
+   "vfoOps": ["TOGGLE"],
+   "handlers": {
+    "set_split_vfo": true,
+    "get_split_vfo": true,
+    "set_split_freq": false,
+    "get_split_freq": false,
+    "set_vfo": true,
+    "get_vfo": true,
+    "vfo_op": true,
+    "set_level": false,
+    "get_level": true,
+    "set_func": true,
+    "get_func": false,
+    "set_ptt": true,
+    "get_ptt": true
+   },
+   "cal": {
+    "str": "FT817_STR_CAL",
+    "swr": "FT817_SWR_CAL",
+    "alc": "FT817_ALC_CAL",
+    "rfpower_meter": "FT817_PWR_CAL"
+   }
+  },
+  "1042": {
+   "caps": "ftdx10_caps",
+   "file": "rigs/yaesu/ftdx10.c",
+   "line": 135,
+   "modelName": "FTDX-10",
+   "status": "STABLE",
+   "level": {
+    "get": ["STRENGTH", "RAWSTR", "SWR", "ALC", "RFPOWER_METER", "RFPOWER_METER_WATTS", "COMP_METER", "ID_METER", "VD_METER", "RFPOWER", "COMP", "AF", "RF", "PREAMP", "ATT", "AGC", "NB", "NR"],
+    "set": ["RFPOWER", "COMP", "AF", "RF", "PREAMP", "ATT", "AGC", "NB", "NR"]
+   },
+   "func": {
+    "get": ["NB", "NR", "TUNER", "COMP", "ANF", "LOCK", "RIT", "XIT"],
+    "set": ["NB", "NR", "TUNER", "COMP", "ANF", "LOCK", "RIT", "XIT"]
+   },
+   "vfoOps": ["TUNE", "XCHG", "CPY", "FROM_VFO", "TO_VFO", "UP", "DOWN", "BAND_UP", "BAND_DOWN", "TOGGLE"],
+   "handlers": {
+    "set_split_vfo": true,
+    "get_split_vfo": true,
+    "set_split_freq": false,
+    "get_split_freq": false,
+    "set_vfo": true,
+    "get_vfo": true,
+    "vfo_op": true,
+    "set_level": true,
+    "get_level": true,
+    "set_func": true,
+    "get_func": true,
+    "set_ptt": true,
+    "get_ptt": true
+   },
+   "cal": {
+    "swr": "FTDX10_SWR_CAL",
+    "rfpower_meter": "FTDX10_RFPOWER_METER_CAL"
+   }
+  },
+  "1043": {
+   "caps": "ft897d_caps",
+   "file": "rigs/yaesu/ft897.c",
+   "line": 397,
+   "modelName": "FT-897D",
+   "status": "STABLE",
+   "level": {
+    "get": ["STRENGTH", "RAWSTR", "SWR", "ALC", "RFPOWER"],
+    "set": []
+   },
+   "func": {
+    "get": [],
+    "set": ["LOCK"]
+   },
+   "vfoOps": ["TOGGLE"],
+   "handlers": {
+    "set_split_vfo": true,
+    "get_split_vfo": true,
+    "set_split_freq": false,
+    "get_split_freq": false,
+    "set_vfo": true,
+    "get_vfo": true,
+    "vfo_op": true,
+    "set_level": false,
+    "get_level": true,
+    "set_func": true,
+    "get_func": false,
+    "set_ptt": true,
+    "get_ptt": true
+   },
+   "cal": {}
+  },
+  "1044": {
+   "caps": "ftdx101mp_caps",
+   "file": "rigs/yaesu/ftdx101mp.c",
+   "line": 76,
+   "modelName": "FTDX-101MP",
+   "status": "STABLE",
+   "level": {
+    "get": ["STRENGTH", "RAWSTR", "SWR", "ALC", "RFPOWER_METER", "RFPOWER_METER_WATTS", "COMP_METER", "ID_METER", "VD_METER", "TEMP_METER", "RFPOWER", "COMP", "AF", "RF", "PREAMP", "ATT", "AGC", "NB", "NR"],
+    "set": ["RFPOWER", "COMP", "AF", "RF", "PREAMP", "ATT", "AGC", "NB", "NR"]
+   },
+   "func": {
+    "get": ["NB", "NR", "TUNER", "COMP", "ANF", "LOCK", "RIT", "XIT"],
+    "set": ["NB", "NR", "TUNER", "COMP", "ANF", "LOCK", "RIT", "XIT"]
+   },
+   "vfoOps": ["TUNE", "XCHG", "CPY", "FROM_VFO", "TO_VFO", "UP", "DOWN", "BAND_UP", "BAND_DOWN", "TOGGLE"],
+   "handlers": {
+    "set_split_vfo": true,
+    "get_split_vfo": true,
+    "set_split_freq": false,
+    "get_split_freq": false,
+    "set_vfo": true,
+    "get_vfo": true,
+    "vfo_op": true,
+    "set_level": true,
+    "get_level": true,
+    "set_func": true,
+    "get_func": true,
+    "set_ptt": true,
+    "get_ptt": true
+   },
+   "cal": {
+    "str": "FTDX101D_STR_CAL",
+    "swr": "FTDX101D_SWR_CAL",
+    "rfpower_meter": "FTDX101MP_RFPOWER_METER_WATTS_CAL",
+    "vd_meter": "YAESU_DEFAULT_VD_METER_200W_CAL"
+   }
+  },
+  "1049": {
+   "caps": "ft710_caps",
+   "file": "rigs/yaesu/ft710.c",
+   "line": 119,
+   "modelName": "FT-710",
+   "status": "STABLE",
+   "level": {
+    "get": ["STRENGTH", "RAWSTR", "SWR", "ALC", "RFPOWER_METER", "RFPOWER_METER_WATTS", "COMP_METER", "ID_METER", "VD_METER", "RFPOWER", "COMP", "AF", "RF", "PREAMP", "ATT", "AGC", "NB", "NR"],
+    "set": ["RFPOWER", "COMP", "AF", "RF", "PREAMP", "ATT", "AGC", "NB", "NR"]
+   },
+   "func": {
+    "get": ["NB", "NR", "TUNER", "COMP", "ANF", "LOCK", "RIT", "XIT"],
+    "set": ["NB", "NR", "TUNER", "COMP", "ANF", "LOCK", "RIT", "XIT"]
+   },
+   "vfoOps": ["TUNE", "XCHG", "CPY", "FROM_VFO", "TO_VFO", "UP", "DOWN", "BAND_UP", "BAND_DOWN", "TOGGLE"],
+   "handlers": {
+    "set_split_vfo": true,
+    "get_split_vfo": true,
+    "set_split_freq": false,
+    "get_split_freq": false,
+    "set_vfo": true,
+    "get_vfo": true,
+    "vfo_op": true,
+    "set_level": true,
+    "get_level": true,
+    "set_func": true,
+    "get_func": true,
+    "set_ptt": true,
+    "get_ptt": true
+   },
+   "cal": {
+    "str": "FT710_STR_CAL",
+    "swr": "FT710_SWR_CAL",
+    "rfpower_meter": "FT710_RFPOWER_METER_CAL",
+    "comp_meter": "FT710_COMP_CAL",
+    "vd_meter": "FT710_VD_CAL",
+    "id_meter": "FT710_ID_CAL"
+   }
+  },
+  "1051": {
+   "caps": "ftx1_caps",
+   "file": "rigs/yaesu/ftx1/ftx1.c",
+   "line": 1022,
+   "modelName": "FTX-1",
+   "status": "BETA",
+   "level": {
+    "get": ["STRENGTH", "RAWSTR", "SWR", "ALC", "RFPOWER_METER", "RFPOWER_METER_WATTS", "COMP_METER", "ID_METER", "VD_METER", "RFPOWER", "COMP", "AF", "RF", "PREAMP", "ATT", "AGC", "NB", "NR"],
+    "set": ["RFPOWER", "COMP", "AF", "RF", "PREAMP", "ATT", "AGC", "NB", "NR"]
+   },
+   "func": {
+    "get": ["NB", "NR", "TUNER", "COMP", "ANF", "LOCK", "RIT", "XIT"],
+    "set": ["NB", "NR", "TUNER", "COMP", "ANF", "LOCK", "RIT", "XIT"]
+   },
+   "vfoOps": ["TUNE", "XCHG", "CPY", "FROM_VFO", "TO_VFO", "MCL", "UP", "DOWN", "BAND_UP", "BAND_DOWN"],
+   "handlers": {
+    "set_split_vfo": true,
+    "get_split_vfo": true,
+    "set_split_freq": true,
+    "get_split_freq": true,
+    "set_vfo": true,
+    "get_vfo": true,
+    "vfo_op": true,
+    "set_level": true,
+    "get_level": true,
+    "set_func": true,
+    "get_func": true,
+    "set_ptt": true,
+    "get_ptt": true
+   },
+   "cal": {
+    "str": "FTX1_STR_CAL",
+    "swr": "FTX1_SWR_CAL",
+    "alc": "FTX1_ALC_CAL",
+    "rfpower_meter": "FTX1_RFPOWER_METER_CAL",
+    "comp_meter": "FTX1_COMP_METER_CAL",
+    "vd_meter": "FTX1_VD_METER_CAL",
+    "id_meter": "FTX1_ID_METER_CAL"
+   }
+  },
+  "2031": {
+   "caps": "ts590_caps",
+   "file": "rigs/kenwood/ts590.c",
+   "line": 1731,
+   "modelName": "TS-590S",
+   "status": "STABLE",
+   "level": {
+    "get": ["STRENGTH", "SWR", "ALC", "RFPOWER_METER", "RFPOWER_METER_WATTS", "COMP_METER", "RFPOWER", "COMP", "AF", "RF", "PREAMP", "ATT", "AGC", "NB", "NR"],
+    "set": ["RFPOWER", "COMP", "AF", "RF", "PREAMP", "ATT", "AGC", "NB", "NR"]
+   },
+   "func": {
+    "get": ["NB", "NR", "TUNER", "COMP", "LOCK", "RIT", "XIT"],
+    "set": ["NB", "NR", "TUNER", "COMP", "LOCK", "RIT", "XIT"]
+   },
+   "vfoOps": ["TUNE", "CPY", "UP", "DOWN"],
+   "handlers": {
+    "set_split_vfo": true,
+    "get_split_vfo": true,
+    "set_split_freq": false,
+    "get_split_freq": false,
+    "set_vfo": true,
+    "get_vfo": true,
+    "vfo_op": true,
+    "set_level": true,
+    "get_level": true,
+    "set_func": true,
+    "get_func": true,
+    "set_ptt": true,
+    "get_ptt": true
+   },
+   "cal": {
+    "str": "TS590_STR_CAL",
+    "swr": "TS590_SWR_CAL"
+   }
+  },
+  "2037": {
+   "caps": "ts590sg_caps",
+   "file": "rigs/kenwood/ts590.c",
+   "line": 2166,
+   "modelName": "TS-590SG",
+   "status": "STABLE",
+   "level": {
+    "get": ["STRENGTH", "SWR", "ALC", "RFPOWER_METER", "RFPOWER_METER_WATTS", "COMP_METER", "RFPOWER", "COMP", "AF", "RF", "PREAMP", "ATT", "AGC", "NB", "NR"],
+    "set": ["RFPOWER", "COMP", "AF", "RF", "PREAMP", "ATT", "AGC", "NB", "NR"]
+   },
+   "func": {
+    "get": ["NB", "NR", "TUNER", "COMP", "LOCK", "RIT", "XIT"],
+    "set": ["NB", "NR", "TUNER", "COMP", "LOCK", "RIT", "XIT"]
+   },
+   "vfoOps": ["TUNE", "CPY", "UP", "DOWN"],
+   "handlers": {
+    "set_split_vfo": true,
+    "get_split_vfo": true,
+    "set_split_freq": false,
+    "get_split_freq": false,
+    "set_vfo": true,
+    "get_vfo": true,
+    "vfo_op": true,
+    "set_level": true,
+    "get_level": true,
+    "set_func": true,
+    "get_func": true,
+    "set_ptt": true,
+    "get_ptt": true
+   },
+   "cal": {
+    "str": "TS590_STR_CAL",
+    "swr": "TS590_SWR_CAL"
+   }
+  },
+  "2039": {
+   "caps": "ts990s_caps",
+   "file": "rigs/kenwood/ts990s.c",
+   "line": 135,
+   "modelName": "TS-990S",
+   "status": "STABLE",
+   "level": {
+    "get": ["STRENGTH", "RAWSTR", "SWR", "RFPOWER", "COMP", "AF", "RF", "PREAMP", "ATT", "AGC"],
+    "set": ["RFPOWER", "COMP", "AF", "RF", "PREAMP", "ATT", "AGC"]
+   },
+   "func": {
+    "get": ["NB", "NR", "COMP", "ANF"],
+    "set": ["NB", "NR", "COMP", "ANF"]
+   },
+   "vfoOps": ["TUNE", "BAND_UP", "BAND_DOWN"],
+   "handlers": {
+    "set_split_vfo": true,
+    "get_split_vfo": true,
+    "set_split_freq": false,
+    "get_split_freq": false,
+    "set_vfo": true,
+    "get_vfo": true,
+    "vfo_op": true,
+    "set_level": true,
+    "get_level": true,
+    "set_func": true,
+    "get_func": true,
+    "set_ptt": true,
+    "get_ptt": false
+   },
+   "cal": {
+    "str": "TS990S_STR_CAL",
+    "swr": "TS990S_SWR_CAL"
+   }
+  },
+  "2040": {
+   "caps": "pihpsdr_caps",
+   "file": "rigs/kenwood/pihpsdr.c",
+   "line": 98,
+   "modelName": "PiHPSDR",
+   "status": "STABLE",
+   "level": {
+    "get": ["STRENGTH", "RAWSTR", "RFPOWER", "COMP", "AF", "RF", "PREAMP", "ATT", "AGC"],
+    "set": ["RFPOWER", "COMP", "AF", "RF", "PREAMP", "ATT", "AGC"]
+   },
+   "func": {
+    "get": ["NB", "NR", "COMP", "ANF"],
+    "set": ["NB", "NR", "COMP", "ANF"]
+   },
+   "vfoOps": ["UP", "DOWN", "BAND_UP", "BAND_DOWN"],
+   "handlers": {
+    "set_split_vfo": true,
+    "get_split_vfo": true,
+    "set_split_freq": false,
+    "get_split_freq": false,
+    "set_vfo": true,
+    "get_vfo": true,
+    "vfo_op": true,
+    "set_level": true,
+    "get_level": true,
+    "set_func": true,
+    "get_func": true,
+    "set_ptt": true,
+    "get_ptt": true
+   },
+   "cal": {
+    "str": "PIHPSDR_STR_CAL"
+   }
+  },
+  "2041": {
+   "caps": "ts890s_caps",
+   "file": "rigs/kenwood/ts890s.c",
+   "line": 537,
+   "modelName": "TS-890S",
+   "status": "STABLE",
+   "level": {
+    "get": ["STRENGTH", "RAWSTR", "SWR", "ALC", "RFPOWER_METER_WATTS", "COMP_METER", "ID_METER", "VD_METER", "TEMP_METER", "RFPOWER", "AF", "RF", "ATT", "AGC"],
+    "set": ["RFPOWER", "AF", "RF", "ATT", "AGC"]
+   },
+   "func": {
+    "get": ["NB", "NR", "TUNER", "COMP", "RIT", "XIT"],
+    "set": ["NB", "NR", "TUNER", "COMP", "RIT", "XIT"]
+   },
+   "vfoOps": ["TUNE", "CPY", "UP", "DOWN", "BAND_UP", "BAND_DOWN"],
+   "handlers": {
+    "set_split_vfo": true,
+    "get_split_vfo": true,
+    "set_split_freq": false,
+    "get_split_freq": false,
+    "set_vfo": true,
+    "get_vfo": true,
+    "vfo_op": true,
+    "set_level": true,
+    "get_level": true,
+    "set_func": true,
+    "get_func": true,
+    "set_ptt": true,
+    "get_ptt": true
+   },
+   "cal": {
+    "swr": "TS890_SWR_CAL"
+   }
+  },
+  "2043": {
+   "caps": "k3s_caps",
+   "file": "rigs/kenwood/k3.c",
+   "line": 361,
+   "modelName": "K3S",
+   "status": "STABLE",
+   "level": {
+    "get": ["STRENGTH", "RAWSTR", "SWR", "ALC", "RFPOWER_METER", "RFPOWER_METER_WATTS", "RFPOWER", "COMP", "AF", "RF", "PREAMP", "ATT", "AGC", "NR"],
+    "set": ["RFPOWER", "COMP", "AF", "RF", "PREAMP", "ATT", "AGC", "NR"]
+   },
+   "func": {
+    "get": ["NB", "LOCK", "RIT", "XIT"],
+    "set": ["NB", "LOCK", "RIT", "XIT"]
+   },
+   "vfoOps": ["TUNE", "UP", "DOWN"],
+   "handlers": {
+    "set_split_vfo": true,
+    "get_split_vfo": true,
+    "set_split_freq": false,
+    "get_split_freq": false,
+    "set_vfo": true,
+    "get_vfo": true,
+    "vfo_op": true,
+    "set_level": true,
+    "get_level": true,
+    "set_func": true,
+    "get_func": true,
+    "set_ptt": true,
+    "get_ptt": true
+   },
+   "cal": {}
+  },
+  "2047": {
+   "caps": "k4_caps",
+   "file": "rigs/kenwood/k3.c",
+   "line": 524,
+   "modelName": "K4",
+   "status": "STABLE",
+   "level": {
+    "get": ["STRENGTH", "RAWSTR", "SWR", "ALC", "RFPOWER_METER", "RFPOWER_METER_WATTS", "RFPOWER", "COMP", "AF", "RF", "PREAMP", "ATT", "AGC", "NR"],
+    "set": ["RFPOWER", "COMP", "AF", "RF", "PREAMP", "ATT", "AGC", "NR"]
+   },
+   "func": {
+    "get": ["NB", "LOCK", "RIT", "XIT"],
+    "set": ["NB", "LOCK", "RIT", "XIT"]
+   },
+   "vfoOps": ["TUNE", "UP", "DOWN"],
+   "handlers": {
+    "set_split_vfo": true,
+    "get_split_vfo": true,
+    "set_split_freq": false,
+    "get_split_freq": false,
+    "set_vfo": true,
+    "get_vfo": true,
+    "vfo_op": true,
+    "set_level": true,
+    "get_level": true,
+    "set_func": true,
+    "get_func": true,
+    "set_ptt": true,
+    "get_ptt": true
+   },
+   "cal": {}
+  },
+  "2052": {
+   "caps": "qrplabs_caps",
+   "file": "rigs/kenwood/ts480.c",
+   "line": 1697,
+   "modelName": "QCX/QDX",
+   "status": "STABLE",
+   "level": {
+    "get": ["STRENGTH", "SWR", "ALC", "RFPOWER_METER", "COMP_METER", "RFPOWER", "COMP", "AF", "RF", "PREAMP", "ATT", "AGC", "NB", "NR"],
+    "set": ["RFPOWER", "COMP", "AF", "RF", "PREAMP", "ATT", "AGC", "NB", "NR"]
+   },
+   "func": {
+    "get": ["NB", "NR", "TUNER", "COMP", "LOCK", "RIT", "XIT"],
+    "set": ["NB", "NR", "TUNER", "COMP", "LOCK", "RIT", "XIT"]
+   },
+   "vfoOps": ["TUNE", "CPY", "UP", "DOWN", "BAND_UP", "BAND_DOWN"],
+   "handlers": {
+    "set_split_vfo": true,
+    "get_split_vfo": true,
+    "set_split_freq": false,
+    "get_split_freq": false,
+    "set_vfo": true,
+    "get_vfo": true,
+    "vfo_op": true,
+    "set_level": true,
+    "get_level": true,
+    "set_func": true,
+    "get_func": true,
+    "set_ptt": true,
+    "get_ptt": true
+   },
+   "cal": {
+    "str": "TS480_STR_CAL",
+    "swr": "TS480_SWR_CAL"
+   }
+  },
+  "2055": {
+   "caps": "trudx_caps",
+   "file": "rigs/kenwood/trusdx.c",
+   "line": 140,
+   "modelName": "(tr)uSDX",
+   "status": "STABLE",
+   "level": {
+    "get": [],
+    "set": []
+   },
+   "func": {
+    "get": [],
+    "set": []
+   },
+   "vfoOps": [],
+   "handlers": {
+    "set_split_vfo": false,
+    "get_split_vfo": false,
+    "set_split_freq": false,
+    "get_split_freq": false,
+    "set_vfo": true,
+    "get_vfo": true,
+    "vfo_op": false,
+    "set_level": false,
+    "get_level": false,
+    "set_func": false,
+    "get_func": false,
+    "set_ptt": true,
+    "get_ptt": false
+   },
+   "cal": {}
+  },
+  "2057": {
+   "caps": "qrplabs_qmx_caps",
+   "file": "rigs/kenwood/ts480.c",
+   "line": 1898,
+   "modelName": "QMX",
+   "status": "BETA",
+   "level": {
+    "get": ["SWR", "RFPOWER_METER", "RFPOWER_METER_WATTS"],
+    "set": []
+   },
+   "func": {
+    "get": [],
+    "set": []
+   },
+   "vfoOps": [],
+   "handlers": {
+    "set_split_vfo": true,
+    "get_split_vfo": true,
+    "set_split_freq": false,
+    "get_split_freq": false,
+    "set_vfo": true,
+    "get_vfo": true,
+    "vfo_op": false,
+    "set_level": false,
+    "get_level": true,
+    "set_func": false,
+    "get_func": false,
+    "set_ptt": true,
+    "get_ptt": true
+   },
+   "cal": {}
+  },
+  "3056": {
+   "caps": "ic7800_caps",
+   "file": "rigs/icom/ic7800.c",
+   "line": 165,
+   "modelName": "IC-7800",
+   "status": "STABLE",
+   "level": {
+    "get": ["STRENGTH", "RAWSTR", "SWR", "ALC", "RFPOWER_METER", "RFPOWER_METER_WATTS", "COMP_METER", "ID_METER", "VD_METER", "RFPOWER", "COMP", "AF", "RF", "PREAMP", "ATT", "AGC", "NB", "NR"],
+    "set": ["RFPOWER", "COMP", "AF", "RF", "PREAMP", "ATT", "AGC", "NB", "NR"]
+   },
+   "func": {
+    "get": ["NB", "NR", "TUNER", "COMP", "ANF", "LOCK", "RIT", "XIT"],
+    "set": ["NB", "NR", "TUNER", "COMP", "ANF", "LOCK", "RIT", "XIT"]
+   },
+   "vfoOps": ["TUNE", "XCHG", "CPY", "FROM_VFO", "TO_VFO", "MCL"],
+   "handlers": {
+    "set_split_vfo": true,
+    "get_split_vfo": true,
+    "set_split_freq": true,
+    "get_split_freq": true,
+    "set_vfo": true,
+    "get_vfo": true,
+    "vfo_op": true,
+    "set_level": true,
+    "get_level": true,
+    "set_func": true,
+    "get_func": true,
+    "set_ptt": true,
+    "get_ptt": true
+   },
+   "cal": {
+    "str": "IC7800_STR_CAL",
+    "swr": "IC7800_SWR_CAL",
+    "alc": "IC7800_ALC_CAL",
+    "rfpower_meter": "IC7800_RFPOWER_METER_CAL",
+    "comp_meter": "IC7800_COMP_METER_CAL",
+    "vd_meter": "IC7800_VD_METER_CAL",
+    "id_meter": "IC7800_ID_METER_CAL"
+   }
+  },
+  "3061": {
+   "caps": "ic7200_caps",
+   "file": "rigs/icom/ic7200.c",
+   "line": 128,
+   "modelName": "IC-7200",
+   "status": "STABLE",
+   "level": {
+    "get": ["STRENGTH", "RAWSTR", "SWR", "ALC", "RFPOWER_METER", "RFPOWER_METER_WATTS", "RFPOWER", "COMP", "AF", "RF", "PREAMP", "ATT", "AGC", "NB", "NR"],
+    "set": ["RFPOWER", "COMP", "AF", "RF", "PREAMP", "ATT", "AGC", "NB", "NR"]
+   },
+   "func": {
+    "get": ["NB", "NR", "TUNER", "COMP", "ANF", "LOCK"],
+    "set": ["NB", "NR", "TUNER", "COMP", "ANF", "LOCK"]
+   },
+   "vfoOps": ["TUNE", "XCHG", "CPY", "FROM_VFO", "TO_VFO", "MCL"],
+   "handlers": {
+    "set_split_vfo": true,
+    "get_split_vfo": false,
+    "set_split_freq": true,
+    "get_split_freq": true,
+    "set_vfo": true,
+    "get_vfo": true,
+    "vfo_op": true,
+    "set_level": true,
+    "get_level": true,
+    "set_func": true,
+    "get_func": true,
+    "set_ptt": true,
+    "get_ptt": true
+   },
+   "cal": {
+    "str": "IC7200_STR_CAL",
+    "swr": "IC7200_SWR_CAL",
+    "alc": "IC7200_ALC_CAL",
+    "rfpower_meter": "IC7200_RFPOWER_METER_CAL"
+   }
+  },
+  "3062": {
+   "caps": "ic7700_caps",
+   "file": "rigs/icom/ic7700.c",
+   "line": 162,
+   "modelName": "IC-7700",
+   "status": "STABLE",
+   "level": {
+    "get": ["STRENGTH", "RAWSTR", "SWR", "ALC", "RFPOWER_METER", "RFPOWER_METER_WATTS", "COMP_METER", "ID_METER", "VD_METER", "RFPOWER", "COMP", "AF", "RF", "PREAMP", "ATT", "AGC", "NB", "NR"],
+    "set": ["RFPOWER", "COMP", "AF", "RF", "PREAMP", "ATT", "AGC", "NB", "NR"]
+   },
+   "func": {
+    "get": ["NB", "NR", "TUNER", "COMP", "ANF", "LOCK", "RIT", "XIT"],
+    "set": ["NB", "NR", "TUNER", "COMP", "ANF", "LOCK", "RIT", "XIT"]
+   },
+   "vfoOps": ["TUNE", "XCHG", "CPY", "FROM_VFO", "TO_VFO", "MCL"],
+   "handlers": {
+    "set_split_vfo": true,
+    "get_split_vfo": true,
+    "set_split_freq": true,
+    "get_split_freq": true,
+    "set_vfo": true,
+    "get_vfo": true,
+    "vfo_op": true,
+    "set_level": true,
+    "get_level": true,
+    "set_func": true,
+    "get_func": true,
+    "set_ptt": true,
+    "get_ptt": true
+   },
+   "cal": {
+    "str": "IC7700_STR_CAL",
+    "swr": "IC7700_SWR_CAL",
+    "alc": "IC7700_ALC_CAL",
+    "rfpower_meter": "IC7700_RFPOWER_METER_CAL",
+    "comp_meter": "IC7700_COMP_METER_CAL",
+    "vd_meter": "IC7700_VD_METER_CAL",
+    "id_meter": "IC7700_ID_METER_CAL"
+   }
+  },
+  "3063": {
+   "caps": "ic7600_caps",
+   "file": "rigs/icom/ic7600.c",
+   "line": 180,
+   "modelName": "IC-7600",
+   "status": "STABLE",
+   "level": {
+    "get": ["STRENGTH", "RAWSTR", "SWR", "ALC", "RFPOWER_METER", "RFPOWER_METER_WATTS", "COMP_METER", "ID_METER", "VD_METER", "RFPOWER", "COMP", "AF", "RF", "PREAMP", "ATT", "AGC", "NB", "NR"],
+    "set": ["RFPOWER", "COMP", "AF", "RF", "PREAMP", "ATT", "AGC", "NB", "NR"]
+   },
+   "func": {
+    "get": ["NB", "NR", "TUNER", "COMP", "ANF", "LOCK", "RIT", "XIT"],
+    "set": ["NB", "NR", "TUNER", "COMP", "ANF", "LOCK", "RIT", "XIT"]
+   },
+   "vfoOps": ["TUNE", "XCHG", "CPY", "FROM_VFO", "TO_VFO", "MCL"],
+   "handlers": {
+    "set_split_vfo": true,
+    "get_split_vfo": true,
+    "set_split_freq": true,
+    "get_split_freq": true,
+    "set_vfo": true,
+    "get_vfo": true,
+    "vfo_op": true,
+    "set_level": true,
+    "get_level": true,
+    "set_func": true,
+    "get_func": true,
+    "set_ptt": true,
+    "get_ptt": true
+   },
+   "cal": {
+    "str": "IC7600_STR_CAL",
+    "swr": "IC7600_SWR_CAL",
+    "alc": "IC7600_ALC_CAL",
+    "rfpower_meter": "IC7600_RFPOWER_METER_CAL",
+    "comp_meter": "IC7600_COMP_METER_CAL",
+    "vd_meter": "IC7600_VD_METER_CAL",
+    "id_meter": "IC7600_ID_METER_CAL"
+   }
+  },
+  "3067": {
+   "caps": "ic7410_caps",
+   "file": "rigs/icom/ic7410.c",
+   "line": 123,
+   "modelName": "IC-7410",
+   "status": "BETA",
+   "level": {
+    "get": ["STRENGTH", "RAWSTR", "SWR", "ALC", "RFPOWER_METER", "RFPOWER_METER_WATTS", "RFPOWER", "COMP", "AF", "RF", "PREAMP", "ATT", "AGC", "NR"],
+    "set": ["RFPOWER", "COMP", "AF", "RF", "PREAMP", "ATT", "AGC", "NR"]
+   },
+   "func": {
+    "get": ["NB", "NR", "TUNER", "COMP", "ANF", "LOCK"],
+    "set": ["NB", "NR", "TUNER", "COMP", "ANF", "LOCK"]
+   },
+   "vfoOps": ["TUNE", "XCHG", "CPY", "FROM_VFO", "TO_VFO", "MCL"],
+   "handlers": {
+    "set_split_vfo": true,
+    "get_split_vfo": true,
+    "set_split_freq": true,
+    "get_split_freq": true,
+    "set_vfo": true,
+    "get_vfo": true,
+    "vfo_op": true,
+    "set_level": true,
+    "get_level": true,
+    "set_func": true,
+    "get_func": true,
+    "set_ptt": true,
+    "get_ptt": true
+   },
+   "cal": {
+    "str": "IC7410_STR_CAL",
+    "swr": "IC7410_SWR_CAL",
+    "alc": "IC7410_ALC_CAL",
+    "rfpower_meter": "IC7410_RFPOWER_METER_CAL"
+   }
+  },
+  "3068": {
+   "caps": "ic9100_caps",
+   "file": "rigs/icom/ic9100.c",
+   "line": 117,
+   "modelName": "IC-9100",
+   "status": "STABLE",
+   "level": {
+    "get": ["RAWSTR", "SWR", "RFPOWER", "COMP", "AF", "RF", "PREAMP", "ATT", "AGC", "NR"],
+    "set": ["RFPOWER", "COMP", "AF", "RF", "PREAMP", "ATT", "AGC", "NR"]
+   },
+   "func": {
+    "get": ["NB", "NR", "COMP", "ANF", "LOCK"],
+    "set": ["NB", "NR", "COMP", "ANF", "LOCK"]
+   },
+   "vfoOps": ["TUNE", "XCHG", "CPY", "FROM_VFO", "TO_VFO", "MCL"],
+   "handlers": {
+    "set_split_vfo": true,
+    "get_split_vfo": true,
+    "set_split_freq": true,
+    "get_split_freq": true,
+    "set_vfo": true,
+    "get_vfo": true,
+    "vfo_op": true,
+    "set_level": true,
+    "get_level": true,
+    "set_func": true,
+    "get_func": true,
+    "set_ptt": true,
+    "get_ptt": true
+   },
+   "cal": {
+    "str": "IC9100_STR_CAL"
+   }
+  },
+  "3070": {
+   "caps": "ic7100_caps",
+   "file": "rigs/icom/ic7100.c",
+   "line": 220,
+   "modelName": "IC-7100",
+   "status": "STABLE",
+   "level": {
+    "get": ["STRENGTH", "RAWSTR", "SWR", "ALC", "RFPOWER_METER", "RFPOWER_METER_WATTS", "COMP_METER", "ID_METER", "VD_METER", "RFPOWER", "COMP", "AF", "RF", "PREAMP", "ATT", "AGC", "NB", "NR"],
+    "set": ["RFPOWER", "COMP", "AF", "RF", "PREAMP", "ATT", "AGC", "NB", "NR"]
+   },
+   "func": {
+    "get": ["NB", "NR", "TUNER", "COMP", "ANF", "LOCK"],
+    "set": ["NB", "NR", "TUNER", "COMP", "ANF", "LOCK"]
+   },
+   "vfoOps": ["TUNE", "XCHG", "CPY", "FROM_VFO", "TO_VFO", "MCL"],
+   "handlers": {
+    "set_split_vfo": true,
+    "get_split_vfo": true,
+    "set_split_freq": true,
+    "get_split_freq": true,
+    "set_vfo": true,
+    "get_vfo": true,
+    "vfo_op": true,
+    "set_level": true,
+    "get_level": true,
+    "set_func": true,
+    "get_func": true,
+    "set_ptt": true,
+    "get_ptt": true
+   },
+   "cal": {
+    "str": "IC7100_STR_CAL",
+    "swr": "IC7100_SWR_CAL",
+    "alc": "IC7100_ALC_CAL",
+    "rfpower_meter": "IC7100_RFPOWER_METER_CAL",
+    "comp_meter": "IC7100_COMP_METER_CAL",
+    "vd_meter": "IC7100_VD_METER_CAL",
+    "id_meter": "IC7100_ID_METER_CAL"
+   }
+  },
+  "3073": {
+   "caps": "ic7300_caps",
+   "file": "rigs/icom/ic7300.c",
+   "line": 411,
+   "modelName": "IC-7300",
+   "status": "STABLE",
+   "level": {
+    "get": ["STRENGTH", "RAWSTR", "SWR", "ALC", "RFPOWER_METER", "RFPOWER_METER_WATTS", "COMP_METER", "ID_METER", "VD_METER", "RFPOWER", "COMP", "AF", "RF", "PREAMP", "ATT", "AGC", "NB", "NR"],
+    "set": ["RFPOWER", "COMP", "AF", "RF", "PREAMP", "ATT", "AGC", "NB", "NR"]
+   },
+   "func": {
+    "get": ["NB", "NR", "TUNER", "COMP", "ANF", "LOCK", "RIT", "XIT"],
+    "set": ["NB", "NR", "TUNER", "COMP", "ANF", "LOCK", "RIT", "XIT"]
+   },
+   "vfoOps": ["TUNE", "XCHG", "CPY", "FROM_VFO", "TO_VFO", "MCL"],
+   "handlers": {
+    "set_split_vfo": true,
+    "get_split_vfo": true,
+    "set_split_freq": true,
+    "get_split_freq": true,
+    "set_vfo": true,
+    "get_vfo": true,
+    "vfo_op": true,
+    "set_level": true,
+    "get_level": true,
+    "set_func": true,
+    "get_func": true,
+    "set_ptt": true,
+    "get_ptt": true
+   },
+   "cal": {
+    "str": "IC7300_STR_CAL",
+    "swr": "IC7300_SWR_CAL",
+    "alc": "IC7300_ALC_CAL",
+    "rfpower_meter": "IC7300_RFPOWER_METER_CAL",
+    "comp_meter": "IC7300_COMP_METER_CAL",
+    "vd_meter": "IC7300_VD_METER_CAL",
+    "id_meter": "IC7300_ID_METER_CAL"
+   }
+  },
+  "3075": {
+   "caps": "ic785x_caps",
+   "file": "rigs/icom/ic785x.c",
+   "line": 251,
+   "modelName": "IC-7850/7851",
+   "status": "STABLE",
+   "level": {
+    "get": ["STRENGTH", "RAWSTR", "SWR", "ALC", "RFPOWER_METER", "RFPOWER_METER_WATTS", "COMP_METER", "ID_METER", "VD_METER", "RFPOWER", "COMP", "AF", "RF", "PREAMP", "ATT", "AGC", "NB", "NR"],
+    "set": ["RFPOWER", "COMP", "AF", "RF", "PREAMP", "ATT", "AGC", "NB", "NR"]
+   },
+   "func": {
+    "get": ["NB", "NR", "TUNER", "COMP", "ANF", "LOCK", "RIT", "XIT"],
+    "set": ["NB", "NR", "TUNER", "COMP", "ANF", "LOCK", "RIT", "XIT"]
+   },
+   "vfoOps": ["TUNE", "XCHG", "CPY", "FROM_VFO", "TO_VFO", "MCL"],
+   "handlers": {
+    "set_split_vfo": true,
+    "get_split_vfo": true,
+    "set_split_freq": true,
+    "get_split_freq": true,
+    "set_vfo": true,
+    "get_vfo": true,
+    "vfo_op": true,
+    "set_level": true,
+    "get_level": true,
+    "set_func": true,
+    "get_func": true,
+    "set_ptt": true,
+    "get_ptt": true
+   },
+   "cal": {
+    "str": "IC785x_STR_CAL",
+    "swr": "IC785x_SWR_CAL",
+    "alc": "IC785x_ALC_CAL",
+    "rfpower_meter": "IC785x_RFPOWER_METER_CAL",
+    "comp_meter": "IC785x_COMP_METER_CAL",
+    "vd_meter": "IC785x_VD_METER_CAL",
+    "id_meter": "IC785x_ID_METER_CAL"
+   }
+  },
+  "3078": {
+   "caps": "ic7610_caps",
+   "file": "rigs/icom/ic7610.c",
+   "line": 261,
+   "modelName": "IC-7610",
+   "status": "STABLE",
+   "level": {
+    "get": ["STRENGTH", "RAWSTR", "SWR", "ALC", "RFPOWER_METER", "RFPOWER_METER_WATTS", "COMP_METER", "ID_METER", "VD_METER", "RFPOWER", "COMP", "AF", "RF", "PREAMP", "ATT", "AGC", "NB", "NR"],
+    "set": ["RFPOWER", "COMP", "AF", "RF", "PREAMP", "ATT", "AGC", "NB", "NR"]
+   },
+   "func": {
+    "get": ["NB", "NR", "TUNER", "COMP", "ANF", "LOCK", "RIT", "XIT"],
+    "set": ["NB", "NR", "TUNER", "COMP", "ANF", "LOCK", "RIT", "XIT"]
+   },
+   "vfoOps": ["TUNE", "XCHG", "CPY", "FROM_VFO", "TO_VFO", "MCL"],
+   "handlers": {
+    "set_split_vfo": true,
+    "get_split_vfo": true,
+    "set_split_freq": true,
+    "get_split_freq": true,
+    "set_vfo": true,
+    "get_vfo": true,
+    "vfo_op": true,
+    "set_level": true,
+    "get_level": true,
+    "set_func": true,
+    "get_func": true,
+    "set_ptt": true,
+    "get_ptt": true
+   },
+   "cal": {
+    "str": "IC7610_STR_CAL",
+    "swr": "IC7610_SWR_CAL",
+    "alc": "IC7610_ALC_CAL",
+    "rfpower_meter": "IC7610_RFPOWER_METER_CAL",
+    "comp_meter": "IC7610_COMP_METER_CAL",
+    "vd_meter": "IC7610_VD_METER_CAL",
+    "id_meter": "IC7610_ID_METER_CAL"
+   }
+  },
+  "3079": {
+   "caps": "icr8600_caps",
+   "file": "rigs/icom/icr8600.c",
+   "line": 151,
+   "modelName": "IC-R8600",
+   "status": "STABLE",
+   "level": {
+    "get": ["STRENGTH", "RAWSTR", "AF", "RF", "PREAMP", "ATT", "AGC", "NR"],
+    "set": ["AF", "RF", "PREAMP", "ATT", "AGC", "NR"]
+   },
+   "func": {
+    "get": ["NB", "NR", "ANF", "LOCK"],
+    "set": ["NB", "NR", "ANF", "LOCK"]
+   },
+   "vfoOps": ["FROM_VFO", "TO_VFO", "MCL"],
+   "handlers": {
+    "set_split_vfo": false,
+    "get_split_vfo": false,
+    "set_split_freq": false,
+    "get_split_freq": false,
+    "set_vfo": true,
+    "get_vfo": false,
+    "vfo_op": true,
+    "set_level": true,
+    "get_level": true,
+    "set_func": true,
+    "get_func": true,
+    "set_ptt": false,
+    "get_ptt": false
+   },
+   "cal": {
+    "str": "ICR8600_STR_CAL"
+   }
+  },
+  "3081": {
+   "caps": "ic9700_caps",
+   "file": "rigs/icom/ic9700.c",
+   "line": 216,
+   "modelName": "IC-9700",
+   "status": "STABLE",
+   "level": {
+    "get": ["STRENGTH", "RAWSTR", "SWR", "ALC", "RFPOWER_METER", "RFPOWER_METER_WATTS", "COMP_METER", "ID_METER", "VD_METER", "RFPOWER", "COMP", "AF", "RF", "PREAMP", "ATT", "AGC", "NB", "NR"],
+    "set": ["RFPOWER", "COMP", "AF", "RF", "PREAMP", "ATT", "AGC", "NB", "NR"]
+   },
+   "func": {
+    "get": ["NB", "NR", "COMP", "ANF", "LOCK", "RIT"],
+    "set": ["NB", "NR", "COMP", "ANF", "LOCK", "RIT"]
+   },
+   "vfoOps": ["XCHG", "CPY", "FROM_VFO", "TO_VFO", "MCL"],
+   "handlers": {
+    "set_split_vfo": true,
+    "get_split_vfo": true,
+    "set_split_freq": true,
+    "get_split_freq": true,
+    "set_vfo": true,
+    "get_vfo": true,
+    "vfo_op": true,
+    "set_level": true,
+    "get_level": true,
+    "set_func": true,
+    "get_func": true,
+    "set_ptt": true,
+    "get_ptt": true
+   },
+   "cal": {
+    "str": "IC9700_STR_CAL",
+    "swr": "IC9700_SWR_CAL",
+    "alc": "IC9700_ALC_CAL",
+    "rfpower_meter": "IC9700_RFPOWER_METER_CAL",
+    "comp_meter": "IC9700_COMP_METER_CAL",
+    "vd_meter": "IC9700_VD_METER_CAL",
+    "id_meter": "IC9700_ID_METER_CAL"
+   }
+  },
+  "3085": {
+   "caps": "ic705_caps",
+   "file": "rigs/icom/ic705.c",
+   "line": 306,
+   "modelName": "IC-705",
+   "status": "STABLE",
+   "level": {
+    "get": ["STRENGTH", "RAWSTR", "SWR", "ALC", "RFPOWER_METER", "RFPOWER_METER_WATTS", "COMP_METER", "ID_METER", "VD_METER", "RFPOWER", "COMP", "AF", "RF", "PREAMP", "ATT", "AGC", "NB", "NR"],
+    "set": ["RFPOWER", "COMP", "AF", "RF", "PREAMP", "ATT", "AGC", "NB", "NR"]
+   },
+   "func": {
+    "get": ["NB", "NR", "TUNER", "COMP", "ANF", "LOCK", "RIT", "XIT"],
+    "set": ["NB", "NR", "TUNER", "COMP", "ANF", "LOCK", "RIT", "XIT"]
+   },
+   "vfoOps": ["TUNE", "XCHG", "CPY", "FROM_VFO", "TO_VFO", "MCL"],
+   "handlers": {
+    "set_split_vfo": true,
+    "get_split_vfo": true,
+    "set_split_freq": true,
+    "get_split_freq": true,
+    "set_vfo": true,
+    "get_vfo": true,
+    "vfo_op": true,
+    "set_level": true,
+    "get_level": true,
+    "set_func": true,
+    "get_func": true,
+    "set_ptt": true,
+    "get_ptt": true
+   },
+   "cal": {
+    "str": "IC705_STR_CAL",
+    "swr": "IC705_SWR_CAL",
+    "alc": "IC705_ALC_CAL",
+    "rfpower_meter": "IC705_RFPOWER_METER_CAL",
+    "comp_meter": "IC705_COMP_METER_CAL",
+    "vd_meter": "IC705_VD_METER_CAL",
+    "id_meter": "IC705_ID_METER_CAL"
+   }
+  },
+  "3087": {
+   "caps": "x6100_caps",
+   "file": "rigs/icom/xiegu.c",
+   "line": 548,
+   "modelName": "X6100",
+   "status": "STABLE",
+   "level": {
+    "get": ["RAWSTR", "SWR", "ALC", "RFPOWER", "COMP", "AF", "RF", "PREAMP", "ATT", "AGC", "NR"],
+    "set": ["RFPOWER", "COMP", "AF", "RF", "PREAMP", "ATT", "AGC", "NR"]
+   },
+   "func": {
+    "get": ["NB", "NR", "COMP", "ANF", "LOCK"],
+    "set": ["NB", "NR", "COMP", "ANF", "LOCK"]
+   },
+   "vfoOps": ["TUNE", "XCHG", "CPY", "FROM_VFO", "TO_VFO", "MCL"],
+   "handlers": {
+    "set_split_vfo": true,
+    "get_split_vfo": false,
+    "set_split_freq": true,
+    "get_split_freq": true,
+    "set_vfo": true,
+    "get_vfo": false,
+    "vfo_op": true,
+    "set_level": true,
+    "get_level": true,
+    "set_func": true,
+    "get_func": true,
+    "set_ptt": true,
+    "get_ptt": true
+   },
+   "cal": {
+    "str": "X6100_STR_CAL"
+   }
+  },
+  "3088": {
+   "caps": "g90_caps",
+   "file": "rigs/icom/xiegu.c",
+   "line": 915,
+   "modelName": "G90",
+   "status": "STABLE",
+   "level": {
+    "get": ["RAWSTR", "SWR", "RFPOWER", "AF", "RF", "PREAMP", "ATT", "AGC"],
+    "set": ["RFPOWER", "AF", "RF", "PREAMP", "ATT", "AGC"]
+   },
+   "func": {
+    "get": ["NB", "TUNER", "COMP", "LOCK"],
+    "set": ["NB", "TUNER", "COMP", "LOCK"]
+   },
+   "vfoOps": ["TUNE", "XCHG", "CPY", "FROM_VFO", "TO_VFO", "MCL"],
+   "handlers": {
+    "set_split_vfo": true,
+    "get_split_vfo": true,
+    "set_split_freq": true,
+    "get_split_freq": true,
+    "set_vfo": true,
+    "get_vfo": false,
+    "vfo_op": true,
+    "set_level": true,
+    "get_level": true,
+    "set_func": true,
+    "get_func": true,
+    "set_ptt": true,
+    "get_ptt": true
+   },
+   "cal": {
+    "str": "X108G_STR_CAL"
+   }
+  },
+  "3089": {
+   "caps": "x5105_caps",
+   "file": "rigs/icom/xiegu.c",
+   "line": 1086,
+   "modelName": "X5105",
+   "status": "STABLE",
+   "level": {
+    "get": ["RAWSTR", "SWR", "ALC", "RFPOWER", "COMP", "AF", "RF", "PREAMP", "ATT", "AGC", "NR"],
+    "set": ["RFPOWER", "COMP", "AF", "RF", "PREAMP", "ATT", "AGC", "NR"]
+   },
+   "func": {
+    "get": ["NB", "NR", "COMP", "ANF", "LOCK"],
+    "set": ["NB", "NR", "COMP", "ANF", "LOCK"]
+   },
+   "vfoOps": ["TUNE", "XCHG", "CPY", "FROM_VFO", "TO_VFO", "MCL"],
+   "handlers": {
+    "set_split_vfo": false,
+    "get_split_vfo": false,
+    "set_split_freq": false,
+    "get_split_freq": false,
+    "set_vfo": true,
+    "get_vfo": false,
+    "vfo_op": true,
+    "set_level": true,
+    "get_level": true,
+    "set_func": true,
+    "get_func": true,
+    "set_ptt": true,
+    "get_ptt": true
+   },
+   "cal": {
+    "str": "X108G_STR_CAL"
+   }
+  },
+  "3090": {
+   "caps": "ic905_caps",
+   "file": "rigs/icom/ic905.c",
+   "line": 298,
+   "modelName": "IC-905",
+   "status": "STABLE",
+   "level": {
+    "get": ["STRENGTH", "RAWSTR", "SWR", "ALC", "RFPOWER_METER", "RFPOWER_METER_WATTS", "COMP_METER", "ID_METER", "VD_METER", "RFPOWER", "COMP", "AF", "RF", "PREAMP", "ATT", "AGC", "NB", "NR"],
+    "set": ["RFPOWER", "COMP", "AF", "RF", "PREAMP", "ATT", "AGC", "NB", "NR"]
+   },
+   "func": {
+    "get": ["NB", "NR", "TUNER", "COMP", "ANF", "LOCK", "RIT", "XIT"],
+    "set": ["NB", "NR", "TUNER", "COMP", "ANF", "LOCK", "RIT", "XIT"]
+   },
+   "vfoOps": ["TUNE", "CPY", "FROM_VFO", "TO_VFO", "MCL"],
+   "handlers": {
+    "set_split_vfo": true,
+    "get_split_vfo": true,
+    "set_split_freq": true,
+    "get_split_freq": true,
+    "set_vfo": true,
+    "get_vfo": true,
+    "vfo_op": true,
+    "set_level": true,
+    "get_level": true,
+    "set_func": true,
+    "get_func": true,
+    "set_ptt": true,
+    "get_ptt": true
+   },
+   "cal": {
+    "str": "IC905_STR_CAL",
+    "swr": "IC905_SWR_CAL",
+    "alc": "IC905_ALC_CAL",
+    "rfpower_meter": "IC905_RFPOWER_METER_CAL",
+    "comp_meter": "IC905_COMP_METER_CAL",
+    "vd_meter": "IC905_VD_METER_CAL",
+    "id_meter": "IC905_ID_METER_CAL"
+   }
+  },
+  "3091": {
+   "caps": "x6200_caps",
+   "file": "rigs/icom/xiegu.c",
+   "line": 716,
+   "modelName": "X6200",
+   "status": "STABLE",
+   "level": {
+    "get": ["RAWSTR", "SWR", "ALC", "RFPOWER", "COMP", "AF", "RF", "PREAMP", "ATT", "AGC", "NR"],
+    "set": ["RFPOWER", "COMP", "AF", "RF", "PREAMP", "ATT", "AGC", "NR"]
+   },
+   "func": {
+    "get": ["NB", "NR", "COMP", "ANF", "LOCK"],
+    "set": ["NB", "NR", "COMP", "ANF", "LOCK"]
+   },
+   "vfoOps": ["TUNE", "XCHG", "CPY", "FROM_VFO", "TO_VFO", "MCL"],
+   "handlers": {
+    "set_split_vfo": true,
+    "get_split_vfo": false,
+    "set_split_freq": true,
+    "get_split_freq": true,
+    "set_vfo": true,
+    "get_vfo": false,
+    "vfo_op": true,
+    "set_level": true,
+    "get_level": true,
+    "set_func": true,
+    "get_func": true,
+    "set_ptt": true,
+    "get_ptt": true
+   },
+   "cal": {
+    "str": "X108G_STR_CAL"
+   }
+  },
+  "3092": {
+   "caps": "ic7760_caps",
+   "file": "rigs/icom/ic7760.c",
+   "line": 239,
+   "modelName": "IC-7760",
+   "status": "ALPHA",
+   "level": {
+    "get": ["STRENGTH", "RAWSTR", "SWR", "ALC", "RFPOWER_METER", "RFPOWER_METER_WATTS", "COMP_METER", "ID_METER", "VD_METER", "RFPOWER", "COMP", "AF", "RF", "PREAMP", "ATT", "AGC", "NB", "NR"],
+    "set": ["RFPOWER", "COMP", "AF", "RF", "PREAMP", "ATT", "AGC", "NB", "NR"]
+   },
+   "func": {
+    "get": ["NB", "NR", "TUNER", "COMP", "ANF", "LOCK", "RIT", "XIT"],
+    "set": ["NB", "NR", "TUNER", "COMP", "ANF", "LOCK", "RIT", "XIT"]
+   },
+   "vfoOps": ["TUNE", "XCHG", "CPY", "FROM_VFO", "TO_VFO", "MCL"],
+   "handlers": {
+    "set_split_vfo": true,
+    "get_split_vfo": true,
+    "set_split_freq": true,
+    "get_split_freq": true,
+    "set_vfo": true,
+    "get_vfo": true,
+    "vfo_op": true,
+    "set_level": true,
+    "get_level": true,
+    "set_func": true,
+    "get_func": true,
+    "set_ptt": true,
+    "get_ptt": true
+   },
+   "cal": {
+    "str": "IC7760_STR_CAL",
+    "swr": "IC7760_SWR_CAL",
+    "alc": "IC7760_ALC_CAL",
+    "rfpower_meter": "IC7760_RFPOWER_METER_CAL",
+    "comp_meter": "IC7760_COMP_METER_CAL",
+    "vd_meter": "IC7760_VD_METER_CAL",
+    "id_meter": "IC7760_ID_METER_CAL"
+   }
+  },
+  "3094": {
+   "caps": "ic7300mk2_caps",
+   "file": "rigs/icom/ic7300.c",
+   "line": 662,
+   "modelName": "IC-7300MK2",
+   "status": "BETA",
+   "level": {
+    "get": ["STRENGTH", "RAWSTR", "SWR", "ALC", "RFPOWER_METER", "RFPOWER_METER_WATTS", "COMP_METER", "ID_METER", "VD_METER", "RFPOWER", "COMP", "AF", "RF", "PREAMP", "ATT", "AGC", "NB", "NR"],
+    "set": ["RFPOWER", "COMP", "AF", "RF", "PREAMP", "ATT", "AGC", "NB", "NR"]
+   },
+   "func": {
+    "get": ["NB", "NR", "TUNER", "COMP", "ANF", "LOCK", "RIT", "XIT"],
+    "set": ["NB", "NR", "TUNER", "COMP", "ANF", "LOCK", "RIT", "XIT"]
+   },
+   "vfoOps": ["TUNE", "XCHG", "CPY", "FROM_VFO", "TO_VFO", "MCL"],
+   "handlers": {
+    "set_split_vfo": true,
+    "get_split_vfo": true,
+    "set_split_freq": true,
+    "get_split_freq": true,
+    "set_vfo": true,
+    "get_vfo": true,
+    "vfo_op": true,
+    "set_level": true,
+    "get_level": true,
+    "set_func": true,
+    "get_func": true,
+    "set_ptt": true,
+    "get_ptt": true
+   },
+   "cal": {
+    "str": "IC7300_STR_CAL",
+    "swr": "IC7300_SWR_CAL",
+    "alc": "IC7300_ALC_CAL",
+    "rfpower_meter": "IC7300_RFPOWER_METER_CAL",
+    "comp_meter": "IC7300_COMP_METER_CAL",
+    "vd_meter": "IC7300_VD_METER_CAL",
+    "id_meter": "IC7300_ID_METER_CAL"
+   }
+  },
+  "23005": {
+   "caps": "smartsdr_a_rig_caps",
+   "file": "rigs/flexradio/smartsdr.c",
+   "line": 105,
+   "modelName": "SmartSDR Slice A",
+   "status": "STABLE",
+   "level": {
+    "get": ["PREAMP"],
+    "set": ["PREAMP"]
+   },
+   "func": {
+    "get": [],
+    "set": []
+   },
+   "vfoOps": [],
+   "handlers": {
+    "set_split_vfo": false,
+    "get_split_vfo": false,
+    "set_split_freq": false,
+    "get_split_freq": false,
+    "set_vfo": false,
+    "get_vfo": false,
+    "vfo_op": false,
+    "set_level": true,
+    "get_level": false,
+    "set_func": true,
+    "get_func": false,
+    "set_ptt": true,
+    "get_ptt": true
+   },
+   "cal": {}
+  }
+ }
+}
