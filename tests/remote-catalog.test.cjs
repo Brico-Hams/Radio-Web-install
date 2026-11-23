@@ -5,8 +5,11 @@ const { loadCatalog, validateCatalog, findRadio } = require("../remote-catalog.c
 const catalog = loadCatalog();
 const all = [...catalog.radios, ...catalog.rotors, ...catalog.amplifiers];
 
-test("todos los modelos Hamlib son enteros y los ids son unicos", () => {
-  for (const item of all) assert.ok(Number.isInteger(item.hamlibModel), item.id);
+test("todos los modelos Hamlib son enteros (o null con protocolo nativo) y los ids son unicos", () => {
+  for (const item of all) {
+    if (item.hamlibModel === null) assert.ok(item.nativeProtocol, item.id);
+    else assert.ok(Number.isInteger(item.hamlibModel), item.id);
+  }
   assert.equal(new Set(all.map(item => item.id)).size, all.length);
 });
 
@@ -46,7 +49,7 @@ test("el espectro propio de cada radio, los USB verificados y el encendido remot
   for (const [id, scope] of Object.entries(scopes)) assert.equal(findRadio(id).scope, scope, id);
   assert.ok(!/openwebrx/i.test(findRadio("hl2-hermes-lite-2").notes_es));
   const withUsb = catalog.radios.filter(radio => radio.serial.usb.length).map(radio => radio.id).sort();
-  assert.deepEqual(withUsb, ["qrplabs-qmx", "yaesu-ftx-1"]);
+  assert.deepEqual(withUsb, ["qrplabs-qmx", "quansheng-uv-k5", "yaesu-ftx-1"]);
   assert.deepEqual(findRadio("qrplabs-qmx").serial.usb, [{ vid: "0483", pid: "A34C" }]);
   for (const radio of catalog.radios) assert.equal(radio.remotePowerOn, "unknown", radio.id);
 });

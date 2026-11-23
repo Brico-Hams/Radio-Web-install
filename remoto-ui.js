@@ -3,13 +3,36 @@
   const EMPTY = "—";
   const show = value => (value === null || value === undefined || value === "" ? EMPTY : String(value));
 
+  // Remote features per radio from data/remote-feature-parity.json: every control is listed, unsupported ones are greyed out with the reason.
+  const FEATURE_LABELS = {
+    freqMode: "Frecuencia y modo", vfoSplit: "VFO / split", ptt: "PTT (explicito, con limite de tiempo)", smeter: "S-metro",
+    txMeters: "Medidores TX (PO / ROE / ALC)", tune: "Tune (portadora explicita)", audioRx: "Audio RX", audioTx: "Audio TX",
+    waterfall: "Cascada de audio", rotor: "Rotor", accessories: "Sintonizador y amplificador", settings: "Ajustes remotos"
+  };
+  const STATUS_TEXT = { ok: "disponible", partial: "parcial", pendiente: "pendiente de fuente", na: "no aplica" };
+
+  function parityView(parity, radioId) {
+    const row = parity && Array.isArray(parity.rows) ? parity.rows.find(item => item.id === radioId) : null;
+    const family = row && parity.families ? parity.families[row.family] || {} : {};
+    const statuses = row ? row.features || family.features : null;
+    if (!statuses) return [];
+    return parity.featureOrder.map((feature, index) => {
+      const status = statuses[index];
+      return {
+        feature, label: FEATURE_LABELS[feature] || feature, status, statusText: STATUS_TEXT[status] || status,
+        enabled: status === "ok" || status === "partial",
+        reason: (row.reasons && row.reasons[feature]) || (family.reasons && family.reasons[feature]) || ""
+      };
+    });
+  }
+
   // Maps a catalog entry to the form defaults (link options and baud).
   function radioDefaults(radio) {
     const links = Array.isArray(radio && radio.links) ? radio.links : [];
     const options = [];
     if (links.includes("usb")) options.push({ value: "usb", text: "USB / serie" });
     if (links.some(link => link === "lan" || link === "wifi")) options.push({ value: "lan", text: "Red (LAN / WiFi)" });
-    const baud = links.includes("usb") && radio.serial && Number.isFinite(Number(radio.serial.baud)) ? Number(radio.serial.baud) : null;
+    const baud = links.includes("usb") && radio.serial && Number(radio.serial.baud) > 0 ? Number(radio.serial.baud) : null;
     return { links: options, link: options[0] ? options[0].value : "usb", baud };
   }
 
@@ -47,7 +70,7 @@
   }
 
   if (typeof document === "undefined") {
-    if (typeof module !== "undefined") module.exports = { radioDefaults, show, createApi, saveConfig, startStation, stopStation, deviceNames };
+    if (typeof module !== "undefined") module.exports = { radioDefaults, parityView, show, createApi, saveConfig, startStation, stopStation, deviceNames };
     return;
   }
   const main = document.getElementById("rm-main");
@@ -123,6 +146,7 @@
   function syncRadio(fromUser) {
     const radio = selectedRadio();
     $.notes.textContent = radio ? radio.notes_es : "";
+    renderParity(radio);
     if (!radio) return;
     if ($.fTuner) $.fTuner.hidden = !radio.cat?.tuner;
     const defaults = radioDefaults(radio);
@@ -130,6 +154,12 @@
     if (!$.link.querySelector(`[value="${$.link.value}"]`)) $.link.value = defaults.link;
     if (defaults.baud !== null && (fromUser === true || !$.baud.value)) $.baud.value = String(defaults.baud);
     syncLink();
+  }
+
+  function renderParity(radio) {
+    if (!$.parity) return;
+    const items = radio ? parityView(state.catalog.parity, radio.id) : [];
+    $.parity.replaceChildren(...items.map(item => el("li", { class: item.enabled ? "rm-feature" : "rm-feature rm-off", title: item.reason, "aria-disabled": String(!item.enabled), text: `${item.label}: ${item.statusText}${item.enabled || !item.reason ? "" : ` — ${item.reason}`}` })));
   }
 
   function syncLink() {
@@ -283,6 +313,7 @@
     $.net = el("input", { id: "rm-net", type: "text", autocomplete: "off", spellcheck: "false" });
     $.tunerKind = el("select", { id: "rm-tuner" }, el("option", { value: "internal", text: "interno" }), el("option", { value: "atas", text: "ATAS" }));
     $.ports = el("ul", { class: "rm-list" });
+    $.parity = el("ul", { class: "rm-list" });
     $.rotor = el("select", { id: "rm-rotor", on: { change: () => { $.fRotorPort.hidden = !$.rotor.value; } } });
     $.rotorPort = el("input", { id: "rm-rotor-port", type: "text", autocomplete: "off", spellcheck: "false" });
     $.relayUrl = el("input", { id: "rm-relay-url", type: "url", autocomplete: "off" });
@@ -309,6 +340,8 @@
           field("rm-net", "Direccion de red (equipo:puerto)", $.net),
           field("rm-tuner", "Sintonizador", $.tunerKind)),
         $.notes),
+      el("section", { class: "rm-card" }, el("h2", { text: "Funciones remotas de esta radio" }), $.parity,
+        el("p", { class: "rm-hint", text: "Advertencia: no transmitas sin carga adaptada o antena. PTT, tune y amplificador son siempre acciones explicitas del operador." })),
       el("section", { class: "rm-card" }, el("h2", { text: "Radios USB detectadas" }), $.ports, el("div", { class: "rm-row" }, refresh)),
       el("section", { class: "rm-card" }, el("h2", { text: "Rotor (opcional)" }),
         el("div", { class: "rm-grid" }, field("rm-rotor", "Rotor", $.rotor), field("rm-rotor-port", "Puerto del rotor", $.rotorPort))),

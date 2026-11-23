@@ -9,6 +9,7 @@ const os = require("node:os");
 const path = require("node:path");
 const childProcess = require("node:child_process");
 const { loadCatalog, findRadio, findRotor, catAllowList, TUNER_KINDS } = require("./remote-catalog.cjs");
+const { loadParity } = require("./remote-parity.cjs");
 const { RigctldClient, stopSequence } = require("./rigctld-client.cjs");
 
 const RIGCTLD_PORT = 4532;
@@ -306,6 +307,7 @@ function buildPlan(config, { catalog = loadCatalog(), find = findHamlibBinary } 
     plan.agent = { rigctldHost: config.netAddress.slice(0, index), rigctldPort: Number(config.netAddress.slice(index + 1)) };
     plan.openDelayMs = 0;
   } else {
+    if (radio.hamlibModel === null) throw fail(`${radio.maker} ${radio.model}: sin modelo Hamlib citado (${radio.nativeProtocol}); CAT del shack pendiente de fuente.`, 409);
     const command = find("rigctld");
     if (!command) throw fail("No se encuentra rigctld. Instala Hamlib 4.x (https://github.com/Hamlib/Hamlib/releases).", 409);
     const usb = config.link === "usb";
@@ -553,7 +555,7 @@ function createController(options = {}) {
   return {
     mode, configDir,
     hasConfig() { try { return readConfig() !== null; } catch { return false; } },
-    catalog: () => ({ radios: catalog.radios, rotors: catalog.rotors, amplifiers: catalog.amplifiers, hamlibVersion: catalog.hamlibVersion }),
+    catalog: () => ({ radios: catalog.radios, rotors: catalog.rotors, amplifiers: catalog.amplifiers, hamlibVersion: catalog.hamlibVersion, parity: loadParity() }),
     ports: () => detect(),
     devices: () => listDevices(),
     status() {

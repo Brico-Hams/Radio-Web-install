@@ -505,7 +505,10 @@ function createRemoteAgent(options = {}) {
         const run = tune;
         const value = parseRawMeter(await client.sendRaw(cmd, { read: true, timeoutMs: meterReadMs, abandon: true }), cmd);
         if (!live()) return;
-        if (key === "swr" && run && tune === run && Number.isFinite(value)) run.lastSwr = value;
+        if (key === "swr" && run && tune === run && Number.isFinite(value)) {
+          // The tuner drops to RX before the tune loop notices; a zero read after a real one is the unkeyed radio, not the antenna.
+          if (value > 0 || !Number.isFinite(run.lastSwr)) run.lastSwr = value;
+        }
         setMeter(key, value);
       } catch (error) {
         if (error.code !== "rejected") throw error;

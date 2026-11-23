@@ -20,7 +20,11 @@ function validateRadio(radio, where) {
   if (!radio || typeof radio !== "object") fail("entrada no valida");
   if (typeof radio.id !== "string" || !ID.test(radio.id)) fail("id no valido");
   for (const key of ["maker", "model", "notes_es"]) if (!isText(radio[key])) fail(`${key} obligatorio`);
-  if (!isModel(radio.hamlibModel)) fail("hamlibModel debe ser un entero");
+  // hamlibModel is null only for radios the Node shack cannot drive yet; nativeProtocol names the protocol code that exists elsewhere in the repo.
+  if (radio.hamlibModel === null) {
+    if (!isText(radio.nativeProtocol)) fail("hamlibModel null exige nativeProtocol");
+  } else if (!isModel(radio.hamlibModel)) fail("hamlibModel debe ser un entero");
+  for (const key of ["nativeProtocol", "hamlibNote"]) if (radio[key] !== undefined && !isText(radio[key])) fail(`${key} no valido`);
   if (!Array.isArray(radio.links) || !radio.links.length || radio.links.some(link => !LINKS.includes(link))) fail("links no validos");
   if (!Array.isArray(radio.bands) || !radio.bands.length || radio.bands.some(band => !isText(band))) fail("bands no validas");
   for (const key of ["listen", "transmit"]) if (typeof radio[key] !== "boolean") fail(`${key} debe ser booleano`);

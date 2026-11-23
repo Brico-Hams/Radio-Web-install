@@ -1,6 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { radioDefaults, show, createApi, saveConfig, startStation, stopStation } = require("../remoto-ui.js");
+const { radioDefaults, parityView, show, createApi, saveConfig, startStation, stopStation } = require("../remoto-ui.js");
 
 test("start/stop/config usan POST y start guarda la config antes", async () => {
   const calls = [];
@@ -43,6 +43,17 @@ test("radioDefaults toma baud y enlaces de la entrada del catalogo", () => {
   assert.equal(lan.link, "lan");
   assert.equal(lan.baud, null);
   assert.deepEqual(radioDefaults(null), { links: [], link: "usb", baud: null });
+});
+
+test("parityView lista todas las funciones y deshabilita con motivo las que la radio no puede", () => {
+  const parity = require("../data/remote-feature-parity.json");
+  const g90 = parityView(parity, "xiegu-g90");
+  assert.equal(g90.length, parity.featureOrder.length);
+  const ptt = g90.find(item => item.feature === "ptt");
+  assert.equal(ptt.enabled, false);
+  assert.match(ptt.reason, /pendiente de fuente/);
+  assert.equal(g90.find(item => item.feature === "audioRx").enabled, true);
+  assert.deepEqual(parityView(parity, "no-existe"), []);
 });
 
 test("show nunca imprime null ni undefined", () => {
