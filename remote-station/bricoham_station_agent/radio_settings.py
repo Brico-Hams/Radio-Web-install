@@ -23,9 +23,12 @@ class RadioSettingsConfig:
     tuner_switching_enabled: bool
     frequency_adjustment_enabled: bool = False
     mode_adjustment_enabled: bool = False
+    menu_write_enabled: bool = False
 
     def __post_init__(self) -> None:
         if (
+            type(self.menu_write_enabled) is not bool
+            or
             type(self.power_adjustment_enabled) is not bool
             or type(self.tuner_switching_enabled) is not bool
             or type(self.frequency_adjustment_enabled) is not bool
@@ -45,7 +48,7 @@ class RadioSettingsConfig:
             "power_level_max",
             "tuner_switching_enabled",
         }
-        optional = {"frequency_adjustment_enabled", "mode_adjustment_enabled"}
+        optional = {"frequency_adjustment_enabled", "mode_adjustment_enabled", "menu_write_enabled"}
         if (
             not isinstance(payload, dict)
             or not required.issubset(payload)
@@ -64,5 +67,6 @@ class RadioSettingsConfig:
             "tuner_switching_enabled": self.tuner_switching_enabled,
             "frequency_adjustment_enabled": self.frequency_adjustment_enabled,
             "mode_adjustment_enabled": self.mode_adjustment_enabled,
+            "menu_write_enabled": self.menu_write_enabled,
             "tune_enabled": False,
         }

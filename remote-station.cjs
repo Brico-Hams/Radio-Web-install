@@ -478,7 +478,7 @@ function createStation(options = {}) {
       agent = createAgent({
         configDir, host: lan ? "0.0.0.0" : "127.0.0.1", port: config.agentPort, tls: lan,
         rigctldHost: plan.agent.rigctldHost, rigctldPort: plan.agent.rigctldPort,
-        radioScope: radioEntry?.scope, radioCat: radioEntry?.cat, tunerKind: config.tunerKind,
+        radioScope: radioEntry?.scope, radioCat: radioEntry?.cat, radioId: radioEntry?.id, tunerKind: config.tunerKind,
         socketFactory: options.socketFactory,
         onRigctldHung: plan.rig ? () => emergencyStop({ cat: radioEntry?.cat || null, tunerKind: config.tunerKind || "internal", target: plan.agent }) : undefined,
         relay: config.relay || undefined, audio: config.audio, log

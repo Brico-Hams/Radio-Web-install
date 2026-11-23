@@ -5,6 +5,7 @@ import {
   type RadioSettings as Settings,
 } from './api'
 import { useLanguage } from './i18n'
+import { RadioMenuSettings } from './RadioMenuSettings'
 type ObservedSettings = Settings & {
   power_level: number
   tx_active: boolean
@@ -135,6 +136,7 @@ export function RadioSettingsPanel({ token }: { token: string }) {
             onClick={() => writeBody('set_tuner', { enabled: false })}>{t('radioBypassTuner')}</button>
         </div> : null}
       </> : null}
+      {config?.model === 'FTX-1' ? <RadioMenuSettings token={token} /> : null}
     </section>
   )
 }

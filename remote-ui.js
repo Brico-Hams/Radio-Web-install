@@ -48,7 +48,7 @@
   const LEVEL_KEYS = Object.freeze({ AF: "af", RF: "rf", RFPOWER: "rfpower" });
   const MIC_GAIN_KEY = "bricohams.remote.micgain";
   const MIC_GAIN_DEFAULT = 50;
-  const TABS = Object.freeze(["band", "levels", "log"]);
+  const TABS = Object.freeze(["band", "levels", "log", "settings"]);
   const $ = id => document.getElementById(id);
 
   const params = new URLSearchParams(location.hash.slice(1));
@@ -993,6 +993,122 @@
     addEventListener("pagehide", () => stopTx(true));
   }
 
+  // Remote radio settings (GET/POST api/settings): the agent validates, backs up, writes, reads back and audits; this view only lists and sends.
+  const settingsView = { list: [], loaded: false };
+  const SETTINGS_ROWS = 60;
+
+  function settingValueText(setting, value) {
+    if (value === null || value === undefined) return "";
+    const option = setting.options?.find(item => item.value === value);
+    return option ? `${value} (${option.label})` : value;
+  }
+
+  function settingRange(setting) {
+    if (setting.options) return "";
+    if (Number.isFinite(setting.min) && Number.isFinite(setting.max)) return `${setting.min}..${setting.max}${setting.unit ? ` ${setting.unit}` : ""}`;
+    return "";
+  }
+
+  function settingRow(setting) {
+    const item = document.createElement("li");
+    item.className = "setting";
+    item.dataset.id = setting.id;
+    const title = document.createElement("strong");
+    title.id = `st-${setting.id}`;
+    title.textContent = setting.label;
+    const group = document.createElement("span");
+    group.className = "hint";
+    group.textContent = [setting.group, setting.read].filter(Boolean).join(" · ");
+    const current = document.createElement("output");
+    current.className = "setting-value";
+    current.setAttribute("aria-live", "polite");
+    current.textContent = "--";
+    const readButton = document.createElement("button");
+    readButton.type = "button";
+    readButton.id = `sr-${setting.id}`;
+    readButton.textContent = "Leer";
+    readButton.setAttribute("aria-labelledby", `${readButton.id} ${title.id}`);
+    readButton.addEventListener("click", () => readSetting(setting, current));
+    item.append(title, group, current, readButton);
+    if (setting.writable) {
+      let input;
+      if (setting.options) {
+        input = document.createElement("select");
+        for (const option of setting.options) input.append(new Option(`${option.value} · ${option.label}`, option.value));
+      } else {
+        input = document.createElement("input");
+        input.type = "number";
+        input.step = String(setting.step || 1);
+        input.min = String(setting.min);
+        input.max = String(setting.max);
+        input.placeholder = settingRange(setting);
+      }
+      input.setAttribute("aria-labelledby", title.id);
+      const apply = document.createElement("button");
+      apply.type = "button";
+      apply.id = `sa-${setting.id}`;
+      apply.textContent = "Aplicar";
+      apply.setAttribute("aria-labelledby", `${apply.id} ${title.id}`);
+      apply.addEventListener("click", () => writeSetting(setting, input.value, current));
+      item.append(input, apply);
+    } else {
+      const label = document.createElement("span");
+      label.className = "hint setting-reason";
+      label.textContent = setting.pending ? "pendiente de fuente" : "Solo lectura";
+      const reason = document.createElement("span");
+      reason.className = "hint setting-reason";
+      reason.textContent = setting.readOnlyReason || "";
+      item.append(label, reason);
+    }
+    return item;
+  }
+
+  function renderSettings() {
+    const filter = $("settings-filter").value.trim().toLowerCase();
+    const matches = settingsView.list.filter(setting => !filter || `${setting.label} ${setting.group || ""} ${setting.read || ""}`.toLowerCase().includes(filter));
+    const list = $("settings-list");
+    list.replaceChildren(...matches.slice(0, SETTINGS_ROWS).map(settingRow));
+    const writable = settingsView.list.filter(setting => setting.writable).length;
+    setText($("settings-summary"), settingsView.list.length ? `${settingsView.list.length} · ${writable}` : "");
+    setText($("settings-note"), matches.length > SETTINGS_ROWS ? `${SETTINGS_ROWS} / ${matches.length}` : "");
+  }
+
+  async function loadSettings() {
+    try {
+      const result = await api("api/settings");
+      settingsView.list = result.settings || [];
+      settingsView.loaded = true;
+      $("settings-filter").disabled = false;
+      if (!settingsView.list.length) setText($("settings-note"), "Esta radio no tiene protocolo de ajustes remoto con fuente documentada.");
+      renderSettings();
+      notify("");
+    } catch (error) { notify(error.message); }
+  }
+
+  async function readSetting(setting, output) {
+    try {
+      const result = await api(`api/settings/value?id=${encodeURIComponent(setting.id)}`);
+      output.textContent = result.available === false ? "Valor no disponible (la radio responde ?;)" : settingValueText(setting, result.value);
+      notify("");
+    } catch (error) { notify(error.message); }
+  }
+
+  async function writeSetting(setting, value, output) {
+    try {
+      const result = await api("api/settings", { method: "POST", body: JSON.stringify({ id: setting.id, value }) });
+      output.textContent = settingValueText(setting, result.value);
+      addLog(`${setting.label}: ${result.backup} → ${result.value}`);
+      notify("");
+    } catch (error) {
+      notify(error.status === 403 ? "Solo el operador con el control puede cambiar ajustes." : error.message);
+    }
+  }
+
+  function bindSettings() {
+    $("settings-load").addEventListener("click", loadSettings);
+    $("settings-filter").addEventListener("input", renderSettings);
+  }
+
   function setLocked(on) {
     view.locked = on;
     write(sessionStorage, LOCK_KEY, on ? "1" : null);
@@ -1111,6 +1227,7 @@
     bindAudio();
     bindTuner();
     bindLevels();
+    bindSettings();
     setLocked(read(sessionStorage, LOCK_KEY) === "1");
     try {
       const config = await api("api/config");

@@ -10,6 +10,7 @@ const os = require("node:os");
 const path = require("node:path");
 const { RigctldClient, VFO_NAMES, stopSequence } = require("./rigctld-client.cjs");
 const { catAllowList, TUNER_KINDS } = require("./remote-catalog.cjs");
+const radioSettings = require("./radio-settings.cjs");
 const remoteTls = require("./remote-tls.cjs");
 const remoteWs = require("./remote-ws.cjs");
 const remoteAudio = require("./remote-audio.cjs");
@@ -268,6 +269,7 @@ function createRemoteAgent(options = {}) {
     reconnectMs: options.reconnectMs,
     timeoutMs: options.rigTimeoutMs,
     rawAllow: catAllowList(cat),
+    rawMatchers: options.radioId === "yaesu-ftx-1" && cat ? [radioSettings.EX_RAW_MATCHER] : [],
     rawIdleMs: options.rawIdleMs
   });
 
@@ -287,6 +289,16 @@ function createRemoteAgent(options = {}) {
   let swrTripped = false;
   let tune = null;
   let tuneWasActive = false;
+  // Remote menu settings: only radios with a sourced CAT menu map (FTX-1) get a live service; others get the read-only model.
+  const settingsFamily = radioSettings.familyOf(options.radioId || "");
+  const settingsService = radioSettings.createSettingsService({
+    settings: options.radioId === "yaesu-ftx-1" && cat
+      ? radioSettings.familySettings(settingsFamily)
+      : radioSettings.familySettings(settingsFamily).map(setting => ({ ...setting, writable: false })),
+    send: (command, opts) => client.sendRaw(command, { ...opts, timeoutMs: opts.timeoutMs || 2000, abandon: Boolean(opts.read) }),
+    isTransmitting: () => (client.connected ? Boolean(rig.ptt || agentTx || tune || swrTripped) : null),
+    now, log
+  });
   let stopping = 0;
   let emergency = false;
   let retryTimer = null;
@@ -505,7 +517,8 @@ function createRemoteAgent(options = {}) {
         const run = tune;
         const value = parseRawMeter(await client.sendRaw(cmd, { read: true, timeoutMs: meterReadMs, abandon: true }), cmd);
         if (!live()) return;
-        if (key === "swr" && run && tune === run && Number.isFinite(value)) run.lastSwr = value;
+        // A zero read is what the radio reports once it is back in RX, so it never replaces a real TX reading.
+        if (key === "swr" && run && tune === run && Number.isFinite(value) && (value > 0 || !Number.isFinite(run.lastSwr))) run.lastSwr = value;
         setMeter(key, value);
       } catch (error) {
         if (error.code !== "rejected") throw error;
@@ -938,6 +951,28 @@ function createRemoteAgent(options = {}) {
         return;
       }
       const result = await applyCommand(command, clientId);
+      send(response, result.status, result.body);
+      return;
+    }
+    if (route === "GET /api/settings") {
+      send(response, 200, {
+        radioId: options.radioId || null, family: settingsFamily, settings: settingsService.list(),
+        warning: "Never transmit without a matched load or antenna. Settings are refused while transmitting."
+      });
+      return;
+    }
+    if (route === "GET /api/settings/value") {
+      if (!(options.radioId === "yaesu-ftx-1" && cat)) { send(response, 501, { ok: false, error: "Live settings reads are not wired for this radio on the Node shack (model is read-only)." }); return; }
+      send(response, ...Object.values(await settingsService.read(url.searchParams.get("id") || "")));
+      return;
+    }
+    if (route === "POST /api/settings") {
+      let body;
+      try { body = await readJson(request); }
+      catch (error) { send(response, error.status || 400, { error: error.message }); return; }
+      // The bearer-token holder who owns control is the operator; a second client is a viewer.
+      const role = claimControl(clientId) ? radioSettings.OPERATOR_ROLE : "viewer";
+      const result = await settingsService.write(typeof body?.id === "string" ? body.id : "", body?.value, { role });
       send(response, result.status, result.body);
       return;
     }

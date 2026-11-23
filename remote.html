@@ -115,6 +115,7 @@
       <button id="tab-band" type="button" role="tab" aria-selected="true" aria-controls="panel-band">Banda</button>
       <button id="tab-levels" type="button" role="tab" aria-selected="false" aria-controls="panel-levels" tabindex="-1">Niveles</button>
       <button id="tab-log" type="button" role="tab" aria-selected="false" aria-controls="panel-log" tabindex="-1">Registro</button>
+      <button id="tab-settings" type="button" role="tab" aria-selected="false" aria-controls="panel-settings" tabindex="-1">Ajustes</button>
     </div>
 
     <section id="panel-band" class="card panel" role="tabpanel" aria-labelledby="tab-band" data-active="true">
@@ -179,6 +180,20 @@
       <ol id="log" class="log" aria-label="Ultimos cambios de esta sesion">
         <li class="empty">Sin eventos todavia.</li>
       </ol>
+    </section>
+
+    <section id="panel-settings" class="card panel" role="tabpanel" aria-labelledby="tab-settings" data-active="false">
+      <h2 class="panel-title">Ajustes</h2>
+      <p class="hint settings-warning" role="note">Nunca transmitas sin una carga o antena adaptada. Los ajustes se rechazan mientras se transmite.</p>
+      <p id="settings-summary" class="hint" role="status" aria-live="polite"></p>
+      <div class="settings-tools">
+        <button id="settings-load" type="button">Leer ajustes</button>
+        <label class="step-field">Buscar ajuste
+          <input id="settings-filter" type="search" autocomplete="off" disabled>
+        </label>
+      </div>
+      <p id="settings-note" class="hint" role="status" aria-live="polite"></p>
+      <ul id="settings-list" class="settings-list" aria-label="Ajustes de la radio"></ul>
     </section>
   </main>
 

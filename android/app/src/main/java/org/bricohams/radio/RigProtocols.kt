@@ -317,7 +317,7 @@ class IcomCivRig(
     private val transport: RadioBytes,
     private val address: Int = 0xA4,
     private val clock: () -> Long = { System.nanoTime() / 1_000_000 }
-) : Rig {
+) : Rig, SettingsIo {
     override val model = RigModel.IC705
     override val supportsVfoB = true
     override val silentVfoB = true
@@ -375,6 +375,12 @@ class IcomCivRig(
     override fun setMode(mode: RigMode) = command(IcomCiv.setMode(mode))
     override fun ptt(on: Boolean) = command(IcomCiv.ptt(on))
     override fun setSplit(on: Boolean) = command(IcomCiv.split(on))
+    override fun readSetting(setting: Ic705Setting): String {
+        val body = IcomCiv.readSetting(setting)
+        val reply = exchange(body) { it.size >= 4 && (0..3).all { index -> it[index] == body[index] } }
+        return IcomCiv.settingDigits(setting, reply)
+    }
+    override fun writeSetting(setting: Ic705Setting, digits: String) = command(IcomCiv.writeSetting(setting, digits))
     override val supportsMeter = true
     override fun signalLevel(): Int = IcomCiv.decodeLevel(query(IcomCiv.readSMeter(), 4), 2)
     override val supportsRfPower = true

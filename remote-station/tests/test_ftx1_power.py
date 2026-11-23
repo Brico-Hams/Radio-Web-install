@@ -117,13 +117,14 @@ class FtxPowerTests(unittest.TestCase):
             "power_level_max": 50,
             "tuner_switching_enabled": False,
         }
-        flags = ("frequency_adjustment_enabled", "mode_adjustment_enabled")
+        flags = ("frequency_adjustment_enabled", "mode_adjustment_enabled", "menu_write_enabled")
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "settings.json"
             path.write_text(json.dumps(base), encoding="utf-8")
             config = RadioSettingsConfig.load(path)
             self.assertFalse(config.frequency_adjustment_enabled)
             self.assertFalse(config.mode_adjustment_enabled)
+            self.assertFalse(config.menu_write_enabled)
             for flag in flags:
                 path.write_text(json.dumps({**base, flag: True}), encoding="utf-8")
                 config = RadioSettingsConfig.load(path)
