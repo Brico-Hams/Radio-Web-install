@@ -235,6 +235,11 @@ web/Android/iPhone/iPad ofrece ambas acciones en ES/EN/FR/PT. No hay inicio TX,
 Reply, Free Text ni Configure; el broker CAT y la operacion digital completa
 siguen pendientes. Consulta [activacion y limites UDP](../remote-station/docs/agente-cat-wsjtx.md).
 
+Los [dispositivos de estacion](../remote-station/docs/dispositivos-estacion.md)
+(relés Digital Loggers y Waveshare Modbus, rotores DCU-1/Rotor-EZ/RT-21) se
+manejan con confirmación, sin conmutar radio/PA al transmitir y con parada
+siempre permitida. Rutas de señal y equipos sin protocolo público: "pendiente de fuente".
+
 El primer origen loopback Heartbeat/Status queda fijado hasta reiniciar el
 agente. Se rechazan origen distinto, instancia caducada/cerrada, campos no
 admitidos y IDs repetidos; Replay tiene limite de una solicitud por segundo.

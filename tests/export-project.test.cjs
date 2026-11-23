@@ -214,7 +214,7 @@ test("el ZIP Beta conserva fuentes, historial y artefactos verificables y no sob
   assert.equal(without.android.applicationVersion, "0.7.0-beta");
   const withoutExtract = path.join(directory, "without-extracted");
   fs.mkdirSync(withoutExtract);
-  if (process.platform === "win32") execFileSync("tar", ["-xf", withoutOutput, "-C", withoutExtract]);
+  if (process.platform === "win32") execFileSync(path.join(process.env.SystemRoot || "C:\\Windows", "System32", "tar.exe"), ["-xf", withoutOutput, "-C", withoutExtract]);
   else execFileSync("unzip", ["-q", withoutOutput, "-d", withoutExtract]);
   const withoutInfo = JSON.parse(fs.readFileSync(path.join(withoutExtract, "Bricohams", "export-info.json")));
   assert.equal(withoutInfo.desktopInstallersIncluded, false);

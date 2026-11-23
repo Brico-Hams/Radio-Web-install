@@ -235,6 +235,11 @@ Web/Android/iPhone/iPad bietet beide Aktionen in ES/EN/FR/PT an. Es gibt keinen 
 kein Reply, keinen Free Text und kein Configure; der CAT-Broker und der vollständige Digitalbetrieb
 stehen weiterhin aus. Siehe [Aktivierung und UDP-Limits](../../../remote-station/docs/agente-cat-wsjtx.md).
 
+Die [Stationsgeräte](../../../remote-station/docs/dispositivos-estacion.md)
+(Digital-Loggers- und Waveshare-Modbus-Relais, DCU-1/Rotor-EZ/RT-21-Rotoren)
+werden mit Bestätigung geschaltet, schalten Funkgerät/PA nie während des Sendens
+und erlauben jederzeit Stopp. Signalwege und Geräte ohne öffentliches Protokoll: "pendiente de fuente".
+
 Der erste Loopback-Ursprung von Heartbeat/Status bleibt bis zum Neustart des
 Agenten fixiert. Abweichender Ursprung, abgelaufene/geschlossene Instanz, nicht
 zulässige Felder und wiederholte IDs werden zurückgewiesen; Replay hat ein Limit von einer Anfrage pro Sekunde.
