@@ -345,7 +345,7 @@
     $.msg = el("p", { class: "rm-msg", role: "status" });
     $.save = el("button", { class: "rm-btn", type: "button", text: "Guardar configuracion", on: { click: () => run(() => saveConfig(api, collect()).then(() => api("status")), "Configuracion guardada.") } });
     $.start = el("button", { class: "rm-btn rm-btn-primary", type: "button", text: "Iniciar estacion", on: { click: () => run(() => startStation(api, collect()), "Estacion en marcha.") } });
-    $.stop = el("button", { class: "rm-btn", type: "button", text: "Detener estacion", on: { click: () => run(() => stopStation(api), "Estacion detenida.") } });
+    $.stop = el("button", { class: "rm-btn rm-btn-danger", type: "button", text: "Detener estacion", on: { click: () => run(() => stopStation(api), "Estacion detenida.") } });
     $.status = el("div", {});
     $.audioGrid = el("div", { class: "rm-grid" });
     renderAudio();
