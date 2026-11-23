@@ -28,7 +28,7 @@ app_files=(
   ayuda-decisiones.html ayuda-despliegue.html
   ayuda-estacion-remota.html ayuda-diagnostico.html ayuda-rotor.html ayuda-aprs-chat-radios.html ayuda-karina-v3-k1.html ayuda-tk11.html
   remote-station.cjs remote-catalog.cjs radio-settings.cjs remote-parity.cjs remote-meters.cjs remote-native-cat.cjs remote-rotor.cjs remote-agent.cjs remote-tls.cjs rigctld-client.cjs smartsdr-core.cjs remote-relay.cjs remote-ws.cjs remote-audio.cjs station-accessories.cjs station-devices.cjs remote-ops.cjs firmware-signature.js remote-cw.cjs remote-log.cjs remote-controls.js
-  remote.html remote-ui.js remote.css remote-audio-core.js spectrum-core.js remote-rotor-ui.js remote-audio-worklet.js remoto.html remoto-ui.js remoto.css remote-sw.js remote.webmanifest remoto.webmanifest
+  remote.html remote-ui.js remote.css remote-audio-core.js remote-digital.js spectrum-core.js remote-rotor-ui.js remote-audio-worklet.js remoto.html remoto-ui.js remoto.css remote-sw.js remote.webmanifest remoto.webmanifest
   ayuda-entrega.html ayuda-android.html ayuda-tutoriales-android.html ayuda-validacion-v3-android.html
   ayuda-egzumer.html ayuda-pack-dim0s.html ayuda-atlas-uv-k5-v3.html
   ayuda-dm32uv.html ayuda-enlaces-comunidad.html ayuda-binarios-terceros.html ayuda-ejemplos.html
@@ -77,6 +77,7 @@ stage_app() {
   cp "$root/data/remote-station-catalog.json" "$destination/data/remote-station-catalog.json"
   cp "$root/data/remote-feature-parity.json" "$destination/data/remote-feature-parity.json"
   cp "$root/data/remote-meter-model.json" "$destination/data/remote-meter-model.json"
+  cp "$root/data/digital-code-tables.json" "$destination/data/digital-code-tables.json"
   cp "$root/data/station-accessories-catalog.json" "$destination/data/station-accessories-catalog.json"
   cp "$root/data/radio-settings-catalog.json" "$destination/data/radio-settings-catalog.json"  # Windows audio helper spawned by remote-audio.cjs.
   mkdir -p "$destination/scripts"
