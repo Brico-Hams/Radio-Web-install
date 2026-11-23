@@ -151,7 +151,7 @@ test("spots are marked new or worked from the optional ADIF log at the agent", (
     assert.deepEqual(cluster.snapshot().spots.map(spot => spot.status), ["unknown", "unknown"]);
     // The log is read through createDxCluster's default loader once the file exists.
     const logged = createDxCluster({ config: { ...CONFIG, logFile: file }, connect: network.connect });
-    fs.writeFileSync(file, "Test\n<EOH>\n<CALL:5>JA1XYZ<QSO_DATE:8>20260101<TIME_ON:4>1200<FREQ:6>14.074<MODE:3>FT8<RST_SENT:3>599<RST_RCVD:3>599<EOR>\n");
+    fs.writeFileSync(file, "Test\n<EOH>\n<CALL:6>JA1XYZ<QSO_DATE:8>20260101<TIME_ON:4>1200<FREQ:6>14.074<MODE:3>FT8<RST_SENT:3>599<RST_RCVD:3>599<EOR>\n");
     logged.start();
     network.last().emit("connect");
     network.last().emit("data", `${LINES.ft8}\n${LINES.ssb}\nDX de K1ABC: 21074.0 JA1XYZ FT8 1234Z\n`);

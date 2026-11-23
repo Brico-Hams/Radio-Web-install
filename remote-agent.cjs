@@ -1827,7 +1827,7 @@ function createRemoteAgent(options = {}) {
     client.stop();
     dxCluster.stop();
     for (const ws of audioSockets) { ws.fail(1001, "shutdown"); ws.socket.destroy(); }
-    for (const ws of audioSockets) { ws.fail(1001, "shutdown"); ws.socket.destroy(); } { ws.fail(1001, "shutdown"); ws.socket.destroy(); }    audio.close?.();
+    audio.close?.();
     await rotor?.close();
     relayRequests.clear();
     for (const entry of sseClients) entry.response.end();
