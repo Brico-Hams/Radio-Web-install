@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# FFT packet parser and frame assembler adapted from POTACAT lib/flex-scope.js, Copyright 2026 Casey Stanton,
+# Apache-2.0 (see docs/THIRD-PARTY-REUSE.md).
 """FlexRadio SmartSDR client codec and guarded session.
 
 Every syntax, port and scale comes from remote-station/docs/FLEX-SMARTSDR-API.md.

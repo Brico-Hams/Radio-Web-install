@@ -1,4 +1,8 @@
 "use strict";
+// SPDX-License-Identifier: GPL-3.0-or-later
+// GS-232A/B rotor frames adapted from Hamlib rotators/gs232a/gs232a.c and gs232b.c, Copyright (c) 2001-2012 Stephane Fillod,
+// LGPL-2.1-or-later; Rot2Prog frames adapted from Hamlib rotators/spid/spid.c, Copyright (c) Norvald H. Ryeng (LA6YKA) and
+// the Hamlib authors, LGPL-2.1-or-later (see docs/THIRD-PARTY-REUSE.md).
 // Station devices: power/relay control (Digital Loggers REST, Waveshare Modbus TCP), serial rotor
 // controllers (DCU-1, Rotor-EZ, RT-21, GS-232A/B, SPID Rot2Prog) and the signal path view. Every protocol fact is cited in
 // remote-station/docs/STATION-DEVICES-SOURCES.md; anything not listed there is "pendiente de fuente".

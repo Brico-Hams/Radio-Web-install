@@ -6,7 +6,7 @@ under data/third-party/refs (see docs/THIRD-PARTY-REUSE.md for the licences):
 - Elecraft KPA: Hamlib amplifiers/elecraft/kpa.c, kpa1500.c (LGPL-2.1+, (c) 2019 Michael Black W9MDB).
 - Expert/SPE: Hamlib amplifiers/expert/expert.c (LGPL-2.1+, (c) 2023 Michael Black W9MDB, (c) 2026 Mikael
   Nousiainen OH3BHX), macexpert-spe SPEProtocol.swift (MIT, (c) 2026 Manoj Ramawarrier VU2CPL) and
-  SPE-1.3-2K-FA-Remote-server (GPL-3.0, OH2GEK).
+  SPE-1.3-2K-FA-Remote-server (GPL-3.0-only, OH2GEK).
 - ACOM: ACOM-Controller MainWindow.xaml.cs (MIT, (c) 2019 Bjorn Ekelund).
 - Gemini: Hamlib amplifiers/gemini/gemini.c (LGPL-2.1+).
 All models are source-implemented but not hardware-tested.
