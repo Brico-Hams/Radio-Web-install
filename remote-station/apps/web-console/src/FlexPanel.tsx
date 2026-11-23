@@ -76,7 +76,7 @@ export function FlexPanel({ token }: { token: string }) {
       <p>{t('flexSafety')}</p>
       <div className="session-actions">
         <button className="button button-secondary" disabled={busy} onClick={() => void load()}>{t('flexRead')}</button>
-        <button className="button button-primary" disabled={!data || busy}
+        <button className="button button-danger" disabled={!data || busy}
           onClick={() => void run({ action: 'emergency_stop' }, t('flexStopped'))}>{t('flexStop')}</button>
       </div>
       {message ? <p role="alert">{message}</p> : null}

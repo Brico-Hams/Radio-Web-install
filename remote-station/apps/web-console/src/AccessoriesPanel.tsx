@@ -75,7 +75,7 @@ export function AccessoriesPanel({ token }: { token: string }) {
       <div className="session-actions">
         <button className="button button-secondary" disabled={busy} onClick={() => void load()}>{t('accRead')}</button>
         {/* STANDBY and the emergency stop are never disabled by the UI state. */}
-        <button className="button button-primary" onClick={() => void operate('emergency_stop')}>{t('accEmergency')}</button>
+        <button className="button button-danger" onClick={() => void operate('emergency_stop')}>{t('accEmergency')}</button>
         <button className="button button-secondary" onClick={() => void operate('standby')}>{t('accStandby')}</button>
         <button className="button button-secondary"
           disabled={busy || !amplifier?.supported || !amplifier.operate_allowed || amplifier.state !== 'standby' ||

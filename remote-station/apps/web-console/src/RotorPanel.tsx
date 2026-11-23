@@ -272,7 +272,7 @@ export function RotorPanel({ token }: { token: string }) {
           onClick={() => void load()}>{t('rotorReadConfig')}</button>
         <button className="button button-secondary" disabled={busy || !!lease}
           onClick={() => void load(true)}>{t('rotorReadPosition')}</button>
-        <button className="button button-primary" onClick={() => {
+        <button className="button button-danger" onClick={() => {
           setError('')
           void stop()
         }}>{t('rotorStop')}</button>
