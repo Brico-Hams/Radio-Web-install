@@ -18,7 +18,8 @@ ejemplo `-t 4533`. No conectes el rotor hasta verificar su configuracion.
 **rotctld no autentica clientes**: no publiques ese puerto en LAN/Internet.
 Loopback tampoco protege frente a procesos locales maliciosos.
 
-Crea un JSON local, por ejemplo `rotor.json`, con exactamente estos campos:
+Crea un JSON local, por ejemplo `rotor.json`, con estos campos obligatorios
+(mas los opcionales de aparcado y calibracion descritos mas abajo):
 
 ```json
 {
@@ -78,7 +79,65 @@ No se reintenta un movimiento si se pierde su confirmacion.
 
 La respuesta confirma **aceptacion del objetivo**, no posicion alcanzada.
 La posicion solo se muestra cuando se consulta al controlador. No hay
-movimiento continuo, park, reset ni envio de comandos arbitrarios.
+movimiento continuo, reset ni envio de comandos arbitrarios.
+
+## Aparcado, calibracion y seguimiento
+
+Campos opcionales del JSON (Python) o de la configuracion del rotor (Node):
+
+- `park_azimuth` + `park_elevation` (Node: `park: {azimuth, elevation}`):
+  posicion de aparcado dentro de limites. Sin ella, `park` responde
+  `409 rotor_park_not_configured`. `park` es un goto a esa posicion con el
+  mismo lease, limites y `motion_enabled`; no usa ningun comando rotctld nuevo.
+- `azimuth_offset` / `elevation_offset` (grados, +/-180): offset de
+  calibracion. Lo informado = valor de rotctld + offset; lo enviado a `+P` =
+  objetivo - offset. Los limites se aplican sobre la posicion calibrada.
+- `POST park`: `{"operation":"park","request_id":"..."}`.
+- Seguimiento (satelite): el cliente que **posee el lease** reenvia
+  `move` o `park` con `lease_id` para cambiar el objetivo AZ/EL (flujo
+  independiente del Doppler, calculado con el planificador de pasos existente).
+  Cada reenvio reinicia el plazo de 30 s; sin reenvios ni renovaciones el
+  deadman para a los 3 s. Otro cliente recibe `rotor_busy` (un solo operador).
+- Clientes: la consola Node (`remote-rotor-ui.js`) y la consola React
+  (`RotorPanel.tsx`, `passTrack.ts`) cargan el archivo `radicodex-pass-track`
+  (muestras `t` ms UTC, `az`, `el`; 2-2000 muestras, t creciente, max. 30 min,
+  512 KB), solo se mueven tras pulsar «Seguir el pase», reenvian `move` con
+  `lease_id` si el objetivo cambia >= 0,5 grados y paran al terminar el pase.
+  Android (`RemoteShackActivity`, `RemoteStationActivity`) reutiliza esa consola
+  web; una interfaz nativa sobre `Rotor*` para el agente remoto: pendiente.
+- Las respuestas incluyen `park`, `calibration_offset` y `capabilities`
+  (`speed` y `limit_switches` son `null` = pendiente de fuente).
+
+El agente Node (`remote-agent.cjs`, modulo `remote-rotor.cjs`) expone la misma
+API en `GET|POST /api/rotor` con el token del agente y las mismas reglas
+(lease de 3 s, tope de 30 s, un propietario, parada al cerrar el agente o
+al cerrarse el flujo de eventos del propietario). Se activa con
+`--rotor-port <puerto rotctld>`, `--rotor-park az,el`, `--rotor-offset az,el` y
+`--rotor-motion` (sin este flag, solo lectura y parada). La estacion
+(`remote-station.cjs`) lo activa con el campo `rotor` de su configuracion
+(`motion`, `park`, `azimuthOffset`, `elevationOffset`); limites por defecto
+0-360 de azimut y 0/0 de elevacion (solo azimut), nunca inferidos.
+
+## Matriz de soporte
+
+Leyenda: ok = implementado y probado con un broker de ensayo; parcial =
+implementado sin validacion en hardware; pendiente de fuente = deshabilitado.
+
+| Backend / modelo | Enlace | Leer AZ | Leer EL | Goto | Stop | Park | Seguimiento | Fuente |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Hamlib rotctld (API comun) | TCP loopback | ok | ok | parcial | ok | parcial (posicion configurada) | parcial | manual rotctld (URL arriba), `rotor.py`, `remote-rotor.cjs` |
+| Hy-Gain DCU-1 / DCU-1X (Hamlib 403) | serie 4800 | parcial | pendiente de fuente | parcial | parcial | parcial | parcial | `data/remote-station-catalog.json` |
+| Green Heron RT-21 (Hamlib 405) | serie 4800 | parcial | pendiente de fuente | parcial | parcial | parcial | parcial | `data/remote-station-catalog.json` |
+| Hy-Gain DCU2 / DCU3 / YRC-1 (Hamlib 406) | serie 9600 | parcial | pendiente de fuente | parcial | parcial | parcial | parcial | `data/remote-station-catalog.json` |
+| BricoHams ESP32 (BLE / HTTP AP) | BLE, Wi-Fi AP | ok (`azMechanical`) | ok (`el`) | ok (`/api/move`) | ok (`/api/stop`) | parcial (`/api/home`) | ok (`/api/track`) | `RotorProtocol.kt`, `RotorClient.kt`; solo en Android local, sin pasarela remota todavia |
+| Yaesu GS-232A/B | serie | pendiente de fuente | pendiente de fuente | pendiente de fuente | pendiente de fuente | pendiente de fuente | pendiente de fuente | sin documentacion en el repo |
+| SPID ROT2PROG | serie | pendiente de fuente | pendiente de fuente | pendiente de fuente | pendiente de fuente | pendiente de fuente | pendiente de fuente | sin documentacion en el repo |
+
+La lectura de elevacion de cada modelo del catalogo Hamlib depende de que el
+controlador la soporte y no esta documentada en el repo: se usan limites de
+elevacion 0/0 (solo azimut) hasta confirmarlo. Velocidad y finales de carrera
+/ solape: pendiente de fuente en todos los backends salvo el firmware BricoHams
+(estado propio en `RotorStatus`, no expuesto remotamente).
 
 ## Sesion y parada: limites de seguridad
 

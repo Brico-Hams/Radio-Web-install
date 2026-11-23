@@ -119,6 +119,7 @@ letters below come from Hamlib and match the manual's descriptions.
 - Dataprobe iBoot-PDU: the vendor advertises REST, Telnet and SNMP, but the
   syntax was not read (the page returned HTTP 429).
 - Alpha 87A and OM Power OM2000A+: not located.
+
 ## Per-radio support matrix
 
 Station devices (power outlets, rotors, signal path) are radio-independent.

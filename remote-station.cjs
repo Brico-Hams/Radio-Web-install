@@ -229,10 +229,24 @@ function validateConfig(input, catalog = loadCatalog()) {
   if (input.rotor !== undefined && input.rotor !== null) {
     const rotor = input.rotor;
     if (typeof rotor !== "object" || Array.isArray(rotor)) throw fail("Rotor no valido.");
-    for (const key of Object.keys(rotor)) if (!["id", "port", "baud"].includes(key)) throw fail(`Campo de rotor no admitido: ${key}`);
+    for (const key of Object.keys(rotor)) if (!["id", "port", "baud", "motion", "park", "azimuthOffset", "elevationOffset"].includes(key)) throw fail(`Campo de rotor no admitido: ${key}`);
     if (typeof rotor.id !== "string" || !findRotor(rotor.id, catalog)) throw fail("Rotor desconocido.");
     if (!isValidPort(rotor.port)) throw fail("Puerto del rotor no valido.");
     config.rotor = { id: rotor.id, port: rotor.port };
+    if (rotor.motion !== undefined) {
+      if (typeof rotor.motion !== "boolean") throw fail("Movimiento del rotor no valido.");
+      config.rotor.motion = rotor.motion;
+    }
+    if (rotor.park !== undefined && rotor.park !== null) {
+      const park = rotor.park;
+      if (typeof park !== "object" || !Number.isFinite(park.azimuth) || !Number.isFinite(park.elevation)) throw fail("Aparcado del rotor no valido.");
+      config.rotor.park = { azimuth: park.azimuth, elevation: park.elevation };
+    }
+    for (const key of ["azimuthOffset", "elevationOffset"]) {
+      if (rotor[key] === undefined) continue;
+      if (!Number.isFinite(rotor[key]) || Math.abs(rotor[key]) > 180) throw fail("Calibracion del rotor no valida.");
+      config.rotor[key] = rotor[key];
+    }
     if (rotor.baud !== undefined) {
       if (!Number.isInteger(rotor.baud) || rotor.baud < 300 || rotor.baud > 115200) throw fail("Velocidad del rotor no valida.");
       config.rotor.baud = rotor.baud;
@@ -295,6 +309,15 @@ function rotctldArgs({ model, path: rotorPath, baud, port = ROTCTLD_PORT }) {
   if (baud) args.push("-s", String(baud));
   args.push("-T", "127.0.0.1", "-t", String(port));
   return args;
+}
+
+// Elevation limits default to 0/0 (azimuth-only): the catalog has no verified limits, so none are inferred.
+function rotorAgentConfig(rotor, catalog = loadCatalog()) {
+  const entry = findRotor(rotor.id, catalog);
+  return {
+    port: ROTCTLD_PORT, label: `${entry.maker} ${entry.model}`, motionEnabled: rotor.motion === true,
+    park: rotor.park || null, azimuthOffset: rotor.azimuthOffset || 0, elevationOffset: rotor.elevationOffset || 0
+  };
 }
 
 // Icom over LAN goes through wfview's rigctld-compatible server, which the agent talks to directly.
@@ -480,6 +503,7 @@ function createStation(options = {}) {
       agent = createAgent({
         configDir, host: lan ? "0.0.0.0" : "127.0.0.1", port: config.agentPort, tls: lan,
         rigctldHost: plan.agent.rigctldHost, rigctldPort: plan.agent.rigctldPort,
+        rotor: plan.rotor ? rotorAgentConfig(config.rotor, catalog) : undefined,
         radioScope: radioEntry?.scope, radioCat: radioEntry?.cat, tunerKind: config.tunerKind,
         socketFactory: options.socketFactory,
         onRigctldHung: plan.rig ? () => emergencyStop({ cat: radioEntry?.cat || null, tunerKind: config.tunerKind || "internal", target: plan.agent }) : undefined,

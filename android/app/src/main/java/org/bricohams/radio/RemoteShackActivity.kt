@@ -264,6 +264,8 @@ class RemoteShackActivity : LocalizedActivity() {
     }
 
     override fun onPause() {
+        // The console stops any rotor motion on pagehide; a paused WebView may not fire it, so ask for it explicitly.
+        web?.evaluateJavascript("window.dispatchEvent(new Event('pagehide'))", null)
         web?.onPause()
         window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         super.onPause()

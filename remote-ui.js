@@ -1162,6 +1162,7 @@
       return;
     }
     connectEvents();
+    if (globalThis.RemoteRotorUI) globalThis.RemoteRotorUI.mount({ doc: document, api, token, clientId, notify });
     measureLatency();
     setInterval(measureLatency, 3000);
   }

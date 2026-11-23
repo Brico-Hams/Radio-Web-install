@@ -39,6 +39,11 @@ class RotorConfig:
     elevation_min: float
     elevation_max: float
     motion_enabled: bool
+    # Optional: parking target and calibration offsets (reported = rotctld value + offset).
+    park_azimuth: float | None = None
+    park_elevation: float | None = None
+    azimuth_offset: float = 0.0
+    elevation_offset: float = 0.0
 
     def __post_init__(self) -> None:
         if type(self.port) is not int or not 1 <= self.port <= 65535:
@@ -60,11 +65,18 @@ class RotorConfig:
             raise ValueError("Invalid azimuth limits; no wraparound or normalization is inferred.")
         if not -90 <= emin <= emax <= 180:
             raise ValueError("Invalid elevation limits; use 0/0 for an azimuth-only controller.")
+        for offset in (self.azimuth_offset, self.elevation_offset):
+            if not -180 <= _number(offset) <= 180:
+                raise ValueError("Calibration offsets must be within +/-180 degrees.")
+        if (self.park_azimuth is None) != (self.park_elevation is None):
+            raise ValueError("Set both park_azimuth and park_elevation, or neither.")
+        if self.park_azimuth is not None:
+            self.position(self.park_azimuth, self.park_elevation)
 
     @classmethod
     def load(cls, path: Path) -> "RotorConfig":
         payload = json.loads(path.read_text(encoding="utf-8"))
-        fields = {
+        required = {
             "port",
             "label",
             "azimuth_min",
@@ -73,9 +85,20 @@ class RotorConfig:
             "elevation_max",
             "motion_enabled",
         }
-        if not isinstance(payload, dict) or set(payload) != fields:
+        optional = {"park_azimuth", "park_elevation", "azimuth_offset", "elevation_offset"}
+        if (
+            not isinstance(payload, dict)
+            or not required <= set(payload)
+            or not set(payload) <= required | optional
+        ):
             raise ValueError("Rotor configuration requires exactly the documented fields.")
         return cls(**payload)
+
+    @property
+    def park(self) -> tuple[float, float] | None:
+        if self.park_azimuth is None or self.park_elevation is None:
+            return None
+        return float(self.park_azimuth), float(self.park_elevation)
 
     def position(self, azimuth: object, elevation: object) -> tuple[float, float]:
         azimuth, elevation = _number(azimuth), _number(elevation)
@@ -156,8 +179,8 @@ class RotorController:
             ):
                 raise ValueError("Invalid ERP position")
             azimuth, elevation = self.config.position(
-                float(lines[0][9:]),
-                float(lines[1][11:]),
+                float(lines[0][9:]) + self.config.azimuth_offset,
+                float(lines[1][11:]) + self.config.elevation_offset,
             )
         except ValueError as error:
             raise RotorError("rotor_invalid_position") from error
@@ -185,6 +208,26 @@ class RotorController:
             "stop_failed": self._stop_failed,
             "lease_seconds": LEASE_SECONDS,
             "max_motion_seconds": MAX_MOTION_SECONDS,
+            "park": (
+                None
+                if self.config.park is None
+                else {"azimuth_deg": self.config.park[0], "elevation_deg": self.config.park[1]}
+            ),
+            "calibration_offset": {
+                "azimuth_deg": self.config.azimuth_offset,
+                "elevation_deg": self.config.elevation_offset,
+            },
+            # Speed and limit/overlap switches are not exposed by the rotctld ERP commands cited in
+            # docs/control-rotores.md: reported as unavailable ("pendiente de fuente").
+            "capabilities": {
+                "read_position": True,
+                "goto": self.config.motion_enabled,
+                "stop": True,
+                "park": self.config.motion_enabled and self.config.park is not None,
+                "tracking": self.config.motion_enabled,
+                "speed": None,
+                "limit_switches": None,
+            },
         }
 
     def _acquire(self, *, wait: bool = False) -> None:
@@ -217,22 +260,29 @@ class RotorController:
         operation = payload.get("operation")
         fields = {
             "move": {"operation", "request_id", "azimuth_deg", "elevation_deg"},
+            "park": {"operation", "request_id"},
             "renew": {"operation", "lease_id"},
             "stop": {"operation"},
         }
+        # Moves may carry the live lease to retarget it (satellite tracking stream).
+        extra = {"move": {"lease_id"}, "park": {"lease_id"}}.get(operation, set())
         if (
             not isinstance(operation, str)
             or operation not in fields
             or (
-                set(payload) != fields[operation]
+                not fields[operation] <= set(payload) <= fields[operation] | extra
                 and not (operation == "stop" and set(payload) == {"operation", "cancel_request_id"})
             )
         ):
             raise ValueError("Unknown operation or unexpected fields.")
         position = None
-        if operation == "move":
+        if operation == "park":
+            position = self.config.park
+            if position is None:
+                raise RotorError("rotor_park_not_configured")
+        elif operation == "move":
             position = self.config.position(payload["azimuth_deg"], payload["elevation_deg"])
-        request_id = payload.get("request_id" if operation == "move" else "cancel_request_id")
+        request_id = payload.get("cancel_request_id" if operation == "stop" else "request_id")
         if ("request_id" in payload or "cancel_request_id" in payload) and (
             not isinstance(request_id, str)
             or not 16 <= len(request_id) <= 64
@@ -240,14 +290,15 @@ class RotorController:
             or not request_id.replace("-", "").replace("_", "").isalnum()
         ):
             raise ValueError("Invalid motion request identifier.")
-        if operation == "move" and request_id is None:
+        if operation in ("move", "park") and request_id is None:
             raise ValueError("Motion requires a unique request identifier.")
-        if operation == "renew" and (
-            not isinstance(payload["lease_id"], str)
-            or len(payload["lease_id"]) > 128
-            or not payload["lease_id"].isascii()
-        ):
-            raise ValueError("Invalid lease identifier.")
+        for key in ("lease_id",):
+            if key in payload and (
+                not isinstance(payload[key], str)
+                or len(payload[key]) > 128
+                or not payload[key].isascii()
+            ):
+                raise ValueError("Invalid lease identifier.")
         self._acquire(wait=operation == "stop")
         try:
             if operation != "stop":
@@ -268,15 +319,18 @@ class RotorController:
                     raise RotorError("rotor_motion_disabled")
                 if self._stop_failed:
                     raise RotorError("rotor_stop_unconfirmed")
-                if self._lease is not None:
+                retarget = self._lease is not None
+                if retarget and not secrets.compare_digest(self._lease, payload.get("lease_id", "")):
                     raise RotorError("rotor_busy")
                 if request_id in self._blocked_requests:
                     raise RotorError("rotor_request_cancelled_or_repeated")
                 if self._can_read_position():
                     self._position()
                 assert position is not None
-                azimuth, elevation = position
-                self._lease = secrets.token_urlsafe(32)
+                azimuth = position[0] - self.config.azimuth_offset
+                elevation = position[1] - self.config.elevation_offset
+                if not retarget:
+                    self._lease = secrets.token_urlsafe(32)
                 self._blocked_requests.append(request_id)
                 self._lease_until = time.monotonic() + LEASE_SECONDS
                 self._motion_until = time.monotonic() + MAX_MOTION_SECONDS
@@ -290,7 +344,7 @@ class RotorController:
                         LOGGER.error("Rotator move failed and its stop could not be confirmed")
                     raise
             result = self._snapshot()
-            if operation in ("move", "renew"):
+            if operation in ("move", "park", "renew"):
                 result["lease_id"] = self._lease
             if position is not None:
                 result["accepted_target"] = {
@@ -317,6 +371,10 @@ class RotorController:
 
     def _watchdog(self) -> None:
         while not self._shutdown.wait(0.1):
+            # Do not take the lock when no deadline is due, so ordinary operations never see a
+            # spurious "rotor_busy" caused by the watchdog tick itself.
+            if self._lease is None or time.monotonic() < min(self._lease_until, self._motion_until):
+                continue
             with self._lock:
                 try:
                     self._expire()

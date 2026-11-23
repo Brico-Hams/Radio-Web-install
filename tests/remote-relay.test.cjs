@@ -27,21 +27,21 @@ const tempDir = () => fs.mkdtempSync(path.join(os.tmpdir(), "radicodex-relay-"))
 // Minimal rigctld: answers the polled commands; everything else is "not available" (RPRT -11).
 async function fakeRigctld() {
   const sockets = new Set();
-  let pttState = "0";
   const server = net.createServer(socket => {
     sockets.add(socket);
     socket.on("close", () => sockets.delete(socket));
     socket.on("error", () => {});
     let buffer = "";
+    let ptt = "0";
     socket.on("data", chunk => {
       buffer += chunk;
       let index;
       while ((index = buffer.indexOf("\n")) >= 0) {
-        const [command, arg] = buffer.slice(0, index).split(" ");
+        const [command, argument] = buffer.slice(0, index).split(" ");
         buffer = buffer.slice(index + 1);
-        // Track PTT like a real rigctld so the agent's poll does not clear it.
-        if (command === "T") pttState = arg === "1" ? "1" : "0";
-        const replies = { f: "14074000\n", m: "USB\n2400\n", t: `${pttState}\n`, v: "VFOA\n", s: "0\nVFOA\n", T: "RPRT 0\n" };
+        // The rig remembers the PTT it was given, so a poll cannot undo a keyed state.
+        if (command === "T") ptt = argument === "1" ? "1" : "0";
+        const replies = { f: "14074000\n", m: "USB\n2400\n", t: `${ptt}\n`, v: "VFOA\n", s: "0\nVFOA\n", T: "RPRT 0\n" };
         socket.write(replies[command] ?? "RPRT -11\n");
       }
     });

@@ -11,6 +11,7 @@
   <script src="ui-translations.js" defer></script>
   <script src="ui-i18n.js" defer></script>
   <script src="remote-audio-core.js" defer></script>
+  <script src="remote-rotor-ui.js" defer></script>
   <script src="remote-ui.js" defer></script>
 </head>
 <body>
@@ -112,6 +113,33 @@
         <div id="mic-meter" class="level-meter" role="meter" aria-labelledby="mic-meter-label" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div id="mic-meter-fill" class="level-fill"></div></div>
       </div>
       </div>
+    </section>
+
+    <section id="rotor" class="card rotor" aria-labelledby="rotor-title" hidden>
+      <h2 id="rotor-title">Rotor</h2>
+      <p class="hint">Pendiente de validar con hardware real. El rotor solo se mueve con una orden tuya y se para al cerrar o perder la conexion.</p>
+      <p><span id="rotor-label" translate="no">--</span> &middot; <span id="rotor-mode">Solo lectura</span></p>
+      <p>Posicion (azimut / elevacion): <output id="rotor-position">--</output></p>
+      <p>Limites (azimut / elevacion): <output id="rotor-limits">--</output></p>
+      <p>Calibracion (azimut / elevacion): <output id="rotor-offset">--</output></p>
+      <p class="hint">Velocidad y finales de carrera: pendiente de fuente</p>
+      <p id="rotor-stop-warning" class="swr-alert" role="alert" hidden>La parada del rotor no esta confirmada: pulsa Parar.</p>
+      <div class="rotor-row">
+        <label>Azimut objetivo <input id="rotor-az" type="number" step="any" inputmode="decimal"></label>
+        <label>Elevacion objetivo <input id="rotor-el" type="number" step="any" inputmode="decimal"></label>
+      </div>
+      <div class="rotor-row">
+        <button id="rotor-read" type="button">Leer posicion</button>
+        <button id="rotor-go" type="button" disabled>Mover</button>
+        <button id="rotor-park" type="button" disabled>Aparcar</button>
+        <button id="rotor-stop" type="button" class="tune-stop">Parar</button>
+      </div>
+      <h3 class="sub">Seguimiento de satelite</h3>
+      <label class="rotor-file">Archivo de pase del planificador <input id="rotor-file" type="file" accept="application/json,.json"></label>
+      <div class="rotor-row">
+        <button id="rotor-track" type="button" disabled>Seguir el pase</button>
+      </div>
+      <p id="rotor-track-info" class="hint" role="status" aria-live="polite"></p>
     </section>
 
     <div class="tabs" role="tablist" aria-label="Paneles de control">

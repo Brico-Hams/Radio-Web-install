@@ -14,7 +14,7 @@ beforeEach(() => localStorage.removeItem('bricoham.language'))
 
 afterEach(() => setCoordinatorUrl(''))
 
-const state = {
+const state: Record<string, unknown> = {
   api_version: 'v1', source: 'hamlib_rotctld', status: 'experimental',
   data_is_simulated: false, hardware_validation_complete: false,
   label: 'Rotator bench', motion_enabled: true, lease_active: false, stop_failed: false,
@@ -87,6 +87,53 @@ describe('control de rotor compartido', () => {
       headers: { Authorization: 'Bearer operator-token', 'Content-Type': 'application/json' },
     }))
     expect(screen.queryByText(/Sesión renovada mientras/)).toBeNull()
+  })
+
+  it('aparca solo si la estación tiene posición de aparcado y envía una operación park', async () => {
+    const { operations } = controller()
+    state.park = { azimuth_deg: 180, elevation_deg: 0 }
+    try {
+      render(<RotorPanel token="operator-token" />)
+      const user = userEvent.setup()
+      await user.click(screen.getByText('Consultar configuración del rotor'))
+      await user.click(await screen.findByText('Aparcar rotor'))
+      await screen.findByText(/Sesión renovada mientras/)
+      expect(operations[0]).toMatchObject({ operation: 'park' })
+      expect(operations[0]).not.toHaveProperty('azimuth_deg')
+    } finally {
+      delete state.park
+    }
+  })
+
+  it('sigue un pase del planificador reenviando AZ/EL sobre la sesión viva y para al dejar de seguir', async () => {
+    const { operations } = controller()
+    const now = Date.now()
+    const file = new File([JSON.stringify({
+      format: 'radicodex-pass-track', version: 1, name: 'ISS',
+      samples: [{ t: now - 60_000, az: 10, el: 5 }, { t: now + 600_000, az: 100, el: 5 }],
+    })], 'pass.json', { type: 'application/json' })
+    render(<RotorPanel token="operator-token" />)
+    const user = userEvent.setup()
+    await user.click(screen.getByText('Consultar configuración del rotor'))
+    await user.upload(await screen.findByLabelText(/Archivo de pase del planificador/), file)
+    await user.click(await screen.findByText('Seguir el pase'))
+    await screen.findByText(/Sesión renovada mientras/)
+    expect(operations[0]).toMatchObject({ operation: 'move', elevation_deg: 0 })
+    expect(operations[0].azimuth_deg as number).toBeGreaterThanOrEqual(10)
+    expect(operations[0].azimuth_deg as number).toBeLessThan(100)
+    await user.click(screen.getByText('Dejar de seguir'))
+    await waitFor(() => expect(operations.at(-1)?.operation).toBe('stop'))
+  })
+
+  it('rechaza un archivo de pase no válido sin mover el rotor', async () => {
+    const { operations } = controller()
+    render(<RotorPanel token="operator-token" />)
+    const user = userEvent.setup()
+    await user.click(screen.getByText('Consultar configuración del rotor'))
+    await user.upload(await screen.findByLabelText(/Archivo de pase del planificador/),
+      new File(['{}'], 'bad.json', { type: 'application/json' }))
+    expect((await screen.findByRole('alert')).textContent).toContain('Archivo de pase no válido')
+    expect(operations).toEqual([])
   })
 
   it('solicita parada al desmontar el cliente con una sesión activa', async () => {

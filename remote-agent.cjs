@@ -16,6 +16,7 @@ const remoteAudio = require("./remote-audio.cjs");
 const { TuneCheck, swrFromRaw, normalizeMeter, normalizeLevel, parsePowerFrame, tunePowerCheck } = require("./remote-meters.cjs");
 const { createAccessories } = require("./station-accessories.cjs");
 const stationDevicesLib = require("./station-devices.cjs");
+const { createRotor, RotorError } = require("./remote-rotor.cjs");
 
 const isLoopbackHost = value => value === "localhost" || value === "::1" || /^127\./.test(value);
 
@@ -58,6 +59,7 @@ const STATIC_FILES = Object.freeze({
   "/remote.html": ["remote.html", "text/html; charset=utf-8"],
   "/remote-ui.js": ["remote-ui.js", "text/javascript; charset=utf-8"],
   "/remote-audio-core.js": ["remote-audio-core.js", "text/javascript; charset=utf-8"],
+  "/remote-rotor-ui.js": ["remote-rotor-ui.js", "text/javascript; charset=utf-8"],
   "/remote-audio-worklet.js": ["remote-audio-worklet.js", "text/javascript; charset=utf-8"],
   "/remote.css": ["remote.css", "text/css; charset=utf-8"],
   "/bricohams-logo.png": ["bricohams-logo.png", "image/png"],
@@ -295,6 +297,8 @@ function createRemoteAgent(options = {}) {
   const relayConfig = config.relay;
   const audio = options.audioService || remoteAudio.createAudio({ ...options.audio, log });
   const audioSockets = new Set();
+  // Optional rotctld rotor (options.rotor = { port, motionEnabled, park, ... }); no rotor commands are sent at startup.
+  const rotor = options.rotor ? createRotor({ config: options.rotor, now: options.now, connect: options.rotorConnect }) : null;
   const relayState = { connected: false };
   const relayBackoff = { min: options.relayBackoffMinMs ?? 1000, max: options.relayBackoffMaxMs ?? 30_000 };
 
@@ -903,9 +907,10 @@ function createRemoteAgent(options = {}) {
       rig.mode = mode.mode;
       rig.passband = mode.passband;
       const epoch = pttEpoch;
+      const genBefore = meterGen;
       const ptt = await client.getPtt();
-      // A read that was in flight while PTT changed or a stop ran is stale and must not re-key the state.
-      if (ptt !== rig.ptt && !tune && epoch === pttEpoch && stopping === 0) setRigPtt(ptt);
+      // A read that was in flight while PTT changed or a stop ran is stale and must not re-key the state; the next poll sees the settled state.
+      if (ptt !== rig.ptt && !tune && epoch === pttEpoch && genBefore === meterGen && stopping === 0) setRigPtt(ptt);
       rig.smeter = rig.ptt ? null : await client.getStrength();
       if (pollCount % 4 === 1) {
         try {
@@ -1148,11 +1153,26 @@ function createRemoteAgent(options = {}) {
       send(response, 200, { callsign: config.callsign, radioScope, audio: { rx: Boolean(audio.rx), tx: Boolean(audio.tx) } });
       return;
     }
+    if (route === "GET /api/rotor" || route === "POST /api/rotor") {
+      if (!rotor) { send(response, 503, { error: "rotor_not_configured" }); return; }
+      try {
+        if (request.method === "GET") {
+          send(response, 200, await rotor.snapshot({ readPositionNow: url.searchParams.get("command") === "position", clientId }));
+          return;
+        }
+        const body = await readJson(request);
+        send(response, 200, await rotor.operate(body, clientId));
+      } catch (error) {
+        if (error instanceof RotorError) send(response, error.status, { error: error.code });
+        else send(response, error.status || 500, { error: error.message || "Error interno." });
+      }
+      return;
+    }
     if (route === "GET /api/events") {
       response.writeHead(200, { "Content-Type": "text/event-stream; charset=utf-8", Connection: "keep-alive", "X-Accel-Buffering": "no" });
       const entry = { response, clientId, last: "" };
       sseClients.add(entry);
-      response.on("close", () => sseClients.delete(entry));
+      response.on("close", () => { sseClients.delete(entry); rotor?.release(clientId); });
       response.write("retry: 1000\n\n");
       pushState(entry, true);
       return;
@@ -1515,7 +1535,7 @@ function createRemoteAgent(options = {}) {
     client.stop();
     for (const ws of audioSockets) { ws.fail(1001, "shutdown"); ws.socket.destroy(); }
     audio.close?.();
-    for (const request of relayRequests) request.destroy();
+    await rotor?.close();
     relayRequests.clear();
     for (const entry of sseClients) entry.response.end();
     sseClients.clear();
@@ -1552,15 +1572,17 @@ function parseArgs(argv, env = process.env) {
   const flags = {
     "--listen": "listen", "--port": "port", "--rigctld-host": "rigctldHost", "--rigctld-port": "rigctldPort",
     "--config-dir": "configDir", "--relay": "relayUrl", "--station": "relayStation",
-    "--station-secret": "relaySecret", "--audio-input": "audioInput", "--audio-output": "audioOutput"
+    "--station-secret": "relaySecret", "--audio-input": "audioInput", "--audio-output": "audioOutput",
+    "--rotor-port": "rotorPort", "--rotor-park": "rotorPark", "--rotor-offset": "rotorOffset"
   };
   for (let i = 0; i < argv.length; i += 1) {
     if (argv[i] === "--tls" || argv[i] === "--no-tls") { args.tls = argv[i] === "--tls"; continue; }
+    if (argv[i] === "--rotor-motion") { args.rotorMotion = true; continue; }
     const name = flags[argv[i]];
     if (!name || i + 1 >= argv.length) throw new Error(`Argumento no valido: ${argv[i]}`);
     args[name] = argv[i += 1];
   }
-  for (const key of ["port", "rigctldPort"]) {
+  for (const key of ["port", "rigctldPort", "rotorPort"]) {
     if (args[key] === undefined) continue;
     const value = Number(args[key]);
     if (!Number.isInteger(value) || value < 0 || value > 65535) throw new Error(`Puerto no valido: ${args[key]}`);
@@ -1574,6 +1596,19 @@ function lanAddresses() {
     .filter(item => item && item.family === "IPv4" && !item.internal).map(item => item.address);
 }
 
+function rotorFromArgs(args) {
+  if (args.rotorPort === undefined) return undefined;
+  const pair = (text, name) => {
+    const parts = String(text).split(",").map(Number);
+    if (parts.length !== 2 || !parts.every(Number.isFinite)) throw new Error(`${name} requiere "azimut,elevacion".`);
+    return parts;
+  };
+  const rotor = { port: args.rotorPort, label: "Rotor", motionEnabled: args.rotorMotion === true };
+  if (args.rotorPark) { const [azimuth, elevation] = pair(args.rotorPark, "--rotor-park"); rotor.park = { azimuth, elevation }; }
+  if (args.rotorOffset) [rotor.azimuthOffset, rotor.elevationOffset] = pair(args.rotorOffset, "--rotor-offset");
+  return rotor;
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   const relay = {};
@@ -1582,6 +1617,7 @@ async function main() {
   if (args.relaySecret) relay.secret = args.relaySecret;
   const agent = createRemoteAgent({
     host: args.listen, port: args.port, rigctldHost: args.rigctldHost, rigctldPort: args.rigctldPort,
+    rotor: rotorFromArgs(args),
     configDir: args.configDir, tls: args.tls, relay: Object.keys(relay).length ? relay : undefined,
     audio: { input: args.audioInput || "", output: args.audioOutput || "" },
     log: message => console.log(`[remote] ${message}`)
