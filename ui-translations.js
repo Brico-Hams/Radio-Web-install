@@ -2447,6 +2447,14 @@ Audio (Hz)|Audio (Hz)|Audio (Hz)|Audio (Hz)
 Mensaje|Message|Message|Nachricht
 Estado no valido.|Invalid state.|État non valide.|Ungültiger Zustand.
 Audio de recepcion no disponible.|Receive audio not available.|Audio de réception indisponible.|Empfangston nicht verfügbar.
+Menú|Menu|Menu|Menü
+Activar audio|Turn on audio|Activer l’audio|Audio einschalten
+Frecuencia y estado de la radio|Radio frequency and state|Fréquence et état de la radio|Frequenz und Zustand des Funkgeräts
+Motivo: el CW remoto esta desactivado en el agente.|Reason: remote CW is disabled at the agent.|Motif : le CW distant est désactivé sur l’agent.|Grund: Remote-CW ist am Agenten deaktiviert.
+Motivo: ya se esta enviando CW. Usa Parar CW.|Reason: CW is already being sent. Use Stop CW.|Motif : du CW est déjà en cours d’envoi. Utilisez Arrêter CW.|Grund: CW wird bereits gesendet. CW stoppen verwenden.
+Motivo: el panel esta bloqueado.|Reason: the panel is locked.|Motif : le panneau est verrouillé.|Grund: das Bedienfeld ist gesperrt.
+Motivo: la radio esta transmitiendo o sintonizando.|Reason: the radio is transmitting or tuning.|Motif : la radio émet ou règle l’accord.|Grund: das Funkgerät sendet oder stimmt ab.
+Motivo: sin conexion con la radio o con el control de otro operador.|Reason: no connection to the radio, or another operator has control.|Motif : pas de connexion à la radio, ou un autre opérateur a le contrôle.|Grund: keine Verbindung zum Funkgerät oder ein anderer Operator hat die Kontrolle.
 `.trim().split("\n").map(line => line.split("|")));
   root.BricohamsUITranslations = entries;
   if (typeof module === "object" && module.exports) module.exports = entries;

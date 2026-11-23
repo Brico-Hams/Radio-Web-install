@@ -539,6 +539,55 @@
     setText($("cw-status"), !state?.cw?.enabled ? "CW remoto: desactivado en el agente" : state.cw.active ? "CW remoto: transmitiendo" : "CW remoto: listo");
     $("cw-send").disabled = !cwReady || Boolean(state.cw.active);
     for (const button of document.querySelectorAll("#cw-memories button")) button.disabled = !cwReady || Boolean(state.cw.active);
+    // Presentation only: say why the send actions are off, and keep the stop button calm until CW is being sent.
+    const cwActive = Boolean(state?.cw?.enabled && state.cw.active);
+    const cwReason = !state?.cw?.enabled ? "Motivo: el CW remoto esta desactivado en el agente."
+      : cwActive ? "Motivo: ya se esta enviando CW. Usa Parar CW."
+        : view.locked ? "Motivo: el panel esta bloqueado."
+          : state.ptt || state.tune ? "Motivo: la radio esta transmitiendo o sintonizando."
+            : !free ? "Motivo: sin conexion con la radio o con el control de otro operador." : "";
+    setText($("cw-reason"), cwReason);
+    $("cw-reason").hidden = !cwReason;
+    setAttr($("cw-stop"), "data-idle", String(!cwActive));
+  }
+
+  // Compact sticky summary: same state as the rig card, shown only while that card is out of view.
+  function renderSummary(state) {
+    const tx = Boolean(state.ptt);
+    setText($("sum-trx"), tx ? "TX" : "RX");
+    $("sticky-summary").classList.toggle("tx", tx);
+    setText($("sum-freq"), Number.isSafeInteger(state.freq) ? formatHz(state.freq) : "--");
+    setText($("sum-mode"), state.mode ? modeLabel(state.mode) : "--");
+    setText($("sum-smeter"), smeterText(state.smeter));
+  }
+
+  function updateSummaryVisibility() {
+    const rig = $("rig");
+    const bar = document.querySelector(".topbar");
+    $("sticky-summary").hidden = !(rig.getBoundingClientRect().bottom <= bar.offsetHeight);
+  }
+
+  function bindSummary() {
+    let frame = 0;
+    const schedule = () => {
+      if (frame) return;
+      frame = requestAnimationFrame(() => { frame = 0; updateSummaryVisibility(); });
+    };
+    window.addEventListener("scroll", schedule, { passive: true });
+    window.addEventListener("resize", schedule, { passive: true });
+    updateSummaryVisibility();
+  }
+
+  function bindTopbarMenu() {
+    const bar = document.querySelector(".topbar");
+    const button = $("topbar-menu");
+    const setOpen = open => {
+      bar.dataset.menu = open ? "open" : "closed";
+      button.setAttribute("aria-expanded", String(open));
+    };
+    button.addEventListener("click", () => setOpen(button.getAttribute("aria-expanded") !== "true"));
+    document.addEventListener("keydown", event => { if (event.key === "Escape") setOpen(false); });
+    document.addEventListener("click", event => { if (!bar.contains(event.target)) setOpen(false); });
   }
 
   function renderRelay(relay) {
@@ -599,6 +648,7 @@
     meter.setAttribute("aria-valuenow", String(hasSignal ? Math.max(0, Math.min(114, Math.round(state.smeter + 54))) : 0));
     meter.setAttribute("aria-valuetext", smeterText(state.smeter));
     setText($("smeter-text"), smeterText(state.smeter));
+    renderSummary(state);
     renderTxMeters(state);
 
     const agc = state.levels?.agc;
@@ -756,6 +806,9 @@
     const show = audio.on && Boolean(audio.hello?.rx);
     $("scope").hidden = !show;
     $("spectrum-note").hidden = show;
+    // Without audio the card collapses to one short row with its action.
+    $("spectrum").classList.toggle("collapsed", !show);
+    $("spectrum-audio").hidden = audio.on;
     if (show) startScope(); else stopScope();
   }
 
@@ -1053,6 +1106,7 @@
       try { localStorage.setItem(MIC_GAIN_KEY, String(value)); } catch { /* storage may be denied */ }
     });
     $("audio").addEventListener("click", () => { if (audio.on) stopAudio(); else startAudio(); });
+    $("spectrum-audio").addEventListener("click", () => { if (!audio.on) startAudio(); });
     $("audio-volume").addEventListener("input", event => {
       setText($("out-audio-volume"), `${event.target.value} %`);
       if (audio.gain) audio.gain.gain.value = Number(event.target.value) / 100;
@@ -1285,28 +1339,37 @@
     if (view.state) { updatePttUi(); refreshControls(); }
   }
 
-  function selectTab(name, focus) {
+  function selectTab(name, focus, reveal) {
     for (const tab of TABS) {
       const selected = tab === name;
       const button = $(`tab-${tab}`);
       button.setAttribute("aria-selected", String(selected));
       button.tabIndex = selected ? 0 : -1;
       $(`panel-${tab}`).dataset.active = String(selected);
-      if (selected && focus) button.focus();
+      if (selected && focus) button.focus({ preventScroll: Boolean(reveal) });
       // Keep the active tab inside the scrolling tab row without moving the page.
       if (selected && button.scrollIntoView) button.scrollIntoView({ block: "nearest", inline: "nearest" });
     }
+    if (reveal) revealTabs();
+  }
+
+  // Bring the tab row and its panel just under the sticky bars (scroll-margin-top in CSS); only on user action.
+  function revealTabs() {
+    const tabs = document.querySelector(".tabs");
+    if (!tabs || !tabs.scrollIntoView || getComputedStyle(tabs).display === "none") return;
+    const calm = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    tabs.scrollIntoView({ block: "start", inline: "nearest", behavior: calm ? "auto" : "smooth" });
   }
 
   function bindTabs() {
     for (const tab of TABS) {
       const button = $(`tab-${tab}`);
-      button.addEventListener("click", () => selectTab(tab, false));
+      button.addEventListener("click", () => selectTab(tab, false, true));
       button.addEventListener("keydown", event => {
         const move = { ArrowRight: 1, ArrowLeft: -1 }[event.key];
-        if (event.key === "Home") selectTab(TABS[0], true);
-        else if (event.key === "End") selectTab(TABS[TABS.length - 1], true);
-        else if (move) selectTab(TABS[(TABS.indexOf(tab) + move + TABS.length) % TABS.length], true);
+        if (event.key === "Home") selectTab(TABS[0], true, true);
+        else if (event.key === "End") selectTab(TABS[TABS.length - 1], true, true);
+        else if (move) selectTab(TABS[(TABS.indexOf(tab) + move + TABS.length) % TABS.length], true, true);
         else return;
         event.preventDefault();
       });
@@ -1542,6 +1605,8 @@
     showFrequency(null);
     renderLog();
     bindTabs();
+    bindSummary();
+    bindTopbarMenu();
     if (!token) {
       notify("Falta el token. Abre la direccion completa que muestra el agente (con #token=...).");
       return;
@@ -1572,7 +1637,10 @@
     setLocked(read(sessionStorage, LOCK_KEY) === "1");
     try {
       const config = await api("api/config");
-      if (config.callsign) setText($("callsign"), config.callsign);
+      if (config.callsign) {
+        setText($("callsign"), config.callsign);
+        $("callsign").hidden = false;
+      }
       await bindCw(config.callsign || "");
       showSpectrumPlaceholder(config.radioScope);
     } catch (error) {
