@@ -194,6 +194,8 @@ test("PTT stays the largest control, solid red and labelled while transmitting; 
 
 test("narrow dock wraps instead of squeezing the PTT button and keeps the tune-live offset in sync", () => {
   assert.match(css, /@media\(max-width:400px\)\{[^@]*\.ptt\{order:-1;flex:1 1 100%\}/);
+  // The reserved offset must cover the real dock height: border 2 + padding 6+6 + PTT 64 + gap 8 + secondary row 48.
   const offset = /@media\(max-width:400px\)\{[^@]*--dock-h:(\d+)px/.exec(css);
-  assert.ok(offset && Number(offset[1]) >= 8 + 72 + 8 + 48 + 8);
+  assert.ok(offset && Number(offset[1]) >= 2 + 6 + 64 + 8 + 48 + 6);
+  assert.ok(Number(offset[1]) <= 136);
 });

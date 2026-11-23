@@ -26,14 +26,25 @@
     <h1 class="sr-only">Remote shack</h1>
     <div class="brand">
       <img class="logo" src="bricohams-logo.png" alt="BricoHams">
-      <span id="callsign" class="callsign" translate="no">--</span>
+      <span id="callsign" class="callsign" translate="no" hidden></span>
     </div>
-    <div class="topbar-right">
-      <span id="relay" class="pill" role="status" aria-live="off">Rel&eacute;: no configurado</span>
-      <span id="latency" class="pill lat" role="status" aria-live="off">Latencia: --</span>
+    <div class="conn-chip">
       <span id="status" class="pill" role="status" aria-live="polite">Sin conexion</span>
+      <span id="latency" class="pill lat" role="status" aria-live="off">Latencia: --</span>
+    </div>
+    <button id="topbar-menu" type="button" class="topbar-menu" aria-expanded="false" aria-controls="topbar-panel">Men&uacute;</button>
+    <div id="topbar-panel" class="topbar-right">
+      <span id="relay" class="pill" role="status" aria-live="off">Rel&eacute;: no configurado</span>
     </div>
   </header>
+  <div class="sticky-summary-wrap">
+    <div id="sticky-summary" class="sticky-summary" role="group" aria-label="Frecuencia y estado de la radio" hidden>
+      <span id="sum-trx" class="sum-trx">RX</span>
+      <span id="sum-freq" class="sum-freq" translate="no">--</span>
+      <span id="sum-mode" class="sum-mode" translate="no">--</span>
+      <span id="sum-smeter" class="sum-smeter" translate="no">--</span>
+    </div>
+  </div>
 
   <main class="console">
     <p id="notice" class="notice" role="alert" hidden></p>
@@ -95,9 +106,14 @@
       <p class="hint">Al soltar, perder la conexion o cambiar de pestana se corta la transmision.</p>
     </section>
 
-    <section id="spectrum" class="card spectrum" aria-labelledby="spectrum-title">
-      <h2 id="spectrum-title">Espectro de la radio</h2>
-      <p id="spectrum-note" class="hint empty">Este modelo no ofrece espectro</p>
+    <section id="spectrum" class="card spectrum collapsed" aria-labelledby="spectrum-title">
+      <div class="spectrum-head">
+        <div class="spectrum-text">
+          <h2 id="spectrum-title">Espectro de la radio</h2>
+          <p id="spectrum-note" class="hint empty">Este modelo no ofrece espectro</p>
+        </div>
+        <button id="spectrum-audio" type="button" class="primary spectrum-audio">Activar audio</button>
+      </div>
       <div id="scope" class="scope" hidden>
         <canvas id="scope-line" class="scope-line" width="640" height="90" role="img" aria-label="Espectro de audio de la banda de paso"></canvas>
         <canvas id="scope-fall" class="scope-fall" width="640" height="160" role="img" aria-label="Cascada de audio de la banda de paso; pulsa para sintonizar en BLU"></canvas>
@@ -247,8 +263,9 @@
       <input id="cw-wpm" type="number" min="5" max="60" step="1" value="20">
       <div class="cw-actions">
         <button id="cw-send" type="button" class="primary">Enviar CW</button>
-        <button id="cw-stop" type="button" class="danger">Parar CW</button>
+        <button id="cw-stop" type="button" class="danger" data-idle="true">Parar CW</button>
       </div>
+      <p id="cw-reason" class="action-reason" role="status" aria-live="polite" hidden></p>
       <h3 class="sub">Memorias F1-F8</h3>
       <label class="slider" for="cw-call">Indicativo del corresponsal</label>
       <input id="cw-call" type="text" maxlength="16" autocomplete="off" spellcheck="false">
@@ -373,7 +390,7 @@
       <p id="settings-summary" class="hint" role="status" aria-live="polite"></p>
       <div class="settings-tools">
         <button id="settings-load" type="button" class="primary">Leer ajustes</button>
-        <label class="step-field">Buscar ajuste
+        <label class="settings-search">Buscar ajuste
           <input id="settings-filter" type="search" autocomplete="off" disabled>
         </label>
       </div>
