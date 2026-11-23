@@ -125,22 +125,25 @@
     },
     "xiegu-civ": {
       "adapter": "none",
-      "features": ["pendiente", "pendiente", "pendiente", "pendiente", "pendiente", "pendiente", "ok", "pendiente", "ok", "ok", "pendiente", "pendiente"],
+      "features": ["partial", "partial", "pendiente", "partial", "pendiente", "pendiente", "ok", "pendiente", "ok", "ok", "pendiente", "pendiente"],
       "sources": {
+        "freqMode": ["remote-native-cat.cjs", "tests/remote-native-cat.test.cjs", "data/remote-station-catalog.json"],
+        "vfoSplit": ["remote-native-cat.cjs", "tests/remote-native-cat.test.cjs"],
+        "smeter": ["remote-native-cat.cjs", "tests/remote-native-cat.test.cjs"],
         "audioRx": ["remote-audio.cjs"],
         "waterfall": ["remote-audio-core.js", "remote-ui.js"],
         "rotor": ["remote-station.cjs", "remote-station/docs/control-rotores.md"]
       },
       "reasons": {
-        "freqMode": "pendiente de fuente: la referencia Xiegu v1.0 da 03/04 pero no direccion CI-V, framing ni baudios (xiegu-candidates.md).",
-        "vfoSplit": "pendiente de fuente: sin comandos citados para este modelo.",
-        "ptt": "pendiente de fuente: 1C no funciona en G90 hasta 1.79b03 y no hay direccion verificada.",
-        "smeter": "pendiente de fuente: sin layout verificado (Hamlib#2257 avisa de lecturas no BCD).",
-        "txMeters": "pendiente de fuente: SWR sin calibracion verificada (Hamlib#2256, #2257).",
-        "tune": "pendiente de fuente: sin comando citado.",
-        "audioTx": "Requiere PTT, pendiente de fuente.",
-        "accessories": "pendiente de fuente: sin comando citado.",
-        "settings": "pendiente de fuente: sin layout verificado (Hamlib#2245)."
+        "freqMode": "Adaptador nativo CI-V con direccion y baudios de Hamlib xiegu.c (G90 0x88, X6100 0xA4, X5105 0x70); sin cablear al shack ni prueba fisica. Modo sin byte de filtro.",
+        "vfoSplit": "VFO A/B (07) y split (0F) de Hamlib xiegu.c; el X6100 rechazo 0F 01, por eso no ofrece split. Sin cablear al shack ni prueba fisica.",
+        "ptt": "pendiente de fuente de hardware: 1C 00 esta en Hamlib xiegu.c (adaptador nativo con allowTx), pero no funciona en G90 hasta 1.79b03 y no esta cableado al shack.",
+        "smeter": "Adaptador nativo 15 02 con la calibracion de Hamlib xiegu.c (X108G/X6100); lecturas no BCD descartadas (Hamlib#2257). Sin cablear al shack ni prueba fisica.",
+        "txMeters": "pendiente de fuente de hardware: SWR 15 12 solo en el adaptador nativo con la tabla Icom por defecto de Hamlib (sin calibracion Xiegu propia; Hamlib#2256, #2257), sin cablear al shack.",
+        "tune": "pendiente de fuente de hardware: ATU 1C 01 solo en G90 segun Hamlib xiegu.c; X6100 y X5105 sin comando citado. Sin cablear al shack ni limite de tiempo del agente.",
+        "audioTx": "Requiere PTT, pendiente de fuente de hardware.",
+        "accessories": "pendiente de fuente: sin control de amplificador; el ATU del G90 depende de tune.",
+        "settings": "pendiente de fuente: Hamlib declara niveles (PREAMP, ATT, AGC...) pero sin layout verificado en hardware (Hamlib#2245)."
       }
     },
     "thd75": {
@@ -264,7 +267,7 @@
     {"id": "xiegu-x6100", "family": "xiegu-civ"},
     {"id": "xiegu-x6200", "family": "hamlib-beta"},
     {"id": "xiegu-x5105", "family": "xiegu-civ"},
-    {"id": "xiegu-g106", "family": "xiegu-civ"},
+    {"id": "xiegu-g106", "family": "xiegu-civ", "features": ["pendiente", "pendiente", "pendiente", "pendiente", "pendiente", "pendiente", "ok", "pendiente", "ok", "ok", "pendiente", "pendiente"], "reasons": {"freqMode": "pendiente de fuente: Hamlib xiegu.c solo nombra el ID 0106 (G106/G106C); no hay modelo Hamlib, direccion CI-V ni baudios.", "vfoSplit": "pendiente de fuente: sin direccion CI-V ni comandos citados para este modelo.", "ptt": "pendiente de fuente: sin direccion CI-V citada para este modelo.", "smeter": "pendiente de fuente: sin direccion CI-V ni layout citados para este modelo.", "txMeters": "pendiente de fuente: sin direccion CI-V ni calibracion citadas para este modelo.", "tune": "pendiente de fuente: sin comando citado para este modelo.", "audioTx": "Requiere PTT, pendiente de fuente.", "accessories": "pendiente de fuente: sin comando citado.", "settings": "pendiente de fuente: sin layout citado para este modelo."}},
     {"id": "quansheng-uv-k5", "family": "quansheng-cat", "androidProfile": "UVK5"},
     {"id": "android-opengd77", "family": "android-local", "androidProfile": "OPENGD77"},
     {"id": "android-rt950", "family": "android-local", "androidProfile": "RT950"},

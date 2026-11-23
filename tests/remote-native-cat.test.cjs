@@ -174,3 +174,100 @@ test("los protocolos nativos del catalogo tienen adaptador salvo Xiegu (pendient
     else assert.ok(cat.createNativeRig(radio.nativeProtocol, {}), radio.id);
   }
 });
+
+// Xiegu CI-V: frames from Hamlib tests/testg90swr.c (query fe fe 88 e0 15 12 fd, replies fe fe e0 88 15 12 hi lo fd) and rigs/icom/xiegu.c.
+const civReply = (from, ...body) => [0xfe, 0xfe, 0xe0, from, ...body, 0xfd];
+
+test("Xiegu: direccion, baudios y modelo Hamlib del catalogo salen de xiegu.c", () => {
+  const { loadCatalog } = require("../remote-catalog.cjs");
+  const radios = new Map(loadCatalog().radios.map(radio => [radio.id, radio]));
+  for (const [id, model] of Object.entries(cat.XIEGU_MODELS)) {
+    const radio = radios.get(id);
+    assert.equal(radio.civAddress, `0x${model.address.toString(16).toUpperCase()}`, id);
+    assert.match(radio.hamlibNote, new RegExp(`= ${model.hamlibModel} `), id);
+    if (model.baudMin === model.baudMax) assert.equal(radio.serial.baud, model.baudMax, id);
+    else assert.equal(radio.serial.baud, 0, id);
+  }
+  assert.equal(radios.get("xiegu-g106").civAddress, undefined);
+  assert.throws(() => cat.createNativeRig("xiegu-civ", {}, { radio: "xiegu-g106" }), /pendiente de fuente/);
+});
+
+test("Xiegu G90: frecuencia 7.074 MHz en BCD de 5 bytes, orden 1 Hz primero", async () => {
+  assert.deepEqual([...cat.civEncodeFreq(7_074_000)], [0x00, 0x40, 0x07, 0x07, 0x00]);
+  assert.equal(cat.civDecodeFreq(Buffer.from([0x00, 0x40, 0x07, 0x07, 0x00])), 7_074_000);
+  assert.throws(() => cat.civDecodeFreq(Buffer.from([0x0a, 0, 0, 0, 0])), /BCD/);
+  const transport = byteTransport(frame => (frame[4] === 0x03 ? civReply(0x88, 0x03, 0x00, 0x40, 0x07, 0x07, 0x00) : frame[4] === 0x04 ? civReply(0x88, 0x04, 0x01, 0x01) : civReply(0x88, 0xfb)));
+  const rig = cat.createNativeRig("xiegu-civ", transport, { radio: "xiegu-g90" });
+  assert.equal(await rig.getFreq(), 7_074_000);
+  assert.deepEqual([...transport.writes[0]], [0xfe, 0xfe, 0x88, 0xe0, 0x03, 0xfd]);
+  assert.equal(await rig.getMode(), "USB");
+});
+
+test("Xiegu: el eco USB de la propia trama y las difusiones se saltan", async () => {
+  const transport = byteTransport(frame => [...frame, 0xfe, 0xfe, 0x00, 0x88, 0x00, 0x00, 0x40, 0x07, 0x07, 0x00, 0xfd, ...civReply(0xa4, 0x03, 0x00, 0x00, 0x04, 0x14, 0x00)]);
+  assert.equal(await new cat.XieguCivRig(transport, { radio: "xiegu-x6100" }).getFreq(), 14_040_000);
+  assert.deepEqual([...transport.writes[0]], [0xfe, 0xfe, 0xa4, 0xe0, 0x03, 0xfd]);
+});
+
+test("Xiegu: setFreq confirma releyendo y setMode rechaza modos sin codigo", async () => {
+  let freq = [0, 0, 0, 0, 0];
+  const transport = byteTransport(frame => {
+    if (frame[4] === 0x05) { freq = [...frame.subarray(5, 10)]; return civReply(0x88, 0xfb); }
+    return civReply(0x88, 0x03, ...freq);
+  });
+  const rig = new cat.XieguCivRig(transport, { radio: "xiegu-g90" });
+  await rig.setFreq(14_074_000);
+  assert.deepEqual([...transport.writes[0]], [0xfe, 0xfe, 0x88, 0xe0, 0x05, 0x00, 0x40, 0x07, 0x14, 0x00, 0xfd]);
+  await assert.rejects(rig.setMode("WFM"), { code: "unsupported" });
+  await assert.rejects(new cat.XieguCivRig(byteTransport(() => civReply(0x88, 0xfa)), { radio: "xiegu-g90" }).setVfo("A"), { code: "rejected" });
+});
+
+test("Xiegu G90: SWR 15 12 con las respuestas de testg90swr.c", async () => {
+  const cases = [[[0x00, 0x00], 1.0], [[0x01, 0x84], 4.6], [[0x02, 0x2c], null], [[0x01, 0xa0], null], [[0x0a, 0x00], null]];
+  let index = 0;
+  const transport = byteTransport(() => civReply(0x88, 0x15, 0x12, ...cases[index++][0]));
+  const rig = new cat.XieguCivRig(transport, { radio: "xiegu-g90" });
+  for (const [, expected] of cases) {
+    if (expected === null) await assert.rejects(rig.getSwr(), /meter/);
+    else assert.ok(Math.abs(await rig.getSwr() - expected) < 0.001);
+  }
+  assert.ok(transport.writes.every(frame => bytesEqualTo(frame, [0xfe, 0xfe, 0x88, 0xe0, 0x15, 0x12, 0xfd])));
+});
+
+function bytesEqualTo(buffer, expected) { return cat.bytesEqual([...buffer], expected); }
+
+test("Xiegu: S-metro 15 02 con la calibracion X108G y la del X6100", async () => {
+  const g90 = new cat.XieguCivRig(byteTransport(() => civReply(0x88, 0x15, 0x02, 0x01, 0x20)), { radio: "xiegu-g90" });
+  assert.equal(await g90.getStrengthRaw(), 120);
+  assert.equal(await g90.getStrength(), -6);
+  const x6100 = new cat.XieguCivRig(byteTransport(() => civReply(0xa4, 0x15, 0x02, 0x01, 0x20)), { radio: "xiegu-x6100" });
+  assert.equal(await x6100.getStrength(), 0);
+});
+
+test("Xiegu: PTT no se sube sin allowTx, acepta FB o el eco 1C y la bajada siempre se envia", async () => {
+  const transport = byteTransport(frame => (frame[5] === 0x00 && frame[6] === 0x01 ? civReply(0x88, 0x1c, 0x00, 0x01) : civReply(0x88, 0xfb)));
+  const locked = new cat.XieguCivRig(transport, { radio: "xiegu-g90" });
+  await assert.rejects(locked.setPtt(true), { code: "tx-disabled" });
+  assert.equal(transport.writes.length, 0);
+  await locked.setPtt(false);
+  assert.deepEqual([...transport.writes[0]], [0xfe, 0xfe, 0x88, 0xe0, 0x1c, 0x00, 0x00, 0xfd]);
+  const keyed = new cat.XieguCivRig(transport, { radio: "xiegu-g90", allowTx: true });
+  await keyed.setPtt(true);
+  assert.deepEqual([...transport.writes[1]], [0xfe, 0xfe, 0x88, 0xe0, 0x1c, 0x00, 0x01, 0xfd]);
+});
+
+test("Xiegu: una subida rechazada intenta la bajada y el tune solo existe en G90 con allowTx", async () => {
+  const transport = byteTransport(() => civReply(0x88, 0xfa));
+  const rig = new cat.XieguCivRig(transport, { radio: "xiegu-g90", allowTx: true });
+  await assert.rejects(rig.setPtt(true), { code: "rejected" });
+  assert.deepEqual(transport.writes.map(frame => frame[6]), [1, 0]);
+  const tuneTransport = byteTransport(() => civReply(0x88, 0xfb));
+  const tuner = new cat.XieguCivRig(tuneTransport, { radio: "xiegu-g90" });
+  await assert.rejects(tuner.setTuner(true), { code: "tx-disabled" });
+  await tuner.setTuner(false);
+  assert.deepEqual([...tuneTransport.writes[0]], [0xfe, 0xfe, 0x88, 0xe0, 0x1c, 0x01, 0x00, 0xfd]);
+  await new cat.XieguCivRig(tuneTransport, { radio: "xiegu-g90", allowTx: true }).setTuner(true);
+  assert.equal(tuneTransport.writes[1][6], 0x02);
+  await assert.rejects(new cat.XieguCivRig(tuneTransport, { radio: "xiegu-x6100", allowTx: true }).setTuner(true), { code: "unsupported" });
+  await assert.rejects(new cat.XieguCivRig(tuneTransport, { radio: "xiegu-x6100" }).setSplit(true), { code: "unsupported" });
+});

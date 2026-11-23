@@ -388,10 +388,10 @@ La matriz `data/remote-feature-parity.json` lista cada radio del catalogo remoto
 | QRP Labs QCX / QDX | usb | ✔ | ◐ | ✔ | ✔ | ◐ | ◐ | ✔ | ✔ | ✔ | ✔ | ◐ | ◐ |
 | DL2MAN (tr)uSDX | usb | ✔ | ◐ | ✔ | ✔ | ◐ | ◐ | ✔ | ✔ | ✔ | ✔ | ◐ | ◐ |
 | Hermes Lite 2 Hermes Lite 2 | lan | ◐ | ◐ | ◐ | ✔ | ◐ | ◐ | ✔ | ✔ | ✔ | ✔ | ◐ | ◐ |
-| Xiegu G90 / G90S | usb | ✖ | ✖ | ✖ | ✖ | ✖ | ✖ | ✔ | ✖ | ✔ | ✔ | ✖ | ✖ |
-| Xiegu X6100 | usb | ✖ | ✖ | ✖ | ✖ | ✖ | ✖ | ✔ | ✖ | ✔ | ✔ | ✖ | ✖ |
+| Xiegu G90 / G90S | usb | ◐ | ◐ | ✖ | ◐ | ✖ | ✖ | ✔ | ✖ | ✔ | ✔ | ✖ | ✖ |
+| Xiegu X6100 | usb | ◐ | ◐ | ✖ | ◐ | ✖ | ✖ | ✔ | ✖ | ✔ | ✔ | ✖ | ✖ |
 | Xiegu X6200 | usb | ◐ | ◐ | ◐ | ✔ | ◐ | ◐ | ✔ | ✔ | ✔ | ✔ | ◐ | ◐ |
-| Xiegu X5105 | usb | ✖ | ✖ | ✖ | ✖ | ✖ | ✖ | ✔ | ✖ | ✔ | ✔ | ✖ | ✖ |
+| Xiegu X5105 | usb | ◐ | ◐ | ✖ | ◐ | ✖ | ✖ | ✔ | ✖ | ✔ | ✔ | ✖ | ✖ |
 | Xiegu G106 / G106C | usb | ✖ | ✖ | ✖ | ✖ | ✖ | ✖ | ✔ | ✖ | ✔ | ✔ | ✖ | ✖ |
 | Quansheng UV-K5 / UV-K1 (BricoHams Satellite, F4HWN) | usb | ◐ | ✖ | ◐ | ✖ | ✖ | ✖ | ✔ | ✖ | ✔ | ✔ | ✖ | ✖ |
 | `android-opengd77` | Android | ✖ | ✖ | ✖ | ✖ | ✖ | ✖ | ✖ | ✖ | ✖ | ✔ | ✖ | ✖ |
