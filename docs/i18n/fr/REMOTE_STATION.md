@@ -275,3 +275,18 @@ Wheel réinstallé hors de l'arborescence source et APK dédié recompilé avec 
 et signature debug v2 vérifiés. Le même bundle apparaît dans wheel/APK/Android/iOS
 et SHA256SUMS coïncide avec les quatre paquets. ZIPAPP et l'APK RadiCodex ne changent pas.
 Aucune acceptation physique/mobile ni compilation/signature iOS n'est attribuée.
+
+## Mesures normalisées et contrôle d'accord
+
+`remote-meters.cjs` + `data/remote-meter-model.json` sont le modèle unique de mesures
+(S, PO, ROS, ALC, COMP, ID, VDD) pour le shack Node, la console React (`meterModel.ts`),
+Android (`MeterModel.kt`) et Python (`ftx1_cat.py`). Les échelles FTX-1 sont citées du manuel CAT 2508-C
+(RM/SM) et de bg7nzl-ftx1ctl ; ce sont des estimations non calibrées. PO n'est mis à l'échelle qu'avec la tête de terrain
+(`PC1`) ; avec le SPA-1 (`PC2`) il reste « pendiente de fuente ». La température n'a pas de source.
+
+L'accord (AC interne 20 s, ATAS 45 s) utilise une machine à états : demande de l'opérateur, confirmation par relecture,
+attente plafonnée, ROS final et TX0 vérifié par relecture. Le résultat (succès/échec/délai) s'affiche
+dans la console. Il est refusé si la puissance configurée dépasse 10 W (`TUNE_POWER_MAX_W`) : l'opérateur
+doit la baisser ; elle n'est jamais baissée automatiquement. Le G TUNE d'Hamlib est aussi plafonné.
+Ne transmettez jamais sans charge adaptée ni antenne connectée.
+Les tests de cette extension n'ont pas été exécutés dans cet environnement.

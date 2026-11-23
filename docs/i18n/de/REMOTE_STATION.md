@@ -275,3 +275,18 @@ Wheel außerhalb des Quellbaums neu installiert und dediziertes APK neu kompilie
 und Debug-Signatur v2. Dasselbe Bundle erscheint in Wheel/APK/Android/iOS,
 und SHA256SUMS stimmt mit den vier Paketen überein. ZIPAPP und RadiCodex-APK ändern sich nicht.
 Es wird weder physische/mobile Abnahme noch iOS-Kompilierung/-Signierung zugeschrieben.
+
+## Normalisierte Messwerte und Abstimmprüfung
+
+`remote-meters.cjs` + `data/remote-meter-model.json` sind das einzige Messwertmodell
+(S, PO, SWR, ALC, COMP, ID, VDD) für den Node-Shack, die React-Konsole (`meterModel.ts`),
+Android (`MeterModel.kt`) und Python (`ftx1_cat.py`). FTX-1-Skalen stammen aus dem CAT-Handbuch 2508-C
+(RM/SM) und bg7nzl-ftx1ctl; es sind unkalibrierte Schätzungen. PO wird nur mit dem Feldkopf skaliert
+(`PC1`); mit dem SPA-1 (`PC2`) bleibt es „pendiente de fuente“. Für die Temperatur gibt es keine Quelle.
+
+Die Abstimmung (internes AC 20 s, ATAS 45 s) nutzt einen Zustandsautomaten: Bedienerwunsch, Bestätigung per Rücklesen,
+zeitbegrenztes Warten, End-SWR und per Rücklesen geprüftes TX0. Das Ergebnis (Erfolg/Fehler/Zeitüberschreitung) wird
+in der Konsole angezeigt. Sie wird abgelehnt, wenn die konfigurierte Leistung 10 W überschreitet (`TUNE_POWER_MAX_W`): der Bediener
+muss sie senken; sie wird nie automatisch gesenkt. Auch Hamlib G TUNE ist zeitbegrenzt.
+Niemals ohne angepasste Last oder angeschlossene Antenne senden.
+Die Tests dieser Erweiterung wurden in dieser Umgebung nicht ausgeführt.

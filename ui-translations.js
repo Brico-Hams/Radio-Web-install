@@ -1917,6 +1917,25 @@ Parar|Stop|Arrêter|Stopp
 Parar la sintonía|Stop tuning|Arrêter l’accord|Abstimmung stoppen
 Sintonía iniciada|Tuning started|Accord démarré|Abstimmung gestartet
 Sintonía terminada|Tuning finished|Accord terminé|Abstimmung beendet
+Sintonía terminada (ROE bruta {0}/255)|Tuning finished (raw SWR {0}/255)|Accord terminé (ROS brut {0}/255)|Abstimmung beendet (SWR roh {0}/255)
+Sintonía terminada (ROE {0}:1)|Tuning finished (SWR {0}:1)|Accord terminé (ROS {0}:1)|Abstimmung beendet (SWR {0}:1)
+Sintonía terminada con ROE alta (ROE bruta {0}/255)|Tuning finished with high SWR (raw SWR {0}/255)|Accord terminé avec ROS élevé (ROS brut {0}/255)|Abstimmung mit hohem SWR beendet (SWR roh {0}/255)
+Sintonía terminada con ROE alta (ROE {0}:1)|Tuning finished with high SWR (SWR {0}:1)|Accord terminé avec ROS élevé (ROS {0}:1)|Abstimmung mit hohem SWR beendet (SWR {0}:1)
+Sintonía terminada con ROE alta|Tuning finished with high SWR|Accord terminé avec ROS élevé|Abstimmung mit hohem SWR beendet
+Sintonía cortada a los {0} s (ROE bruta {1}/255): la antena no ha sintonizado|Tuning cut after {0} s (raw SWR {1}/255): the antenna did not tune|Accord coupé après {0} s (ROS brut {1}/255) : l’antenne ne s’est pas accordée|Abstimmung nach {0} s abgebrochen (SWR roh {1}/255): Die Antenne wurde nicht abgestimmt
+Sintonía abortada: {0}|Tuning aborted: {0}|Accord interrompu : {0}|Abstimmung abgebrochen: {0}
+Sintonía terminada pero la radio sigue en TX: se reintenta la parada|Tuning finished but the radio is still in TX: the stop is being retried|Accord terminé mais la radio est encore en émission : l’arrêt est relancé|Abstimmung beendet, aber das Funkgerät sendet noch: Der Stopp wird wiederholt
+La radio no ha confirmado la sintonía (Hamlib no informa del estado del sintonizador)|The radio did not confirm the tuning (Hamlib does not report the tuner state)|La radio n’a pas confirmé l’accord (Hamlib ne signale pas l’état du coupleur)|Das Funkgerät hat die Abstimmung nicht bestätigt (Hamlib meldet den Tunerstatus nicht)
+Baja la potencia a {0} W o menos antes de sintonizar (ahora {1} W). La potencia no se cambia sola.|Lower the power to {0} W or less before tuning (now {1} W). The power is never changed automatically.|Baissez la puissance à {0} W ou moins avant l’accord (actuellement {1} W). La puissance n’est jamais modifiée automatiquement.|Reduziere die Leistung vor dem Abstimmen auf {0} W oder weniger (jetzt {1} W). Die Leistung wird nie automatisch geändert.
+No se puede leer la potencia configurada: no se sintoniza sin conocerla.|The configured power cannot be read: no tuning without knowing it.|La puissance configurée est illisible : pas d’accord sans la connaître.|Die eingestellte Leistung ist nicht lesbar: Ohne sie wird nicht abgestimmt.
+Nunca transmitas sin una carga adaptada o una antena conectada.|Never transmit without a matched load or a connected antenna.|N’émettez jamais sans charge adaptée ni antenne connectée.|Sende niemals ohne angepasste Last oder angeschlossene Antenne.
+Sintonía correcta|Tuning succeeded|Accord réussi|Abstimmung erfolgreich
+Sintonía fallida|Tuning failed|Accord échoué|Abstimmung fehlgeschlagen
+Sintonía cortada por tiempo|Tuning cut at the time limit|Accord coupé à la limite de temps|Abstimmung am Zeitlimit abgebrochen
+ROE {0}:1|SWR {0}:1|ROS {0}:1|SWR {0}:1
+TX apagado verificado|TX off verified|Émission coupée vérifiée|Senden aus bestätigt
+TX sin verificar: la radio puede seguir transmitiendo|TX not verified: the radio may still be transmitting|Émission non vérifiée : la radio peut encore émettre|Senden nicht bestätigt: Das Funkgerät sendet möglicherweise noch
+{0}/255 (pendiente de fuente)|{0}/255 (pending source)|{0}/255 (source en attente)|{0}/255 (Quelle ausstehend)
 Al soltar, perder la conexion o cambiar de pestana se corta la transmision.|Releasing, losing the connection or switching tabs stops the transmission.|Relâcher, perdre la connexion ou changer d’onglet coupe l’émission.|Loslassen, Verbindungsverlust oder Tabwechsel beendet das Senden.
 Sin operador|No operator|Aucun opérateur|Kein Bediener
 Tienes el control|You have control|Vous avez le contrôle|Du hast die Kontrolle

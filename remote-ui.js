@@ -429,14 +429,35 @@
 
   const formatTimer = seconds => `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
 
-  // PO / SWR / ALC while transmitting. Raw-CAT radios report 0-1 fractions (PO labelled with the configured watts);
-  // other radios show Hamlib's values as they come.
-  function txMeterText(key, tx) {
+  // PO / SWR / ALC while transmitting, as normalized by the agent (remote-meters.cjs). Without a normalized
+  // value (older agent) the previous raw rendering is used.
+  function txMeterText(key, tx, meter) {
+    if (meter?.text) return meter.text;
     const value = tx[key];
     if (value === null || value === undefined) return "--";
     if (key === "po") return tx.source === "raw" ? (tx.powerSetW === null ? "--" : `${tx.powerSetW} W`) : `${Math.round(value)} W`;
     if (key === "swr") return tx.source === "raw" ? `${Math.round(value)}/255` : `${value.toFixed(1)}:1`;
     return `${Math.round((tx.fraction?.alc ?? 0) * 100)} %`;
+  }
+
+  const TUNE_LABELS = { success: "Sintonía correcta", fail: "Sintonía fallida", timeout: "Sintonía cortada por tiempo" };
+
+  function renderTuneResult(state) {
+    const result = state.tuneResult;
+    const show = Boolean(result) && !state.tune;
+    $("tune-result").hidden = !show;
+    if (!show) return;
+    setText($("tune-result-label"), TUNE_LABELS[result.outcome] || TUNE_LABELS.fail);
+    const swr = result.swr === null || result.swr === undefined ? "" : (result.swr >= 99 ? "∞" : result.swr.toFixed(1));
+    setText($("tune-result-swr"), swr ? `ROE ${swr}:1` : "");
+    setText($("tune-result-tx"), result.txOff ? "TX apagado verificado" : "TX sin verificar: la radio puede seguir transmitiendo");
+  }
+
+  function renderExtraMeters(state) {
+    const parts = ["comp", "id", "vdd"].filter(key => state.meters?.[key]?.text).map(key => `${key.toUpperCase()} ${state.meters[key].text}`);
+    const line = $("tx-extra");
+    line.hidden = !state.ptt || !parts.length;
+    setText(line, parts.join(" · "));
   }
 
   function renderTxMeters(state) {
@@ -447,7 +468,7 @@
     for (const key of ["po", "swr", "alc"]) {
       const fraction = tx?.fraction?.[key];
       const percent = fraction === null || fraction === undefined ? 0 : Math.round(fraction * 100);
-      const text = tx ? txMeterText(key, tx) : "--";
+      const text = tx ? txMeterText(key, tx, state.meters?.[key]) : "--";
       $(`txm-${key}-fill`).style.width = `${percent}%`;
       setAttr($(`txm-${key}`), "aria-valuenow", String(percent));
       setAttr($(`txm-${key}`), "aria-valuetext", text);
@@ -457,6 +478,8 @@
     $("swr-alert").hidden = !tripped;
     if (tripped && view.last.alert !== "swr") addLog("PTT off: ROE alta");
     view.last.alert = state.txAlert || null;
+    renderTuneResult(state);
+    renderExtraMeters(state);
     if (state.notice && state.notice.id !== view.noticeId) {
       view.noticeId = state.notice.id;
       notify(state.notice.text);

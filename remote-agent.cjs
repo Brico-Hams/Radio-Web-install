@@ -13,7 +13,7 @@ const { catAllowList, TUNER_KINDS } = require("./remote-catalog.cjs");
 const remoteTls = require("./remote-tls.cjs");
 const remoteWs = require("./remote-ws.cjs");
 const remoteAudio = require("./remote-audio.cjs");
-
+const { TuneCheck, swrFromRaw, normalizeMeter, normalizeLevel, parsePowerFrame, tunePowerCheck } = require("./remote-meters.cjs");
 const isLoopbackHost = value => value === "localhost" || value === "::1" || /^127\./.test(value);
 
 const MODES = Object.freeze(["USB", "LSB", "CW", "CWR", "AM", "FM", "WFM", "RTTY", "PKTUSB", "PKTLSB", "PKTFM"]);
@@ -286,12 +286,18 @@ function createRemoteAgent(options = {}) {
   let swrSince = 0;
   let swrTripped = false;
   let tune = null;
+  let tuneResult = null;
+  let hamlibRun = null;
+  let tuneSeq = 0;
+  let powerHead = null;
+  const extraMeters = {};
   let tuneWasActive = false;
   let stopping = 0;
   let emergency = false;
   let retryTimer = null;
   let meterBusy = false;
   let meterGen = 0;
+  let pttEpoch = 0;
   let meterCycle = 0;
   let meterTimer = null;
   let notice = null;
@@ -330,6 +336,8 @@ function createRemoteAgent(options = {}) {
       tx: rig.ptt && tx ? { ...tx, fraction: { ...tx.fraction } } : null,
       txAlert: swrTripped ? "swr" : null,
       tune: tune ? { kind: tunerKind, seconds: Math.max(0, Math.floor((now() - tune.startedAt) / 1000)), maxSeconds: Math.round(tuneMaxMs / 1000) } : null,
+      tuneResult: tuneResult ? { ...tuneResult } : null,
+      meters: metersView(),
       notice: notice && now() - notice.at < NOTICE_MS ? { id: notice.id, text: notice.text } : null,
       operator: !active ? null : owner === clientId ? "me" : "other",
       relay: { configured: Boolean(relayConfig), connected: relayState.connected }
@@ -340,9 +348,22 @@ function createRemoteAgent(options = {}) {
     notice = { id: (notice?.id || 0) + 1, text, at: now() };
   }
 
+  // Normalized meters for the consoles (remote-meters.cjs): TX meters while keyed, the S-meter in RX.
+  function metersView() {
+    const out = {};
+    if (rig.ptt && tx) {
+      for (const key of ["po", "swr", "alc"]) {
+        if (tx[key] === null) continue;
+        out[key] = cat ? normalizeMeter(key, tx[key], { head: powerHead }) : normalizeLevel(key, tx[key]);
+      }
+      for (const [key, value] of Object.entries(extraMeters)) out[key] = normalizeMeter(key, value);
+    } else if (Number.isFinite(rig.smeter)) out.smeter = normalizeLevel("smeter", rig.smeter);
+    return out;
+  }
+
   function setRigPtt(on) {
     // Any PTT edge starts a fresh meter generation so a read left over from the previous transmission cannot block or pollute this one.
-    if (on !== rig.ptt) { meterGen += 1; meterBusy = false; }
+    if (on !== rig.ptt) { pttEpoch += 1; meterGen += 1; meterBusy = false; for (const key of Object.keys(extraMeters)) delete extraMeters[key]; }
     if (on && !rig.ptt) {
       txStart = now();
       tx = { po: null, swr: null, alc: null, powerSetW: null, source: cat ? "raw" : "hamlib", fraction: { po: null, swr: null, alc: null } };
@@ -369,11 +390,10 @@ function createRemoteAgent(options = {}) {
   }
 
   // Last raw SWR read while still transmitting during the tune; falls back to one bounded read when there is none.
-  async function readFinalSwr(run) {
-    if (!cat?.meters?.swr || closing) return "";
-    const text = value => ` (ROE bruta ${Math.round(value)}/255)`;
-    if (Number.isFinite(run?.lastSwr)) return text(run.lastSwr);
-    if (!client.connected) return "";
+  async function readFinalSwrRaw(run, fresh = true) {
+    if (!cat?.meters?.swr) return null;
+    if (Number.isFinite(run?.lastSwr)) return run.lastSwr;
+    if (!fresh || closing || !client.connected) return null;
     const cmd = cat.meters.swr;
     let timer;
     try {
@@ -381,28 +401,111 @@ function createRemoteAgent(options = {}) {
         client.sendRaw(cmd, { read: true, timeoutMs: meterReadMs }).then(reply => parseRawMeter(reply, cmd)),
         new Promise(resolve => { timer = setTimeout(() => resolve(null), 800); })
       ]);
-      return Number.isFinite(value) ? text(value) : "";
-    } catch { return ""; } finally { clearTimeout(timer); }
+      return Number.isFinite(value) ? value : null;
+    } catch { return null; } finally { clearTimeout(timer); }
+  }
+
+  // True when the radio reports RX (TX0 / no PTT), false when still keyed, null when it cannot be read.
+  async function readTxOff() {
+    let timer;
+    try {
+      const read = cat
+        ? client.sendRaw(cat.txState, { read: true, timeoutMs: meterReadMs, abandon: true }).then(reply => {
+          const match = /^TX(\d);?$/.exec(reply || "");
+          return match ? match[1] === "0" : null;
+        })
+        : client.getPtt().then(ptt => (ptt === null ? null : !ptt));
+      return await Promise.race([read, new Promise(resolve => { timer = setTimeout(() => resolve(null), meterReadMs + 500); })]);
+    } catch { return null; } finally { clearTimeout(timer); }
+  }
+
+  // Keeps sending the stop sequence until one gets through (a stop that did not take).
+  function startStopRetry() {
+    if (emergency || closing) return;
+    emergency = true;
+    const retry = () => {
+      if (!emergency || closing) { endEmergency(); return; }
+      if (client.connected) runStop({ tuner: true }).then(ok => { if (ok) endEmergency(); });
+    };
+    retry();
+    retryTimer = setInterval(retry, hangRetryMs);
+    retryTimer.unref?.();
+  }
+
+  const reasonCode = reason => {
+    if (reason === "sin latido") return "heartbeat";
+    if (reason === "limite de TX") return "tx-limit";
+    if (reason.startsWith("tiempo máximo")) return "time-cap";
+    if (reason === "ROE alta") return "swr-trip";
+    if (reason.startsWith("Hi-SWR")) return "hi-swr";
+    if (reason === "cierre del agente") return "closing";
+    return "operator";
+  };
+
+  // Ends a tune exactly once: final SWR, stop sequence, TX-off readback, then the result is kept in tuneResult.
+  // `tune` stays set until the very end so nothing else (poll, watchdog, SWR trip) can re-enter or clear it early.
+  // `outcome` null = the radio left tune by itself; time-cap is reported as "timeout", every other cut as "fail".
+  function endTune(run, outcome, reason, detail = "") {
+    if (run.ending) return run.ending;
+    run.ending = (async () => {
+      const check = run.check;
+      if (outcome) check.cut(outcome, reason);
+      else if (!check.finished()) check.cut("fail", "other");
+      check.tick(Math.max(0, Math.round((now() - run.startedAt) / 1000)));
+      // Any cut stops the transmitter first: only the last SWR already read while keyed is used, never a new read.
+      const settled = !outcome;
+      // Hamlib radios already report the SWR as a ratio; raw-CAT radios report RM6 0-255 (one shared conversion).
+      let swrRaw = null;
+      let ratio = null;
+      if (run.kind === "hamlib") ratio = Number.isFinite(run.lastSwr) ? run.lastSwr : null;
+      else {
+        swrRaw = await readFinalSwrRaw(run, settled);
+        ratio = Number.isFinite(swrRaw) ? Math.min(99, swrFromRaw(swrRaw)) : null;
+      }
+      check.finalSwr(ratio);
+      check.stopping();
+      setRigPtt(false);
+      if (await runStop({ tuner: true })) endEmergency();
+      let off = await readTxOff();
+      for (let attempt = 0; off !== true && attempt < 2 && !closing && client.connected; attempt += 1) {
+        await runStop({ tuner: true });
+        off = await readTxOff();
+      }
+      if (off !== true && !closing) startStopRetry();
+      check.verified(off === true);
+      const result = check.result();
+      const swrText = Number.isFinite(swrRaw) ? ` (ROE bruta ${Math.round(swrRaw)}/255)` : ratio !== null ? ` (ROE ${ratio.toFixed(1)}:1)` : "";
+      let text;
+      if (result.reason === "not-started") text = TUNE_FAILED;
+      else if (result.reason === "unconfirmed") text = "La radio no ha confirmado la sintonía (Hamlib no informa del estado del sintonizador)";
+      else if (result.reason === "tx-stuck") text = "Sintonía terminada pero la radio sigue en TX: se reintenta la parada";
+      else if (result.reason === "swr-high") text = `Sintonía terminada con ROE alta${swrText}`;
+      else if (!outcome) text = TUNE_DONE + swrText;
+      else if (reason === "time-cap" && run.kind === "atas") text = `Sintonía cortada a los ${result.seconds} s${swrText}: la antena no ha sintonizado`;
+      else text = `Sintonía abortada: ${detail || reason}${swrText}`;
+      log(outcome || result.outcome !== "success" ? `Sintonía abortada: ${detail || reason || result.reason}` : TUNE_DONE + swrText);
+      tuneSeq += 1;
+      tuneResult = { id: tuneSeq, ...result, swrRaw: Number.isFinite(swrRaw) ? Math.round(swrRaw) : null, at: now() };
+      setNotice(text);
+      if (tune === run) tune = null;
+      if (hamlibRun === run) hamlibRun = null;
+    })();
+    return run.ending;
   }
 
   async function pttOff(reason) {
     log(`PTT off: ${reason}`);
-    const tuning = tune !== null;
-    let swrText = "";
-    if (tuning) {
-      const run = tune;
-      tune = null;
-      if (tunerKind === "atas") swrText = await readFinalSwr(run);
-      log(`Sintonía abortada: ${reason}`);
-      if (tunerKind === "atas" && reason.startsWith("tiempo máximo")) {
-        setNotice(`Sintonía cortada a los ${Math.round((now() - run.startedAt) / 1000)} s${swrText}: la antena no ha sintonizado`);
-      } else {
-        setNotice(`Sintonía abortada: ${reason}${swrText}`);
-      }
+    const run = tune || hamlibRun;
+    if (run) {
+      const code = reasonCode(reason);
+      // A cut at the time cap is a timeout (not a failure); every other cut is a failure.
+      await endTune(run, code === "time-cap" ? "timeout" : "fail", code, reason).catch(error => log(`sintonía: ${error.message}`));
+      if (tune === run) tune = null;
+      if (hamlibRun === run) hamlibRun = null;
+      return;
     }
-    tune = null;
     setRigPtt(false);
-    if (await runStop({ tuner: tuning })) endEmergency();
+    if (await runStop({ tuner: false })) endEmergency();
   }
 
   // Radios with a raw-CAT tuner override are driven through it, whatever Hamlib reports.
@@ -438,6 +541,7 @@ function createRemoteAgent(options = {}) {
   client.on("disconnect", () => {
     if (tune) tuneWasActive = true;
     tune = null;
+    hamlibRun = null;
     setRigPtt(false);
     Object.assign(rig, {
       freq: null, mode: null, passband: null, vfo: null, split: false, smeter: null,
@@ -505,7 +609,8 @@ function createRemoteAgent(options = {}) {
         const run = tune;
         const value = parseRawMeter(await client.sendRaw(cmd, { read: true, timeoutMs: meterReadMs, abandon: true }), cmd);
         if (!live()) return;
-        if (key === "swr" && run && tune === run && Number.isFinite(value)) run.lastSwr = value;
+        // A 0 after a non-zero read means the carrier already dropped (RX); keep the last keyed reading.
+        if (key === "swr" && run && tune === run && Number.isFinite(value) && !(value === 0 && run.lastSwr > 0)) run.lastSwr = value;
         setMeter(key, value);
       } catch (error) {
         if (error.code !== "rejected") throw error;
@@ -515,9 +620,25 @@ function createRemoteAgent(options = {}) {
     }
     if (meterCycle % 5 === 0 && live()) {
       try {
-        const watts = parsePower(await client.sendRaw(cat.power, { read: true, timeoutMs: meterReadMs, abandon: true }));
-        if (live() && watts !== null) tx.powerSetW = watts;
+        const reply = await client.sendRaw(cat.power, { read: true, timeoutMs: meterReadMs, abandon: true });
+        const watts = parsePower(reply);
+        if (live() && watts !== null) { tx.powerSetW = watts; powerHead = parsePowerFrame(reply)?.head ?? null; }
       } catch (error) { if (error.code !== "rejected") throw error; }
+    }
+  }
+
+  // COMP, ID and VDD are read less often and after the SWR check, so a slow or refused read never delays the trip.
+  async function readExtraMeters(gen) {
+    for (const key of ["comp", "id", "vdd"]) {
+      const cmd = cat.meters[key];
+      if (!cmd || meterOff.has(key)) continue;
+      if (gen !== meterGen || !rig.ptt || !tx) return;
+      try {
+        const value = parseRawMeter(await client.sendRaw(cmd, { read: true, timeoutMs: meterReadMs, abandon: true }), cmd);
+        if (gen === meterGen && rig.ptt && value !== null) extraMeters[key] = value;
+      } catch (error) {
+        if (error.code === "rejected") meterOff.add(key);
+      }
     }
   }
 
@@ -528,7 +649,11 @@ function createRemoteAgent(options = {}) {
       if (!caps.level[name]?.get || meterOff.has(key)) continue;
       const value = await client.getLevel(name, { timeoutMs: meterReadMs });
       if (gen !== meterGen || !rig.ptt || !tx) return;
-      if (value === null) meterOff.add(key); else setMeter(key, round3(value));
+      if (value === null) meterOff.add(key);
+      else {
+        setMeter(key, round3(value));
+        if (key === "swr" && hamlibRun) hamlibRun.lastSwr = value;
+      }
     }
   }
 
@@ -561,6 +686,7 @@ function createRemoteAgent(options = {}) {
           if (gen !== meterGen) return;
           meterCycle += 1;
           await checkSwr();
+          if (cat && gen === meterGen && meterCycle % 5 === 1) await readExtraMeters(gen);
         })(),
         new Promise((_, reject) => { timer = setTimeout(() => reject(Object.assign(new Error("meter poll timeout"), { code: "timeout" })), meterPollMs); })
       ]);
@@ -576,12 +702,13 @@ function createRemoteAgent(options = {}) {
   async function tuneKeyed(run) {
     let expired = false;
     const timer = setTimeout(() => { expired = true; }, tuneWatchMs);
+    const live = () => tune === run && !run.ending;
     try {
-      while (!expired && !closing && tune === run) {
+      while (!expired && !closing && live()) {
         try {
           if (/^TX[12];?$/.test(await client.sendRaw(cat.txState, { read: true }) || "")) return true;
         } catch (error) { if (error.code !== "rejected") throw error; }
-        if (expired || tune !== run) break;
+        if (expired || !live()) break;
         // The client is still waiting for this request, so it counts as alive during the start window.
         lastBeat = now();
         await sleep(tunePollMs);
@@ -602,29 +729,19 @@ function createRemoteAgent(options = {}) {
     return match ? { hiSwr: false, tx: Number(match[1]), tuning: Number(match[1]) > 0 } : null;
   }
 
-  async function finishTune(run) {
-    if (tune !== run) return;
-    tune = null;
-    const swrText = tunerKind === "atas" ? await readFinalSwr(run) : "";
-    log(TUNE_DONE + swrText);
-    setNotice(TUNE_DONE + swrText);
-    setRigPtt(false);
-    await runStop({ tuner: true });
-  }
-
   // Polls the radio until the tune ends. Limits (time, Hi-SWR, raw SWR, heartbeat) are enforced by watchTx/checkSwr,
   // so a stuck poll can never keep a tune alive.
   async function tuneLoop(run) {
-    while (tune === run && !closing) {
+    while (tune === run && !run.ending && !closing) {
       await sleep(tuneStatusMs);
-      if (tune !== run || closing) return;
+      if (tune !== run || run.ending || closing) return;
       try {
         const info = await readTuneInfo();
-        if (tune !== run) return;
+        if (tune !== run || run.ending) return;
         if (info) {
           if (info.tuning || info.tx > 0) run.seen = true;
           run.hiSwrSince = info.hiSwr ? run.hiSwrSince || now() : 0;
-          if (run.seen && !info.tuning && info.tx === 0) { await finishTune(run); return; }
+          if (run.seen && !info.tuning && info.tx === 0) { await endTune(run, null); return; }
         }
       } catch (error) {
         if (typeof error.code !== "number" && error.code !== "rejected") log(`sintonía: ${error.message}`);
@@ -632,8 +749,35 @@ function createRemoteAgent(options = {}) {
     }
   }
 
+  const newTuneRun = (clientId, kind) => ({
+    owner: clientId, startedAt: now(), hiSwrSince: 0, seen: false, kind, lastSwr: null, ending: null,
+    check: new TuneCheck({ kind, swrLimit, maxSeconds: Math.round(tuneMaxMs / 1000) })
+  });
+
+  // Tune is refused above TUNE_POWER_MAX_W (remote-meters.cjs): the operator lowers the power, it is never changed here.
+  async function tunePowerGate() {
+    let watts = null;
+    try {
+      const reply = await client.sendRaw(cat.power, { read: true, timeoutMs: meterReadMs });
+      watts = parsePower(reply);
+      const frame = parsePowerFrame(reply);
+      if (frame) powerHead = frame.head;
+    } catch { watts = null; }
+    const verdict = tunePowerCheck(watts);
+    if (verdict.ok) return null;
+    const unknown = verdict.reason === "unknown";
+    const error = unknown
+      ? "No se puede leer la potencia configurada: no se sintoniza sin conocerla."
+      : `Baja la potencia a ${verdict.maxW} W o menos antes de sintonizar (ahora ${verdict.watts} W). La potencia no se cambia sola.`;
+    log(error);
+    return { status: 409, body: { error, code: unknown ? "tune-power-unknown" : "tune-power-high", powerSetW: verdict.watts, maxW: verdict.maxW } };
+  }
+
   async function startCatTune(clientId) {
-    const run = { owner: clientId, startedAt: now(), hiSwrSince: 0, seen: false };
+    const refused = await tunePowerGate();
+    if (refused) return refused;
+    const run = newTuneRun(clientId, tunerKind);
+    run.check.confirming();
     tune = run;
     swrTripped = false;
     setRigPtt(true);
@@ -644,27 +788,44 @@ function createRemoteAgent(options = {}) {
       await client.sendRaw(tunerSpec.start);
       lastBeat = now();
       if (!(await tuneKeyed(run))) {
-        if (tune !== run) return { status: 409, body: { error: "Sintonía cancelada." } };
-        log(TUNE_FAILED);
-        setNotice(TUNE_FAILED);
-        tune = null;
-        setRigPtt(false);
-        await runStop({ tuner: true });
+        if (run.ending) return { status: 409, body: { error: "Sintonía cancelada." } };
+        await endTune(run, "fail", "not-started");
         return { status: 502, body: { error: TUNE_FAILED } };
       }
     } catch (error) {
-      if (tune === run) {
-        tune = null;
-        setRigPtt(false);
-        runStop({ tuner: true });
-      }
+      if (tune === run) endTune(run, "fail", "error", error.message).catch(() => {});
       throw error;
     }
-    if (tune !== run) return { status: 409, body: { error: "Sintonía cancelada." } };
+    if (tune !== run || run.ending) return { status: 409, body: { error: "Sintonía cancelada." } };
     run.seen = true;
+    run.check.entered();
     log(`Sintonía iniciada (${tunerKind})`);
     tuneLoop(run);
     return null;
+  }
+
+  // Radios without a raw-CAT tuner (Hamlib G TUNE): bounded by the same cap and checked by Hamlib's own PTT readback.
+  // The tune is not owned by the agent (no agentTx), so only the cap, the SWR trip and the final TX-off check apply.
+  async function startHamlibTune(clientId) {
+    await client.tune();
+    const run = newTuneRun(clientId, "hamlib");
+    run.check.confirming();
+    hamlibRun = run;
+    hamlibTuneWatch(run);
+  }
+
+  async function hamlibTuneWatch(run) {
+    let keyed = false;
+    while (hamlibRun === run && !run.ending && !closing) {
+      await sleep(tuneStatusMs);
+      if (hamlibRun !== run || run.ending || closing) return;
+      const elapsed = now() - run.startedAt;
+      const off = await readTxOff();
+      if (off === false && !keyed) { keyed = true; run.check.entered(); }
+      if (keyed && off === true) { await endTune(run, null); return; }
+      if (elapsed >= tuneMaxMs) { await endTune(run, "timeout", "time-cap"); return; }
+      if (!keyed && elapsed >= tuneWatchMs) { await endTune(run, "fail", "unconfirmed"); return; }
+    }
   }
 
   // Capabilities as shown to the console: controls found unreadable are reported as not gettable.
@@ -693,8 +854,10 @@ function createRemoteAgent(options = {}) {
       const mode = await client.getMode();
       rig.mode = mode.mode;
       rig.passband = mode.passband;
+      const epoch = pttEpoch;
       const ptt = await client.getPtt();
-      if (ptt !== rig.ptt && !tune) setRigPtt(ptt);
+      // A read that was in flight while PTT changed or a stop ran is stale and must not re-key the state.
+      if (ptt !== rig.ptt && !tune && epoch === pttEpoch && stopping === 0) setRigPtt(ptt);
       rig.smeter = rig.ptt ? null : await client.getStrength();
       if (pollCount % 4 === 1) {
         try {
@@ -858,7 +1021,10 @@ function createRemoteAgent(options = {}) {
           if (cat?.tuner) {
             const refused = await startCatTune(clientId);
             if (refused) return refused;
-          } else await client.tune();
+          } else {
+            if (hamlibRun) return { status: 409, body: { error: "Sintonía en curso." } };
+            await startHamlibTune(clientId);
+          }
           break;
         case "vfo": {
           const name = rigVfoName(command.value === "VFOA" ? "A" : "B");
@@ -1240,7 +1406,7 @@ function createRemoteAgent(options = {}) {
     clearInterval(sseTimer);
     clearInterval(keepAliveTimer);
     endEmergency();
-    if (client.connected && (rig.ptt || agentTx || tune)) await pttOff("cierre del agente");
+    if (client.connected && (rig.ptt || agentTx || tune || hamlibRun)) await pttOff("cierre del agente");
     client.stop();
     for (const ws of audioSockets) { ws.fail(1001, "shutdown"); ws.socket.destroy(); }
     audio.close?.();

@@ -1,0 +1,105 @@
+{
+  "version": 2,
+  "tune": {
+    "maxPowerW": 10,
+    "source": "docs/FTX1-KNOWLEDGE.md PC row: field head 005-010 W, SPA-1 005-100 W; operator policy: tune only at or below 10 W, never lowered automatically",
+    "caps": { "internal": { "default": 20, "cap": 30 }, "atas": { "default": 45, "cap": 60 } }
+  },
+  "meters": {
+    "smeter": { "label": "S", "unit": "S", "max": 255, "s9raw": 128, "steps": [[0, 0], [14, 1], [42, 3], [81, 5], [103, 7]], "over": [[202, 20], [233, 40], [255, 60]], "source": "ftx1-s-bg7nzl" },
+    "smeter-sub": { "label": "S sub", "unit": "S", "max": 255, "s9raw": 128, "steps": [[0, 0], [14, 1], [42, 3], [81, 5], [103, 7]], "over": [[202, 20], [233, 40], [255, 60]], "source": "ftx1-s-bg7nzl" },
+    "po": { "label": "PO", "unit": "W", "max": 255, "points": [[55, 0.5], [73, 1], [113, 3], [139, 5], [164, 7.5], [189, 10], [255, 15]], "head": 1, "source": "ftx1-community" },
+    "swr": { "label": "SWR", "unit": "", "max": 255, "c": 0.333, "b": 0.0151, "source": "ftx1-community" },
+    "alc": { "label": "ALC", "unit": "%", "max": 252, "scale": 200, "cap": 200, "source": "ftx1-community" },
+    "comp": { "label": "COMP", "unit": "dB", "max": 255, "scale": 30, "source": "ftx1-community" },
+    "id": { "label": "ID", "unit": "A", "max": 255, "scale": 3, "source": "ftx1-community" },
+    "vdd": { "label": "VDD", "unit": "V", "raw203": 203, "scale": 13.8, "source": "ftx1-community" }
+  },
+  "profiles": {
+    "ic705": {
+      "source": "icom-civ-ic705",
+      "frame": "FE FE A4 E0 15 <sub> FD; reply FE FE E0 A4 15 <sub> <2 BCD bytes 0000-0255> FD",
+      "meters": {
+        "smeter": { "sub": "02", "s9raw": 120, "overPoint": [241, 60], "unit": "S" },
+        "po": { "sub": "11", "points": [[0, 0], [143, 50], [213, 100]], "unit": "%" },
+        "swr": { "sub": "12", "points": [[0, 1], [48, 1.5], [80, 2], [120, 3]], "unit": "", "beyond": "above 0120 (SWR 3.0) the guide gives no value: shown as >3:1" },
+        "alc": { "sub": "13", "points": [[0, 0], [120, 100]], "unit": "%", "beyond": "0120 = maximum; above it the guide gives no value: capped at 100 %" },
+        "comp": { "sub": "14", "points": [[0, 0], [130, 15], [210, 25.5]], "unit": "dB" },
+        "vdd": { "sub": "15", "points": [[0, 0], [75, 5], [241, 16]], "unit": "V" },
+        "id": { "sub": "16", "points": [[0, 0], [121, 2], [241, 4]], "unit": "A" }
+      }
+    }
+  },
+  "sources": {
+    "icom-civ-ic705": "IC-705 CI-V Reference Guide (data/third-party/IC-705_ENG_CI-V_6.txt, local only) printed p.4 / txt page 5, command 15: 02 S-meter 0000=S0 0120=S9 0241=S9+60 dB; 11 Po 0000=0% 0143=50% 0213=100%; 12 SWR 0000=1.0 0048=1.5 0080=2.0 0120=3.0; 13 ALC 0000=min 0120=max; 14 COMP 0000=0 dB 0130=15 dB 0210=25.5 dB; 15 Vd 0000=0 V 0075=5 V 0241=16 V; 16 Id 0000=0 A 0121=2 A 0241=4 A. Values between the cited points are linear interpolations, not calibrations. Tuner/TX state: 1C 00 (00=RX 01=TX) and 1C 01 (00=OFF 01=ON 02=Tune) on printed p.14 / txt page 15",
+    "ftx1-rm-sm": "docs/FTX1-KNOWLEDGE.md RM row (CAT Operation Reference Manual 2508-C): RM P1 = 1 S-MAIN, 2 S-SUB, 3 COMP, 4 ALC, 5 PO, 6 SWR, 7 IDD, 8 VDD; raw 000-255, uncalibrated; SM row: SM P1 nnn 0-255",
+    "ftx1-community": "docs/FTX1-KNOWLEDGE.md RM row, host-side scales of bg7nzl-ftx1ctl (third_party/ftx1/bg7nzl-ftx1ctl/ftx1cat.py): VDD raw*13.8/203 V, IDD raw*3/255 A, COMP raw*30/255 dB, ALC raw*200/252 % (max 200), SWR 1+0.333(e^(0.0151 raw)-1) (infinity at 255), PO piecewise linear up to 15 W for the FIELD HEAD only (PC P1 = 1); with the SPA-1 (PC P1 = 2) the PO scale is pendiente de fuente and PO stays raw; estimates, not calibrated",
+    "ftx1-s-bg7nzl": "ftx1cat.py s_meter_from_raw: raw 14=S1, 42=S3, 81=S5, 103=S7, 128=S9, 202=+20, 233=+40, 255=+60 dB; approximate dial calibration",
+    "hamlib": "rigctld levels STRENGTH, RFPOWER_METER_WATTS, SWR, ALC, only when the running rigctld advertises them (remote-agent.cjs readHamlibMeters)",
+    "icom-civ-15-02": "Icom CI-V Reference Guide p.4: 15 02 S-meter 0000=S0, 0120=S9, 0241=S9+60 dB"
+  },
+  "matrix": [
+    { "radios": ["FTX-1"], "link": "CAT raw (RM/RI/AC)",
+      "meters": { "smeter": "ok", "po": "partial", "swr": "ok", "alc": "ok", "comp": "ok", "id": "ok", "vdd": "ok", "temp": "pendiente de fuente" },
+      "tune": "ok", "verified": true, "source": "ftx1-rm-sm", "notes": "PO in watts only with the field head (PC1xxx); SPA-1 (PC2xxx) PO scale pendiente de fuente; tune refused above 10 W"
+    },
+    { "radios": ["IC-7100"], "link": "Hamlib rigctld (CI-V)", "meters": { "smeter": "ok", "po": "partial", "swr": "partial", "alc": "partial", "comp": "pendiente de fuente", "id": "pendiente de fuente", "vdd": "pendiente de fuente", "temp": "pendiente de fuente" }, "tune": "pendiente de fuente", "verified": false, "source": "hamlib", "notes": "15 xx scales of this model not in the repo" },
+    { "radios": ["IC-7200"], "link": "Hamlib rigctld (CI-V)", "meters": { "smeter": "ok", "po": "partial", "swr": "partial", "alc": "partial", "comp": "pendiente de fuente", "id": "pendiente de fuente", "vdd": "pendiente de fuente", "temp": "pendiente de fuente" }, "tune": "pendiente de fuente", "verified": false, "source": "hamlib" },
+    { "radios": ["IC-7300"], "link": "Hamlib rigctld (CI-V)", "meters": { "smeter": "ok", "po": "partial", "swr": "partial", "alc": "partial", "comp": "pendiente de fuente", "id": "pendiente de fuente", "vdd": "pendiente de fuente", "temp": "pendiente de fuente" }, "tune": "partial", "verified": false, "source": "hamlib; icom_civ.py Ic7300Setting TUNER 1C01" },
+    { "radios": ["IC-7300MK2"], "link": "Hamlib rigctld (CI-V, beta)", "meters": { "smeter": "ok", "po": "partial", "swr": "partial", "alc": "partial", "comp": "pendiente de fuente", "id": "pendiente de fuente", "vdd": "pendiente de fuente", "temp": "pendiente de fuente" }, "tune": "pendiente de fuente", "verified": false, "source": "hamlib" },
+    { "radios": ["IC-7410"], "link": "Hamlib rigctld (CI-V)", "meters": { "smeter": "ok", "po": "partial", "swr": "partial", "alc": "partial", "comp": "pendiente de fuente", "id": "pendiente de fuente", "vdd": "pendiente de fuente", "temp": "pendiente de fuente" }, "tune": "pendiente de fuente", "verified": false, "source": "hamlib" },
+    { "radios": ["IC-7600"], "link": "Hamlib rigctld (CI-V)", "meters": { "smeter": "ok", "po": "partial", "swr": "partial", "alc": "partial", "comp": "pendiente de fuente", "id": "pendiente de fuente", "vdd": "pendiente de fuente", "temp": "pendiente de fuente" }, "tune": "pendiente de fuente", "verified": false, "source": "hamlib" },
+    { "radios": ["IC-7610"], "link": "Hamlib rigctld (CI-V/LAN via wfview)", "meters": { "smeter": "ok", "po": "partial", "swr": "partial", "alc": "partial", "comp": "pendiente de fuente", "id": "pendiente de fuente", "vdd": "pendiente de fuente", "temp": "pendiente de fuente" }, "tune": "pendiente de fuente", "verified": false, "source": "hamlib" },
+    { "radios": ["IC-7700"], "link": "Hamlib rigctld (CI-V)", "meters": { "smeter": "ok", "po": "partial", "swr": "partial", "alc": "partial", "comp": "pendiente de fuente", "id": "pendiente de fuente", "vdd": "pendiente de fuente", "temp": "pendiente de fuente" }, "tune": "pendiente de fuente", "verified": false, "source": "hamlib" },
+    { "radios": ["IC-7760"], "link": "Hamlib rigctld (CI-V, beta)", "meters": { "smeter": "ok", "po": "partial", "swr": "partial", "alc": "partial", "comp": "pendiente de fuente", "id": "pendiente de fuente", "vdd": "pendiente de fuente", "temp": "pendiente de fuente" }, "tune": "pendiente de fuente", "verified": false, "source": "hamlib" },
+    { "radios": ["IC-7800"], "link": "Hamlib rigctld (CI-V)", "meters": { "smeter": "ok", "po": "partial", "swr": "partial", "alc": "partial", "comp": "pendiente de fuente", "id": "pendiente de fuente", "vdd": "pendiente de fuente", "temp": "pendiente de fuente" }, "tune": "pendiente de fuente", "verified": false, "source": "hamlib" },
+    { "radios": ["IC-7850/IC-7851"], "link": "Hamlib rigctld (CI-V)", "meters": { "smeter": "ok", "po": "partial", "swr": "partial", "alc": "partial", "comp": "pendiente de fuente", "id": "pendiente de fuente", "vdd": "pendiente de fuente", "temp": "pendiente de fuente" }, "tune": "pendiente de fuente", "verified": false, "source": "hamlib" },
+    { "radios": ["IC-905"], "link": "Hamlib rigctld (CI-V)", "meters": { "smeter": "ok", "po": "partial", "swr": "partial", "alc": "partial", "comp": "pendiente de fuente", "id": "pendiente de fuente", "vdd": "pendiente de fuente", "temp": "pendiente de fuente" }, "tune": "pendiente de fuente", "verified": false, "source": "hamlib" },
+    { "radios": ["IC-9100"], "link": "Hamlib rigctld (CI-V)", "meters": { "smeter": "ok", "po": "partial", "swr": "partial", "alc": "partial", "comp": "pendiente de fuente", "id": "pendiente de fuente", "vdd": "pendiente de fuente", "temp": "pendiente de fuente" }, "tune": "pendiente de fuente", "verified": false, "source": "hamlib" },
+    { "radios": ["IC-9700"], "link": "Hamlib rigctld (CI-V)", "meters": { "smeter": "ok", "po": "partial", "swr": "partial", "alc": "partial", "comp": "pendiente de fuente", "id": "pendiente de fuente", "vdd": "pendiente de fuente", "temp": "pendiente de fuente" }, "tune": "pendiente de fuente", "verified": false, "source": "hamlib" },
+    { "radios": ["FLEX-6400"], "link": "Hamlib rigctld (SmartSDR CAT)", "meters": { "smeter": "ok", "po": "partial", "swr": "partial", "alc": "partial", "comp": "pendiente de fuente", "id": "pendiente de fuente", "vdd": "pendiente de fuente", "temp": "pendiente de fuente" }, "tune": "pendiente de fuente", "verified": false, "source": "hamlib" },
+    { "radios": ["FLEX-6400M"], "link": "Hamlib rigctld (SmartSDR CAT)", "meters": { "smeter": "ok", "po": "partial", "swr": "partial", "alc": "partial", "comp": "pendiente de fuente", "id": "pendiente de fuente", "vdd": "pendiente de fuente", "temp": "pendiente de fuente" }, "tune": "pendiente de fuente", "verified": false, "source": "hamlib" },
+    { "radios": ["FLEX-6600"], "link": "Hamlib rigctld (SmartSDR CAT)", "meters": { "smeter": "ok", "po": "partial", "swr": "partial", "alc": "partial", "comp": "pendiente de fuente", "id": "pendiente de fuente", "vdd": "pendiente de fuente", "temp": "pendiente de fuente" }, "tune": "pendiente de fuente", "verified": false, "source": "hamlib" },
+    { "radios": ["FLEX-6600M"], "link": "Hamlib rigctld (SmartSDR CAT)", "meters": { "smeter": "ok", "po": "partial", "swr": "partial", "alc": "partial", "comp": "pendiente de fuente", "id": "pendiente de fuente", "vdd": "pendiente de fuente", "temp": "pendiente de fuente" }, "tune": "pendiente de fuente", "verified": false, "source": "hamlib" },
+    { "radios": ["FLEX-6700"], "link": "Hamlib rigctld (SmartSDR CAT)", "meters": { "smeter": "ok", "po": "partial", "swr": "partial", "alc": "partial", "comp": "pendiente de fuente", "id": "pendiente de fuente", "vdd": "pendiente de fuente", "temp": "pendiente de fuente" }, "tune": "pendiente de fuente", "verified": false, "source": "hamlib" },
+    { "radios": ["FLEX-8400"], "link": "Hamlib rigctld (SmartSDR CAT)", "meters": { "smeter": "ok", "po": "partial", "swr": "partial", "alc": "partial", "comp": "pendiente de fuente", "id": "pendiente de fuente", "vdd": "pendiente de fuente", "temp": "pendiente de fuente" }, "tune": "pendiente de fuente", "verified": false, "source": "hamlib" },
+    { "radios": ["FLEX-8400M"], "link": "Hamlib rigctld (SmartSDR CAT)", "meters": { "smeter": "ok", "po": "partial", "swr": "partial", "alc": "partial", "comp": "pendiente de fuente", "id": "pendiente de fuente", "vdd": "pendiente de fuente", "temp": "pendiente de fuente" }, "tune": "pendiente de fuente", "verified": false, "source": "hamlib" },
+    { "radios": ["FLEX-8600"], "link": "Hamlib rigctld (SmartSDR CAT)", "meters": { "smeter": "ok", "po": "partial", "swr": "partial", "alc": "partial", "comp": "pendiente de fuente", "id": "pendiente de fuente", "vdd": "pendiente de fuente", "temp": "pendiente de fuente" }, "tune": "pendiente de fuente", "verified": false, "source": "hamlib" },
+    { "radios": ["FLEX-8600M"], "link": "Hamlib rigctld (SmartSDR CAT)", "meters": { "smeter": "ok", "po": "partial", "swr": "partial", "alc": "partial", "comp": "pendiente de fuente", "id": "pendiente de fuente", "vdd": "pendiente de fuente", "temp": "pendiente de fuente" }, "tune": "pendiente de fuente", "verified": false, "source": "hamlib" },
+    { "radios": ["AURORA-510"], "link": "Hamlib rigctld (SmartSDR CAT)", "meters": { "smeter": "ok", "po": "partial", "swr": "partial", "alc": "partial", "comp": "pendiente de fuente", "id": "pendiente de fuente", "vdd": "pendiente de fuente", "temp": "pendiente de fuente" }, "tune": "pendiente de fuente", "verified": false, "source": "hamlib" },
+    { "radios": ["AURORA-510M"], "link": "Hamlib rigctld (SmartSDR CAT)", "meters": { "smeter": "ok", "po": "partial", "swr": "partial", "alc": "partial", "comp": "pendiente de fuente", "id": "pendiente de fuente", "vdd": "pendiente de fuente", "temp": "pendiente de fuente" }, "tune": "pendiente de fuente", "verified": false, "source": "hamlib" },
+    { "radios": ["AURORA-520"], "link": "Hamlib rigctld (SmartSDR CAT)", "meters": { "smeter": "ok", "po": "partial", "swr": "partial", "alc": "partial", "comp": "pendiente de fuente", "id": "pendiente de fuente", "vdd": "pendiente de fuente", "temp": "pendiente de fuente" }, "tune": "pendiente de fuente", "verified": false, "source": "hamlib" },
+    { "radios": ["AURORA-520M"], "link": "Hamlib rigctld (SmartSDR CAT)", "meters": { "smeter": "ok", "po": "partial", "swr": "partial", "alc": "partial", "comp": "pendiente de fuente", "id": "pendiente de fuente", "vdd": "pendiente de fuente", "temp": "pendiente de fuente" }, "tune": "pendiente de fuente", "verified": false, "source": "hamlib" },
+    { "radios": ["TS-590S"], "link": "Hamlib rigctld (Kenwood CAT)", "meters": { "smeter": "ok", "po": "partial", "swr": "partial", "alc": "partial", "comp": "pendiente de fuente", "id": "pendiente de fuente", "vdd": "pendiente de fuente", "temp": "pendiente de fuente" }, "tune": "pendiente de fuente", "verified": false, "source": "hamlib" },
+    { "radios": ["TS-590SG"], "link": "Hamlib rigctld (Kenwood CAT)", "meters": { "smeter": "ok", "po": "partial", "swr": "partial", "alc": "partial", "comp": "pendiente de fuente", "id": "pendiente de fuente", "vdd": "pendiente de fuente", "temp": "pendiente de fuente" }, "tune": "pendiente de fuente", "verified": false, "source": "hamlib" },
+    { "radios": ["TS-890S"], "link": "Hamlib rigctld (Kenwood CAT)", "meters": { "smeter": "ok", "po": "partial", "swr": "partial", "alc": "partial", "comp": "pendiente de fuente", "id": "pendiente de fuente", "vdd": "pendiente de fuente", "temp": "pendiente de fuente" }, "tune": "pendiente de fuente", "verified": false, "source": "hamlib" },
+    { "radios": ["TS-990S"], "link": "Hamlib rigctld (Kenwood CAT)", "meters": { "smeter": "ok", "po": "partial", "swr": "partial", "alc": "partial", "comp": "pendiente de fuente", "id": "pendiente de fuente", "vdd": "pendiente de fuente", "temp": "pendiente de fuente" }, "tune": "pendiente de fuente", "verified": false, "source": "hamlib" },
+    { "radios": ["FT-710"], "link": "Hamlib rigctld (Yaesu CAT)", "meters": { "smeter": "ok", "po": "partial", "swr": "partial", "alc": "partial", "comp": "pendiente de fuente", "id": "pendiente de fuente", "vdd": "pendiente de fuente", "temp": "pendiente de fuente" }, "tune": "pendiente de fuente", "verified": false, "source": "hamlib" },
+    { "radios": ["FT-991A"], "link": "Hamlib rigctld (Yaesu CAT)", "meters": { "smeter": "ok", "po": "partial", "swr": "partial", "alc": "partial", "comp": "pendiente de fuente", "id": "pendiente de fuente", "vdd": "pendiente de fuente", "temp": "pendiente de fuente" }, "tune": "pendiente de fuente", "verified": false, "source": "hamlib" },
+    { "radios": ["FTDX10"], "link": "Hamlib rigctld (Yaesu CAT)", "meters": { "smeter": "ok", "po": "partial", "swr": "partial", "alc": "partial", "comp": "pendiente de fuente", "id": "pendiente de fuente", "vdd": "pendiente de fuente", "temp": "pendiente de fuente" }, "tune": "pendiente de fuente", "verified": false, "source": "hamlib" },
+    { "radios": ["FTDX101D"], "link": "Hamlib rigctld (Yaesu CAT)", "meters": { "smeter": "ok", "po": "partial", "swr": "partial", "alc": "partial", "comp": "pendiente de fuente", "id": "pendiente de fuente", "vdd": "pendiente de fuente", "temp": "pendiente de fuente" }, "tune": "pendiente de fuente", "verified": false, "source": "hamlib" },
+    { "radios": ["FTDX101MP"], "link": "Hamlib rigctld (Yaesu CAT)", "meters": { "smeter": "ok", "po": "partial", "swr": "partial", "alc": "partial", "comp": "pendiente de fuente", "id": "pendiente de fuente", "vdd": "pendiente de fuente", "temp": "pendiente de fuente" }, "tune": "pendiente de fuente", "verified": false, "source": "hamlib" },
+    { "radios": ["FTDX3000"], "link": "Hamlib rigctld (Yaesu CAT)", "meters": { "smeter": "ok", "po": "partial", "swr": "partial", "alc": "partial", "comp": "pendiente de fuente", "id": "pendiente de fuente", "vdd": "pendiente de fuente", "temp": "pendiente de fuente" }, "tune": "pendiente de fuente", "verified": false, "source": "hamlib" },
+    { "radios": ["K3S"], "link": "Hamlib rigctld (Elecraft CAT)", "meters": { "smeter": "ok", "po": "partial", "swr": "partial", "alc": "partial", "comp": "pendiente de fuente", "id": "pendiente de fuente", "vdd": "pendiente de fuente", "temp": "pendiente de fuente" }, "tune": "pendiente de fuente", "verified": false, "source": "hamlib" },
+    { "radios": ["K4"], "link": "Hamlib rigctld (Elecraft CAT, USB/LAN 9200)", "meters": { "smeter": "ok", "po": "partial", "swr": "partial", "alc": "partial", "comp": "pendiente de fuente", "id": "pendiente de fuente", "vdd": "pendiente de fuente", "temp": "pendiente de fuente" }, "tune": "pendiente de fuente", "verified": false, "source": "hamlib" },
+    { "radios": ["QMX/QMX+"], "link": "Hamlib rigctld (Kenwood-style CAT)", "meters": { "smeter": "ok", "po": "partial", "swr": "partial", "alc": "partial", "comp": "pendiente de fuente", "id": "pendiente de fuente", "vdd": "pendiente de fuente", "temp": "pendiente de fuente" }, "tune": "pendiente de fuente", "verified": false, "source": "hamlib" },
+    { "radios": ["QCX/QDX"], "link": "Hamlib rigctld (Kenwood-style CAT)", "meters": { "smeter": "ok", "po": "partial", "swr": "partial", "alc": "partial", "comp": "pendiente de fuente", "id": "pendiente de fuente", "vdd": "pendiente de fuente", "temp": "pendiente de fuente" }, "tune": "pendiente de fuente", "verified": false, "source": "hamlib" },
+    { "radios": ["(tr)uSDX"], "link": "Hamlib rigctld (Kenwood-style CAT)", "meters": { "smeter": "ok", "po": "partial", "swr": "partial", "alc": "partial", "comp": "pendiente de fuente", "id": "pendiente de fuente", "vdd": "pendiente de fuente", "temp": "pendiente de fuente" }, "tune": "pendiente de fuente", "verified": false, "source": "hamlib" },
+    { "radios": ["Hermes Lite 2"], "link": "Hamlib rigctld", "meters": { "smeter": "ok", "po": "partial", "swr": "partial", "alc": "partial", "comp": "pendiente de fuente", "id": "pendiente de fuente", "vdd": "pendiente de fuente", "temp": "pendiente de fuente" }, "tune": "pendiente de fuente", "verified": false, "source": "hamlib" },
+    {
+      "radios": ["IC-R8600"], "link": "Hamlib rigctld (RX only)",
+      "meters": { "smeter": "ok", "po": "none", "swr": "none", "alc": "none", "comp": "none", "id": "none", "vdd": "none", "temp": "none" },
+      "tune": "none", "verified": false, "source": "hamlib"
+    },
+    {
+      "radios": ["IC-705", "android:IC705"], "link": "CI-V 15 xx (parsers: Node, Python; Android RigCat wiring not done)",
+      "meters": { "smeter": "ok", "po": "ok", "swr": "ok", "alc": "ok", "comp": "ok", "id": "ok", "vdd": "ok", "temp": "pendiente de fuente" },
+      "tune": "pendiente de fuente", "verified": false, "source": "icom-civ-ic705", "notes": "1C 01 02 tune state is documented (printed p.14) but no tune runtime is wired for Icom"
+    },
+    {
+      "radios": ["android:FT817", "android:FT818", "android:FT857", "android:FT897", "android:THD75", "android:UVK5", "android:OPENGD77", "android:RT950", "android:RTS10", "android:D878", "android:KISS_TNC", "android:TRUSDX", "android:QMX", "android:QDX"], "link": "Android profile",
+      "meters": { "smeter": "pendiente de fuente", "po": "pendiente de fuente", "swr": "pendiente de fuente", "alc": "pendiente de fuente", "comp": "pendiente de fuente", "id": "pendiente de fuente", "vdd": "pendiente de fuente", "temp": "pendiente de fuente" },
+      "tune": "none", "verified": false, "source": "Profile.kt"
+    }
+  ]
+}

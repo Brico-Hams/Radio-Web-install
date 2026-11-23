@@ -121,6 +121,101 @@ def parse_ic7300_setting_ack(frame: bytes) -> bool:
     raise ValueError("Invalid IC-7300 setting acknowledgement.")
 
 
+class Ic705Meter(IntEnum):
+    """CI-V command 15 sub-commands (IC-705 CI-V Reference Guide, printed p.4 / txt page 5)."""
+
+    S_METER = 0x02
+    PO = 0x11
+    SWR = 0x12
+    ALC = 0x13
+    COMP = 0x14
+    VD = 0x15
+    ID = 0x16
+
+
+# Anchor points (raw 0000-0255, value) cited by the guide; values in between are linear interpolations, not
+# calibrations. data/remote-meter-model.json profiles.ic705 carries the same table.
+_IC705_POINTS = {
+    Ic705Meter.PO: ((0, 0.0), (143, 50.0), (213, 100.0)),  # percent of full power
+    Ic705Meter.SWR: ((0, 1.0), (48, 1.5), (80, 2.0), (120, 3.0)),
+    Ic705Meter.ALC: ((0, 0.0), (120, 100.0)),  # 0120 = maximum, percent of that
+    Ic705Meter.COMP: ((0, 0.0), (130, 15.0), (210, 25.5)),  # dB
+    Ic705Meter.VD: ((0, 0.0), (75, 5.0), (241, 16.0)),  # volts
+    Ic705Meter.ID: ((0, 0.0), (121, 2.0), (241, 4.0)),  # amperes
+}
+_IC705_S9_RAW = 120
+_IC705_S_OVER = (241, 60.0)  # raw 0241 = S9+60 dB
+
+
+def build_ic705_meter_query(meter: Ic705Meter) -> bytes:
+    if not isinstance(meter, Ic705Meter):
+        raise ValueError("Select a documented IC-705 meter sub-command.")
+    return _PREAMBLE + bytes(
+        (_RADIO_ADDRESSES[IcomCivModel.IC_705], CONTROLLER_ADDRESS, 0x15, meter.value, _END)
+    )
+
+
+def parse_ic705_meter_reply(meter: Ic705Meter, frame: bytes) -> int:
+    """FE FE E0 A4 15 <sub> <2 BCD bytes 0000-0255> FD -> raw value."""
+    request = build_ic705_meter_query(meter)
+    prefix = _PREAMBLE + bytes((CONTROLLER_ADDRESS, _RADIO_ADDRESSES[IcomCivModel.IC_705], 0x15, meter.value))
+    if (
+        not isinstance(frame, bytes)
+        or len(frame) != len(request) + 2
+        or not frame.startswith(prefix)
+        or frame[-1] != _END
+    ):
+        raise ValueError("Invalid IC-705 meter reply.")
+    data = frame[len(prefix) : -1]
+    if any(byte >> 4 > 9 or byte & 15 > 9 for byte in data):
+        raise ValueError("Invalid IC-705 meter BCD.")
+    raw = (data[0] >> 4) * 1000 + (data[0] & 15) * 100 + (data[1] >> 4) * 10 + (data[1] & 15)
+    if raw > 255:
+        raise ValueError("IC-705 meter value exceeds the documented 0000-0255 range.")
+    return raw
+
+
+def _interpolate(points: tuple[tuple[int, float], ...], raw: int) -> float:
+    previous = points[0]
+    for point in points[1:]:
+        if raw <= point[0]:
+            return previous[1] + (point[1] - previous[1]) * (raw - previous[0]) / (point[0] - previous[0])
+        previous = point
+    return previous[1]
+
+
+def ic705_meter_value(meter: Ic705Meter, raw: int) -> tuple[float | None, str]:
+    """Raw -> (value, unit). SWR above 0120 and ALC above its maximum are not given by the guide."""
+    if not isinstance(meter, Ic705Meter) or type(raw) is not int or not 0 <= raw <= 255:
+        raise ValueError("Invalid IC-705 meter reading.")
+    if meter is Ic705Meter.S_METER:
+        if raw <= _IC705_S9_RAW:
+            return raw * 9 / _IC705_S9_RAW, "S"
+        over_raw, over_db = _IC705_S_OVER
+        return 9 + min(over_db, (raw - _IC705_S9_RAW) * over_db / (over_raw - _IC705_S9_RAW)), "S+dB"
+    points = _IC705_POINTS[meter]
+    value = _interpolate(points, raw)
+    if meter is Ic705Meter.SWR:
+        return (None if raw > points[-1][0] else value), ""
+    unit = {Ic705Meter.PO: "%", Ic705Meter.ALC: "%", Ic705Meter.COMP: "dB", Ic705Meter.VD: "V", Ic705Meter.ID: "A"}[meter]
+    return (min(value, 100.0) if meter is Ic705Meter.ALC else value), unit
+
+
+def build_ic705_state_query(tuner: bool) -> bytes:
+    """1C 00 transceiver status (00 RX, 01 TX) or 1C 01 antenna tuner (00 OFF, 01 ON, 02 Tune); guide txt page 15."""
+    return _PREAMBLE + bytes((_RADIO_ADDRESSES[IcomCivModel.IC_705], CONTROLLER_ADDRESS, 0x1C, 1 if tuner else 0, _END))
+
+
+def parse_ic705_state_reply(tuner: bool, frame: bytes) -> int:
+    request = build_ic705_state_query(tuner)
+    prefix = _PREAMBLE + bytes((CONTROLLER_ADDRESS, _RADIO_ADDRESSES[IcomCivModel.IC_705], 0x1C, 1 if tuner else 0))
+    if not isinstance(frame, bytes) or len(frame) != len(request) + 1 or not frame.startswith(prefix) or frame[-1] != _END:
+        raise ValueError("Invalid IC-705 state reply.")
+    if frame[-2] not in ((0, 1, 2) if tuner else (0, 1)):
+        raise ValueError("Unknown IC-705 state.")
+    return frame[-2]
+
+
 def build_query(model: IcomCivModel, command: IcomReadCommand) -> bytes:
     if not isinstance(model, IcomCivModel):
         raise ValueError("El modelo debe pertenecer a la lista CI-V documentada.")
