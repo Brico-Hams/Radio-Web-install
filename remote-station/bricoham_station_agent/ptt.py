@@ -4,6 +4,7 @@ import secrets
 import threading
 import time
 from collections import deque
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -11,6 +12,7 @@ from bricoham_remote_station.drivers import ftx1_cat as ftx
 from bricoham_station_agent.audio import AudioError
 from bricoham_station_agent.audio_tx import AudioTransmitter, TxAudioSession
 from bricoham_station_agent.cat import CatError, Ftx1TransmitChannel, SerialCat
+from bricoham_station_agent.guests import TxLog, guest_tx_refusal
 from bricoham_station_agent.radio_settings import settings_request_identifier
 
 LOGGER = logging.getLogger("bricoham.station_agent.ptt")
@@ -71,15 +73,36 @@ class PttConfig:
         return cls(**value)
 
 
+@dataclass(frozen=True)
+class PttOperator:
+    """Who is asking to key: a label for the TX log and, for guests, their per-radio permission."""
+
+    label: str
+    guest_id: str | None = None
+    permission: dict[str, object] | None = None
+
+
 class PttController:
     def __init__(
-        self, cat: SerialCat, config: PttConfig, *, tx_audio: AudioTransmitter | None = None
+        self,
+        cat: SerialCat,
+        config: PttConfig,
+        *,
+        tx_audio: AudioTransmitter | None = None,
+        tx_log: TxLog | None = None,
+        radio_id: str = "ftx-1",
+        guest_active: Callable[[str], bool] | None = None,
     ) -> None:
         if cat.config.model != "FTX-1":
             raise ValueError("Guarded PTT is implemented only for FTX-1.")
         self.cat = cat
         self.config = config
         self.tx_audio = tx_audio
+        self.tx_log = tx_log
+        self.radio_id = radio_id
+        self.guest_active = guest_active
+        self._owner = PttOperator("local")
+        self._checked: tuple[int, int | float] | None = None
         self._voice: TxAudioSession | None = None
         self._lock = threading.Lock()
         self._shutdown = threading.Event()
@@ -120,8 +143,11 @@ class PttController:
         finally:
             self._lock.release()
 
-    def _guard(self, *, transmitting: bool, deadline: float) -> None:
+    def _guard(
+        self, *, transmitting: bool, deadline: float, operator: PttOperator | None = None
+    ) -> None:
         assert self._channel is not None
+        operator = operator or self._owner
         channel = self._channel
         state = ftx.parse_tx_reply(channel.read(ftx.Ftx1ReadCommand.TX_STATE, deadline))
         expected = ftx.Ftx1TxState.CAT_TX if transmitting else ftx.Ftx1TxState.RX
@@ -147,6 +173,14 @@ class PttController:
             raise PttError("ptt_requires_ssb")
         if not self.config.frequency_min_hz <= info.frequency_hz <= self.config.frequency_max_hz:
             raise PttError("ptt_frequency_limit")
+        # Guest band and power limits are checked against the live radio, on start and on every renew.
+        if operator.guest_id is not None:
+            refusal = guest_tx_refusal(
+                operator.permission, freq_hz=info.frequency_hz, power_w=power.watts
+            )
+            if refusal is not None:
+                raise PttError(refusal)
+        self._checked = (info.frequency_hz, power.watts)
         if self.tx_audio is not None:
             if ftx.parse_vox_reply(channel.read(ftx.Ftx1ReadCommand.VOX, deadline)):
                 raise PttError("ptt_disable_vox_locally")
@@ -171,20 +205,51 @@ class PttController:
         self._release_channel()
         self._rx_confirmed = True
         self._stop_failed = False
+        if self.tx_log is not None:
+            self.tx_log.end()
+        self._owner = PttOperator("local")
         LOGGER.info("PTT RX confirmed")
 
-    def _expire(self) -> None:
-        if self._stop_failed or (
+    def _owner_revoked(self) -> bool:
+        guest_id = self._owner.guest_id
+        return bool(
             self._lease is not None
-            and (
-                time.monotonic() >= min(self._lease_until, self._maximum_until)
-                or self._voice is not None
-                and not self._voice.healthy()
+            and guest_id is not None
+            and self.guest_active is not None
+            and not self.guest_active(guest_id)
+        )
+
+    def revoke_guest(self, guest_id: str) -> None:
+        """Unkeys at once when the revoked guest holds the lease; a no-op otherwise."""
+        if not self._lock.acquire(timeout=1.5):
+            raise PttError("ptt_busy")
+        try:
+            if not self._closed and self._lease is not None and self._owner.guest_id == guest_id:
+                self._stop()
+        except (CatError, ValueError) as error:
+            raise PttError("ptt_transaction_unconfirmed") from error
+        finally:
+            self._lock.release()
+
+    def _expire(self) -> None:
+        if (
+            self._stop_failed
+            or self._owner_revoked()
+            or (
+                self._lease is not None
+                and (
+                    time.monotonic() >= min(self._lease_until, self._maximum_until)
+                    or self._voice is not None
+                    and not self._voice.healthy()
+                )
             )
         ):
             self._stop()
 
-    def operate(self, payload: object) -> dict[str, object]:
+    def operate(
+        self, payload: object, operator: PttOperator | None = None
+    ) -> dict[str, object]:
+        operator = operator or PttOperator("local")
         if not isinstance(payload, dict) or not isinstance(payload.get("operation"), str):
             raise ValueError("PTT operation must be an object.")
         operation = payload["operation"]
@@ -266,7 +331,9 @@ class PttController:
                             self._voice = self.tx_audio.claim(payload["audio_session_id"])
                         self._channel = self.cat.reserve_transmitter()
                         self._guard(
-                            transmitting=False, deadline=time.monotonic() + TRANSACTION_SECONDS
+                            transmitting=False,
+                            deadline=time.monotonic() + TRANSACTION_SECONDS,
+                            operator=operator,
                         )
                     except (CatError, ValueError, PttError, AudioError):
                         self._rx_confirmed = False
@@ -277,6 +344,7 @@ class PttController:
                         raise
                     self._rx_confirmed = False
                     self._lease = secrets.token_urlsafe(32)
+                    self._owner = operator
                     now = time.monotonic()
                     self._maximum_until = now + self.config.max_transmit_seconds
                     self._lease_until = min(now + LEASE_SECONDS, self._maximum_until)
@@ -284,6 +352,13 @@ class PttController:
                         self._channel.set_tx(
                             True, min(now + TRANSACTION_SECONDS, self._lease_until)
                         )
+                        if self.tx_log is not None and self._checked is not None:
+                            self.tx_log.begin(
+                                operator=operator.label,
+                                radio=self.radio_id,
+                                freq_hz=self._checked[0],
+                                power_w=self._checked[1],
+                            )
                         if self._voice is not None:
                             self._voice.unmute()
                     except (CatError, ValueError, AudioError):

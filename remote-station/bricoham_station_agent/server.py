@@ -45,7 +45,8 @@ from bricoham_station_agent.inventory import (
     enumerate_serial_ports,
 )
 from bricoham_station_agent.accessories import StationAccessories, support_matrix
-from bricoham_station_agent.ptt import PttConfig, PttController, PttError
+from bricoham_station_agent.guests import RADIO_ID, GuestGrant, GuestStore, TxLog
+from bricoham_station_agent.ptt import PttConfig, PttController, PttError, PttOperator
 from bricoham_station_agent.radio_settings import RadioSettingsConfig
 from bricoham_station_agent.rotor import RotorConfig, RotorController, RotorError
 from bricoham_station_agent.wsjtx import WsjtxError, WsjtxReceiver
@@ -63,7 +64,13 @@ AUDIO_PATH = f"/api/{API_VERSION}/audio"
 ACCESSORIES_PATH = f"/api/{API_VERSION}/accessories"
 AUDIO_STREAM_PATH = f"{AUDIO_PATH}/stream"
 SCOPE_PATH = f"{CAT_PATH}/scope"
+GUESTS_PATH = f"/api/{API_VERSION}/guests"
+GUESTS_REVOKE_PATH = f"{GUESTS_PATH}/revoke"
+TXLOG_PATH = f"/api/{API_VERSION}/txlog"
+TXLOG_CSV_PATH = f"{TXLOG_PATH}.csv"
 _INVENTORY_ROLES = frozenset({Role.ADMIN, Role.OPERATOR})
+# Guest tokens (per-radio, revocable) may only listen, query PTT state or use the PTT/TX-audio paths they are granted.
+_GUEST_PATHS = (AUDIO_PATH, AUDIO_STREAM_PATH, PTT_PATH)
 
 
 class StationAgentHTTPServer(SecureHTTPServer):
@@ -85,7 +92,13 @@ class StationAgentHTTPServer(SecureHTTPServer):
         ptt: PttController | None = None,
         accessories: StationAccessories | None = None,
         flex: FlexController | None = None,
+        guests: GuestStore | None = None,
+        tx_log: TxLog | None = None,
+        radio_id: str = "ftx-1",
     ) -> None:
+        self.guests = guests if guests is not None else GuestStore()
+        self.tx_log = tx_log if tx_log is not None else TxLog()
+        self.radio_id = radio_id
         self.accessories = accessories
         self.authenticator = authenticator
         self.inventory = DeviceInventory(enumerator)
@@ -95,6 +108,13 @@ class StationAgentHTTPServer(SecureHTTPServer):
         self.flex = flex
         self.audio = audio
         self.ptt = ptt
+        if ptt is not None:
+            # One shared TX log and revocation check, so a revoked guest is unkeyed by the watchdog itself.
+            if ptt.tx_log is None:
+                ptt.tx_log = self.tx_log
+            if ptt.guest_active is None:
+                ptt.guest_active = self.guests.is_active_id
+            ptt.radio_id = radio_id
         try:
             validate_listen(host, tls_context)
             super().__init__((host, port), StationAgentRequestHandler, tls_context=tls_context)
@@ -166,6 +186,8 @@ class StationAgentRequestHandler(SecureRequestHandler):
             )
             return
 
+        if self._serve_station_ops(path, "GET"):
+            return
         if path not in (
             DEVICES_PATH,
             CAT_PATH,
@@ -183,10 +205,14 @@ class StationAgentRequestHandler(SecureRequestHandler):
             return
 
         role = self.server.authenticator.authenticate(self.headers.get("Authorization"))
-        if role is None:
+        guest = self._guest() if role is None and path in _GUEST_PATHS else None
+        if guest is not None and guest.permission(self.server.radio_id) is None:
+            self._send_error(HTTPStatus.FORBIDDEN, "guest_no_radio_permission")
+            return
+        if role is None and guest is None:
             self._send_error(HTTPStatus.UNAUTHORIZED, "unauthorized")
             return
-        if role not in (
+        if guest is None and role not in (
             _INVENTORY_ROLES | {Role.LISTENER}
             if path in (AUDIO_PATH, AUDIO_STREAM_PATH)
             else _INVENTORY_ROLES
@@ -346,7 +372,10 @@ class StationAgentRequestHandler(SecureRequestHandler):
             peer = accept_websocket(self)
             token = read_auth_token(peer)
             if self.server.authenticator.authenticate(f"Bearer {token}") not in _INVENTORY_ROLES:
-                raise WebSocketError("audio_tx_unauthorized")
+                guest = self.server.guests.authenticate(token)
+                permission = guest.permission(self.server.radio_id) if guest else None
+                if permission is None or not permission["transmit"]:
+                    raise WebSocketError("audio_tx_unauthorized")
             ptt = self.server.ptt
             if ptt is None or ptt.tx_audio is None:
                 raise AudioError("audio_tx_not_configured")
@@ -494,17 +523,28 @@ class StationAgentRequestHandler(SecureRequestHandler):
 
     def do_POST(self) -> None:
         path = urlsplit(self.path).path
+        if path in (GUESTS_PATH, GUESTS_REVOKE_PATH):
+            self._serve_station_ops(path, "POST")
+            return
         if path not in (ROTOR_PATH, SETTINGS_PATH, PTT_PATH, DIGITAL_PATH, ACCESSORIES_PATH, FLEX_PATH):
             self._method_not_allowed()
             return
         self.close_connection = True
         role = self.server.authenticator.authenticate(self.headers.get("Authorization"))
-        if role is None:
+        guest = self._guest() if role is None and path == PTT_PATH else None
+        if role is None and guest is None:
             self._send_error(HTTPStatus.UNAUTHORIZED, "unauthorized")
             return
-        if role not in _INVENTORY_ROLES:
+        if guest is None and role not in _INVENTORY_ROLES:
             self._send_error(HTTPStatus.FORBIDDEN, "forbidden")
             return
+        operator = PttOperator(role.value if role is not None else "")
+        if guest is not None:
+            permission = guest.permission(self.server.radio_id)
+            if permission is None:
+                self._send_error(HTTPStatus.FORBIDDEN, "guest_no_radio_permission")
+                return
+            operator = PttOperator(guest.label, guest.id, permission)
         if path == ACCESSORIES_PATH:
             self._operate_accessories()
             return
@@ -563,7 +603,16 @@ class StationAgentRequestHandler(SecureRequestHandler):
                 self._send_error(HTTPStatus.SERVICE_UNAVAILABLE, "ptt_not_configured")
                 return
             try:
-                result = self.server.ptt.operate(self.request_json())
+                payload = self.request_json()
+                # A listen-only guest never reaches the radio, except to unkey (PTT off pre-empts everything).
+                if (
+                    operator.guest_id is not None
+                    and not operator.permission["transmit"]  # type: ignore[index]
+                    and not (isinstance(payload, dict) and payload.get("operation") == "stop")
+                ):
+                    self._send_error(HTTPStatus.FORBIDDEN, "ptt_guest_listen_only")
+                    return
+                result = self.server.ptt.operate(payload, operator)
             except RequestJsonError as error:
                 self._send_error(error.status, str(error))
                 return
@@ -696,6 +745,93 @@ class StationAgentRequestHandler(SecureRequestHandler):
             {"api_version": "v1", "data_is_simulated": False, **result, **accessories.snapshot()},
         )
 
+    def _guest(self) -> GuestGrant | None:
+        scheme, _, token = (self.headers.get("Authorization") or "").partition(" ")
+        if scheme.lower() != "bearer" or not token or token.strip() != token:
+            return None
+        return self.server.guests.authenticate(token)
+
+    def _serve_station_ops(self, path: str, method: str) -> bool:
+        """Guest management and TX log: admin only. Returns False when the path is not one of these."""
+        if path not in (GUESTS_PATH, GUESTS_REVOKE_PATH, TXLOG_PATH, TXLOG_CSV_PATH):
+            return False
+        allowed = (
+            (GUESTS_PATH, TXLOG_PATH, TXLOG_CSV_PATH)
+            if method == "GET"
+            else (GUESTS_PATH, GUESTS_REVOKE_PATH)
+        )
+        if path not in allowed:
+            self._method_not_allowed()
+            return True
+        self.close_connection = True
+        role = self.server.authenticator.authenticate(self.headers.get("Authorization"))
+        if role is None:
+            self._send_error(HTTPStatus.UNAUTHORIZED, "unauthorized")
+            return True
+        if role is not Role.ADMIN:
+            self._send_error(HTTPStatus.FORBIDDEN, "forbidden")
+            return True
+        guests = self.server.guests
+        if method == "GET":
+            if urlsplit(self.path).query:
+                self._send_error(HTTPStatus.BAD_REQUEST, "guests_invalid_query")
+            elif path == GUESTS_PATH:
+                self._send_json(HTTPStatus.OK, {"api_version": API_VERSION, "guests": guests.list()})
+            elif path == TXLOG_PATH:
+                self._send_json(
+                    HTTPStatus.OK,
+                    {"api_version": API_VERSION, "entries": self.server.tx_log.entries()},
+                )
+            else:
+                self._send_text(
+                    HTTPStatus.OK,
+                    self.server.tx_log.to_csv(),
+                    "text/csv; charset=utf-8",
+                    {"Content-Disposition": 'attachment; filename="tx-log.csv"'},
+                )
+            return True
+        try:
+            body = self.request_json()
+        except RequestJsonError as error:
+            self._send_error(error.status, str(error))
+            return True
+        if not isinstance(body, dict):
+            self._send_error(HTTPStatus.BAD_REQUEST, "guests_invalid_request")
+            return True
+        if path == GUESTS_REVOKE_PATH:
+            if set(body) != {"id"} or not guests.revoke(body["id"]):
+                self._send_error(HTTPStatus.NOT_FOUND, "guest_unknown")
+                return True
+            ptt = self.server.ptt
+            if ptt is not None:
+                try:
+                    ptt.revoke_guest(body["id"])
+                except PttError as error:
+                    self._send_error(HTTPStatus.SERVICE_UNAVAILABLE, str(error))
+                    return True
+            self._send_json(HTTPStatus.OK, {"api_version": API_VERSION, "revoked": body["id"]})
+            return True
+        if not set(body) <= {"label", "ttl_hours", "transmit", "bands", "max_power_w"}:
+            self._send_error(HTTPStatus.BAD_REQUEST, "guests_invalid_request")
+            return True
+        try:
+            guest, token = guests.invite(
+                body.get("label"),
+                {
+                    self.server.radio_id: {
+                        "transmit": body.get("transmit", False),
+                        "bands": body.get("bands"),
+                        "max_power_w": body.get("max_power_w"),
+                    }
+                },
+                body.get("ttl_hours", 24),
+            )
+        except ValueError as error:
+            self._send_error(HTTPStatus.BAD_REQUEST, str(error))
+            return True
+        self._send_json(HTTPStatus.CREATED, {"api_version": API_VERSION, "guest": guest, "token": token})
+        return True
+
     def do_PUT(self) -> None:
         self._method_not_allowed()
 
@@ -715,6 +851,25 @@ class StationAgentRequestHandler(SecureRequestHandler):
             {"api_version": API_VERSION, "error": {"code": code}},
             headers={"Allow": "GET"} if status == HTTPStatus.METHOD_NOT_ALLOWED else None,
         )
+
+    def _send_text(
+        self,
+        status: HTTPStatus,
+        text: str,
+        content_type: str,
+        headers: dict[str, str] | None = None,
+    ) -> None:
+        body = text.encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-Frame-Options", "DENY")
+        for name, value in (headers or {}).items():
+            self.send_header(name, value)
+        self.end_headers()
+        self.wfile.write(body)
 
     def _send_json(
         self,
@@ -783,6 +938,16 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--audio-config", type=Path, help="Explicit RX audio input JSON.")
     parser.add_argument(
+        "--radio-id",
+        default="ftx-1",
+        help="Radio id that per-radio guest permissions and the TX log refer to (default: ftx-1).",
+    )
+    parser.add_argument(
+        "--state-dir",
+        type=Path,
+        help="Persist guests (token hashes only) and the TX log here; in memory when omitted.",
+    )
+    parser.add_argument(
         "--tx-audio-config",
         type=Path,
         help="Explicit muted USB DAC output JSON; requires guarded FTX-1 PTT.",
@@ -819,6 +984,8 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         parser.error("--ptt-config requires explicit experimental FTX-1 CAT.")
     if args.tx_audio_config and not args.ptt_config:
         parser.error("--tx-audio-config requires --ptt-config.")
+    if not RADIO_ID.fullmatch(args.radio_id):
+        parser.error("--radio-id must be 1-64 characters of A-Z a-z 0-9 _ -.")
     if (args.wsjtx_udp_port is None) != (args.wsjtx_id is None):
         parser.error("WSJT-X requiere --wsjtx-udp-port y --wsjtx-id juntos.")
     if args.enable_wsjtx_safe_commands and args.wsjtx_id is None:
@@ -912,6 +1079,9 @@ def main(argv: list[str] | None = None) -> int:
             ptt=ptt,
             accessories=accessories,
             flex=flex,
+            guests=GuestStore(args.state_dir),
+            tx_log=TxLog(args.state_dir / "remote-txlog.jsonl" if args.state_dir else None),
+            radio_id=args.radio_id,
         )
     except ValueError as error:
         LOGGER.error("Configuración del agente no válida: %s", error)
