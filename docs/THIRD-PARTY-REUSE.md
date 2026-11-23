@@ -56,7 +56,8 @@ Licences are those stated in the collection catalogue (inventory 2026-11-23); "t
 | SPE-1.3-2K-FA-Remote-server | `server.py`, `README.md` | same files (Expert driver) | GPL-3.0, OH2GEK | Request frames `55 55 55 01 90 90` and `55 55 55 01 0D 0D` and the status request flow, re-written in the project style with safety checks. |
 | ACOM-Controller | `MainWindow.xaml.cs`, `README.md` | same files (ACOM driver) | MIT, (c) 2019 Bjorn Ekelund | Telemetry enable/disable, operate/standby frames, 72-byte telemetry offsets, per-model temperature offsets and error codes; every error code counts as a fault. |
 | ATU-100-EXT-YAF-2E0UMK | whole repo reviewed | nothing | MIT, DG4SN / 2E0UMK | Reviewed: only a debug bit-banged UART TX, no host command set, so no driver. Catalog entry `atu-100-ext` stays `pendiente de fuente`. |
-
+| POTACAT | `lib/flex-scope.js` | `remote-station/bricoham_remote_station/drivers/smartsdr_protocol.py`, `smartsdr-core.cjs` | Apache-2.0 (Copyright 2026 Casey Stanton; file SPDX header) | FFT packet parser (class 0x8003), pixel-to-level mapping, frame assembler with junk-frame drop and `display pan set` sizing, ported; added strict length checks, stream filtering and tests. |
+| POTACAT | `lib/smartsdr.js` | facts only (own implementation) | GPL-3.0 | Facts only: `xmit 1\|0` syntax; implemented in our own words behind `allow_tx`, time cap and SWR trip. |
 ## Engineering method for new radios
 
 Short version of the method in the collection notes, in our own words. See also [MAPA-TECNICO-PROYECTO.md](MAPA-TECNICO-PROYECTO.md).
@@ -80,9 +81,12 @@ Every row records what was taken from a third-party source and what was changed.
 | --- | --- | --- | --- | --- |
 | Hamlib (reference tree 5.0-dev) | `rigs/{icom,kenwood,yaesu,yaesu/ftx1,flexradio}/*.c`, `riglist.h` | LGPL-2.1-or-later | Facts only: model numbers and the declared levels, functions, VFO operations and handler presence of each backend caps struct | No code or calibration table was copied. `scripts/hamlib-caps-extract.cjs` (own code) records the facts in `data/remote-hamlib-caps.json`; `remote-hamlib-caps.cjs` derives the parity and meter statuses; `scripts/remote-caps-apply.cjs` writes them |
 | wfview | CI-V command usage for Icom radios | GPL-3.0-or-later | Read as a cross-check of which meters and operations Icom radios expose; nothing copied | Nothing vendored |
+| Hamlib | `rigs/flexradio/smartsdr.c` | LGPL-2.1-or-later | Facts only: `xmit %d` syntax confirms the POTACAT source | Nothing copied |
 
 Notes:
 
 - The reference tree is Hamlib 5.0-dev while the catalogue pins `hamlibVersion` 4.7.2. The extracted caps are reference facts; the `dump_caps` of the installed `rigctld` still decides at runtime.
 - Declared but unreached meters (COMP, ID, VD, TEMP over Hamlib) are listed per radio in `data/remote-meter-model.json` (`backend.unreached`) and are not upgraded.
 - Re-run `node scripts/hamlib-caps-extract.cjs`, `node scripts/remote-caps-apply.cjs` and `node scripts/remote-parity-docs.cjs` after updating the references.
+- Not found in any reference: ping/keepalive syntax and waterfall-tile layout (kept "pendiente de fuente").
+- Reference repos live in `data/third-party/` (gitignored, never committed).

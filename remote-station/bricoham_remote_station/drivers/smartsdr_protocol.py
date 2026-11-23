@@ -20,6 +20,11 @@ PGXL_TCP_PORT = 9008
 DISCOVERY_CLASS_ID = 0x534CFFFF
 MAX_SMARTSDR_FRAME_BYTES = 16_384
 MAX_SMARTSDR_SEQUENCE = 0xFFFF_FFFF
+# Panadapter FFT packets: layout verified on a FLEX-8600 by POTACAT (lib/flex-scope.js).
+PACKET_CLASS_FFT = 0x8003
+PAN_BINS = 850
+PAN_Y_PIXELS = 256
+PAN_JUNK_FACTOR = 4
 
 
 class SmartSdrReadCommand(StrEnum):
@@ -416,6 +421,85 @@ def normalize_meters(readings: dict) -> dict:
     return out
 
 
+# --- Panadapter FFT stream (VITA-49 class 0x8003) ----------------------------
+# SPDX-License-Identifier: Apache-2.0 (adapted part, GPL-3.0-or-later compatible)
+# Adapted from POTACAT lib/flex-scope.js (Copyright 2026 Casey Stanton, Apache-2.0; see
+# docs/THIRD-PARTY-REUSE.md). Layout, verified there against a FLEX-8600 on v4: 28-byte VITA header,
+# stream ID = pan ID, packet class 0x8003; payload header (big endian) start_bin u16, num_bins u16,
+# bin_size u16 (= 2), total_bins u16, frame_index u32; then num_bins u16 bins. A bin is a Y pixel:
+# 0 = max_dbm (top), y_pixels - 1 = min_dbm. Waterfall tiles: pendiente de fuente (no source read).
+
+
+@dataclass(frozen=True)
+class FftPacket:
+    stream_id: int
+    start: int
+    num: int
+    total: int
+    frame: int
+    bins: tuple
+
+
+def parse_fft_packet(packet: bytes) -> Optional[FftPacket]:
+    """One VITA-49 datagram -> FftPacket, or None when it is not a well-formed panadapter FFT packet."""
+    if not isinstance(packet, bytes) or len(packet) < 4 or packet[0] & 0xF8 != 0x38:
+        return None
+    try:
+        vita = parse_vita_packet(packet)
+    except ValueError:
+        return None
+    if vita.class_id is None or vita.class_id & 0xFFFF != PACKET_CLASS_FFT or vita.stream_id is None:
+        return None
+    if len(vita.payload) < 12:
+        return None
+    start, num, size, total, frame = struct.unpack_from(">HHHHI", vita.payload)
+    if size != 2 or not num or not total or start + num > total or len(vita.payload) < 12 + num * 2:
+        return None
+    bins = struct.unpack_from(f">{num}H", vita.payload, 12)
+    return FftPacket(vita.stream_id, start, num, total, frame, bins)
+
+
+def level_from_pixel(value: int, y_pixels: int = PAN_Y_PIXELS) -> int:
+    """A pixel row (0 = top = strongest) -> a 0..255 level (255 = strongest)."""
+    top = max(1, y_pixels - 1)
+    return max(0, min(255, int(255 - value * 255 / top + 0.5)))
+
+
+class PanFrameAssembler:
+    """Reassembles FFT packets into whole frames of 0..255 levels; resize junk frames are dropped."""
+
+    def __init__(self, y_pixels: int = PAN_Y_PIXELS) -> None:
+        self.y_pixels = y_pixels
+        self.dropped = 0
+        self._frame = None
+        self._levels = None
+        self._have = 0
+        self._bad = False
+
+    def feed(self, packet: Optional[FftPacket]) -> Optional[bytes]:
+        if packet is None:
+            return None
+        if packet.frame != self._frame or self._levels is None or len(self._levels) != packet.total:
+            self._frame = packet.frame
+            self._levels = bytearray(packet.total)
+            self._have = 0
+            self._bad = False
+        for index, value in enumerate(packet.bins):
+            # A bin a little past the last row is a noise floor under min_dbm; far past it is junk.
+            if value >= self.y_pixels * PAN_JUNK_FACTOR:
+                self._bad = True
+            self._levels[packet.start + index] = level_from_pixel(min(value, self.y_pixels - 1), self.y_pixels)
+        self._have += packet.num
+        if self._have < packet.total:
+            return None
+        levels, bad = bytes(self._levels), self._bad
+        self._levels, self._frame = None, None
+        if bad:
+            self.dropped += 1
+            return None
+        return levels
+
+
 # --- Command builders (pure; the session decides what may be sent) -----------
 
 SLICE_MODES = ("usb", "lsb", "cw", "am", "digu")
@@ -571,6 +655,19 @@ class Cmd:
         return f"display pan s {_hex_id(pan_id, 'pan')} " + " ".join(f"{k}={allowed[k](v)}" for k, v in params.items())
 
     @staticmethod
+    def xmit(on):
+        """Voice PTT: `xmit 1|0` (POTACAT lib/smartsdr.js setTransmit; Hamlib rigs/flexradio/smartsdr.c)."""
+        return f"xmit {1 if on else 0}"
+
+    @staticmethod
+    def pan_layout(pan_id, fps=15):
+        """Size the pan so the FFT stream matches PAN_BINS x PAN_Y_PIXELS (POTACAT lib/flex-scope.js panSizeCommand)."""
+        return (
+            f"display pan set {_hex_id(pan_id, 'pan')} xpixels={PAN_BINS} ypixels={PAN_Y_PIXELS} "
+            f"fps={max(5, min(30, _int(fps, 1, 1000, 'fps')))}"
+        )
+
+    @staticmethod
     def pan_remove(pan_id):
         return f"display pan r {_hex_id(pan_id, 'pan')}"
 
@@ -604,6 +701,27 @@ PGXL_STATUS_COMMAND = "status"
 
 
 # --- Session -----------------------------------------------------------------
+
+
+class UdpTransport:
+    """Receive-only UDP socket for VITA-49 streams; datagrams from other hosts are dropped."""
+
+    def __init__(self, host: str, port: int) -> None:
+        self._host = socket.gethostbyname(host)
+        self._sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self._sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self._sock.bind(("", port))
+
+    def recv(self, timeout: float):
+        self._sock.settimeout(max(timeout, 0.001))
+        try:
+            data, address = self._sock.recvfrom(65535)
+        except socket.timeout:
+            return None
+        return data if address[0] == self._host else None
+
+    def close(self) -> None:
+        self._sock.close()
 
 
 class TcpTransport:
@@ -640,8 +758,9 @@ class TcpTransport:
 class SmartSdrSession:
     """One SmartSDR TCP session. TX needs allow_tx (default off) and is time capped.
 
-    No keepalive is sent: the ping syntax is pendiente de fuente, so the radio may
-    drop an idle client after 15 s if keepalive was enabled by someone else.
+    No keepalive is sent: the ping syntax is not in any reference read (POTACAT, Hamlib rigs/flexradio,
+    ThetisLink), so it stays pendiente de fuente; the radio may drop an idle client after 15 s if
+    keepalive was enabled by someone else.
     """
 
     transport: object
@@ -663,6 +782,7 @@ class SmartSdrSession:
     tx_deadline: Optional[float] = None
     swr_tripped: bool = False
     tx_off_unverified: bool = False
+    _xmit_keyed: bool = False
     _seq: int = 1
     _amplifiers: set = field(default_factory=set)
     _swr_since: Optional[float] = None
@@ -745,11 +865,25 @@ class SmartSdrSession:
         self.command(Cmd.atu_start())
         self.tx_deadline = self.clock() + self.tx_cap_s
 
+    def ptt_start(self) -> None:
+        """Voice PTT (`xmit 1`): same guards and time cap as tune; there is no automatic keying."""
+        if not self.allow_tx:
+            raise SmartSdrError("TX desactivado por configuración.")
+        if self.swr_tripped:
+            raise SmartSdrError("ROE alta: reinicia la alerta antes de transmitir.")
+        self.command(Cmd.xmit(True))
+        self._xmit_keyed = True
+        self.tx_deadline = self.clock() + self.tx_cap_s
+
     def unkey(self, attempts: int = 3) -> bool:
-        """Send `transmit tune off`; a reply with code 0 counts as verified TX off."""
+        """Send `xmit 0` (when PTT was keyed) and `transmit tune off`; code 0 counts as verified TX off."""
         for _ in range(attempts):
             try:
-                if self.command(Cmd.transmit_tune(False), timeout=2.0, check=False).succeeded:
+                ok = True
+                if self._xmit_keyed:
+                    ok = self.command(Cmd.xmit(False), timeout=2.0, check=False).succeeded
+                    self._xmit_keyed = not ok
+                if self.command(Cmd.transmit_tune(False), timeout=2.0, check=False).succeeded and ok:
                     self.tx_deadline = None
                     self.tx_off_unverified = False
                     return True

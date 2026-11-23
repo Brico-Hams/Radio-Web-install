@@ -26,8 +26,10 @@ Pages read:
 - SmartSDR-Command-Line-API
 
 Pages not read (pendiente de fuente):
-- TCPIP-xmit
-- TCPIP-ping
+- TCPIP-ping (no ping syntax in POTACAT, Hamlib rigs/flexradio or ThetisLink either)
+
+`xmit` is sourced from code, not from the wiki: `data/third-party/refs/POTACAT/lib/smartsdr.js`
+(`xmit ${state ? 1 : 0}`) and `data/third-party/refs/Hamlib/rigs/flexradio/smartsdr.c` (`xmit %d`).
 - TCPIP-filt
 - TCPIP-dax
 - TCPIP-remote-audio
@@ -92,7 +94,8 @@ Pages not read (pendiente de fuente):
   - `transmit bandset <band> rfpower= tunepower= hwalc_enabled=`.
   - Errors: 5000003D TX not supported, 50000042 not ready, 50000043 no
     transmitter.
-  - `xmit 0|1` syntax: pendiente de fuente.
+  - `xmit 0|1`: sourced (POTACAT `lib/smartsdr.js`, Hamlib `smartsdr.c`). Implemented as
+    `ptt_start`/`ptt_stop`, guarded by `allow_tx` (default off), the TX time cap and the SWR trip.
 - **ATU**
   - `atu start` needs a TX slice and READY state.
   - `atu bypass`.
@@ -141,8 +144,14 @@ Pages not read (pendiente de fuente):
   can do this.
 - `display pan s <id> center= bandwidth= xpixels= ypixels= fps= min_dbm= max_dbm= average= autocenter=`.
 - `display pan r <id>` removes the display. Subscribe with `sub pan all`.
-- The VITA-49 bin, FFT and waterfall-tile layouts are pendiente de fuente:
-  the Panadapter page is empty and the panafall pages were not read.
+- `display pan set <id> xpixels=850 ypixels=256 fps=N` (POTACAT `lib/flex-scope.js`, verified
+  on a FLEX-8600); pan status `center`/`bandwidth` are in MHz.
+- FFT packet (POTACAT `lib/flex-scope.js`): 28-byte VITA header, stream ID = pan ID, packet class
+  `0x8003` (low half of the last class word). Payload, big endian: start_bin u16, num_bins u16,
+  bin_size u16 (= 2), total_bins u16, frame_index u32, then u16 bins. A bin is a Y pixel:
+  0 = max_dbm, ypixels-1 = min_dbm. Frames with a bin >= 4 x ypixels are junk and dropped.
+  Meter packets are class `0x8002`.
+- The waterfall-tile layout is pendiente de fuente: no reference describes it.
 
 ## Streams and audio
 
@@ -173,6 +182,9 @@ Node agent (`remote-agent.cjs --smartsdr-host`, `SmartSdrRigClient`) and the Rea
 console (`FlexPanel`). Android is not wired yet (no Flex profile or Kotlin client);
 pending features are shown greyed as "pendiente de fuente".
 
+- Panadapter FFT: the Python agent streams it through `/cat/scope` (needs a UDP port) into the
+  existing scope view; the Node core/rig client emits `scope` frames, but the Node UI has no
+  scope view yet.
 - Keepalive: not sent (ping syntax pendiente de fuente); a radio that enabled
   `keepalive enable` drops an idle client after 15 s.
 - `vox_level`, `vox_delay`, `hwalc_enabled` values: range pendiente de fuente, not

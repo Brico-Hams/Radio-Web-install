@@ -6,6 +6,7 @@ from collections import deque
 from bricoham_remote_station.drivers.smartsdr_protocol import (
     MAX_SMARTSDR_SEQUENCE,
     Cmd,
+    PanFrameAssembler,
     SmartSdrCommandError,
     SmartSdrError,
     SmartSdrReadCommand,
@@ -13,9 +14,11 @@ from bricoham_remote_station.drivers.smartsdr_protocol import (
     build_query,
     decode_meter_payload,
     describe_error,
+    level_from_pixel,
     normalize_meters,
     parse_discovery_packet,
     parse_discovery_string,
+    parse_fft_packet,
     parse_legacy_discovery,
     parse_line,
     parse_meter_list,
@@ -49,6 +52,17 @@ def vita_packet(payload: bytes, class_word=None, timestamps=False) -> bytes:
         header_words += [1, 2, 3]
     size = 1 + len(header_words) + len(payload) // 4
     words = [flags | size] + header_words
+    return struct.pack(f">{len(words)}I", *words) + payload
+
+
+def fft_packet(stream_id, start, num, total, frame, bins, size=2, trailer=False) -> bytes:
+    payload = struct.pack(">HHHHI", start, num, size, total, frame) + struct.pack(f">{len(bins)}H", *bins)
+    flags = 3 << 28 | 1 << 27 | 1 << 22 | 1 << 20
+    words = [0, stream_id, 0x00001C2D, 0x534C8003, 1, 2, 3]
+    if trailer:
+        flags |= 1 << 26
+        payload += b"\x00" * 4
+    words[0] = flags | len(words) + len(payload) // 4
     return struct.pack(f">{len(words)}I", *words) + payload
 
 
@@ -227,6 +241,62 @@ class SmartSdrFlexTests(unittest.TestCase):
         session.close()
         self.assertEqual(transport.sent[-2:], ["transmit tune off", "amplifier set 1A operate=0"])
         self.assertTrue(transport.closed)
+
+
+    def test_xmit_is_guarded_capped_and_unkeyed_first(self) -> None:
+        session, transport, _ = make_session()
+        with self.assertRaises(SmartSdrError):
+            session.ptt_start()
+        self.assertEqual(transport.sent, [])
+        session, transport, clock = make_session(allow_tx=True, tx_cap_s=30)
+        session.ptt_start()
+        self.assertEqual(transport.sent, ["xmit 1"])
+        clock.t += 31
+        session.tick()
+        self.assertEqual(transport.sent[1:], ["xmit 0", "transmit tune off"])
+        self.assertIsNone(session.tx_deadline)
+        session.ptt_start()
+        session.swr_tripped = True
+        session.emergency_stop()
+        self.assertEqual(transport.sent[-2:], ["xmit 0", "transmit tune off"])
+        with self.assertRaises(SmartSdrError):
+            session.ptt_start()
+
+    def test_unverified_xmit_off_is_reported_and_retried(self) -> None:
+        session, _, _ = make_session(allow_tx=True, replies={"xmit 0": ("50000042", "")})
+        session.ptt_start()
+        self.assertFalse(session.unkey())
+        self.assertTrue(session.tx_off_unverified)
+
+    def test_fft_packet_layout_from_potacat_flex_scope(self) -> None:
+        # POTACAT lib/flex-scope.js: class 0x8003, header start/num/size(2)/total/frame, u16 Y-pixel bins.
+        packet = parse_fft_packet(fft_packet(0x40000000, 670, 4, 850, 9, [0, 255, 300, 7]))
+        self.assertEqual((packet.stream_id, packet.start, packet.num, packet.total, packet.frame),
+                         (0x40000000, 670, 4, 850, 9))
+        self.assertEqual(packet.bins, (0, 255, 300, 7))
+        trailer = fft_packet(0x40000000, 0, 2, 4, 1, [5, 6], trailer=True)
+        self.assertEqual(parse_fft_packet(trailer).bins, (5, 6))
+        meter = vita_packet(b"\x00" * 16, class_word=0x534C8002, timestamps=True)
+        for bad in (meter, b"\x38\x00", fft_packet(1, 0, 2, 4, 1, [5, 6], size=4),
+                    fft_packet(1, 3, 2, 4, 1, [5, 6]), fft_packet(1, 0, 2, 4, 1, [5, 6])[:-4]):
+            self.assertIsNone(parse_fft_packet(bad))
+
+    def test_fft_frames_reassemble_and_drop_resize_junk(self) -> None:
+        self.assertEqual((level_from_pixel(0), level_from_pixel(255), level_from_pixel(190)), (255, 0, 65))
+        assembler = PanFrameAssembler()
+        first = parse_fft_packet(fft_packet(1, 0, 2, 4, 7, [0, 255]))
+        self.assertIsNone(assembler.feed(first))
+        self.assertEqual(assembler.feed(parse_fft_packet(fft_packet(1, 2, 2, 4, 7, [190, 262]))), bytes([255, 0, 65, 0]))
+        junk = parse_fft_packet(fft_packet(1, 0, 4, 4, 8, [65000, 1, 1, 1]))
+        self.assertIsNone(assembler.feed(junk))
+        self.assertEqual(assembler.dropped, 1)
+
+    def test_xmit_and_pan_layout_builders(self) -> None:
+        self.assertEqual((Cmd.xmit(True), Cmd.xmit(False)), ("xmit 1", "xmit 0"))
+        self.assertEqual(Cmd.pan_layout("0x40000000", 15), "display pan set 0x40000000 xpixels=850 ypixels=256 fps=15")
+        self.assertEqual(Cmd.pan_layout("40000000", 99), "display pan set 40000000 xpixels=850 ypixels=256 fps=30")
+        with self.assertRaises(ValueError):
+            Cmd.pan_layout("0x4;x")
 
 
 class SmartSdrProtocolTests(unittest.TestCase):

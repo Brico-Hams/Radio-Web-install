@@ -2,7 +2,8 @@
 
 Wraps drivers/smartsdr_protocol.SmartSdrSession (source: remote-station/docs/FLEX-SMARTSDR-API.md).
 TX is default off, only through the guarded tune/ATU flow (operator action, tunepower <= tune_limit,
-time cap, verified TX off). `xmit` PTT, vox_* values and panadapter payloads are pendiente de fuente.
+time cap, verified TX off). `xmit` PTT is an explicit operator action under the same guards; the
+panadapter FFT feeds the scope stream. ping/keepalive, waterfall tiles and vox_* values are pendiente de fuente.
 """
 
 import json
@@ -13,19 +14,26 @@ from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 
+from bricoham_remote_station.drivers.icom_scope import PIXEL_MAX, ScopeFrame
 from bricoham_remote_station.drivers.smartsdr_protocol import (
     SMARTSDR_TCP_PORT,
     Cmd,
+    PanFrameAssembler,
     SmartSdrError,
     SmartSdrSession,
     TcpTransport,
+    UdpTransport,
+    parse_fft_packet,
 )
 from bricoham_station_agent.radio_settings import settings_request_identifier
 
 LOGGER = logging.getLogger("bricoham.station_agent.flex")
 # Documented 0-100 ranges only (transmit set); max_power_level and region are never written.
 SETTINGS = ("rfpower", "tunepower", "miclevel")
-PENDING = ("ptt_xmit", "vox_level", "vox_delay", "hwalc_enabled", "panadapter_decode", "keepalive")
+# ping (keepalive) syntax and VITA-49 waterfall tiles are in none of the references read.
+PENDING = ("vox_level", "vox_delay", "hwalc_enabled", "waterfall_tiles", "keepalive")
+SCOPE_MAX_COLUMNS = 425  # the web console accepts at most 689 pixels per row; 850 bins / 2
+SCOPE_PAN_WAIT_S = 2.0
 # Same live-data envelope the coordinator checks for every agent payload.
 ENVELOPE = {
     "api_version": "v1",
@@ -38,6 +46,14 @@ ENVELOPE = {
 
 class FlexError(Exception):
     pass
+
+
+def _scope_pixels(levels: bytes) -> bytes:
+    """0..255 levels -> 0..PIXEL_MAX pixels, keeping the peak when the row is decimated to fit."""
+    step = -(-len(levels) // SCOPE_MAX_COLUMNS)
+    return bytes(
+        round(max(levels[i : i + step]) * PIXEL_MAX / 255) for i in range(0, len(levels), step)
+    )
 
 
 @dataclass(frozen=True)
@@ -84,9 +100,12 @@ class FlexConfig:
 
 
 class FlexController:
-    def __init__(self, config: FlexConfig, transport_factory=TcpTransport, clock=time.monotonic) -> None:
+    def __init__(
+        self, config: FlexConfig, transport_factory=TcpTransport, clock=time.monotonic, udp_factory=UdpTransport
+    ) -> None:
         self.config = config
         self._factory = transport_factory
+        self._udp_factory = udp_factory
         self._clock = clock
         self._lock = threading.RLock()
         self._session: SmartSdrSession | None = None
@@ -202,6 +221,11 @@ class FlexController:
             return {"ok": session.emergency_stop()}
         if action == "tune_stop":
             return {"ok": session.unkey()}
+        if action == "ptt_stop":
+            return {"ok": session.unkey()}
+        if action == "ptt_start":
+            session.ptt_start()
+            return {"ok": True, "cap_s": self.config.tx_cap_s}
         if action == "reset_swr":
             session.reset_swr_trip()
             return {"ok": True}
@@ -247,6 +271,71 @@ class FlexController:
         session.command(Cmd.transmit_set(**{name: value}))
         self._seen.append(request_id)
         return {"ok": True, "name": name, "value": value, "backup": self._backup[name], "readback": "ack_only"}
+
+    def _pan_geometry(self, session: SmartSdrSession, pan_id: str):
+        fields = session.status.get(("display", ("pan", pan_id)), {})
+        try:
+            center, bandwidth = float(fields["center"]), float(fields["bandwidth"])
+        except (KeyError, ValueError):
+            return None
+        if not (center > 0 and bandwidth > 0):
+            return None
+        return round((center - bandwidth / 2) * 1e6), round((center + bandwidth / 2) * 1e6)
+
+    def _find_pan(self, session: SmartSdrSession):
+        for key in session.status:
+            if key[0] == "display" and len(key[1]) == 2 and key[1][0] == "pan":
+                return key[1][1]
+        return None
+
+    def scope_stream(self, seconds: float, max_fps: float):
+        """Yield ScopeFrame rows from the radio's own panadapter (receive-only) for at most `seconds`."""
+        if self.config.udp_port is None:
+            raise FlexError("flex_scope_needs_udp_port")
+        with self._lock:
+            session = self._ensure()
+            try:
+                session.command(Cmd.subscribe("pan"))
+            except (SmartSdrError, OSError, ValueError) as error:
+                raise FlexError("flex_command_failed") from error
+        pan_id = None
+        wait_until = self._clock() + SCOPE_PAN_WAIT_S
+        while pan_id is None and self._clock() < wait_until:
+            self.pump_once(0.05)
+            with self._lock:
+                pan_id = self._find_pan(session)
+        if pan_id is None:
+            raise FlexError("flex_scope_no_pan")
+        try:
+            with self._lock:
+                session.command(Cmd.pan_layout(pan_id))
+            udp = self._udp_factory(self.config.host, self.config.udp_port)
+        except (SmartSdrError, OSError, ValueError) as error:
+            raise FlexError("flex_scope_unavailable") from error
+        stream_id = int(pan_id, 16)
+        assembler = PanFrameAssembler()
+        min_gap = 1.0 / max(0.1, min(float(max_fps), 30.0))
+        deadline = self._clock() + max(0.0, float(seconds))
+        last = None
+        try:
+            while self._clock() < deadline and not self._closed and self._session is session:
+                self.pump_once(0.0)
+                data = udp.recv(0.05)
+                packet = parse_fft_packet(data) if data else None
+                if packet is None or packet.stream_id != stream_id:
+                    continue
+                levels = assembler.feed(packet)
+                now = self._clock()
+                if levels is None or (last is not None and now - last < min_gap):
+                    continue
+                with self._lock:
+                    edges = self._pan_geometry(session, pan_id)
+                if edges is None or edges[1] <= edges[0]:
+                    continue
+                last = now
+                yield ScopeFrame(1, edges[0], edges[1], False, _scope_pixels(levels))
+        finally:
+            udp.close()
 
     def close(self) -> None:
         with self._lock:

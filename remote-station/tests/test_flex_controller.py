@@ -1,5 +1,6 @@
 import json
 import re
+import struct
 import tempfile
 import unittest
 from collections import deque
@@ -43,6 +44,27 @@ class FakeTransport:
         self.closed = True
 
 
+class FakeUdp:
+    def __init__(self, clock, packets) -> None:
+        self.clock = clock
+        self.packets = deque(packets)
+        self.closed = False
+
+    def recv(self, timeout: float):
+        self.clock.t += max(timeout, 0.2)
+        return self.packets.popleft() if self.packets else None
+
+    def close(self) -> None:
+        self.closed = True
+
+
+def fft_packet(stream_id, start, num, total, frame, bins) -> bytes:
+    payload = struct.pack(">HHHHI", start, num, 2, total, frame) + struct.pack(f">{num}H", *bins)
+    words = [0, stream_id, 0x00001C2D, 0x534C8003, 1, 2, 3]
+    words[0] = 3 << 28 | 1 << 27 | 1 << 22 | 1 << 20 | len(words) + len(payload) // 4
+    return struct.pack(f">{len(words)}I", *words) + payload
+
+
 def make(allow_tx=True, replies=None, **config):
     clock = Clock()
     transport = FakeTransport(clock, {"meter list": ("0", METER_LIST), **(replies or {})})
@@ -58,7 +80,54 @@ class FlexControllerTests(unittest.TestCase):
         self.assertTrue(snapshot["connected"])
         self.assertEqual(transport.sent[:3], ["client gui", "interlock timeout=30000", "meter list"])
         self.assertEqual(transport.sent[-2:], ["sub meter all", "sub slice all"])
-        self.assertIn("ptt_xmit", snapshot["pending_de_fuente"])
+        self.assertIn("keepalive", snapshot["pending_de_fuente"])
+        self.assertIn("waterfall_tiles", snapshot["pending_de_fuente"])
+        self.assertNotIn("ptt_xmit", snapshot["pending_de_fuente"])
+
+    def test_ptt_is_default_off_capped_and_stopped(self) -> None:
+        controller, transport, _ = make(allow_tx=False)
+        with self.assertRaises(FlexError) as caught:
+            controller.operate({"action": "ptt_start"})
+        self.assertEqual(str(caught.exception), "flex_tx_disabled")
+        self.assertNotIn("xmit 1", transport.sent)
+        controller, transport, clock = make()
+        controller.operate({"action": "ptt_start"})
+        self.assertEqual(transport.sent[-1], "xmit 1")
+        self.assertTrue(controller.operate({"action": "ptt_stop"})["ok"])
+        self.assertEqual(transport.sent[-2:], ["xmit 0", "transmit tune off"])
+        controller.operate({"action": "ptt_start"})
+        clock.t += 31
+        controller.pump_once()
+        self.assertEqual(transport.sent[-2:], ["xmit 0", "transmit tune off"])
+
+    def test_scope_stream_turns_pan_fft_into_scope_frames(self) -> None:
+        controller, transport, clock = make(udp_port=4993)
+        transport.lines.append(b"S0|display pan 0x40000000 center=14.100000 bandwidth=0.200000")
+        udp = FakeUdp(clock, [
+            fft_packet(0x40000000, 0, 426, 850, 1, [0] * 426),
+            fft_packet(0x40000000, 426, 424, 850, 1, [255] * 424),
+            fft_packet(0x40000001, 0, 850, 850, 2, [0] * 850),
+        ])
+        controller._udp_factory = lambda host, port: udp
+        frames = list(controller.scope_stream(5, 5))
+        self.assertEqual(len(frames), 1)
+        frame = frames[0]
+        self.assertEqual((frame.start_hz, frame.end_hz, frame.out_of_range), (14_000_000, 14_200_000, False))
+        self.assertEqual(len(frame.pixels), 425)
+        self.assertEqual((frame.pixels[0], frame.pixels[-1]), (160, 0))
+        self.assertIn("sub pan all", transport.sent)
+        self.assertIn("display pan set 0x40000000 xpixels=850 ypixels=256 fps=15", transport.sent)
+        self.assertTrue(udp.closed)
+
+    def test_scope_stream_needs_udp_port_and_a_pan(self) -> None:
+        controller, _, _ = make()
+        with self.assertRaises(FlexError) as caught:
+            next(controller.scope_stream(1, 5))
+        self.assertEqual(str(caught.exception), "flex_scope_needs_udp_port")
+        controller, _, _ = make(udp_port=4993)
+        with self.assertRaises(FlexError) as caught:
+            next(controller.scope_stream(1, 5))
+        self.assertEqual(str(caught.exception), "flex_scope_no_pan")
 
     def test_tx_is_default_off_and_limited(self) -> None:
         controller, transport, _ = make(allow_tx=False)
