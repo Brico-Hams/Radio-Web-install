@@ -84,6 +84,10 @@ class AccessoriesApiTests(unittest.TestCase):
 class StubPtt:
     def __init__(self):
         self.lease_active = False
+        self.tune_refusal_code = None
+
+    def tune_refusal(self):
+        return self.tune_refusal_code
 
     def snapshot(self):
         return {"lease_active": self.lease_active}
@@ -147,6 +151,15 @@ class TuneAndPowerApiTests(unittest.TestCase):
         self.assertFalse(body["tuner"]["tuning"])
         self.assertEqual(self.tuner.calls, ["start", "stop"])
         self.assertEqual(self.call(path, "POST", {"operation": "tune", "power_w": True})[0], 400)
+
+    def test_tune_out_of_band_is_refused_before_the_tuner_is_started(self):
+        path = "/api/v1/accessories"
+        self.ptt.tune_refusal_code = "ptt_out_of_band"
+        status, body = self.call(path, "POST", {"operation": "tune", "power_w": 5})
+        self.assertEqual((status, body["error"]["code"]), (409, "accessories_tx_out_of_band"))
+        self.assertEqual(self.tuner.calls, [])
+        self.ptt.tune_refusal_code = None
+        self.assertEqual(self.call(path, "POST", {"operation": "tune", "power_w": 5})[0], 200)
 
     def test_operate_refused_while_ptt_lease_is_held(self):
         path = "/api/v1/accessories"
