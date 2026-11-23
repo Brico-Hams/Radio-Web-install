@@ -164,6 +164,7 @@
       <button id="tab-levels" type="button" role="tab" aria-selected="false" aria-controls="panel-levels" tabindex="-1">Niveles</button>
       <button id="tab-cw" type="button" role="tab" aria-selected="false" aria-controls="panel-cw" tabindex="-1">CW</button>
       <button id="tab-log" type="button" role="tab" aria-selected="false" aria-controls="panel-log" tabindex="-1">Registro</button>
+      <button id="tab-qso" type="button" role="tab" aria-selected="false" aria-controls="panel-qso" tabindex="-1">Libro QSO</button>
       <button id="tab-settings" type="button" role="tab" aria-selected="false" aria-controls="panel-settings" tabindex="-1">Ajustes</button>
     </div>
 
@@ -258,6 +259,45 @@
       <ol id="log" class="log" aria-label="Ultimos cambios de esta sesion">
         <li class="empty">Sin eventos todavia.</li>
       </ol>
+    </section>
+
+    <section id="panel-qso" class="card panel" role="tabpanel" aria-labelledby="tab-qso" data-active="false">
+      <h2 class="panel-title">Libro de QSO</h2>
+      <p class="hint">Los datos de QRZ.com y de LoTW se guardan solo en el agente. Nada se sube sin que pulses el boton.</p>
+      <label class="slider" for="qso-call">Indicativo del corresponsal</label>
+      <input id="qso-call" type="text" maxlength="16" autocomplete="off" spellcheck="false">
+      <label class="slider" for="qso-freq">Frecuencia (MHz)</label>
+      <input id="qso-freq" type="text" inputmode="decimal" maxlength="12" autocomplete="off">
+      <label class="slider" for="qso-mode">Modo</label>
+      <input id="qso-mode" type="text" maxlength="12" autocomplete="off" spellcheck="false">
+      <label class="slider" for="qso-sent">RST enviado</label>
+      <input id="qso-sent" type="text" maxlength="6" value="59" autocomplete="off">
+      <label class="slider" for="qso-rcvd">RST recibido</label>
+      <input id="qso-rcvd" type="text" maxlength="6" value="59" autocomplete="off">
+      <label class="slider" for="qso-grid">Locator del corresponsal</label>
+      <input id="qso-grid" type="text" maxlength="8" autocomplete="off" spellcheck="false">
+      <label class="slider" for="qso-notes">Notas</label>
+      <input id="qso-notes" type="text" maxlength="200" autocomplete="off">
+      <div class="cw-actions">
+        <button id="qso-fill" type="button">Usar frecuencia y modo de la radio</button>
+        <button id="qso-lookup" type="button" disabled>Consultar QRZ.com</button>
+        <button id="qso-add" type="button">Guardar QSO</button>
+      </div>
+      <p id="qso-qrz-hint" class="hint"></p>
+      <p id="qso-lookup-result" class="hint" role="status" aria-live="polite"></p>
+      <p id="qso-status" class="hint" role="status" aria-live="polite"></p>
+      <p id="qso-progress" class="hint" role="status" aria-live="polite"></p>
+      <ol id="qso-list" class="log" aria-label="Ultimos contactos">
+        <li class="empty">Sin contactos todavia.</li>
+      </ol>
+      <h3 class="sub">ADIF y LoTW</h3>
+      <label class="slider" for="qso-import">Importar ADIF</label>
+      <input id="qso-import" type="file" accept=".adi,.adif,text/plain">
+      <div class="cw-actions">
+        <button id="qso-export" type="button">Exportar ADIF</button>
+        <button id="qso-lotw" type="button" disabled>Subir a LoTW con TQSL</button>
+      </div>
+      <p id="qso-lotw-hint" class="hint"></p>
     </section>
 
     <section id="panel-settings" class="card panel" role="tabpanel" aria-labelledby="tab-settings" data-active="false">

@@ -55,6 +55,13 @@ Unione di `data/remote-station-catalog.json`, dei driver Python e dei profili An
 
 Xiegu non è nel catalogo, nei driver Python né nei profili Android, quindi non c'è una riga.
 
+## Registro QSO, QRZ.com e LoTW (agente Node, solo proprietario)
+
+La scheda «Libro QSO» della console riusa `remote-log.cjs` (import/export ADIF, duplicati, avanzamento DXCC/WAS/locator/POTA) tramite `remote-qsl.cjs`, che salva il registro in `qso-log.json` accanto a `remote-agent.json` (0600).
+
+- La ricerca QRZ.com è disattivata di default. Si attiva in `remote-agent.json`: `"qrz": {"enabled": true, "username": "...", "password": "..."}`. Il flusso XML segue `third_party/ftx1/Eugen68-Yaesu-FTX1-CAT-Control/.../QrzLookupHelper.java`. Solo HTTPS, timeout di 8 s, 20 ricerche al minuto. Credenziali e chiave di sessione restano nell’agente: mai nello storage del browser, nelle risposte o nei log.
+- Il caricamento LoTW esegue il tuo TQSL locale: `"lotw": {"tqslPath": "C:\\percorso\\tqsl.exe", "args": ["...", "{file}"], "timeoutSeconds": 120}`. La riga di comando di TQSL è pendiente de fuente in questo repository: l’array di argomenti lo indichi tu; `{file}` è sostituito da un ADIF temporaneo dei QSO in sospeso. Nessuna shell, nessuno stdin, le password dei certificati non sono mai gestite (se ne occupa TQSL) e nulla parte senza clic e conferma. Il codice di uscita 0 segna i QSO come inviati.
+
 ## Pendiente de fuente (disattivato)
 
-Ricerca QRZ.com XML, riga di comando TQSL (LoTW), formato righe telnet del DX cluster, decoder FT8/FT4/WSPR/CW/RTTY/PSK31, SSTV nella console web, tabella prefissi DXCC, FlexControl HID.
+Argomenti della riga di comando TQSL (configurati dall’operatore, vedi sopra), formato righe telnet del DX cluster, decoder FT8/FT4/WSPR/CW/RTTY/PSK31, SSTV nella console web, tabella prefissi DXCC, FlexControl HID.

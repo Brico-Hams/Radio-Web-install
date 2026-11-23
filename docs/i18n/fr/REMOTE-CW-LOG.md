@@ -55,6 +55,13 @@ Union de `data/remote-station-catalog.json`, des pilotes Python et des profils A
 
 Xiegu n'est ni dans le catalogue, ni dans les pilotes Python, ni dans les profils Android : il n'y a donc pas de ligne.
 
+## Carnet QSO, QRZ.com et LoTW (agent Node, propriétaire uniquement)
+
+L’onglet « Libro QSO » de la console réutilise `remote-log.cjs` (import/export ADIF, doublons, progression DXCC/WAS/locators/POTA) via `remote-qsl.cjs`, qui conserve le carnet dans `qso-log.json` à côté de `remote-agent.json` (0600).
+
+- La consultation QRZ.com est désactivée par défaut. Activez-la dans `remote-agent.json` : `"qrz": {"enabled": true, "username": "...", "password": "..."}`. Flux XML d’après `third_party/ftx1/Eugen68-Yaesu-FTX1-CAT-Control/.../QrzLookupHelper.java`. HTTPS uniquement, délai de 8 s, 20 consultations par minute. Identifiants et clé de session restent sur l’agent : jamais dans le stockage du navigateur, les réponses ou les journaux.
+- L’envoi LoTW lance votre TQSL local : `"lotw": {"tqslPath": "C:\\chemin\\tqsl.exe", "args": ["...", "{file}"], "timeoutSeconds": 120}`. La ligne de commande de TQSL est pendiente de fuente dans ce dépôt : vous fournissez vous-même le tableau d’arguments ; `{file}` est remplacé par un ADIF temporaire des QSO en attente. Pas de shell, pas de stdin, aucun mot de passe de certificat n’est manipulé (TQSL s’en charge) et rien n’est envoyé sans clic et confirmation. Le code de sortie 0 marque les QSO comme envoyés.
+
 ## Pendiente de fuente (désactivé)
 
-Consultation QRZ.com XML, ligne de commande TQSL (LoTW), format des lignes telnet du DX cluster, décodeurs FT8/FT4/WSPR/CW/RTTY/PSK31, SSTV sur la console web, table des préfixes DXCC, FlexControl HID.
+Arguments de la ligne de commande TQSL (configurés par l’opérateur, voir ci-dessus), format des lignes telnet du DX cluster, décodeurs FT8/FT4/WSPR/CW/RTTY/PSK31, SSTV sur la console web, table des préfixes DXCC, FlexControl HID.
