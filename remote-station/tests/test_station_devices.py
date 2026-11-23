@@ -9,6 +9,7 @@ from bricoham_station_agent.station_devices import (
     Outlet,
     PowerDevice,
     SerialRotorBackend,
+    build_power_device,
     build_signal_path,
     dli_request,
     modbus_read_coils,
@@ -264,6 +265,21 @@ class SignalPathTests(unittest.TestCase):
         for device, link, status, source in SUPPORT_MATRIX:
             self.assertTrue(device and link and source)
             self.assertIn(status, ("ok", "partial", PENDING))
+
+
+class PowerConfigTests(unittest.TestCase):
+    def test_builder_reads_dli_credentials_only_from_environment(self):
+        config = {"id": "dli", "kind": "dli", "host": "10.0.0.5", "outlets": [{"name": "fan", "index": 0}]}
+        seen = []
+        build_power_device(config, {"BRICOHAM_POWER_USER": "u", "BRICOHAM_POWER_PASSWORD": "p"}, lambda: False,
+                           dli_transport=lambda *args: seen.append(args) or (lambda request: (204, "")))
+        self.assertEqual(seen, [("10.0.0.5", "u", "p", 80)])
+        with self.assertRaises(ValueError):
+            build_power_device(config, {}, lambda: False)
+        with self.assertRaises(ValueError):
+            build_power_device({**config, "password": "x"}, {}, lambda: False)
+        device = build_power_device({**config, "kind": "modbus"}, {}, lambda: False, modbus_exchange=lambda *a: FakeModbus())
+        self.assertFalse(device.enabled)
 
 
 if __name__ == "__main__":

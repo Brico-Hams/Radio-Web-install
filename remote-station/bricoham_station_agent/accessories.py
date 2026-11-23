@@ -103,6 +103,10 @@ class StationAccessories:
     def _find(self, device_id: Any) -> dict[str, Any] | None:
         return next((item for item in self._catalog["devices"] if item["id"] == device_id), None)
 
+    def _swr_high(self) -> bool:
+        swr = (self._readout or {}).get("swr")
+        return isinstance(swr, (int, float)) and swr > self._swr_limit
+
     def standby(self, reason: str = "operator") -> dict[str, Any]:
         with self._lock:
             if reason not in STANDBY_REASONS:
@@ -127,7 +131,7 @@ class StationAccessories:
                 else "disabled" if not self._operate_allowed
                 else "tx" if tx
                 else "tuning" if tuning or self._tune_started is not None
-                else "swr" if swr_tripped
+                else "swr" if swr_tripped or self._swr_high()
                 else "fault" if self._state == "fault"
                 else "standby_pending" if self._pending_standby
                 else "band_unknown" if self._band is None
@@ -181,6 +185,8 @@ class StationAccessories:
                 self.standby("fault")
             elif isinstance(swr, (int, float)) and swr > self._swr_limit:
                 self.standby("swr")
+                if self._tune_started is not None:
+                    self.stop_tune("swr", swr)
             elif reading.get("operate") is True and self._state != "operate":
                 self.standby("mismatch")
             return dict(self._readout)
@@ -255,3 +261,65 @@ class StationAccessories:
                     "last": dict(self._tune_result) if self._tune_result else None,
                 },
             }
+
+
+class AccessorySupervisor:
+    """Feeds the radio frequency to the accessories and forces STANDBY on link or lease loss.
+
+    read_frequency() returns Hz, None when the radio is momentarily busy (no update) and raises
+    when the radio link is lost. is_transmitting() must fail closed (True when unknown).
+    """
+
+    def __init__(
+        self,
+        accessories: StationAccessories,
+        *,
+        is_transmitting: Callable[[], bool],
+        read_frequency: Callable[[], float | None] | None = None,
+        interval: float = 0.5,
+        log: Callable[[str], None] = lambda message: None,
+    ) -> None:
+        self._accessories = accessories
+        self._is_transmitting = is_transmitting
+        self._read_frequency = read_frequency
+        self._interval = interval
+        self._log = log
+        self._was_tx = False
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    def step(self) -> None:
+        tx = self._is_transmitting()
+        if self._was_tx and not tx:
+            self._accessories.standby("lease")
+        self._was_tx = tx
+        if self._read_frequency is not None:
+            try:
+                frequency = self._read_frequency()
+            except Exception:
+                # Repeated every step so an operate request while the link is down is undone at once.
+                self._accessories.standby("disconnect")
+                self._accessories.stop_tune("disconnect")
+            else:
+                if frequency is not None:
+                    self._accessories.follow_band(frequency, tx=tx)
+        self._accessories.poll()
+        self._accessories.tick()
+
+    def start(self) -> None:
+        if self._thread is None:
+            self._thread = threading.Thread(target=self._run, name="accessories-supervisor", daemon=True)
+            self._thread.start()
+
+    def _run(self) -> None:
+        while not self._stop.wait(self._interval):
+            try:
+                self.step()
+            except Exception as error:  # an unexpected failure must never leave the amplifier operating
+                self._log(f"Accessory supervision failed: {type(error).__name__}")
+                self._accessories.emergency_stop("fault")
+
+    def stop(self) -> None:
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=2)
