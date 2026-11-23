@@ -2149,6 +2149,16 @@ Ajuste terminado.|Tuning finished.|Réglage terminé.|Abstimmung abgeschlossen.
 Calculando la radiacion...|Computing the radiation...|Calcul du rayonnement...|Strahlung wird berechnet...
 Radiacion calculada.|Radiation computed.|Rayonnement calculé.|Strahlung berechnet.
 Calcula primero el barrido.|Run the sweep first.|Calculez d’abord le balayage.|Zuerst die Wobbelung berechnen.
+CW por el manipulador de la radio|CW through the radio's own keyer|CW par le manipulateur de la radio|CW über den Tastgeber des Funkgeräts
+El CW remoto esta desactivado hasta que el operador lo active en el agente. Transmite solo con una carga o antena adaptada. Esc lo para.|Remote CW stays disabled until the operator enables it at the agent. Transmit only into a matched load or antenna. Esc stops it.|Le CW distant reste désactivé tant que l’opérateur ne l’active pas sur l’agent. N’émettez que sur une charge ou une antenne adaptée. Échap l’arrête.|Remote-CW bleibt deaktiviert, bis der Operator es am Agenten aktiviert. Nur auf eine angepasste Last oder Antenne senden. Esc stoppt es.
+Texto|Text|Texte|Text
+Velocidad (WPM)|Speed (WPM)|Vitesse (WPM)|Geschwindigkeit (WPM)
+Enviar CW|Send CW|Envoyer CW|CW senden
+Parar CW|Stop CW|Arrêter CW|CW stoppen
+Memorias F1-F8|Memories F1-F8|Mémoires F1-F8|Speicher F1-F8
+Indicativo del corresponsal|Other station callsign|Indicatif du correspondant|Rufzeichen der Gegenstation
+Control RST|RST report|Report RST|RST-Rapport
+Numero|Number|Numéro|Nummer
 Resonancia en {0} MHz, por debajo de la banda (objetivo {1} MHz): acorta cada brazo {2} mm (brazo actual {3} m).|Resonance at {0} MHz, below the band (target {1} MHz): shorten each arm by {2} mm (current arm {3} m).|Résonance à {0} MHz, sous la bande (cible {1} MHz) : raccourcissez chaque brin de {2} mm (brin actuel {3} m).|Resonanz bei {0} MHz, unter dem Band (Ziel {1} MHz): jeden Arm um {2} mm kürzen (aktueller Arm {3} m).
 Resonancia en {0} MHz, por encima de la banda (objetivo {1} MHz): alarga cada brazo {2} mm (brazo actual {3} m).|Resonance at {0} MHz, above the band (target {1} MHz): lengthen each arm by {2} mm (current arm {3} m).|Résonance à {0} MHz, au-dessus de la bande (cible {1} MHz) : allongez chaque brin de {2} mm (brin actuel {3} m).|Resonanz bei {0} MHz, über dem Band (Ziel {1} MHz): jeden Arm um {2} mm verlängern (aktueller Arm {3} m).
 Sin cruce de X en el barrido: X = {0} ohm a {1} MHz con pendiente {2} ohm/MHz; la resonancia queda hacia {3} MHz.|No X zero crossing in the sweep: X = {0} ohm at {1} MHz with slope {2} ohm/MHz; resonance lies near {3} MHz.|Pas de passage à zéro de X dans le balayage : X = {0} ohm à {1} MHz, pente {2} ohm/MHz ; la résonance se situe vers {3} MHz.|Kein Nulldurchgang von X in der Wobbelung: X = {0} Ohm bei {1} MHz, Steigung {2} Ohm/MHz; die Resonanz liegt bei etwa {3} MHz.

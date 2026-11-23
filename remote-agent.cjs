@@ -13,6 +13,7 @@ const { catAllowList, TUNER_KINDS } = require("./remote-catalog.cjs");
 const remoteTls = require("./remote-tls.cjs");
 const remoteWs = require("./remote-ws.cjs");
 const remoteAudio = require("./remote-audio.cjs");
+const { planCwSend, createCwGuard } = require("./remote-cw.cjs");
 
 const isLoopbackHost = value => value === "localhost" || value === "::1" || /^127\./.test(value);
 
@@ -82,6 +83,9 @@ function loadConfig(dir) {
     swrRawLimit: Number.isInteger(stored.swrRawLimit) && stored.swrRawLimit >= 1 && stored.swrRawLimit <= 255 ? stored.swrRawLimit : undefined,
     tuneMaxSeconds: Number(stored.tuneMaxSeconds) > 0 ? Math.min(TUNE_MAX_SECONDS_CAP, Number(stored.tuneMaxSeconds)) : undefined,
     tunerKind: TUNER_KINDS.includes(stored.tunerKind) ? stored.tunerKind : undefined,
+    // Remote CW through the radio's own keyer: off unless the operator enables it.
+    cwEnabled: stored.cwEnabled === true,
+    cwMaxSeconds: Number(stored.cwMaxSeconds) > 0 ? Math.min(120, Number(stored.cwMaxSeconds)) : undefined,
     relay: normalizeRelay(stored.relay)
   };
   if (!config.token) {
@@ -123,7 +127,7 @@ function tokenMatches(expected, supplied) {
 const CSP = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
 
 // Extra keys each command may carry besides "cmd"; anything else is rejected.
-const COMMAND_KEYS = Object.freeze({ level: ["name", "value"], func: ["name", "on"], tune: [], mode: ["value", "passband"] });
+const COMMAND_KEYS = Object.freeze({ level: ["name", "value"], func: ["name", "on"], tune: [], mode: ["value", "passband"], cw: ["text", "wpm", "slot"], cwstop: [] });
 
 function validateCommand(body, state) {
   if (!body || typeof body !== "object" || Array.isArray(body)) return { error: "Cuerpo no valido." };
@@ -155,6 +159,15 @@ function validateCommand(body, state) {
       return { cmd, name: body.name, on: body.on };
     case "tune":
       return { cmd };
+    case "cwstop":
+      return { cmd };
+    case "cw": {
+      if (typeof body.text !== "string" || !body.text.trim() || body.text.length > 80) return { error: "Texto CW no valido." };
+      const { wpm = 20, slot = 5 } = body;
+      if (!Number.isSafeInteger(wpm) || wpm < 5 || wpm > 60) return { error: "Velocidad CW no valida (5-60 WPM)." };
+      if (!Number.isSafeInteger(slot) || slot < 1 || slot > 5) return { error: "Memoria de manipulador no valida (1-5)." };
+      return { cmd, text: body.text, wpm, slot };
+    }
     case "ptt":
       if (typeof value !== "boolean") return { error: "PTT debe ser booleano." };
       return { cmd, value };
@@ -329,6 +342,7 @@ function createRemoteAgent(options = {}) {
       txSeconds: rig.ptt ? Math.max(0, Math.floor((now() - txStart) / 1000)) : 0,
       tx: rig.ptt && tx ? { ...tx, fraction: { ...tx.fraction } } : null,
       txAlert: swrTripped ? "swr" : null,
+      cw: { enabled: cwGuard.enabled, active: Boolean(cwGuard.active()), maxSeconds: cwMaxSeconds },
       tune: tune ? { kind: tunerKind, seconds: Math.max(0, Math.floor((now() - tune.startedAt) / 1000)), maxSeconds: Math.round(tuneMaxMs / 1000) } : null,
       notice: notice && now() - notice.at < NOTICE_MS ? { id: notice.id, text: notice.text } : null,
       operator: !active ? null : owner === clientId ? "me" : "other",
@@ -338,6 +352,52 @@ function createRemoteAgent(options = {}) {
 
   function setNotice(text) {
     notice = { id: (notice?.id || 0) + 1, text, at: now() };
+  }
+
+  // Remote CW (remote-cw.cjs): the radio's own keyer sends the text; the guard is off by default, one message at a time and time capped.
+  const cwGuard = createCwGuard({
+    enabled: options.cwEnabled ?? config.cwEnabled === true,
+    now,
+    isBlocked: () => swrTripped || emergency || tune !== null || rig.ptt || closing
+  });
+  const cwMaxSeconds = options.cwMaxSeconds ?? config.cwMaxSeconds ?? 60;
+  let cwTimer = null;
+
+  async function cwHalt() {
+    clearTimeout(cwTimer);
+    cwTimer = null;
+    const steps = cwGuard.stop();
+    if (!client.connected) return;
+    for (const step of steps) {
+      try { await client.sendKeyer(step, { priority: true }); } catch (error) { log(`CW stop: ${error.message}`); }
+    }
+  }
+
+  async function startCw(command) {
+    if (!cwGuard.enabled) return { status: 403, body: { error: "El CW remoto esta desactivado (accion explicita del operador)." } };
+    const radio = options.radio;
+    let plan;
+    try {
+      const planOptions = { wpm: command.wpm, slot: command.slot, maxSeconds: cwMaxSeconds };
+      plan = planCwSend(radio, command.text, planOptions);
+      // The CI-V frame has no transport through rigctld here: Icom models use the Hamlib send_morse baseline.
+      if (plan.via === "civ") plan = planCwSend({ ...radio, id: "hamlib-baseline" }, command.text, planOptions);
+    } catch (error) {
+      if (error.name !== "CwError") throw error;
+      return { status: error.code === "unsourced" ? 501 : 400, body: { error: error.message } };
+    }
+    try { cwGuard.authorize(plan); }
+    catch (error) { return { status: error.code === "busy" ? 409 : error.code === "blocked" ? 423 : 403, body: { error: error.message } }; }
+    try {
+      if (plan.via === "hamlib") await client.sendMorse(plan.text);
+      else for (const step of plan.steps) await client.sendKeyer(step);
+    } catch (error) {
+      await cwHalt();
+      return { status: 502, body: { error: `rigctld: ${error.message}` } };
+    }
+    cwTimer = setTimeout(() => { cwHalt(); }, (plan.seconds + 1) * 1000);
+    cwTimer.unref?.();
+    return null;
   }
 
   function setRigPtt(on) {
@@ -368,7 +428,7 @@ function createRemoteAgent(options = {}) {
     retryTimer = null;
   }
 
-  // Last raw SWR read while still transmitting during the tune; falls back to one bounded read when there is none.
+  // Highest raw SWR read during the tune (reads taken after the radio left TX, before the agent noticed, would read 0); falls back to one bounded read when there is none.
   async function readFinalSwr(run) {
     if (!cat?.meters?.swr || closing) return "";
     const text = value => ` (ROE bruta ${Math.round(value)}/255)`;
@@ -387,6 +447,7 @@ function createRemoteAgent(options = {}) {
 
   async function pttOff(reason) {
     log(`PTT off: ${reason}`);
+    if (cwGuard.active()) await cwHalt();
     const tuning = tune !== null;
     let swrText = "";
     if (tuning) {
@@ -436,6 +497,8 @@ function createRemoteAgent(options = {}) {
     detectCaps().finally(() => schedulePoll(0));
   });
   client.on("disconnect", () => {
+    cwGuard.stop();
+    clearTimeout(cwTimer);
     if (tune) tuneWasActive = true;
     tune = null;
     setRigPtt(false);
@@ -505,7 +568,7 @@ function createRemoteAgent(options = {}) {
         const run = tune;
         const value = parseRawMeter(await client.sendRaw(cmd, { read: true, timeoutMs: meterReadMs, abandon: true }), cmd);
         if (!live()) return;
-        if (key === "swr" && run && tune === run && Number.isFinite(value)) run.lastSwr = value;
+        if (key === "swr" && run && tune === run && Number.isFinite(value)) run.lastSwr = Math.max(run.lastSwr ?? 0, value);
         setMeter(key, value);
       } catch (error) {
         if (error.code !== "rejected") throw error;
@@ -726,6 +789,8 @@ function createRemoteAgent(options = {}) {
 
   function watchTx() {
     checkHung();
+    // Lease: a CW message does not outlive the operator's control.
+    if (cwGuard.active() && !ownerActive()) cwHalt();
     if (!agentTx || !rig.ptt) return;
     const time = now();
     if (time - lastBeat > heartbeatTimeoutMs) pttOff("sin latido");
@@ -818,6 +883,11 @@ function createRemoteAgent(options = {}) {
   }
 
   async function applyCommand(command, clientId) {
+    // Stopping CW is never refused.
+    if (command.cmd === "cwstop") {
+      await cwHalt();
+      return { status: 200, body: { ok: true, state: snapshot(clientId) } };
+    }
     if (command.cmd === "ptt" && command.value === true && !client.connected) {
       return { status: 503, body: { error: "Radio sin conexion." } };
     }
@@ -860,6 +930,11 @@ function createRemoteAgent(options = {}) {
             if (refused) return refused;
           } else await client.tune();
           break;
+        case "cw": {
+          const refused = await startCw(command);
+          if (refused) return refused;
+          break;
+        }
         case "vfo": {
           const name = rigVfoName(command.value === "VFOA" ? "A" : "B");
           await client.setVfo(name);
@@ -873,6 +948,7 @@ function createRemoteAgent(options = {}) {
         case "ptt":
           if (command.value) {
             if (tune) return { status: 409, body: { error: "Sintonía en curso." } };
+            if (cwGuard.active()) await cwHalt();
             await client.setPtt(true);
             swrTripped = false;
             setRigPtt(true);
@@ -1240,6 +1316,8 @@ function createRemoteAgent(options = {}) {
     clearInterval(sseTimer);
     clearInterval(keepAliveTimer);
     endEmergency();
+    if (cwGuard.active()) await cwHalt();
+    clearTimeout(cwTimer);
     if (client.connected && (rig.ptt || agentTx || tune)) await pttOff("cierre del agente");
     client.stop();
     for (const ws of audioSockets) { ws.fail(1001, "shutdown"); ws.socket.destroy(); }

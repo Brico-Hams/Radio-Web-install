@@ -22,6 +22,8 @@ const VFO_NAMES = Object.freeze(["VFOA", "VFOB", "Main", "Sub", "MEM"]);
 const METER_NAMES = Object.freeze(["RFPOWER_METER_WATTS", "SWR", "ALC"]);
 // Raw CAT strings: upper-case letters/digits only, and only when the radio entry allows that exact string.
 const RAW_FORMAT = /^[A-Z0-9]{1,8}$/;
+const KEYER_FORMAT = /^(KM[1-5][A-Z0-9 /?,.=+\-():@]{1,50}|KY0[0-5]);$/;
+const MORSE_FORMAT = /^[A-Z0-9 /?,.=+\-():@]{1,80}$/;
 // Safety net only: a set normally completes on rigctld's immediate NUL.
 const RAW_IDLE_MS = 1000;
 // `\dump_caps` has no fixed length: it ends with a RPRT line, or (older builds) simply goes quiet.
@@ -425,6 +427,18 @@ class RigctldClient extends EventEmitter {
     // Sets use expected reply length 0 ("; 0"): rigctld answers a single NUL at once. The "; ;" terminator form
     // makes it wait ~1.8 s for a reply the radio never sends, blocking every following command.
     return this.send(read ? `W ${cmd}; ;` : `W ${cmd}; 0`, { priority, raw: true, read, idleMs, timeoutMs, abandon });
+  }
+
+  // CW keyer commands built by remote-cw.cjs: FTX-1 `KM<slot><text>;` / `KY0<slot>;` / `KY00;` as raw CAT (docs/FTX1-KNOWLEDGE.md).
+  sendKeyer(cmd, { priority = false } = {}) {
+    if (typeof cmd !== "string" || !KEYER_FORMAT.test(cmd)) return Promise.reject(new RigctldError("keyer command not allowed", "invalid"));
+    return this.send(`W ${cmd} 0`, { priority, raw: true });
+  }
+
+  // Hamlib send_morse (`b`), the generic baseline for radios without a sourced native keyer command.
+  sendMorse(text) {
+    if (typeof text !== "string" || !MORSE_FORMAT.test(text)) return Promise.reject(new RigctldError("morse text not allowed", "invalid"));
+    return this.send(`b ${text}`);
   }
 
   async dumpCaps() {
