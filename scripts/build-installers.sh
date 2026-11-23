@@ -27,9 +27,9 @@ app_files=(
   ayuda-anytone.html ayuda-ftx1.html ayuda-icom.html ayuda-icom-internals.html ayuda-icom-parches.html ayuda-referencias.html ayuda-arquitectura.html ayuda-marca.html ayuda-ftx1-conocimiento.html
   ayuda-decisiones.html ayuda-despliegue.html
   ayuda-estacion-remota.html ayuda-diagnostico.html ayuda-rotor.html ayuda-aprs-chat-radios.html ayuda-karina-v3-k1.html ayuda-tk11.html
-  remote-station.cjs remote-catalog.cjs remote-parity.cjs remote-meters.cjs remote-native-cat.cjs remote-rotor.cjs remote-agent.cjs remote-tls.cjs rigctld-client.cjs remote-relay.cjs remote-ws.cjs remote-audio.cjs station-accessories.cjs station-devices.cjs
-  remote.html remote-ui.js remote.css remote-audio-core.js spectrum-core.js remote-rotor-ui.js remote-audio-worklet.js remoto.html remoto-ui.js remoto.css
-  ayuda-entrega.html ayuda-android.html ayuda-tutoriales-android.html ayuda-validacion-v3-android.html
+  remote-station.cjs remote-catalog.cjs radio-settings.cjs remote-parity.cjs remote-meters.cjs remote-native-cat.cjs remote-rotor.cjs remote-agent.cjs remote-tls.cjs rigctld-client.cjs remote-relay.cjs remote-ws.cjs remote-audio.cjs station-accessories.cjs station-devices.cjs
+    remote.html remote-ui.js remote.css remote-audio-core.js spectrum-core.js remote-rotor-ui.js remote-audio-worklet.js remoto.html remoto-ui.js remoto.css
+    ayuda-entrega.html ayuda-android.html ayuda-tutoriales-android.html ayuda-validacion-v3-android.html
   ayuda-egzumer.html ayuda-pack-dim0s.html ayuda-atlas-uv-k5-v3.html
   ayuda-dm32uv.html ayuda-enlaces-comunidad.html ayuda-binarios-terceros.html ayuda-ejemplos.html
   ayuda-iniciacion-satelite.html ayuda-antenas-satelite.html ayuda-antenas-hf.html
@@ -78,7 +78,7 @@ stage_app() {
   cp "$root/data/remote-feature-parity.json" "$destination/data/remote-feature-parity.json"
   cp "$root/data/remote-meter-model.json" "$destination/data/remote-meter-model.json"
   cp "$root/data/station-accessories-catalog.json" "$destination/data/station-accessories-catalog.json"
-  # Windows audio helper spawned by remote-audio.cjs.
+  cp "$root/data/radio-settings-catalog.json" "$destination/data/radio-settings-catalog.json"  # Windows audio helper spawned by remote-audio.cjs.
   mkdir -p "$destination/scripts"
   cp "$root/scripts/winaudio-out.ps1" "$destination/scripts/winaudio-out.ps1"
   mkdir -p "$destination/node_modules"

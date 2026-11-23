@@ -79,6 +79,13 @@ input[type=range]{width:100%;min-height:36px;accent-color:var(--accent)}
 .log li{display:flex;gap:.7rem;padding:.35rem 0;border-bottom:1px solid var(--border)}
 .log time{color:var(--muted);font-variant-numeric:tabular-nums;font-family:ui-monospace,Consolas,monospace}
 .log li.empty{display:block;border:0;color:var(--muted)}
+.settings-tools{display:flex;gap:.6rem;align-items:flex-end;flex-wrap:wrap;margin-top:.6rem}
+.settings-warning{color:var(--warn,inherit);font-weight:600}
+.settings-list{list-style:none;margin:.6rem 0 0;padding:0;max-height:60vh;overflow:auto;font-size:.9rem}
+.setting{display:flex;flex-wrap:wrap;gap:.4rem .7rem;align-items:center;padding:.45rem 0;border-bottom:1px solid var(--border)}
+.setting strong{flex:1 1 12rem}
+.setting-value{font-family:ui-monospace,Consolas,monospace}
+.setting-reason{flex:1 1 100%;margin:0}
 
 .scope{display:grid;gap:.3rem;margin-top:.5rem}
 .scope[hidden],.audio-panel[hidden],#mic-row[hidden]{display:none}

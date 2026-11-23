@@ -2013,6 +2013,13 @@ Audio|Audio|Audio|Audio
 Próximamente|Coming soon|Bientôt disponible|Demnächst
 Bloquear|Lock|Verrouiller|Sperren
 Bloqueado|Locked|Verrouillé|Gesperrt
+Ajustes de la radio|Radio settings|Réglages de la radio|Funkgeräte-Einstellungen
+Nunca transmitas sin una carga o antena adaptada. Los ajustes se rechazan mientras se transmite.|Never transmit without a matched load or antenna. Settings are refused while transmitting.|Ne transmettez jamais sans charge ou antenne adaptée. Les réglages sont refusés pendant l’émission.|Niemals ohne angepasste Last oder Antenne senden. Einstellungen werden während des Sendens abgelehnt.
+Leer ajustes|Read settings|Lire les réglages|Einstellungen lesen
+Buscar ajuste|Search setting|Rechercher un réglage|Einstellung suchen
+Esta radio no tiene protocolo de ajustes remoto con fuente documentada.|This radio has no remote settings protocol with a documented source.|Cette radio n’a pas de protocole de réglages à distance avec source documentée.|Dieses Funkgerät hat kein Fern-Einstellungsprotokoll mit dokumentierter Quelle.
+Valor no disponible (la radio responde ?;)|Value not available (the radio answers ?;)|Valeur indisponible (la radio répond ?;)|Wert nicht verfügbar (das Funkgerät antwortet ?;)
+Solo el operador con el control puede cambiar ajustes.|Only the operator in control can change settings.|Seul l’opérateur ayant le contrôle peut modifier les réglages.|Nur der Bediener mit Kontrolle kann Einstellungen ändern.
 Bloquear PTT y sintonia|Lock PTT and tuning|Verrouiller le PTT et l’accord|PTT und Abstimmung sperren
 Sintonia por arrastre|Drag to tune|Accord par glissement|Abstimmen durch Ziehen
 Frecuencia en MHz (o con k, m, Hz)|Frequency in MHz (or with k, m, Hz)|Fréquence en MHz (ou avec k, m, Hz)|Frequenz in MHz (oder mit k, m, Hz)

@@ -14,6 +14,7 @@ from bricoham_remote_station.drivers import icom_civ as icom
 from bricoham_remote_station.drivers import opengd77_usb as opengd77
 from bricoham_remote_station.drivers import yaesu_cat as yaesu
 from bricoham_remote_station.drivers.icom_scope import ScopeAssembler, ScopeFrame, scope_payload
+from bricoham_station_agent import menu_settings
 from bricoham_station_agent.radio_settings import (
     RadioSettingsConfig,
     settings_request_identifier,
@@ -91,6 +92,8 @@ class SerialCat:
                         "Yaesu requires a model-specific watts limit and no tuner switching."
                     )
         self.settings = settings
+        self._menu: menu_settings.MenuSettingsService | None = None
+        self._menu_connection: SerialPort | None = None
         self._setting_requests: deque[str] = deque(maxlen=256)
         self.queries = {
             command: query
@@ -338,6 +341,80 @@ class SerialCat:
         finally:
             self._lock.release()
 
+    def _menu_service(self) -> menu_settings.MenuSettingsService:
+        if self._menu is None:
+            assert self.settings is not None
+            self._menu = menu_settings.MenuSettingsService(
+                menu_settings.ftx1_settings(),
+                exchange=self._menu_exchange,
+                is_transmitting=self._menu_is_transmitting,
+                write_enabled=self.settings.menu_write_enabled,
+                log=LOGGER.info,
+            )
+        return self._menu
+
+    def _menu_exchange(self, command: str, expect_reply: bool) -> str | None:
+        connection = self._menu_connection
+        assert connection is not None
+        deadline = time.monotonic() + 3
+        request = f"{command};".encode("ascii")
+        if expect_reply:
+            return self._exchange(connection, ReadQuery(request), deadline=deadline).decode(
+                "ascii", errors="replace"
+            )
+        connection.reset_input_buffer()
+        self._write_request(connection, request, deadline)
+        return None
+
+    def _menu_is_transmitting(self) -> bool | None:
+        try:
+            reply = self._menu_exchange(ftx1.Ftx1ReadCommand.TX_STATE.value, True)
+            return ftx1.parse_tx_reply((reply or "").encode("ascii")) is not ftx1.Ftx1TxState.RX
+        except (CatError, OSError, ValueError):
+            return None
+
+    def _operate_menu(self, payload: dict, metadata: dict[str, object]) -> dict[str, object]:
+        operation = payload.get("operation")
+        try:
+            service = self._menu_service()
+        except menu_settings.MenuSettingsError as error:
+            raise CatError(str(error)) from error
+        if operation == "menu_list":
+            if set(payload) != {"operation"}:
+                raise ValueError("Unexpected menu list fields.")
+            return {**metadata, "menu": service.listing(), "audit": service.audit()[-20:]}
+        if operation == "menu_read" and set(payload) == {"operation", "id"}:
+            args: tuple = (payload["id"],)
+        elif operation == "menu_write" and set(payload) == {"operation", "id", "value", "request_id"}:
+            args = (payload["id"], payload["value"])
+            identifier = settings_request_identifier(payload["request_id"])
+        else:
+            raise ValueError("Unknown menu operation.")
+        if not self._lock.acquire(blocking=False):
+            raise CatError("cat_busy")
+        try:
+            if operation == "menu_write":
+                if identifier in self._setting_requests:
+                    raise CatError("cat_setting_request_repeated")
+                self._setting_requests.append(identifier)
+            try:
+                self._menu_connection = self._port if self._port is not None else self._open()
+                if operation == "menu_read":
+                    return {**metadata, **service.read(*args)}
+                return {**metadata, **service.write(*args)}
+            except menu_settings.MenuSettingsError as error:
+                if str(error) == "cat_menu_unknown_setting":
+                    raise ValueError("Unknown menu setting.") from error
+                raise CatError(str(error)) from error
+            except (OSError, CatError) as error:
+                self._close()
+                if isinstance(error, CatError):
+                    raise
+                raise CatError("cat_invalid_response") from error
+        finally:
+            self._menu_connection = None
+            self._lock.release()
+
     def _operate_ftx1_settings(
         self, payload: object, metadata: dict[str, object]
     ) -> dict[str, object]:
@@ -345,6 +422,8 @@ class SerialCat:
         if not isinstance(payload, dict):
             raise ValueError("FTX-1 settings operation must be an object.")
         operation = payload.get("operation")
+        if isinstance(operation, str) and operation.startswith("menu_"):
+            return self._operate_menu(payload, metadata)
         identifier = None
         target = None
         request = None

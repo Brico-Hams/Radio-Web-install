@@ -269,6 +269,33 @@ et SHA256SUMS mis à jour. Revue de sécurité limitée à cet incrément
 et à ses helpers d'authentification/TLS : aucune vulnérabilité confirmée.
 Elle ne certifie ni tout le produit, ni WSJT-X en exécution réelle, ni le matériel.
 
+## Réglages de menu à distance
+
+Le modèle partagé (`radio-settings.cjs`, `data/radio-settings-catalog.json`) liste, par radio,
+chaque réglage avec id, type, plage, commande de lecture/écriture et source. L'agent Node expose
+`GET /api/settings`, `GET /api/settings/value?id=` et `POST /api/settings` ; seul le FTX-1 a
+une carte de menu EX sourcée (`ftx1-menu.js`). Chaque écriture exige le rôle opérateur, lit la valeur
+actuelle comme sauvegarde, valide la plage, écrit, relit et compare, et restaure la sauvegarde en cas d'écart.
+Elle est refusée pendant l'émission, une seule écriture à la fois, limitée en fréquence et journalisée.
+Calibration, reset, région/limites TX, vitesse/stop bits/timeout CAT et ports USB ne sont jamais écrits.
+Ce qui n'a pas de source apparaît comme « pendiente de fuente » en lecture seule ; les radios à codeplug
+seul renvoient à l'éditeur de bureau. N'émettez jamais sans charge ou antenne adaptée.
+
+L'agent Python (`remote-station/bricoham_station_agent/menu_settings.py`) expose le même modèle pour le
+FTX-1 via `POST /api/v1/radio-settings` (`menu_list`, `menu_read`, `menu_write`) ; l'écriture exige
+`menu_write_enabled: true` dans `--radio-settings-config` (désactivé par défaut) et le panneau React l'affiche.
+Les éléments « MAX POWER », REGION/LIMITES TX, CALIBRATION, reset, CAT, USB/TUN-LIN, AUTO POWER OFF et
+TX timer sont en lecture seule ; une réponse `?;` signifie « non disponible », pas une valeur. Les
+réponses réelles du banc (`EX0104133;`, `EX030503100;`, `EX050109;` -> `?;`) sont des fixtures de test.
+IC-705 : l'application Android (écran Radio, CI-V USB, bouton « Réglages de la radio (CI-V) ») lit et modifie les
+réglages `1A 05 <sub>` du guide CI-V de l'IC-705 rév. 6 (pp. imprimées 2 et 5-8 ; le guide est local et jamais
+versionné) avec la même écriture sûre (`RigSettings.kt`, table vérifiée contre `data/radio-settings-catalog.json`).
+Temporisateur TX, verrouillage PTT, démarrage PTT du coupleur, sorties SEND/manipulation, puissance TX maximale,
+bip de bord de bande, arrêt automatique, éléments de liaison CI-V/USB et REF adjust sont en lecture seule ; les
+éléments composites 0001 et 0046 sont pendiente de fuente. Les agents Node et Python listent le modèle de
+l'IC-705 en lecture seule faute de route CI-V brute sourcée. Les consoles web d'Android réutilisent l'onglet
+Réglages de l'agent Node.
+
 ## Langues sans interrompre les contrôles actifs
 
 PTT, rotor, audio RX et le panneau CAT/WSJT-X partagent ES/EN/FR/PT, y compris les

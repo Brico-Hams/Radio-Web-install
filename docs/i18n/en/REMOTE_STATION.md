@@ -269,6 +269,32 @@ and SHA256SUMS updated. Security review limited to this increment
 and its authentication/TLS helpers: no confirmed vulnerabilities.
 It does not certify the whole product, WSJT-X in real operation, or hardware.
 
+## Remote menu settings
+
+The shared model (`radio-settings.cjs`, `data/radio-settings-catalog.json`) lists, per radio,
+each setting with id, type, range, read/write command and source. The Node agent exposes
+`GET /api/settings`, `GET /api/settings/value?id=` and `POST /api/settings`; only the FTX-1 has
+a sourced EX menu map (`ftx1-menu.js`). Every write requires the operator role, reads the current
+value as a backup, validates the range, writes, reads back and compares, and restores the backup on mismatch.
+It is refused during TX, one write at a time, rate limited and audit logged.
+Calibration, reset, region/TX limits, CAT speed/stop bits/timeout and USB ports are never written.
+Anything without a source is shown as "pendiente de fuente" and read-only; codeplug-only radios
+point to the desktop editor. Never transmit without a matched load or antenna.
+
+The Python agent (`remote-station/bricoham_station_agent/menu_settings.py`) exposes the same model for the
+FTX-1 through `POST /api/v1/radio-settings` (`menu_list`, `menu_read`, `menu_write`); writing requires
+`menu_write_enabled: true` in `--radio-settings-config` (off by default) and the React panel shows it.
+"MAX POWER", REGION/TX LIMITS, CALIBRATION, reset, CAT, USB/TUN-LIN, AUTO POWER OFF and TX timer items
+are read-only; a `?;` reply means "not available", not a value. The real bench replies (`EX0104133;`,
+`EX030503100;`, `EX050109;` -> `?;`) are test fixtures. IC-705: the Android app (Rig screen, USB CI-V,
+button "Radio settings (CI-V)") reads and edits the `1A 05 <sub>` settings of the IC-705 CI-V Reference
+Guide rev. 6 (printed pp.2 and 5-8; the guide itself is local and never versioned) through the same safe
+write (`RigSettings.kt`, table checked against `data/radio-settings-catalog.json`). TX time-out, PTT lock, tuner
+PTT start, SEND/keying outputs, max TX power, band-edge beep, auto power OFF, CI-V/USB link items and REF
+adjust are read-only; the composite items 0001 and 0046 are pendiente de fuente. The Node and Python agents
+list the IC-705 model read-only because no sourced raw CI-V route exists there. The Android web consoles
+reuse the Settings tab of the Node agent.
+
 ## Languages without interrupting active controls
 
 PTT, rotator, RX audio, and the CAT/WSJT-X panel share ES/EN/FR/PT, including

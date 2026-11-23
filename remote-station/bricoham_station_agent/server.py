@@ -550,6 +550,14 @@ class StationAgentRequestHandler(SecureRequestHandler):
                         "cat_disable_ptt_tune_locally",
                         "cat_setting_request_repeated",
                         "cat_power_head_limit_exceeded",
+                        "cat_menu_tx_active",
+                        "cat_menu_rate_limited",
+                        "cat_menu_restored",
+                        "cat_menu_restore_failed",
+                        "cat_menu_readback_mismatch",
+                        "cat_menu_backup_unavailable",
+                        "cat_menu_write_disabled",
+                        "cat_menu_setting_read_only",
                     )
                     else HTTPStatus.SERVICE_UNAVAILABLE
                 )

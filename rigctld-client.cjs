@@ -80,6 +80,8 @@ class RigctldClient extends EventEmitter {
     this.timeoutMs = options.timeoutMs ?? 5000;
     this.reconnectMs = options.reconnectMs ?? 3000;
     this.rawAllow = new Set(options.rawAllow || []);
+    // Exact-shape matchers for sourced commands longer than RAW_FORMAT (FTX-1 EX menu, see radio-settings.cjs).
+    this.rawMatchers = (options.rawMatchers || []).filter(matcher => matcher instanceof RegExp);
     this.rawIdleMs = options.rawIdleMs ?? RAW_IDLE_MS;
     this.socketFactory = options.socketFactory || ((port, host) => net.connect({ port, host }));
     this.connected = false;
@@ -425,7 +427,8 @@ class RigctldClient extends EventEmitter {
   // on rigctld's single NUL (or after a long safety silence). Rejects with code "rejected" on a "?;" reply.
   // `abandon`: a timed-out read is dropped without reconnecting; its late reply is discarded by command prefix.
   sendRaw(cmd, { priority = false, read = false, idleMs = 0, timeoutMs = 0, abandon = false } = {}) {
-    if (typeof cmd !== "string" || !RAW_FORMAT.test(cmd) || !this.rawAllow.has(cmd)) {
+    const matched = typeof cmd === "string" && cmd.length <= 24 && this.rawMatchers.some(matcher => matcher.test(cmd));
+    if (!matched && (typeof cmd !== "string" || !RAW_FORMAT.test(cmd) || !this.rawAllow.has(cmd))) {
       return Promise.reject(new RigctldError("raw command not allowed", "invalid"));
     }
     // Sets use expected reply length 0 ("; 0"): rigctld answers a single NUL at once. The "; ;" terminator form

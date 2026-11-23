@@ -399,6 +399,7 @@ class RigActivity : LocalizedActivity() {
             operation(notice) { refresh(r); null }
         }
         button(card, R.string.rig_ptt_test) { pttTest() }
+        button(card, R.string.rig_settings_open) { openRadioSettings() }
         speakToggle = CheckBox(this).apply {
             setText(R.string.rig_speak)
             setTextColor(colors.text)
@@ -1229,6 +1230,81 @@ class RigActivity : LocalizedActivity() {
     }
 
     // PTT test
+
+    private var settingsService: Pair<IcomCivRig, RigSettingsService>? = null
+
+    private fun settingsFor(r: IcomCivRig): RigSettingsService =
+        settingsService?.takeIf { it.first === r }?.second ?: RigSettingsService(r, {
+            try { r.isTransmitting() } catch (_: Exception) { null }
+        }, log = { android.util.Log.i("RigSettings", it) }).also { settingsService = r to it }
+
+    private fun settingReason(setting: Ic705Setting) = getString(when (setting.exclusion) {
+        "tx-region" -> R.string.rig_settings_reason_tx_region
+        "tx-safety" -> R.string.rig_settings_reason_tx_safety
+        "link-serial" -> R.string.rig_settings_reason_link
+        "auto-off" -> R.string.rig_settings_reason_auto_off
+        "calibration-reset" -> R.string.rig_settings_reason_calibration
+        else -> R.string.rig_settings_reason_pending
+    })
+
+    /** IC-705 only: lists the 1A 05 settings read from the radio; sourced and non-excluded ones can be edited. */
+    private fun openRadioSettings() {
+        val r = rig as? IcomCivRig ?: run { notice.setText(R.string.rig_settings_unavailable); return }
+        val service = settingsFor(r)
+        operation(notice, R.string.rig_settings_reading) {
+            val values = Ic705Settings.all.map { setting ->
+                setting to attempt<String?>({ null }) { if (setting.kind == SettingKind.COMPOSITE) null else service.read(setting) }
+            }
+            runOnUiThread { if (!isDestroyed && rig === r) showRadioSettings(service, values) }
+            null
+        }
+    }
+
+    private fun showRadioSettings(service: RigSettingsService, values: List<Pair<Ic705Setting, String?>>) {
+        val lines = values.map { (setting, value) ->
+            val shown = value?.let(setting::display) ?: "?"
+            val suffix = if (setting.writable) "" else " " + getString(R.string.rig_settings_read_only_tag)
+            "${setting.label}: $shown$suffix"
+        }
+        AlertDialog.Builder(this).setTitle(R.string.rig_settings_title)
+            .setItems(lines.toTypedArray()) { _, which ->
+                val (setting, value) = values[which]
+                if (setting.writable) editRadioSetting(service, setting, value)
+                else AlertDialog.Builder(this).setTitle(setting.label).setMessage(settingReason(setting)).setPositiveButton(android.R.string.ok, null).show()
+            }
+            .setNegativeButton(R.string.action_cancel, null).show()
+    }
+
+    private fun editRadioSetting(service: RigSettingsService, setting: Ic705Setting, current: String?) {
+        if (setting.kind == SettingKind.ENUM || setting.kind == SettingKind.BOOL) {
+            val choices = setting.choices
+            AlertDialog.Builder(this).setTitle(setting.label)
+                .setItems(choices.map { "${it.first} = ${it.second}" }.toTypedArray()) { _, which -> confirmRadioSetting(service, setting, current, choices[which].first) }
+                .setNegativeButton(R.string.action_cancel, null).show()
+            return
+        }
+        val input = field(R.string.rig_settings_value_hint, current?.toIntOrNull()?.toString().orEmpty(), InputType.TYPE_CLASS_NUMBER)
+        val dialog = AlertDialog.Builder(this).setTitle(setting.label).setMessage(getString(R.string.rig_settings_range, setting.min, setting.max))
+            .setView(input).setNegativeButton(R.string.action_cancel, null).setPositiveButton(android.R.string.ok, null).create()
+        dialog.show()
+        dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+            val digits = setting.encode(input.text.toString())
+            if (digits == null) input.error = getString(R.string.rig_settings_err_value)
+            else { dialog.dismiss(); confirmRadioSetting(service, setting, current, digits) }
+        }
+    }
+
+    private fun confirmRadioSetting(service: RigSettingsService, setting: Ic705Setting, current: String?, digits: String) {
+        AlertDialog.Builder(this).setTitle(setting.label)
+            .setMessage(getString(R.string.rig_settings_confirm, current?.let(setting::display) ?: "?", setting.display(digits)) + "\n\n" + getString(R.string.rig_settings_warning))
+            .setNegativeButton(R.string.action_cancel, null)
+            .setPositiveButton(R.string.rig_ftx_set) { _, _ ->
+                operation(notice, R.string.rig_settings_writing) {
+                    val result = service.write(setting, digits)
+                    getString(R.string.rig_settings_saved, setting.label, setting.display(result.backup))
+                }
+            }.show()
+    }
 
     private fun pttTest() {
         val r = rig ?: run { notice.setText(R.string.rig_connect_first); return }
