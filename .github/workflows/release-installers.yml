@@ -8,6 +8,7 @@ on:
       - ".github/workflows/release-installers.yml"
       - "installers/**"
       - "scripts/build-installers.sh"
+      - "data/ftx-ldpc174.json"
       - "package.json"
       - "package-lock.json"
       - "*.js"
