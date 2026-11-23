@@ -11,7 +11,7 @@
 //   Hamlib amplifiers/gemini/gemini.c     Hamlib authors, LGPL-2.1-or-later
 //   Hamlib amplifiers/expert/expert.c     Copyright (c) 2023 Michael Black W9MDB, (c) 2026 Mikael Nousiainen OH3BHX, LGPL-2.1-or-later
 //   macexpert-spe SPEProtocol.swift       Copyright (c) 2026 Manoj Ramawarrier (VU2CPL), MIT
-//   SPE-1.3-2K-FA-Remote-server server.py Copyright (c) OH2GEK, GPL-3.0
+//   SPE-1.3-2K-FA-Remote-server server.py Copyright (c) OH2GEK, GPL-3.0-only
 //   ACOM-Controller MainWindow.xaml.cs    Copyright (c) 2019 Bjorn Ekelund, MIT
 //
 // Safety contract (shared with station-accessories.cjs): a driver never keys a transmitter, never sends a

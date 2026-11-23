@@ -1,4 +1,7 @@
 "use strict";
+// SPDX-License-Identifier: GPL-3.0-or-later
+// FFT packet parser and frame assembler adapted from POTACAT lib/flex-scope.js, Copyright 2026 Casey Stanton,
+// Apache-2.0 (see docs/THIRD-PARTY-REUSE.md).
 // FlexRadio SmartSDR client for the Node remote shack. Mirrors
 // remote-station/bricoham_remote_station/drivers/smartsdr_protocol.py; every syntax, port and
 // scale comes from remote-station/docs/FLEX-SMARTSDR-API.md. "pendiente de fuente" items are not implemented.

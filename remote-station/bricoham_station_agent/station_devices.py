@@ -1,3 +1,7 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# GS-232A/B rotor frames adapted from Hamlib rotators/gs232a/gs232a.c and gs232b.c, Copyright (c) 2001-2012 Stephane Fillod,
+# LGPL-2.1-or-later; Rot2Prog frames adapted from Hamlib rotators/spid/spid.c, Copyright (c) Norvald H. Ryeng (LA6YKA) and
+# the Hamlib authors, LGPL-2.1-or-later (see docs/THIRD-PARTY-REUSE.md).
 """Station devices: power/relay control and serial rotor controllers.
 
 Mirror of station-devices.cjs. Every protocol fact is cited in
