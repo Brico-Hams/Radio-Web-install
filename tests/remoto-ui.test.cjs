@@ -56,6 +56,41 @@ test("parityView lista todas las funciones y deshabilita con motivo las que la r
   assert.deepEqual(parityView(parity, "no-existe"), []);
 });
 
+test("parityView cubre una radio compatible, una parcial y una solo receptor", () => {
+  const parity = require("../data/remote-feature-parity.json");
+  const states = id => Object.fromEntries(parityView(parity, id).map(item => [item.feature, item]));
+  const supported = states("yaesu-ftx-1");
+  assert.deepEqual(Object.keys(supported), parity.featureOrder);
+  for (const feature of ["freqMode", "ptt", "txMeters", "tune", "audioTx"]) assert.equal(supported[feature].enabled, true, feature);
+  const partial = states("icom-ic-7300mk2");
+  assert.deepEqual(Object.keys(partial), parity.featureOrder);
+  assert.equal(partial.ptt.status, "partial");
+  assert.equal(partial.ptt.enabled, true);
+  assert.notEqual(partial.ptt.reason, "");
+  const receiver = states("icom-ic-r8600");
+  assert.deepEqual(Object.keys(receiver), parity.featureOrder);
+  for (const feature of ["ptt", "txMeters", "tune", "audioTx", "accessories"]) {
+    assert.equal(receiver[feature].enabled, false, feature);
+    assert.equal(receiver[feature].status, "na");
+  }
+  assert.equal(receiver.audioRx.enabled, true);
+});
+
+test("la tarjeta Funciones remotas de esta radio esta traducida a en, fr y de", () => {
+  const rows = require("../ui-translations.js");
+  const I = require("../ui-i18n.js");
+  const parity = require("../data/remote-feature-parity.json");
+  const sources = ["Funciones remotas de esta radio", ...parityView(parity, "xiegu-g90").flatMap(item => [item.label, item.statusText])];
+  const labels = new Set(rows.map(row => row[0]));
+  for (const source of sources) {
+    assert.ok(labels.has(source), source);
+    for (const locale of ["en-US", "fr", "de"]) assert.ok(I.translate(source, locale), `${locale}: ${source}`);
+  }
+  assert.equal(I.translate("Funciones remotas de esta radio", "en-US"), "Remote features of this radio");
+  assert.equal(I.translate("Funciones remotas de esta radio", "fr"), "Fonctions distantes de cette radio");
+  assert.equal(I.translate("Funciones remotas de esta radio", "de"), "Fernfunktionen dieses Funkgeräts");
+});
+
 test("show nunca imprime null ni undefined", () => {
   assert.equal(show(null), "—");
   assert.equal(show(undefined), "—");

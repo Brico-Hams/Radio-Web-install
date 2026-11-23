@@ -22,6 +22,7 @@ import { AgentLivePanel } from './AgentLivePanel'
 import { RotorPanel } from './RotorPanel'
 import { AccessoriesPanel } from './AccessoriesPanel'
 import { MetersPanel } from './MetersPanel'
+import { FeatureParityPanel } from './FeatureParityPanel'
 import { FlexPanel } from './FlexPanel'
 import { RadioSettingsPanel } from './RadioSettingsPanel'
 import { RadioOperatingPanel } from './RadioOperatingPanel'
@@ -414,6 +415,7 @@ function App() {
               </nav>
               <div className="operation-workspace-grid">
                 <AgentLivePanel key={`live-${activeToken}`} token={activeToken} />
+                <FeatureParityPanel key={`parity-${activeToken}`} token={activeToken} />
                 <RadioOperatingPanel key={`operating-${activeToken}`} token={activeToken} />
                 <PttPanel key={`ptt-${activeToken}`} token={activeToken} />
                 <AudioPanel key={`audio-${activeToken}`} token={activeToken} />

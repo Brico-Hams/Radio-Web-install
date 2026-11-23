@@ -133,6 +133,12 @@ class CoordinatorAPITests(unittest.TestCase):
         self.assertEqual(len(body["candidates"]), 68)
         self.assertFalse(body["hardware_validation_complete"])
 
+        status, body, _ = self.request("/api/v1/feature-parity", GUEST_TOKEN)
+        self.assertEqual(status, 200)
+        self.assertIn("yaesu-ftx-1", [radio["id"] for radio in body["radios"]])
+        status, _, _ = self.request("/api/v1/feature-parity")
+        self.assertEqual(status, 401)
+
         status, body, _ = self.request("/api/v1/diagnostics", LISTENER_TOKEN)
         self.assertEqual(status, 403)
         status, body, _ = self.request("/api/v1/diagnostics", OPERATOR_TOKEN)

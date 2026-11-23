@@ -150,6 +150,7 @@ Rutas de la API:
 | `GET /api/v1/status` | Admin, operador y oyente |
 | `GET /api/v1/capabilities` | Roles configurados |
 | `GET /api/v1/radios` | Roles configurados; catálogo de 46 candidatas, no soporte verificado |
+| `GET /api/v1/feature-parity` | Roles configurados; matriz de funciones remotas por radio (`data/remote-feature-parity.json`), solo lectura; la consola React atenúa con su motivo lo no disponible |
 | `GET /api/v1/protocols` | Roles configurados; consultas y decoders offline por candidato, sin envío CAT |
 | `GET /api/v1/logbook` | Admin, operador y oyente; requiere SQLite configurado; páginas de 50 contactos |
 | `POST /api/v1/logbook` | Solo admin/operador; alta manual validada en SQLite, no control de radio |
