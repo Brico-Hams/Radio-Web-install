@@ -62,6 +62,7 @@ def support_matrix(catalog: dict[str, Any] | None = None) -> list[dict[str, Any]
         {
             **{key: device.get(key) for key in ("id", "kind", "maker", "model", "link", "status", "tune", "safetyStop", "source")},
             "enabled": bool(device.get("driver")),
+            "verification": device.get("verification") if device.get("driver") else None,
         }
         for device in catalog["devices"]
     ]
@@ -158,9 +159,9 @@ class StationAccessories:
             if self._state == "operate":
                 self.standby("band_change")
             self._band = nxt
-            if self._amp is not None and nxt:
+            if self._amp is not None and nxt and hasattr(self._amp, "set_band"):
                 try:
-                    self._amp.set_band(nxt)
+                    self._amp.set_band(nxt, frequency_hz)
                 except Exception as error:
                     self._log(f"Amplifier band not applied: {error}")
                     return {"ok": False, "reason": "driver_error", "band": nxt}
@@ -181,14 +182,25 @@ class StationAccessories:
                 "power_w": reading.get("power_w"), "temp_c": reading.get("temp_c"),
                 "swr": swr, "fault": reading.get("fault"),
             }
+            # A persistent condition is not re-sent every poll: STANDBY is repeated only while the amplifier may
+            # still be operating or the previous STANDBY was not confirmed.
+            needs_standby = self._state == "operate" or self._pending_standby
             if reading.get("fault"):
-                self.standby("fault")
+                if needs_standby or self._reason != "fault":
+                    self.standby("fault")
             elif isinstance(swr, (int, float)) and swr > self._swr_limit:
-                self.standby("swr")
+                if needs_standby or self._reason != "swr":
+                    self.standby("swr")
                 if self._tune_started is not None:
                     self.stop_tune("swr", swr)
             elif reading.get("operate") is True and self._state != "operate":
                 self.standby("mismatch")
+            # The amplifier left OPERATE by itself: follow it, never the other way round.
+            elif reading.get("operate") is False and self._state == "operate":
+                self.standby("mismatch")
+            # An independent readback showing STANDBY confirms a standby the write could not confirm.
+            elif reading.get("operate") is False and self._pending_standby:
+                self._pending_standby = False
             return dict(self._readout)
 
     def start_tune(self, *, tx: bool = False, power_w: float | None = None) -> dict[str, Any]:
@@ -243,6 +255,7 @@ class StationAccessories:
                     "device": self._amp_device["id"] if self._amp_device else None,
                     "supported": self._amp is not None,
                     "status": self._amp_device["status"] if self._amp_device else PENDING,
+                    "verification": (self._amp_device.get("verification") if self._amp is not None else None),
                     "state": self._state,
                     "band": self._band,
                     "operate_allowed": self._operate_allowed,

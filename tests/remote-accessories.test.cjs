@@ -40,10 +40,16 @@ test("the catalog marks every device without a driver as pendiente de fuente and
     assert.ok(row.source.length > 0, row.id);
     if (!row.enabled) assert.ok(["pendiente de fuente", "partial"].includes(row.status), row.id);
   }
-  for (const id of ["elecraft-kat500", "elecraft-kpa500", "elecraft-kpa1500", "expert-fa", "acom-amplifiers", "palstar-amplifiers", "icom-ic705-internal-atu"]) {
+  for (const id of ["elecraft-kat500", "elecraft-kpa500", "palstar-amplifiers", "icom-ic705-internal-atu", "atu-100-ext"]) {
     const row = rows.find(item => item.id === id);
     assert.equal(row.status, "pendiente de fuente", id);
     assert.equal(row.enabled, false, id);
+  }
+  for (const id of ["elecraft-kpa1500", "expert-fa", "acom-amplifiers", "gemini-dx1200-hf1k"]) {
+    const row = rows.find(item => item.id === id);
+    assert.equal(row.status, "partial", id);
+    assert.equal(row.enabled, true, id);
+    assert.equal(row.verification, "source-implemented, not hardware-tested", id);
   }
 });
 

@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import { createControlRequest, getApiData, isRecord } from './api'
 import { useStableTranslation } from './i18n'
 
-type Support = { id: string; kind: 'tuner' | 'amplifier'; maker: string; model: string; status: string; enabled: boolean }
+type Support = { id: string; kind: 'tuner' | 'amplifier'; maker: string; model: string; status: string; enabled: boolean; verification?: string | null }
 
 type Accessories = {
   amplifier: {
@@ -105,7 +105,7 @@ export function AccessoriesPanel({ token }: { token: string }) {
               <thead><tr><th>{t('accDevice')}</th><th>{t('accStatus')}</th></tr></thead>
               <tbody>
                 {data.support.map((row) => (
-                  <tr key={row.id}><td>{row.maker} {row.model}</td><td>{row.status}</td></tr>
+                  <tr key={row.id}><td>{row.maker} {row.model}</td><td>{row.status}{row.verification ? ` · ${t('accUntested')}` : ''}</td></tr>
                 ))}
               </tbody>
             </table>

@@ -29,7 +29,8 @@ function findDevice(catalog, id) {
 function supportMatrix(catalog = loadCatalog()) {
   return catalog.devices.map(device => ({
     id: device.id, kind: device.kind, maker: device.maker, model: device.model, link: device.link,
-    status: device.status, tune: device.tune, safetyStop: device.safetyStop, source: device.source, enabled: Boolean(device.driver)
+    status: device.status, tune: device.tune, safetyStop: device.safetyStop, source: device.source, enabled: Boolean(device.driver),
+    verification: device.driver ? device.verification || null : null
   }));
 }
 
@@ -53,6 +54,9 @@ function createAccessories(options = {}) {
   let readout = null;
   let tune = null;
   let tuneResult = null;
+  let polling = null;
+  let lastPollAt = null;
+  const pollIntervalMs = options.pollIntervalMs ?? 0;
 
   async function standby(reason) {
     if (!STANDBY_REASONS.includes(reason)) reason = "operator";
@@ -97,24 +101,40 @@ function createAccessories(options = {}) {
     // A band change always drops the amplifier out of operate; the operator must re-arm it for the new band.
     if (ampState === "operate") await standby("band_change");
     band = next;
-    if (ampDriver && next) {
-      try { await ampDriver.setBand(next); } catch (error) { log(`Amplificador: banda no aplicada (${error.message})`); return { ok: false, reason: "driver_error", band }; }
+    if (ampDriver?.setBand && next) {
+      try { await ampDriver.setBand(next, freqHz); } catch (error) { log(`Amplificador: banda no aplicada (${error.message})`); return { ok: false, reason: "driver_error", band }; }
     }
     return { ok: true, band };
   }
 
-  async function poll() {
-    if (!ampDriver?.read) return null;
+  async function readDriver() {
     let reading;
     try { reading = await ampDriver.read(); } catch (error) {
       if (ampState === "operate") await standby("fault");
       return null;
     }
     readout = { powerW: reading.powerW ?? null, tempC: reading.tempC ?? null, swr: reading.swr ?? null, fault: reading.fault ?? null, at: now() };
-    if (reading.fault) await standby("fault");
-    else if (Number.isFinite(reading.swr) && reading.swr > swrLimit) await standby("swr");
+    // Re-sending STANDBY on every poll of a persistent condition is pointless; it is repeated only while the amplifier
+    // may still be operating or a previous STANDBY was not confirmed.
+    const needsStandby = reason => ampState === "operate" || pendingStandby || standbyReason !== reason;
+    if (reading.fault) { if (needsStandby("fault")) await standby("fault"); }
+    else if (Number.isFinite(reading.swr) && reading.swr > swrLimit) { if (needsStandby("swr")) await standby("swr"); }
     else if (reading.operate === true && ampState !== "operate") await standby("mismatch");
+    // The amplifier left OPERATE by itself (its own protection or front panel): follow it, never the other way round.
+    else if (reading.operate === false && ampState === "operate") await standby("mismatch");
+    // An independent readback that shows STANDBY confirms a standby the write could not confirm.
+    else if (reading.operate === false && pendingStandby) pendingStandby = false;
     return readout;
+  }
+
+  // One read at a time; a slow link never stacks polls, and pollIntervalMs rate-limits it.
+  async function poll() {
+    if (!ampDriver?.read) return null;
+    if (polling) return readout;
+    if (pollIntervalMs > 0 && lastPollAt !== null && now() - lastPollAt < pollIntervalMs) return readout;
+    lastPollAt = now();
+    polling = readDriver().finally(() => { polling = null; });
+    return polling;
   }
 
   async function startTune(context = {}) {
@@ -152,6 +172,7 @@ function createAccessories(options = {}) {
         device: ampDevice?.id || null,
         supported: Boolean(ampDriver),
         status: ampDevice?.status || PENDING,
+        verification: ampDriver ? ampDevice.verification || null : null,
         state: ampState,
         band,
         operateAllowed,

@@ -16,7 +16,8 @@ const remoteTls = require("./remote-tls.cjs");
 const remoteWs = require("./remote-ws.cjs");
 const remoteAudio = require("./remote-audio.cjs");
 const { TuneCheck, swrFromRaw, normalizeMeter, normalizeLevel, parsePowerFrame, tunePowerCheck } = require("./remote-meters.cjs");
-const { createAccessories } = require("./station-accessories.cjs");
+const { createAccessories, loadCatalog: loadAccessoryCatalog, findDevice: findAccessoryDevice } = require("./station-accessories.cjs");
+const { createAmplifierDriver, createTcpTransport } = require("./station-amplifier-drivers.cjs");
 const stationDevicesLib = require("./station-devices.cjs");
 const { createRotor, RotorError } = require("./remote-rotor.cjs");
 const { createDxCluster, normalizeDxConfig } = require("./remote-dxcluster.cjs");
@@ -131,10 +132,18 @@ function loadConfig(dir) {
 }
 
 // Amplifier operate stays off unless the owner sets operateAllowed true in the local config file.
+// The amplifier link (host/port, serial-to-network or Gemini network port) and the ACOM model are local-only settings.
 function normalizeAccessories(value) {
   const id = item => (typeof item?.device === "string" && /^[a-z0-9-]{1,48}$/.test(item.device) ? item.device : undefined);
+  const amp = value?.amplifier;
   return {
-    amplifier: { device: id(value?.amplifier), operateAllowed: value?.amplifier?.operateAllowed === true },
+    amplifier: {
+      device: id(amp),
+      operateAllowed: amp?.operateAllowed === true,
+      host: typeof amp?.host === "string" && /^[\w.:-]{1,253}$/.test(amp.host) ? amp.host : undefined,
+      port: Number.isInteger(amp?.port) && amp.port > 0 && amp.port < 65536 ? amp.port : undefined,
+      model: typeof amp?.model === "string" && /^[A-Za-z0-9-]{1,16}$/.test(amp.model) ? amp.model : undefined
+    },
     // ratedPowerW converts the radio RFPOWER fraction to watts so a tune can be refused above the 10 W cap.
     tuner: { device: id(value?.tuner), ratedPowerW: Number(value?.tuner?.ratedPowerW) > 0 ? Number(value.tuner.ratedPowerW) : undefined }
   };
@@ -328,8 +337,16 @@ function createRemoteAgent(options = {}) {
     },
     async stop() { if (tune) await pttOff("acoplador: parada"); }
   };
+  // The amplifier driver comes from the catalog entry and a local TCP link; it is lazy, so nothing connects until the first use.
+  let amplifierDriver = options.amplifier || null;
+  const ampConfig = config.accessories?.amplifier;
+  const ampCatalogDevice = ampConfig?.device ? findAccessoryDevice(loadAccessoryCatalog(), ampConfig.device) : null;
+  if (!amplifierDriver && ampCatalogDevice?.driver && ampConfig.host && ampConfig.port) {
+    amplifierDriver = createAmplifierDriver(ampCatalogDevice.driver, createTcpTransport({ host: ampConfig.host, port: ampConfig.port }), { model: ampConfig.model });
+  }
   const accessories = createAccessories({
-    now, log, swrLimit, tuneMaxSeconds: tuneMaxMs / 1000, config: config.accessories, amplifier: options.amplifier,
+    now, log, swrLimit, tuneMaxSeconds: tuneMaxMs / 1000, config: config.accessories, amplifier: amplifierDriver,
+    pollIntervalMs: options.amplifier ? 0 : 1000,
     tuner: options.tuner || tunerBridge
   });
   const useTls = options.tls ?? !isLoopbackHost(host);
@@ -1086,6 +1103,7 @@ function createRemoteAgent(options = {}) {
     if (rotorLockHeld && !ownerActive()) { rotorLockHeld = false; stationDevices.safeAll().catch(() => {}); }
     checkHung();
     accessories.tick().catch(() => {});
+    accessories.poll().catch(() => {});
     if (!tune && accessories.snapshot().tuner.tuning) accessories.stopTune("done", lastTuneSwr).catch(() => {});
     // Lease: a CW message does not outlive the operator's control.
     if (cwGuard.active() && !ownerActive()) cwHalt();
@@ -1893,7 +1911,7 @@ function createRemoteAgent(options = {}) {
       try { if (cwGuard.active()) await cwHalt(); } catch { /* CW stop is best effort */ }
       clearTimeout(cwTimer);
       try { await accessories.emergencyStop("close"); }
-      finally { await stationDevices.safeAll().catch(() => {}); }
+      finally { await amplifierDriver?.close?.().catch(() => {}); await stationDevices.safeAll().catch(() => {}); }
     }
     client.stop();
     dxCluster.stop();

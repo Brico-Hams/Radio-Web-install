@@ -36,4 +36,13 @@ describe('accesorios de estación', () => {
     await user.click(screen.getByText('PARADA DE EMERGENCIA'))
     expect(operations).toEqual([{ operation: 'standby' }, { operation: 'emergency_stop' }])
   })
+
+  it('marca los modelos implementados según fuente como no probados en hardware', async () => {
+    const tested = { ...state, support: [{ id: 'acom-amplifiers', kind: 'amplifier', maker: 'ACOM', model: '700S', status: 'partial', enabled: true, verification: 'source-implemented, not hardware-tested' }] }
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json(tested)))
+    const user = userEvent.setup()
+    render(<AccessoriesPanel token="operator-token" />)
+    await user.click(screen.getByText('Leer accesorios'))
+    expect(await screen.findByText(/sin probar en hardware/)).toBeTruthy()
+  })
 })
