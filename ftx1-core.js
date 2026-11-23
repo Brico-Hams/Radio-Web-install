@@ -150,6 +150,13 @@
     R.assert(Number(match[1]) === checkInt(p1, 1, 8, "Medidor RM fuera de rango 1-8."), "Respuesta RM de otro medidor.");
     return checkLevel(Number(match[2]));
   }
+  // FTX-1 CAT Operation Reference Manual 2508-C "TX" (p.25): read TX; answers TX0 = RX, TX1 = CAT TX, TX2 = radio TX (still transmitting).
+  // Real bench answer (read only, RX): "TX0;". Only reads are built here: nothing in this file keys the transmitter.
+  const txReadCommand = () => "TX;";
+  function parseTxState(answer) {
+    const match = answerOf("TX", answer, "([012])");
+    return match[1] !== "0";
+  }
   function checkLevelCode(code) {
     R.assert(LEVEL_CODES.includes(code), "Control de nivel no valido (AG, RG, SQ).");
     return code;
@@ -575,6 +582,15 @@
       for (const [p1, name] of Object.entries(METER_NAMES)) meters[name] = parseMeter(await this.command(meterReadCommand(Number(p1))), Number(p1));
       return meters;
     }
+    // Read-only: TX; first, then FA; and RM6; only while the radio itself reports TX (the operator keys it). meter is the raw
+    // 0-255 RM6 value; AntennaCore.swrFromMeter("ftx1", meter) is the single FTX-1 SWR conversion.
+    async readSwrSample() {
+      const transmitting = parseTxState(await this.command(txReadCommand()));
+      if (!transmitting) return { tx: false, freqHz: null, meter: null };
+      const freqHz = await this.readFrequency("A");
+      const meter = parseMeter(await this.command(meterReadCommand(6)), 6);
+      return { tx: true, freqHz, meter };
+    }
     async readControls(side) {
       checkSide(side);
       const read = async (command, parse) => parse(await this.command(command));
@@ -692,7 +708,7 @@
     FTX1_AGC_SET: AGC_SET, FTX1_AGC_READ: AGC_READ, FTX1_PREAMP_BANDS: PREAMP_BANDS, FTX1_PREAMP_HF: PREAMP_HF,
     FTX1_POWER_RANGES: POWER_RANGES, FTX1_METERS: METER_NAMES,
     ftx1SmeterReadCommand: smeterReadCommand, parseFtx1Smeter: parseSmeter,
-    ftx1MeterReadCommand: meterReadCommand, parseFtx1Meter: parseMeter,
+    ftx1MeterReadCommand: meterReadCommand, parseFtx1Meter: parseMeter, ftx1TxReadCommand: txReadCommand, parseFtx1TxState: parseTxState,
     ftx1LevelReadCommand: levelReadCommand, ftx1LevelWriteCommand: levelWriteCommand, parseFtx1Level: parseLevel,
     ftx1WidthReadCommand: widthReadCommand, ftx1WidthWriteCommand: widthWriteCommand, parseFtx1Width: parseWidth,
     ftx1IfShiftReadCommand: ifShiftReadCommand, ftx1IfShiftWriteCommand: ifShiftWriteCommand, parseFtx1IfShift: parseIfShift,

@@ -930,8 +930,7 @@ function createRemoteAgent(options = {}) {
       const genBefore = meterGen;
       const ptt = await client.getPtt();
       // A read that was in flight while PTT changed or a stop ran is stale and must not re-key the state; the next poll sees the settled state.
-      if (ptt !== rig.ptt && !tune && epoch === pttEpoch && genBefore === meterGen && stopping === 0) setRigPtt(ptt);
-      rig.smeter = rig.ptt ? null : await client.getStrength();
+      if (ptt !== rig.ptt && !tune && epoch === pttEpoch && genBefore === meterGen && stopping === 0) setRigPtt(ptt);      rig.smeter = rig.ptt ? null : await client.getStrength();
       if (pollCount % 4 === 1) {
         try {
           const vfo = await client.getVfo();

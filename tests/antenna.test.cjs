@@ -191,10 +191,16 @@ test("advisor suggestions carry the number they come from", () => {
 test("band filter returns only repository-sourced bands and pendiente de fuente otherwise", () => {
   const none = A.bandsForRadio("");
   assert.equal(none.status, "none"); assert.equal(none.bands.length, 0);
-  for (const id of ["ftx1", "trusdx", "qmx", "thd75", "tk11"]) {
+  for (const id of ["tk11"]) {
     const info = A.bandsForRadio(id);
     assert.equal(info.status, "pending"); assert.equal(info.message, "pendiente de fuente"); assert.equal(info.bands.length, 0);
   }
+  const ftx = A.bandsForRadio("ftx1");
+  assert.equal(ftx.status, "ok");
+  assert.deepEqual(ftx.bands.find(b => b.label === "60 m").lowHz, 5351500);
+  assert.deepEqual(ftx.bands.find(b => b.label === "70 cm").highHz, 450e6);
+  assert.deepEqual(A.bandsForRadio("thd75").bands.map(b => [b.lowHz, b.highHz]), [[136e6, 174e6], [216e6, 260e6], [410e6, 470e6]]);
+  for (const id of ["trusdx", "qmx"]) assert.match(A.bandsForRadio(id).note, /no limites de TX/);
   const ic = A.bandsForRadio("ic705-plan0");
   assert.equal(ic.status, "ok");
   const band = label => ic.bands.find(b => b.label === label);
@@ -206,6 +212,35 @@ test("band filter returns only repository-sourced bands and pendiente de fuente 
   const q = A.bandsForRadio("quansheng");
   assert.deepEqual(q.bands.map(b => [b.lowHz, b.highHz]), [[136e6, 174e6], [400e6, 470e6]]);
   for (const profile of A.RADIO_PROFILES) assert.ok(profile.bands ? profile.source : profile.source === null, profile.id);
+});
+
+test("SWR meter table only converts sourced radios and the logger records TX points only", () => {
+  assert.equal(A.swrMeterInfo("ic705-plan0").status, "ok");
+  assert.equal(A.swrMeterInfo("ftx1").status, "partial");
+  assert.equal(A.swrMeterInfo("trusdx").status, "pending");
+  assert.equal(A.swrMeterInfo("trusdx").message, "pendiente de fuente");
+  assert.equal(A.swrFromMeter("qmx", 100), null);
+  for (const id of ["ic7300", "ic7300mk2", "ic7610", "ic9700", "ic905", "icom-ic-7300"]) assert.equal(A.swrMeterInfo(id).status, "partial", id);
+  near(A.swrFromMeter("icom-ic-9700", 80), 2, 1e-9, "ic9700 80");
+  assert.equal(A.swrFromMeter("ic7300", 200), null);
+  assert.equal(A.swrMeterInfo("ic705").status, "ok");
+  assert.match(A.swrMeterInfo("ic705").source, /p\.5.*p\.15/);
+  assert.equal(A.swrMeterInfo("kenwood-ts-590s").status, "pending");
+  for (const [raw, swr] of [[0, 1], [48, 1.5], [80, 2], [120, 3], [240, 6]]) near(A.swrFromMeter("ic705-plan1", raw), swr, 1e-9, `ic705 ${raw}`);
+  near(A.swrFromMeter("ic705", 64), 1.75, 1e-9, "ic705 midpoint");
+  assert.equal(A.swrFromMeter("ic705", 256), null);
+  near(A.swrFromMeter("ftx1", 0), 1, 1e-9, "ftx1 zero");
+  near(A.swrFromMeter("ftx1", 96), 1 + 0.333 * (Math.exp(0.0151 * 96) - 1), 1e-9, "ftx1 96");
+  assert.equal(A.swrFromMeter("ftx1", 255), null);
+  const log = A.createSwrLogger({ maxPoints: 2 });
+  assert.equal(log.add({ freqHz: 7.1e6, swr: 1.4, tx: false }), false);
+  assert.equal(log.add({ freqHz: 7.1e6, swr: 0.5, tx: true }), false);
+  assert.equal(log.add({ freqHz: 7.1e6, swr: 1.4, tx: true }), true);
+  assert.equal(log.add({ freqHz: 7.1e6 + 100, swr: 1.5, tx: true }), true);
+  assert.equal(log.size, 1);
+  assert.equal(log.add({ freqHz: 7.2e6, swr: 2, tx: true }), true);
+  assert.equal(log.add({ freqHz: 7.3e6, swr: 3, tx: true }), false);
+  assert.deepEqual(log.points().map(p => p.swr), [1.5, 2]);
 });
 
 test("segment cap rejects oversized models", () => {

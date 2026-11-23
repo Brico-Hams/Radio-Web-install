@@ -75,6 +75,9 @@
     <string name="tool_rotor_title">AZ/EL-Rotor</string>
     <string name="tool_rotor_desc">Antenne mit dem BricoHams-Rotor ausrichten.</string>
     <string name="tool_rotor_help">Verbindet per Bluetooth mit dem BricoHams-Rotor. Stellen Sie sicher, dass der Bereich frei ist, bevor die Antenne sich bewegt.</string>
+    <string name="tool_antenna_title">HF/VHF-Antennen</string>
+    <string name="tool_antenna_desc">Antennen offline entwerfen und analysieren.</string>
+    <string name="tool_antenna_help">Berechnet SWR, Diagramm und Anpassung ohne Netzwerk. Sie können das SWR messen, indem das Messinstrument des Funkgeräts gelesen wird, während Sie senden; senden Sie nie ohne angepasste Last oder Antenne.</string>
     <string name="tool_satellites_title">Satelliten</string>
     <string name="tool_satellites_desc">Überflüge, Karte und Doppler, offline.</string>
     <string name="tool_satellites_help">Berechnet Überflüge aus gespeicherten TLE und Ihrer Profilposition. Kein Funkgerät nötig; mit CAT kann es den Doppler korrigieren.</string>

@@ -627,3 +627,31 @@ test("receive extras are verified by reading back and rejected out of range befo
   await assert.rejects(stuckCat.setMode("C"), /Verificacion fallida en MD/);
   await assert.rejects(stuckCat.setSplit(true), /Verificacion fallida en ST/);
 });
+
+test("readSwrSample only reads TX;, FA; and RM6; and returns the meter only while the radio reports TX", async () => {
+  const AntennaCore = require("../antenna-core.js");
+  class SwrPort extends R.BufferedTransport {
+    constructor(tx, meter) { super(); this.opened = true; this.tx = tx; this.meter = meter; this.commands = []; }
+    async write(bytes) {
+      const command = Buffer.from(bytes).toString("latin1");
+      this.commands.push(command);
+      const answers = { "TX;": `TX${this.tx};`, "FA;": "FA007100000;", "RM6;": `RM6${String(this.meter).padStart(3, "0")}000;` };
+      this.push(new TextEncoder().encode(answers[command] || "?;"));
+    }
+  }
+  // Real bench answers (read only, RX): TX0; and RM6000000;
+  assert.equal(R.ftx1TxReadCommand(), "TX;");
+  assert.equal(R.parseFtx1TxState("TX0;"), false);
+  assert.equal(R.parseFtx1TxState("TX1;"), true);
+  assert.equal(R.parseFtx1TxState("TX2;"), true);
+  assert.throws(() => R.parseFtx1TxState("TX3;"), /TX/);
+  const rx = new SwrPort(0, 0);
+  assert.deepEqual(await new R.Ftx1Cat(rx).readSwrSample(), { tx: false, freqHz: null, meter: null });
+  assert.deepEqual(rx.commands, ["TX;"]);
+  const tx = new SwrPort(2, 96);
+  const sample = await new R.Ftx1Cat(tx).readSwrSample();
+  assert.deepEqual(sample, { tx: true, freqHz: 7100000, meter: 96 });
+  assert.deepEqual(tx.commands, ["TX;", "FA;", "RM6;"]);
+  assert.equal(AntennaCore.swrFromMeter("ftx1", 0), 1);
+  assert.equal(AntennaCore.swrFromMeter("ftx1", sample.meter), 1 + 0.333 * (Math.exp(0.0151 * 96) - 1));
+});

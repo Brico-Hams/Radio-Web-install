@@ -719,17 +719,97 @@
       bands: [seg("136-174 MHz", 136, 174), seg("400-470 MHz", 400, 470)] },
     { id: "anytone", label: "AnyTone (bandas admitidas por el validador de canales)", source: "anytone-core.js",
       bands: [seg("136-174 MHz", 136, 174), seg("400-470 MHz", 400, 470)] },
-    { id: "ftx1", label: "Yaesu FTX-1", source: null, note: "Las fuentes del repositorio discrepan y no fijan los limites de TX (docs/FTX1-KNOWLEDGE.md)." },
-    { id: "trusdx", label: "(tr)uSDX", source: null },
-    { id: "qmx", label: "QRP Labs QMX / QMX+", source: null },
-    { id: "thd75", label: "Kenwood TH-D75", source: null },
+    // FTX-1 TX bands: [[freq_ranges.ranges.bands]] of the rigplane profile (BS BAND SELECT codes of the CAT Operation Reference
+    // Manual 2508-C). docs/FTX1-KNOWLEDGE.md warns that the sources do not fix licence limits: check your own licence.
+    { id: "ftx1", label: "Yaesu FTX-1", source: "third_party/ftx1/rigplane-rigplane-core/rigs/ftx1.toml",
+      note: "Bandas del perfil rigplane del FTX-1; docs/FTX1-KNOWLEDGE.md avisa de que las fuentes no fijan los limites de TX: respeta tu licencia.",
+      bands: [["160 m", 1.8, 2], ["80 m", 3.5, 3.8], ["60 m", 5.3515, 5.3665], ["40 m", 7, 7.2], ["30 m", 10.1, 10.15], ["20 m", 14, 14.35],
+        ["17 m", 18.068, 18.168], ["15 m", 21, 21.45], ["12 m", 24.89, 24.99], ["10 m", 28, 29.7], ["6 m", 50, 54], ["4 m", 70, 70.5],
+        ["2 m", 144, 148], ["70 cm", 430, 450]].map(([label, lo, hi]) => seg(label, lo, hi)) },
+    // truSDX / QMX: the repository only gives the CAT tuning range of the radio profile (android RigCat.kt RigModel), not TX edges.
+    { id: "trusdx", label: "(tr)uSDX (rango de sintonia CAT)", source: "android/app/src/main/java/org/bricohams/radio/RigCat.kt",
+      note: "Rango de sintonia CAT del perfil, no limites de TX; bandas por defecto 80/60/40/30/20 m segun remote-station/docs/radio-conexiones-candidatas.md.",
+      bands: [seg("3-30 MHz (CAT)", 3, 30)] },
+    { id: "qmx", label: "QRP Labs QMX / QMX+ (rango de sintonia CAT)", source: "android/app/src/main/java/org/bricohams/radio/RigCat.kt",
+      note: "Rango de sintonia CAT del perfil, no limites de TX; 160 m-6 m segun remote-station/docs/radio-conexiones-candidatas.md.",
+      bands: [seg("1.8-54 MHz (CAT)", 1.8, 54)] },
+    // TH-D75 band A tunes only the amateur 144, 220 and 430 MHz bands (Th75Rig.BAND_A_RANGES in RigProtocols.kt).
+    { id: "thd75", label: "Kenwood TH-D75 (banda A)", source: "android/app/src/main/java/org/bricohams/radio/RigProtocols.kt",
+      note: "Rangos de sintonia de la banda A del TH-D75, no limites de licencia.",
+      bands: [seg("136-174 MHz", 136, 174), seg("216-260 MHz", 216, 260), seg("410-470 MHz", 410, 470)] },
     { id: "tk11", label: "TK11", source: null }
   );
   function bandsForRadio(id) {
     const profile = RADIO_PROFILES.find(p => p.id === id);
     if (!profile) return { status: "none", bands: [], message: "Elige una radio." };
     if (!profile.bands) return { status: "pending", bands: [], message: PENDING, source: null, note: profile.note || null };
-    return { status: "ok", bands: profile.bands.map(b => ({ ...b, centerHz: (b.lowHz + b.highHz) / 2 })), source: profile.source };
+    return { status: "ok", bands: profile.bands.map(b => ({ ...b, centerHz: (b.lowHz + b.highHz) / 2 })), source: profile.source, note: profile.note || null };
+  }
+
+  // ---------------------------------------------------------------- SWR meter read via CAT (the radio is keyed by the operator, never by the app)
+  const SWR_PENDING = "pendiente de fuente";
+  // status "ok": command and conversion sourced; "partial": command and raw scale sourced, ratio calibration approximate;
+  // "pending": no sourced SWR read command (or no sourced scale).
+  const SWR_METERS = Object.freeze({
+    // data/third-party/IC-705_ENG_CI-V_6.txt (local, not committed): p.5 "Read SWR meter level" 15 12, 0000-0255, 0000=SWR 1.0,
+    // 0048=1.5, 0080=2.0, 0120=3.0; p.15 "Send/read the transceiver's status" 1C 00 (00=RX, 01=TX). Raw 240 = 6.0 only from rigplane ic705.toml.
+    ic705: { status: "ok", command: "CI-V 15 12 (4 digitos BCD, 0000-0255); TX 1C 00", source: "IC-705 CI-V Reference Guide p.5 (15 12) y p.15 (1C 00); rigs/ic705.toml" },
+    // Same 15 12 read and 0/48/80/120 -> 1.0/1.5/2.0/3.0 table in the rigplane rigs files; no value above raw 120 is used for these radios.
+    ic7300: { status: "partial", command: "CI-V 15 12; TX 1C 00", source: "third_party/ftx1/rigplane-rigplane-core/rigs/ic7300.toml (get_swr, meters.swr.calibration)" },
+    ic7300mk2: { status: "partial", command: "CI-V 15 12; TX 1C 00", source: "third_party/ftx1/rigplane-rigplane-core/rigs/ic7300mk2.toml (get_swr, meters.swr.calibration)" },
+    ic7610: { status: "partial", command: "CI-V 15 12; TX 1C 00", source: "third_party/ftx1/rigplane-rigplane-core/rigs/ic7610.toml (get_swr, meters.swr.calibration)" },
+    ic9700: { status: "partial", command: "CI-V 15 12; TX 1C 00", source: "third_party/ftx1/rigplane-rigplane-core/rigs/ic9700.toml (get_swr, meters.swr.calibration)" },
+    ic905: { status: "partial", command: "CI-V 15 12; TX 1C 00", source: "third_party/ftx1/rigplane-rigplane-core/rigs/ic905.toml (get_swr, meters.swr.calibration)" },
+    ftx1: { status: "partial", command: "RM6;", source: "FTX-1 CAT Operation Reference Manual 2508-C RM READ METER; docs/FTX1-KNOWLEDGE.md; third_party/ftx1/bg7nzl-ftx1ctl/ftx1cat.py swr_from_meter" },
+    qmx: { status: "pending", command: "SW;", source: "remote-station/docs/hardware/qmx-plus.md: comando listado, escala no documentada" }
+  });
+  // IC-705 raw 0-255 to SWR: rigplane ic705.toml calibration points (0=1.0, 48=1.5, 80=2.0, 120=3.0, 240=6.0), piecewise linear.
+  const IC705_SWR_CAL = [[0, 1], [48, 1.5], [80, 2], [120, 3], [240, 6]];
+  // Station catalog ids (data/remote-station-catalog.json) share the meter table with the antenna radio ids.
+  const SWR_ALIASES = {
+    "icom-ic-705": "ic705", "yaesu-ftx-1": "ftx1", "qrplabs-qmx": "qmx", "icom-ic-7300": "ic7300", "icom-ic-7300mk2": "ic7300mk2",
+    "icom-ic-7610": "ic7610", "icom-ic-9700": "ic9700", "icom-ic-905": "ic905"
+  };
+  const ICOM_CIV_SWR = new Set(["ic705", "ic7300", "ic7300mk2", "ic7610", "ic9700", "ic905"]);
+  const swrMeterKey = radioId => { const id = String(radioId || "").replace(/-plan\d+$/, ""); return SWR_ALIASES[id] || id; };
+  function swrMeterInfo(radioId) {
+    const info = SWR_METERS[swrMeterKey(radioId)];
+    return info ? { ...info } : { status: "pending", command: null, source: null, message: SWR_PENDING };
+  }
+  // Returns the SWR ratio for a raw meter value, or null when the radio has no sourced conversion or the value is out of range.
+  function swrFromMeter(radioId, raw) {
+    const key = swrMeterKey(radioId);
+    if (!Number.isFinite(raw) || raw < 0 || raw > 255) return null;
+    if (ICOM_CIV_SWR.has(key)) {
+      if (key !== "ic705" && raw > 120) return null;
+      for (let i = 1; i < IC705_SWR_CAL.length; i++) {
+        const [r0, s0] = IC705_SWR_CAL[i - 1], [r1, s1] = IC705_SWR_CAL[i];
+        if (raw <= r1) return s0 + (s1 - s0) * (raw - r0) / (r1 - r0);
+      }
+      return IC705_SWR_CAL[IC705_SWR_CAL.length - 1][1];
+    }
+    // FTX-1 host-side calibration of bg7nzl-ftx1ctl ftx1cat.py swr_from_meter; approximate (the meter is raw, uncalibrated).
+    // This is the only FTX-1 raw-to-SWR conversion (Node agent, Web Serial page and Android all send the raw RM6 value here).
+    // Real bench answer (read only, RX): RM6000000; -> raw 0 -> SWR 1.0.
+    if (key === "ftx1") return raw >= 255 ? null : raw <= 0 ? 1 : 1 + 0.333 * (Math.exp(0.0151 * raw) - 1);
+    return null;
+  }
+  // Logs (frequency, SWR) points only while the radio reports TX; the points have the shape of parseMeasurementCsv rows.
+  function createSwrLogger(options = {}) {
+    const maxPoints = options.maxPoints || 400, stepHz = options.stepHz || 1000;
+    const byBin = new Map();
+    return {
+      add({ freqHz, swr, tx }) {
+        if (tx !== true || !Number.isFinite(freqHz) || freqHz <= 0 || !Number.isFinite(swr) || swr < 1) return false;
+        const bin = Math.round(freqHz / stepHz);
+        if (!byBin.has(bin) && byBin.size >= maxPoints) return false;
+        byBin.set(bin, { f: freqHz, swr });
+        return true;
+      },
+      points: () => [...byBin.values()].sort((a, b) => a.f - b.f),
+      clear: () => byBin.clear(),
+      get size() { return byBin.size; }
+    };
   }
 
   // ---------------------------------------------------------------- advisor (rule based; every figure comes from the computed numbers)
@@ -860,7 +940,8 @@
     validateDesign, chainRows, locate, buildFromDesign, feedPoint, evaluate, linspace, sweep, findMinimum, interpolate, findResonances,
     nelderMead, scaleDesign, autoTune, suggestSegments, dipoleTemplate, invertedVTemplate, trapDipoleTemplate, cloneDesign, rowLength,
     transformImpedance, bestTransformer, lNetwork, lNetworkInput, coaxInput, coaxMatchedLossDb,
-    parseMeasurementCsv, compareMeasured, bandsForRadio, advise, fmt
+    parseMeasurementCsv, compareMeasured, bandsForRadio, advise, fmt,
+    SWR_METERS, swrMeterInfo, swrFromMeter, createSwrLogger
   };
   if (typeof module === "object" && module.exports) module.exports = api;
   root.AntennaCore = api;

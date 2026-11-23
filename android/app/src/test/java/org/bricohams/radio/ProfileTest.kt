@@ -182,7 +182,7 @@ class ProfileTest {
     }
 
     @Test fun rts10SupportsOnlyItsProbeAndPhoneSideTools() {
-        assertEquals(setOf(Tool.RTS10, Tool.SSTV, Tool.LIVE_AUDIO, Tool.ROTOR, Tool.RADIO_TOOLS), ProfileRadio.RTS10.tools)
+        assertEquals(setOf(Tool.RTS10, Tool.SSTV, Tool.LIVE_AUDIO, Tool.ROTOR, Tool.RADIO_TOOLS, Tool.ANTENNA), ProfileRadio.RTS10.tools)
         assertFalse(ProfileRadio.RTS10.supports(Tool.RT950))
         assertFalse(ProfileRadio.RTS10.supports(Tool.CHANNELS))
         assertFalse(ProfileRadio.RTS10.supports(Tool.RIG_CAT))

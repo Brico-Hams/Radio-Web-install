@@ -54,7 +54,7 @@ class UiOverhaulTest {
             open(MainActivity::class.java) { activity ->
                 val tags = all(activity).mapNotNull { it.tag as? String }
                 val enabled = Tool.values().filter { "tool_" + it.name in tags }.map { it.name }.toSet()
-                assertEquals(radio.name, specific + setOf("SSTV", "LIVE_AUDIO", "ROTOR", "RADIO_TOOLS"), enabled)
+                assertEquals(radio.name, specific + setOf("SSTV", "LIVE_AUDIO", "ROTOR", "RADIO_TOOLS", "ANTENNA"), enabled)
                 val unavailable = Tool.values().filter { "unavailable_" + it.name in tags }.map { it.name }.toSet()
                 assertEquals(radio.name, Tool.values().map { it.name }.toSet() - enabled, unavailable)
                 for (always in listOf("tool_satellites", "tool_ftx", "tool_logbook")) assertTrue(always in tags)
