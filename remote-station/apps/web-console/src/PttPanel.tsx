@@ -217,7 +217,7 @@ export function PttPanel({ token }: { token: string }) {
       <div className="session-actions">
         <button className="button button-secondary" disabled={busy || !!lease}
           onClick={() => void load()}>{t('pttRead')}</button>
-        <button className="button button-primary" onClick={() => void stop()}>
+        <button className="button button-danger" onClick={() => void stop()}>
           {t('pttStop')}
         </button>
       </div>
@@ -242,7 +242,7 @@ export function PttPanel({ token }: { token: string }) {
           onChange={(event) => setEnabledHere(event.target.checked)} />
           {t('pttEnableHere')}
         </label>
-        <button className="button button-primary" type="button"
+        <button className={`button button-danger button-ptt${holding ? ' is-transmitting' : ''}`} type="button"
           disabled={!holding && (busy || !canStart)}
           onPointerDown={(event) => {
             if (event.button === 0 && event.isPrimary) void start()
