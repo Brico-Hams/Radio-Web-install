@@ -12,6 +12,10 @@
     <string name="remote_clipboard_empty">Die Zwischenablage ist leer.</string>
     <string name="remote_reload">Neu laden</string>
     <string name="remote_forget">Kopplung vergessen</string>
+    <string name="remote_more">Mehr</string>
+    <string name="remote_back">Zurück</string>
+    <string name="remote_forget_title">Kopplung vergessen?</string>
+    <string name="remote_forget_message">Die gespeicherte Kopplung wird gelöscht und muss neu eingerichtet werden.</string>
     <string name="remote_cert_mismatch">Zertifikat stimmt nicht überein: erneut koppeln</string>
     <string name="remote_cert_invalid">Relay-Zertifikat ungültig: Verbindung abgelehnt</string>
     <string name="remote_detected_direct">Erkannter Modus: direkt (lokales Netz / Tailscale)\nZiel: %1$s:%2$d</string>

@@ -2,6 +2,7 @@ package org.bricohams.radio
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -175,3 +176,40 @@ class RemoteShackStoreTest {
         assertEquals(RemotePairing("10.0.0.5", 9443, token, fp), RemoteShackStore.load(context))
     }
 }
+
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [28], qualifiers = "en-rUS")
+class RemoteShackBarTest {
+    private val token = "AbC-_".repeat(8) + "xyz"
+    private val fp = (0 until 32).joinToString(":") { "%02X".format(it * 7) }
+    private fun views(view: android.view.View): List<android.view.View> = listOf(view) +
+        if (view is android.view.ViewGroup) (0 until view.childCount).flatMap { views(view.getChildAt(it)) } else emptyList()
+
+    @Test fun forgetPairingIsInTheOverflowMenuAndNeedsConfirmation() {
+        val context = RuntimeEnvironment.getApplication()
+        assertTrue(RemoteShackStore.save(context, RemotePairing("192.168.1.20", 8443, token, fp)))
+        val controller = org.robolectric.Robolectric.buildActivity(RemoteShackActivity::class.java).setup()
+        try {
+            val activity = controller.get()
+            val all = views(activity.window.decorView)
+            assertTrue(all.filterIsInstance<android.widget.Button>().isEmpty())
+            val more = all.single { it.contentDescription == activity.getString(R.string.remote_more) }
+            assertTrue(more.minimumHeight >= (48 * context.resources.displayMetrics.density).toInt())
+            more.performClick()
+            val menu = org.robolectric.shadows.ShadowAlertDialog.getLatestAlertDialog()
+            val items = org.robolectric.Shadows.shadowOf(menu).items
+            assertEquals(listOf(activity.getString(R.string.remote_reload), activity.getString(R.string.remote_forget)), items.toList())
+            menu.listView.performItemClick(null, 1, 1)
+            val confirm = org.robolectric.shadows.ShadowAlertDialog.getLatestAlertDialog()
+            assertNotNull(RemoteShackStore.load(context))
+            confirm.getButton(android.app.AlertDialog.BUTTON_NEGATIVE).performClick()
+            assertNotNull(RemoteShackStore.load(context))
+            more.performClick()
+            org.robolectric.shadows.ShadowAlertDialog.getLatestAlertDialog().listView.performItemClick(null, 1, 1)
+            org.robolectric.shadows.ShadowAlertDialog.getLatestAlertDialog()
+                .getButton(android.app.AlertDialog.BUTTON_POSITIVE).performClick()
+            assertNull(RemoteShackStore.load(context))
+        } finally { controller.pause().stop().destroy() }
+    }
+}
+

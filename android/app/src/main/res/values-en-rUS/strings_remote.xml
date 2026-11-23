@@ -12,6 +12,10 @@
     <string name="remote_clipboard_empty">The clipboard is empty.</string>
     <string name="remote_reload">Reload</string>
     <string name="remote_forget">Forget pairing</string>
+    <string name="remote_more">More</string>
+    <string name="remote_back">Back</string>
+    <string name="remote_forget_title">Forget pairing?</string>
+    <string name="remote_forget_message">The stored pairing will be cleared and you will have to pair again.</string>
     <string name="remote_cert_mismatch">Certificate does not match: pair again</string>
     <string name="remote_cert_invalid">Relay certificate is not valid: connection refused</string>
     <string name="remote_detected_direct">Detected mode: direct (local network / Tailscale)\nTarget: %1$s:%2$d</string>

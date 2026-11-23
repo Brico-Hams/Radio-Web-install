@@ -1,6 +1,7 @@
 package org.bricohams.radio
 
 import android.Manifest
+import android.app.AlertDialog
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
@@ -11,6 +12,7 @@ import android.net.http.SslError
 import android.os.Build
 import android.os.Bundle
 import android.text.InputType
+import android.view.Gravity
 import android.view.View
 import android.view.WindowInsets
 import android.view.WindowManager
@@ -137,13 +139,23 @@ class RemoteShackActivity : LocalizedActivity() {
     private fun consoleScreen() {
         val current = pairing ?: return
         val layout = root()
-        val bar = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        bar.addView(BrandUi.secondaryButton(this, getString(R.string.remote_reload)) { web?.reload() },
-            LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-        bar.addView(BrandUi.secondaryButton(this, getString(R.string.remote_forget)) {
-            RemoteShackStore.clear(this); pairing = null; render()
-        }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-        layout.addView(bar)
+        val touch = Brand.dp(this, 48)
+        fun action(glyph: String, description: String, click: () -> Unit) = Brand.text(this, 22f, bold = true).apply {
+            text = glyph
+            contentDescription = description
+            gravity = Gravity.CENTER
+            minWidth = touch; minHeight = touch
+            isClickable = true; isFocusable = true
+            setOnClickListener { click() }
+        }
+        val bar = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+        bar.addView(action("←", getString(R.string.remote_back)) { finish() }, LinearLayout.LayoutParams(-2, touch))
+        bar.addView(Brand.text(this, 16f, bold = true).apply {
+            text = getString(R.string.remote_shack_title)
+            maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END
+        }, LinearLayout.LayoutParams(0, -2, 1f))
+        bar.addView(action("⋮", getString(R.string.remote_more)) { showMore() }, LinearLayout.LayoutParams(-2, touch))
+        layout.addView(bar, LinearLayout.LayoutParams(-1, touch))
         status = Brand.text(this, 14f).apply { visibility = View.GONE; setPadding(Brand.dp(this@RemoteShackActivity, 12), 0, 0, 0) }
         layout.addView(status)
         val view = WebView(this)
@@ -152,6 +164,19 @@ class RemoteShackActivity : LocalizedActivity() {
         web = view
         setContentView(layout)
         view.loadUrl(current.consoleUrl)
+    }
+
+    private fun showMore() {
+        val labels = arrayOf(getString(R.string.remote_reload), getString(R.string.remote_forget))
+        AlertDialog.Builder(this).setItems(labels) { _, which ->
+            if (which == 0) web?.reload() else confirmForget()
+        }.show()
+    }
+
+    private fun confirmForget() {
+        AlertDialog.Builder(this).setTitle(R.string.remote_forget_title).setMessage(R.string.remote_forget_message)
+            .setPositiveButton(R.string.remote_forget) { _, _ -> RemoteShackStore.clear(this); pairing = null; render() }
+            .setNegativeButton(R.string.remote_pair_cancel, null).show()
     }
 
     private fun configure(view: WebView, current: RemoteTarget) {
