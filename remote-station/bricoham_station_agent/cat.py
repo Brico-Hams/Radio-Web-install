@@ -2,6 +2,7 @@ import logging
 import threading
 import time
 from collections import deque
+from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -12,12 +13,16 @@ from bricoham_remote_station.drivers import ftx1_cat as ftx1
 from bricoham_remote_station.drivers import icom_civ as icom
 from bricoham_remote_station.drivers import opengd77_usb as opengd77
 from bricoham_remote_station.drivers import yaesu_cat as yaesu
+from bricoham_remote_station.drivers.icom_scope import ScopeAssembler, ScopeFrame, scope_payload
 from bricoham_station_agent.radio_settings import (
     RadioSettingsConfig,
     settings_request_identifier,
 )
 
 LOGGER = logging.getLogger("bricoham.station_agent.cat")
+SCOPE_MAX_SECONDS = 30
+SCOPE_MAX_FPS = 10
+SCOPE_MAX_BUFFER = 4096
 
 
 class SerialPort(Protocol):
@@ -639,6 +644,76 @@ class SerialCat:
             }
         finally:
             self._lock.release()
+
+    def scope_stream(
+        self, seconds: float, max_fps: float = SCOPE_MAX_FPS
+    ) -> Iterator[ScopeFrame]:
+        """Yield assembled CI-V scope frames for at most `seconds`, at most `max_fps` per second.
+
+        The scope is switched on with 27 10 01 and its output with 27 11 01; output is always switched off with
+        27 11 00 on exit, so the stream is bounded and the radio stops sending even if the consumer disconnects.
+        Receive-only: no PTT or transmit command is ever written here.
+        """
+        if self.protocol != "Icom CI-V" or self.config.model not in icom.SCOPE_MODELS:
+            raise CatError("cat_scope_not_sourced")
+        if not 0 < seconds <= SCOPE_MAX_SECONDS or not 0 < max_fps <= SCOPE_MAX_FPS:
+            raise ValueError("Scope duration or rate out of range.")
+        model = icom.IcomCivModel(self.config.model)
+        address = icom._RADIO_ADDRESSES[model]
+        if not self._lock.acquire(blocking=False):
+            raise CatError("cat_busy")
+        enabled = False
+        try:
+            try:
+                connection = self._port if self._port is not None else self._open()
+                connection.reset_input_buffer()
+                deadline = time.monotonic() + self.config.timeout
+                self._write_request(connection, icom.build_scope_on_off(model, True), deadline)
+                self._write_request(connection, icom.build_scope_data_output(model, True), deadline)
+                enabled = True
+                assembler = ScopeAssembler()
+                pending = bytearray()
+                end = time.monotonic() + seconds
+                last = 0.0
+                while time.monotonic() < end:
+                    chunk = connection.read(64)
+                    if not chunk:
+                        continue
+                    pending.extend(chunk)
+                    if len(pending) > SCOPE_MAX_BUFFER:
+                        raise CatError("cat_frame_too_large")
+                    while (stop := pending.find(b"\xfd")) >= 0:
+                        raw = bytes(pending[: stop + 1])
+                        del pending[: stop + 1]
+                        parsed = scope_payload(raw[raw.find(b"\xfe\xfe") :], address)
+                        # Receiver byte 00 = main scope (IC-705 guide p.28); a dual-scope radio's sub frames must not mix in.
+                        if parsed is None or parsed[0] != 0:
+                            continue
+                        frame = assembler.feed(parsed[1])
+                        now = time.monotonic()
+                        if frame is not None and now - last >= 1 / max_fps:
+                            last = now
+                            yield frame
+            except (OSError, TimeoutError) as error:
+                LOGGER.warning("CAT scope I/O failed (%s)", type(error).__name__)
+                enabled = False
+                self._close()
+                raise CatError("cat_io_failed") from error
+        finally:
+            try:
+                if enabled and self._port is not None:
+                    self._port.write(icom.build_scope_data_output(model, False))
+            except OSError:
+                LOGGER.warning("CAT scope output could not be switched off")
+                self._close_quietly()
+            finally:
+                self._lock.release()
+
+    def _close_quietly(self) -> None:
+        try:
+            self._close()
+        except CatError:
+            pass
 
     def _write_request(self, connection: SerialPort, request: bytes, deadline: float) -> None:
         if time.monotonic() >= deadline:

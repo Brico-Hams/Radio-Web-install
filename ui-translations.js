@@ -2081,6 +2081,16 @@ No se pudo acceder al micrófono.|Could not access the microphone.|Impossible d�
 La transmisión de audio no está permitida.|Audio transmission is not allowed.|La transmission audio n’est pas autorisée.|Audioübertragung ist nicht erlaubt.
 Activa el audio para ver el espectro de la banda de paso.|Turn on audio to see the passband spectrum.|Activez l’audio pour voir le spectre de la bande passante.|Schalte das Audio ein, um das Durchlassbereich-Spektrum zu sehen.
 Espectro de audio de la banda de paso|Passband audio spectrum|Spectre audio de la bande passante|Audiospektrum des Durchlassbereichs
+Escala nativa de la radio: pendiente de fuente. Activa el audio para ver la cascada de la banda de paso.|Native radio scope: pending a source. Turn on audio to see the passband waterfall.|Échelle native de la radio : en attente de source. Activez l’audio pour voir la cascade de la bande passante.|Natives Radio-Scope: Quelle ausstehend. Schalte das Audio ein, um den Durchlassbereich-Wasserfall zu sehen.
+Cascada de audio de la banda de paso; pulsa para sintonizar en BLU|Passband audio waterfall; click to tune in SSB|Cascade audio de la bande passante ; cliquez pour accorder en BLU|Audio-Wasserfall des Durchlassbereichs; klicken zum Abstimmen in SSB
+Pausar cascada|Pause waterfall|Mettre la cascade en pause|Wasserfall pausieren
+Paleta|Palette|Palette|Palette
+Calor|Heat|Chaleur|Hitze
+Hielo|Ice|Glace|Eis
+Grises|Gray|Gris|Grau
+Suelo dB|Floor dB|Plancher dB|Untergrenze dB
+Techo dB|Ceiling dB|Plafond dB|Obergrenze dB
+Pulsar la cascada sintoniza solo en BLU/USB/LSB. No transmitas sin antena o carga adaptada.|Clicking the waterfall tunes in SSB/USB/LSB only. Do not transmit without an antenna or matched load.|Un clic sur la cascade n’accorde qu’en BLU/USB/LSB. Ne transmettez pas sans antenne ni charge adaptée.|Ein Klick auf den Wasserfall stimmt nur in SSB/USB/LSB ab. Nicht ohne Antenne oder angepasste Last senden.
 Audio de la radio|Radio audio|Audio de la radio|Funkgerät-Audio
 Entrada de audio de la radio (códec USB)|Radio audio input (USB codec)|Entrée audio de la radio (codec USB)|Audioeingang des Funkgeräts (USB-Codec)
 Salida de audio hacia la radio (códec USB)|Audio output to the radio (USB codec)|Sortie audio vers la radio (codec USB)|Audioausgang zum Funkgerät (USB-Codec)

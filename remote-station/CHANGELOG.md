@@ -1,5 +1,16 @@
 # Historial de cambios
 
+## No publicado — Escala RF por CAT y unkey de PTT
+
+- Escala nativa `/api/v1/cat/scope` ampliada a IC-705, IC-7300, IC-7300MK2, IC-7610,
+  IC-905 e IC-9700 (guía CI-V IC-705 pp. 27-28 y perfiles rigplane): activa `27 10 01`
+  y `27 11 01`, apaga siempre `27 11 00`, solo receptor principal, borde inferior negativo.
+  El coordinador la reenvía (solo admin/operador; 501 sin fuente) y la consola web la
+  dibuja (`RfScopePanel`) con pulsar-para-sintonizar por el camino `set_frequency`
+  existente. Solo recepción; sin nuevo camino TX. Resto de radios: pendiente de fuente.
+- Pruebas: relay de audio con rigctld que recuerda el PTT y unkey inmediato al cerrar
+  el socket propietario (cierre abrupto y trama de cierre).
+
 ## No publicado — Consola web local
 
 - Puertos por defecto movidos para evitar colisiones con Workspace de escritorio

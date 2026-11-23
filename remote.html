@@ -11,6 +11,7 @@
   <script src="ui-translations.js" defer></script>
   <script src="ui-i18n.js" defer></script>
   <script src="remote-audio-core.js" defer></script>
+  <script src="spectrum-core.js" defer></script>
   <script src="remote-rotor-ui.js" defer></script>
   <script src="remote-ui.js" defer></script>
 </head>
@@ -93,8 +94,21 @@
       <p id="spectrum-note" class="hint empty">Este modelo no ofrece espectro</p>
       <div id="scope" class="scope" hidden>
         <canvas id="scope-line" class="scope-line" width="640" height="90" role="img" aria-label="Espectro de audio de la banda de paso"></canvas>
-        <canvas id="scope-fall" class="scope-fall" width="640" height="160" aria-hidden="true"></canvas>
+        <canvas id="scope-fall" class="scope-fall" width="640" height="160" role="img" aria-label="Cascada de audio de la banda de paso; pulsa para sintonizar en BLU"></canvas>
         <p id="scope-axis" class="hint scope-axis" aria-live="off"></p>
+        <div class="scope-controls">
+          <button id="scope-pause" type="button" aria-pressed="false">Pausar cascada</button>
+          <label>Paleta
+            <select id="scope-map">
+              <option value="heat">Calor</option>
+              <option value="ice">Hielo</option>
+              <option value="gray">Grises</option>
+            </select>
+          </label>
+          <label>Suelo dB <input id="scope-floor" type="range" min="-140" max="-40" step="5" value="-100"></label>
+          <label>Techo dB <input id="scope-ceil" type="range" min="-60" max="0" step="5" value="-20"></label>
+        </div>
+        <p class="hint">Pulsar la cascada sintoniza solo en BLU/USB/LSB. No transmitas sin antena o carga adaptada.</p>
       </div>
 
       <div id="audio-panel" class="audio-panel" role="group" aria-labelledby="audio-title" hidden>

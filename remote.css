@@ -87,6 +87,8 @@ input[type=range]{width:100%;min-height:36px;accent-color:var(--accent)}
 .scope-line{height:90px}
 .scope-fall{height:160px}
 .scope-axis{margin:0;font-variant-numeric:tabular-nums}
+.scope-controls{display:flex;flex-wrap:wrap;gap:.5rem 1rem;align-items:center;font-size:.85rem}
+.scope-fall{cursor:crosshair}
 .meter-row{display:grid;gap:.25rem;margin-top:.6rem;font-size:.85rem;color:var(--muted)}
 .level-meter{position:relative;height:10px;border-radius:5px;background:var(--bg);border:1px solid var(--border);overflow:hidden}
 .level-fill{height:100%;width:0;background:var(--ok);transition:width .1s linear}

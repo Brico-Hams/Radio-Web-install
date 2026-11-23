@@ -39,7 +39,7 @@ async function fakeRigctld() {
       while ((index = buffer.indexOf("\n")) >= 0) {
         const [command, argument] = buffer.slice(0, index).split(" ");
         buffer = buffer.slice(index + 1);
-        // The rig remembers the PTT it was given, so a poll cannot undo a keyed state.
+        // The rig remembers the PTT it was given, so a poll between "T 1" and the first TX frame cannot undo a keyed state.
         if (command === "T") ptt = argument === "1" ? "1" : "0";
         const replies = { f: "14074000\n", m: "USB\n2400\n", t: `${ptt}\n`, v: "VFOA\n", s: "0\nVFOA\n", T: "RPRT 0\n" };
         socket.write(replies[command] ?? "RPRT -11\n");

@@ -41,6 +41,48 @@ class ScriptedPort:
 
 
 class SerialCatTests(unittest.TestCase):
+    def test_icom_scope_stream_enables_reads_and_always_disables_output(self) -> None:
+        # Burst layout from third_party/ftx1/rigplane-rigplane-core docs/api/scope.md; commands 27 11 01 / 27 11 00.
+        burst = bytes.fromhex("fefee094270000" "0101" "01" "0040071400" "0050020000" "00" "0908" "fd")
+        port = ScriptedPort(burst)
+        with patch("bricoham_station_agent.cat.serial.Serial", return_value=port):
+            cat = SerialCat(CatConfig("IC-7300", "COM7", 19200))
+            stream = cat.scope_stream(0.3, 10)
+            frame = next(stream)
+            self.assertEqual((frame.start_hz, frame.end_hz, frame.pixels), (14074000, 25000, b"\x09\x08"))
+            stream.close()
+            self.assertEqual(
+                port.writes,
+                [bytes.fromhex("fefe94e02710" "01fd"), bytes.fromhex("fefe94e02711" "01fd"), bytes.fromhex("fefe94e02711" "00fd")],
+            )
+            with self.assertRaises(ValueError):
+                next(cat.scope_stream(31, 1))
+            self.assertTrue(cat._lock.acquire(blocking=False))
+            cat._lock.release()
+            cat.close()
+
+    def test_icom_scope_models_use_their_own_address_and_skip_sub_receiver_frames(self) -> None:
+        # Addresses from icom_civ._RADIO_ADDRESSES; receiver byte 00 = main scope (IC-705 guide p.28).
+        for model, address in (("IC-705", 0xA4), ("IC-7300MK2", 0xB6), ("IC-7610", 0x98), ("IC-905", 0xAC), ("IC-9700", 0xA2)):
+            sub = bytes((0xFE, 0xFE, 0xE0, address, 0x27, 0x00, 0x01, 0x01, 0x01, 0x01)) + bytes.fromhex("0040071400" "0050020000" "00" "ff") + b"\xfd"
+            main = bytes((0xFE, 0xFE, 0xE0, address, 0x27, 0x00, 0x00, 0x01, 0x01, 0x01)) + bytes.fromhex("0040071400" "0050020000" "00" "07") + b"\xfd"
+            port = ScriptedPort(sub + main)
+            with patch("bricoham_station_agent.cat.serial.Serial", return_value=port):
+                cat = SerialCat(CatConfig(model, "COM7", 115200))
+                stream = cat.scope_stream(0.3, 10)
+                self.assertEqual(next(stream).pixels, b"\x07", model)
+                stream.close()
+                # Request frame layout: FE FE <radio> <controller E0> cmd...
+                self.assertEqual(port.writes[0][2], address)
+                self.assertEqual(port.writes[0][4:6], b"\x27\x10")
+                self.assertEqual(port.writes[-1][4:7], b"\x27\x11\x00")
+                cat.close()
+
+    def test_scope_is_refused_for_radios_without_a_sourced_scope(self) -> None:
+        cat = SerialCat(CatConfig("K4", "COM7", 38400))
+        with self.assertRaises(CatError):
+            next(cat.scope_stream(1, 1))
+
     def test_kx2_serial_profile_reads_without_inheriting_k3s_options_or_fm(self) -> None:
         port = ScriptedPort(b"MD$2;")
         with patch("bricoham_station_agent.cat.serial.Serial", return_value=port):

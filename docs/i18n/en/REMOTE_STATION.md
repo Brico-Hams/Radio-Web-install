@@ -377,3 +377,84 @@ in the console. It is refused if the configured power exceeds 10 W (`TUNE_POWER_
 must lower it; it is never lowered automatically. Hamlib G TUNE is also time-capped.
 Never transmit without a matched load or a connected antenna.
 Tests of this extension were not run in this environment.
+
+## Remote waterfall of the received signal
+
+`spectrum-core.js` (Node remote shack UI, and so the Android WebView) and `spectrum.ts` (React web console, and so the Android remote station client) compute an FFT of the RX audio that already arrives over the authenticated `/api/audio` or `/api/v1/audio` channel; no second audio listener is opened and no new network traffic exists. They draw at most 25 rows/s on a fixed 640 px canvas, with dB scale, colour map, pause and adjustable range. The radio's native scope is used only where a source exists: `drivers/icom_scope.py` and `SpectrumCore.createScopeAssembler` implement the `27 00` frame per `third_party/ftx1/rigplane-rigplane-core/docs/api/scope.md` (MIT, which cites the IC-705/7300/7610/9700 CI-V guides), and `SerialCat.scope_stream` (Python agent) reads it live only on IC-705, IC-7300, IC-7300MK2, IC-7610, IC-905 and IC-9700 (the six with `27 00`/`27 10`/`27 11` in the rigplane profiles; IC-705 CI-V guide pp. 27-28; main receiver only): it enables the scope with `27 10 01` and the output with `27 11 01`, reassembles `27 00` at up to 10 frames/s for at most 30 s and always disables it with `27 11 00` (commands from `commands/scope.py`, `scope_data_output`; receive only, never PTT) and serves it on `GET /api/v1/cat/scope?seconds=&fps=` (NDJSON, authenticated). The Node agent talks to rigctld, which delivers no unsolicited frames: it stays "pending a source" there and uses the audio waterfall. Clicking the waterfall tunes only in USB/LSB/PKTUSB/PKTLSB through the existing frequency path (RF = dial ± tone); there is no new TX path. Do not transmit without an antenna or matched load.
+
+| Radio | Link · source | Native scope over CAT | Audio waterfall | Click to tune |
+| --- | --- | --- | --- | --- |
+| Icom IC-705 | usb/lan/wifi · catalog + `icom_civ.py` + `Profile.kt` | ok (Python agent); Node pending a source | ok (with audio) | SSB |
+| Icom IC-7100 | usb · catalog + `icom_civ.py` | pending a source | ok (with audio) | SSB |
+| Icom IC-7200 | usb · catalog + `icom_civ.py` | pending a source | ok (with audio) | SSB |
+| Icom IC-7300 | usb · catalog + `icom_civ.py` | ok (Python agent); Node pending a source | ok (with audio) | SSB |
+| Icom IC-7300MK2 | usb · catalog + `icom_civ.py` | ok (Python agent); Node pending a source | ok (with audio) | SSB |
+| Icom IC-7410 | usb · catalog + `icom_civ.py` | pending a source | ok (with audio) | SSB |
+| Icom IC-7600 | usb · catalog + `icom_civ.py` | pending a source | ok (with audio) | SSB |
+| Icom IC-7610 | usb/lan · catalog + `icom_civ.py` | ok (Python agent); Node pending a source | ok (with audio) | SSB |
+| Icom IC-7700 | usb · catalog + `icom_civ.py` | pending a source | ok (with audio) | SSB |
+| Icom IC-7760 | usb/lan · catalog + `icom_civ.py` | pending a source | ok (with audio) | SSB |
+| Icom IC-7800 | usb · catalog | pending a source | ok (with audio) | SSB |
+| Icom IC-7850 | usb/lan · catalog + `icom_civ.py` | pending a source | ok (with audio) | SSB |
+| Icom IC-7851 | usb/lan · catalog + `icom_civ.py` | pending a source | ok (with audio) | SSB |
+| Icom IC-905 | usb/lan/wifi · catalog + `icom_civ.py` | ok (Python agent); Node pending a source | ok (with audio) | SSB |
+| Icom IC-9100 | usb · catalog + `icom_civ.py` | pending a source | ok (with audio) | SSB |
+| Icom IC-9700 | usb/lan · catalog + `icom_civ.py` | ok (Python agent); Node pending a source | ok (with audio) | SSB |
+| Icom IC-R8600 | usb/lan · catalog + `icom_civ.py` | pending a source | ok (with audio) | SSB |
+| FlexRadio FLEX-6400 | lan/wifi · catalog | pending a source | ok (with audio) | SSB |
+| FlexRadio FLEX-6400M | lan/wifi · catalog | pending a source | ok (with audio) | SSB |
+| FlexRadio FLEX-6600 | lan/wifi · catalog | pending a source | ok (with audio) | SSB |
+| FlexRadio FLEX-6600M | lan/wifi · catalog | pending a source | ok (with audio) | SSB |
+| FlexRadio FLEX-6700 | lan/wifi · catalog | pending a source | ok (with audio) | SSB |
+| FlexRadio FLEX-8400 | lan/wifi · catalog | pending a source | ok (with audio) | SSB |
+| FlexRadio FLEX-8400M | lan/wifi · catalog | pending a source | ok (with audio) | SSB |
+| FlexRadio FLEX-8600 | lan/wifi · catalog | pending a source | ok (with audio) | SSB |
+| FlexRadio FLEX-8600M | lan/wifi · catalog | pending a source | ok (with audio) | SSB |
+| FlexRadio AURORA-510 | lan/wifi · catalog | pending a source | ok (with audio) | SSB |
+| FlexRadio AURORA-510M | lan/wifi · catalog | pending a source | ok (with audio) | SSB |
+| FlexRadio AURORA-520 | lan/wifi · catalog | pending a source | ok (with audio) | SSB |
+| FlexRadio AURORA-520M | lan/wifi · catalog | pending a source | ok (with audio) | SSB |
+| Kenwood TS-590S | usb · catalog + `kenwood_cat.py` | pending a source | ok (with audio) | SSB |
+| Kenwood TS-590SG | usb · catalog + `kenwood_cat.py` | pending a source | ok (with audio) | SSB |
+| Kenwood TS-890S | usb · catalog + `kenwood_cat.py` | pending a source | ok (with audio) | SSB |
+| Kenwood TS-990S | usb · catalog + `kenwood_cat.py` | pending a source | ok (with audio) | SSB |
+| Yaesu FT-710 | usb · catalog + `yaesu_cat.py` | pending a source | ok (with audio) | SSB |
+| Yaesu FT-991A | usb · catalog + `yaesu_cat.py` | pending a source | ok (with audio) | SSB |
+| Yaesu FTDX10 | usb · catalog + `yaesu_cat.py` | pending a source | ok (with audio) | SSB |
+| Yaesu FTDX101D | usb · catalog + `yaesu_cat.py` | pending a source | ok (with audio) | SSB |
+| Yaesu FTDX101MP | usb · catalog + `yaesu_cat.py` | pending a source | ok (with audio) | SSB |
+| Yaesu FTDX3000 | usb · catalog + `yaesu_cat.py` | pending a source | ok (with audio) | SSB |
+| Yaesu FTX-1 | usb · catalog + `ftx1_cat.py` + `Profile.kt` | pending a source (`SS` are settings, not samples) | ok (with audio) | SSB |
+| Elecraft K3 | driver `elecraft_k3s_cat.py` | pending a source | ok (with audio) | SSB |
+| Elecraft KX3 | driver `elecraft_k3s_cat.py` | pending a source | ok (with audio) | SSB |
+| Elecraft KX2 | driver `elecraft_k3s_cat.py` | pending a source | ok (with audio) | SSB |
+| Elecraft K3S | usb · catalog + `elecraft_k3s_cat.py` | pending a source | ok (with audio) | SSB |
+| Elecraft K4 | usb/lan/wifi · catalog + `elecraft_k4_cat.py` | pending a source (dB/bin over Ethernet, protocol not published) | ok (with audio) | SSB |
+| QRP Labs QMX | usb · catalog + `qmx_cat.py` + `Profile.kt` | pending a source | ok (with audio) | SSB |
+| QRP Labs QMX+ | usb · catalog + `qmx_cat.py` | pending a source | ok (with audio) | SSB |
+| QRP Labs QCX | usb · catalog | pending a source | ok (with audio) | SSB |
+| QRP Labs QDX | usb · catalog + `Profile.kt` | pending a source | ok (with audio) | SSB |
+| (tr)uSDX | usb · catalog + `trusdx_cat.py` + `Profile.kt` | pending a source | ok (with audio) | SSB |
+| Hermes Lite 2 | lan · catalog + `hermes_lite_protocol.py` | pending a source (IQ, not audio) | ok (with audio) | SSB |
+| OpenGD77 GD-77 | usb · `opengd77_usb.py` + `Profile.kt` | pending a source | no audio path | no |
+| OpenGD77 GD-77S | usb · `opengd77_usb.py` | pending a source | no audio path | no |
+| OpenGD77 DM-1801 | usb · `opengd77_usb.py` | pending a source | no audio path | no |
+| OpenGD77 RD-5R | usb · `opengd77_usb.py` | pending a source | no audio path | no |
+| OpenGD77 DM-1801A | usb · `opengd77_usb.py` | pending a source | no audio path | no |
+| OpenGD77 MD-9600 | usb · `opengd77_usb.py` | pending a source | no audio path | no |
+| OpenGD77 MD-UV380 | usb · `opengd77_usb.py` | pending a source | no audio path | no |
+| OpenGD77 MD-380 | usb · `opengd77_usb.py` | pending a source | no audio path | no |
+| OpenGD77 DM-1701 | usb · `opengd77_usb.py` | pending a source | no audio path | no |
+| OpenGD77 MD-2017 | usb · `opengd77_usb.py` | pending a source | no audio path | no |
+| OpenGD77 DM-32 | usb · `opengd77_usb.py` | pending a source | no audio path | no |
+| OpenGD77 UV008 | usb · `opengd77_usb.py` | pending a source | no audio path | no |
+| Yaesu FT-817 | usb · `Profile.kt` | pending a source | no audio path | no |
+| Yaesu FT-818 | usb · `Profile.kt` | pending a source | no audio path | no |
+| Yaesu FT-857 | usb · `Profile.kt` | pending a source | no audio path | no |
+| Yaesu FT-897 | usb · `Profile.kt` | pending a source | no audio path | no |
+| Kenwood TH-D75 | usb · `Profile.kt` | pending a source | no audio path | no |
+| Quansheng UV-K5 (BricoHams Satellite) | usb · `Profile.kt` | pending a source (`firmware/bricohams/spectrum.c` exports no samples over UART) | no audio path | no |
+| Radtel RT-950 Pro | ble · `Profile.kt` | pending a source | no audio path | no |
+| Radtel RT-S10 | ble · `Profile.kt` | pending a source | no audio path | no |
+| AnyTone D878 | no connection · `Profile.kt` | pending a source | no audio path | no |
+| KISS TNC | network · `Profile.kt` | pending a source | no audio path | no |

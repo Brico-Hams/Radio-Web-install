@@ -60,6 +60,7 @@ const STATIC_FILES = Object.freeze({
   "/remote-ui.js": ["remote-ui.js", "text/javascript; charset=utf-8"],
   "/remote-audio-core.js": ["remote-audio-core.js", "text/javascript; charset=utf-8"],
   "/remote-rotor-ui.js": ["remote-rotor-ui.js", "text/javascript; charset=utf-8"],
+  "/spectrum-core.js": ["spectrum-core.js", "text/javascript; charset=utf-8"],
   "/remote-audio-worklet.js": ["remote-audio-worklet.js", "text/javascript; charset=utf-8"],
   "/remote.css": ["remote.css", "text/css; charset=utf-8"],
   "/bricohams-logo.png": ["bricohams-logo.png", "image/png"],
@@ -1356,11 +1357,15 @@ function createRemoteAgent(options = {}) {
     });
     ws.on("pong", () => { state.lastSeen = now(); });
     ws.on("close", () => {
-      clearTimeout(authTimer);
-      clearInterval(pingTimer);
-      audioSockets.delete(ws);
-      unsubscribeRx();
-      if (state.authed && owner === state.cid && (rig.ptt || agentTx)) pttOff("socket de audio cerrado");
+      // Unkey first: nothing may delay or skip T 0 when the PTT owner's socket goes away.
+      try {
+        if (state.authed && owner === state.cid && (rig.ptt || agentTx)) pttOff("socket de audio cerrado");
+      } finally {
+        clearTimeout(authTimer);
+        clearInterval(pingTimer);
+        audioSockets.delete(ws);
+        unsubscribeRx();
+      }
     });
   }
 
