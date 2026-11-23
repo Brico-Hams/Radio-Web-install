@@ -145,6 +145,7 @@ class RemoteShackActivity : LocalizedActivity() {
             contentDescription = description
             gravity = Gravity.CENTER
             minWidth = touch; minHeight = touch
+            minimumWidth = touch; minimumHeight = touch
             isClickable = true; isFocusable = true
             setOnClickListener { click() }
         }

@@ -203,11 +203,13 @@ class RemoteShackBarTest {
             val confirm = org.robolectric.shadows.ShadowAlertDialog.getLatestAlertDialog()
             assertNotNull(RemoteShackStore.load(context))
             confirm.getButton(android.app.AlertDialog.BUTTON_NEGATIVE).performClick()
+            org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
             assertNotNull(RemoteShackStore.load(context))
             more.performClick()
             org.robolectric.shadows.ShadowAlertDialog.getLatestAlertDialog().listView.performItemClick(null, 1, 1)
             org.robolectric.shadows.ShadowAlertDialog.getLatestAlertDialog()
                 .getButton(android.app.AlertDialog.BUTTON_POSITIVE).performClick()
+            org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
             assertNull(RemoteShackStore.load(context))
         } finally { controller.pause().stop().destroy() }
     }
