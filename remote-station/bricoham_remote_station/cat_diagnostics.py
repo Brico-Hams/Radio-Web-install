@@ -91,6 +91,15 @@ def read_profiles() -> dict[str, ReadProfile]:
     ftx_queries["KP"] = ReadQuery(b"KP;", ftx1.parse_key_pitch_reply, "cw_pitch_hz")
     ftx_queries["KR"] = ReadQuery(b"KR;", ftx1.parse_keyer_reply, "cw_keyer_enabled")
     ftx_queries["BI"] = ReadQuery(b"BI;", ftx1.parse_break_in_reply, "cw_break_in_enabled")
+    # Raw 0-255 meter reads (RM1..RM8, SM0/SM1); the console normalizes them with data/remote-meter-model.json.
+    for selector in ftx1.FTX1_METER_KEYS:
+        ftx_queries[f"RM{selector}"] = ReadQuery(
+            ftx1.build_meter_query(selector), ftx1.parse_meter_reply, "meter"
+        )
+    for side in (0, 1):
+        ftx_queries[f"SM{side}"] = ReadQuery(
+            f"SM{side};".encode("ascii"), ftx1.parse_smeter_reply, "meter"
+        )
     profiles["FTX-1"] = ReadProfile("CAT ASCII", ftx_queries)
 
     tru_queries = {

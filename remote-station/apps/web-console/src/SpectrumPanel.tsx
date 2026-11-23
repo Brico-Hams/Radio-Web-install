@@ -24,7 +24,7 @@ export function SpectrumPanel({ sinkRef }: { sinkRef: MutableRefObject<SpectrumS
   const [floorDb, setFloorDb] = useState(-100)
   const [ceilDb, setCeilDb] = useState(-20)
   const live = useRef({ paused, map, floorDb, ceilDb })
-  live.current = { paused, map, floorDb, ceilDb }
+  useEffect(() => { live.current = { paused, map, floorDb, ceilDb } }, [paused, map, floorDb, ceilDb])
 
   function pick(event: MouseEvent<HTMLCanvasElement>) {
     const box = event.currentTarget.getBoundingClientRect()

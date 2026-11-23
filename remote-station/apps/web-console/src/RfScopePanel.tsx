@@ -24,7 +24,7 @@ export function RfScopePanel({ token }: { token: string }) {
   const [paused, setPaused] = useState(false)
   const [map, setMap] = useState<ColorMap>('heat')
   const live = useRef({ paused, map })
-  live.current = { paused, map }
+  useEffect(() => { live.current = { paused, map } }, [paused, map])
 
   function stop() {
     abort.current?.abort()

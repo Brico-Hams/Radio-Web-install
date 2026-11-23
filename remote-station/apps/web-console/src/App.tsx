@@ -21,6 +21,7 @@ import { LogbookPanel, ProtocolPanel } from './OperationPanels'
 import { AgentLivePanel } from './AgentLivePanel'
 import { RotorPanel } from './RotorPanel'
 import { AccessoriesPanel } from './AccessoriesPanel'
+import { MetersPanel } from './MetersPanel'
 import { FlexPanel } from './FlexPanel'
 import { RadioSettingsPanel } from './RadioSettingsPanel'
 import { RadioOperatingPanel } from './RadioOperatingPanel'
@@ -418,6 +419,7 @@ function App() {
                 <AudioPanel key={`audio-${activeToken}`} token={activeToken} />
                 <RotorPanel key={`rotor-${activeToken}`} token={activeToken} />
                 <AccessoriesPanel key={`accessories-${activeToken}`} token={activeToken} />
+                <MetersPanel key={`meters-${activeToken}`} token={activeToken} />
                 <FlexPanel key={`flex-${activeToken}`} token={activeToken} />
                 <RadioSettingsPanel key={`settings-${activeToken}`} token={activeToken} />
                 <LogbookPanel key={`logbook-${activeToken}`} token={activeToken} />
