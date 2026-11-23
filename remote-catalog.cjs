@@ -9,6 +9,7 @@ const SCOPES = Object.freeze(["civ", "smartsdr", "sdr", "audio", "none"]);
 const STATUSES = Object.freeze(["tested", "expected", "beta"]);
 const ID = /^[a-z0-9][a-z0-9-]{1,63}$/;
 const HEX4 = /^[0-9A-F]{4}$/;
+const CIV_ADDRESS = /^0x[0-9A-F]{2}$/;
 const SET_CONF = /^[a-z_]+=[A-Za-z0-9]+(,[a-z_]+=[A-Za-z0-9]+)*$/;
 const CAT_COMMAND = /^[A-Z]{2}[0-9]{0,3}$/;
 
@@ -25,6 +26,7 @@ function validateRadio(radio, where) {
     if (!isText(radio.nativeProtocol)) fail("hamlibModel null exige nativeProtocol");
   } else if (!isModel(radio.hamlibModel)) fail("hamlibModel debe ser un entero");
   for (const key of ["nativeProtocol", "hamlibNote"]) if (radio[key] !== undefined && !isText(radio[key])) fail(`${key} no valido`);
+  if (radio.civAddress !== undefined && !CIV_ADDRESS.test(radio.civAddress)) fail("civAddress no valido");
   if (!Array.isArray(radio.links) || !radio.links.length || radio.links.some(link => !LINKS.includes(link))) fail("links no validos");
   if (!Array.isArray(radio.bands) || !radio.bands.length || radio.bands.some(band => !isText(band))) fail("bands no validas");
   for (const key of ["listen", "transmit"]) if (typeof radio[key] !== "boolean") fail(`${key} debe ser booleano`);

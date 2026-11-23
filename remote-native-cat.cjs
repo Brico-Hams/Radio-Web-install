@@ -424,8 +424,189 @@ async function handleRigctldLine(rig, line) {
   }
 }
 
-// nativeProtocol (data/remote-station-catalog.json) -> rig class. Xiegu CI-V stays unsourced (address, framing, baud): no rig.
-const NATIVE_RIGS = Object.freeze({ "quansheng-cat": QuanshengRig, "yaesu-five-byte": YaesuFiveByteRig, "kenwood-th-d75": Th75Rig });
+// ---- Xiegu CI-V (G90/G90S, X6100, X5105) ----
+// Adapted from Hamlib rigs/icom/xiegu.c, icom.c, icom_defs.h and tests/testg90swr.c (LGPL-2.1-or-later, see docs/THIRD-PARTY-REUSE.md):
+// SPDX-FileCopyrightText: Hamlib contributors (Xiegu backend: Michael Black W9MDB, Hamlib Team)
+// SPDX-License-Identifier: LGPL-2.1-or-later
+// Per-model address, rates and limits are copied from the xiegu.c capability structs (x6100_priv_caps, g90_priv_caps, x108g_priv_caps).
+// The G106 has no Hamlib model, so it has no address here: pendiente de fuente.
+const CIV = Object.freeze({ PREAMBLE: 0xfe, EOM: 0xfd, CONTROLLER: 0xe0, ACK: 0xfb, NAK: 0xfa, BROADCAST: 0x00 });
+const CIV_CMD = Object.freeze({ RD_FREQ: 0x03, RD_MODE: 0x04, SET_FREQ: 0x05, SET_MODE: 0x06, SET_VFO: 0x07, SPLIT: 0x0f, SQSM: 0x15, PTT: 0x1c });
+const CIV_SUB = Object.freeze({ S_METER: 0x02, SWR: 0x12, PTT: 0x00, TUNER: 0x01, VFO_A: 0x00, VFO_B: 0x01, SPLIT_OFF: 0x00, SPLIT_ON: 0x01 });
+const CIV_TUNER_START = 0x02; // icom_defs.h S_ANT_TUN: 0 = off, 1 = on, 2 = start tuning
+// icom_defs.h S_LSB..S_RTTYR; S_FM and S_FMN share 0x05, so FMN reads back as FM.
+const CIV_MODES = Object.freeze({ 0x00: "LSB", 0x01: "USB", 0x02: "AM", 0x03: "CW", 0x04: "RTTY", 0x05: "FM", 0x07: "CWR", 0x08: "RTTYR" });
+const CIV_MODE_CODES = Object.freeze({ LSB: 0x00, USB: 0x01, AM: 0x02, CW: 0x03, RTTY: 0x04, FM: 0x05, CWR: 0x07, RTTYR: 0x08 });
+// xiegu.c X108G_STR_CAL (measurement by WA0TOP) and X6100_STR_CAL: raw 0-255 -> dB relative to S9.
+const STR_CAL_X108G = Object.freeze([[0, -54], [5, -29], [15, -27], [43, -22], [68, -17], [92, -12], [120, -6], [141, 2], [162, 13], [182, 25], [202, 38], [222, 47], [241, 57], [255, 63]]);
+const STR_CAL_X6100 = Object.freeze([[0, -54], [120, 0], [241, 60]]);
+// icom.c icom_default_swr_cal: raw 0-255 -> SWR ratio.
+const SWR_CAL = Object.freeze([[0, 1.0], [48, 1.5], [80, 2.0], [120, 3.0], [240, 6.0]]);
+
+const XIEGU_MODELS = Object.freeze({
+  "xiegu-g90": Object.freeze({ hamlibModel: 3088, address: 0x88, baudMin: 19200, baudMax: 19200, strCal: STR_CAL_X108G, tuner: true, split: true, maxRitHz: 500, ids: [0x0070, 0x0090] }),
+  "xiegu-x6100": Object.freeze({ hamlibModel: 3087, address: 0xa4, baudMin: 300, baudMax: 19200, strCal: STR_CAL_X6100, tuner: false, split: false, maxRitHz: 9999, ids: [0x6100, 0x00a4] }),
+  "xiegu-x5105": Object.freeze({ hamlibModel: 3089, address: 0x70, baudMin: 300, baudMax: 19200, strCal: STR_CAL_X108G, tuner: false, split: true, maxRitHz: 9999, ids: [] })
+});
+
+function calInterpolate(table, raw) {
+  if (raw <= table[0][0]) return table[0][1];
+  for (let index = 1; index < table.length; index += 1) {
+    const [x1, y1] = table[index];
+    if (raw <= x1) {
+      const [x0, y0] = table[index - 1];
+      return y0 + (y1 - y0) * (raw - x0) / (x1 - x0);
+    }
+  }
+  return table[table.length - 1][1];
+}
+
+// Low-nibble-first BCD: five bytes, 10 digits, 1 Hz digit first (icom.c to_bcd / from_bcd).
+function civEncodeFreq(hz) {
+  if (!Number.isInteger(hz) || hz < 0 || hz > 9_999_999_999) throw new NativeCatError("frequency out of bounds", "range");
+  const out = Buffer.alloc(5);
+  let rest = hz;
+  for (let index = 0; index < 5; index += 1) {
+    out[index] = (Math.floor(rest / 10) % 10) << 4 | rest % 10;
+    rest = Math.floor(rest / 100);
+  }
+  return out;
+}
+
+function civDecodeFreq(bytes) {
+  if (bytes.length !== 5) throw new NativeCatError("invalid reply");
+  let hz = 0;
+  for (let index = 4; index >= 0; index -= 1) {
+    const high = bytes[index] >> 4;
+    const low = bytes[index] & 15;
+    if (high > 9 || low > 9) throw new NativeCatError("invalid BCD digit");
+    hz = hz * 100 + high * 10 + low;
+  }
+  return hz;
+}
+
+const civFrame = (to, command, data = []) => Buffer.from([CIV.PREAMBLE, CIV.PREAMBLE, to, CIV.CONTROLLER, ...command, ...data, CIV.EOM]);
+
+// Big-endian BCD pair after the sub-command: 0000-0255. Anything with a non-decimal nibble is rejected (testg90swr.c: 02 2c).
+function civMeterRaw(payload) {
+  if (payload.length !== 2 || payload[0] > 0x09 || (payload[1] >> 4) > 9 || (payload[1] & 15) > 9) throw new NativeCatError("invalid meter reply");
+  return (payload[0] >> 4) * 1000 + (payload[0] & 15) * 100 + (payload[1] >> 4) * 10 + (payload[1] & 15);
+}
+
+class XieguCivRig {
+  // transport: { write(buffer), read(length, timeoutMs) } as for the Yaesu rig; model: a key of XIEGU_MODELS.
+  constructor(transport, { radio, allowTx = false, timeoutMs = 1000, address } = {}) {
+    const model = XIEGU_MODELS[radio];
+    if (!model) throw new NativeCatError(`${radio || "xiegu-civ"}: pendiente de fuente`, "unsupported");
+    this.transport = transport;
+    this.model = model;
+    this.address = address === undefined ? model.address : address;
+    this.allowTx = allowTx;
+    this.timeoutMs = timeoutMs;
+  }
+
+  async readFrame() {
+    const bytes = [];
+    for (let guard = 0; guard < 64; guard += 1) {
+      const byte = (await this.transport.read(1, this.timeoutMs))[0];
+      bytes.push(byte);
+      if (byte === CIV.EOM) return Buffer.from(bytes);
+    }
+    throw new NativeCatError("frame too long");
+  }
+
+  // Sends a frame and returns { command, data } of the radio's answer; the USB echo of our own frame and transceive broadcasts are skipped.
+  async transact(command, data = []) {
+    await this.transport.write(civFrame(this.address, command, data));
+    for (let skipped = 0; skipped < 8; skipped += 1) {
+      const frame = await this.readFrame();
+      if (frame.length < 6 || frame[0] !== CIV.PREAMBLE || frame[1] !== CIV.PREAMBLE) throw new NativeCatError("frame corrupt");
+      if (frame[3] === CIV.CONTROLLER && frame[2] === this.address) continue;
+      if (frame[2] === CIV.BROADCAST) continue;
+      if (frame[2] !== CIV.CONTROLLER || frame[3] !== this.address) throw new NativeCatError("unexpected sender");
+      return { command: frame[4], data: frame.subarray(5, frame.length - 1) };
+    }
+    throw new NativeCatError("CAT timeout", "timeout");
+  }
+
+  async query(command, expected) {
+    const reply = await this.transact(command);
+    if (reply.command === CIV.NAK) throw new NativeCatError("radio rejected the command", "rejected");
+    if (reply.command !== expected[0] || (expected.length > 1 && reply.data[0] !== expected[1])) throw new NativeCatError("invalid reply");
+    return reply.data;
+  }
+
+  async ack(command, data) {
+    const reply = await this.transact(command, data);
+    // Xiegu answers some writes with the command echo instead of FB (x108g_set_ptt, g90_set_level).
+    if (reply.command === CIV.ACK || reply.command === command[0]) return;
+    throw new NativeCatError("radio rejected the command", "rejected");
+  }
+
+  async getFreq() { return civDecodeFreq(await this.query([CIV_CMD.RD_FREQ], [CIV_CMD.RD_FREQ])); }
+
+  async getMode() {
+    const data = await this.query([CIV_CMD.RD_MODE], [CIV_CMD.RD_MODE]);
+    if (data.length < 1) throw new NativeCatError("invalid reply");
+    return CIV_MODES[data[0]] || null;
+  }
+
+  async setFreq(hz) {
+    await this.ack([CIV_CMD.SET_FREQ], civEncodeFreq(Math.round(hz)));
+    if ((await this.getFreq()) !== Math.round(hz)) throw new NativeCatError("frequency not confirmed", "unconfirmed");
+  }
+
+  async setMode(mode) {
+    if (!(mode in CIV_MODE_CODES)) throw new NativeCatError(`mode ${mode} not available`, "unsupported");
+    await this.ack([CIV_CMD.SET_MODE], [CIV_MODE_CODES[mode]]);
+    if ((await this.getMode()) !== mode) throw new NativeCatError("mode not confirmed", "unconfirmed");
+  }
+
+  async setVfo(vfo) {
+    if (vfo !== "A" && vfo !== "B") throw new NativeCatError(`VFO ${vfo} not available`, "unsupported");
+    return this.ack([CIV_CMD.SET_VFO], [vfo === "A" ? CIV_SUB.VFO_A : CIV_SUB.VFO_B]);
+  }
+
+  // xiegu.c: the X6100 rejected 0F 01, so split is only offered where the Hamlib backend wires it.
+  async setSplit(on) {
+    if (!this.model.split) throw new NativeCatError("split not available on this model", "unsupported");
+    return this.ack([CIV_CMD.SPLIT], [on ? CIV_SUB.SPLIT_ON : CIV_SUB.SPLIT_OFF]);
+  }
+
+  // Raw 0-255 S-meter (15 02) and its dB-over-S9 value from the Hamlib calibration of the model.
+  async getStrengthRaw() { return civMeterRaw((await this.query([CIV_CMD.SQSM, CIV_SUB.S_METER], [CIV_CMD.SQSM, CIV_SUB.S_METER])).subarray(1)); }
+  async getStrength() { return calInterpolate(this.model.strCal, await this.getStrengthRaw()); }
+
+  async getSwr() {
+    return calInterpolate(SWR_CAL, civMeterRaw((await this.query([CIV_CMD.SQSM, CIV_SUB.SWR], [CIV_CMD.SQSM, CIV_SUB.SWR])).subarray(1)));
+  }
+
+  // PTT off is never gated and always sent; PTT on needs allowTx and tries a release when the key-up fails.
+  async setPtt(on) {
+    if (!on) return this.ack([CIV_CMD.PTT, CIV_SUB.PTT], [0]);
+    if (!this.allowTx) throw new NativeCatError("PTT disabled by configuration", "tx-disabled");
+    try { return await this.ack([CIV_CMD.PTT, CIV_SUB.PTT], [1]); } catch (error) {
+      await this.ack([CIV_CMD.PTT, CIV_SUB.PTT], [0]).catch(() => {});
+      throw error;
+    }
+  }
+  async getPtt() { return (await this.query([CIV_CMD.PTT, CIV_SUB.PTT], [CIV_CMD.PTT, CIV_SUB.PTT]))[1] === 1; }
+
+  // Built-in ATU (xiegu.c G90_FUNCS RIG_FUNC_TUNER, 1C 01): G90 only. Starting a tune keys the radio, so it needs allowTx;
+  // the time cap and SWR trip live in the agent, and stopping (data 00) is never gated.
+  async setTuner(on) {
+    if (!this.model.tuner) throw new NativeCatError("tuner not available on this model", "unsupported");
+    if (!on) return this.ack([CIV_CMD.PTT, CIV_SUB.TUNER], [0]);
+    if (!this.allowTx) throw new NativeCatError("tune disabled by configuration", "tx-disabled");
+    try { return await this.ack([CIV_CMD.PTT, CIV_SUB.TUNER], [CIV_TUNER_START]); } catch (error) {
+      await this.ack([CIV_CMD.PTT, CIV_SUB.TUNER], [0]).catch(() => {});
+      throw error;
+    }
+  }
+}
+
+// nativeProtocol (data/remote-station-catalog.json) -> rig class. Xiegu CI-V needs options.radio (a sourced model); the G106 has no sourced address.
+const NATIVE_RIGS = Object.freeze({ "quansheng-cat": QuanshengRig, "yaesu-five-byte": YaesuFiveByteRig, "kenwood-th-d75": Th75Rig, "xiegu-civ": XieguCivRig });
 
 function createNativeRig(nativeProtocol, transport, options) {
   const Rig = NATIVE_RIGS[nativeProtocol];
@@ -436,5 +617,5 @@ function createNativeRig(nativeProtocol, transport, options) {
 module.exports = {
   NativeCatError, crc16, quanshengEncode, quanshengDecode, quanshengInBand, quanshengCatPayload, quanshengParseCat,
   quanshengPttPayload, quanshengParsePtt, readQuanshengFrame, QuanshengRig, YaesuFiveByte, YaesuFiveByteRig, Th75, Th75Rig,
-  handleRigctldLine, createNativeRig, NATIVE_RIGS, bytesEqual
+  XieguCivRig, XIEGU_MODELS, civEncodeFreq, civDecodeFreq, handleRigctldLine, createNativeRig, NATIVE_RIGS, bytesEqual
 };
