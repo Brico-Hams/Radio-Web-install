@@ -17,7 +17,7 @@ from bricoham_station_agent.station_devices import (
     modbus_write_coils,
     parse_heading,
     parse_modbus_response,
-    rotor_frames,
+    parse_rotor_reply,    rotor_frames,
 )
 
 OUTLETS = [Outlet("radio", 0, "radio"), Outlet("amp", 1, "amp"), Outlet("rotor", 2, "rotor")]
@@ -189,6 +189,53 @@ class RotorProtocolTests(unittest.TestCase):
         SerialRotorBackend("rt21", FakeSerial(), 9600)
         with self.assertRaises(ValueError):
             SerialRotorBackend("rotorez", FakeSerial(), 9600)
+        with self.assertRaises(ValueError):
+            SerialRotorBackend("gs232a", FakeSerial())  # no documented default baud
+        with self.assertRaises(ValueError):
+            SerialRotorBackend("gs232b", FakeSerial(), 600)  # Hamlib gs232b minimum is 1200
+        with self.assertRaises(ValueError):
+            SerialRotorBackend("rot2prog", FakeSerial(), 1200)  # spid.txt: Rot2Prog is 600 bps
+        SerialRotorBackend("rot2prog", FakeSerial())
+        SerialRotorBackend("gs232a", FakeSerial(), 9600)
+
+    def test_gs232_frames_follow_hamlib(self):
+        for protocol in ("gs232a", "gs232b"):
+            self.assertEqual(rotor_frames(protocol, "move", 123.4, 45.6), ["W123 046\r"])
+            self.assertEqual(rotor_frames(protocol, "move", 5), ["W005 000\r"])
+            self.assertEqual(rotor_frames(protocol, "read"), ["C2\r"])
+            self.assertEqual(rotor_frames(protocol, "stop"), ["S\r"])
+            with self.assertRaises(DeviceError):
+                rotor_frames(protocol, "move", 90, 181)
+            with self.assertRaises(DeviceError):
+                rotor_frames(protocol, "move", 451)
+
+    def test_gs232_replies(self):
+        self.assertEqual(parse_rotor_reply("gs232a", "+0123+0045\r\n")[:2], (123.0, 45.0))
+        self.assertEqual(parse_rotor_reply("gs232b", "AZ=123 EL=045\r\n")[:2], (123.0, 45.0))
+        self.assertEqual(parse_rotor_reply("gs232b", "AZ=270\r\n")[:2], (270.0, 0.0))
+        for protocol, reply in (("gs232a", "AZ=123 EL=045"), ("gs232b", "+0123+0045"), ("gs232a", "?>")):
+            with self.assertRaises(DeviceError):
+                parse_rotor_reply(protocol, reply)
+
+    def test_rot2prog_frames_follow_spid_txt(self):
+        # spid.txt "SET COMMAND": az 123.5, el 77.0 at PH=PV=2.
+        self.assertEqual(
+            rotor_frames("rot2prog", "move", 123.5, 77.0, (2, 2)).pop().encode("latin-1").hex(),
+            "57303936370230383734022f20",
+        )
+        self.assertEqual(rotor_frames("rot2prog", "stop")[0].encode("latin-1").hex(), "57000000000000000000000f20")
+        self.assertEqual(rotor_frames("rot2prog", "read")[0].encode("latin-1").hex(), "57000000000000000000001f20")
+        with self.assertRaises(DeviceError):
+            rotor_frames("rot2prog", "move", 10, 0)  # resolution unknown
+        with self.assertRaises(DeviceError):
+            rotor_frames("rot2prog", "move", 10, 0, (3, 3))
+
+    def test_rot2prog_reply_from_spid_txt(self):
+        frame = bytes.fromhex("570307020502030904000220").decode("latin-1")
+        self.assertEqual(parse_rotor_reply("rot2prog", frame), (12.5, 34.0, 2, 2))
+        for bad in (frame[:-1], frame[:-1] + "x", "X" + frame[1:], frame[:5] + "\x03" + frame[6:], frame[:1] + "\x0a" + frame[2:]):
+            with self.assertRaises(DeviceError):
+                parse_rotor_reply("rot2prog", bad)
 
 
 def rotor_config(**overrides):
@@ -205,6 +252,48 @@ def rotor_config(**overrides):
 
 
 class SerialRotorControllerTests(unittest.TestCase):
+    def test_gs232b_moves_with_elevation_and_close_stops(self):
+        serial = FakeSerial("AZ=010 EL=000\r\n")
+        rotor = RotorController(
+            rotor_config(elevation_max=90), SerialRotorBackend("gs232b", serial, 9600)
+        )
+        self.assertEqual(rotor.snapshot(read_position=True)["position"]["azimuth_deg"], 10.0)
+        rotor.operate(
+            {"operation": "move", "request_id": "d" * 16, "azimuth_deg": 120, "elevation_deg": 45}
+        )
+        self.assertIn("W120 045\r", serial.written)
+        rotor.close()
+        self.assertEqual(serial.written[-1], "S\r")
+
+    def test_rot2prog_moves_with_sensed_resolution_and_stop_is_always_allowed(self):
+        serial = FakeSerial(bytes.fromhex("570307020502030904000220").decode("latin-1"))
+        rotor = RotorController(
+            rotor_config(elevation_max=90), SerialRotorBackend("rot2prog", serial)
+        )
+        self.addCleanup(rotor.close)
+        position = rotor.snapshot(read_position=True)["position"]
+        self.assertEqual((position["azimuth_deg"], position["elevation_deg"]), (12.5, 34.0))
+        rotor.operate(
+            {"operation": "move", "request_id": "e" * 16, "azimuth_deg": 120, "elevation_deg": 45}
+        )
+        self.assertEqual(serial.written[-1], "W0960\x020810\x02/ ")
+        rotor.operate({"operation": "stop"})
+        self.assertEqual(serial.written[-1], "W\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x0f ")
+
+    def test_gs232_motion_disabled_refuses_move_but_stop_works(self):
+        serial = FakeSerial("+0010+0000")
+        rotor = RotorController(
+            rotor_config(motion_enabled=False), SerialRotorBackend("gs232a", serial, 4800)
+        )
+        self.addCleanup(rotor.close)
+        with self.assertRaises(RotorError):
+            rotor.operate(
+                {"operation": "move", "request_id": "f" * 16, "azimuth_deg": 1, "elevation_deg": 0}
+            )
+        self.assertEqual(serial.written, [])
+        rotor.operate({"operation": "stop"})
+        self.assertEqual(serial.written, ["S\r"])
+
     def test_dcu1_moves_without_heading_read_and_stops(self):
         serial = FakeSerial()
         rotor = RotorController(rotor_config(), SerialRotorBackend("dcu1", serial))

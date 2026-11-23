@@ -130,8 +130,14 @@ implementado sin validacion en hardware; pendiente de fuente = deshabilitado.
 | Green Heron RT-21 (Hamlib 405) | serie 4800 | parcial | pendiente de fuente | parcial | parcial | parcial | parcial | `data/remote-station-catalog.json` |
 | Hy-Gain DCU2 / DCU3 / YRC-1 (Hamlib 406) | serie 9600 | parcial | pendiente de fuente | parcial | parcial | parcial | parcial | `data/remote-station-catalog.json` |
 | BricoHams ESP32 (BLE / HTTP AP) | BLE, Wi-Fi AP | ok (`azMechanical`) | ok (`el`) | ok (`/api/move`) | ok (`/api/stop`) | parcial (`/api/home`) | ok (`/api/track`) | `RotorProtocol.kt`, `RotorClient.kt`; solo en Android local, sin pasarela remota todavia |
-| Yaesu GS-232A/B | serie | pendiente de fuente | pendiente de fuente | pendiente de fuente | pendiente de fuente | pendiente de fuente | pendiente de fuente | sin documentacion en el repo |
-| SPID ROT2PROG | serie | pendiente de fuente | pendiente de fuente | pendiente de fuente | pendiente de fuente | pendiente de fuente | pendiente de fuente | sin documentacion en el repo |
+| Yaesu GS-232A/B | serie 150-9600 (A) / 1200-9600 (B), baudios explicitos | parcial (`C2`, `+0aaa+0eee` / `AZ=aaa EL=eee`) | parcial (misma lectura; el limite `elevation_max` sigue en 0 si no se configura) | parcial (`Waaa eee`) | parcial (`S`) | parcial | parcial | Hamlib `rotators/gs232a/gs232a.c`, `gs232b.c`; sin validacion en hardware |
+| SPID ROT2PROG | serie 600 | parcial (estado 12 bytes) | parcial | parcial (resolucion leida antes de cada orden) | parcial (`0x0F`) | parcial | parcial | Hamlib `rotators/spid/spid.c`, `spid.txt`; sin validacion en hardware |
+
+El comportamiento de k3ng_rotator_controller (emulacion GS-232A/B, modo B con
+`OPTION_GS_232B_EMULATION`) confirma que existen dos variantes de respuesta; el
+fichero con el codigo de emulacion no esta en la copia de referencia, por lo que
+las tramas se citan solo de Hamlib. Velocidad (`X1`..`X4`, Hamlib) y movimiento
+continuo (`U`/`D`/`L`/`R`) no se exponen: pendiente de fuente para esta capa.
 
 La lectura de elevacion de cada modelo del catalogo Hamlib depende de que el
 controlador la soporte y no esta documentada en el repo: se usan limites de
@@ -170,7 +176,9 @@ Las pruebas usan un broker TCP de ensayo identificado, no un rotor real.
 
 ## Controlador serie directo (sin rotctld)
 
-`--rotor-serial PROTOCOLO:PUERTO[:BAUDIOS]` (`dcu1`, `rotorez`, `rt21`) sustituye a
+`--rotor-serial PROTOCOLO:PUERTO[:BAUDIOS]` (`dcu1`, `rotorez`, `rt21`, `gs232a`,
+`gs232b`, `rot2prog`; GS-232 exige baudios explicitos, sin valor por defecto
+documentado) sustituye a
 rotctld y reutiliza el mismo modelo (límites, lease, deadman, STOP, bloqueo por
 `stop_failed`). `--rotor-config` sigue siendo obligatorio y su campo `port` no se
 usa. Tramas y fuentes en [dispositivos de estación](dispositivos-estacion.md).

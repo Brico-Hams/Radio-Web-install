@@ -113,4 +113,4 @@ corrects the radio's Doppler in parallel.
 - Warning: never transmit without a matched load or antenna.
 - Satellite tracking: in the planner, "Export pass for the rotator (.json)" produces `radicodex-pass-track` (`t`/`az`/`el` samples, Doppler-independent). The console imports it and only starts moving after the track button is pressed.
 - Speed and limit switches: pendiente de fuente (disabled).
-- Support: Hamlib `rotctld` with the catalog models (`data/remote-station-catalog.json`) and the Bricohams BLE/AP protocol on Android. GS-232A/B and SPID ROT2PROG: pendiente de fuente.
+- Support: Hamlib `rotctld` with the catalog models (`data/remote-station-catalog.json`) and the Bricohams BLE/AP protocol on Android. GS-232A/B and SPID ROT2PROG: only in the station agent via `--rotor-serial` (Hamlib frames, no hardware validation); the BLE/AP rotor is unchanged.

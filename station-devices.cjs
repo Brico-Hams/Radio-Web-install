@@ -1,6 +1,6 @@
 "use strict";
 // Station devices: power/relay control (Digital Loggers REST, Waveshare Modbus TCP), serial rotor
-// controllers (DCU-1, Rotor-EZ, RT-21) and the signal path view. Every protocol fact is cited in
+// controllers (DCU-1, Rotor-EZ, RT-21, GS-232A/B, SPID Rot2Prog) and the signal path view. Every protocol fact is cited in
 // remote-station/docs/STATION-DEVICES-SOURCES.md; anything not listed there is "pendiente de fuente".
 // Device contract (kept compatible with the station accessories layer): { id, type, status(), commands, safeState() }.
 // TX safety: nothing here ever transmits. Switching is default-off, refused while transmitting, and
@@ -242,11 +242,24 @@ function createPowerDevice({ id, kind, label = id, outlets, transport, enabled =
 
 // ---- Serial rotor controllers ----
 // Sources: Hamlib rotorez.txt/rotorez.c and the Green Heron RT-21 manual, Appendix F.
+// GS-232A/B and SPID Rot2Prog follow Hamlib rotators/gs232a/gs232a.c, gs232b.c and rotators/spid/spid.c,
+// spid.txt (LGPL-2.1-or-later, Stephane Fillod / Norvald H. Ryeng), see docs/THIRD-PARTY-REUSE.md.
+// Frames are latin-1 strings so the binary SPID bytes survive text I/O.
 
+const GS232_BAUDS = [150, 300, 600, 1200, 2400, 4800, 9600]; // Hamlib serial_rate_min/max 150..9600
+const GS232B_BAUDS = [1200, 2400, 4800, 9600]; // Hamlib gs232b serial_rate_min/max 1200..9600
+const SPID_PULSES = [1, 2, 4]; // spid.txt: 1, 0.5 and 0.25 deg/pulse
+const SPID_STOP = `W${"\x00".repeat(10)}\x0f `;
+const SPID_STATUS = `W${"\x00".repeat(10)}\x1f `;
+
+// defaultBaud null: the operator must choose a documented baud explicitly.
 const ROTOR_PROTOCOLS = Object.freeze({
-  dcu1: { label: "Hy-Gain DCU-1 / DCU-1X", bauds: [4800], headingRead: false },
-  rotorez: { label: "Idiom Press Rotor-EZ / RotorCard", bauds: [4800], headingRead: true },
-  rt21: { label: "Green Heron RT-21", bauds: [4800, 9600], headingRead: true }
+  dcu1: { label: "Hy-Gain DCU-1 / DCU-1X", bauds: [4800], defaultBaud: 4800, headingRead: false },
+  rotorez: { label: "Idiom Press Rotor-EZ / RotorCard", bauds: [4800], defaultBaud: 4800, headingRead: true },
+  rt21: { label: "Green Heron RT-21", bauds: [4800, 9600], defaultBaud: 4800, headingRead: true },
+  gs232a: { label: "Yaesu GS-232A", bauds: GS232_BAUDS, defaultBaud: null, headingRead: true, elevation: true, replyEnd: "\n" },
+  gs232b: { label: "Yaesu GS-232B", bauds: GS232B_BAUDS, defaultBaud: null, headingRead: true, elevation: true, replyEnd: "\n" },
+  rot2prog: { label: "SPID Rot2Prog", bauds: [600], defaultBaud: 600, headingRead: true, elevation: true, replyLength: 12 }
 });
 
 function headingDigits(degrees) {
@@ -254,15 +267,36 @@ function headingDigits(degrees) {
   return String(Math.round(degrees)).padStart(3, "0");
 }
 
-function rotorFrames(protocol, operation, degrees) {
+// pulses = { az, el } pulses per degree, required by Rot2Prog moves (sensed with a status read).
+function rotorFrames(protocol, operation, degrees, elevation = 0, pulses = null) {
   if (!ROTOR_PROTOCOLS[protocol]) throw new DeviceError("protocol_unknown", "Unknown rotor protocol.");
+  const spec = ROTOR_PROTOCOLS[protocol];
   switch (operation) {
-    case "move": return [`AP1${headingDigits(degrees)};`, "AM1;"];
+    case "move": {
+      const azimuth = headingDigits(degrees);
+      if (!spec.elevation) return [`AP1${azimuth};`, "AM1;"];
+      if (!Number.isFinite(elevation)) throw new DeviceError("heading_invalid", "Elevation out of range.");
+      if (protocol === "rot2prog") {
+        if (elevation < -20 || elevation > 210) throw new DeviceError("heading_invalid", "Elevation out of range."); // Hamlib Rot2Prog min_el/max_el
+        if (!pulses || !SPID_PULSES.includes(pulses.az) || !SPID_PULSES.includes(pulses.el)) throw new DeviceError("rotor_resolution_unknown", "Rot2Prog resolution is unknown.", 502);
+        const h = Math.round(pulses.az * (360 + degrees));
+        const v = Math.round(pulses.el * (360 + elevation));
+        if (h < 0 || h > 9999 || v < 0 || v > 9999) throw new DeviceError("heading_invalid", "Position out of range.");
+        return [`W${String(h).padStart(4, "0")}${String.fromCharCode(pulses.az)}${String(v).padStart(4, "0")}${String.fromCharCode(pulses.el)}/ `];
+      }
+      if (elevation < 0 || elevation > 180) throw new DeviceError("heading_invalid", "Elevation out of range."); // Hamlib GS-232 max_el
+      return [`W${azimuth} ${String(Math.round(elevation)).padStart(3, "0")}\r`];
+    }
     case "read":
-      if (!ROTOR_PROTOCOLS[protocol].headingRead) return null;
+      if (!spec.headingRead) return null;
+      if (protocol === "rot2prog") return [SPID_STATUS];
+      if (spec.elevation) return ["C2\r"];
       return [protocol === "rt21" ? "BI1;" : "AI1;"];
     // A bare ';' stops Rotor-EZ and RT-21; for the DCU-1 Hamlib sends AS1; (its README disagrees: verify on hardware).
-    case "stop": return protocol === "dcu1" ? [";", "AS1;"] : [";"];
+    case "stop":
+      if (protocol === "rot2prog") return [SPID_STOP];
+      if (spec.elevation) return ["S\r"];
+      return protocol === "dcu1" ? [";", "AS1;"] : [";"];
     default: throw new DeviceError("operation_invalid", "Unknown rotor operation.");
   }
 }
@@ -276,10 +310,39 @@ function parseHeading(reply) {
   return value;
 }
 
+// Returns { azimuth, elevation, pulses } (pulses only for Rot2Prog).
+function parseRotorReply(protocol, reply) {
+  const text = String(reply);
+  let match = null;
+  if (protocol === "gs232a") {
+    match = /^\+0(\d{3})\+0(\d{3})$/.exec(text.trim());
+    if (match) return { azimuth: Number(match[1]), elevation: Number(match[2]) };
+  } else if (protocol === "gs232b") {
+    match = /^AZ=(\d{3})(?:\s*EL=(\d{3}))?$/.exec(text.trim()); // some 12PR1A units answer AZ only
+    if (match) return { azimuth: Number(match[1]), elevation: Number(match[2] ?? 0) };
+  } else if (protocol === "rot2prog") {
+    // 12-byte frame: 'W', H1-H4, PH, V1-V4, PV, ' ' (spid.txt); angle = digits - 360.
+    if (text.length === 12 && text[0] === "W" && text[11] === " ") {
+      const b = [...text].map(char => char.charCodeAt(0));
+      const digits = [...b.slice(1, 5), ...b.slice(6, 10)];
+      if (digits.every(value => value <= 9) && SPID_PULSES.includes(b[5]) && SPID_PULSES.includes(b[10])) {
+        return {
+          azimuth: b[1] * 100 + b[2] * 10 + b[3] + b[4] / 10 - 360,
+          elevation: b[6] * 100 + b[7] * 10 + b[8] + b[9] / 10 - 360,
+          pulses: { az: b[5], el: b[10] }
+        };
+      }
+    }
+  } else return { azimuth: parseHeading(text), elevation: 0 };
+  throw new DeviceError("rotor_response", "Unexpected position reply.", 502);
+}
+
 // serial = { write(text): Promise, read(): Promise<string> (drains stray bytes first when flush is true) }.
-function createSerialRotor({ id, label = id, protocol, baud = 4800, serial, enabled = false, min = 0, max = 360, maxMotionMs = MAX_MOTION_MS, timers = { set: setTimeout, clear: clearTimeout } }) {
+function createSerialRotor({ id, label = id, protocol, baud, serial, enabled = false, min = 0, max = 360, elevationMin = 0, elevationMax = 0, maxMotionMs = MAX_MOTION_MS, timers = { set: setTimeout, clear: clearTimeout } }) {
   const spec = ROTOR_PROTOCOLS[protocol];
   if (!spec) throw new Error("Unknown rotor protocol.");
+  baud ??= spec.defaultBaud;
+  if (baud === null) throw new Error(`Choose a baud explicitly for ${spec.label}.`);
   if (!spec.bauds.includes(baud)) throw new Error(`Baud ${baud} is not documented for ${spec.label}.`);
   let timer = null;
   let stopFailed = false;
@@ -294,6 +357,12 @@ function createSerialRotor({ id, label = id, protocol, baud = 4800, serial, enab
     return { stopped: true };
   }
 
+  async function readReply() {
+    await serial.flush?.();
+    await serial.write(rotorFrames(protocol, "read")[0]);
+    return parseRotorReply(protocol, await serial.read());
+  }
+
   return {
     id,
     type: "rotor",
@@ -306,16 +375,17 @@ function createSerialRotor({ id, label = id, protocol, baud = 4800, serial, enab
       const base = { id, type: "rotor", protocol, baud, controlEnabled: enabled, moving, stopFailed, limits: { min, max } };
       if (!spec.headingRead) return { ...base, heading: null, headingNote: "sin lectura de rumbo" };
       try {
-        await serial.flush?.();
-        await serial.write(rotorFrames(protocol, "read")[0]);
-        return { ...base, heading: parseHeading(await serial.read()) };
+        const reading = await readReply();
+        return spec.elevation ? { ...base, heading: reading.azimuth, elevation: reading.elevation } : { ...base, heading: reading.azimuth };
       } catch (error) { return { ...base, heading: null, error: error.code || "transport" }; }
     },
-    async move(degrees) {
+    async move(degrees, elevation = 0) {
       if (!enabled) throw new DeviceError("control_disabled", "Rotor motion is disabled in the agent configuration.", 403);
       if (stopFailed) throw new DeviceError("stop_unconfirmed", "The last stop was not confirmed.", 409);
       if (!Number.isFinite(degrees) || degrees < min || degrees > max) throw new DeviceError("heading_invalid", "Heading outside the configured limits.");
-      for (const frame of rotorFrames(protocol, "move", degrees)) await serial.write(frame);
+      if (!Number.isFinite(elevation) || elevation < (spec.elevation ? elevationMin : 0) || elevation > (spec.elevation ? elevationMax : 0)) throw new DeviceError("heading_invalid", "Elevation outside the configured limits.");
+      const pulses = protocol === "rot2prog" ? (await readReply()).pulses : null;
+      for (const frame of rotorFrames(protocol, "move", degrees, elevation, pulses)) await serial.write(frame);
       moving = true;
       if (timer) timers.clear(timer);
       timer = timers.set(() => { stop().catch(() => {}); }, maxMotionMs);
@@ -394,6 +464,9 @@ const SUPPORT_MATRIX = Object.freeze([
   { device: "Hy-Gain DCU-1 / DCU-1X", link: "serial 4800 8N1", status: "partial", source: "Hamlib rotorez.txt/.c; RT-21 manual App. F (no heading read, stop unconfirmed)" },
   { device: "Idiom Press Rotor-EZ / RotorCard", link: "serial 4800 8N1", status: "ok", source: "Hamlib rotorez.txt/.c" },
   { device: "Green Heron RT-21", link: "serial 4800/9600 8N1", status: "ok", source: "RT-21 manual App. F; Hamlib rotorez.c" },
+  { device: "Yaesu GS-232A", link: "serial 150-9600 8N1 (baud explicit)", status: "partial", source: "Hamlib gs232a.c; no hardware validation" },
+  { device: "Yaesu GS-232B", link: "serial 1200-9600 8N1 (baud explicit)", status: "partial", source: "Hamlib gs232b.c; no hardware validation" },
+  { device: "SPID Rot2Prog", link: "serial 600 8N1", status: "partial", source: "Hamlib spid.c, spid.txt; no hardware validation" },
   { device: "Hy-Gain DCU2 / DCU3 / YRC-1", link: "serial 9600", status: PENDING, source: "catalog only (Hamlib 406); command set not read" },
   ...PENDING_DEVICES.map(item => ({ device: item.label, link: "network", status: PENDING, source: "STATION-DEVICES-SOURCES.md" }))
 ]);
@@ -430,7 +503,7 @@ function createStationDevices({ devices = [], isTransmitting = () => false } = {
       }
       if (name === "stop") return device.stop();
       if (name === "read") return device.status();
-      return device.move(Number(body.heading));
+      return device.move(Number(body.heading), body.elevation === undefined ? 0 : Number(body.elevation));
     },
     // Called on operator loss and shutdown: only rotors are stopped; power outlets stay as they are.
     async safeAll() {
@@ -446,5 +519,5 @@ module.exports = {
   PENDING, CRITICAL_ROLES, DeviceError, MODBUS, ROTOR_PROTOCOLS, SUPPORT_MATRIX, PENDING_DEVICES, STAGES,
   dliRequest, digestAuthorization, httpTransport, tcpExchange,
   modbusReadCoils, modbusWriteCoil, modbusWriteCoils, parseModbusResponse,
-  createPowerDevice, rotorFrames, parseHeading, createSerialRotor, buildSignalPath, createListedDevice, devicesFromConfig, createStationDevices
+  createPowerDevice, rotorFrames, parseHeading, parseRotorReply, createSerialRotor, buildSignalPath, createListedDevice, devicesFromConfig, createStationDevices
 };
