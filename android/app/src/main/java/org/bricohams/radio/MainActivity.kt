@@ -15,7 +15,9 @@ import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.text.InputType
+import android.view.Gravity
 import android.view.View
+import android.view.ViewGroup
 import android.view.WindowInsets
 import android.widget.ArrayAdapter
 import android.widget.Button
@@ -183,12 +185,18 @@ class MainActivity : LocalizedActivity() {
             }.also {
                 if (name == NAV_SATELLITES) it.contentDescription = getString(R.string.home_open_satellites)
                 navigation[name] = it
-            }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
-                setMargins(dp(4), dp(8), dp(4), 0)
+            }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                setMargins(dp(2), dp(8), dp(2), 0)
             })
         }
-        // Five 16 sp labels do not fit a 320 dp phone: the bar scrolls sideways instead of truncating "Satellites".
-        val navScroll = HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(nav) }
+        // Tabs share the width (fit at 360 dp); on narrower screens the bar still scrolls and shows a fading edge instead of cutting a label.
+        val navScroll = HorizontalScrollView(this).apply {
+            isHorizontalScrollBarEnabled = false
+            isFillViewport = true
+            isHorizontalFadingEdgeEnabled = true
+            setFadingEdgeLength(dp(24))
+            addView(nav, ViewGroup.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        }
         status = Brand.text(this, 14f, Brand.Palette(this).accent).apply {
             setPadding(0, dp(10), 0, dp(14))
             accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
@@ -212,6 +220,18 @@ class MainActivity : LocalizedActivity() {
     }
 
     private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
+
+    // Five tabs share the width at 14 sp so none is cut at 360 dp; the selected cue is fill + bold (no check mark, it would not fit).
+    private fun compactNavButton(button: View) {
+        (button as? Button)?.apply {
+            textSize = NAV_LABEL_SP
+            minWidth = 0; minimumWidth = 0
+            minHeight = dp(BrandUi.MIN_TARGET_DP); minimumHeight = minHeight
+            setPadding(dp(2), dp(10), dp(2), dp(10))
+            gravity = Gravity.CENTER
+            setCompoundDrawablesRelative(null, null, null, null)
+        }
+    }
 
     private fun text(value: String) = Brand.text(this).apply {
         text = value; setPadding(0, dp(8), 0, dp(8))
@@ -258,6 +278,7 @@ class MainActivity : LocalizedActivity() {
             val active = name == tab
             button.isSelected = active
             BrandUi.styleButton(button, if (active) BrandUi.ButtonKind.SELECTED else BrandUi.ButtonKind.SECONDARY)
+            compactNavButton(button)
         }
         val cards = tab == TAB_HOME
         content.background = if (cards) null else Brand.rounded(this, colors.surface, 20)
@@ -294,7 +315,7 @@ class MainActivity : LocalizedActivity() {
         Tool.LIVE_AUDIO -> ToolInfo(R.drawable.ic_mic, R.string.tool_live_title, R.string.tool_live_desc, R.string.tool_live_help, "ayuda-android")
         Tool.ROTOR -> ToolInfo(R.drawable.ic_satellite, R.string.tool_rotor_title, R.string.tool_rotor_desc, R.string.tool_rotor_help, "ayuda-android")
         Tool.RADIO_TOOLS -> ToolInfo(R.drawable.ic_tools, R.string.tool_radio_tools_title, R.string.tool_radio_tools_desc, R.string.tool_radio_tools_help, "ayuda-android")
-        Tool.ANTENNA -> ToolInfo(R.drawable.ic_tools, R.string.tool_antenna_title, R.string.tool_antenna_desc, R.string.tool_antenna_help, "ayuda-android")
+        Tool.ANTENNA -> ToolInfo(R.drawable.ic_antenna, R.string.tool_antenna_title, R.string.tool_antenna_desc, R.string.tool_antenna_help, "ayuda-android")
     }
 
     private fun home() {
@@ -1170,6 +1191,7 @@ class MainActivity : LocalizedActivity() {
 
     companion object {
         // Stable tab identifiers persisted in the instance state; labels come from resources.
+        private const val NAV_LABEL_SP = 14f
         private const val TAB_HOME = "Inicio"
         private const val TAB_LOGBOOK = "Guardia"
         private const val TAB_ARDF = "ARDF"
