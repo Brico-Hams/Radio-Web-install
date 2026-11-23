@@ -196,6 +196,10 @@ and explicitly pending functions are not covered by these results.
   are added as candidates without transport: the pending addresses, framing, and response
   details are not guessed from Icom, Kenwood, or Hamlib.
   The catalog contains 68 candidates, not 68 certified radios.
+- [FlexRadio SmartSDR](../../../remote-station/docs/FLEX-SMARTSDR-API.md): client
+  `smartsdr_protocol.py` / `smartsdr-core.cjs` (discovery, TCP 4992 session,
+  VITA-49 meters, guarded TX that is off by default). VITA-49 panadapter and
+  waterfall: pending source.
 - Final verification: **223 Python tests**, **66 client tests**, and **44 focused
   Node tests** pass; Ruff, lint, and build are correct. A transient WinError 10053
   abort in a rotator test was repeated in isolation and the later full suite

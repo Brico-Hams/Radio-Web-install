@@ -1,9 +1,9 @@
 name: Remote station
 on:
   push:
-    paths: ["remote-station/**", "station*", "diagnostic*", "remote-*.cjs", "remote*.js", "remote*.html", "remote*.css", "remoto*", "rigctld-client.cjs", "data/remote-station-catalog.json", "server.cjs", "app.js", "radio-ui.js", "ui-i18n.js", "ui-translations.js", "android/**", "branding/**", "scripts/*station*", "scripts/export-project.cjs", "tests/*diagnostic*", "tests/remote*.test.cjs", "tests/remoto-ui.test.cjs", "tests/ui-i18n.test.cjs", "package*.json", ".github/workflows/remote-station.yml"]
+    paths: ["remote-station/**", "station*", "diagnostic*", "remote-*.cjs", "remote*.js", "remote*.html", "remote*.css", "remoto*", "rigctld-client.cjs", "smartsdr-core.cjs", "data/remote-station-catalog.json", "server.cjs", "app.js", "radio-ui.js", "ui-i18n.js", "ui-translations.js", "android/**", "branding/**", "scripts/*station*", "scripts/export-project.cjs", "tests/*diagnostic*", "tests/remote*.test.cjs", "tests/smartsdr-core.test.cjs", "tests/remoto-ui.test.cjs", "tests/ui-i18n.test.cjs", "package*.json", ".github/workflows/remote-station.yml"]
   pull_request:
-    paths: ["remote-station/**", "station*", "diagnostic*", "remote-*.cjs", "remote*.js", "remote*.html", "remote*.css", "remoto*", "rigctld-client.cjs", "data/remote-station-catalog.json", "server.cjs", "app.js", "radio-ui.js", "ui-i18n.js", "ui-translations.js", "android/**", "branding/**", "scripts/*station*", "scripts/export-project.cjs", "tests/*diagnostic*", "tests/remote*.test.cjs", "tests/remoto-ui.test.cjs", "tests/ui-i18n.test.cjs", "package*.json", ".github/workflows/remote-station.yml"]
+    paths: ["remote-station/**", "station*", "diagnostic*", "remote-*.cjs", "remote*.js", "remote*.html", "remote*.css", "remoto*", "rigctld-client.cjs", "smartsdr-core.cjs", "data/remote-station-catalog.json", "server.cjs", "app.js", "radio-ui.js", "ui-i18n.js", "ui-translations.js", "android/**", "branding/**", "scripts/*station*", "scripts/export-project.cjs", "tests/*diagnostic*", "tests/remote*.test.cjs", "tests/smartsdr-core.test.cjs", "tests/remoto-ui.test.cjs", "tests/ui-i18n.test.cjs", "package*.json", ".github/workflows/remote-station.yml"]
   workflow_dispatch:
 permissions:
   contents: read

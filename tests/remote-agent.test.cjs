@@ -295,7 +295,8 @@ test("agent detects caps once and reports levels/functions, null when the rig ca
   const rig = await fakeRigctld();
   const { call, cleanup } = await startAgent(rig);
   try {
-    await waitFor(async () => (await call("GET", "/api/state")).json.levels.af === 0.5);
+    // levels are polled one by one: wait for the last one so the snapshot is complete
+    await waitFor(async () => { const s = (await call("GET", "/api/state")).json; return s.levels.agc === 2 && s.levels.rfpower === 0.4 && s.funcs.nb === false && s.funcs.tuner === false; });
     const state = (await call("GET", "/api/state")).json;
     assert.equal(state.caps.detected, true);
     assert.equal(state.caps.tune, true);

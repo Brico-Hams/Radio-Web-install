@@ -655,7 +655,7 @@
   // The radio's own spectrum is not rendered yet; the panel only says what to expect for this model.
   const SPECTRUM_TEXT = Object.freeze({
     civ: "Disponible próximamente para este modelo",
-    smartsdr: "Disponible próximamente para este modelo",
+    smartsdr: "Espectro Flex: pendiente de fuente (usa el audio para la cascada)",
     sdr: "Disponible próximamente para este modelo",
     audio: "Activa el audio para ver el espectro de la banda de paso.",
     none: "Este modelo no ofrece espectro"

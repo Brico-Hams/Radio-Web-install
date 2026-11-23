@@ -196,6 +196,10 @@ iOS e le funzioni espressamente in sospeso non sono coperte da questi risultati.
   si aggiungono come candidati senza trasporto: gli indirizzi, il framing e i dettagli
   di risposta in sospeso non si indovinano da Icom, Kenwood o Hamlib.
   Il catalogo contiene 68 candidati, non 68 radio certificate.
+- [FlexRadio SmartSDR](../../../remote-station/docs/FLEX-SMARTSDR-API.md): client
+  `smartsdr_protocol.py` / `smartsdr-core.cjs` (discovery, sessione TCP 4992,
+  misuratori VITA-49, TX protetto e disattivato di default). Panadapter e
+  waterfall VITA-49: fonte in sospeso.
 - Verifica finale: **223 test Python**, **66 del client** e **44 Node
   mirati** riusciti; Ruff, lint e build corretti. Un'interruzione transitoria
   WinError 10053 di un test del rotore è stata ripetuta in isolamento e la suite completa

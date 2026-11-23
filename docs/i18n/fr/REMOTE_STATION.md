@@ -196,6 +196,10 @@ iOS et les fonctions expressément en attente ne sont pas couvertes par ces rés
   sont ajoutés comme candidats sans transport : les adresses, le framing et les détails
   de réponse en attente ne sont pas devinés à partir d'Icom, Kenwood ou Hamlib.
   Le catalogue contient 68 candidats, pas 68 radios certifiées.
+- [FlexRadio SmartSDR](../../../remote-station/docs/FLEX-SMARTSDR-API.md) : client
+  `smartsdr_protocol.py` / `smartsdr-core.cjs` (découverte, session TCP 4992,
+  indicateurs VITA-49, TX protégé et désactivé par défaut). Panadapter et
+  cascade VITA-49 : source en attente.
 - Vérification finale : **223 tests Python**, **66 du client** et **44 Node
   ciblés** réussis ; Ruff, lint et build corrects. Un abandon transitoire
   WinError 10053 d'un test de rotor a été répété isolément et la suite complète

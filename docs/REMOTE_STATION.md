@@ -196,6 +196,10 @@ iOS y funciones expresamente pendientes no quedan cubiertas por estos resultados
   se agregan como candidatos sin transporte: las direcciones, framing y detalles
   de respuesta pendientes no se adivinan desde Icom, Kenwood o Hamlib.
   El catalogo contiene 68 candidatos, no 68 radios certificadas.
+- [FlexRadio SmartSDR](../remote-station/docs/FLEX-SMARTSDR-API.md): cliente
+  `smartsdr_protocol.py` / `smartsdr-core.cjs` (descubrimiento, sesion TCP 4992,
+  medidores VITA-49, TX guardado y desactivado por defecto). Panadapter y
+  cascada VITA-49: pendiente de fuente.
 - Verificacion final: **223 pruebas Python**, **66 del cliente** y **44 Node
   enfocadas** correctas; Ruff, lint y build correctos. Un aborto transitorio
   WinError 10053 de una prueba rotor se repitio aisladamente y la suite completa
