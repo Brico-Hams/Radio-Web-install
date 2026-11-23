@@ -64,4 +64,4 @@ L’onglet « Libro QSO » de la console réutilise `remote-log.cjs` (import/exp
 
 ## Pendiente de fuente (désactivé)
 
-Arguments de la ligne de commande TQSL (configurés par l’opérateur, voir ci-dessus), format des lignes telnet du DX cluster, décodeurs FT8/FT4/WSPR/CW/RTTY/PSK31, SSTV sur la console web, table des préfixes DXCC, FlexControl HID.
+Arguments de la ligne de commande TQSL (configurés par l’opérateur, voir ci-dessus), décodeurs FT8/FT4/WSPR/CW/RTTY/PSK31, SSTV sur la console web, table des préfixes DXCC, FlexControl HID, transports TLS/SSH du DX cluster.

@@ -19,6 +19,7 @@ const { TuneCheck, swrFromRaw, normalizeMeter, normalizeLevel, parsePowerFrame, 
 const { createAccessories } = require("./station-accessories.cjs");
 const stationDevicesLib = require("./station-devices.cjs");
 const { createRotor, RotorError } = require("./remote-rotor.cjs");
+const { createDxCluster, normalizeDxConfig } = require("./remote-dxcluster.cjs");
 const remoteOps = require("./remote-ops.cjs");
 const { planCwSend, createCwGuard, createMemoryStore, CwError } = require("./remote-cw.cjs");
 const remoteQsl = require("./remote-qsl.cjs");
@@ -68,6 +69,7 @@ const STATIC_FILES = Object.freeze({
   "/digital-code-tables.json": ["data/digital-code-tables.json", "application/json; charset=utf-8"],
   "/remote-rotor-ui.js": ["remote-rotor-ui.js", "text/javascript; charset=utf-8"],
   "/remote-tune-ui.js": ["remote-tune-ui.js", "text/javascript; charset=utf-8"],
+  "/remote-dxcluster-ui.js": ["remote-dxcluster-ui.js", "text/javascript; charset=utf-8"],
   "/spectrum-core.js": ["spectrum-core.js", "text/javascript; charset=utf-8"],
   "/remote-audio-worklet.js": ["remote-audio-worklet.js", "text/javascript; charset=utf-8"],
   "/remote.css": ["remote.css", "text/css; charset=utf-8"],
@@ -115,7 +117,9 @@ function loadConfig(dir) {
     // QRZ.com lookup (off by default, the operator's own credentials) and LoTW upload through the operator's local TQSL.
     // Both stay in this 0600 file and are never sent to clients.
     qrz: remoteQsl.normalizeQrzConfig(stored.qrz),
-    lotw: remoteQsl.normalizeLotwConfig(stored.lotw)
+    lotw: remoteQsl.normalizeLotwConfig(stored.lotw),
+    // DX cluster telnet client (read-only, plain TCP): off unless the operator sets host, port and callsign here.
+    dxCluster: normalizeDxConfig(stored.dxCluster, dir)
   };
   if (!config.token) {
     config.token = crypto.randomBytes(32).toString("base64url");
@@ -352,6 +356,8 @@ function createRemoteAgent(options = {}) {
   const audioSockets = new Set();
   // Optional rotctld rotor (options.rotor = { port, motionEnabled, park, ... }); no rotor commands are sent at startup.
   const rotor = options.rotor ? createRotor({ config: options.rotor, now: options.now, connect: options.rotorConnect }) : null;
+  // Read-only DX cluster feed (remote-dxcluster.cjs); tuning to a spot goes through the normal freq command only.
+  const dxCluster = createDxCluster({ config: options.dxCluster || config.dxCluster, connect: options.dxConnect, now, log, setTimer: options.dxSetTimer, clearTimer: options.dxClearTimer });
   const relayState = { connected: false };
   const relayBackoff = { min: options.relayBackoffMinMs ?? 1000, max: options.relayBackoffMaxMs ?? 30_000 };
 
@@ -1416,6 +1422,7 @@ function createRemoteAgent(options = {}) {
       send(response, 200, { callsign: config.callsign, radioScope, audio: { rx: Boolean(audio.rx), tx: Boolean(audio.tx) } });
       return;
     }
+    if (route === "GET /api/dxcluster") { send(response, 200, dxCluster.snapshot()); return; }
     if (route === "GET /api/rotor" || route === "POST /api/rotor") {
       if (!rotor) { send(response, 503, { error: "rotor_not_configured" }); return; }
       try {
@@ -1838,6 +1845,7 @@ function createRemoteAgent(options = {}) {
       server.listen(options.port ?? 8788, host, resolve);
     });
     client.start();
+    dxCluster.start();
     connectRelay();
     watchdog = setInterval(watchTx, 100);
     meterTimer = setInterval(pollTxMeters, meterMs);
@@ -1871,6 +1879,7 @@ function createRemoteAgent(options = {}) {
       finally { await stationDevices.safeAll().catch(() => {}); }
     }
     client.stop();
+    dxCluster.stop();
     for (const ws of audioSockets) { ws.fail(1001, "shutdown"); ws.socket.destroy(); }
     audio.close?.();
     await rotor?.close();

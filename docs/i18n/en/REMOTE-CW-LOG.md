@@ -64,4 +64,4 @@ The console tab "Libro QSO" reuses `remote-log.cjs` (ADIF import/export, duplica
 
 ## Pendiente de fuente (disabled)
 
-TQSL command line arguments (operator-configured, see above), DX cluster telnet line format, FT8/FT4/WSPR/CW/RTTY/PSK31 decoders, SSTV on the web console, DXCC prefix table, FlexControl HID.
+TQSL command line arguments (operator-configured, see above), FT8/FT4/WSPR/CW/RTTY/PSK31 decoders, SSTV on the web console, DXCC prefix table, FlexControl HID, TLS/SSH DX cluster transports.

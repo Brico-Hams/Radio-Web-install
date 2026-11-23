@@ -64,4 +64,4 @@ La scheda «Libro QSO» della console riusa `remote-log.cjs` (import/export ADIF
 
 ## Pendiente de fuente (disattivato)
 
-Argomenti della riga di comando TQSL (configurati dall’operatore, vedi sopra), formato righe telnet del DX cluster, decoder FT8/FT4/WSPR/CW/RTTY/PSK31, SSTV nella console web, tabella prefissi DXCC, FlexControl HID.
+Argomenti della riga di comando TQSL (configurati dall’operatore, vedi sopra), decoder FT8/FT4/WSPR/CW/RTTY/PSK31, SSTV nella console web, tabella prefissi DXCC, FlexControl HID, trasporti TLS/SSH del DX cluster.

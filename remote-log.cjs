@@ -4,7 +4,7 @@
 // The terminator is meant to be drawn over data/world-land-110m.txt (Natural Earth, public domain) by the console.
 //
 // Not here, because the repo has no source for them (docs/remote-cw-log.md marks them "pendiente de fuente"):
-// DX cluster protocol, QRZ.com XML lookup and the TQSL command line.
+// QRZ.com XML lookup and the TQSL command line. The DX cluster client lives in remote-dxcluster.cjs.
 
 const MAX_BYTES = 16 * 1024 * 1024;
 const MAX_RECORDS = 50_000;

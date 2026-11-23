@@ -17,6 +17,7 @@
   <script src="spectrum-core.js" defer></script>
   <script src="remote-rotor-ui.js" defer></script>
   <script src="remote-tune-ui.js" defer></script>
+  <script src="remote-dxcluster-ui.js" defer></script>
   <script src="remote-ui.js" defer></script>
 </head>
 <body>
@@ -165,6 +166,7 @@
       <button id="tab-levels" type="button" role="tab" aria-selected="false" aria-controls="panel-levels" tabindex="-1">Niveles</button>
       <button id="tab-cw" type="button" role="tab" aria-selected="false" aria-controls="panel-cw" tabindex="-1">CW</button>
       <button id="tab-digital" type="button" role="tab" aria-selected="false" aria-controls="panel-digital" tabindex="-1">RTTY/PSK31</button>
+      <button id="tab-dx" type="button" role="tab" aria-selected="false" aria-controls="panel-dx" tabindex="-1">Cluster DX</button>
       <button id="tab-log" type="button" role="tab" aria-selected="false" aria-controls="panel-log" tabindex="-1">Registro</button>
       <button id="tab-qso" type="button" role="tab" aria-selected="false" aria-controls="panel-qso" tabindex="-1">Libro QSO</button>
       <button id="tab-settings" type="button" role="tab" aria-selected="false" aria-controls="panel-settings" tabindex="-1">Ajustes</button>
@@ -294,6 +296,13 @@
       </div>
       <p id="digital-status" class="hint" role="status" aria-live="polite">Decodificador apagado.</p>
       <pre id="digital-text" class="digital-text" translate="no" role="log" aria-label="Texto decodificado" aria-live="off"></pre>
+    </section>
+
+    <section id="panel-dx" class="card panel" role="tabpanel" aria-labelledby="tab-dx" data-active="false">
+      <h2 class="panel-title">Cluster DX</h2>
+      <p id="dx-status" class="hint" role="status">Cluster DX desactivado en el agente.</p>
+      <label class="check"><input id="dx-alert" type="checkbox"> Avisar de spots necesarios</label>
+      <ol id="dx-list" class="log" aria-label="Spots del cluster DX"></ol>
     </section>
 
     <section id="panel-log" class="card panel" role="tabpanel" aria-labelledby="tab-log" data-active="false">
