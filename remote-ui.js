@@ -512,6 +512,21 @@
     pill.classList.toggle("on", configured && Boolean(relay.connected));
   }
 
+  // The panel only appears when the agent reports accessories; operate stays disabled without a sourced driver and explicit opt-in.
+  function renderAccessories(accessories) {
+    $("accessories").hidden = !accessories;
+    if (!accessories) return;
+    const amp = accessories.amplifier;
+    setText($("amp-state"), !amp.supported ? "Amplificador: pendiente de fuente"
+      : amp.state === "operate" ? "Amplificador: OPERATE" : amp.state === "fault" ? "Amplificador: FALLO" : "Amplificador: STANDBY");
+    const tuner = accessories.tuner;
+    setText($("tuner-state"), !tuner.supported ? "Acoplador: pendiente de fuente"
+      : tuner.tuning ? "Acoplador: sintonizando" : "Acoplador: en reposo");
+    setPressed($("btn-amp-operate"), amp.state === "operate");
+    $("btn-amp-operate").disabled = !amp.supported || !amp.operateAllowed || amp.state === "operate" ||
+      Boolean(view.state?.ptt || view.state?.tune || tuner.tuning) || view.locked === true;
+  }
+
   function render(state) {
     view.state = state;
     view.linkUp = true;
@@ -558,6 +573,7 @@
     setPressed($("btn-nb"), Boolean(state.funcs?.nb));
     setPressed($("btn-nr"), Boolean(state.funcs?.nr));
     setPressed($("btn-atu"), Boolean(state.funcs?.tuner));
+    renderAccessories(state.accessories);
 
     trackLog(state);
     rememberBand(state);
@@ -1057,6 +1073,8 @@
     $("btn-nb").addEventListener("click", toggleFunc("NB", "nb"));
     $("btn-nr").addEventListener("click", toggleFunc("NR", "nr"));
     $("btn-atu").addEventListener("click", toggleFunc("TUNER", "tuner"));
+    $("btn-amp-operate").addEventListener("click", () => run({ cmd: "amp", value: "operate" }));
+    $("btn-amp-standby").addEventListener("click", () => run({ cmd: "amp", value: "standby" }));
     $("btn-tune").addEventListener("click", async () => {
       if (view.locked || view.tuneBusy) return;
       view.tuneBusy = true;

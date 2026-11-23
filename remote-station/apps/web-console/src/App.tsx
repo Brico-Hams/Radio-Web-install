@@ -20,6 +20,7 @@ import './App.css'
 import { LogbookPanel, ProtocolPanel } from './OperationPanels'
 import { AgentLivePanel } from './AgentLivePanel'
 import { RotorPanel } from './RotorPanel'
+import { AccessoriesPanel } from './AccessoriesPanel'
 import { RadioSettingsPanel } from './RadioSettingsPanel'
 import { RadioOperatingPanel } from './RadioOperatingPanel'
 import { PttPanel } from './PttPanel'
@@ -405,6 +406,7 @@ function App() {
                 <a href="#operating-title">CAT</a>
                 <a href="#ptt-title">PTT</a>
                 <a href="#rotor-title">Rotor</a>
+                <a href="#accessories-title">{t('accTitle')}</a>
                 <a href="#radio-settings-title">{t('operationPower')}</a>
                 <a href="#logbook-title">Logbook</a>
               </nav>
@@ -414,6 +416,7 @@ function App() {
                 <PttPanel key={`ptt-${activeToken}`} token={activeToken} />
                 <AudioPanel key={`audio-${activeToken}`} token={activeToken} />
                 <RotorPanel key={`rotor-${activeToken}`} token={activeToken} />
+                <AccessoriesPanel key={`accessories-${activeToken}`} token={activeToken} />
                 <RadioSettingsPanel key={`settings-${activeToken}`} token={activeToken} />
                 <LogbookPanel key={`logbook-${activeToken}`} token={activeToken} />
               </div>

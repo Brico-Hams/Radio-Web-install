@@ -1,9 +1,9 @@
 name: Remote station
 on:
   push:
-    paths: ["remote-station/**", "station*", "diagnostic*", "remote-*.cjs", "remote*.js", "remote*.html", "remote*.css", "remoto*", "rigctld-client.cjs", "data/remote-station-catalog.json", "server.cjs", "app.js", "radio-ui.js", "ui-i18n.js", "ui-translations.js", "android/**", "branding/**", "scripts/*station*", "scripts/export-project.cjs", "tests/*diagnostic*", "tests/remote*.test.cjs", "tests/remoto-ui.test.cjs", "tests/ui-i18n.test.cjs", "package*.json", ".github/workflows/remote-station.yml"]
+    paths: ["data/station-accessories-catalog.json", "remote-station/**", "station*", "diagnostic*", "remote-*.cjs", "remote*.js", "remote*.html", "remote*.css", "remoto*", "rigctld-client.cjs", "data/remote-station-catalog.json", "server.cjs", "app.js", "radio-ui.js", "ui-i18n.js", "ui-translations.js", "android/**", "branding/**", "scripts/*station*", "scripts/export-project.cjs", "tests/*diagnostic*", "tests/remote*.test.cjs", "tests/remoto-ui.test.cjs", "tests/ui-i18n.test.cjs", "package*.json", ".github/workflows/remote-station.yml"]
   pull_request:
-    paths: ["remote-station/**", "station*", "diagnostic*", "remote-*.cjs", "remote*.js", "remote*.html", "remote*.css", "remoto*", "rigctld-client.cjs", "data/remote-station-catalog.json", "server.cjs", "app.js", "radio-ui.js", "ui-i18n.js", "ui-translations.js", "android/**", "branding/**", "scripts/*station*", "scripts/export-project.cjs", "tests/*diagnostic*", "tests/remote*.test.cjs", "tests/remoto-ui.test.cjs", "tests/ui-i18n.test.cjs", "package*.json", ".github/workflows/remote-station.yml"]
+    paths: ["data/station-accessories-catalog.json", "remote-station/**", "station*", "diagnostic*", "remote-*.cjs", "remote*.js", "remote*.html", "remote*.css", "remoto*", "rigctld-client.cjs", "data/remote-station-catalog.json", "server.cjs", "app.js", "radio-ui.js", "ui-i18n.js", "ui-translations.js", "android/**", "branding/**", "scripts/*station*", "scripts/export-project.cjs", "tests/*diagnostic*", "tests/remote*.test.cjs", "tests/remoto-ui.test.cjs", "tests/ui-i18n.test.cjs", "package*.json", ".github/workflows/remote-station.yml"]
   workflow_dispatch:
 permissions:
   contents: read
@@ -58,7 +58,7 @@ jobs:
           python-version: "3.12"
       - run: npm ci
       - run: python remote-station/scripts/build_diagnostic_contract.py --check
-      - run: node --test tests/diagnostics.test.cjs tests/remote-station.test.cjs tests/remote-agent.test.cjs tests/remote-api.test.cjs tests/remote-tx.test.cjs tests/remote-audio.test.cjs tests/remote-tls.test.cjs tests/remote-relay.test.cjs tests/remote-catalog.test.cjs tests/remoto-ui.test.cjs tests/remote-ui-audio.test.cjs tests/ui-i18n.test.cjs tests/export-project.test.cjs
+      - run: node --test tests/diagnostics.test.cjs tests/remote-station.test.cjs tests/remote-agent.test.cjs tests/remote-api.test.cjs tests/remote-tx.test.cjs tests/remote-audio.test.cjs tests/remote-tls.test.cjs tests/remote-relay.test.cjs tests/remote-catalog.test.cjs tests/remote-accessories.test.cjs tests/remoto-ui.test.cjs tests/remote-ui-audio.test.cjs tests/ui-i18n.test.cjs tests/export-project.test.cjs
       - run: npm --prefix remote-station/apps/web-console ci
       - run: npm --prefix remote-station/apps/web-console test
       - run: npm --prefix remote-station/apps/web-console run lint

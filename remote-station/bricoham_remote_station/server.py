@@ -78,6 +78,7 @@ DIGITAL_PATH = f"/api/{API_VERSION}/digital"
 ROTOR_PATH = f"/api/{API_VERSION}/rotor"
 SETTINGS_PATH = f"/api/{API_VERSION}/radio-settings"
 PTT_PATH = f"/api/{API_VERSION}/ptt"
+ACCESSORIES_PATH = f"/api/{API_VERSION}/accessories"
 AUDIO_PATH = f"/api/{API_VERSION}/audio"
 AUDIO_STREAM_PATH = f"{AUDIO_PATH}/stream"
 LOGBOOK_PATH = f"/api/{API_VERSION}/logbook"
@@ -311,11 +312,13 @@ class CoordinatorRequestHandler(SecureRequestHandler):
                 self._serve_audio(path)
             return
 
-        if path in (DEVICES_PATH, CAT_PATH, DIGITAL_PATH, ROTOR_PATH, SETTINGS_PATH, PTT_PATH):
+        if path in (
+            DEVICES_PATH, CAT_PATH, DIGITAL_PATH, ROTOR_PATH, SETTINGS_PATH, PTT_PATH, ACCESSORIES_PATH
+        ):
             if role not in _DIAGNOSTIC_ROLES:
                 self._send_error(HTTPStatus.FORBIDDEN, "forbidden")
                 return
-            if path == PTT_PATH and urlsplit(self.path).query:
+            if path in (PTT_PATH, ACCESSORIES_PATH) and urlsplit(self.path).query:
                 self._send_error(HTTPStatus.BAD_REQUEST, "ptt_invalid_query")
                 return
             self._serve_station_agent_data(path)
@@ -400,7 +403,9 @@ class CoordinatorRequestHandler(SecureRequestHandler):
         if urlsplit(self.path).path == REPORT_PATH:
             self._accept_diagnostic_report()
             return
-        if urlsplit(self.path).path in (ROTOR_PATH, SETTINGS_PATH, PTT_PATH, DIGITAL_PATH):
+        if urlsplit(self.path).path in (
+            ROTOR_PATH, SETTINGS_PATH, PTT_PATH, DIGITAL_PATH, ACCESSORIES_PATH
+        ):
             self._operate_station_agent(urlsplit(self.path).path)
             return
         if urlsplit(self.path).path != LOGBOOK_PATH:
@@ -509,7 +514,10 @@ class CoordinatorRequestHandler(SecureRequestHandler):
             or method not in ("GET", "POST")
             or (
                 method == "POST"
-                and path not in (LOGBOOK_PATH, ROTOR_PATH, SETTINGS_PATH, PTT_PATH, DIGITAL_PATH)
+                and path
+                not in (
+                    LOGBOOK_PATH, ROTOR_PATH, SETTINGS_PATH, PTT_PATH, DIGITAL_PATH, ACCESSORIES_PATH
+                )
             )
             or requested - {"authorization", "content-type"}
         ):
@@ -872,7 +880,9 @@ class CoordinatorRequestHandler(SecureRequestHandler):
         query = urlsplit(self.path).query if path in (CAT_PATH, ROTOR_PATH) else ""
         target = path + ("?" + query if query else "")
         timeout = (
-            4 if path in (ROTOR_PATH, SETTINGS_PATH, PTT_PATH) else 3 if path == CAT_PATH else 2
+            4
+            if path in (ROTOR_PATH, SETTINGS_PATH, PTT_PATH, ACCESSORIES_PATH)
+            else 3 if path == CAT_PATH else 2
         )
         if self.server.agent_link is not None:
             upstream = urlsplit(self.server.agent_link.url)
@@ -936,7 +946,7 @@ class CoordinatorRequestHandler(SecureRequestHandler):
                     if (
                         isinstance(code, str)
                         and len(code) < 64
-                        and code.startswith(("cat_", "wsjtx_", "rotor_", "ptt_"))
+                        and code.startswith(("cat_", "wsjtx_", "rotor_", "ptt_", "accessories_"))
                         and code.replace("_", "").isascii()
                         and code.replace("_", "").isalnum()
                     ):
@@ -1061,6 +1071,14 @@ def _is_live_agent_data(path: str, payload: dict[str, object], *, method: str = 
                 and 32 <= len(payload["lease_id"]) <= 128
                 and payload["lease_id"].isascii()
             )
+        )
+    if path == ACCESSORIES_PATH:
+        amplifier, tuner = payload.get("amplifier"), payload.get("tuner")
+        return (
+            isinstance(amplifier, dict)
+            and amplifier.get("state") in ("standby", "operate", "fault")
+            and isinstance(tuner, dict)
+            and isinstance(tuner.get("tuning"), bool)
         )
     if path == ROTOR_PATH:
         return (

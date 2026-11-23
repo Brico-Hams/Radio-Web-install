@@ -42,6 +42,7 @@ from bricoham_station_agent.inventory import (
     DeviceInventory,
     enumerate_serial_ports,
 )
+from bricoham_station_agent.accessories import StationAccessories, support_matrix
 from bricoham_station_agent.ptt import PttConfig, PttController, PttError
 from bricoham_station_agent.radio_settings import RadioSettingsConfig
 from bricoham_station_agent.rotor import RotorConfig, RotorController, RotorError
@@ -56,6 +57,7 @@ ROTOR_PATH = f"/api/{API_VERSION}/rotor"
 SETTINGS_PATH = f"/api/{API_VERSION}/radio-settings"
 PTT_PATH = f"/api/{API_VERSION}/ptt"
 AUDIO_PATH = f"/api/{API_VERSION}/audio"
+ACCESSORIES_PATH = f"/api/{API_VERSION}/accessories"
 AUDIO_STREAM_PATH = f"{AUDIO_PATH}/stream"
 _INVENTORY_ROLES = frozenset({Role.ADMIN, Role.OPERATOR})
 
@@ -77,7 +79,9 @@ class StationAgentHTTPServer(SecureHTTPServer):
         rotor: RotorController | None = None,
         audio: AudioCapture | None = None,
         ptt: PttController | None = None,
+        accessories: StationAccessories | None = None,
     ) -> None:
+        self.accessories = accessories
         self.authenticator = authenticator
         self.inventory = DeviceInventory(enumerator)
         self.cat = cat
@@ -94,10 +98,15 @@ class StationAgentHTTPServer(SecureHTTPServer):
 
     def _close_integrations(self) -> None:
         try:
-            if self.ptt is not None:
-                self.ptt.close()
+            # The amplifier returns to STANDBY and any tune stops before the radio is released.
+            if self.accessories is not None:
+                self.accessories.emergency_stop("close")
         finally:
-            self._close_other_integrations()
+            try:
+                if self.ptt is not None:
+                    self.ptt.close()
+            finally:
+                self._close_other_integrations()
 
     def _close_other_integrations(self) -> None:
         if self.audio is not None:
@@ -153,6 +162,7 @@ class StationAgentRequestHandler(SecureRequestHandler):
             PTT_PATH,
             AUDIO_PATH,
             AUDIO_STREAM_PATH,
+            ACCESSORIES_PATH,
         ):
             self._send_error(HTTPStatus.NOT_FOUND, "not_found")
             return
@@ -185,6 +195,24 @@ class StationAgentRequestHandler(SecureRequestHandler):
                 self._send_error(HTTPStatus.SERVICE_UNAVAILABLE, "audio_not_configured")
                 return
             self._stream_audio()
+            return
+
+        if path == ACCESSORIES_PATH:
+            if urlsplit(self.path).query:
+                self._send_error(HTTPStatus.BAD_REQUEST, "accessories_invalid_query")
+                return
+            if self.server.accessories is None:
+                self._send_error(HTTPStatus.SERVICE_UNAVAILABLE, "accessories_not_configured")
+                return
+            self._send_json(
+                HTTPStatus.OK,
+                {
+                    "api_version": "v1",
+                    "data_is_simulated": False,
+                    **self.server.accessories.snapshot(),
+                    "support": support_matrix(),
+                },
+            )
             return
 
         if path == PTT_PATH:
@@ -369,7 +397,7 @@ class StationAgentRequestHandler(SecureRequestHandler):
 
     def do_POST(self) -> None:
         path = urlsplit(self.path).path
-        if path not in (ROTOR_PATH, SETTINGS_PATH, PTT_PATH, DIGITAL_PATH):
+        if path not in (ROTOR_PATH, SETTINGS_PATH, PTT_PATH, DIGITAL_PATH, ACCESSORIES_PATH):
             self._method_not_allowed()
             return
         self.close_connection = True
@@ -379,6 +407,9 @@ class StationAgentRequestHandler(SecureRequestHandler):
             return
         if role not in _INVENTORY_ROLES:
             self._send_error(HTTPStatus.FORBIDDEN, "forbidden")
+            return
+        if path == ACCESSORIES_PATH:
+            self._operate_accessories()
             return
         if path == DIGITAL_PATH:
             if self.server.wsjtx is None:
@@ -484,6 +515,56 @@ class StationAgentRequestHandler(SecureRequestHandler):
             return
         self._send_json(HTTPStatus.OK, result)
 
+    def _operate_accessories(self) -> None:
+        accessories = self.server.accessories
+        if accessories is None:
+            self._send_error(HTTPStatus.SERVICE_UNAVAILABLE, "accessories_not_configured")
+            return
+        if urlsplit(self.path).query:
+            self._send_error(HTTPStatus.BAD_REQUEST, "accessories_invalid_query")
+            return
+        try:
+            payload = self.request_json()
+        except RequestJsonError as error:
+            self._send_error(error.status, str(error))
+            return
+        operation = payload.get("operation") if isinstance(payload, dict) else None
+        # A held PTT lease counts as TX: operate and band changes are refused meanwhile.
+        ptt = self.server.ptt
+        try:
+            transmitting = bool(ptt is not None and ptt.snapshot()["lease_active"])
+        except PttError:
+            transmitting = True
+        if operation == "standby" and set(payload) == {"operation"}:
+            result = accessories.standby("operator")
+        elif operation == "emergency_stop" and set(payload) == {"operation"}:
+            result = accessories.emergency_stop("emergency")
+        elif operation == "stop_tune" and set(payload) == {"operation"}:
+            result = accessories.stop_tune("operator")
+        elif operation == "operate" and set(payload) == {"operation"}:
+            result = accessories.operate(tx=transmitting)
+        elif (
+            operation == "band"
+            and set(payload) == {"operation", "frequency_hz"}
+            and isinstance(payload["frequency_hz"], (int, float))
+            and not isinstance(payload["frequency_hz"], bool)
+        ):
+            result = accessories.follow_band(payload["frequency_hz"], tx=transmitting)
+        else:
+            self._send_error(HTTPStatus.BAD_REQUEST, "accessories_invalid_operation")
+            return
+        if not result.get("ok"):
+            refused = result.get("reason") in ("unsupported", "disabled")
+            self._send_error(
+                HTTPStatus.SERVICE_UNAVAILABLE if refused else HTTPStatus.CONFLICT,
+                f"accessories_{result.get('reason', 'standby_unconfirmed')}",
+            )
+            return
+        self._send_json(
+            HTTPStatus.OK,
+            {"api_version": "v1", "data_is_simulated": False, **result, **accessories.snapshot()},
+        )
+
     def do_PUT(self) -> None:
         self._method_not_allowed()
 
@@ -555,6 +636,12 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--serial-model")
     parser.add_argument("--radio-settings-config", type=Path)
     parser.add_argument("--ptt-config", type=Path, help="Local default-off guarded FTX-1 PTT JSON.")
+    parser.add_argument(
+        "--accessories-config",
+        type=Path,
+        help="Local station-accessories JSON ({'amplifier': {'device', 'operate_allowed'}, 'tuner': {'device'}}); "
+        "the amplifier stays in STANDBY unless operate_allowed is true.",
+    )
     parser.add_argument("--audio-config", type=Path, help="Explicit RX audio input JSON.")
     parser.add_argument(
         "--tx-audio-config",
@@ -654,6 +741,12 @@ def main(argv: list[str] | None = None) -> int:
             ptt = PttController(
                 cat, ptt_config, tx_audio=AudioTransmitter(tx_config) if tx_config else None
             )
+        # No amplifier or tuner driver has a protocol source yet, so only supervision (STANDBY, emergency stop) is active.
+        accessories = (
+            StationAccessories(config=json.loads(args.accessories_config.read_text(encoding="utf-8")))
+            if args.accessories_config
+            else None
+        )
         server = StationAgentHTTPServer(
             args.port,
             authenticator,
@@ -665,6 +758,7 @@ def main(argv: list[str] | None = None) -> int:
             audio=audio,
             tls_context=tls_context,
             ptt=ptt,
+            accessories=accessories,
         )
     except ValueError as error:
         LOGGER.error("Configuración del agente no válida: %s", error)

@@ -13,6 +13,7 @@ const { catAllowList, TUNER_KINDS } = require("./remote-catalog.cjs");
 const remoteTls = require("./remote-tls.cjs");
 const remoteWs = require("./remote-ws.cjs");
 const remoteAudio = require("./remote-audio.cjs");
+const { createAccessories } = require("./station-accessories.cjs");
 
 const isLoopbackHost = value => value === "localhost" || value === "::1" || /^127\./.test(value);
 
@@ -82,13 +83,24 @@ function loadConfig(dir) {
     swrRawLimit: Number.isInteger(stored.swrRawLimit) && stored.swrRawLimit >= 1 && stored.swrRawLimit <= 255 ? stored.swrRawLimit : undefined,
     tuneMaxSeconds: Number(stored.tuneMaxSeconds) > 0 ? Math.min(TUNE_MAX_SECONDS_CAP, Number(stored.tuneMaxSeconds)) : undefined,
     tunerKind: TUNER_KINDS.includes(stored.tunerKind) ? stored.tunerKind : undefined,
-    relay: normalizeRelay(stored.relay)
+    relay: normalizeRelay(stored.relay),
+    accessories: normalizeAccessories(stored.accessories)
   };
   if (!config.token) {
     config.token = crypto.randomBytes(32).toString("base64url");
     writeConfig(dir, config);
   }
   return config;
+}
+
+// Amplifier operate stays off unless the owner sets operateAllowed true in the local config file.
+function normalizeAccessories(value) {
+  const id = item => (typeof item?.device === "string" && /^[a-z0-9-]{1,48}$/.test(item.device) ? item.device : undefined);
+  return {
+    amplifier: { device: id(value?.amplifier), operateAllowed: value?.amplifier?.operateAllowed === true },
+    // ratedPowerW converts the radio RFPOWER fraction to watts so a tune can be refused above the 10 W cap.
+    tuner: { device: id(value?.tuner), ratedPowerW: Number(value?.tuner?.ratedPowerW) > 0 ? Number(value.tuner.ratedPowerW) : undefined }
+  };
 }
 
 function writeConfig(dir, config) {
@@ -157,6 +169,9 @@ function validateCommand(body, state) {
       return { cmd };
     case "ptt":
       if (typeof value !== "boolean") return { error: "PTT debe ser booleano." };
+      return { cmd, value };
+    case "amp":
+      if (value !== "operate" && value !== "standby") return { error: "Amplificador: usa operate o standby." };
       return { cmd, value };
     case "vfo": {
       const vfo = { A: "VFOA", B: "VFOB", VFOA: "VFOA", VFOB: "VFOB" }[value];
@@ -246,6 +261,24 @@ function createRemoteAgent(options = {}) {
   const tunerSpec = cat?.tuner?.[tunerKind] || null;
   const tuneLimits = TUNE_MAX_SECONDS[tunerKind];
   const tuneMaxMs = Math.min(tuneLimits.cap, options.tuneMaxSeconds ?? config.tuneMaxSeconds ?? tuneLimits.default) * 1000;
+  // Bridge between the accessories layer and the existing tune flow (AC103/AC123 raw CAT or Hamlib G TUNE).
+  // Stopping only acts on a tracked raw-CAT tune; a Hamlib tune is run and ended by the radio itself.
+  let bridgeClient = null;
+  let lastTuneSwr = null;
+  const tunerBridge = {
+    async start() {
+      lastTuneSwr = null;
+      if (cat?.tuner) {
+        const refused = await startCatTune(bridgeClient);
+        if (refused) throw new Error(refused.body.error);
+      } else await client.tune();
+    },
+    async stop() { if (tune) await pttOff("acoplador: parada"); }
+  };
+  const accessories = createAccessories({
+    now, log, swrLimit, tuneMaxSeconds: tuneMaxMs / 1000, config: config.accessories, amplifier: options.amplifier,
+    tuner: options.tuner || tunerBridge
+  });
   const useTls = options.tls ?? !isLoopbackHost(host);
   const identity = useTls ? remoteTls.ensure(configDir) : null;
 
@@ -331,6 +364,7 @@ function createRemoteAgent(options = {}) {
       txAlert: swrTripped ? "swr" : null,
       tune: tune ? { kind: tunerKind, seconds: Math.max(0, Math.floor((now() - tune.startedAt) / 1000)), maxSeconds: Math.round(tuneMaxMs / 1000) } : null,
       notice: notice && now() - notice.at < NOTICE_MS ? { id: notice.id, text: notice.text } : null,
+      accessories: accessories.snapshot(),
       operator: !active ? null : owner === clientId ? "me" : "other",
       relay: { configured: Boolean(relayConfig), connected: relayState.connected }
     };
@@ -439,6 +473,7 @@ function createRemoteAgent(options = {}) {
     if (tune) tuneWasActive = true;
     tune = null;
     setRigPtt(false);
+    accessories.standby("disconnect");
     Object.assign(rig, {
       freq: null, mode: null, passband: null, vfo: null, split: false, smeter: null,
       levels: emptyReadings(LEVELS), funcs: emptyReadings(FUNCS)
@@ -505,7 +540,8 @@ function createRemoteAgent(options = {}) {
         const run = tune;
         const value = parseRawMeter(await client.sendRaw(cmd, { read: true, timeoutMs: meterReadMs, abandon: true }), cmd);
         if (!live()) return;
-        if (key === "swr" && run && tune === run && Number.isFinite(value)) run.lastSwr = value;
+        // A zero read after the carrier dropped (before the tune loop notices) must not replace the last read with RF.
+        if (key === "swr" && run && tune === run && Number.isFinite(value) && (value > 0 || !Number.isFinite(run.lastSwr))) { run.lastSwr = value; lastTuneSwr = value; }
         setMeter(key, value);
       } catch (error) {
         if (error.code !== "rejected") throw error;
@@ -543,6 +579,7 @@ function createRemoteAgent(options = {}) {
     if (!swrSince) { swrSince = time; return; }
     if (time - swrSince <= (tuning ? tuneSwrMs : SWR_TRIP_MS)) return;
     swrTripped = true;
+    accessories.standby("swr");
     setNotice(tuning ? "ROE alta: sintonía cortada" : "ROE alta: transmisión cortada");
     await pttOff("ROE alta");
   }
@@ -726,9 +763,11 @@ function createRemoteAgent(options = {}) {
 
   function watchTx() {
     checkHung();
+    accessories.tick().catch(() => {});
+    if (!tune && accessories.snapshot().tuner.tuning) accessories.stopTune("done", lastTuneSwr).catch(() => {});
     if (!agentTx || !rig.ptt) return;
     const time = now();
-    if (time - lastBeat > heartbeatTimeoutMs) pttOff("sin latido");
+    if (time - lastBeat > heartbeatTimeoutMs) { accessories.standby("lease"); pttOff("sin latido"); }
     else if (time - txStart >= txLimitMs) pttOff("limite de TX");
     else if (tune && time - tune.startedAt >= tuneMaxMs) pttOff(`tiempo máximo de sintonía (${Math.round(tuneMaxMs / 1000)} s)`);
     else if (tunerKind !== "atas" && tune?.hiSwrSince && time - tune.hiSwrSince > tuneHiSwrMs) pttOff("Hi-SWR de la radio");
@@ -741,6 +780,7 @@ function createRemoteAgent(options = {}) {
     if (!(rig.ptt || agentTx || tune || stopping > 0) || client.oldestPendingMs() <= hangMs) return;
     if (options.onRigctldHung && Date.now() - lastHangAt < hangCooldownMs) return;
     emergency = true;
+    accessories.emergencyStop("emergency");
     log(`rigctld no responde (${hangMs} ms) con TX activo: parada de emergencia`);
     if (options.onRigctldHung) {
       lastHangAt = Date.now();
@@ -818,6 +858,10 @@ function createRemoteAgent(options = {}) {
   }
 
   async function applyCommand(command, clientId) {
+    if (command.cmd === "amp" && command.value === "standby") {
+      await accessories.standby("operator");
+      return { status: 200, body: { ok: true, state: snapshot(clientId) } };
+    }
     if (command.cmd === "ptt" && command.value === true && !client.connected) {
       return { status: 503, body: { error: "Radio sin conexion." } };
     }
@@ -828,7 +872,18 @@ function createRemoteAgent(options = {}) {
     if (!client.connected) return { status: 503, body: { error: "Radio sin conexion." } };
     try {
       switch (command.cmd) {
-        case "freq": await client.setFreq(command.value); rig.freq = command.value; break;
+        case "freq":
+          await client.setFreq(command.value);
+          rig.freq = command.value;
+          await accessories.followBand(command.value, { tx: rig.ptt });
+          break;
+        case "amp": {
+          // Standby is always allowed; operate is refused while transmitting, tuning or after a SWR trip.
+          if (command.value === "standby") { await accessories.standby("operator"); break; }
+          const result = await accessories.operate({ tx: rig.ptt, tuning: tune !== null, swrTripped });
+          if (!result.ok) return { status: 409, body: { error: `Amplificador: ${result.reason}` } };
+          break;
+        }
         case "mode":
           await client.setMode(command.value, command.passband);
           rig.mode = command.value;
@@ -855,7 +910,19 @@ function createRemoteAgent(options = {}) {
         case "tune":
           if (!caps.tune) return { status: 501, body: { error: "La radio no admite TUNE." } };
           if (rig.ptt) return { status: 409, body: { error: "Cambio bloqueado durante TX." } };
-          if (cat?.tuner) {
+          if (accessories.snapshot().tuner.supported) {
+            // A configured tuner goes through the accessories layer: explicit request, low power, time cap, no amplifier in operate.
+            const rated = config.accessories?.tuner?.ratedPowerW;
+            const fraction = rig.levels.rfpower;
+            bridgeClient = clientId;
+            const started = await accessories.startTune({
+              tx: rig.ptt,
+              powerW: Number.isFinite(rated) && Number.isFinite(fraction) ? rated * fraction : undefined
+            });
+            if (!started.ok) {
+              return { status: started.reason === "driver_error" ? 502 : 409, body: { error: started.error || `Acoplador: ${started.reason}` } };
+            }
+          } else if (cat?.tuner) {
             const refused = await startCatTune(clientId);
             if (refused) return refused;
           } else await client.tune();
@@ -925,7 +992,7 @@ function createRemoteAgent(options = {}) {
       const command = validateCommand(body, rig);
       if (command.error) { send(response, command.status || 400, { error: command.error }); return; }
       // Releasing PTT is never rate limited or refused: it must always be possible to stop transmitting.
-      const release = command.cmd === "ptt" && command.value === false;
+      const release = (command.cmd === "ptt" && command.value === false) || (command.cmd === "amp" && command.value === "standby");
       if (!release) {
         const time = now();
         while (commandTimes.length && time - commandTimes[0] >= 1000) commandTimes.shift();
@@ -1240,6 +1307,7 @@ function createRemoteAgent(options = {}) {
     clearInterval(sseTimer);
     clearInterval(keepAliveTimer);
     endEmergency();
+    await accessories.emergencyStop("close");
     if (client.connected && (rig.ptt || agentTx || tune)) await pttOff("cierre del agente");
     client.stop();
     for (const ws of audioSockets) { ws.fail(1001, "shutdown"); ws.socket.destroy(); }
