@@ -96,7 +96,7 @@ function createRotor(options = {}) {
         if (buffer.length > 512) { finish(new RotorError("rotor_invalid_response")); return; }
         let index;
         while ((index = buffer.indexOf("\n")) >= 0) {
-          const line = buffer.slice(0, index).replace(/\r$/, "");
+          const line = buffer.slice(0, index).replace(/\0/g, "").replace(/\r$/, "");
           buffer = buffer.slice(index + 1);
           lines.push(line);
           if (lines.length > 5) { finish(new RotorError("rotor_invalid_response")); return; }

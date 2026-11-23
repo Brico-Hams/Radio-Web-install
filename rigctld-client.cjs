@@ -239,7 +239,8 @@ class RigctldClient extends EventEmitter {
   consumeRaw(item) {
     this.discardGhostReplies();
     if (!this.buffer) return;
-    const report = /^[ \t]*RPRT[ \t]+(-?\d+)[ \t]*\r?\n/.exec(this.buffer);
+    // Hamlib 4.7.2 may prefix a report with NUL bytes; in raw mode NUL is also the terminator, so only tolerate it before RPRT.
+    const report = /^[\0 \t]*RPRT[ \t]+(-?\d+)[ \t]*\r?\n/.exec(this.buffer);
     if (report) {
       this.buffer = this.buffer.slice(report[0].length);
       const code = Number(report[1]);
@@ -280,7 +281,8 @@ class RigctldClient extends EventEmitter {
     if (this.current.raw) { this.consumeRaw(this.current); return; }
     let index;
     while ((index = this.buffer.indexOf("\n")) >= 0) {
-      const line = this.buffer.slice(0, index).replace(/\r$/, "");
+      // Hamlib 4.7.2 can emit stray NUL bytes (e.g. "\0RPRT 0"); they are never part of a reply line.
+      const line = this.buffer.slice(0, index).replace(/\0/g, "").replace(/\r$/, "");
       this.buffer = this.buffer.slice(index + 1);
       if (!this.current) continue;
       this.lines.push(line);

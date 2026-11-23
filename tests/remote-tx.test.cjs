@@ -391,6 +391,10 @@ test("rigctld replies tolerate surrounding whitespace: ' RPRT 0' is success, any
       const line = chunk.toString().trim();
       if (line === "T 0") socket.write(" RPRT 0\n");
       else if (line === "T 1") socket.write(" RPRT -9 \n");
+      else if (line === "L RFPOWER 0.5") socket.write("\0RPRT 0\n");
+      else if (line === "L RFPOWER 0.6") socket.write("\0RPRT -9\n");
+      else if (line === "L RFPOWER 0.7") { socket.write("\0RP"); setTimeout(() => socket.write("RT 0\n"), 30); }
+      else if (line === "L RFPOWER 0.8") socket.write("\0garbage\n");
       else socket.write("garbage\n");
     });
   });
@@ -403,6 +407,11 @@ test("rigctld replies tolerate surrounding whitespace: ' RPRT 0' is success, any
     await client.setPtt(false);
     await assert.rejects(client.setPtt(true), error => error instanceof RigctldError && error.code === -9);
     await assert.rejects(client.setFreq(7100000), error => error instanceof RigctldError && error.code === "protocol");
+    // Stray NUL bytes (Hamlib 4.7.2): "\0RPRT 0" is success, also when the NUL and the report arrive in separate chunks.
+    await client.setLevel("RFPOWER", 0.5);
+    await client.setLevel("RFPOWER", 0.7);
+    await assert.rejects(client.setLevel("RFPOWER", 0.6), error => error instanceof RigctldError && error.code === -9);
+    await assert.rejects(client.setLevel("RFPOWER", 0.8), error => error instanceof RigctldError && error.code === "protocol");
   } finally { client.stop(); server.closeAllConnections?.(); await new Promise(resolve => server.close(resolve)); }
 });
 
