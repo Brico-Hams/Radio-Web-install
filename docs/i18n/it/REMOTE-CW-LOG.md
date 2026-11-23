@@ -26,7 +26,7 @@ I messaggi MIDI note e control-change (formato MIDI 1.0) sono associati ad azion
 
 ## Agente e console
 
-L’agente accetta `{"cmd":"cw","text":"CQ TEST","wpm":20,"slot":5}` e `{"cmd":"cwstop"}` su `POST /api/cmd`. `cwEnabled` in `remote-agent.json` è `false` per impostazione predefinita, `cwMaxSeconds` limita il messaggio. Un messaggio si ferma con `cwstop`, a ogni rilascio del PTT o intervento del SWR, quando l’operatore perde il controllo, quando la radio si disconnette e quando l’agente si chiude. La console ha una scheda CW (testo, WPM, memorie F1-F8, Esc per fermare). I modelli Icom usano la base Hamlib perché nessun trasporto CI-V tramite rigctld è documentato.
+L’agente accetta `{"cmd":"cw","text":"CQ TEST","wpm":20,"slot":5}` e `{"cmd":"cwstop"}` su `POST /api/cmd`. `cwEnabled` in `remote-agent.json` è `false` per impostazione predefinita, `cwMaxSeconds` limita il messaggio. Un messaggio si ferma con `cwstop`, a ogni rilascio del PTT o intervento del SWR, quando l’operatore perde il controllo, quando la radio si disconnette e quando l’agente si chiude. La console ha una scheda CW (testo, WPM, memorie F1-F8, Esc per fermare). Le memorie F1-F8 sono salvate per operatore nell’agente (`remote-cw-memories.json`, `GET`/`POST /api/cw/memories`, 8 voci di al massimo 50 caratteri documentati), mai nel browser; Invio nel campo testo invia. Gli ospiti in sola ascolto sono rifiutati per `cw` e per le memorie, gli ospiti con TX restano soggetti ai limiti di banda e potenza, e `cwstop` non è mai rifiutato né limitato. Un messaggio che raggiunge il tempo massimo riceve il suo frame di arresto. I modelli Icom usano la base Hamlib perché nessun trasporto CI-V tramite rigctld è documentato.
 
 ## Matrice di supporto per radio
 

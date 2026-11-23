@@ -26,7 +26,7 @@ MIDI-Note- und Control-Change-Nachrichten (MIDI-1.0-Format) werden auf Abstimm-,
 
 ## Agent und Konsole
 
-Der Agent akzeptiert `{"cmd":"cw","text":"CQ TEST","wpm":20,"slot":5}` und `{"cmd":"cwstop"}` auf `POST /api/cmd`. `cwEnabled` in `remote-agent.json` ist standardmäßig `false`, `cwMaxSeconds` begrenzt die Nachricht. Eine Nachricht stoppt bei `cwstop`, bei jedem PTT-Loslassen oder SWR-Abschalten, wenn der Operator die Kontrolle verliert, wenn das Funkgerät trennt und wenn der Agent schließt. Die Konsole hat einen CW-Tab (Text, WPM, Speicher F1-F8, Esc zum Stoppen). Icom-Modelle laufen über die Hamlib-Basis, da kein CI-V-Transport über rigctld belegt ist.
+Der Agent akzeptiert `{"cmd":"cw","text":"CQ TEST","wpm":20,"slot":5}` und `{"cmd":"cwstop"}` auf `POST /api/cmd`. `cwEnabled` in `remote-agent.json` ist standardmäßig `false`, `cwMaxSeconds` begrenzt die Nachricht. Eine Nachricht stoppt bei `cwstop`, bei jedem PTT-Loslassen oder SWR-Abschalten, wenn der Operator die Kontrolle verliert, wenn das Funkgerät trennt und wenn der Agent schließt. Die Konsole hat einen CW-Tab (Text, WPM, Speicher F1-F8, Esc zum Stoppen). Die Speicher F1-F8 werden je Operator im Agenten gespeichert (`remote-cw-memories.json`, `GET`/`POST /api/cw/memories`, 8 Einträge mit höchstens 50 belegten Zeichen), nie im Browser; Enter im Textfeld sendet. Gäste nur zum Hören werden für `cw` und die Speicher abgewiesen, Gäste mit TX unterliegen zusätzlich ihren Band- und Leistungsgrenzen, und `cwstop` wird nie abgewiesen oder begrenzt. Eine Nachricht, die ihre Zeitgrenze erreicht, erhält ihren Stopp-Frame. Icom-Modelle laufen über die Hamlib-Basis, da kein CI-V-Transport über rigctld belegt ist.
 
 ## Unterstützungsmatrix pro Funkgerät
 

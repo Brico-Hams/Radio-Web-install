@@ -89,6 +89,16 @@ test("CW guard: off by default, one message at a time, blocked on SWR trip, stop
   assert.deepEqual(guard.stop(), []);
 });
 
+test("CW guard: a message that reached its time cap still returns its stop frame once", () => {
+  let time = 0;
+  const guard = cw.createCwGuard({ enabled: true, now: () => time });
+  guard.authorize(cw.planCwSend(radio("yaesu-ftx-1"), "CQ"));
+  time += 5000;
+  assert.equal(guard.active(), null);
+  assert.deepEqual(guard.stop(), ["KY00;"]);
+  assert.deepEqual(guard.stop(), []);
+});
+
 const SAMPLE = "<ADIF_VER:5>3.1.4<EOH>\n<CALL:5>EA4XX<QSO_DATE:8>20261122<TIME_ON:4>2100<FREQ:6>14.074<MODE:3>FT8<RST_SENT:3>-05<RST_RCVD:3>-10<GRIDSQUARE:4>IN80<DXCC:3>281<EOR>\n";
 
 test("ADIF parse keeps progress fields and round-trips through export", () => {

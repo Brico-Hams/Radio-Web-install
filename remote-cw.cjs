@@ -118,12 +118,57 @@ function expandMemory(template, values = {}) {
   return template.replace(/\{(CALL|MYCALL|RST|NR)\}/g, (_, key) => String(values[key] ?? "").toUpperCase());
 }
 
+const DEFAULT_MEMORIES = Object.freeze(["CQ CQ DE {MYCALL} {MYCALL} K", "{CALL} DE {MYCALL} K", "{CALL} {RST} {RST} {NR}", "{CALL} TU 73 EE", "QRZ? DE {MYCALL}", "AGN?", "{MYCALL}", "73 TU"]);
+const MEMORY_COUNT = 8;
+const MEMORY_CHARS = /^[A-Za-z0-9 /?,.=+\-():@'"^{}]*$/;
+const OPERATOR_ID = /^(owner|guest:[\w-]{1,64})$/;
+
+// F1-F8 templates, stored per operator in the agent (never in the browser). Holds text only: no tokens or credentials.
+function validateMemories(memories) {
+  if (!Array.isArray(memories) || memories.length !== MEMORY_COUNT) throw new CwError("Se requieren 8 memorias CW.", "memory");
+  return memories.map(item => {
+    if (typeof item !== "string" || item.length > FTX1_MAX || !MEMORY_CHARS.test(item)) throw new CwError("Memoria CW no valida.", "memory");
+    return item;
+  });
+}
+
+function createMemoryStore({ dir = null } = {}) {
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const file = dir ? path.join(dir, "remote-cw-memories.json") : null;
+  let data = {};
+  if (file && fs.existsSync(file)) {
+    try { data = JSON.parse(fs.readFileSync(file, "utf8")) || {}; } catch { throw new Error(`Memorias CW corruptas: ${file}`); }
+  }
+  const key = operator => {
+    if (!OPERATOR_ID.test(operator)) throw new CwError("Operador no valido.", "operator");
+    return operator;
+  };
+  return {
+    get(operator) {
+      const stored = Object.hasOwn(data, key(operator)) ? data[operator] : null;
+      try { return validateMemories(stored); } catch { return [...DEFAULT_MEMORIES]; }
+    },
+    set(operator, memories) {
+      const clean = validateMemories(memories);
+      data[key(operator)] = clean;
+      if (file) {
+        fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+        fs.writeFileSync(file, `${JSON.stringify(data, null, 2)}\n`, { mode: 0o600 });
+      }
+      return clean;
+    }
+  };
+}
+
 // One CW send at a time, off by default, time capped, never while the SWR trip or an emergency stop is active.
 // `stop()` is always allowed. The caller sends plan.stop and releases PTT when the guard reports `expired`.
 function createCwGuard({ enabled = false, now = Date.now, isBlocked = () => false } = {}) {
   let active = null;
+  // A message that ran into its time cap still owes the radio a stop frame.
+  let lapsed = null;
   const state = () => {
-    if (active && now() >= active.until) active = null;
+    if (active && now() >= active.until) { lapsed = active; active = null; }
     return active;
   };
   return {
@@ -134,16 +179,19 @@ function createCwGuard({ enabled = false, now = Date.now, isBlocked = () => fals
       if (state()) throw new CwError("Ya hay un mensaje en curso.", "busy");
       // Margin of 1 s covers the radio's own start/stop latency.
       active = { until: now() + (plan.seconds + 1) * 1000, plan };
+      lapsed = null;
       return active;
     },
     active: () => state(),
     expired: () => active !== null && now() >= active.until,
     stop() {
-      const stopSteps = active ? active.plan.stop : [];
+      state();
+      const stopSteps = active ? active.plan.stop : lapsed ? lapsed.plan.stop : [];
       active = null;
+      lapsed = null;
       return stopSteps;
     }
   };
 }
 
-module.exports = { planCwSend, expandMemory, createCwGuard, cwUnits, cwSeconds, civFrame, CwError, NATIVE, ICOM_MAX, FTX1_MAX, MAX_SECONDS_DEFAULT };
+module.exports = { planCwSend, expandMemory, createCwGuard, createMemoryStore, validateMemories, DEFAULT_MEMORIES, cwUnits, cwSeconds, civFrame, CwError, NATIVE, ICOM_MAX, FTX1_MAX, MAX_SECONDS_DEFAULT };

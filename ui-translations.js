@@ -2231,6 +2231,9 @@ Calcula primero el barrido.|Run the sweep first.|Calculez d’abord le balayage.
 CW por el manipulador de la radio|CW through the radio's own keyer|CW par le manipulateur de la radio|CW über den Tastgeber des Funkgeräts
 El CW remoto esta desactivado hasta que el operador lo active en el agente. Transmite solo con una carga o antena adaptada. Esc lo para.|Remote CW stays disabled until the operator enables it at the agent. Transmit only into a matched load or antenna. Esc stops it.|Le CW distant reste désactivé tant que l’opérateur ne l’active pas sur l’agent. N’émettez que sur une charge ou une antenne adaptée. Échap l’arrête.|Remote-CW bleibt deaktiviert, bis der Operator es am Agenten aktiviert. Nur auf eine angepasste Last oder Antenne senden. Esc stoppt es.
 Texto|Text|Texte|Text
+CW remoto: desactivado en el agente|Remote CW: disabled at the agent|CW distant : désactivé sur l’agent|Remote-CW: am Agenten deaktiviert
+CW remoto: listo|Remote CW: ready|CW distant : prêt|Remote-CW: bereit
+CW remoto: transmitiendo|Remote CW: sending|CW distant : émission en cours|Remote-CW: sendet
 Velocidad (WPM)|Speed (WPM)|Vitesse (WPM)|Geschwindigkeit (WPM)
 Enviar CW|Send CW|Envoyer CW|CW senden
 Parar CW|Stop CW|Arrêter CW|CW stoppen

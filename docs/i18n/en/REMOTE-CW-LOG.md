@@ -26,7 +26,7 @@ MIDI note and control-change messages (MIDI 1.0 layout) map to tuning, band, CW 
 
 ## Agent and console
 
-The agent accepts `{"cmd":"cw","text":"CQ TEST","wpm":20,"slot":5}` and `{"cmd":"cwstop"}` on `POST /api/cmd`. `cwEnabled` in `remote-agent.json` is `false` by default, `cwMaxSeconds` caps the message. A message stops on `cwstop`, on any PTT release or SWR trip, when the operator loses control, when the radio disconnects and when the agent closes. The console has a CW tab (text, WPM, F1-F8 memories, Esc to stop). Icom models go through the Hamlib baseline because no CI-V transport through rigctld is sourced.
+The agent accepts `{"cmd":"cw","text":"CQ TEST","wpm":20,"slot":5}` and `{"cmd":"cwstop"}` on `POST /api/cmd`. `cwEnabled` in `remote-agent.json` is `false` by default, `cwMaxSeconds` caps the message. A message stops on `cwstop`, on any PTT release or SWR trip, when the operator loses control, when the radio disconnects and when the agent closes. The console has a CW tab (text, WPM, F1-F8 memories, Esc to stop). The F1-F8 memories are stored per operator in the agent (`remote-cw-memories.json`, `GET`/`POST /api/cw/memories`, 8 entries of up to 50 sourced characters), never in the browser; Enter in the text field sends. Listen-only guests are refused for `cw` and for the memories, guests with TX are also held to their band and power limits, and `cwstop` is never refused or rate limited. A message that reaches its time cap gets its stop frame. Icom models go through the Hamlib baseline because no CI-V transport through rigctld is sourced.
 
 ## Support matrix per radio
 

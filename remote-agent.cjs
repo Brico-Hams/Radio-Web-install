@@ -20,7 +20,7 @@ const { createAccessories } = require("./station-accessories.cjs");
 const stationDevicesLib = require("./station-devices.cjs");
 const { createRotor, RotorError } = require("./remote-rotor.cjs");
 const remoteOps = require("./remote-ops.cjs");
-const { planCwSend, createCwGuard } = require("./remote-cw.cjs");
+const { planCwSend, createCwGuard, createMemoryStore, CwError } = require("./remote-cw.cjs");
 
 const isLoopbackHost = value => value === "localhost" || value === "::1" || /^127\./.test(value);
 
@@ -323,6 +323,7 @@ function createRemoteAgent(options = {}) {
   const radioId = options.radioId ?? config.radioId;
   const rigMaxW = options.rigMaxPowerW ?? config.rigMaxPowerW;
   const guests = options.guestStore || remoteOps.createGuestStore({ dir: configDir, now });
+  const cwMemories = options.cwMemories || createMemoryStore({ dir: configDir });
   const txLog = options.txLog || remoteOps.createTxLog({ file: path.join(configDir, "remote-txlog.jsonl"), now });
   const listenGate = remoteOps.createListenGate({ ...(options.listenLive ?? config.listenLive), now });
   const powerOffCmd = cat?.powerOff || null;
@@ -1182,7 +1183,7 @@ function createRemoteAgent(options = {}) {
     }
     if (who?.guest) {
       const perm = guestPerm(who);
-      const keys = (command.cmd === "ptt" && command.value === true) || command.cmd === "tune";
+      const keys = (command.cmd === "ptt" && command.value === true) || command.cmd === "tune" || command.cmd === "cw";
       let refusal = remoteOps.guestCommandRefusal(perm, command);
       if (!refusal && keys) refusal = remoteOps.guestTxRefusal(perm, { freq: rig.freq, rfpower: rig.levels.rfpower, rigMaxW });
       if (!refusal && command.cmd === "level" && command.name === "RFPOWER") {
@@ -1364,6 +1365,22 @@ function createRemoteAgent(options = {}) {
       return;
     }
     if (route === "GET /api/state") { send(response, 200, snapshot(clientId)); return; }
+    if (route === "GET /api/cw/memories" || route === "POST /api/cw/memories") {
+      // Listen-only guests get no CW at all; everyone else has their own F1-F8 set, stored here.
+      const refusal = remoteOps.guestCommandRefusal(who.guest ? guestPerm(who) : { transmit: true }, { cmd: "cw" });
+      if (refusal) { send(response, 403, { error: refusal }); return; }
+      const operator = who.guest ? `guest:${who.guest.id}` : "owner";
+      if (route === "GET /api/cw/memories") { send(response, 200, { memories: cwMemories.get(operator) }); return; }
+      let body;
+      try { body = await readJson(request); }
+      catch (error) { send(response, error.status || 400, { error: error.message }); return; }
+      try { send(response, 200, { memories: cwMemories.set(operator, body?.memories) }); }
+      catch (error) {
+        if (!(error instanceof CwError)) throw error;
+        send(response, 400, { error: error.message });
+      }
+      return;
+    }
     if (route === "GET /api/config") {
       send(response, 200, { callsign: config.callsign, radioScope, audio: { rx: Boolean(audio.rx), tx: Boolean(audio.tx) } });
       return;
@@ -1414,7 +1431,7 @@ function createRemoteAgent(options = {}) {
     if (route === "POST /api/heartbeat") {
       // Latency probes must not keep an idle operator's control alive; only a held PTT does.
       if (ownerActive() && owner !== clientId) { send(response, 409, { error: "Otro operador tiene el control." }); return; }
-      if (owner === clientId && rig.ptt && agentTx) { lastBeat = now(); ownerSeen = now(); }
+      if (owner === clientId && ((rig.ptt && agentTx) || cwGuard.active())) { lastBeat = now(); ownerSeen = now(); }
       send(response, 200, { ok: true });
       return;
     }
@@ -1424,8 +1441,8 @@ function createRemoteAgent(options = {}) {
       catch (error) { send(response, error.status || 400, { error: error.message }); return; }
       const command = validateCommand(body, rig);
       if (command.error) { send(response, command.status || 400, { error: command.error }); return; }
-      // Releasing PTT is never rate limited or refused: it must always be possible to stop transmitting.
-      const release = (command.cmd === "ptt" && command.value === false) || (command.cmd === "amp" && command.value === "standby");
+      // Releasing PTT or stopping CW is never rate limited or refused: it must always be possible to stop transmitting.
+      const release = (command.cmd === "ptt" && command.value === false) || (command.cmd === "amp" && command.value === "standby") || command.cmd === "cwstop";
       if (!release) {
         const time = now();
         while (commandTimes.length && time - commandTimes[0] >= 1000) commandTimes.shift();
@@ -1433,9 +1450,14 @@ function createRemoteAgent(options = {}) {
         commandTimes.push(time);
       }
       if (release) claimControl(clientId, { acquire: false });
-      else if (!claimControl(clientId, { label: who.label, guestId: who.guest?.id || null })) {
-        send(response, 409, { error: "Otro operador tiene el control." });
-        return;
+      else {
+        // A guest that will be refused must not take the operator lock.
+        const refusal = who.guest ? remoteOps.guestCommandRefusal(guestPerm(who), command) : null;
+        if (refusal) { send(response, 403, { error: refusal }); return; }
+        if (!claimControl(clientId, { label: who.label, guestId: who.guest?.id || null })) {
+          send(response, 409, { error: "Otro operador tiene el control." });
+          return;
+        }
       }
       const result = await applyCommand(command, clientId, who);
       send(response, result.status, result.body);
