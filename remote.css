@@ -1,6 +1,7 @@
 /* BricoHams remote console: dark station look, palette taken from styles.css (brand ink/orange). */
 :root{color-scheme:dark;--bg:#0D1114;--surface:#161D22;--surface-2:#1C2329;--text:#F6F8FA;--muted:#BAC4CC;--border:#38434C;--accent:#F26B1D;--on-accent:#23272B;--focus:#FFC18F;--amber:#FFB52E;--amber-dim:#6B5016;--error:#FFACB5;--tx:#C62F43;--on-tx:#FFFFFF;--ok:#6FD08C;--warn:#FFC857;--bad:#FF8A97;--dock-h:92px;font-family:Inter,"Segoe UI",system-ui,-apple-system,Roboto,Arial,sans-serif;color:var(--text);background:var(--bg)}
 *{box-sizing:border-box}
+html{max-width:100%;overflow-x:hidden}
 body{margin:0;background:var(--bg);color:var(--text);min-height:100vh;padding-bottom:calc(var(--dock-h) + env(safe-area-inset-bottom))}
 .sr-only{position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
 h2{font-size:1rem;margin:0 0 .6rem;color:var(--muted);font-weight:600}
@@ -61,8 +62,8 @@ button[aria-pressed=true]{background:var(--accent);border-color:var(--accent);co
 
 .empty{padding:1rem 0;text-align:center}
 
-.tabs{display:flex;gap:.3rem}
-.tabs button{flex:1 1 0;min-height:48px;font-weight:600}
+.tabs{display:flex;gap:.3rem;min-width:0;max-width:100%;overflow-x:auto;overflow-y:hidden;overscroll-behavior-x:contain;-webkit-overflow-scrolling:touch;scrollbar-width:thin;scroll-padding-inline:.6rem}
+.tabs button{flex:1 0 auto;min-height:48px;font-weight:600;white-space:nowrap}
 .tabs button[aria-selected=true]{background:var(--accent);border-color:var(--accent);color:var(--on-accent)}
 .panel-title{display:none}
 .panel[data-active=false]{display:none}
@@ -113,7 +114,7 @@ input[type=range]{width:100%;min-height:36px;accent-color:var(--accent)}
 .tx-meter output{font-family:ui-monospace,Consolas,monospace;font-weight:700;color:var(--amber);text-align:right}
 .swr-alert{margin:.6rem 0 0;padding:.6rem .9rem;border-radius:10px;background:var(--bad);color:#fff;font-weight:700;text-align:center}
 .audio[aria-pressed=true]{background:var(--ok);border-color:var(--ok);color:var(--on-accent)}
-.dock{position:fixed;left:0;right:0;bottom:0;z-index:4;display:flex;gap:.5rem;align-items:stretch;padding:.5rem .6rem calc(.5rem + env(safe-area-inset-bottom));background:var(--bg);border-top:1px solid var(--border)}
+.dock{position:fixed;left:0;right:0;bottom:0;max-width:100%;z-index:4;display:flex;gap:.5rem;align-items:stretch;padding:.5rem .6rem calc(.5rem + env(safe-area-inset-bottom));background:var(--bg);border-top:1px solid var(--border)}
 .audio-wrap{display:flex;flex:0 0 auto}
 .audio,.lock,.tune-stop{min-width:84px;min-height:72px}
 .tune-stop{background:var(--tx);border-color:var(--tx);color:var(--on-tx);font-weight:700}
@@ -140,7 +141,7 @@ input[type=range]{width:100%;min-height:36px;accent-color:var(--accent)}
 .rotor-row label,.rotor-file{display:flex;flex-direction:column;gap:.2rem;font-size:.85rem}
 .rotor-row input{min-height:44px;width:8rem}
 .rotor-row button{min-height:44px}
-.ptt{flex:1 1 auto;min-height:72px;font-size:1.25rem;font-weight:700;background:var(--accent);border-color:var(--accent);color:var(--on-accent);touch-action:none;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:.1rem}
+.ptt{flex:1 1 auto;min-width:0;min-height:72px;font-size:1.25rem;font-weight:700;background:var(--accent);border-color:var(--accent);color:var(--on-accent);touch-action:none;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:.1rem}
 .ptt[aria-pressed=true]{background:var(--tx);border-color:var(--tx);color:var(--on-tx)}
 .tx-timer{font-family:ui-monospace,Consolas,monospace;font-size:1rem;font-variant-numeric:tabular-nums}
 .tx-timer[hidden]{display:none}
@@ -173,7 +174,15 @@ input[type=range]{width:100%;min-height:36px;accent-color:var(--accent)}
   .step-field{order:2;flex:1 1 0;grid-template-columns:auto 1fr;align-items:center}
   #step-up{order:3}
 }
+@media(max-width:420px){
+  .freq{font-size:clamp(1.8rem,10.5vw,3rem);max-width:100%;min-width:0}
+  .freq .digit{min-width:.58em}
+  .step-field select{min-width:0}
+  .rotor-row input{width:100%;min-width:0}
+  .rotor-row label,.rotor-file{flex:1 1 100%;min-width:0}
+}
 @media(max-width:400px){
-  .audio,.lock{min-width:68px;font-size:.85rem;padding-inline:.3rem}
+  .audio,.lock,.tune-stop{min-width:64px;font-size:.85rem;padding-inline:.3rem}
+  .dock{gap:.35rem}
 }
 @media(prefers-reduced-motion:no-preference){button{transition:background-color .12s}}

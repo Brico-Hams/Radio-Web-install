@@ -1293,6 +1293,8 @@
       button.tabIndex = selected ? 0 : -1;
       $(`panel-${tab}`).dataset.active = String(selected);
       if (selected && focus) button.focus();
+      // Keep the active tab inside the scrolling tab row without moving the page.
+      if (selected && button.scrollIntoView) button.scrollIntoView({ block: "nearest", inline: "nearest" });
     }
   }
 
