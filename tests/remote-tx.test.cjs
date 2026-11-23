@@ -539,6 +539,7 @@ test("a tune that never ends is cut at tuneMaxSeconds: AC120, TX0, then T 0", as
     const beforeTune = rig.log.slice(0, rig.log.lastIndexOf("W AC123; 0"));
     const connectStop = [beforeTune.indexOf("W AC120; 0"), beforeTune.indexOf("W TX0; 0"), beforeTune.indexOf("T 0")];
     assert.ok(inOrder(connectStop), JSON.stringify(rig.log));
+    await waitFor(() => logs.some(line => /abortada/.test(line)), 5000);
     assert.ok(logs.some(line => /abortada/.test(line)));
   } finally { stopBeat(); await cleanup(); await rig.close(); }
 });
