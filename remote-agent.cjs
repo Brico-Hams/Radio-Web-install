@@ -469,6 +469,7 @@ function createRemoteAgent(options = {}) {
 
   function snapshot(clientId) {
     const active = ownerActive();
+    const activeTune = tune || hamlibRun;
     return {
       connected: client.connected,
       freq: rig.freq,
@@ -485,7 +486,7 @@ function createRemoteAgent(options = {}) {
       tx: rig.ptt && tx ? { ...tx, fraction: { ...tx.fraction } } : null,
       txAlert: swrTripped ? "swr" : null,
       cw: { enabled: cwGuard.enabled, active: Boolean(cwGuard.active()), maxSeconds: cwMaxSeconds },
-      tune: tune ? { kind: tunerKind, seconds: Math.max(0, Math.floor((now() - tune.startedAt) / 1000)), maxSeconds: Math.round(tuneMaxMs / 1000) } : null,
+      tune: activeTune ? { kind: activeTune.kind, seconds: Math.max(0, Math.floor((now() - activeTune.startedAt) / 1000)), maxSeconds: Math.round(tuneMaxMs / 1000) } : null,
       tuneResult: tuneResult ? { ...tuneResult } : null,
       txInhibit: txInhibit.snapshot(),
       meters: metersView(),

@@ -184,7 +184,8 @@ class PttController:
         if self.tx_inhibit.configured and self.tx_inhibit.observe(
             info.frequency_hz, info.mode.name
         ) != "inside":
-            raise PttError("ptt_out_of_band")        # Guest band and power limits are checked against the live radio, on start and on every renew.
+            raise PttError("ptt_out_of_band")
+        # Guest band and power limits are checked against the live radio, on start and on every renew.
         if operator.guest_id is not None:
             refusal = guest_tx_refusal(
                 operator.permission, freq_hz=info.frequency_hz, power_w=power.watts
