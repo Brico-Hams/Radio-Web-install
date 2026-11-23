@@ -1082,3 +1082,76 @@ class SecureTransportTests(unittest.TestCase):
                 response.read()
             finally:
                 connection.close()
+
+
+class AgentProxyTlsClassificationTests(unittest.TestCase):
+    """Deterministic classification of agent proxy failures with a fake HTTPS connection."""
+
+    def _proxy(self, *, connect=None, request=None, getresponse=None):
+        from http.client import HTTPException
+        from types import SimpleNamespace
+
+        from bricoham_remote_station import server as coordinator
+
+        class FakeConnection:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def connect(self):
+                if connect:
+                    raise connect
+
+            def request(self, *args, **kwargs):
+                if request:
+                    raise request
+
+            def getresponse(self):
+                if getresponse:
+                    raise getresponse
+                raise HTTPException("unexpected")
+
+            def close(self):
+                pass
+
+        handler = object.__new__(coordinator.CoordinatorRequestHandler)
+        handler.server = SimpleNamespace(
+            android_agent=None,
+            agent_link=SimpleNamespace(url="https://agent.invalid:8443", token="t"),
+            agent_tls_context=None,
+        )
+        handler.path = coordinator.DEVICES_PATH
+        handler.headers = {}
+        sent = []
+        handler._send_error = lambda status, code, *a, **k: sent.append((int(status), code))
+        with patch.object(coordinator, "HTTPSConnection", FakeConnection):
+            handler._serve_station_agent_data(coordinator.DEVICES_PATH)
+        return sent
+
+    def test_reset_after_handshake_is_tls_failed(self) -> None:
+        self.assertEqual(
+            self._proxy(getresponse=ConnectionResetError()), [(502, "station_agent_tls_failed")]
+        )
+
+    def test_remote_disconnected_after_handshake_is_tls_failed(self) -> None:
+        from http.client import RemoteDisconnected
+
+        self.assertEqual(
+            self._proxy(getresponse=RemoteDisconnected("closed")), [(502, "station_agent_tls_failed")]
+        )
+
+    def test_refused_connect_is_unavailable(self) -> None:
+        self.assertEqual(
+            self._proxy(connect=ConnectionRefusedError()), [(503, "station_agent_unavailable")]
+        )
+
+    def test_timeout_after_handshake_is_unavailable(self) -> None:
+        self.assertEqual(
+            self._proxy(getresponse=socket.timeout()), [(503, "station_agent_unavailable")]
+        )
+
+    def test_bad_status_line_is_invalid_response(self) -> None:
+        from http.client import BadStatusLine
+
+        self.assertEqual(
+            self._proxy(getresponse=BadStatusLine("x")), [(502, "station_agent_invalid_response")]
+        )

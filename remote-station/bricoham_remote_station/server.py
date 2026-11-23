@@ -1015,7 +1015,11 @@ class CoordinatorRequestHandler(SecureRequestHandler):
                 timeout=timeout,
             )
             authorization = self.headers.get("Authorization", "")
+        handshake_done = False
         try:
+            if self.server.agent_link is not None:
+                connection.connect()
+                handshake_done = True
             connection.request(
                 method,
                 target,
@@ -1027,6 +1031,16 @@ class CoordinatorRequestHandler(SecureRequestHandler):
             )
             response = connection.getresponse()
             body = response.read(_MAX_AGENT_RESPONSE_BYTES + 1)
+        except ConnectionError as error:
+            # TLS 1.3 clients finish the handshake before the agent validates the client
+            # certificate, so a rejection can surface as a plain reset after connect().
+            if not handshake_done:
+                LOGGER.warning("Station agent unavailable (%s)", type(error).__name__)
+                self._send_error(HTTPStatus.SERVICE_UNAVAILABLE, "station_agent_unavailable")
+                return
+            LOGGER.warning("Station agent TLS rejected after handshake (%s)", type(error).__name__)
+            self._send_error(HTTPStatus.BAD_GATEWAY, "station_agent_tls_failed")
+            return
         except ssl.SSLCertVerificationError:
             LOGGER.warning("Station agent TLS certificate verification failed")
             self._send_error(HTTPStatus.BAD_GATEWAY, "station_agent_tls_failed")
