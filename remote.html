@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="referrer" content="no-referrer">
-  <meta name="color-scheme" content="dark">
+  <meta name="color-scheme" content="dark light">
   <title>Remote shack - BricoHams</title>
   <link rel="icon" href="bricohams-logo.png" type="image/png">
   <link rel="manifest" href="manifest.webmanifest">
@@ -150,7 +150,7 @@
       </div>
       <div class="rotor-row">
         <button id="rotor-read" type="button">Leer posicion</button>
-        <button id="rotor-go" type="button" disabled>Mover</button>
+        <button id="rotor-go" type="button" class="primary" disabled>Mover</button>
         <button id="rotor-park" type="button" disabled>Aparcar</button>
         <button id="rotor-stop" type="button" class="tune-stop">Parar</button>
       </div>
@@ -226,13 +226,13 @@
         <button id="btn-nb" type="button" class="toggle" aria-pressed="false" aria-label="Supresor de ruido impulsivo (NB)" disabled>NB</button>
         <button id="btn-nr" type="button" class="toggle" aria-pressed="false" aria-label="Reduccion de ruido (NR)" disabled>NR</button>
         <button id="btn-atu" type="button" class="toggle" aria-pressed="false" aria-label="Acoplador de antena (ATU)" disabled>ATU</button>
-        <button id="btn-tune" type="button" aria-label="Sintonizar el acoplador (TUNE)" disabled>TUNE</button>
+        <button id="btn-tune" type="button" class="danger" aria-label="Sintonizar el acoplador (TUNE)" disabled>TUNE</button>
       </div>
       <div id="accessories" class="toggles" role="group" aria-label="Accesorios de la estación" hidden>
         <span id="amp-state">Amplificador: pendiente de fuente</span>
         <span id="tuner-state">Acoplador: pendiente de fuente</span>
         <button id="btn-amp-operate" type="button" class="toggle" aria-label="Poner el amplificador en OPERATE" disabled>OPERATE</button>
-        <button id="btn-amp-standby" type="button" class="toggle" aria-label="Poner el amplificador en STANDBY">STANDBY</button>
+        <button id="btn-amp-standby" type="button" class="toggle danger" aria-label="Poner el amplificador en STANDBY">STANDBY</button>
         <p id="acc-warning">Nunca transmitas sin una carga o antena adaptada.</p>
       </div>
     </section>
@@ -246,8 +246,8 @@
       <label class="slider" for="cw-wpm">Velocidad (WPM)</label>
       <input id="cw-wpm" type="number" min="5" max="60" step="1" value="20">
       <div class="cw-actions">
-        <button id="cw-send" type="button">Enviar CW</button>
-        <button id="cw-stop" type="button">Parar CW</button>
+        <button id="cw-send" type="button" class="primary">Enviar CW</button>
+        <button id="cw-stop" type="button" class="danger">Parar CW</button>
       </div>
       <h3 class="sub">Memorias F1-F8</h3>
       <label class="slider" for="cw-call">Indicativo del corresponsal</label>
@@ -348,7 +348,7 @@
       <div class="cw-actions">
         <button id="qso-fill" type="button">Usar frecuencia y modo de la radio</button>
         <button id="qso-lookup" type="button" disabled>Consultar QRZ.com</button>
-        <button id="qso-add" type="button">Guardar QSO</button>
+        <button id="qso-add" type="button" class="primary">Guardar QSO</button>
       </div>
       <p id="qso-qrz-hint" class="hint"></p>
       <p id="qso-lookup-result" class="hint" role="status" aria-live="polite"></p>
@@ -372,7 +372,7 @@
       <p class="hint settings-warning" role="note">Nunca transmitas sin una carga o antena adaptada. Los ajustes se rechazan mientras se transmite.</p>
       <p id="settings-summary" class="hint" role="status" aria-live="polite"></p>
       <div class="settings-tools">
-        <button id="settings-load" type="button">Leer ajustes</button>
+        <button id="settings-load" type="button" class="primary">Leer ajustes</button>
         <label class="step-field">Buscar ajuste
           <input id="settings-filter" type="search" autocomplete="off" disabled>
         </label>
