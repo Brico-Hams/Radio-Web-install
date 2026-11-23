@@ -57,7 +57,7 @@ qui persistent. Celles d'émission (`TX`, `MX`, `KY`) et de démarrage du couple
 | Commande | Réglage | Lecture | Réponse | Paramètres | Notes | Sources |
 |---|---|---|---|---|---|---|
 | AB | `AB;` | - | - | Copie MAIN vers SUB | Réglage seul. Rigplane l'appelle « M=S equalize » ; ce n'est pas une opération VFO A/B | [rigplane-rigplane-core:docs/validation/cat-audits/ftx1.md] [rigplane-rigplane-core:rigs/ftx1.toml] |
-| AC | `AC P1 P2 P3;` | `AC;` | `AC P1 P2 P3;` | P1 0 interne/1 externe ; P2 0 ATU, 2 ATAS ; P3 0 OFF, 1 ON, 3 START (2 réservé) | P3=3 démarre le coupleur et **émet**. Vérifié sur radio : P1=0 ne fait rien sur une Optima, P1=1 fonctionne. Formes : interne `AC003;`/`AC000;`, externe `AC103;`/`AC100;`, ATAS `AC123;`/`AC120;` ; ATAS refuse tout ce qui n'est pas `AC12x` ; `AC;` peut rester différent de zéro à la fin (on surveille PO) ; antenne `EX030704;`, type de coupleur `EX030701;`/`EX030702;`. **ESCRIBE EN LA RADIO** (état) | [rigplane-rigplane-core:rigs/ftx1.toml] [captobie-ftx1-remote:FTX-1 CAT Manual Errors.md] [git-jcw-FTX-1-WebUI:js/cat/ftx1.js] [git-jcw-FTX-1-WebUI:docs/FTX1-CAT-NOTES.md] [iTracMan-FTX1WinController:src/FTX1WinController/Cat/CatCommands.Func.cs] |
+| AC | `AC P1 P2 P3;` | `AC;` | `AC P1 P2 P3;` | P1 0 interne/1 externe ; P2 0 ATU, 2 ATAS ; P3 0 OFF, 1 ON, 3 START (2 réservé) | P3=3 démarre le coupleur et **émet**. Vérifié sur radio : P1=0 ne fait rien sur une Optima, P1=1 fonctionne. Formes : interne `AC003;`/`AC000;`, externe `AC103;`/`AC100;`, ATAS `AC123;`/`AC120;` ; ATAS refuse tout ce qui n'est pas `AC12x` ; `AC;` peut rester différent de zéro à la fin (on surveille PO) ; **mesuré sur radio pendant un réglage ATAS : `AC100` pendant tout le réglage** (la radio le signale sans que l'opérateur le change ; console : pas un changement de l'opérateur) ; antenne `EX030704;`, type de coupleur `EX030701;`/`EX030702;`. **ESCRIBE EN LA RADIO** (état) | [rigplane-rigplane-core:rigs/ftx1.toml] [captobie-ftx1-remote:FTX-1 CAT Manual Errors.md] [git-jcw-FTX-1-WebUI:js/cat/ftx1.js] [git-jcw-FTX-1-WebUI:docs/FTX1-CAT-NOTES.md] [iTracMan-FTX1WinController:src/FTX1WinController/Cat/CatCommands.Func.cs] |
 | AG | `AG P1 nnn;` | `AG P1;` | `AG P1 nnn;` | Gain AF, 3 chiffres, 000-255 | Utilisé par gnfrazier, rigplane, WebUI, iTracMan et SEM | [gnfrazier-ftxcat:ftxcontrol.py] [rigplane-rigplane-core:rigs/ftx1.toml] [git-jcw-FTX-1-WebUI:js/cat/ftx1.js] [iTracMan-FTX1WinController:src/FTX1WinController/Cat/CatCommands.Vfo.cs] |
 | AI | `AI0;`/`AI1;` | `AI;` | `AI s;` | Information automatique OFF/ON | Aucune source ne décrit le format des messages non sollicités ; les applications interrogent au lieu de dépendre de AI. Voir section 3 | [gnfrazier-ftxcat:ftxcontrol.py] [rigplane-rigplane-core:rigs/ftx1.toml] [evertonma-FTX-1CAT_PR2EM:ftx1cat/cat/commands.py] |
 | AM | `AM;` | - | - | Enregistre l'état du VFO-A MAIN dans le canal mémoire sélectionné (sans argument de canal) | Réglage seul. Enregistre tonalité/CTCSS, mode et décalage (MW non). **ESCRIBE EN LA RADIO** | [fritzsche-yaesu-ftx1:cat_format.md] [ew1abz-yaesu-ftx-1-memory-manipulator:doc/memory-write-sequence.md] [rigplane-rigplane-core:docs/validation/cat-audits/ftx1-command-gaps.csv] |
@@ -129,7 +129,7 @@ qui persistent. Celles d'émission (`TX`, `MX`, `KY`) et de démarrage du couple
 | RA | `RA P1 s;` | `RA P1;` | `RA P1 s;` | Atténuateur RF (12 dB selon WebUI) | Refusé (`?;`) avec MAIN sur 461.550 MHz lors d'un essai sur banc | [rigplane-rigplane-core:rigs/ftx1.toml] [git-jcw-FTX-1-WebUI:js/cat/ftx1.js] |
 | RC | `RC;` | - | - | `reset_clarifier` de rigplane | **Non documenté dans 2508-C** (provenance du profil seulement) | [rigplane-rigplane-core:docs/validation/cat-audits/ftx1.md] |
 | RG | `RG P1 nnn;` | `RG P1;` | `RG P1 nnn;` | Gain RF 000-255 | | [rigplane-rigplane-core:rigs/ftx1.toml] [iTracMan-FTX1WinController:src/FTX1WinController/Cat/CatCommands.Dsp.cs] |
-| RI | - | `RI P1;` | état de radio à 8 champs | `RI0` (P7 état du scan, P8 squelch) ; `RI1` répond `?;`. PR2EM : 7 caractères (HI-SWR[0], rec[1], TX[2], tuning[4], scan[5], busy[6]) | Le tuner-sweep l'utilise pour détecter le coupleur (chiffre 6) | [captobie-ftx1-remote:CLAUDE.md] [rigplane-rigplane-core:docs/validation/cat-audits/ftx1-command-gaps.csv] [evertonma-FTX-1CAT_PR2EM:ftx1cat/cat/commands.py] [hatandspecs-ftx1-tuner-sweep:ftx1_cat.py] |
+| RI | - | `RI P1;` | état de radio à 8 champs | `RI0` (P7 état du scan, P8 squelch) ; `RI1` répond `?;`. PR2EM : 7 caractères (HI-SWR[0], rec[1], TX[2], tuning[4], scan[5], busy[6]) | Le tuner-sweep l'utilise pour détecter le coupleur (chiffre 6). **Mesuré sur radio pendant un réglage ATAS : `RI0` avec HI-SWR + TX + tuning actifs en même temps** (le drapeau HI-SWR n'indique pas une panne pendant que le moteur cherche ; l'agent l'ignore en ATAS et coupe par temps) | [captobie-ftx1-remote:CLAUDE.md] [rigplane-rigplane-core:docs/validation/cat-audits/ftx1-command-gaps.csv] [evertonma-FTX-1CAT_PR2EM:ftx1cat/cat/commands.py] [hatandspecs-ftx1-tuner-sweep:ftx1_cat.py] |
 | RL | `RL P1 nn;` | `RL P1;` | `RL P1 nn;` | Niveau de DNR OFF/01-10 (EUG : forme `RL000;`) | | [gnfrazier-ftxcat:ftxcontrol.py] [rigplane-rigplane-core:rigs/ftx1.toml] [Eugen68-Yaesu-FTX1-CAT-Control:app/src/main/java/com/example/yaesucatcontroladv/RadioManager.java] |
 | RM | - | `RM P1;` | `RM P1 nnn 000;` (rigplane : `RM{tipo}{main:03d}{sub:03d}`) | Mesures P1 1..8 : 1 S-MAIN, 2 S-SUB, 3 COMP, 4 ALC, 5 PO, 6 SWR, 7 IDD, 8 VDD ; valeur 000-255 | Brut, non calibré. bg7nzl (uniquement dans le logiciel du PC ; rien n'est écrit dans la radio, **CALIBRACION** côté hôte) : VDD ~ brut*13.8/203, IDD brut*3/255, COMP brut*30/255 dB, ALC brut*200/252 %, SWR 1+0.333(e^(0.0151 brut)-1), PO linéaire par tronçons jusqu'à 15 W. Rigplane : brut 210 ~ 13.8 V (banc). L'index dit RM Set=X mais le détail montre une ligne `P1=0`. RZO note des dispositions à une ou deux valeurs. EUG lit `RM8;` toutes les 5 s pour en déduire une tête de 6 W ou de 10 W | [bg7nzl-ftx1ctl:ftx1cat.py] [captobie-ftx1-remote:FTX-1 CAT Manual Errors.md] [rigplane-rigplane-core:rigs/ftx1.toml] [git-jcw-FTX-1-WebUI:docs/FTX1-CAT-NOTES.md] [Eugen68-Yaesu-FTX1-CAT-Control:app/src/main/java/com/example/yaesucatcontroladv/RadioManager.java] |
 | SC | `SC P1 m;` | `SC;` renvoie la dernière commande (p. ex. `SC11;`) | - | Scan : m 0 OFF, 1 UP, 2 DOWN | `SC0;`/`SC1;` comme lecture donne `?;`. Tout arrêt interrompt les deux scans. `SC<lado>1` déplace VS/FT vers ce côté | [gnfrazier-ftxcat:ftxcontrol.py] [captobie-ftx1-remote:CLAUDE.md] [iTracMan-FTX1WinController:src/FTX1WinController/Cat/CatCommands.Dsp.cs] |
@@ -938,6 +938,21 @@ par fréquence (testé avec un mAT-30, FTX-1 Optima, 15 m et 12 m)
   Stop termine le pas en cours ; ne détecte pas si la fréquence est occupée ; sans
   tests automatiques [hatandspecs-ftx1-tuner-sweep:docs/usage.md]
   [hatandspecs-ftx1-tuner-sweep:app.py] [hatandspecs-ftx1-tuner-sweep:AGENTS.md].
+
+### Réglage ATAS mesuré sur radio (FTX-1)
+
+Mesuré sur radio pendant un réglage ATAS (`AC123;`) [medido en radio: ajuste ATAS, FTX-1] :
+
+- Pendant tout le réglage la radio signale `TX2`, `MD07` (CW-L), `PC2005` et `AC100` ;
+  `RI0` garde HI-SWR + TX + tuning en même temps.
+- À la fin, la radio restaure d'elle-même le mode et la puissance précédents ;
+  le logiciel ne les réécrit pas.
+- Console Node (`remote.html`) : tant que `state.tune` existe, elle affiche
+  « Réglage ATAS... N s / max », étiquette le mode comme temporaire de réglage
+  (non noté comme changement de l'opérateur ni mémorisé par bande) et, quand
+  `state.tuneResult` change, garde une carte persistante avec résultat, motif,
+  ROS final (« approximative » si elle vient de la courbe RM6 non calibrée) et
+  la vérification de TX coupé.
 
 ## Satellites et Look4Sat
 

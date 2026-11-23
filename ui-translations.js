@@ -2273,6 +2273,28 @@ Aparcado: azimut|Park: azimuth|Parcage : azimut|Parken: Azimut
 Aparcado: elevacion|Park: elevation|Parcage : élévation|Parken: Elevation
 Calibracion: azimut|Calibration: azimuth|Étalonnage : azimut|Kalibrierung: Azimut
 Calibracion: elevacion|Calibration: elevation|Étalonnage : élévation|Kalibrierung: Elevation
+Ajustando ATAS... {0} s / {1} s máx.|Tuning ATAS... {0} s / {1} s max.|Accord ATAS... {0} s / {1} s max.|ATAS wird abgestimmt... {0} s / {1} s max.
+Ajustando el acoplador... {0} s / {1} s máx.|Tuning the tuner... {0} s / {1} s max.|Accord du coupleur... {0} s / {1} s max.|Tuner wird abgestimmt... {0} s / {1} s max.
+Ajustando ATAS... {0} s|Tuning ATAS... {0} s|Accord ATAS... {0} s|ATAS wird abgestimmt... {0} s
+Ajustando el acoplador... {0} s|Tuning the tuner... {0} s|Accord du coupleur... {0} s|Tuner wird abgestimmt... {0} s
+Modo temporal de ajuste: la radio lo restaura sola al terminar.|Temporary tuning mode: the radio restores it by itself when finished.|Mode d’accord temporaire : la radio le rétablit seule à la fin.|Temporärer Abstimmmodus: Das Funkgerät stellt ihn am Ende selbst wieder her.
+Modo de ajuste (temporal)|Tuning mode (temporary)|Mode d’accord (temporaire)|Abstimmmodus (temporär)
+Cerrar el resultado de la sintonía|Close the tuning result|Fermer le résultat de l’accord|Abstimmergebnis schließen
+Cerrar|Close|Fermer|Schließen
+Lectura final de ROE {0}:1 (aproximada)|Final SWR reading {0}:1 (approximate)|Lecture finale du ROS {0}:1 (approximative)|Endgültiger SWR-Wert {0}:1 (ungefähr)
+Lectura final de ROE {0}:1|Final SWR reading {0}:1|Lecture finale du ROS {0}:1|Endgültiger SWR-Wert {0}:1
+Lectura final de ROE: sin lectura|Final SWR reading: none|Lecture finale du ROS : aucune|Endgültiger SWR-Wert: keiner
+Tiempo máximo de ajuste alcanzado|Maximum tuning time reached|Durée maximale d’accord atteinte|Maximale Abstimmzeit erreicht
+La radio avisó de ROE alta|The radio warned of high SWR|La radio a signalé un ROS élevé|Das Funkgerät meldete hohes SWR
+ROE final alta|High final SWR|ROS final élevé|Hohes End-SWR
+Sin latido del operador: PTT off|No operator heartbeat: PTT off|Pas de signal de l’opérateur : PTT off|Kein Bediener-Heartbeat: PTT off
+Límite de TX alcanzado|TX limit reached|Limite d’émission atteinte|Sendegrenze erreicht
+La radio no entró en modo de ajuste|The radio did not enter tuning mode|La radio n’est pas entrée en mode d’accord|Das Funkgerät ist nicht in den Abstimmmodus gewechselt
+La radio no confirmó la sintonía|The radio did not confirm the tuning|La radio n’a pas confirmé l’accord|Das Funkgerät hat die Abstimmung nicht bestätigt
+La radio seguía en TX: parada reintentada|The radio was still in TX: stop retried|La radio était encore en émission : arrêt relancé|Das Funkgerät sendete noch: Stopp wiederholt
+Cierre del agente|Agent closing|Fermeture de l’agent|Agent wird geschlossen
+Parada por el operador|Stopped by the operator|Arrêt par l’opérateur|Vom Bediener gestoppt
+Motivo no indicado|Reason not given|Motif non indiqué|Grund nicht angegeben
 `.trim().split("\n").map(line => line.split("|")));
   root.BricohamsUITranslations = entries;
   if (typeof module === "object" && module.exports) module.exports = entries;

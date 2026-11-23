@@ -64,6 +64,7 @@ const STATIC_FILES = Object.freeze({
   "/remote-ui.js": ["remote-ui.js", "text/javascript; charset=utf-8"],
   "/remote-audio-core.js": ["remote-audio-core.js", "text/javascript; charset=utf-8"],
   "/remote-rotor-ui.js": ["remote-rotor-ui.js", "text/javascript; charset=utf-8"],
+  "/remote-tune-ui.js": ["remote-tune-ui.js", "text/javascript; charset=utf-8"],
   "/spectrum-core.js": ["spectrum-core.js", "text/javascript; charset=utf-8"],
   "/remote-audio-worklet.js": ["remote-audio-worklet.js", "text/javascript; charset=utf-8"],
   "/remote.css": ["remote.css", "text/css; charset=utf-8"],
