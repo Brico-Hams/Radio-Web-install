@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-11-22T12:47:01.877Z",
+  "generatedAt": "2026-11-23T15:10:33.609Z",
   "sources": [
     "https://hearham.com/api/repeaters/v1",
     "https://hearham.com/repeaters",
@@ -554,16 +554,16 @@
       "radio": "radicodex",
       "country": "US",
       "path": "radicodex/US.csv",
-      "channels": 8342,
+      "channels": 8349,
       "dropped": 0,
-      "sha256": "b2ac52b83254a51d877ef511c5b29a6dacc3b05526f32e830c712dc9b639cfb7"
+      "sha256": "a574506e1efe2dcecc00204ef2f00ce7a9ed5cff1e39a3d3ed4578af2d64b9b8"
     },
     {
       "radio": "rt950pro",
       "country": "US",
       "path": "rt950pro/US.csv",
       "channels": 662,
-      "dropped": 7680,
+      "dropped": 7687,
       "sha256": "45c74359dfb610a362b11f817d0f18bd94b3e5270db4ebdbae3cf03c1bfdc8c2"
     },
     {
@@ -571,7 +571,7 @@
       "country": "US",
       "path": "uvk5v3/US.csv",
       "channels": 1024,
-      "dropped": 7318,
+      "dropped": 7325,
       "sha256": "b1aca696d3dd22809c0b8551205fd0dbe286199bdd6893f632152f8977776a5b"
     },
     {
@@ -579,15 +579,15 @@
       "country": "US",
       "path": "d878/US.json",
       "channels": 4000,
-      "dropped": 4342,
-      "sha256": "254707f112aacc54f296ce1d8201201d16d93114dea8aa504b4f3b4b22dbc10c"
+      "dropped": 4349,
+      "sha256": "1b4c500c43b802270b837e515ac7a17b86ef745fdbd9bbf1b60c485426cb397b"
     },
     {
       "radio": "ftx1",
       "country": "US",
       "path": "ftx1/US.csv",
       "channels": 999,
-      "dropped": 7343,
+      "dropped": 7350,
       "sha256": "72ce0b2816f50e6920a0a9db8f0a54fe7e2825b517c5c7a2e261a8acadefc6ce"
     },
     {
@@ -954,41 +954,41 @@
       "radio": "radicodex",
       "country": "DK",
       "path": "radicodex/DK.csv",
-      "channels": 4,
+      "channels": 3,
       "dropped": 0,
-      "sha256": "1dd6e4a6e61cdec5056ef16a2bd09ce890bb76efd61136dd84d1166e83c76edc"
+      "sha256": "9a777d0ff6862f6ed9240d491279bb3fabe54777d165651544055c83b0a50f19"
     },
     {
       "radio": "rt950pro",
       "country": "DK",
       "path": "rt950pro/DK.csv",
-      "channels": 4,
+      "channels": 3,
       "dropped": 0,
-      "sha256": "b2cfa110584f27038704b282239431df9e7745a34cb9b2e8562917f9cf21777d"
+      "sha256": "69c080a15c9bd84a5816b65ba93d6918f4ca87e5454061c9941b33955361d091"
     },
     {
       "radio": "uvk5v3",
       "country": "DK",
       "path": "uvk5v3/DK.csv",
-      "channels": 4,
+      "channels": 3,
       "dropped": 0,
-      "sha256": "8dcfcf38f684086385ab0c6cde191a3000cbd0769004051dd6b859eb90a084c0"
+      "sha256": "55664d7f15af20a749ffc2ebac582b06409dd36d2a354aaeeb0e3218aecabd1e"
     },
     {
       "radio": "d878",
       "country": "DK",
       "path": "d878/DK.json",
-      "channels": 4,
+      "channels": 3,
       "dropped": 0,
-      "sha256": "febdeb3aa75469984d80b6d71e980cccb51c42a410e0a17f0a2b7ad0ca572fb7"
+      "sha256": "bcf1e8e92aa416056bad648b12cb7fcc73e82765d0f1dbafbe0d20efc2584c96"
     },
     {
       "radio": "ftx1",
       "country": "DK",
       "path": "ftx1/DK.csv",
-      "channels": 4,
+      "channels": 3,
       "dropped": 0,
-      "sha256": "f2af4638c5b7ae118e421f3b3f63dc8aa2bd9e76a7686bf105e12f1f3bf1e356"
+      "sha256": "92e3ea0722127034a948ccc57728d7cba837ea0f5825e0f6a8c9d68039b620c9"
     },
     {
       "radio": "radicodex",
@@ -1554,81 +1554,81 @@
       "radio": "radicodex",
       "country": "CA",
       "path": "radicodex/CA.csv",
-      "channels": 428,
+      "channels": 427,
       "dropped": 0,
-      "sha256": "7dbc294414aff4f8d4a644740529cbd7beb3e04600e07b7a4111bdda3a2d10ef"
+      "sha256": "16bd59c53d26a868b2ada93547e33b0e60ba64b13469506334e5bdfe821a72ef"
     },
     {
       "radio": "rt950pro",
       "country": "CA",
       "path": "rt950pro/CA.csv",
-      "channels": 428,
+      "channels": 427,
       "dropped": 0,
-      "sha256": "483571ee4be620f747e30f74e31be4e62758786131d358187ee52fdc0156872b"
+      "sha256": "3489ddc8a2a784a165b9fded910d7278d0fec97ef91ff688d197e22c88cf2b27"
     },
     {
       "radio": "uvk5v3",
       "country": "CA",
       "path": "uvk5v3/CA.csv",
-      "channels": 428,
+      "channels": 427,
       "dropped": 0,
-      "sha256": "deccd6f4e7dd0fb8c6911f84aaeddb9fcffd7ab63c1bcdac2919ca2ae2648958"
+      "sha256": "c5ea0d890e27411b89b3b13a59aeae5e5bc53960c7bd0d9c74310e2c665eadcd"
     },
     {
       "radio": "d878",
       "country": "CA",
       "path": "d878/CA.json",
-      "channels": 428,
+      "channels": 427,
       "dropped": 0,
-      "sha256": "cbea041a62622a800a90b99ac839e7c8209f0366f85849948ea3db90917928fb"
+      "sha256": "31943651347de8c6027cfc0b32ce04871e3a43051b72a2e29b193eb0a66c4e99"
     },
     {
       "radio": "ftx1",
       "country": "CA",
       "path": "ftx1/CA.csv",
-      "channels": 428,
+      "channels": 427,
       "dropped": 0,
-      "sha256": "76163a3e9371f5f6c9a6ed1e700ac9eb140e1236720f5389d2bf461ee2bbee21"
+      "sha256": "3ee6ae437af4ff0f318d516f3bfacf34dfb9d0c305c9aa5bd6f61cf8147662ea"
     },
     {
       "radio": "radicodex",
       "country": "MX",
       "path": "radicodex/MX.csv",
-      "channels": 93,
+      "channels": 96,
       "dropped": 0,
-      "sha256": "4f712e5620e2ccecf537c03434fe96ff9bbfc7795daae6656cab655de7789f87"
+      "sha256": "09d7563e75e2f9251b6d494da9aadb401b30191424c2328827a5fdd8c232c29f"
     },
     {
       "radio": "rt950pro",
       "country": "MX",
       "path": "rt950pro/MX.csv",
-      "channels": 93,
+      "channels": 96,
       "dropped": 0,
-      "sha256": "4f21d4d974a8ba1f6895b9b059547cb24aba9a3b038bcbcf56148f89f0a73882"
+      "sha256": "897fb30338aa30d2af1e28b46b1968583a5d80c9a08a607d3e532fa32795d599"
     },
     {
       "radio": "uvk5v3",
       "country": "MX",
       "path": "uvk5v3/MX.csv",
-      "channels": 93,
+      "channels": 96,
       "dropped": 0,
-      "sha256": "b5c36f69cb34590ece63b5fe1a67085cef69d8e39a76d1c2f9adc03210c075ef"
+      "sha256": "c3bce06669171e0784a9a46d77bbfc0891c08e447c0a0e2fdd85815b96d99ebb"
     },
     {
       "radio": "d878",
       "country": "MX",
       "path": "d878/MX.json",
-      "channels": 93,
+      "channels": 96,
       "dropped": 0,
-      "sha256": "507367e1ecb327491a5098f98bd9502c4e6d54a43360a087d57a82be33414560"
+      "sha256": "16abeb278707cd2f859945371e28962a4d0f369356d3dd1a7fba6afb8e8d1cf5"
     },
     {
       "radio": "ftx1",
       "country": "MX",
       "path": "ftx1/MX.csv",
-      "channels": 93,
+      "channels": 96,
       "dropped": 0,
-      "sha256": "ac6ec2469b96e23e3f91f962a11e9404a17586883defb37f6a45166fa50fc4cb"
+      "sha256": "c44ba5e6e2972d49ddd3ffb2b818e562b2e8854e104fbc0cb6292c15b9f08a7a"
     },
     {
       "radio": "radicodex",
