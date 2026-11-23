@@ -20,6 +20,7 @@ const { createAccessories } = require("./station-accessories.cjs");
 const stationDevicesLib = require("./station-devices.cjs");
 const { createRotor, RotorError } = require("./remote-rotor.cjs");
 const remoteOps = require("./remote-ops.cjs");
+const { planCwSend, createCwGuard } = require("./remote-cw.cjs");
 
 const isLoopbackHost = value => value === "localhost" || value === "::1" || /^127\./.test(value);
 
@@ -103,7 +104,10 @@ function loadConfig(dir) {
     relay: normalizeRelay(stored.relay),
     accessories: normalizeAccessories(stored.accessories),
     // Station devices (power/relay, rotors); credentials stay in this 0600 file and are never sent to clients.
-    devices: Array.isArray(stored.devices) ? stored.devices : []
+    devices: Array.isArray(stored.devices) ? stored.devices : [],
+    // Remote CW through the radio's own keyer: off unless the operator enables it.
+    cwEnabled: stored.cwEnabled === true,
+    cwMaxSeconds: Number(stored.cwMaxSeconds) > 0 ? Math.min(120, Number(stored.cwMaxSeconds)) : undefined
   };
   if (!config.token) {
     config.token = crypto.randomBytes(32).toString("base64url");
@@ -154,7 +158,7 @@ function tokenMatches(expected, supplied) {
 const CSP = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
 
 // Extra keys each command may carry besides "cmd"; anything else is rejected.
-const COMMAND_KEYS = Object.freeze({ level: ["name", "value"], func: ["name", "on"], tune: [], mode: ["value", "passband"], ptt: ["value", "location"] });
+const COMMAND_KEYS = Object.freeze({ level: ["name", "value"], func: ["name", "on"], tune: [], mode: ["value", "passband"], ptt: ["value", "location"], cw: ["text", "wpm", "slot"], cwstop: [] });
 
 function validateCommand(body, state) {
   if (!body || typeof body !== "object" || Array.isArray(body)) return { error: "Cuerpo no valido." };
@@ -186,6 +190,15 @@ function validateCommand(body, state) {
       return { cmd, name: body.name, on: body.on };
     case "tune":
       return { cmd };
+    case "cwstop":
+      return { cmd };
+    case "cw": {
+      if (typeof body.text !== "string" || !body.text.trim() || body.text.length > 80) return { error: "Texto CW no valido." };
+      const { wpm = 20, slot = 5 } = body;
+      if (!Number.isSafeInteger(wpm) || wpm < 5 || wpm > 60) return { error: "Velocidad CW no valida (5-60 WPM)." };
+      if (!Number.isSafeInteger(slot) || slot < 1 || slot > 5) return { error: "Memoria de manipulador no valida (1-5)." };
+      return { cmd, text: body.text, wpm, slot };
+    }
     case "ptt":
       if (typeof value !== "boolean") return { error: "PTT debe ser booleano." };
       if (body.location !== undefined) {
@@ -429,6 +442,7 @@ function createRemoteAgent(options = {}) {
       txSeconds: rig.ptt ? Math.max(0, Math.floor((now() - txStart) / 1000)) : 0,
       tx: rig.ptt && tx ? { ...tx, fraction: { ...tx.fraction } } : null,
       txAlert: swrTripped ? "swr" : null,
+      cw: { enabled: cwGuard.enabled, active: Boolean(cwGuard.active()), maxSeconds: cwMaxSeconds },
       tune: tune ? { kind: tunerKind, seconds: Math.max(0, Math.floor((now() - tune.startedAt) / 1000)), maxSeconds: Math.round(tuneMaxMs / 1000) } : null,
       tuneResult: tuneResult ? { ...tuneResult } : null,
       meters: metersView(),
@@ -454,6 +468,52 @@ function createRemoteAgent(options = {}) {
       for (const [key, value] of Object.entries(extraMeters)) out[key] = normalizeMeter(key, value);
     } else if (Number.isFinite(rig.smeter)) out.smeter = normalizeLevel("smeter", rig.smeter);
     return out;
+  }
+
+  // Remote CW (remote-cw.cjs): the radio's own keyer sends the text; the guard is off by default, one message at a time and time capped.
+  const cwGuard = createCwGuard({
+    enabled: options.cwEnabled ?? config.cwEnabled === true,
+    now,
+    isBlocked: () => swrTripped || emergency || tune !== null || rig.ptt || closing
+  });
+  const cwMaxSeconds = options.cwMaxSeconds ?? config.cwMaxSeconds ?? 60;
+  let cwTimer = null;
+
+  async function cwHalt() {
+    clearTimeout(cwTimer);
+    cwTimer = null;
+    const steps = cwGuard.stop();
+    if (!client.connected) return;
+    for (const step of steps) {
+      try { await client.sendKeyer(step, { priority: true }); } catch (error) { log(`CW stop: ${error.message}`); }
+    }
+  }
+
+  async function startCw(command) {
+    if (!cwGuard.enabled) return { status: 403, body: { error: "El CW remoto esta desactivado (accion explicita del operador)." } };
+    const radio = options.radio;
+    let plan;
+    try {
+      const planOptions = { wpm: command.wpm, slot: command.slot, maxSeconds: cwMaxSeconds };
+      plan = planCwSend(radio, command.text, planOptions);
+      // The CI-V frame has no transport through rigctld here: Icom models use the Hamlib send_morse baseline.
+      if (plan.via === "civ") plan = planCwSend({ ...radio, id: "hamlib-baseline" }, command.text, planOptions);
+    } catch (error) {
+      if (error.name !== "CwError") throw error;
+      return { status: error.code === "unsourced" ? 501 : 400, body: { error: error.message } };
+    }
+    try { cwGuard.authorize(plan); }
+    catch (error) { return { status: error.code === "busy" ? 409 : error.code === "blocked" ? 423 : 403, body: { error: error.message } }; }
+    try {
+      if (plan.via === "hamlib") await client.sendMorse(plan.text);
+      else for (const step of plan.steps) await client.sendKeyer(step);
+    } catch (error) {
+      await cwHalt();
+      return { status: 502, body: { error: `rigctld: ${error.message}` } };
+    }
+    cwTimer = setTimeout(() => { cwHalt(); }, (plan.seconds + 1) * 1000);
+    cwTimer.unref?.();
+    return null;
   }
 
   function setRigPtt(on) {
@@ -596,6 +656,7 @@ function createRemoteAgent(options = {}) {
 
   async function pttOff(reason) {
     log(`PTT off: ${reason}`);
+    if (cwGuard.active()) cwHalt();
     const run = tune || hamlibRun;
     if (run) {
       const code = reasonCode(reason);
@@ -640,6 +701,8 @@ function createRemoteAgent(options = {}) {
     detectCaps().finally(() => schedulePoll(0));
   });
   client.on("disconnect", () => {
+    cwGuard.stop();
+    clearTimeout(cwTimer);
     if (tune) tuneWasActive = true;
     tune = null;
     hamlibRun = null;
@@ -999,6 +1062,8 @@ function createRemoteAgent(options = {}) {
     checkHung();
     accessories.tick().catch(() => {});
     if (!tune && accessories.snapshot().tuner.tuning) accessories.stopTune("done", lastTuneSwr).catch(() => {});
+    // Lease: a CW message does not outlive the operator's control.
+    if (cwGuard.active() && !ownerActive()) cwHalt();
     if (!agentTx || !rig.ptt) return;
     const time = now();
     if (time - lastBeat > heartbeatTimeoutMs) { accessories.standby("lease"); pttOff("sin latido"); }
@@ -1105,6 +1170,11 @@ function createRemoteAgent(options = {}) {
   }
 
   async function applyCommand(command, clientId, who = null) {
+    // Stopping CW is never refused.
+    if (command.cmd === "cwstop") {
+      await cwHalt();
+      return { status: 200, body: { ok: true, state: snapshot(clientId) } };
+    }
     if (command.cmd === "amp" && command.value === "standby") {
       await accessories.standby("operator");
       return { status: 200, body: { ok: true, state: snapshot(clientId) } };
@@ -1188,6 +1258,11 @@ function createRemoteAgent(options = {}) {
             await startHamlibTune(clientId);
           }
           break;
+        case "cw": {
+          const refused = await startCw(command);
+          if (refused) return refused;
+          break;
+        }
         case "vfo": {
           const name = rigVfoName(command.value === "VFOA" ? "A" : "B");
           await client.setVfo(name);
@@ -1202,6 +1277,7 @@ function createRemoteAgent(options = {}) {
           if (command.value) {
             if (tune) return { status: 409, body: { error: "Sintonía en curso." } };
             txLocation = command.location || null;
+            if (cwGuard.active()) await cwHalt();
             await client.setPtt(true);
             swrTripped = false;
             setRigPtt(true);
@@ -1731,10 +1807,12 @@ function createRemoteAgent(options = {}) {
     clearInterval(keepAliveTimer);
     clearInterval(updateTimer);
     endEmergency();
-    // PTT off first; accessories and station devices are made safe even if it fails.
+    // PTT off first; CW, accessories and station devices are made safe even if it fails.
     try {
       if (client.connected && (rig.ptt || agentTx || tune || hamlibRun)) await pttOff("cierre del agente");
     } finally {
+      try { if (cwGuard.active()) await cwHalt(); } catch { /* CW stop is best effort */ }
+      clearTimeout(cwTimer);
       try { await accessories.emergencyStop("close"); }
       finally { await stationDevices.safeAll().catch(() => {}); }
     }

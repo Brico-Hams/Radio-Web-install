@@ -435,7 +435,8 @@ test("the tune notice reports the last raw SWR read while transmitting, not the 
   try {
     stopBeat = keepAlive(call);
     assert.equal((await cmd({ cmd: "tune" })).status, 200);
-    await sleep(500);
+    await waitFor(async () => typeof (await state()).tx?.swr === "number", 3000);
+    await sleep(150);
     rig.tuning = false;
     await waitFor(async () => (await state()).notice?.text.includes("Sintonía terminada"));
     assert.match((await state()).notice.text, /ROE bruta 70\/255/);
