@@ -633,6 +633,11 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--rotor-config", type=Path, help="Explicit local rotctld JSON configuration."
     )
+    parser.add_argument(
+        "--rotor-serial",
+        help="PROTOCOL:PORT[:BAUD] (dcu1, rotorez, rt21) to drive the rotor over serial "
+        "instead of rotctld; the JSON port field is then unused.",
+    )
     parser.add_argument("--serial-model")
     parser.add_argument("--radio-settings-config", type=Path)
     parser.add_argument("--ptt-config", type=Path, help="Local default-off guarded FTX-1 PTT JSON.")
@@ -734,7 +739,16 @@ def main(argv: list[str] | None = None) -> int:
             if args.wsjtx_id
             else None
         )
-        rotor = RotorController(rotor_config) if rotor_config else None
+        rotor_backend = None
+        if args.rotor_serial:
+            if rotor_config is None:
+                raise ValueError("--rotor-serial requires --rotor-config for limits and motion_enabled.")
+            from bricoham_station_agent.station_devices import open_serial_rotor_backend
+
+            protocol, _, rest = args.rotor_serial.partition(":")
+            port, _, baud = rest.rpartition(":") if rest.count(":") else (rest, "", "4800")
+            rotor_backend = open_serial_rotor_backend(protocol, port, int(baud or "4800"))
+        rotor = RotorController(rotor_config, rotor_backend) if rotor_config else None
         ptt = None
         if ptt_config is not None:
             assert cat is not None

@@ -15,6 +15,7 @@ const remoteWs = require("./remote-ws.cjs");
 const remoteAudio = require("./remote-audio.cjs");
 const { TuneCheck, swrFromRaw, normalizeMeter, normalizeLevel, parsePowerFrame, tunePowerCheck } = require("./remote-meters.cjs");
 const { createAccessories } = require("./station-accessories.cjs");
+const stationDevicesLib = require("./station-devices.cjs");
 
 const isLoopbackHost = value => value === "localhost" || value === "::1" || /^127\./.test(value);
 
@@ -85,7 +86,9 @@ function loadConfig(dir) {
     tuneMaxSeconds: Number(stored.tuneMaxSeconds) > 0 ? Math.min(TUNE_MAX_SECONDS_CAP, Number(stored.tuneMaxSeconds)) : undefined,
     tunerKind: TUNER_KINDS.includes(stored.tunerKind) ? stored.tunerKind : undefined,
     relay: normalizeRelay(stored.relay),
-    accessories: normalizeAccessories(stored.accessories)
+    accessories: normalizeAccessories(stored.accessories),
+    // Station devices (power/relay, rotors); credentials stay in this 0600 file and are never sent to clients.
+    devices: Array.isArray(stored.devices) ? stored.devices : []
   };
   if (!config.token) {
     config.token = crypto.randomBytes(32).toString("base64url");
@@ -351,6 +354,12 @@ function createRemoteAgent(options = {}) {
   const commandTimes = [];
 
   const ownerActive = () => owner !== null && now() - ownerSeen < CONTROL_IDLE_MS;
+  const isTransmitting = () => Boolean(rig.ptt || agentTx || tune);
+  const stationDevices = options.stationDevices || stationDevicesLib.createStationDevices({
+    devices: stationDevicesLib.devicesFromConfig(config.devices, { isTransmitting, serialFactory: options.serialFactory }),
+    isTransmitting
+  });
+  let rotorLockHeld = false;
 
   function snapshot(clientId) {
     const active = ownerActive();
@@ -927,6 +936,8 @@ function createRemoteAgent(options = {}) {
   }
 
   function watchTx() {
+    // Rotors stop when the operator that moved them goes idle or disconnects.
+    if (rotorLockHeld && !ownerActive()) { rotorLockHeld = false; stationDevices.safeAll().catch(() => {}); }
     checkHung();
     accessories.tick().catch(() => {});
     if (!tune && accessories.snapshot().tuner.tuning) accessories.stopTune("done", lastTuneSwr).catch(() => {});
@@ -1144,6 +1155,25 @@ function createRemoteAgent(options = {}) {
       response.on("close", () => sseClients.delete(entry));
       response.write("retry: 1000\n\n");
       pushState(entry, true);
+      return;
+    }
+    if (route === "GET /api/devices") { send(response, 200, await stationDevices.status()); return; }
+    if (route === "POST /api/devices/cmd") {
+      let body;
+      try { body = await readJson(request); }
+      catch (error) { send(response, error.status || 400, { error: error.message }); return; }
+      const stop = body?.command === "stop";
+      // Stop never needs the operator lock; every other device command does.
+      if (stop) claimControl(clientId, { acquire: false });
+      else if (body?.command !== "read" && !claimControl(clientId)) { send(response, 409, { error: "Otro operador tiene el control." }); return; }
+      try {
+        const result = await stationDevices.command(String(body?.id), body);
+        if (body?.command === "move") rotorLockHeld = true;
+        if (stop) rotorLockHeld = false;
+        send(response, 200, { ok: true, result });
+      } catch (error) {
+        send(response, error.status || 502, { error: error.message, code: error.code });
+      }
       return;
     }
     if (route === "POST /api/heartbeat") {
@@ -1475,10 +1505,12 @@ function createRemoteAgent(options = {}) {
     clearInterval(sseTimer);
     clearInterval(keepAliveTimer);
     endEmergency();
+    // PTT off first; accessories and station devices are made safe even if it fails.
     try {
       if (client.connected && (rig.ptt || agentTx || tune || hamlibRun)) await pttOff("cierre del agente");
     } finally {
-      await accessories.emergencyStop("close");
+      try { await accessories.emergencyStop("close"); }
+      finally { await stationDevices.safeAll().catch(() => {}); }
     }
     client.stop();
     for (const ws of audioSockets) { ws.fail(1001, "shutdown"); ws.socket.destroy(); }

@@ -108,3 +108,12 @@ pueden mover el rotor fuera de la sesion BricoHams.
 
 Referencia publica: [manual oficial rotctld](https://hamlib.sourceforge.net/html/rotctld.1.html).
 Las pruebas usan un broker TCP de ensayo identificado, no un rotor real.
+
+## Controlador serie directo (sin rotctld)
+
+`--rotor-serial PROTOCOLO:PUERTO[:BAUDIOS]` (`dcu1`, `rotorez`, `rt21`) sustituye a
+rotctld y reutiliza el mismo modelo (límites, lease, deadman, STOP, bloqueo por
+`stop_failed`). `--rotor-config` sigue siendo obligatorio y su campo `port` no se
+usa. Tramas y fuentes en [dispositivos de estación](dispositivos-estacion.md).
+El DCU-1 no tiene lectura de rumbo: la posición se informa como `null` con la nota
+«sin lectura de rumbo».

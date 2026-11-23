@@ -57,6 +57,11 @@ no declara hardware validado ni producto completo.
   IC-7300 RF PWR CAT e insertar/bypass ATU; FTX-1 PC de potencia field/SPA-1
   en W de consigna, con cabezal observado y límites. Comprobación RX/readback;
   no son potencia RF medida ni sintonía.
+- **Dispositivos de estación experimentales:** [relés/alimentación DLI y Waveshare
+  Modbus, rotores serie DCU-1/Rotor-EZ/RT-21 y vista de ruta de señal](docs/dispositivos-estacion.md),
+  con [fuentes citadas](docs/STATION-DEVICES-SOURCES.md). Conmutación desactivada por
+  defecto y rechazada durante TX; sin TX propio. Modelos sin protocolo público
+  figuran como «pendiente de fuente» y sin control.
 - **PTT FTX-1 experimental:** [sesión exclusiva y watchdog](docs/ptt-ftx1.md),
   opt-in local separado y desactivado por defecto. Solo MAIN VFO simplex
   LSB/USB, RX explícito previo y límites de frecuencia/consigna/tiempo.

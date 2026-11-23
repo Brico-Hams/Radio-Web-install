@@ -87,8 +87,10 @@ class RotorConfig:
 
 
 class RotorController:
-    def __init__(self, config: RotorConfig) -> None:
+    def __init__(self, config: RotorConfig, backend: object | None = None) -> None:
         self.config = config
+        # Optional direct serial controller (station_devices.SerialRotorBackend) replacing rotctld.
+        self._backend = backend
         self._lock = threading.Lock()
         self._shutdown = threading.Event()
         self._lease: str | None = None
@@ -101,6 +103,12 @@ class RotorController:
         self._thread.start()
 
     def _exchange(self, command: str, expected: str) -> list[str]:
+        if self._backend is not None:
+            try:
+                return self._backend.exchange(command, expected)
+            except Exception as error:
+                LOGGER.warning("Serial rotor failed (%s)", type(error).__name__)
+                raise RotorError("rotor_transport_failed") from error
         deadline = time.monotonic() + 0.7
         try:
             with socket.create_connection(("127.0.0.1", self.config.port), timeout=0.7) as peer:
@@ -155,10 +163,13 @@ class RotorController:
             raise RotorError("rotor_invalid_position") from error
         return {"azimuth_deg": azimuth, "elevation_deg": elevation}
 
+    def _can_read_position(self) -> bool:
+        return self._backend is None or bool(getattr(self._backend, "heading_read", True))
+
     def _snapshot(self) -> dict[str, object]:
         return {
             "api_version": "v1",
-            "source": "hamlib_rotctld",
+            "source": "hamlib_rotctld" if self._backend is None else "serial_rotor",
             "status": "experimental",
             "data_is_simulated": False,
             "hardware_validation_complete": False,
@@ -190,8 +201,12 @@ class RotorController:
             self._expire()
             result = self._snapshot()
             if read_position:
-                result["position"] = self._position()
-                result["observed_at"] = time.time()
+                if self._can_read_position():
+                    result["position"] = self._position()
+                    result["observed_at"] = time.time()
+                else:
+                    result["position"] = None
+                    result["heading_note"] = "sin lectura de rumbo"
             return result
         finally:
             self._lock.release()
@@ -257,7 +272,8 @@ class RotorController:
                     raise RotorError("rotor_busy")
                 if request_id in self._blocked_requests:
                     raise RotorError("rotor_request_cancelled_or_repeated")
-                self._position()
+                if self._can_read_position():
+                    self._position()
                 assert position is not None
                 azimuth, elevation = position
                 self._lease = secrets.token_urlsafe(32)

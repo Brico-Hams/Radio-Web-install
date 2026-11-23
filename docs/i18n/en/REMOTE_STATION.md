@@ -244,6 +244,11 @@ console offers both actions in ES/EN/FR/PT. There is no TX start,
 Reply, Free Text, or Configure; the CAT broker and full digital operation
 remain pending. See [activation and UDP limits](../../../remote-station/docs/agente-cat-wsjtx.md).
 
+The [station devices](../../../remote-station/docs/dispositivos-estacion.md)
+(Digital Loggers and Waveshare Modbus relays, DCU-1/Rotor-EZ/RT-21 rotors)
+are driven with confirmation, never switch the radio/amplifier while transmitting,
+and always allow stop. Signal paths and gear without a public protocol: "pendiente de fuente".
+
 The first loopback Heartbeat/Status origin is pinned until the agent
 restarts. A different origin, an expired/closed instance, unsupported fields,
 and repeated IDs are rejected; Replay has a limit of one request per second.

@@ -25,6 +25,10 @@ rest_api_reference.pdf, linked from that page, which was not read.
   - Several outlets (firmware 1.10.11+): `POST /restapi/relay/set_outlet_transient_states/`
     with the JSON body `[[[0,false],[1,true]]]`.
 - Notes:
+  - The JSON shape of the read reply is not documented in the pages read;
+    the code accepts only a bare JSON boolean and rejects anything else.
+  - The form `Content-Type` for the PUT is assumed to be
+    `application/x-www-form-urlencoded` ("form data" in the reference).
   - Change the default credentials.
   - An "on" request may be delayed by the on-sequence and cycle delays.
   - The physical state cannot be set directly.
@@ -48,6 +52,12 @@ Source: https://www.waveshare.com/wiki/Modbus_POE_ETH_Relay (parts marked
   reply is the function code + 0x80 (summary).
 - Modbus TCP example for relay 0 on: `00 00 00 00 00 06 01 05 00 00 FF 00`
   (summary).
+- Modbus PDU layouts used by the code (FC 01 `01 addr qty`, FC 05
+  `05 addr value`, FC 0F `0F addr qty bytecount data`, MBAP header with
+  protocol 0 and length = PDU + 1): Modbus Application Protocol V1.1b3
+  (https://modbus.org/docs/Modbus_Application_Protocol_V1_1b3.pdf), not
+  re-read in this session. The test frames other than the relay 0 example
+  are derived from it.
 - Safety: protect the load with a fuse and confirm the relay state after
   power-up.
 
@@ -109,3 +119,71 @@ letters below come from Hamlib and match the manual's descriptions.
 - Dataprobe iBoot-PDU: the vendor advertises REST, Telnet and SNMP, but the
   syntax was not read (the page returned HTTP 429).
 - Alpha 87A and OM Power OM2000A+: not located.
+## Per-radio support matrix
+
+Station devices (power outlets, rotors, signal path) are radio-independent.
+The only radio-coupled behaviour is the TX interlock: switching a radio or
+amplifier outlet is refused while the radio transmits. The interlock reads the
+TX state through the Hamlib rigctld generic path (`hamlibModel` in
+`data/remote-station-catalog.json`). Native TX-state fallbacks have not been
+verified per radio, so rows relying on rigctld only are `ok` where the catalog
+lists a Hamlib model and `partial` where the link is not rigctld-native.
+Source for every row: `data/remote-station-catalog.json` entry of the radio.
+
+| radio | link | feature status |
+|---|---|---|
+| Icom IC-705 | usb, lan, wifi | ok (rigctld 3085; LAN/Wi-Fi via wfview) |
+| Icom IC-7100 | usb | ok (rigctld 3070) |
+| Icom IC-7200 | usb | ok (rigctld 3061) |
+| Icom IC-7300 | usb | ok (rigctld 3073) |
+| Icom IC-7300MK2 | usb | ok (rigctld 3094, Beta) |
+| Icom IC-7410 | usb | ok (rigctld 3067) |
+| Icom IC-7600 | usb | ok (rigctld 3063) |
+| Icom IC-7610 | usb, lan | ok (rigctld 3078; LAN via wfview) |
+| Icom IC-7700 | usb | ok (rigctld 3062) |
+| Icom IC-7760 | usb, lan | ok (rigctld 3092, Alpha) |
+| Icom IC-7800 | usb | ok (rigctld 3056) |
+| Icom IC-7850 / IC-7851 | usb, lan | ok (rigctld 3075; LAN via wfview) |
+| Icom IC-905 | usb, lan, wifi | ok (rigctld 3090; LAN/Wi-Fi via wfview) |
+| Icom IC-9100 | usb | ok (rigctld 3068) |
+| Icom IC-9700 | usb, lan | ok (rigctld 3081; LAN via wfview) |
+| Icom IC-R8600 | usb, lan | ok (rigctld 3079; receive only, no TX interlock needed) |
+| FlexRadio FLEX-6400 | lan, wifi | partial (rigctld 23005 via SmartSDR CAT; native TX state pendiente de fuente) |
+| FlexRadio FLEX-6400M | lan, wifi | partial (same as FLEX-6400) |
+| FlexRadio FLEX-6600 | lan, wifi | partial (same as FLEX-6400) |
+| FlexRadio FLEX-6600M | lan, wifi | partial (same as FLEX-6400) |
+| FlexRadio FLEX-6700 | lan, wifi | partial (same as FLEX-6400) |
+| FlexRadio FLEX-8400 | lan, wifi | partial (same as FLEX-6400) |
+| FlexRadio FLEX-8400M | lan, wifi | partial (same as FLEX-6400) |
+| FlexRadio FLEX-8600 | lan, wifi | partial (same as FLEX-6400) |
+| FlexRadio FLEX-8600M | lan, wifi | partial (same as FLEX-6400) |
+| FlexRadio AURORA-510 | lan, wifi | partial (same as FLEX-6400) |
+| FlexRadio AURORA-510M | lan, wifi | partial (same as FLEX-6400) |
+| FlexRadio AURORA-520 | lan, wifi | partial (same as FLEX-6400) |
+| FlexRadio AURORA-520M | lan, wifi | partial (same as FLEX-6400) |
+| Kenwood TS-590S | usb | ok (rigctld 2031) |
+| Kenwood TS-590SG | usb | ok (rigctld 2037) |
+| Kenwood TS-890S | usb | ok (rigctld 2041) |
+| Kenwood TS-990S | usb | ok (rigctld 2039) |
+| Yaesu FT-710 | usb | ok (rigctld 1049) |
+| Yaesu FT-991A | usb | ok (rigctld 1035) |
+| Yaesu FTDX10 | usb | ok (rigctld 1042) |
+| Yaesu FTDX101D | usb | ok (rigctld 1040) |
+| Yaesu FTDX101MP | usb | ok (rigctld 1044) |
+| Yaesu FTDX3000 | usb | ok (rigctld 1037) |
+| Yaesu FTX-1 | usb | ok (rigctld 1051; direct CAT `TX`/`RI0` in the catalog `cat` block) |
+| Elecraft K3S | usb | ok (rigctld 2043) |
+| Elecraft K4 | usb, lan, wifi | ok (rigctld 2047; network port 9200) |
+| QRP Labs QMX / QMX+ | usb | ok (rigctld 2057) |
+| QRP Labs QCX / QDX | usb | ok (rigctld 2052) |
+| DL2MAN (tr)uSDX | usb | ok (rigctld 2055) |
+| Hermes Lite 2 | lan | partial (rigctld 2040 via piHPSDR CAT, Beta) |
+| Xiegu | not in catalog | pendiente de fuente (no catalog entry) |
+| Quansheng | not in catalog | pendiente de fuente (no catalog entry) |
+
+Rotor models in the catalog (Hy-Gain DCU-1 / DCU-1X, Green Heron RT-21,
+Hy-Gain DCU2 / DCU3 / YRC-1) and the amplifier models (Elecraft KPA1500,
+Gemini DX1200 / HF-1K, Expert 1.3K-FA / 1.5K-FA / 2K-FA) are accessory rows,
+not radios: DCU-1 and RT-21 are covered above; DCU2 / DCU3 / YRC-1 are
+`pendiente de fuente` for direct serial control (Hamlib model 406 only); the
+amplifiers are `pendiente de fuente` for direct control (Hamlib ampctld only).
