@@ -233,7 +233,7 @@ test("static files are limited to the console allow-list and carry security head
   const rig = await fakeRigctld();
   const { call, cleanup } = await startAgent(rig, { radioScope: "audio" });
   try {
-    for (const file of ["/remote.html", "/remote-ui.js", "/remote-audio-core.js", "/spectrum-core.js", "/remote-audio-worklet.js", "/remote.css"]) {
+    for (const file of ["/remote.html", "/remote-ui.js", "/remote-audio-core.js", "/remote-digital.js", "/digital-code-tables.json", "/spectrum-core.js", "/remote-audio-worklet.js", "/remote.css"]) {
       const response = await call("GET", file, { token: "" });
       assert.equal(response.status, 200, file);
       assert.equal(response.headers["x-content-type-options"], "nosniff");

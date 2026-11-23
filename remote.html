@@ -13,6 +13,7 @@
   <script src="ui-translations.js" defer></script>
   <script src="ui-i18n.js" defer></script>
   <script src="remote-audio-core.js" defer></script>
+  <script src="remote-digital.js" defer></script>
   <script src="spectrum-core.js" defer></script>
   <script src="remote-rotor-ui.js" defer></script>
   <script src="remote-tune-ui.js" defer></script>
@@ -163,6 +164,7 @@
       <button id="tab-band" type="button" role="tab" aria-selected="true" aria-controls="panel-band">Banda</button>
       <button id="tab-levels" type="button" role="tab" aria-selected="false" aria-controls="panel-levels" tabindex="-1">Niveles</button>
       <button id="tab-cw" type="button" role="tab" aria-selected="false" aria-controls="panel-cw" tabindex="-1">CW</button>
+      <button id="tab-digital" type="button" role="tab" aria-selected="false" aria-controls="panel-digital" tabindex="-1">RTTY/PSK31</button>
       <button id="tab-log" type="button" role="tab" aria-selected="false" aria-controls="panel-log" tabindex="-1">Registro</button>
       <button id="tab-qso" type="button" role="tab" aria-selected="false" aria-controls="panel-qso" tabindex="-1">Libro QSO</button>
       <button id="tab-settings" type="button" role="tab" aria-selected="false" aria-controls="panel-settings" tabindex="-1">Ajustes</button>
@@ -252,6 +254,46 @@
       <label class="slider" for="cw-nr">Numero</label>
       <input id="cw-nr" type="text" maxlength="6" value="001" autocomplete="off">
       <div id="cw-memories" class="cw-memories"></div>
+    </section>
+
+    <section id="panel-digital" class="card panel" role="tabpanel" aria-labelledby="tab-digital" data-active="false">
+      <h2 class="panel-title">RTTY y PSK31 (solo recepcion)</h2>
+      <p class="hint">Decodifica en este navegador el audio de recepcion de la radio. Nunca transmite.</p>
+      <div class="cw-actions">
+        <button id="digital-toggle" type="button" class="toggle" aria-pressed="false">Activar decodificador</button>
+        <button id="digital-clear" type="button">Borrar texto decodificado</button>
+      </div>
+      <label class="slider" for="digital-mode">Modo digital</label>
+      <select id="digital-mode">
+        <option value="bpsk31">BPSK31</option>
+        <option value="rtty">RTTY</option>
+      </select>
+      <div id="digital-psk">
+        <label class="slider" for="digital-carrier">Frecuencia de portadora (Hz)</label>
+        <input id="digital-carrier" type="number" min="100" step="1" inputmode="decimal" placeholder="1000">
+      </div>
+      <div id="digital-rtty" hidden>
+        <label class="slider" for="digital-mark">Frecuencia de marca (Hz)</label>
+        <input id="digital-mark" type="number" min="100" step="1" inputmode="decimal">
+        <label class="slider" for="digital-baud">Velocidad RTTY (baudios)</label>
+        <input id="digital-baud" type="number" min="1" step="0.01" inputmode="decimal">
+        <label class="slider" for="digital-shift">Desplazamiento entre marca y espacio (Hz)</label>
+        <input id="digital-shift" type="number" min="1" step="1" inputmode="decimal">
+        <label class="slider" for="digital-stop">Bits de parada</label>
+        <select id="digital-stop">
+          <option value="1">1</option>
+          <option value="1.5">1,5</option>
+          <option value="2">2</option>
+        </select>
+        <label class="slider" for="digital-polarity">Polaridad RTTY</label>
+        <select id="digital-polarity">
+          <option value="normal">Polaridad normal</option>
+          <option value="reversed">Polaridad invertida</option>
+        </select>
+        <button id="digital-preset" type="button">Cargar preset RTTY: valor habitual, pendiente de cita</button>
+      </div>
+      <p id="digital-status" class="hint" role="status" aria-live="polite">Decodificador apagado.</p>
+      <pre id="digital-text" class="digital-text" translate="no" role="log" aria-label="Texto decodificado" aria-live="off"></pre>
     </section>
 
     <section id="panel-log" class="card panel" role="tabpanel" aria-labelledby="tab-log" data-active="false">

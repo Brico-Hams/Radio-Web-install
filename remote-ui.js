@@ -48,7 +48,8 @@
   const LEVEL_KEYS = Object.freeze({ AF: "af", RF: "rf", RFPOWER: "rfpower" });
   const MIC_GAIN_KEY = "bricohams.remote.micgain";
   const MIC_GAIN_DEFAULT = 50;
-  const TABS = Object.freeze(["band", "levels", "cw", "log", "qso", "settings"]);
+  const TABS = Object.freeze(["band", "levels", "cw", "digital", "log", "qso", "settings"]);
+  const CW_KEY = "bricohams.remote.cwmemories";
   // Placeholders {CALL} (their call, typed in the panel), {MYCALL}, {RST}, {NR} are expanded here and validated again by the agent.
   const CW_DEFAULTS = Object.freeze(["CQ CQ DE {MYCALL} {MYCALL} K", "{CALL} DE {MYCALL} K", "{CALL} {RST} {RST} {NR}", "{CALL} TU 73 EE", "QRZ? DE {MYCALL}", "AGN?", "{MYCALL}", "73 TU"]);
   const $ = id => document.getElementById(id);
@@ -848,6 +849,7 @@
         try {
           const pcm = new Float32Array(data.numberOfFrames);
           data.copyTo(pcm, { planeIndex: 0, format: "f32-planar" });
+          digitalFeed(pcm);
           audio.node?.port.postMessage({ pcm }, [pcm.buffer]);
         } finally { data.close(); }
       },
@@ -910,6 +912,7 @@
       updateAudioButton();
       $("audio-panel").hidden = false;
       audioNote("");
+      renderDigital();
       if (view.ptt || view.wantPtt) startTx();
     } catch {
       stopAudio();
@@ -939,6 +942,8 @@
     updateAudioButton();
     updateScopeVisibility();
     $("audio-panel").hidden = true;
+    digital.session?.reset();
+    renderDigital();
   }
 
   const txAllowed = () => Boolean(audio.on && audio.hello?.tx?.allowed && audio.ws?.readyState === WebSocket.OPEN);
@@ -1056,6 +1061,102 @@
       if (document.hidden) { stopTx(true); stopScope(); } else if (audio.on) updateScopeVisibility();
     });
     addEventListener("pagehide", () => stopTx(true));
+  }
+
+  // RTTY / BPSK31 receive-only decoding of the RX audio, in this browser. It only reads the decoded PCM: it never keys,
+  // never touches the TX path, the operator lock or the heartbeat, and stores no credentials.
+  const Digital = window.RemoteDigital;
+  const digital = { on: false, session: null, tables: null, loading: false, error: "", statusAt: 0 };
+
+  function readDigitalConfig() {
+    return {
+      mode: $("digital-mode").value,
+      carrierHz: $("digital-carrier").value,
+      rtty: {
+        markHz: $("digital-mark").value, baud: $("digital-baud").value, shiftHz: $("digital-shift").value,
+        stopBits: $("digital-stop").value, polarity: $("digital-polarity").value
+      }
+    };
+  }
+
+  function renderDigital() {
+    const mode = $("digital-mode").value;
+    $("digital-psk").hidden = mode !== "bpsk31";
+    $("digital-rtty").hidden = mode !== "rtty";
+    setPressed($("digital-toggle"), digital.on);
+    setText($("digital-toggle"), digital.on ? "Detener decodificador" : "Activar decodificador");
+    let message = "Decodificador apagado.";
+    if (digital.on) {
+      if (digital.error) message = digital.error;
+      else if (!audio.on) message = "Activa el audio de la radio para decodificar.";
+      else message = digital.session?.status().locked ? "Senal digital detectada." : "Escuchando: sin senal digital detectada.";
+    }
+    setText($("digital-status"), message);
+  }
+
+  function configureDigital() {
+    digital.error = "";
+    if (!digital.session) return;
+    const result = digital.session.configure(readDigitalConfig());
+    if (!result.ok) digital.error = result.errors[0];
+    renderDigital();
+  }
+
+  function digitalFeed(pcm) {
+    if (!digital.on || !digital.session) return;
+    if (digital.session.push(pcm)) {
+      const view = $("digital-text");
+      view.textContent = digital.session.text();
+      view.scrollTop = view.scrollHeight;
+    }
+    const now = Date.now();
+    if (now - digital.statusAt > 300) { digital.statusAt = now; renderDigital(); }
+  }
+
+  async function toggleDigital() {
+    if (digital.on) {
+      digital.on = false;
+      digital.session?.configure({ mode: "off" });
+      renderDigital();
+      return;
+    }
+    if (!Digital || digital.loading) return;
+    digital.loading = true;
+    try {
+      if (!digital.tables) {
+        const response = await fetch("digital-code-tables.json", { cache: "no-store" });
+        if (!response.ok) throw new Error("tables");
+        digital.tables = await response.json();
+      }
+      digital.session = Digital.createDigitalSession({ tables: digital.tables, sampleRate: 48000 });
+      digital.on = true;
+      configureDigital();
+    } catch {
+      digital.on = true;
+      digital.error = "No se pudieron cargar las tablas de codigos.";
+      renderDigital();
+    } finally {
+      digital.loading = false;
+    }
+  }
+
+  function bindDigital() {
+    $("digital-toggle").addEventListener("click", toggleDigital);
+    $("digital-clear").addEventListener("click", () => { digital.session?.clear(); $("digital-text").textContent = ""; });
+    for (const id of ["digital-mode", "digital-carrier", "digital-mark", "digital-baud", "digital-shift", "digital-stop", "digital-polarity"]) {
+      $(id).addEventListener("change", () => { if (digital.on && digital.session) configureDigital(); else renderDigital(); });
+    }
+    // Editable convenience values without a repo citation; the mark frequency is never preset.
+    $("digital-preset").addEventListener("click", () => {
+      const preset = Digital?.RTTY_USUAL_PRESET;
+      if (!preset) return;
+      $("digital-baud").value = String(preset.baud);
+      $("digital-shift").value = String(preset.shiftHz);
+      $("digital-stop").value = String(preset.stopBits);
+      $("digital-polarity").value = preset.polarity;
+      if (digital.on && digital.session) configureDigital();
+    });
+    renderDigital();
   }
 
   // Remote radio settings (GET/POST api/settings): the agent validates, backs up, writes, reads back and audits; this view only lists and sends.
@@ -1461,6 +1562,7 @@
     bindPtt();
     bindAudio();
     bindScopeControls();
+    bindDigital();
     bindTuner();
     bindLevels();
     bindSettings();

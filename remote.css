@@ -125,6 +125,8 @@ input[type=range]{width:100%;min-height:36px;accent-color:var(--accent)}
 .tune-result[data-outcome=fail] strong{color:var(--bad)}
 .tune-result[data-outcome=timeout] strong{color:var(--warn)}
 .rotor[hidden]{display:none}
+#digital-psk[hidden],#digital-rtty[hidden]{display:none}
+.digital-text{margin:.6rem 0 0;min-height:8rem;max-height:18rem;overflow:auto;white-space:pre-wrap;word-break:break-word;font-family:ui-monospace,Consolas,monospace;padding:.5rem .7rem;border:1px solid var(--border);border-radius:10px;background:var(--surface-2);color:var(--text)}
 .rotor-row{display:flex;flex-wrap:wrap;gap:.5rem;margin:.6rem 0;align-items:end}
 .rotor-row label,.rotor-file{display:flex;flex-direction:column;gap:.2rem;font-size:.85rem}
 .rotor-row input{min-height:44px;width:8rem}

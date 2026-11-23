@@ -2383,6 +2383,39 @@ No hay contactos pendientes de subir.|No contacts are pending upload.|Aucun cont
 TQSL no ha terminado a tiempo.|TQSL did not finish in time.|TQSL ne s’est pas terminé à temps.|TQSL wurde nicht rechtzeitig beendet.
 TQSL ha terminado con error.|TQSL finished with an error.|TQSL s’est terminé avec une erreur.|TQSL wurde mit einem Fehler beendet.
 `.trim().split("\n").map(line => line.split("|")));
+  entries.push(...`
+RTTY/PSK31|RTTY/PSK31|RTTY/PSK31|RTTY/PSK31
+RTTY y PSK31 (solo recepcion)|RTTY and PSK31 (receive only)|RTTY et PSK31 (réception seule)|RTTY und PSK31 (nur Empfang)
+Decodifica en este navegador el audio de recepcion de la radio. Nunca transmite.|Decodes the radio receive audio in this browser. It never transmits.|Décode dans ce navigateur l’audio de réception de la radio. Ne transmet jamais.|Dekodiert den Empfangston des Funkgeräts in diesem Browser. Sendet niemals.
+Activar decodificador|Start decoder|Activer le décodeur|Dekoder starten
+Detener decodificador|Stop decoder|Arrêter le décodeur|Dekoder stoppen
+Borrar texto decodificado|Clear decoded text|Effacer le texte décodé|Dekodierten Text löschen
+Texto decodificado|Decoded text|Texte décodé|Dekodierter Text
+Modo digital|Digital mode|Mode numérique|Digitalmodus
+Frecuencia de portadora (Hz)|Carrier frequency (Hz)|Fréquence porteuse (Hz)|Trägerfrequenz (Hz)
+Frecuencia de marca (Hz)|Mark frequency (Hz)|Fréquence de marque (Hz)|Markenfrequenz (Hz)
+Velocidad RTTY (baudios)|RTTY speed (baud)|Vitesse RTTY (bauds)|RTTY-Geschwindigkeit (Baud)
+Desplazamiento entre marca y espacio (Hz)|Shift between mark and space (Hz)|Décalage entre marque et espace (Hz)|Hub zwischen Mark und Space (Hz)
+Bits de parada|Stop bits|Bits d’arrêt|Stoppbits
+Polaridad RTTY|RTTY polarity|Polarité RTTY|RTTY-Polarität
+Polaridad normal|Normal polarity|Polarité normale|Normale Polarität
+Polaridad invertida|Reversed polarity|Polarité inversée|Invertierte Polarität
+Cargar preset RTTY: valor habitual, pendiente de cita|Load RTTY preset: usual value, citation pending|Charger le préréglage RTTY : valeur habituelle, citation en attente|RTTY-Voreinstellung laden: üblicher Wert, Quelle ausstehend
+Decodificador apagado.|Decoder off.|Décodeur arrêté.|Dekoder aus.
+Activa el audio de la radio para decodificar.|Turn on the radio audio to decode.|Activez l’audio de la radio pour décoder.|Schalte den Ton des Funkgeräts ein, um zu dekodieren.
+Escuchando: sin senal digital detectada.|Listening: no digital signal detected.|À l’écoute : aucun signal numérique détecté.|Hört zu: kein Digitalsignal erkannt.
+Senal digital detectada.|Digital signal detected.|Signal numérique détecté.|Digitalsignal erkannt.
+No se pudieron cargar las tablas de codigos.|The code tables could not be loaded.|Les tables de codes n’ont pas pu être chargées.|Die Codetabellen konnten nicht geladen werden.
+Introduce la velocidad en baudios (mayor que 0).|Enter the speed in baud (greater than 0).|Saisissez la vitesse en bauds (supérieure à 0).|Geschwindigkeit in Baud eingeben (größer als 0).
+La velocidad es demasiado alta para el audio recibido.|The speed is too high for the received audio.|La vitesse est trop élevée pour l’audio reçu.|Die Geschwindigkeit ist für den empfangenen Ton zu hoch.
+Introduce el desplazamiento en Hz (mayor que 0).|Enter the shift in Hz (greater than 0).|Saisissez le décalage en Hz (supérieur à 0).|Hub in Hz eingeben (größer als 0).
+Introduce la frecuencia de marca en Hz.|Enter the mark frequency in Hz.|Saisissez la fréquence de marque en Hz.|Markenfrequenz in Hz eingeben.
+Marca y espacio deben quedar dentro de la banda de audio recibida.|Mark and space must fall inside the received audio band.|La marque et l’espace doivent rester dans la bande audio reçue.|Mark und Space müssen im empfangenen Audiobereich liegen.
+Los bits de parada deben estar entre 1 y 2.|Stop bits must be between 1 and 2.|Les bits d’arrêt doivent être compris entre 1 et 2.|Stoppbits müssen zwischen 1 und 2 liegen.
+Elige polaridad normal o invertida.|Choose normal or reversed polarity.|Choisissez la polarité normale ou inversée.|Normale oder invertierte Polarität wählen.
+Introduce la frecuencia de portadora en Hz.|Enter the carrier frequency in Hz.|Saisissez la fréquence porteuse en Hz.|Trägerfrequenz in Hz eingeben.
+Ajustes no validos.|Invalid settings.|Réglages non valides.|Ungültige Einstellungen.
+`.trim().split("\n").map(line => line.split("|")));
   root.BricohamsUITranslations = entries;
   if (typeof module === "object" && module.exports) module.exports = entries;
 })(typeof globalThis === "object" ? globalThis : this);
