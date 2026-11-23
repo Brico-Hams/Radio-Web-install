@@ -271,7 +271,8 @@ function detail(tool) {
 }
 
 document.getElementById("app").innerHTML = `
-  <aside class="sidebar">
+  <aside class="sidebar" id="sidebar">
+    <button id="nav-close" class="button secondary nav-close" type="button">Cerrar menu</button>
     <a class="brand" href="index.html" aria-label="Bricohams Radio Workspace: inicio"><img class="brand-logo" src="bricohams-logo.png" alt="Bricohams" width="1200" height="446"><span class="brand-product">${BRAND.product.toUpperCase()}</span></a>
     <p class="nav-label">TU ESTACION</p>${sidebarNav()}
     ${current ? `<p class="nav-label">PASOS</p><nav class="steps" aria-label="Pasos de este espacio">${steps.map(([label, target, tab], index) => page === "quansheng"
@@ -279,10 +280,33 @@ document.getElementById("app").innerHTML = `
       : `<a href="${target.startsWith("#") ? target : "#radio-operations"}" data-step="${target}"${tab ? ` data-tab="${tab}"` : ""}><span class="step-num" aria-hidden="true">${index}</span>${label}</a>`).join("")}</nav>` : ""}
     <div class="sidebar-bottom"><span class="local-dot"></span> USB / Serial local<p>Sin envio de datos a servidores.<br>Copias antes de escribir.</p></div>
   </aside>
+  <div id="nav-backdrop" class="nav-backdrop" hidden></div>
   <div class="workspace"><header class="topbar">
+    <button id="nav-toggle" class="button secondary nav-toggle" type="button" aria-controls="sidebar" aria-expanded="false"><span aria-hidden="true">&#9776;</span> Menú</button>
     <div class="topbar-left"><span class="crumb">${BRAND.name} <span class="breadcrumb">/ ${current ? current.name : stationTemplate ? "Estación remota (host/agente Python)" : anytoneTemplate ? "AnyTone Beta" : ftx1Template ? "Yaesu FTX-1" : icomTemplate ? "Icom transversores" : helpTemplate ? "Ayuda y soporte" : page === "satelites" ? "Satelites" : page === "antenas" ? "Antenas" : page === "herramientas" ? "Estacion / Herramientas de radio" : page === "radios" ? "Radios" : "Inicio"}</span></span>${current ? '<span class="topbar-status"><span class="status-dot" aria-hidden="true"></span><span id="topbar-status">Sin conexion.</span></span>' : ""}</div>
     <div class="topbar-right"><span class="pill">BETA - EN VALIDACION</span><span id="mode-badge" class="mode-badge"></span><span class="local-badge">SIN CUENTA &middot; SIN SUBIDAS</span>${current ? '<button id="topbar-connect" class="button primary topbar-connect" type="button" disabled><span aria-hidden="true">⌁</span> Conectar</button>' : ""}</div></header>
   <main id="main">${current ? detail(current) : stationTemplate || helpTemplate || anytoneTemplate || ftx1Template || icomTemplate || page === "satelites" || page === "antenas" || page === "herramientas" ? "" : page === "radios" ? radios() : home()}</main>  <footer><span>&copy; 2026 ${BRAND.name} ${BRAND.product} <span class="muted">/ GPL-3.0-or-later / Sin garantia</span></span><span><a href="ayuda-referencias.html">Documentacion de referencia</a> &middot; <a href="ayuda.html#inicio">Instalar en local</a> &middot; <a href="ayuda.html">Ayuda y soporte</a> &middot; <a href="${BRAND.repository}" target="_blank" rel="noopener noreferrer">Codigo fuente</a> &middot; No afiliado a OpenGD77, grid.radio, F4HWN ni Quansheng.</span></footer></div>`;
+// Below 900px the sidebar is a drawer opened by the menu button; the top bar height feeds scroll-padding-top.
+{
+  const sidebar = document.getElementById("sidebar"), toggle = document.getElementById("nav-toggle");
+  const close = document.getElementById("nav-close"), backdrop = document.getElementById("nav-backdrop");
+  const topbar = document.querySelector(".topbar");
+  const setOpen = (open, restoreFocus) => {
+    if (open) sidebar.setAttribute("data-open", ""); else sidebar.removeAttribute("data-open");
+    backdrop.hidden = !open;
+    toggle.setAttribute("aria-expanded", String(open));
+    if (open) close.focus(); else if (restoreFocus) toggle.focus();
+  };
+  toggle.addEventListener("click", () => setOpen(!sidebar.hasAttribute("data-open")));
+  close.addEventListener("click", () => setOpen(false, true));
+  backdrop.addEventListener("click", () => setOpen(false, true));
+  sidebar.addEventListener("click", event => { if (event.target.closest && event.target.closest("a, .step-view")) setOpen(false); });
+  document.addEventListener("keydown", event => { if (event.key === "Escape" && sidebar.hasAttribute("data-open")) setOpen(false, true); });
+  const syncTopbar = () => document.documentElement.style.setProperty("--topbar-h", `${topbar.offsetHeight}px`);
+  syncTopbar();
+  if (typeof ResizeObserver === "function") new ResizeObserver(syncTopbar).observe(topbar);
+  else globalThis.addEventListener("resize", syncTopbar);
+}
 if (anytoneTemplate) {
   document.getElementById("main").append(anytoneTemplate.content.cloneNode(true));
   globalThis.RadioWorkspace.mountAnytoneUI();

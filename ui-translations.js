@@ -313,6 +313,7 @@
     ["Vista general", "Overview", "Vue d’ensemble", "Übersicht"],
     ["/ Vista general", "/ Overview", "/ Vue d’ensemble", "/ Übersicht"],
     ["Navegacion principal", "Main navigation", "Navigation principale", "Hauptnavigation"],
+    ["Cerrar menu", "Close menu", "Fermer le menu", "Menü schließen"],
     ["Ayuda y soporte", "Help and support", "Aide et assistance", "Hilfe und Support"],
     ["PASOS", "STEPS", "ÉTAPES", "SCHRITTE"],
     ["Pasos de este espacio", "Workspace steps", "Étapes de cet espace", "Schritte in diesem Bereich"],
