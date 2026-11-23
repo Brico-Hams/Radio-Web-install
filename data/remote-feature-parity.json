@@ -1,0 +1,275 @@
+{
+  "format": "radicodex-remote-feature-parity",
+  "version": 1,
+  "featureOrder": ["freqMode", "vfoSplit", "ptt", "smeter", "txMeters", "tune", "audioRx", "audioTx", "waterfall", "rotor", "accessories", "settings"],
+  "statusMeaning": {
+    "ok": "Implemented in the shared layer and covered by repository tests; hardware verification is tracked by the catalog status.",
+    "partial": "Implemented only for some paths (Android code only, runtime-probed Hamlib capability, beta backend).",
+    "pendiente": "pendiente de fuente: no source in the repository, or no adapter yet. Shown disabled in every UI.",
+    "na": "Not applicable (receiver-only radio)."
+  },
+  "families": {
+    "hamlib-tx": {
+      "adapter": "hamlib",
+      "features": ["ok", "partial", "ok", "ok", "partial", "partial", "ok", "ok", "ok", "ok", "partial", "partial"],
+      "sources": {
+        "freqMode": ["rigctld-client.cjs", "remote-agent.cjs", "data/remote-station-catalog.json"],
+        "vfoSplit": ["rigctld-client.cjs"],
+        "ptt": ["remote-agent.cjs", "tests/remote-tx.test.cjs"],
+        "smeter": ["rigctld-client.cjs"],
+        "txMeters": ["remote-agent.cjs", "rigctld-client.cjs"],
+        "tune": ["remote-agent.cjs", "rigctld-client.cjs"],
+        "audioRx": ["remote-audio.cjs"],
+        "audioTx": ["remote-audio.cjs", "tests/remote-audio.test.cjs"],
+        "waterfall": ["remote-audio-core.js", "remote-ui.js"],
+        "rotor": ["remote-station.cjs", "remote-station/docs/control-rotores.md"],
+        "accessories": ["remote-agent.cjs"],
+        "settings": ["remote-agent.cjs"]
+      },
+      "reasons": {
+        "vfoSplit": "Depende del backend Hamlib del modelo (se comprueba al arrancar).",
+        "txMeters": "PO/SWR/ALC solo si Hamlib los declara; sin calibracion propia.",
+        "tune": "G TUNE / funcion TUNER solo si Hamlib la declara; siempre explicito, con limite de tiempo y corte por ROE.",
+        "accessories": "Sintonizador por Hamlib; los amplificadores solo estan en el catalogo (ampctld no se arranca todavia).",
+        "settings": "Niveles y funciones (PREAMP, ATT, AGC, NB, NR) segun lo que declare Hamlib."
+      }
+    },
+    "hamlib-beta": {
+      "adapter": "hamlib",
+      "features": ["partial", "partial", "partial", "ok", "partial", "partial", "ok", "ok", "ok", "ok", "partial", "partial"],
+      "sources": {
+        "freqMode": ["rigctld-client.cjs", "data/remote-station-catalog.json"],
+        "vfoSplit": ["rigctld-client.cjs"],
+        "ptt": ["remote-agent.cjs", "tests/remote-tx.test.cjs"],
+        "smeter": ["rigctld-client.cjs"],
+        "txMeters": ["remote-agent.cjs"],
+        "tune": ["remote-agent.cjs"],
+        "audioRx": ["remote-audio.cjs"],
+        "audioTx": ["remote-audio.cjs", "tests/remote-audio.test.cjs"],
+        "waterfall": ["remote-audio-core.js", "remote-ui.js"],
+        "rotor": ["remote-station.cjs", "remote-station/docs/control-rotores.md"],
+        "accessories": ["remote-agent.cjs"],
+        "settings": ["remote-agent.cjs"]
+      },
+      "reasons": {
+        "freqMode": "Soporte beta/alfa o sin prueba fisica en el catalogo: pueden faltar funciones.",
+        "vfoSplit": "Depende del backend Hamlib del modelo (se comprueba al arrancar).",
+        "ptt": "Backend beta/alfa o sin prueba fisica: PTT explicito y protegido, pero sin verificar en hardware.",
+        "txMeters": "PO/SWR/ALC solo si Hamlib los declara; sin calibracion propia.",
+        "tune": "Solo si Hamlib la declara; siempre explicito, con limite de tiempo y corte por ROE.",
+        "accessories": "Sintonizador por Hamlib; los amplificadores solo estan en el catalogo.",
+        "settings": "Niveles y funciones segun lo que declare Hamlib."
+      }
+    },
+    "hamlib-rx": {
+      "adapter": "hamlib",
+      "features": ["ok", "partial", "na", "ok", "na", "na", "ok", "na", "ok", "ok", "na", "partial"],
+      "sources": {
+        "freqMode": ["rigctld-client.cjs", "remote-agent.cjs"],
+        "vfoSplit": ["rigctld-client.cjs"],
+        "smeter": ["rigctld-client.cjs"],
+        "audioRx": ["remote-audio.cjs"],
+        "waterfall": ["remote-audio-core.js", "remote-ui.js"],
+        "rotor": ["remote-station.cjs", "remote-station/docs/control-rotores.md"],
+        "settings": ["remote-agent.cjs"]
+      },
+      "reasons": {
+        "vfoSplit": "Depende del backend Hamlib del modelo (se comprueba al arrancar).",
+        "settings": "Niveles y funciones segun lo que declare Hamlib."
+      }
+    },
+    "ftx1": {
+      "adapter": "hamlib",
+      "features": ["ok", "ok", "ok", "ok", "ok", "ok", "ok", "ok", "ok", "ok", "partial", "partial"],
+      "sources": {
+        "freqMode": ["remote-station/bricoham_remote_station/drivers/ftx1_cat.py", "rigctld-client.cjs", "data/remote-station-catalog.json"],
+        "vfoSplit": ["remote-station/bricoham_remote_station/drivers/ftx1_cat.py", "rigctld-client.cjs"],
+        "ptt": ["remote-agent.cjs", "tests/remote-tx.test.cjs", "remote-station/docs/ptt-ftx1.md"],
+        "smeter": ["rigctld-client.cjs"],
+        "txMeters": ["remote-agent.cjs", "data/remote-station-catalog.json"],
+        "tune": ["remote-agent.cjs", "data/remote-station-catalog.json"],
+        "audioRx": ["remote-audio.cjs"],
+        "audioTx": ["remote-audio.cjs", "tests/remote-audio.test.cjs"],
+        "waterfall": ["remote-audio-core.js", "remote-ui.js"],
+        "rotor": ["remote-station.cjs", "remote-station/docs/control-rotores.md"],
+        "accessories": ["remote-agent.cjs", "data/remote-station-catalog.json"],
+        "settings": ["remote-agent.cjs", "remote-station/bricoham_remote_station/drivers/ftx1_cat.py"]
+      },
+      "reasons": {
+        "accessories": "Sintonizador por CAT directo (AC1xx); los amplificadores solo estan en el catalogo.",
+        "settings": "ATT devuelve RPRT -9 y AGC responde lento (notas del catalogo)."
+      }
+    },
+    "android-fivebyte": {
+      "adapter": "none",
+      "features": ["partial", "partial", "partial", "pendiente", "pendiente", "pendiente", "ok", "pendiente", "ok", "ok", "pendiente", "pendiente"],
+      "sources": {
+        "freqMode": ["android/app/src/main/java/org/bricohams/radio/RigProtocols.kt"],
+        "vfoSplit": ["android/app/src/main/java/org/bricohams/radio/RigProtocols.kt"],
+        "ptt": ["android/app/src/main/java/org/bricohams/radio/RigProtocols.kt"],
+        "audioRx": ["remote-audio.cjs"],
+        "waterfall": ["remote-audio-core.js", "remote-ui.js"],
+        "rotor": ["remote-station.cjs", "remote-station/docs/control-rotores.md"]
+      },
+      "reasons": {
+        "freqMode": "Solo en el codigo Android (YaesuFiveByteRig); falta portarlo al shack Node y a Python (sin modelo Hamlib citado).",
+        "vfoSplit": "Solo en el codigo Android (YaesuFiveByte.split).",
+        "ptt": "Solo en el codigo Android; el shack no lo ofrece sin adaptador CAT.",
+        "smeter": "pendiente de fuente: YaesuFiveByteRig no lee el S-metro.",
+        "txMeters": "pendiente de fuente: sin lectura de medidores TX en el repositorio.",
+        "tune": "pendiente de fuente: sin comando de sintonia citado.",
+        "audioTx": "Requiere PTT en el shack, aun sin adaptador CAT (pendiente de fuente).",
+        "accessories": "pendiente de fuente: sin control de sintonizador en el repositorio.",
+        "settings": "pendiente de fuente: sin ajustes remotos citados."
+      }
+    },
+    "xiegu-civ": {
+      "adapter": "none",
+      "features": ["pendiente", "pendiente", "pendiente", "pendiente", "pendiente", "pendiente", "ok", "pendiente", "ok", "ok", "pendiente", "pendiente"],
+      "sources": {
+        "audioRx": ["remote-audio.cjs"],
+        "waterfall": ["remote-audio-core.js", "remote-ui.js"],
+        "rotor": ["remote-station.cjs", "remote-station/docs/control-rotores.md"]
+      },
+      "reasons": {
+        "freqMode": "pendiente de fuente: la referencia Xiegu v1.0 da 03/04 pero no direccion CI-V, framing ni baudios (xiegu-candidates.md).",
+        "vfoSplit": "pendiente de fuente: sin comandos citados para este modelo.",
+        "ptt": "pendiente de fuente: 1C no funciona en G90 hasta 1.79b03 y no hay direccion verificada.",
+        "smeter": "pendiente de fuente: sin layout verificado (Hamlib#2257 avisa de lecturas no BCD).",
+        "txMeters": "pendiente de fuente: SWR sin calibracion verificada (Hamlib#2256, #2257).",
+        "tune": "pendiente de fuente: sin comando citado.",
+        "audioTx": "Requiere PTT, pendiente de fuente.",
+        "accessories": "pendiente de fuente: sin comando citado.",
+        "settings": "pendiente de fuente: sin layout verificado (Hamlib#2245)."
+      }
+    },
+    "thd75": {
+      "adapter": "none",
+      "features": ["partial", "pendiente", "partial", "pendiente", "pendiente", "pendiente", "ok", "pendiente", "ok", "ok", "pendiente", "pendiente"],
+      "sources": {
+        "freqMode": ["android/app/src/main/java/org/bricohams/radio/RigProtocols.kt"],
+        "ptt": ["android/app/src/main/java/org/bricohams/radio/RigProtocols.kt"],
+        "audioRx": ["remote-audio.cjs"],
+        "waterfall": ["remote-audio-core.js", "remote-ui.js"],
+        "rotor": ["remote-station.cjs", "remote-station/docs/control-rotores.md"]
+      },
+      "reasons": {
+        "freqMode": "Solo en el codigo Android (Th75Rig); falta portarlo al shack Node y a Python (sin modelo Hamlib citado).",
+        "vfoSplit": "Th75Rig declara split no soportado.",
+        "ptt": "Solo en el codigo Android; el shack no lo ofrece sin adaptador CAT.",
+        "smeter": "pendiente de fuente: Th75Rig no lee el S-metro.",
+        "txMeters": "pendiente de fuente: sin medidores TX en el repositorio.",
+        "tune": "pendiente de fuente: sin comando citado.",
+        "audioTx": "Requiere PTT en el shack, aun sin adaptador CAT (pendiente de fuente).",
+        "accessories": "pendiente de fuente: sin comando citado.",
+        "settings": "pendiente de fuente: sin ajustes remotos citados."
+      }
+    },
+    "quansheng-cat": {
+      "adapter": "none",
+      "features": ["partial", "pendiente", "partial", "pendiente", "pendiente", "pendiente", "ok", "pendiente", "ok", "ok", "pendiente", "pendiente"],
+      "sources": {
+        "freqMode": ["android/app/src/main/java/org/bricohams/radio/CatProtocol.kt"],
+        "ptt": ["android/app/src/main/java/org/bricohams/radio/CatProtocol.kt"],
+        "audioRx": ["remote-audio.cjs"],
+        "waterfall": ["remote-audio-core.js", "remote-ui.js"],
+        "rotor": ["remote-station.cjs", "remote-station/docs/control-rotores.md"]
+      },
+      "reasons": {
+        "freqMode": "CatProtocol solo ajusta/lee frecuencia (sin modo) y solo en Android; falta portarlo al shack Node y a Python.",
+        "vfoSplit": "pendiente de fuente: CatProtocol no tiene VFO ni split.",
+        "ptt": "Solo en Android (pttKey/pttRelease con armado y concesion); el shack no lo ofrece sin adaptador CAT.",
+        "smeter": "pendiente de fuente: CatProtocol no lee el S-metro.",
+        "txMeters": "pendiente de fuente: sin medidores TX en el repositorio.",
+        "tune": "pendiente de fuente: CatProtocol.tune solo reajusta la frecuencia, no emite portadora.",
+        "audioTx": "Requiere PTT en el shack, aun sin adaptador CAT (pendiente de fuente).",
+        "accessories": "pendiente de fuente: sin comando citado.",
+        "settings": "pendiente de fuente: sin ajustes remotos citados."
+      }
+    },
+    "android-local": {
+      "adapter": "android-local",
+      "features": ["pendiente", "pendiente", "pendiente", "pendiente", "pendiente", "pendiente", "pendiente", "pendiente", "pendiente", "ok", "pendiente", "pendiente"],
+      "sources": {
+        "rotor": ["android/app/src/main/java/org/bricohams/radio/Profile.kt"]
+      },
+      "reasons": {
+        "freqMode": "pendiente de fuente: perfil sin enlace CAT remoto (programacion o APRS por Android).",
+        "vfoSplit": "pendiente de fuente: sin enlace CAT remoto.",
+        "ptt": "pendiente de fuente: sin enlace CAT remoto.",
+        "smeter": "pendiente de fuente: sin enlace CAT remoto.",
+        "txMeters": "pendiente de fuente: sin enlace CAT remoto.",
+        "tune": "pendiente de fuente: sin enlace CAT remoto.",
+        "audioRx": "pendiente de fuente: el audio remoto no esta cableado a este perfil.",
+        "audioTx": "pendiente de fuente: el audio remoto no esta cableado a este perfil.",
+        "waterfall": "pendiente de fuente: el audio remoto no esta cableado a este perfil.",
+        "accessories": "pendiente de fuente: sin enlace CAT remoto.",
+        "settings": "pendiente de fuente: sin enlace CAT remoto."
+      }
+    }
+  },
+  "rows": [
+    {"id": "icom-ic-705", "family": "hamlib-tx", "androidProfile": "IC705"},
+    {"id": "icom-ic-7100", "family": "hamlib-tx"},
+    {"id": "icom-ic-7200", "family": "hamlib-tx"},
+    {"id": "icom-ic-7300", "family": "hamlib-tx"},
+    {"id": "icom-ic-7300mk2", "family": "hamlib-beta"},
+    {"id": "icom-ic-7410", "family": "hamlib-tx"},
+    {"id": "icom-ic-7600", "family": "hamlib-tx"},
+    {"id": "icom-ic-7610", "family": "hamlib-tx"},
+    {"id": "icom-ic-7700", "family": "hamlib-tx"},
+    {"id": "icom-ic-7760", "family": "hamlib-beta"},
+    {"id": "icom-ic-7800", "family": "hamlib-tx"},
+    {"id": "icom-ic-7850-7851", "family": "hamlib-tx"},
+    {"id": "icom-ic-905", "family": "hamlib-tx"},
+    {"id": "icom-ic-9100", "family": "hamlib-tx"},
+    {"id": "icom-ic-9700", "family": "hamlib-tx"},
+    {"id": "icom-ic-r8600", "family": "hamlib-rx"},
+    {"id": "flex-flex-6400", "family": "hamlib-tx"},
+    {"id": "flex-flex-6400m", "family": "hamlib-tx"},
+    {"id": "flex-flex-6600", "family": "hamlib-tx"},
+    {"id": "flex-flex-6600m", "family": "hamlib-tx"},
+    {"id": "flex-flex-6700", "family": "hamlib-tx"},
+    {"id": "flex-flex-8400", "family": "hamlib-tx"},
+    {"id": "flex-flex-8400m", "family": "hamlib-tx"},
+    {"id": "flex-flex-8600", "family": "hamlib-tx"},
+    {"id": "flex-flex-8600m", "family": "hamlib-tx"},
+    {"id": "flex-aurora-510", "family": "hamlib-tx"},
+    {"id": "flex-aurora-510m", "family": "hamlib-tx"},
+    {"id": "flex-aurora-520", "family": "hamlib-tx"},
+    {"id": "flex-aurora-520m", "family": "hamlib-tx"},
+    {"id": "kenwood-ts-590s", "family": "hamlib-tx"},
+    {"id": "kenwood-ts-590sg", "family": "hamlib-tx"},
+    {"id": "kenwood-ts-890s", "family": "hamlib-tx"},
+    {"id": "kenwood-ts-990s", "family": "hamlib-tx"},
+    {"id": "kenwood-th-d75", "family": "thd75", "androidProfile": "THD75"},
+    {"id": "yaesu-ft-710", "family": "hamlib-tx"},
+    {"id": "yaesu-ft-991a", "family": "hamlib-tx"},
+    {"id": "yaesu-ftdx10", "family": "hamlib-tx"},
+    {"id": "yaesu-ftdx101d", "family": "hamlib-tx"},
+    {"id": "yaesu-ftdx101mp", "family": "hamlib-tx"},
+    {"id": "yaesu-ftdx3000", "family": "hamlib-tx"},
+    {"id": "yaesu-ftx-1", "family": "ftx1", "androidProfile": "FTX1"},
+    {"id": "yaesu-ft-817", "family": "android-fivebyte", "androidProfile": "FT817"},
+    {"id": "yaesu-ft-818", "family": "android-fivebyte", "androidProfile": "FT818"},
+    {"id": "yaesu-ft-857", "family": "android-fivebyte", "androidProfile": "FT857"},
+    {"id": "yaesu-ft-897", "family": "android-fivebyte", "androidProfile": "FT897"},
+    {"id": "elecraft-k3s", "family": "hamlib-tx"},
+    {"id": "elecraft-k4", "family": "hamlib-tx"},
+    {"id": "qrplabs-qmx", "family": "hamlib-tx", "androidProfile": "QMX"},
+    {"id": "qrplabs-qcx-qdx", "family": "hamlib-tx", "androidProfile": "QDX"},
+    {"id": "dl2man-trusdx", "family": "hamlib-tx", "androidProfile": "TRUSDX"},
+    {"id": "hl2-hermes-lite-2", "family": "hamlib-beta"},
+    {"id": "xiegu-g90", "family": "xiegu-civ"},
+    {"id": "xiegu-x6100", "family": "xiegu-civ"},
+    {"id": "xiegu-x6200", "family": "hamlib-beta"},
+    {"id": "xiegu-x5105", "family": "xiegu-civ"},
+    {"id": "xiegu-g106", "family": "xiegu-civ"},
+    {"id": "quansheng-uv-k5", "family": "quansheng-cat", "androidProfile": "UVK5"},
+    {"id": "android-opengd77", "family": "android-local", "androidProfile": "OPENGD77"},
+    {"id": "android-rt950", "family": "android-local", "androidProfile": "RT950"},
+    {"id": "android-rts10", "family": "android-local", "androidProfile": "RTS10"},
+    {"id": "android-d878", "family": "android-local", "androidProfile": "D878"},
+    {"id": "android-kiss-tnc", "family": "android-local", "androidProfile": "KISS_TNC"}
+  ]
+}

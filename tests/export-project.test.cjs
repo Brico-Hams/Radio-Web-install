@@ -106,7 +106,7 @@ test("la exportacion excluye configuracion privada, respaldos, caches y datos de
     "android/gradle/wrapper/gradle-wrapper.jar", "data/satellites.config.json",
     "precompiled/apps/catalog.json", "precompiled/apps/SystemInfo.app", "data/world-land-110m.txt",
     "data/channel-templates/ES.json", "data/channel-templates/ES-passes.json", "data/firmware-catalog-fallback.json",
-    "data/remote-station-catalog.json", "templates/repeaters/index.json", "templates/repeaters/uvk5v3/ES.csv",
+    "data/remote-station-catalog.json", "data/remote-feature-parity.json", "templates/repeaters/index.json", "templates/repeaters/uvk5v3/ES.csv",
     "third_party/icom-custom-firmware/LICENSE", "third_party/icom-custom-firmware/docs/js/worker.js",
     "third_party/icom-custom-firmware/docs/patches/index.json"]) assert.equal(projectSource(name), true, name);
   for (const name of [".env", ".env.local", ".git/config", ".vscode/settings.json",
@@ -214,7 +214,7 @@ test("el ZIP Beta conserva fuentes, historial y artefactos verificables y no sob
   assert.equal(without.android.applicationVersion, "0.7.0-beta");
   const withoutExtract = path.join(directory, "without-extracted");
   fs.mkdirSync(withoutExtract);
-  if (process.platform === "win32") execFileSync("tar", ["-xf", withoutOutput, "-C", withoutExtract]);
+  if (process.platform === "win32") execFileSync(path.join(process.env.SystemRoot || "C:\\Windows", "System32", "tar.exe"), ["-xf", withoutOutput, "-C", withoutExtract]);
   else execFileSync("unzip", ["-q", withoutOutput, "-d", withoutExtract]);
   const withoutInfo = JSON.parse(fs.readFileSync(path.join(withoutExtract, "Bricohams", "export-info.json")));
   assert.equal(withoutInfo.desktopInstallersIncluded, false);

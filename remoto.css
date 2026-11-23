@@ -26,6 +26,7 @@ body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.45 sys
 .rm-msg[data-kind="ok"] { color: var(--ok); }
 .rm-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
 .rm-list li { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between; border: 1px solid var(--border); border-radius: 6px; padding: 8px; }
+.rm-list li.rm-off { opacity: .55; }
 .rm-status { display: grid; gap: 6px; margin: 0; }
 .rm-status div { display: flex; gap: 8px; flex-wrap: wrap; }
 .rm-status dt { font-weight: 600; min-width: 9em; }

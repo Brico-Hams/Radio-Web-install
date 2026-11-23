@@ -142,7 +142,17 @@ class RotorTests(unittest.TestCase):
         self.broker.responses["+S"] = b"stop:\nRPRT -1\n"
         with self.assertRaises(RotorError):
             self.move()
-        self.assertTrue(self.rotor.snapshot()["stop_failed"])
+        snapshot = None
+        deadline = time.monotonic() + 5
+        while snapshot is None:
+            try:
+                snapshot = self.rotor.snapshot()
+            except RotorError as error:
+                # The watchdog thread may still hold the lock after the failed move.
+                if str(error) != "rotor_busy" or time.monotonic() > deadline:
+                    raise
+                time.sleep(0.01)
+        self.assertTrue(snapshot["stop_failed"])
         self.assertEqual(sum(cmd.startswith("+P ") for cmd in self.broker.commands), 1)
         with self.assertRaisesRegex(RotorError, "rotor_stop_unconfirmed"):
             self.move()
