@@ -130,8 +130,8 @@
     <div class="ant-row">
       <button type="button" id="ant-swr-serial" class="ant-btn">Conectar FTX-1 por Web Serial</button>
       <button type="button" id="ant-swr-start" class="ant-btn">Iniciar medida de SWR</button>
-      <button type="button" id="ant-swr-stop" class="ant-btn" disabled>Parar medida de SWR</button>
-      <button type="button" id="ant-swr-clear" class="ant-btn">Borrar puntos de SWR</button>
+      <button type="button" id="ant-swr-stop" class="ant-btn ant-btn-danger" disabled>Parar medida de SWR</button>
+      <button type="button" id="ant-swr-clear" class="ant-btn ant-btn-danger">Borrar puntos de SWR</button>
     </div>
     <div id="ant-swr-live" class="ant-results" aria-live="polite">Medida de SWR parada.</div>
   </section>
