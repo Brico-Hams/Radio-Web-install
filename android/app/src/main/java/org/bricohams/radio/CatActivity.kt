@@ -152,9 +152,10 @@ class CatActivity : LocalizedActivity() {
         })
         content.addView(TextView(this).apply { setText(R.string.cat_help) })
         content.addView(BrandUi.sectionHeader(this, getString(R.string.cat_section_connect), getString(R.string.cat_help_connect), "ayuda-quansheng"))
-        fun button(label: Int, action: () -> Unit) {
+        fun button(label: Int, action: () -> Unit): Button {
             val button = Button(this).apply { setText(label); setOnClickListener { action() } }
             controls.add(button); content.addView(button)
+            return button
         }
         button(R.string.cat_choose_device) { chooseDevice() }
         button(R.string.cat_query) { operation { requireNotNull(protocol) { getString(R.string.cat_connect_first) }.query() } }
@@ -190,7 +191,7 @@ class CatActivity : LocalizedActivity() {
                 cat.stop()
                 getString(R.string.cat_stop_done)
             }
-        }
+        }.also { BrandUi.styleButton(it, BrandUi.ButtonKind.DANGER) }
         button(R.string.usb_disconnect) { operation { closeRadio(); null } }
         content.addView(BrandUi.sectionHeader(this, getString(R.string.cat_section_sstv), getString(R.string.cat_help_sstv), "ayuda-quansheng"))
         content.addView(TextView(this).apply { setText(R.string.cat_sstv_help) })
@@ -210,6 +211,7 @@ class CatActivity : LocalizedActivity() {
             isEnabled = false
             setOnClickListener { cancelTransmit() }
         }
+        BrandUi.styleButton(stopTransmit, BrandUi.ButtonKind.DANGER)
         content.addView(stopTransmit)
         content.addView(Button(this).apply { setText(R.string.cat_sstv_record); setOnClickListener { startReceive() } })
         content.addView(Button(this).apply { setText(R.string.cat_sstv_stop); setOnClickListener { capture?.stop() } })

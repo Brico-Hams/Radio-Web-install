@@ -8,6 +8,7 @@ import android.text.InputType
 import android.view.View
 import android.view.ViewGroup
 import android.widget.ArrayAdapter
+import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
@@ -166,9 +167,8 @@ class NetControlActivity : LocalizedActivity() {
         text = value; setPadding(0, Brand.dp(this@NetControlActivity, 4), 0, Brand.dp(this@NetControlActivity, 4))
     })
 
-    private fun button(label: String, primary: Boolean = false, description: String = label, action: () -> Unit) {
-        content.addView(Brand.button(this, label, primary) { guarded(action) }.apply { contentDescription = description })
-    }
+    private fun button(label: String, primary: Boolean = false, description: String = label, action: () -> Unit): Button =
+        Brand.button(this, label, primary) { guarded(action) }.apply { contentDescription = description }.also(content::addView)
 
     private fun field(key: String, caption: Int, initial: String, size: Float = 18f, numeric: Boolean = false,
         decimal: Boolean = false, signed: Boolean = false, caps: Boolean = false): EditText {
@@ -299,7 +299,7 @@ class NetControlActivity : LocalizedActivity() {
                     store.deleteNetSession(session.id); drafts.clear(session.id)
                     sessions = store.netSessions(); currentId = null; render(); message(getString(R.string.net_session_deleted))
                 } }.show()
-        }
+        }.also { BrandUi.styleButton(it, BrandUi.ButtonKind.DANGER) }
         button(getString(R.string.net_back_to_sessions)) { leaveSession { currentId = null; render() } }
     }
 
@@ -443,7 +443,7 @@ class NetControlActivity : LocalizedActivity() {
                     .setPositiveButton(R.string.net_delete) { _, _ -> guarded {
                         saveSession(session.withoutCheckIn(c.id)); message(getString(R.string.net_checkin_deleted, c.call))
                     } }.show()
-            } }.apply { contentDescription = getString(R.string.net_delete_description, c.order, c.call) })
+            } }.apply { contentDescription = getString(R.string.net_delete_description, c.order, c.call); BrandUi.styleButton(this, BrandUi.ButtonKind.DANGER) })
             content.addView(card)
         }
     }

@@ -15,4 +15,16 @@
     <color name="brand_ripple">#33F26B1D</color>
     <color name="brand_positive">#8EDCA6</color>
     <color name="brand_error">#FF8A80</color>
+    <color name="brand_border_strong">#BAC4CC</color>
+    <color name="brand_danger">#D32F2F</color>
+    <color name="brand_danger_hover">#C62828</color>
+    <color name="brand_danger_pressed">#B71C1C</color>
+    <color name="brand_on_danger">#FFFFFF</color>
+    <color name="brand_primary_hover">#F7803A</color>
+    <color name="brand_primary_pressed">#FFA06A</color>
+    <color name="brand_secondary_hover">#28323A</color>
+    <color name="brand_secondary_pressed">#38434C</color>
+    <color name="brand_disabled_fill">#151B20</color>
+    <color name="brand_disabled_text">#8E9AA3</color>
+    <color name="brand_disabled_border">#38434C</color>
 </resources>

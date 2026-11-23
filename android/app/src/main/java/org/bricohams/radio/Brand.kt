@@ -49,6 +49,18 @@ object Brand {
         val ripple = context.getColor(R.color.brand_ripple)
         val positive = context.getColor(R.color.brand_positive)
         val error = context.getColor(R.color.brand_error)
+        val borderStrong = context.getColor(R.color.brand_border_strong)
+        val danger = context.getColor(R.color.brand_danger)
+        val dangerHover = context.getColor(R.color.brand_danger_hover)
+        val dangerPressed = context.getColor(R.color.brand_danger_pressed)
+        val onDanger = context.getColor(R.color.brand_on_danger)
+        val primaryHover = context.getColor(R.color.brand_primary_hover)
+        val primaryPressed = context.getColor(R.color.brand_primary_pressed)
+        val secondaryHover = context.getColor(R.color.brand_secondary_hover)
+        val secondaryPressed = context.getColor(R.color.brand_secondary_pressed)
+        val disabledFill = context.getColor(R.color.brand_disabled_fill)
+        val disabledText = context.getColor(R.color.brand_disabled_text)
+        val disabledBorder = context.getColor(R.color.brand_disabled_border)
     }
 
     /** Original logo PNG, untinted; in dark mode it sits on a discreet white rounded plate. */
@@ -62,9 +74,9 @@ object Brand {
     }
 
     fun dp(context: Context, value: Int) = (value * context.resources.displayMetrics.density).toInt()
-    fun rounded(context: Context, color: Int, radius: Int = 16, stroke: Int? = null) = GradientDrawable().apply {
+    fun rounded(context: Context, color: Int, radius: Int = 16, stroke: Int? = null, strokeDp: Int = 2) = GradientDrawable().apply {
         setColor(color); cornerRadius = dp(context, radius).toFloat()
-        if (stroke != null) setStroke(dp(context, 2), stroke)
+        if (stroke != null) setStroke(dp(context, strokeDp), stroke)
     }
     fun card(context: Context, selected: Boolean = false): LinearLayout = LinearLayout(context).apply {
         val colors = Palette(context)
@@ -82,34 +94,21 @@ object Brand {
         if (bold) typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
     }
     fun button(context: Context, label: CharSequence, primary: Boolean = false, action: () -> Unit) = Button(context).apply {
-        val colors = Palette(context)
         text = label
-        isAllCaps = false
-        textSize = 15f
-        minHeight = dp(context, 52)
-        setPadding(dp(context, 16), dp(context, 12), dp(context, 16), dp(context, 12))
-        setTextColor(ColorStateList(arrayOf(intArrayOf(-android.R.attr.state_enabled), intArrayOf()),
-            intArrayOf(colors.muted, if (primary) colors.onAccent else colors.accent)))
-        background = BrandUi.interactive(context, if (primary) colors.orange else colors.surfaceHigh, 16)
-        stateListAnimator = null
+        BrandUi.styleButton(this, if (primary) BrandUi.ButtonKind.PRIMARY else BrandUi.ButtonKind.SECONDARY)
         setOnClickListener { action() }
         layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
             .apply { topMargin = dp(context, 6); bottomMargin = dp(context, 6) }
     }
     fun chip(context: Context, label: CharSequence, active: Boolean, action: () -> Unit) = TextView(context).apply {
-        val colors = Palette(context)
         text = label
         gravity = Gravity.CENTER
-        textSize = 14f
-        minHeight = dp(context, 48)
-        setPadding(dp(context, 8), dp(context, 10), dp(context, 8), dp(context, 10))
-        setTextColor(if (active) colors.onAccent else colors.text)
-        background = BrandUi.interactive(context, if (active) colors.orange else colors.surfaceHigh, 16)
+        BrandUi.styleButton(this, if (active) BrandUi.ButtonKind.SELECTED else BrandUi.ButtonKind.SECONDARY)
         isSelected = active
         isClickable = true; isFocusable = true
         setOnClickListener { action() }
         layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-            .apply { val margin = dp(context, 3); setMargins(margin, 0, margin, 0) }
+            .apply { val margin = dp(context, 4); setMargins(margin, 0, margin, 0) }
     }
     fun row(context: Context, vararg views: View) = LinearLayout(context).apply {
         orientation = LinearLayout.HORIZONTAL

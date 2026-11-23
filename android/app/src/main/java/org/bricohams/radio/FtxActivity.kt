@@ -155,7 +155,7 @@ class FtxActivity : LocalizedActivity() {
             card.addView(txInfo)
             saveWav = action(card, R.string.ftx_save_wav) { chooseSaveWav() }
             transmit = action(card, R.string.ftx_tx_next, true) { startTransmit() }
-            stopTx = action(card, R.string.ftx_tx_stop) { transmitter?.cancel() }
+            stopTx = action(card, R.string.ftx_tx_stop) { transmitter?.cancel() }.also { BrandUi.styleButton(it, BrandUi.ButtonKind.DANGER) }
             txStatus = Brand.text(this, 14f, colors.text).apply { accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE }
             card.addView(txStatus)
             card.addView(Brand.text(this, 13f, colors.muted).apply { setText(R.string.ftx_tx_legal) })
