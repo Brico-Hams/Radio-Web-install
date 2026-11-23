@@ -1,3 +1,4 @@
+import math
 from dataclasses import dataclass
 from enum import IntEnum, StrEnum
 
@@ -267,3 +268,93 @@ def parse_identification_reply(frame: bytes) -> str:
     if payload != b"0840":
         raise ValueError("La respuesta no coincide con el ID CAT documentado del FTX-1.")
     return payload.decode("ascii")
+
+
+# Meters. RM P1 selects 1 S-MAIN, 2 S-SUB, 3 COMP, 4 ALC, 5 PO, 6 SWR, 7 IDD, 8 VDD with a raw 000-255 value and a
+# reserved 000 tail; SM P1 nnn is the S meter (docs/FTX1-KNOWLEDGE.md RM and SM rows, CAT manual 2508-C).
+# The scales mirror data/remote-meter-model.json (host-side estimates of bg7nzl-ftx1ctl ftx1cat.py, not calibrated);
+# remote-meters.cjs is the reference and tests/test_ftx1_meters.py compares both.
+FTX1_METER_KEYS = {1: "smeter", 2: "smeter-sub", 3: "comp", 4: "alc", 5: "po", 6: "swr", 7: "id", 8: "vdd"}
+_PO_POINTS = ((55, 0.5), (73, 1.0), (113, 3.0), (139, 5.0), (164, 7.5), (189, 10.0), (255, 15.0))
+_S_STEPS = ((0, 0), (14, 1), (42, 3), (81, 5), (103, 7))
+_S_OVER = ((202, 20.0), (233, 40.0), (255, 60.0))
+_S9_RAW = 128
+
+
+@dataclass(frozen=True)
+class Ftx1MeterReading:
+    key: str
+    raw: int
+
+
+def build_meter_query(selector: int) -> bytes:
+    if selector not in FTX1_METER_KEYS:
+        raise ValueError("Undocumented FTX-1 RM meter selector.")
+    return f"RM{selector};".encode("ascii")
+
+
+def parse_meter_reply(frame: bytes) -> Ftx1MeterReading:
+    payload = parse_ascii_cat_reply("RM", frame)
+    if len(payload) != 7 or not payload.isdigit() or int(payload[:1]) not in FTX1_METER_KEYS:
+        raise ValueError("Invalid FTX-1 RM meter response.")
+    raw = int(payload[1:4])
+    if raw > 255 or payload[4:] != b"000":
+        raise ValueError("FTX-1 RM meter value outside 0-255 or non-zero reserved field.")
+    return Ftx1MeterReading(FTX1_METER_KEYS[int(payload[:1])], raw)
+
+
+def parse_smeter_reply(frame: bytes) -> Ftx1MeterReading:
+    payload = parse_ascii_cat_reply("SM", frame)
+    if len(payload) != 4 or payload[:1] not in (b"0", b"1") or not payload.isdigit() or int(payload[1:]) > 255:
+        raise ValueError("Invalid FTX-1 SM S-meter response.")
+    return Ftx1MeterReading("smeter" if payload[:1] == b"0" else "smeter-sub", int(payload[1:]))
+
+
+def swr_from_raw(raw: int) -> float:
+    if raw >= 255:
+        return math.inf
+    if raw <= 0:
+        return 1.0
+    return 1 + 0.333 * (math.exp(0.0151 * raw) - 1)
+
+
+def alc_percent(raw: int) -> float:
+    return min(200.0, raw * 200 / 252)
+
+
+def comp_db(raw: int) -> float:
+    return raw * 30 / 255
+
+
+def drain_amps(raw: int) -> float:
+    return raw * 3 / 255
+
+
+def vdd_volts(raw: int) -> float:
+    return raw * 13.8 / 203
+
+
+def po_watts(raw: int, head: str) -> float | None:
+    # The piecewise scale is only cited for the field head; with the SPA-1 the PO scale is pendiente de fuente.
+    if head != "field":
+        return None
+    if raw <= 0:
+        return 0.0
+    previous = (0, 0.0)
+    for point in _PO_POINTS:
+        if raw <= point[0]:
+            return previous[1] + (point[1] - previous[1]) * (raw - previous[0]) / (point[0] - previous[0])
+        previous = point
+    return previous[1]
+
+
+def s_units(raw: int) -> tuple[int, float]:
+    # (S units, dB over S9).
+    if raw < _S9_RAW:
+        return [units for start, units in _S_STEPS if raw >= start][-1], 0.0
+    previous = (_S9_RAW, 0.0)
+    for point in _S_OVER:
+        if raw <= point[0]:
+            return 9, previous[1] + (point[1] - previous[1]) * (raw - previous[0]) / (point[0] - previous[0])
+        previous = point
+    return 9, previous[1]

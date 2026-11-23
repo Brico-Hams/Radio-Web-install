@@ -348,3 +348,18 @@ La matrice `data/remote-feature-parity.json` liste chaque radio du catalogue dis
 | `android-d878` | Android | ✖ | ✖ | ✖ | ✖ | ✖ | ✖ | ✖ | ✖ | ✖ | ✔ | ✖ | ✖ |
 | `android-kiss-tnc` | Android | ✖ | ✖ | ✖ | ✖ | ✖ | ✖ | ✖ | ✖ | ✖ | ✔ | ✖ | ✖ |
 <!-- remote-parity:end -->
+
+## Mesures normalisées et contrôle d'accord
+
+`remote-meters.cjs` + `data/remote-meter-model.json` sont le modèle unique de mesures
+(S, PO, ROS, ALC, COMP, ID, VDD) pour le shack Node, la console React (`meterModel.ts`),
+Android (`MeterModel.kt`) et Python (`ftx1_cat.py`). Les échelles FTX-1 sont citées du manuel CAT 2508-C
+(RM/SM) et de bg7nzl-ftx1ctl ; ce sont des estimations non calibrées. PO n'est mis à l'échelle qu'avec la tête de terrain
+(`PC1`) ; avec le SPA-1 (`PC2`) il reste « pendiente de fuente ». La température n'a pas de source.
+
+L'accord (AC interne 20 s, ATAS 45 s) utilise une machine à états : demande de l'opérateur, confirmation par relecture,
+attente plafonnée, ROS final et TX0 vérifié par relecture. Le résultat (succès/échec/délai) s'affiche
+dans la console. Il est refusé si la puissance configurée dépasse 10 W (`TUNE_POWER_MAX_W`) : l'opérateur
+doit la baisser ; elle n'est jamais baissée automatiquement. Le G TUNE d'Hamlib est aussi plafonné.
+Ne transmettez jamais sans charge adaptée ni antenne connectée.
+Les tests de cette extension n'ont pas été exécutés dans cet environnement.

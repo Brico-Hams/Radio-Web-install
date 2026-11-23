@@ -348,3 +348,18 @@ La matriz `data/remote-feature-parity.json` lista cada radio del catalogo remoto
 | `android-d878` | Android | ✖ | ✖ | ✖ | ✖ | ✖ | ✖ | ✖ | ✖ | ✖ | ✔ | ✖ | ✖ |
 | `android-kiss-tnc` | Android | ✖ | ✖ | ✖ | ✖ | ✖ | ✖ | ✖ | ✖ | ✖ | ✔ | ✖ | ✖ |
 <!-- remote-parity:end -->
+
+## Medidores normalizados y comprobacion de sintonia
+
+`remote-meters.cjs` + `data/remote-meter-model.json` son el modelo unico de medidores
+(S, PO, ROE, ALC, COMP, ID, VDD) para el shack Node, la consola React (`meterModel.ts`),
+Android (`MeterModel.kt`) y Python (`ftx1_cat.py`). Escalas FTX-1 citadas del manual CAT 2508-C
+(RM/SM) y bg7nzl-ftx1ctl; son estimaciones sin calibrar. PO solo se escala con cabeza de campo
+(`PC1`); con SPA-1 (`PC2`) queda "pendiente de fuente". La temperatura no tiene fuente.
+
+La sintonia (AC interno 20 s, ATAS 45 s) usa una maquina de estados: peticion del operador,
+confirmacion por lectura, espera con tope, ROE final y TX0 verificado por lectura. Resultado
+(exito/fallo/tiempo) visible en la consola. Se rechaza si la potencia configurada supera 10 W
+(`TUNE_POWER_MAX_W`): el operador debe bajarla; nunca se baja automaticamente. El G TUNE de
+Hamlib tambien tiene tope. Nunca transmitas sin una carga adaptada o una antena conectada.
+No se ejecutaron pruebas de esta ampliacion en este entorno.

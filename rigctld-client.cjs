@@ -191,8 +191,14 @@ class RigctldClient extends EventEmitter {
     return items.length ? Date.now() - Math.min(...items.map(item => item.queuedAt)) : 0;
   }
 
+  // Queues several commands while the pump is paused, so none is dispatched before the whole batch is in place.
+  holdPump(fn) {
+    this.pumpHeld = (this.pumpHeld || 0) + 1;
+    try { return fn(); } finally { this.pumpHeld -= 1; this.pump(); }
+  }
+
   pump() {
-    if (this.current || !this.connected || !this.queue.length || !this.socket) return;
+    if (this.pumpHeld || this.current || !this.connected || !this.queue.length || !this.socket) return;
     const item = this.queue.shift();
     this.current = item;
     this.lines = [];
@@ -450,9 +456,20 @@ async function stopSequence(client, { cat = null, tunerKind = "internal", tuner 
   if (tunerStop && (tuner || tunerKind === "atas")) steps.push([tunerStop, () => client.sendRaw(tunerStop, { priority: true, idleMs: STOP_IDLE_MS })]);
   if (cat?.txOff) steps.push([cat.txOff, () => client.sendRaw(cat.txOff, { priority: true, idleMs: STOP_IDLE_MS })]);
   steps.push(["T 0", () => client.setPtt(false, { priority: true })]);
+  // Every step is queued at once (last first, so the head of the queue keeps the order): no queued meter or tune
+  // poll can slip in between two stop commands. Each step still gets its own stepMs once its turn comes.
+  const started = [];
+  const queueAll = () => {
+    for (const [name, run] of [...steps].reverse()) {
+      const pending = run();
+      pending.catch(() => {});
+      started.unshift([name, pending]);
+    }
+  };
+  if (typeof client.holdPump === "function") client.holdPump(queueAll); else queueAll();
   let ok = true;
-  for (const [name, run] of steps) {
-    try { await withinMs(run(), stepMs); } catch (error) { ok = false; log(`stop ${name} failed: ${error.message}`); }
+  for (const [name, pending] of started) {
+    try { await withinMs(pending, stepMs); } catch (error) { ok = false; log(`stop ${name} failed: ${error.message}`); }
   }
   return ok;
 }

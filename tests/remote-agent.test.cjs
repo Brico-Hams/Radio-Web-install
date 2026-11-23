@@ -448,6 +448,19 @@ test("TUNE sends G TUNE, is blocked while another client holds control (409) and
   } finally { await cleanup(); await rig.close(); }
 });
 
+test("Hamlib G TUNE is bounded: a tune the radio never confirms is reported, TX stays off", async () => {
+  const rig = await fakeRigctld();
+  const { call, cleanup } = await startAgent(rig, { tuneWatchMs: 300, tuneStatusMs: 80 });
+  const as = id => ({ headers: { "X-Client-Id": id } });
+  try {
+    assert.equal((await call("POST", "/api/cmd", { body: { cmd: "tune" }, ...as("client-a") })).status, 200);
+    await waitFor(async () => (await call("GET", "/api/state", as("client-a"))).json.tuneResult, 4000);
+    const { tuneResult } = (await call("GET", "/api/state", as("client-a"))).json;
+    assert.deepEqual([tuneResult.kind, tuneResult.outcome, tuneResult.reason, tuneResult.txOff], ["hamlib", "fail", "unconfirmed", true]);
+    assert.ok(rig.log.includes("T 0"));
+  } finally { await cleanup(); await rig.close(); }
+});
+
 test("console assets: logo and locale scripts are served; the page has no inline script or style", async () => {
   const rig = await fakeRigctld();
   const { call, cleanup } = await startAgent(rig);

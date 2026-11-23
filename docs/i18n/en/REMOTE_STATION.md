@@ -348,3 +348,18 @@ The matrix `data/remote-feature-parity.json` lists every radio of the remote cat
 | `android-d878` | Android | ✖ | ✖ | ✖ | ✖ | ✖ | ✖ | ✖ | ✖ | ✖ | ✔ | ✖ | ✖ |
 | `android-kiss-tnc` | Android | ✖ | ✖ | ✖ | ✖ | ✖ | ✖ | ✖ | ✖ | ✖ | ✔ | ✖ | ✖ |
 <!-- remote-parity:end -->
+
+## Normalized meters and tune check
+
+`remote-meters.cjs` + `data/remote-meter-model.json` are the single meter model
+(S, PO, SWR, ALC, COMP, ID, VDD) for the Node shack, the React console (`meterModel.ts`),
+Android (`MeterModel.kt`) and Python (`ftx1_cat.py`). FTX-1 scales are cited from the CAT manual 2508-C
+(RM/SM) and bg7nzl-ftx1ctl; they are uncalibrated estimates. PO is only scaled with the field head
+(`PC1`); with the SPA-1 (`PC2`) it stays "pendiente de fuente". Temperature has no source.
+
+Tune (internal AC 20 s, ATAS 45 s) uses a state machine: operator request, readback confirmation,
+time-capped wait, final SWR and TX0 verified by readback. The result (success/fail/timeout) is shown
+in the console. It is refused if the configured power exceeds 10 W (`TUNE_POWER_MAX_W`): the operator
+must lower it; it is never lowered automatically. Hamlib G TUNE is also time-capped.
+Never transmit without a matched load or a connected antenna.
+Tests of this extension were not run in this environment.

@@ -68,6 +68,7 @@ function validateCat(cat, fail) {
   command(cat.txState, "txState");
   if (!cat.meters || typeof cat.meters !== "object") fail("cat.meters obligatorio");
   for (const key of ["alc", "po", "swr"]) command(cat.meters[key], `meters.${key}`);
+  for (const key of ["comp", "id", "vdd"]) if (cat.meters[key] !== undefined) command(cat.meters[key], `meters.${key}`);
   command(cat.power, "power");
   if (!Number.isInteger(cat.swrRawLimit) || cat.swrRawLimit < 1 || cat.swrRawLimit > 255) fail("cat.swrRawLimit debe estar entre 1 y 255");
 }

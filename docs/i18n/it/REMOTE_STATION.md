@@ -348,3 +348,18 @@ La matrice `data/remote-feature-parity.json` elenca ogni radio del catalogo remo
 | `android-d878` | Android | ✖ | ✖ | ✖ | ✖ | ✖ | ✖ | ✖ | ✖ | ✖ | ✔ | ✖ | ✖ |
 | `android-kiss-tnc` | Android | ✖ | ✖ | ✖ | ✖ | ✖ | ✖ | ✖ | ✖ | ✖ | ✔ | ✖ | ✖ |
 <!-- remote-parity:end -->
+
+## Misure normalizzate e verifica dell'accordo
+
+`remote-meters.cjs` + `data/remote-meter-model.json` sono il modello unico delle misure
+(S, PO, SWR, ALC, COMP, ID, VDD) per lo shack Node, la console React (`meterModel.ts`),
+Android (`MeterModel.kt`) e Python (`ftx1_cat.py`). Le scale FTX-1 sono citate dal manuale CAT 2508-C
+(RM/SM) e da bg7nzl-ftx1ctl; sono stime non calibrate. PO è scalata solo con la testa da campo
+(`PC1`); con l'SPA-1 (`PC2`) resta «pendiente de fuente». La temperatura non ha fonte.
+
+L'accordo (AC interno 20 s, ATAS 45 s) usa una macchina a stati: richiesta dell'operatore, conferma per rilettura,
+attesa con limite, SWR finale e TX0 verificato per rilettura. Il risultato (successo/errore/timeout) è mostrato
+nella console. Viene rifiutato se la potenza configurata supera 10 W (`TUNE_POWER_MAX_W`): l'operatore
+deve abbassarla; non viene mai abbassata automaticamente. Anche il G TUNE di Hamlib ha un limite.
+Non trasmettere mai senza carico adattato o antenna collegata.
+I test di questa estensione non sono stati eseguiti in questo ambiente.

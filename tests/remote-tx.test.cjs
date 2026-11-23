@@ -35,7 +35,7 @@ const BASE_CAPS = [
 async function fakeRigctld(capsLines = BASE_CAPS) {
   const rig = {
     freq: 28500000, ptt: 0, log: [], sockets: new Set(), connections: 0, rawDelay: 0, levels: {},
-    raw: { AC: "AC100;", PC: "PC2010;", TX: "TX0;", RI0: "RI00000000;", RM4: "RM4000000;", RM5: "RM5000000;", RM6: "RM6000000;" }
+    raw: { AC: "AC100;", PC: "PC2010;", TX: "TX0;", RI0: "RI00000000;", RM3: "RM3000000;", RM4: "RM4000000;", RM5: "RM5000000;", RM6: "RM6000000;", RM7: "RM7000000;", RM8: "RM8201000;" }
   };
   const server = net.createServer(socket => {
     rig.connections += 1;
@@ -56,7 +56,7 @@ async function fakeRigctld(capsLines = BASE_CAPS) {
         if (raw) {
           const cmd = raw[1];
           // Expected reply length 0: rigctld answers one NUL at once. "; ;" on a set blocks until its timeout.
-          if (raw[2] === "0") { socket.write("\0"); continue; }
+          if (raw[2] === "0") { rig.onSet?.(cmd); socket.write("\0"); continue; }
           const reply = typeof rig.raw[cmd] === "function" ? rig.raw[cmd]() : rig.raw[cmd];
           if (reply === null || reply === undefined) { if (rig.setBlockMs !== Infinity) setTimeout(() => socket.write("\0"), rig.setBlockMs ?? 1800); continue; }
           const write = () => socket.write(`${reply}\0`);
@@ -157,7 +157,7 @@ test("catalog: FTX-1 carries a validated cat override and bad ones are refused",
   assert.deepEqual(cat.tuner.atas, { start: "AC123", stop: "AC120" });
   assert.equal(cat.status, "RI0");
   assert.equal(cat.txOff, "TX0");
-  assert.deepEqual(cat.meters, { alc: "RM4", po: "RM5", swr: "RM6" });
+  assert.deepEqual(cat.meters, { alc: "RM4", po: "RM5", swr: "RM6", comp: "RM3", id: "RM7", vdd: "RM8" });
   const data = JSON.parse(JSON.stringify(loadCatalog()));
   data.radios.find(radio => radio.id === "yaesu-ftx-1").cat.tuner.internal.on = "AC101;T1";
   assert.throws(() => validateCatalog(data), /cat\.tuner\.internal\.on/);
@@ -261,6 +261,18 @@ test("a brief SWR spike below 1 s does not trip the protection", async () => {
   } finally { stopBeat(); await cleanup(); await rig.close(); }
 });
 
+test("the stop sequence queues every step at once so no poll can slip between them", async () => {
+  const { stopSequence } = require("../rigctld-client.cjs");
+  const issued = [];
+  const resolvers = [];
+  const track = name => { issued.push(name); return new Promise(resolve => resolvers.push(resolve)); };
+  const client = { sendRaw: (cmd, options) => { assert.equal(options.priority, true); return track(cmd); }, setPtt: (on, options) => { assert.equal(options.priority, true); return track("T 0"); } };
+  const done = stopSequence(client, { cat: ftx1(), tunerKind: "atas", tuner: true, stepMs: 1000 });
+  assert.deepEqual(issued.sort(), [ftx1().tuner.atas.stop, ftx1().txOff, "T 0"].sort());
+  for (const resolve of resolvers) resolve(null);
+  assert.equal(await done, true);
+});
+
 test("PTT off is not delayed by meter polling", async () => {
   const rig = await fakeRigctld();
   rig.rawDelay = 120;
@@ -350,6 +362,11 @@ test("hang watchdog fires during TX but at most once per cooldown", async () => 
 function atasRig() {
   return fakeRigctld().then(rig => {
     rig.tuning = true;
+    // The radio leaves TX/tune once any stop frame arrives, like the real one.
+    rig.onSet = cmd => {
+      if (["AC123", "AC103"].includes(cmd)) rig.tuning = true;
+      if (["AC120", "AC100", "TX0"].includes(cmd)) rig.tuning = false;
+    };
     Object.assign(rig.raw, {
       AC123: null, AC120: null, TX0: null,
       TX: () => (rig.tuning ? "TX2;" : "TX0;"),
@@ -512,6 +529,114 @@ test("pttOff sends tuner stop, txOff and T 0 in that order", async () => {
     assert.equal((await cmd({ cmd: "ptt", value: false })).status, 200);
     assert.ok(inOrder(stopOrder(rig)), JSON.stringify(rig.log));
   } finally { stopBeat(); await cleanup(); await rig.close(); }
+});
+
+test("tune is refused above 10 W (PC2100 with the SPA-1) and the power is never lowered", async () => {
+  const rig = await atasRig();
+  rig.raw.PC = "PC2100;";
+  const { cmd, state, cleanup } = await startAgent(rig, atasOptions());
+  try {
+    const result = await cmd({ cmd: "tune" });
+    assert.equal(result.status, 409);
+    assert.deepEqual([result.json.code, result.json.powerSetW, result.json.maxW], ["tune-power-high", 100, 10]);
+    assert.ok(!rig.log.includes("W AC123; 0"));
+    assert.ok(!rig.log.some(line => /^W PC\d/.test(line)));
+    assert.equal((await state()).tune, null);
+    rig.raw.PC = "PC2010;";
+    assert.equal((await cmd({ cmd: "tune" })).status, 200);
+  } finally { await cleanup(); await rig.close(); }
+});
+
+test("tune is refused when the configured power cannot be read", async () => {
+  const rig = await atasRig();
+  rig.raw.PC = "?;";
+  const { cmd, cleanup } = await startAgent(rig, atasOptions());
+  try {
+    const result = await cmd({ cmd: "tune" });
+    assert.equal(result.status, 409);
+    assert.equal(result.json.code, "tune-power-unknown");
+    assert.ok(!rig.log.includes("W AC123; 0"));
+  } finally { await cleanup(); await rig.close(); }
+});
+
+test("a finished tune keeps its result: final SWR read, stop sequence, then TX0 read back", async () => {
+  const rig = await atasRig();
+  rig.raw.RM6 = () => (rig.tuning ? "RM6070000;" : "RM6000000;");
+  const { cmd, call, state, cleanup } = await startAgent(rig, atasOptions({ meterMs: 50 }));
+  let stopBeat = () => {};
+  try {
+    stopBeat = keepAlive(call);
+    assert.equal((await cmd({ cmd: "tune" })).status, 200);
+    await sleep(500);
+    rig.tuning = false;
+    await waitFor(async () => (await state()).tuneResult);
+    const after = await state();
+    assert.equal(after.tune, null);
+    assert.deepEqual([after.tuneResult.kind, after.tuneResult.outcome, after.tuneResult.txOff, after.tuneResult.swrRaw], ["atas", "success", true, 70]);
+    assert.ok(after.tuneResult.swr > 1.5 && after.tuneResult.swr < 1.7);
+    const tail = afterTune(rig);
+    assert.ok(tail.indexOf("W TX; ;", tail.indexOf("T 0")) > tail.indexOf("T 0"), JSON.stringify(rig.log));
+  } finally { stopBeat(); await cleanup(); await rig.close(); }
+});
+
+test("a tune cut at the time cap is a timeout with the final SWR and TX off verified", async () => {
+  const rig = await atasRig();
+  rig.raw.RM6 = "RM6255000;";
+  const { cmd, call, state, cleanup } = await startAgent(rig, atasOptions({ tuneMaxSeconds: 1, meterMs: 50 }));
+  let stopBeat = () => {};
+  try {
+    stopBeat = keepAlive(call);
+    assert.equal((await cmd({ cmd: "tune" })).status, 200);
+    await waitFor(async () => (await state()).tuneResult, 5000);
+    const { tuneResult } = await state();
+    assert.deepEqual([tuneResult.outcome, tuneResult.reason, tuneResult.txOff, tuneResult.swr], ["timeout", "time-cap", true, 99]);
+  } finally { stopBeat(); await cleanup(); await rig.close(); }
+});
+
+test("a tune whose radio stays keyed after the stop is reported as not off", async () => {
+  const rig = await atasRig();
+  rig.onSet = () => {};
+  const { cmd, call, state, cleanup } = await startAgent(rig, atasOptions({ tuneMaxSeconds: 1 }));
+  let stopBeat = () => {};
+  try {
+    stopBeat = keepAlive(call);
+    assert.equal((await cmd({ cmd: "tune" })).status, 200);
+    await waitFor(async () => (await state()).tuneResult, 8000);
+    const { tuneResult } = await state();
+    assert.equal(tuneResult.txOff, false);
+    assert.notEqual(tuneResult.outcome, "success");
+  } finally { stopBeat(); rig.tuning = false; await cleanup(); await rig.close(); }
+});
+
+test("an SWR trip during an internal tune keeps its alert and reason", async () => {
+  const rig = await atasRig();
+  Object.assign(rig.raw, { AC103: null, AC100: null, RM6: "RM6200000;" });
+  const { cmd, call, state, cleanup } = await startAgent(rig, atasOptions({ tunerKind: "internal", tuneSwrMs: 300, meterMs: 50 }));
+  let stopBeat = () => {};
+  try {
+    stopBeat = keepAlive(call);
+    assert.equal((await cmd({ cmd: "tune" })).status, 200);
+    await waitFor(async () => (await state()).tuneResult, 6000);
+    const after = await state();
+    assert.equal(after.txAlert, "swr");
+    assert.deepEqual([after.tuneResult.outcome, after.tuneResult.reason, after.tuneResult.txOff], ["fail", "swr-trip", true]);
+  } finally { stopBeat(); await cleanup(); await rig.close(); }
+});
+
+test("normalized meters follow the FTX-1 bench frames during TX (PC2100 head 2: PO pending)", async () => {
+  const rig = await fakeRigctld();
+  Object.assign(rig.raw, { RM5: "RM5128000;", RM6: "RM6020000;", RM4: "RM4126000;", PC: "PC2100;" });
+  const { cmd, state, cleanup } = await startAgent(rig, { radioCat: ftx1(), rawIdleMs: 60, meterMs: 100 });
+  try {
+    await cmd({ cmd: "ptt", value: true });
+    await waitFor(async () => { const { meters } = await state(); return meters.vdd && meters.alc; });
+    const { meters } = await state();
+    assert.equal(meters.vdd.value, 13.66);
+    assert.equal(meters.alc.value, 100);
+    assert.equal(meters.po.pending, true);
+    assert.equal(meters.swr.unit, "");
+    await cmd({ cmd: "ptt", value: false });
+  } finally { await cleanup(); await rig.close(); }
 });
 
 test("supervisor kills and restarts a hung rigctld, then sends the stop sequence", async () => {

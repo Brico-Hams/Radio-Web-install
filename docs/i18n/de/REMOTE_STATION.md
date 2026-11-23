@@ -348,3 +348,18 @@ Die Matrix `data/remote-feature-parity.json` führt jedes Funkgerät des Remote-
 | `android-d878` | Android | ✖ | ✖ | ✖ | ✖ | ✖ | ✖ | ✖ | ✖ | ✖ | ✔ | ✖ | ✖ |
 | `android-kiss-tnc` | Android | ✖ | ✖ | ✖ | ✖ | ✖ | ✖ | ✖ | ✖ | ✖ | ✔ | ✖ | ✖ |
 <!-- remote-parity:end -->
+
+## Normalisierte Messwerte und Abstimmprüfung
+
+`remote-meters.cjs` + `data/remote-meter-model.json` sind das einzige Messwertmodell
+(S, PO, SWR, ALC, COMP, ID, VDD) für den Node-Shack, die React-Konsole (`meterModel.ts`),
+Android (`MeterModel.kt`) und Python (`ftx1_cat.py`). FTX-1-Skalen stammen aus dem CAT-Handbuch 2508-C
+(RM/SM) und bg7nzl-ftx1ctl; es sind unkalibrierte Schätzungen. PO wird nur mit dem Feldkopf skaliert
+(`PC1`); mit dem SPA-1 (`PC2`) bleibt es „pendiente de fuente“. Für die Temperatur gibt es keine Quelle.
+
+Die Abstimmung (internes AC 20 s, ATAS 45 s) nutzt einen Zustandsautomaten: Bedienerwunsch, Bestätigung per Rücklesen,
+zeitbegrenztes Warten, End-SWR und per Rücklesen geprüftes TX0. Das Ergebnis (Erfolg/Fehler/Zeitüberschreitung) wird
+in der Konsole angezeigt. Sie wird abgelehnt, wenn die konfigurierte Leistung 10 W überschreitet (`TUNE_POWER_MAX_W`): der Bediener
+muss sie senken; sie wird nie automatisch gesenkt. Auch Hamlib G TUNE ist zeitbegrenzt.
+Niemals ohne angepasste Last oder angeschlossene Antenne senden.
+Die Tests dieser Erweiterung wurden in dieser Umgebung nicht ausgeführt.
