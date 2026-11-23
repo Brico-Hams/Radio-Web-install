@@ -27,7 +27,7 @@ class FakeAmp:
         if self.fail_standby and not on:
             raise OSError("serial")
 
-    def set_band(self, band):
+    def set_band(self, band, frequency_hz=None):
         self.calls.append(("band", band))
 
     def read(self):
@@ -67,9 +67,13 @@ class AccessoriesTests(unittest.TestCase):
     def test_catalog_lists_pending_devices_without_driver(self):
         rows = {row["id"]: row for row in support_matrix()}
         self.assertGreaterEqual(len(rows), 15)
-        for device_id in ("elecraft-kat500", "elecraft-kpa500", "elecraft-kpa1500", "expert-fa", "icom-ic705-internal-atu"):
+        for device_id in ("elecraft-kat500", "elecraft-kpa500", "palstar-amplifiers", "icom-ic705-internal-atu", "atu-100-ext"):
             self.assertEqual(rows[device_id]["status"], "pendiente de fuente")
             self.assertFalse(rows[device_id]["enabled"])
+        for device_id in ("elecraft-kpa1500", "expert-fa", "acom-amplifiers", "gemini-dx1200-hf1k"):
+            self.assertEqual(rows[device_id]["status"], "partial")
+            self.assertTrue(rows[device_id]["enabled"])
+            self.assertEqual(rows[device_id]["verification"], "source-implemented, not hardware-tested")
         self.assertTrue(all(row["source"] for row in rows.values()))
         self.assertEqual(json.loads(CATALOG_PATH.read_text(encoding="utf-8"))["format"], "radicodex-station-accessories-catalog")
 

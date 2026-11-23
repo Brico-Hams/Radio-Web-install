@@ -45,7 +45,8 @@ from bricoham_station_agent.inventory import (
     DeviceInventory,
     enumerate_serial_ports,
 )
-from bricoham_station_agent.accessories import AccessorySupervisor, StationAccessories, support_matrix
+from bricoham_station_agent.accessories import AccessorySupervisor, StationAccessories, load_catalog, support_matrix
+from bricoham_station_agent.amplifier_drivers import driver_from_config
 from bricoham_station_agent.guests import RADIO_ID, GuestGrant, GuestStore, TxLog
 from bricoham_station_agent.station_devices import DeviceError, PowerDevice, build_power_device
 from bricoham_station_agent.ptt import PttConfig, PttController, PttError, PttOperator
@@ -1164,10 +1165,16 @@ def main(argv: list[str] | None = None) -> int:
             ptt = PttController(
                 cat, ptt_config, tx_audio=AudioTransmitter(tx_config) if tx_config else None
             )
-        # No amplifier or tuner driver has a protocol source yet, so only supervision (STANDBY, emergency stop) is active.
+        # The amplifier driver (if any) comes from the local accessories config; links open lazily on first use.
+        accessories_config = (
+            json.loads(args.accessories_config.read_text(encoding="utf-8")) if args.accessories_config else None
+        )
         accessories = (
-            StationAccessories(config=json.loads(args.accessories_config.read_text(encoding="utf-8")))
-            if args.accessories_config
+            StationAccessories(
+                config=accessories_config,
+                amplifier=driver_from_config(load_catalog(), accessories_config),
+            )
+            if accessories_config is not None
             else None
         )
         power = (
