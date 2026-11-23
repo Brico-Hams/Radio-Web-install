@@ -318,6 +318,42 @@ test("Hamlib G TUNE is covered by the heartbeat: silence ends it, heartbeats kee
   } finally { await cleanup(); await rig.close(); }
 });
 
+test("Hamlib G TUNE reports state.tune (kind hamlib) while it runs and null after it ends", async () => {
+  const rig = await fakeRigctld();
+  const clock = { t: Date.now() };
+  const { cmd, state, beat, cleanup } = await startAgent(rig, { now: () => clock.t, tuneWatchMs: 600_000, tuneStatusMs: 50, tuneMaxSeconds: 30 });
+  try {
+    assert.equal((await cmd({ cmd: "tune" })).status, 200);
+    clock.t += 3000;
+    await beat();
+    const active = (await state()).tune;
+    assert.equal(active.kind, "hamlib");
+    assert.equal(active.maxSeconds, 30);
+    assert.ok(active.seconds >= 3);
+    assert.equal((await cmd({ cmd: "ptt", value: false })).status, 200);
+    assert.equal((await state()).tune, null);
+  } finally { await cleanup(); await rig.close(); }
+});
+
+test("UI rule: while state.tune is reported the client keeps beating past the 2 s tuneBusy window and the tune survives", async () => {
+  const rig = await fakeRigctld();
+  const clock = { t: Date.now() };
+  const { cmd, state, beat, cleanup } = await startAgent(rig, { now: () => clock.t, tuneWatchMs: 600_000, tuneStatusMs: 50, tuneMaxSeconds: 3600 });
+  try {
+    assert.equal((await cmd({ cmd: "tune" })).status, 200);
+    // Mirrors remote-ui.js updatePttUi: beat while state.tune is set and this client is the operator.
+    for (let i = 0; i < 12; i += 1) {
+      clock.t += 500;
+      const current = await state();
+      assert.ok(current.tune, `state.tune missing at ${clock.t}`);
+      if (current.tune && current.operator === "me") assert.equal((await beat()).status, 200);
+      await sleep(80);
+    }
+    assert.equal((await state()).tuneResult, null);
+    assert.equal(count(rig, "T 0"), 0);
+  } finally { await cleanup(); await rig.close(); }
+});
+
 test("tune start is checked once with the operator mode; an out-of-band tune is refused with a code", async () => {
   const rig = await fakeRigctld();
   rig.freq = 7_200_000;
