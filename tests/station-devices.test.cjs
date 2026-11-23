@@ -181,6 +181,68 @@ test("rotor: unconfirmed stop blocks further motion and limits are enforced", as
   await rotor.move(350);
 });
 
+test("GS-232A/B frames and replies follow Hamlib gs232a.c / gs232b.c", () => {
+  for (const protocol of ["gs232a", "gs232b"]) {
+    assert.deepEqual(sd.rotorFrames(protocol, "move", 123.4, 45.6), ["W123 046\r"]);
+    assert.deepEqual(sd.rotorFrames(protocol, "move", 5), ["W005 000\r"]);
+    assert.deepEqual(sd.rotorFrames(protocol, "read"), ["C2\r"]);
+    assert.deepEqual(sd.rotorFrames(protocol, "stop"), ["S\r"]);
+    assert.throws(() => sd.rotorFrames(protocol, "move", 90, 181), { code: "heading_invalid" });
+    assert.throws(() => sd.rotorFrames(protocol, "move", 451), { code: "heading_invalid" });
+  }
+  assert.deepEqual(sd.parseRotorReply("gs232a", "+0123+0045\r\n"), { azimuth: 123, elevation: 45 });
+  assert.deepEqual(sd.parseRotorReply("gs232b", "AZ=123 EL=045\r\n"), { azimuth: 123, elevation: 45 });
+  assert.deepEqual(sd.parseRotorReply("gs232b", "AZ=270\r\n"), { azimuth: 270, elevation: 0 });
+  assert.throws(() => sd.parseRotorReply("gs232a", "AZ=123 EL=045"), { code: "rotor_response" });
+  assert.throws(() => sd.parseRotorReply("gs232b", "?>"), { code: "rotor_response" });
+});
+
+test("Rot2Prog frames and replies follow spid.txt", () => {
+  const hexOf = text => Buffer.from(text, "latin1").toString("hex");
+  assert.equal(hexOf(sd.rotorFrames("rot2prog", "move", 123.5, 77, { az: 2, el: 2 })[0]), "57303936370230383734022f20");
+  assert.equal(hexOf(sd.rotorFrames("rot2prog", "stop")[0]), "57000000000000000000000f20");
+  assert.equal(hexOf(sd.rotorFrames("rot2prog", "read")[0]), "57000000000000000000001f20");
+  assert.throws(() => sd.rotorFrames("rot2prog", "move", 10, 0), { code: "rotor_resolution_unknown" });
+  assert.throws(() => sd.rotorFrames("rot2prog", "move", 10, 0, { az: 3, el: 3 }), { code: "rotor_resolution_unknown" });
+  const frame = Buffer.from("570307020502030904000220", "hex").toString("latin1");
+  assert.deepEqual(sd.parseRotorReply("rot2prog", frame), { azimuth: 12.5, elevation: 34, pulses: { az: 2, el: 2 } });
+  for (const bad of [frame.slice(0, 11), `${frame.slice(0, 11)}x`, `X${frame.slice(1)}`, `${frame.slice(0, 5)}\x03${frame.slice(6)}`, `${frame[0]}\x0a${frame.slice(2)}`]) {
+    assert.throws(() => sd.parseRotorReply("rot2prog", bad), { code: "rotor_response" });
+  }
+});
+
+test("rotor: baud must be documented and GS-232 needs an explicit one", () => {
+  const serial = fakeSerial();
+  assert.throws(() => sd.createSerialRotor({ id: "g", protocol: "gs232a", serial }), /explicitly/);
+  assert.throws(() => sd.createSerialRotor({ id: "g", protocol: "gs232b", baud: 600, serial }), /not documented/);
+  assert.throws(() => sd.createSerialRotor({ id: "g", protocol: "rot2prog", baud: 1200, serial }), /not documented/);
+  assert.equal(sd.createSerialRotor({ id: "g", protocol: "rot2prog", serial }).baud, 600);
+});
+
+test("rotor: GS-232B moves with elevation inside limits; locked rotor refuses motion but stops", async () => {
+  const serial = fakeSerial("AZ=010 EL=000\r\n");
+  const rotor = sd.createSerialRotor({ id: "g", protocol: "gs232b", baud: 9600, serial, enabled: true, elevationMax: 90, timers: { set: () => 1, clear: () => {} } });
+  await rotor.move(120, 45);
+  assert.deepEqual(serial.written, ["W120 045\r"]);
+  await assert.rejects(rotor.move(120, 91), { code: "heading_invalid" });
+  assert.deepEqual(await rotor.status(), { ...(await rotor.status()), heading: 10, elevation: 0 });
+  const locked = sd.createSerialRotor({ id: "l", protocol: "gs232a", baud: 4800, serial: fakeSerial("+0010+0000") });
+  await assert.rejects(locked.move(10), { code: "control_disabled" });
+  assert.deepEqual(await locked.stop(), { stopped: true });
+});
+
+test("rotor: Rot2Prog senses the resolution before every move and stops with the SPID frame", async () => {
+  const serial = fakeSerial(Buffer.from("570307020502030904000220", "hex").toString("latin1"));
+  const timers = { handler: null, set: fn => { timers.handler = fn; return 1; }, clear: () => { timers.handler = null; } };
+  const rotor = sd.createSerialRotor({ id: "s", protocol: "rot2prog", serial, enabled: true, elevationMax: 90, timers });
+  await rotor.move(120, 45);
+  assert.deepEqual(serial.written, [`W${"\x00".repeat(10)}\x1f `, "W0960\x020810\x02/ "]);
+  timers.handler();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(serial.written.at(-1), `W${"\x00".repeat(10)}\x0f `);
+  assert.equal(rotor.commands.includes("read"), true);
+});
+
 test("signal path orders the stages and lists unsupported models as pendiente de fuente", () => {
   const path = sd.buildSignalPath([
     { id: "tr", label: "FTX-1", stage: "radio" },

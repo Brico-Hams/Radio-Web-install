@@ -57,6 +57,9 @@ aparecen como «pendiente de fuente», sin control.
 | Hy-Gain DCU-1 / DCU-1X | serie 4800 8N1 | parcial (sin lectura de rumbo; STOP sin confirmar) | Hamlib rotorez, manual RT-21 Apéndice F |
 | Idiom Press Rotor-EZ / RotorCard | serie 4800 8N1 | ok | Hamlib rotorez |
 | Green Heron RT-21 | serie 4800 / 9600 8N1 | ok | manual RT-21 Apéndice F, Hamlib rotorez.c |
+| Yaesu GS-232A | serie 150-9600 8N1 (baudios explícitos) | parcial (sin validación en hardware) | Hamlib gs232a.c |
+| Yaesu GS-232B | serie 1200-9600 8N1 (baudios explícitos) | parcial (sin validación en hardware) | Hamlib gs232b.c |
+| SPID Rot2Prog | serie 600 8N1 | parcial (sin validación en hardware) | Hamlib spid.c, spid.txt |
 | Hy-Gain DCU2 / DCU3 / YRC-1 | serie 9600 | pendiente de fuente | solo catálogo (Hamlib 406) |
 | 4O3A Antenna Genius, Tuner Genius XL, Power Genius XL | red | pendiente de fuente | sin protocolo público |
 | Dataprobe iBoot-PDU, Alpha 87A, OM Power OM2000A+ | red / serie | pendiente de fuente | no localizado |

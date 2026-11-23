@@ -113,4 +113,4 @@ den Doppler des Funkgeräts parallel korrigiert.
 - Warnung: niemals ohne angepasste Last oder Antenne senden.
 - Satellitenverfolgung: im Planer erzeugt „Überflug für den Rotor exportieren (.json)“ `radicodex-pass-track` (Proben `t`/`az`/`el`, Doppler-unabhängig). Die Konsole importiert die Datei und bewegt erst nach Druck auf die Verfolgungstaste.
 - Geschwindigkeit und Endschalter: pendiente de fuente (deaktiviert).
-- Unterstützung: Hamlib `rotctld` mit den Katalogmodellen (`data/remote-station-catalog.json`) und das Bricohams-BLE/AP-Protokoll auf Android. GS-232A/B und SPID ROT2PROG: pendiente de fuente.
+- Unterstützung: Hamlib `rotctld` mit den Katalogmodellen (`data/remote-station-catalog.json`) und das Bricohams-BLE/AP-Protokoll auf Android. GS-232A/B und SPID ROT2PROG: nur im Stationsagenten über `--rotor-serial` (Hamlib-Frames, ohne Hardware-Validierung); der BLE/AP-Rotor bleibt unverändert.

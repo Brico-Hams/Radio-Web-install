@@ -110,6 +110,41 @@ letters below come from Hamlib and match the manual's descriptions.
     5 s brake delay.
   - Flush stray replies before reading.
 
+## Rotors: Yaesu GS-232A/B and SPID Rot2Prog
+
+Sources (Hamlib, LGPL-2.1-or-later; local reference copies are not committed):
+`rotators/gs232a/gs232a.c`, `rotators/gs232a/gs232b.c`, `rotators/spid/spid.c`,
+`rotators/spid/spid.txt`. Reuse is recorded in `docs/THIRD-PARTY-REUSE.md`.
+
+### GS-232A / GS-232B
+
+- Serial 8N1, no handshake. Hamlib caps: GS-232A 150-9600 baud, GS-232B
+  1200-9600 baud. No default baud is documented, so the operator chooses it.
+- Every command ends with `<CR>`.
+- Set position: `Waaa eee<CR>` (azimuth and elevation, 3 digits, rounded;
+  Hamlib wraps negative azimuth by +360). No reply is read. Hamlib caps:
+  azimuth up to 450, elevation 0-180.
+- Read position: `C2<CR>`. GS-232A replies `+0aaa+0eee` ending in `<LF>`;
+  GS-232B replies `AZ=aaa EL=eee` ending in `<CR><LF>` (a 12PR1A may send
+  `AZ=` only). A leading `?` is an error.
+- Stop (all stop): `S<CR>`.
+- Speed `X1`..`X4` and continuous `U`/`D`/`L`/`R` exist in Hamlib but are not
+  exposed here: pendiente de fuente for the safety limits of this layer.
+- k3ng_rotator_controller README confirms GS-232A/B emulation; the emulation
+  source is not in the reference copy, so it adds no frames here.
+
+### SPID Rot2Prog
+
+- Serial 600 bps 8N1 (spid.txt, Hamlib caps). Commands are 13 bytes
+  `57 H1..H4 PH V1..V4 PV K 20`, replies 12 bytes `57 H1..H4 PH V1..V4 PV 20`.
+- Stop `K=0x0F` (all other fields 0), status `K=0x1F`, set `K=0x2F`. Stop
+  returns a status frame (the reply may be a degree or two off).
+- Set: `H = PH * (360 + az)`, `V = PV * (360 + el)`, as 4 ASCII digits; no
+  reply. The resolution PH/PV (1, 2 or 4 pulses per degree) is read with the
+  status command before every move, as Hamlib does when it is unknown.
+- Reply angle: `H1*100 + H2*10 + H3 + H4/10 - 360` (same for elevation).
+- Rot1Prog (1200 bps, 5-byte reply) is not implemented here.
+
 ## Pendiente de fuente (no public protocol found)
 
 - 4O3A Power Genius XL: only the FlexRadio wiki notes in

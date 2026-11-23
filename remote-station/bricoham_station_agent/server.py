@@ -1019,7 +1019,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--rotor-serial",
-        help="PROTOCOL:PORT[:BAUD] (dcu1, rotorez, rt21) to drive the rotor over serial "
+        help="PROTOCOL:PORT[:BAUD] (dcu1, rotorez, rt21, gs232a, gs232b, rot2prog; gs232 needs an explicit baud) to drive the rotor over serial "
         "instead of rotctld; the JSON port field is then unused.",
     )
     parser.add_argument(
@@ -1151,8 +1151,8 @@ def main(argv: list[str] | None = None) -> int:
             from bricoham_station_agent.station_devices import open_serial_rotor_backend
 
             protocol, _, rest = args.rotor_serial.partition(":")
-            port, _, baud = rest.rpartition(":") if rest.count(":") else (rest, "", "4800")
-            rotor_backend = open_serial_rotor_backend(protocol, port, int(baud or "4800"))
+            port, _, baud = rest.rpartition(":") if rest.count(":") else (rest, "", "")
+            rotor_backend = open_serial_rotor_backend(protocol, port, int(baud) if baud else None)
         rotor = RotorController(rotor_config, rotor_backend) if rotor_config else None
         flex = None
         if args.flex_config:

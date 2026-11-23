@@ -320,21 +320,45 @@ class PowerDevice:
 # --- Serial rotor controllers (Hamlib rotorez.txt/.c, RT-21 manual Appendix F) ---
 
 
+# GS-232A/B and SPID Rot2Prog frames follow Hamlib rotators/gs232a/gs232a.c, gs232b.c and
+# rotators/spid/spid.c, spid.txt (LGPL-2.1-or-later, Stephane Fillod / Norvald H. Ryeng);
+# see docs/THIRD-PARTY-REUSE.md. Frames are latin-1 text so SPID binary bytes survive str I/O.
+GS232_BAUDS = (150, 300, 600, 1200, 2400, 4800, 9600)  # Hamlib serial_rate_min/max 150..9600
+GS232B_BAUDS = (1200, 2400, 4800, 9600)  # Hamlib gs232b serial_rate_min/max 1200..9600
+SPID_PULSES = (1, 2, 4)  # spid.txt: 1, 0.5 and 0.25 deg/pulse
+SPID_STOP = "W" + "\x00" * 10 + "\x0f "
+SPID_STATUS = "W" + "\x00" * 10 + "\x1f "
+
+
 @dataclass(frozen=True)
 class RotorProtocol:
     label: str
     bauds: tuple[int, ...]
     heading_read: bool
+    elevation: bool = False
+    default_baud: int | None = 4800  # None: the operator must choose the documented baud explicitly
+    reply_end: str = ";"
+    reply_len: int | None = None
 
 
 ROTOR_PROTOCOLS = {
     "dcu1": RotorProtocol("Hy-Gain DCU-1 / DCU-1X", (4800,), False),
     "rotorez": RotorProtocol("Idiom Press Rotor-EZ / RotorCard", (4800,), True),
     "rt21": RotorProtocol("Green Heron RT-21", (4800, 9600), True),
+    "gs232a": RotorProtocol("Yaesu GS-232A", GS232_BAUDS, True, True, None, "\n"),
+    "gs232b": RotorProtocol("Yaesu GS-232B", GS232B_BAUDS, True, True, None, "\n"),
+    "rot2prog": RotorProtocol("SPID Rot2Prog", (600,), True, True, 600, "", 12),
 }
 
 
-def rotor_frames(protocol: str, operation: str, degrees: float | None = None) -> list[str] | None:
+def rotor_frames(
+    protocol: str,
+    operation: str,
+    degrees: float | None = None,
+    elevation: float = 0.0,
+    pulses: tuple[int, int] | None = None,
+) -> list[str] | None:
+    """Frames for one operation; pulses = (az, el) pulses per degree, required by Rot2Prog moves."""
     spec = ROTOR_PROTOCOLS.get(protocol)
     if spec is None:
         raise DeviceError("protocol_unknown", "Unknown rotor protocol.")
@@ -345,12 +369,36 @@ def rotor_frames(protocol: str, operation: str, degrees: float | None = None) ->
             or not 0 <= degrees <= 450
         ):
             raise DeviceError("heading_invalid", "Heading out of range.")
-        return [f"AP1{round(degrees):03d};", "AM1;"]
+        if isinstance(elevation, bool) or not isinstance(elevation, int | float):
+            raise DeviceError("heading_invalid", "Elevation out of range.")
+        if not spec.elevation:
+            return [f"AP1{round(degrees):03d};", "AM1;"]
+        if protocol == "rot2prog":
+            if not -20 <= elevation <= 210:  # Hamlib Rot2Prog min_el/max_el
+                raise DeviceError("heading_invalid", "Elevation out of range.")
+            if pulses is None or pulses[0] not in SPID_PULSES or pulses[1] not in SPID_PULSES:
+                raise DeviceError("rotor_resolution_unknown", "Rot2Prog resolution is unknown.", 502)
+            h = round(pulses[0] * (360 + degrees))
+            v = round(pulses[1] * (360 + elevation))
+            if not 0 <= h <= 9999 or not 0 <= v <= 9999:
+                raise DeviceError("heading_invalid", "Position out of range.")
+            return [f"W{h:04d}{chr(pulses[0])}{v:04d}{chr(pulses[1])}/ "]
+        if not 0 <= elevation <= 180:  # Hamlib GS-232 max_el
+            raise DeviceError("heading_invalid", "Elevation out of range.")
+        return [f"W{round(degrees):03d} {round(elevation):03d}\r"]
     if operation == "read":
         if not spec.heading_read:
             return None
+        if protocol == "rot2prog":
+            return [SPID_STATUS]
+        if spec.elevation:
+            return ["C2\r"]
         return ["BI1;" if protocol == "rt21" else "AI1;"]
     if operation == "stop":
+        if protocol == "rot2prog":
+            return [SPID_STOP]
+        if spec.elevation:
+            return ["S\r"]
         # A bare ';' stops Rotor-EZ and RT-21; for the DCU-1 Hamlib sends AS1; (its README disagrees).
         return [";", "AS1;"] if protocol == "dcu1" else [";"]
     raise DeviceError("operation_invalid", "Unknown rotor operation.")
@@ -367,16 +415,49 @@ def parse_heading(reply: str) -> float:
     return float(match.group(1))
 
 
+_GS232A_REPLY = re.compile(r"\+0(\d{3})\+0(\d{3})")
+_GS232B_REPLY = re.compile(r"AZ=(\d{3})(?:\s*EL=(\d{3}))?")  # some 12PR1A units answer AZ only
+
+
+def parse_rotor_reply(protocol: str, reply: str) -> tuple[float, float, int, int]:
+    """Returns (azimuth, elevation, az pulses/deg, el pulses/deg); pulses are 0 unless Rot2Prog."""
+    if protocol == "gs232a":
+        match = _GS232A_REPLY.fullmatch(reply.strip())
+        if match is not None:
+            return float(match.group(1)), float(match.group(2)), 0, 0
+    elif protocol == "gs232b":
+        match = _GS232B_REPLY.fullmatch(reply.strip())
+        if match is not None:
+            return float(match.group(1)), float(match.group(2) or 0), 0, 0
+    elif protocol == "rot2prog":
+        # 12-byte frame: 'W', H1-H4, PH, V1-V4, PV, ' ' (spid.txt); angle = digits - 360.
+        if len(reply) == 12 and reply[0] == "W" and reply[11] == " ":
+            data = [ord(char) for char in reply]
+            if all(value <= 9 for value in data[1:5] + data[6:10]) and (
+                data[5] in SPID_PULSES and data[10] in SPID_PULSES
+            ):
+                azimuth = data[1] * 100 + data[2] * 10 + data[3] + data[4] / 10 - 360
+                elevation = data[6] * 100 + data[7] * 10 + data[8] + data[9] / 10 - 360
+                return azimuth, elevation, data[5], data[10]
+    else:
+        return parse_heading(reply), 0.0, 0, 0
+    raise DeviceError("rotor_response", "Unexpected position reply.", 502)
+
+
 class SerialRotorBackend:
     """rotctld-compatible exchange() so RotorController keeps its lease, deadman and stop logic.
 
     serial exposes write(str), read() -> str and flush(); a pyserial wrapper or a fake in tests.
     """
 
-    def __init__(self, protocol: str, serial: object, baud: int = 4800) -> None:
+    def __init__(self, protocol: str, serial: object, baud: int | None = None) -> None:
         spec = ROTOR_PROTOCOLS.get(protocol)
         if spec is None:
             raise ValueError("Unknown rotor protocol.")
+        if baud is None:
+            baud = spec.default_baud
+        if baud is None:
+            raise ValueError(f"Choose a baud explicitly for {spec.label}.")
         if baud not in spec.bauds:
             raise ValueError(f"Baud {baud} is not documented for {spec.label}.")
         self.protocol = protocol
@@ -386,15 +467,16 @@ class SerialRotorBackend:
 
     def exchange(self, command: str, expected: str) -> list[str]:
         if expected == "get_pos":
-            frames = rotor_frames(self.protocol, "read")
-            if frames is None:
-                raise DeviceError("rotor_no_heading_read", "sin lectura de rumbo")
-            self._serial.flush()
-            self._serial.write(frames[0])
-            heading = parse_heading(self._serial.read())
-            return [f"Azimuth: {heading}", "Elevation: 0.0"]
+            azimuth, elevation, _, _ = self._read_position()
+            return [f"Azimuth: {azimuth}", f"Elevation: {elevation}"]
         if expected == "set_pos":
-            for frame in rotor_frames(self.protocol, "move", float(command.split()[1])) or []:
+            _, az_text, el_text = command.split()
+            pulses = None
+            if self.protocol == "rot2prog":
+                _, _, az_pulses, el_pulses = self._read_position()
+                pulses = (az_pulses, el_pulses)
+            elevation = float(el_text) if ROTOR_PROTOCOLS[self.protocol].elevation else 0.0
+            for frame in rotor_frames(self.protocol, "move", float(az_text), elevation, pulses) or []:
                 self._serial.write(frame)
             return []
         if expected == "stop":
@@ -403,19 +485,38 @@ class SerialRotorBackend:
             return []
         raise DeviceError("operation_invalid", "Unsupported rotor exchange.")
 
+    def _read_position(self) -> tuple[float, float, int, int]:
+        frames = rotor_frames(self.protocol, "read")
+        if frames is None:
+            raise DeviceError("rotor_no_heading_read", "sin lectura de rumbo")
+        self._serial.flush()
+        self._serial.write(frames[0])
+        return parse_rotor_reply(self.protocol, self._serial.read())
 
-def open_serial_rotor_backend(protocol: str, port: str, baud: int = 4800) -> SerialRotorBackend:
+
+def open_serial_rotor_backend(protocol: str, port: str, baud: int | None = None) -> SerialRotorBackend:
     import serial  # pyserial, already required by cat.py
+
+    spec = ROTOR_PROTOCOLS.get(protocol)
+    if spec is None:
+        raise ValueError("Unknown rotor protocol.")
+    baud = baud or spec.default_baud
+    if baud is None:
+        raise ValueError(f"Choose a baud explicitly for {spec.label}.")
 
     class Wire:
         def __init__(self) -> None:
             self._port = serial.Serial(port, baud, bytesize=8, parity="N", stopbits=1, timeout=0.7)
 
         def write(self, text: str) -> None:
-            self._port.write(text.encode("ascii"))
+            self._port.write(text.encode("latin-1"))
 
         def read(self) -> str:
-            return self._port.read_until(b";").decode("ascii", "replace")
+            if spec.reply_len:
+                data = self._port.read(spec.reply_len)
+            else:
+                data = self._port.read_until(spec.reply_end.encode("ascii"))
+            return data.decode("latin-1")
 
         def flush(self) -> None:
             self._port.reset_input_buffer()
@@ -489,6 +590,9 @@ SUPPORT_MATRIX = (
     ("Hy-Gain DCU-1 / DCU-1X", "serial 4800 8N1", "partial", "Hamlib rotorez; RT-21 manual App. F"),
     ("Idiom Press Rotor-EZ / RotorCard", "serial 4800 8N1", "ok", "Hamlib rotorez"),
     ("Green Heron RT-21", "serial 4800/9600 8N1", "ok", "RT-21 manual App. F; Hamlib rotorez.c"),
+    ("Yaesu GS-232A", "serial 150-9600 8N1 (baud explicit)", "partial", "Hamlib gs232a.c; no hardware validation"),
+    ("Yaesu GS-232B", "serial 1200-9600 8N1 (baud explicit)", "partial", "Hamlib gs232b.c; no hardware validation"),
+    ("SPID Rot2Prog", "serial 600 8N1", "partial", "Hamlib spid.c, spid.txt; no hardware validation"),
     ("Hy-Gain DCU2 / DCU3 / YRC-1", "serial 9600", PENDING, "catalog only (Hamlib 406)"),
     *((label, "network", PENDING, "STATION-DEVICES-SOURCES.md") for label, _ in PENDING_DEVICES.values()),
 )
