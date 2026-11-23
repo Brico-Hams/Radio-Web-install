@@ -18,6 +18,7 @@
   <script src="remote-rotor-ui.js" defer></script>
   <script src="remote-tune-ui.js" defer></script>
   <script src="remote-dxcluster-ui.js" defer></script>
+  <script src="remote-ftx-ui.js" defer></script>
   <script src="remote-ui.js" defer></script>
 </head>
 <body>
@@ -296,6 +297,20 @@
       </div>
       <p id="digital-status" class="hint" role="status" aria-live="polite">Decodificador apagado.</p>
       <pre id="digital-text" class="digital-text" translate="no" role="log" aria-label="Texto decodificado" aria-live="off"></pre>
+      <h3 class="panel-title">FT8 (solo recepcion)</h3>
+      <p class="hint">El agente decodifica en ranuras de 15 s el audio de recepcion de la radio. Nunca transmite ni responde por si solo.</p>
+      <div class="cw-actions">
+        <button id="ftx-toggle" type="button" class="toggle" aria-pressed="false">Activar FT8</button>
+      </div>
+      <p id="ftx-status" class="hint" role="status" aria-live="polite">FT8 apagado.</p>
+      <p class="hint"><span>Ranuras decodificadas:</span> <span id="ftx-slots">0</span> · <span>Ranuras descartadas:</span> <span id="ftx-dropped">0</span></p>
+      <p class="hint">FT4: todavia no disponible.</p>
+      <div class="ftx-wrap">
+        <table class="ftx-table">
+          <thead><tr><th scope="col">UTC</th><th scope="col">SNR (dB)</th><th scope="col">DT (s)</th><th scope="col">Audio (Hz)</th><th scope="col">Mensaje</th></tr></thead>
+          <tbody id="ftx-list" translate="no"></tbody>
+        </table>
+      </div>
     </section>
 
     <section id="panel-dx" class="card panel" role="tabpanel" aria-labelledby="tab-dx" data-active="false">

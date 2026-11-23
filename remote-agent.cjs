@@ -23,6 +23,7 @@ const { createDxCluster, normalizeDxConfig } = require("./remote-dxcluster.cjs")
 const remoteOps = require("./remote-ops.cjs");
 const { planCwSend, createCwGuard, createMemoryStore, CwError } = require("./remote-cw.cjs");
 const remoteQsl = require("./remote-qsl.cjs");
+const { createFtx } = require("./remote-ftx.cjs");
 
 const isLoopbackHost = value => value === "localhost" || value === "::1" || /^127\./.test(value);
 
@@ -70,6 +71,7 @@ const STATIC_FILES = Object.freeze({
   "/remote-rotor-ui.js": ["remote-rotor-ui.js", "text/javascript; charset=utf-8"],
   "/remote-tune-ui.js": ["remote-tune-ui.js", "text/javascript; charset=utf-8"],
   "/remote-dxcluster-ui.js": ["remote-dxcluster-ui.js", "text/javascript; charset=utf-8"],
+  "/remote-ftx-ui.js": ["remote-ftx-ui.js", "text/javascript; charset=utf-8"],
   "/spectrum-core.js": ["spectrum-core.js", "text/javascript; charset=utf-8"],
   "/remote-audio-worklet.js": ["remote-audio-worklet.js", "text/javascript; charset=utf-8"],
   "/remote.css": ["remote.css", "text/css; charset=utf-8"],
@@ -354,6 +356,8 @@ function createRemoteAgent(options = {}) {
   const relayConfig = config.relay;
   const audio = options.audioService || remoteAudio.createAudio({ ...options.audio, log });
   const audioSockets = new Set();
+  // Receive-only FT8 decoder (remote-ftx.cjs): off until the owner enables it; it only lists decodes and never keys the radio.
+  const ftx = createFtx({ audio, now, log, workerFactory: options.ftxWorkerFactory, setInterval: options.ftxSetInterval, clearInterval: options.ftxClearInterval });
   // Optional rotctld rotor (options.rotor = { port, motionEnabled, park, ... }); no rotor commands are sent at startup.
   const rotor = options.rotor ? createRotor({ config: options.rotor, now: options.now, connect: options.rotorConnect }) : null;
   // Read-only DX cluster feed (remote-dxcluster.cjs); tuning to a spot goes through the normal freq command only.
@@ -1423,6 +1427,19 @@ function createRemoteAgent(options = {}) {
       return;
     }
     if (route === "GET /api/dxcluster") { send(response, 200, dxCluster.snapshot()); return; }
+    if (route === "GET /api/ftx") { send(response, 200, ftx.snapshot()); return; }
+    if (route === "POST /api/ftx") {
+      // Only the owner switches decoding on or off; guests may read the list.
+      if (!owner_) { send(response, 403, { error: "Solo el propietario." }); return; }
+      let body;
+      try { body = await readJson(request); }
+      catch (error) { send(response, error.status || 400, { error: error.message }); return; }
+      if (typeof body?.enabled !== "boolean") { send(response, 400, { error: "Estado no valido." }); return; }
+      if (body.enabled && !audio.rx) { send(response, 503, { error: "Audio de recepcion no disponible." }); return; }
+      ftx.enable(body.enabled);
+      send(response, 200, ftx.snapshot());
+      return;
+    }
     if (route === "GET /api/rotor" || route === "POST /api/rotor") {
       if (!rotor) { send(response, 503, { error: "rotor_not_configured" }); return; }
       try {
@@ -1880,6 +1897,7 @@ function createRemoteAgent(options = {}) {
     }
     client.stop();
     dxCluster.stop();
+    ftx.close();
     for (const ws of audioSockets) { ws.fail(1001, "shutdown"); ws.socket.destroy(); }
     audio.close?.();
     await rotor?.close();

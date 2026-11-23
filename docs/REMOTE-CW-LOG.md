@@ -79,3 +79,7 @@ Read-only telnet client, plain TCP, off by default. The operator sets it in `rem
 - Spots are marked `new` or `worked` against the optional ADIF file at the agent (`logFile`, default `~/.radicodex/remote-log.adi`, parsed by `remote-log.cjs`); without it they are `unknown`. Spots carry no mode, so the match is call + band.
 - The console tab "Cluster DX" lists spots; a click sends the existing `freq` command (operator lock applies) and never keys. The needed-spot alert is an opt-in checkbox.
 - Line format and login/backoff behaviour: `third_party/ftx1/rigplane-rigplane-core/src/rigplane/web/dx_cluster.py` and its `tests/test_dx_cluster.py`.
+
+## FT8 receive (`remote-ftx.cjs`)
+
+Receive only, off by default. `GET /api/ftx` (token) returns `{ enabled, available, modes, slotSeconds, decodes, stats }`; `POST /api/ftx {"enabled":true|false}` is owner only. While enabled, `remote-audio.cjs` adds a 12 kHz mono s16le tap to the single ffmpeg capture (it restarts once if the capture was already running without it). The agent fills UTC-aligned 15 s slots and decodes each closed slot with `ftx-core.js` in a `worker_thread`; the queue holds one waiting slot, older slots are dropped (`stats.dropped`) and a decode that overruns 20 s is abandoned with its worker. The "RTTY/PSK31" console tab lists UTC, SNR, DT, audio Hz and message; FT4 is shown as not available yet. There is no reply button, no auto-sequence and no path to PTT (licence rule of `data/ftx-ldpc174.json`: no robotic or unattended QSOs).

@@ -1581,6 +1581,7 @@
     if (globalThis.RemoteRotorUI) globalThis.RemoteRotorUI.mount({ doc: document, api, token, clientId, notify });
     // Click-to-tune uses the same freq command as the frequency display; the panel can never key the radio.
     if (globalThis.RemoteDxUI) globalThis.RemoteDxUI.mount({ doc: document, api, notify, tune: hz => run({ cmd: "freq", value: hz }) });
+    if (globalThis.RemoteFtxUI) globalThis.RemoteFtxUI.mount({ doc: document, api, notify });
     measureLatency();
     setInterval(measureLatency, 3000);
   }

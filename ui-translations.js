@@ -2427,6 +2427,25 @@ Sin spots todavia.|No spots yet.|Aucun spot pour l’instant.|Noch keine Spots.
 Nuevo|New|Nouveau|Neu
 Trabajado|Worked|Travaillé|Gearbeitet
 Sin registro|No log|Pas de journal|Kein Log
+FT8 (solo recepcion)|FT8 (receive only)|FT8 (réception seule)|FT8 (nur Empfang)
+El agente decodifica en ranuras de 15 s el audio de recepcion de la radio. Nunca transmite ni responde por si solo.|The agent decodes the radio receive audio in 15 s slots. It never transmits or replies by itself.|L’agent décode l’audio de réception de la radio par créneaux de 15 s. Il ne transmet ni ne répond jamais seul.|Der Agent dekodiert den Empfangston des Funkgeräts in 15-s-Slots. Er sendet und antwortet niemals selbstständig.
+Activar FT8|Start FT8|Activer FT8|FT8 starten
+Detener FT8|Stop FT8|Arrêter FT8|FT8 stoppen
+FT8 apagado.|FT8 off.|FT8 désactivé.|FT8 aus.
+FT8 activo: esperando la primera ranura completa de 15 s.|FT8 on: waiting for the first complete 15 s slot.|FT8 actif : en attente du premier créneau complet de 15 s.|FT8 an: warte auf den ersten vollständigen 15-s-Slot.
+FT8 activo: escuchando.|FT8 on: listening.|FT8 actif : à l’écoute.|FT8 an: hört zu.
+FT8 no disponible: el agente no tiene audio de recepcion.|FT8 not available: the agent has no receive audio.|FT8 indisponible : l’agent n’a pas d’audio de réception.|FT8 nicht verfügbar: Der Agent hat keinen Empfangston.
+Ranuras decodificadas:|Slots decoded:|Créneaux décodés :|Dekodierte Slots:
+Ranuras descartadas:|Slots dropped:|Créneaux abandonnés :|Verworfene Slots:
+FT4: todavia no disponible.|FT4: not available yet.|FT4 : pas encore disponible.|FT4: noch nicht verfügbar.
+Sin decodificaciones FT8 todavia.|No FT8 decodes yet.|Aucun décodage FT8 pour l’instant.|Noch keine FT8-Dekodierungen.
+UTC|UTC|UTC|UTC
+SNR (dB)|SNR (dB)|SNR (dB)|SNR (dB)
+DT (s)|DT (s)|DT (s)|DT (s)
+Audio (Hz)|Audio (Hz)|Audio (Hz)|Audio (Hz)
+Mensaje|Message|Message|Nachricht
+Estado no valido.|Invalid state.|État non valide.|Ungültiger Zustand.
+Audio de recepcion no disponible.|Receive audio not available.|Audio de réception indisponible.|Empfangston nicht verfügbar.
 `.trim().split("\n").map(line => line.split("|")));
   root.BricohamsUITranslations = entries;
   if (typeof module === "object" && module.exports) module.exports = entries;

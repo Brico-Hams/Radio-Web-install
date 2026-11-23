@@ -10,6 +10,7 @@ const childProcess = require("node:child_process");
 const path = require("node:path");
 
 const SAMPLE_RATE = 48000;
+const PCM_RATE = 12000;
 const FRAME_SAMPLES = 960;
 const PRE_SKIP = 312;
 const RMS_BLOCK_SAMPLES = 24000;
@@ -225,17 +226,20 @@ async function listAudioDevices({ platform = process.platform, run = runCapture,
 }
 
 // ---- ffmpeg argument builders ----
-function captureArgs(input, platform = process.platform) {
+// With pcm, a third output writes mono s16le at PCM_RATE (ffmpeg resamples) on fd 3 for the receive-only FT8 decoder.
+function captureArgs(input, platform = process.platform, { pcm = false } = {}) {
   const source = platform === "win32" ? ["-f", "dshow", "-i", `audio=${input}`]
     : platform === "darwin" ? ["-f", "avfoundation", "-i", `:${input}`]
       : ["-f", "alsa", "-i", input];
+  const pcmOutput = pcm ? ["-map", "0:a", "-ac", "1", "-ar", String(PCM_RATE), "-f", "s16le", "pipe:3"] : [];
   return [
     "-hide_banner", "-nostdin", "-loglevel", "info", "-fflags", "nobuffer", "-flags", "low_delay", ...source,
     "-map", "0:a", "-ac", "1", "-ar", String(SAMPLE_RATE), "-c:a", "libopus", "-b:a", "24k", "-application", "voip",
     "-frame_duration", "20", "-f", "ogg", "pipe:1",
     "-map", "0:a", "-ac", "1", "-ar", String(SAMPLE_RATE),
     "-af", `asetnsamples=n=${RMS_BLOCK_SAMPLES}:p=0,astats=metadata=1:reset=1,ametadata=mode=print:key=lavfi.astats.Overall.RMS_level`,
-    "-f", "null", "-"
+    "-f", "null", "-",
+    ...pcmOutput
   ];
 }
 
@@ -255,8 +259,9 @@ function parseRmsLine(line) {
 }
 
 // ---- Capture (RX) ----
-function createCapture({ input, platform, spawn, ffmpegPath, log, onPacket, onLevel, backoffMinMs = 500, backoffMaxMs = 10_000 }) {
+function createCapture({ input, platform, spawn, ffmpegPath, log, onPacket, onLevel, onPcm, wantsPcm = () => false, backoffMinMs = 500, backoffMaxMs = 10_000 }) {
   let child = null;
+  let withPcm = false;
   let wanted = false;
   let retry = null;
   let attempt = 0;
@@ -267,9 +272,18 @@ function createCapture({ input, platform, spawn, ffmpegPath, log, onPacket, onLe
     const parser = new OggPacketParser();
     let stderrBuffer = "";
     let current;
-    try { current = spawn(ffmpegPath, captureArgs(input, platform), { stdio: ["ignore", "pipe", "pipe"], windowsHide: true, shell: false }); }
-    catch (error) { log(`ffmpeg RX: ${error.message}`); scheduleRetry(); return; }
+    const pcm = Boolean(onPcm) && wantsPcm();
+    try {
+      current = spawn(ffmpegPath, captureArgs(input, platform, { pcm }), {
+        stdio: pcm ? ["ignore", "pipe", "pipe", "pipe"] : ["ignore", "pipe", "pipe"], windowsHide: true, shell: false
+      });
+    } catch (error) { log(`ffmpeg RX: ${error.message}`); scheduleRetry(); return; }
     child = current;
+    withPcm = pcm;
+    if (pcm) {
+      current.stdio?.[3]?.on("data", chunk => { if (child === current) onPcm(chunk); });
+      current.stdio?.[3]?.on("error", () => {});
+    }
     current.stdout.on("data", chunk => { for (const packet of parser.feed(chunk)) onPacket(packet); attempt = 0; });
     current.stderr.on("data", chunk => {
       stderrBuffer += chunk.toString("latin1");
@@ -311,7 +325,8 @@ function createCapture({ input, platform, spawn, ffmpegPath, log, onPacket, onLe
       child = null;
       current?.kill();
     },
-    get running() { return Boolean(child); }
+    get running() { return Boolean(child); },
+    get pcm() { return withPcm; }
   };
 }
 
@@ -378,9 +393,12 @@ function createAudio(options = {}) {
   const emitPacket = packet => { for (const entry of [...subscribers]) entry.onPacket?.(packet); };
   const emitLevel = rms => { for (const entry of [...subscribers]) entry.onLevel?.(rms); };
 
+  const emitPcm = chunk => { for (const entry of [...subscribers]) entry.onPcm?.(chunk); };
+  const wantsPcm = () => [...subscribers].some(entry => entry.onPcm);
+
   function ensureCapture() {
     if (!capture) {
-      const params = { onPacket: emitPacket, onLevel: emitLevel };
+      const params = { onPacket: emitPacket, onLevel: emitLevel, onPcm: emitPcm, wantsPcm };
       capture = options.createCapture
         ? options.createCapture(params)
         : createCapture({ input, platform, spawn, ffmpegPath, log, ...params });
@@ -393,6 +411,8 @@ function createAudio(options = {}) {
     subscribers.add(entry);
     clearTimeout(idleTimer);
     idleTimer = null;
+    // A running capture started without the PCM tap is restarted once so the first PCM subscriber gets it.
+    if (entry.onPcm && capture && capture.running && !capture.pcm) capture.stop();
     ensureCapture();
     return () => {
       subscribers.delete(entry);
@@ -448,5 +468,5 @@ function createAudio(options = {}) {
 module.exports = {
   oggCrc, oggPage, opusHead, opusTags, OggOpusMuxer, OggPacketParser,
   parseDshowAudioDevices, parseAlsaList, parseAvfoundationAudioDevices, parseRmsLine,
-  captureArgs, playbackArgs, listAudioDevices, createAudio, createCapture, createPlaybackSink
+  PCM_RATE, captureArgs, playbackArgs, listAudioDevices, createAudio, createCapture, createPlaybackSink
 };

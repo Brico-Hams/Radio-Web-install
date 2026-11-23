@@ -4,7 +4,7 @@
 const CACHE = "bricohams-remote-shell-v1";
 const COMMON = ["ui-i18n.js", "ui-translations.js", "bricohams-logo.png"];
 const SHELLS = {
-  agent: ["", "remote.css", "remote-ui.js", "remote-tune-ui.js", "remote-audio-core.js", "remote-digital.js", "remote-audio-worklet.js", "manifest.webmanifest", ...COMMON],
+  agent: ["", "remote.css", "remote-ui.js", "remote-tune-ui.js", "remote-audio-core.js", "remote-digital.js", "remote-ftx-ui.js", "remote-audio-worklet.js", "manifest.webmanifest", ...COMMON],
   remoto: ["remoto.html", "remoto.css", "remoto-ui.js", "remoto.webmanifest", ...COMMON]
 };
 // The desktop page registers this worker as remote-sw.js scoped to remoto.html; the agent serves it as sw.js.
