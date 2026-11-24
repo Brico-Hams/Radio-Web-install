@@ -1,4 +1,8 @@
 import { isRecord } from './api'
+import { int16Level, type SpeechProcessor } from './txProcessing'
+
+// Optional capture-path hooks: the speech processor runs before the PCM is sent; onLevel feeds VOX.
+export type MicrophoneTap = { processor?: SpeechProcessor; onLevel?: (level: number) => void }
 
 export class RemoteMicrophone {
   sessionId: string | null = null
@@ -15,15 +19,18 @@ export class RemoteMicrophone {
   private token: string
   private onReady: (id: string) => void
   private onFailure: (message: string) => void
+  private tap: MicrophoneTap
 
   constructor(
     url: string, token: string,
     onReady: (id: string) => void, onFailure: (message: string) => void,
+    tap: MicrophoneTap = {},
   ) {
     this.url = url
     this.token = token
     this.onReady = onReady
     this.onFailure = onFailure
+    this.tap = tap
   }
 
   private ensureOpen() {
@@ -122,7 +129,15 @@ export class RemoteMicrophone {
         this.fail('Canal de micrófono cerrado.')
         return
       }
-      try { socket.send(data.pcm) }
+      try {
+        if (this.tap.onLevel || this.tap.processor) {
+          const samples = new Int16Array(data.pcm)
+          // The level is measured before processing; the processor leaves the samples untouched while off.
+          this.tap.onLevel?.(int16Level(samples))
+          this.tap.processor?.processInt16(samples)
+        }
+        socket.send(data.pcm)
+      }
       catch { this.fail('No se pudo enviar audio; transmisión detenida.') }
     }
     this.timer = window.setTimeout(() => this.fail('El agente no preparó el audio a tiempo.'), 8000)

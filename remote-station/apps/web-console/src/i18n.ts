@@ -4,6 +4,17 @@ export type Language = 'es' | 'en' | 'fr' | 'pt'
 export const languageNames = { es: 'Español', en: 'English', fr: 'Français', pt: 'Português' }
 
 const es = {
+  speechProcessor: 'Procesador de voz',
+  speechThreshold: 'Umbral del compresor',
+  speechRatio: 'Relación del compresor',
+  speechPresence: 'Realce de presencia',
+  voxArm: 'Armar VOX',
+  voxArmed: 'VOX ARMADO',
+  voxThreshold: 'Umbral de VOX',
+  voxHold: 'Retención de VOX',
+  voxHint: 'VOX solo se arma con una acción explícita, nunca se guarda y usa la misma sesión de PTT. Pulsar PTT, perder el foco, ocultar el cliente, perder el canal de voz o cualquier corte del agente lo desarma.',
+  voxUnavailable: 'VOX no disponible: prepara el micrófono y habilita TX en este cliente.',
+  voxDisarmed: 'VOX desarmado: se cortó la transmisión, el canal o el foco.',
   rxTitle: 'Audio RX experimental', rxListen: 'Escuchar RX', rxStop: 'Detener',
   rxSafety: 'Solo recepción; sin micrófono ni transmisión. La aceptación física está pendiente.',
   scopeTitle: 'Escala RF de la radio (CI-V)', scopeStart: 'Iniciar escala', scopeStop: 'Detener escala',
@@ -233,6 +244,17 @@ const es = {
   parFeatAccessories: 'Sintonizador y amplificador', parFeatSettings: 'Ajustes remotos',}
 export type Message = keyof typeof es
 const en: Record<Message, string> = {
+  speechProcessor: 'Speech processor',
+  speechThreshold: 'Compressor threshold',
+  speechRatio: 'Compressor ratio',
+  speechPresence: 'Presence boost',
+  voxArm: 'Arm VOX',
+  voxArmed: 'VOX ARMED',
+  voxThreshold: 'VOX threshold',
+  voxHold: 'VOX hold time',
+  voxHint: 'VOX is armed only by an explicit action, is never saved and uses the same PTT session. Pressing PTT, losing focus, hiding the client, losing the voice channel or any agent cut disarms it.',
+  voxUnavailable: 'VOX unavailable: prepare the microphone and enable TX on this client.',
+  voxDisarmed: 'VOX disarmed: the transmission, the channel or the focus was lost.',
   rxTitle: 'Experimental RX audio', rxListen: 'Listen to RX', rxStop: 'Stop',
   rxSafety: 'Receive only; no microphone or transmission. Hardware acceptance is pending.',
   scopeTitle: 'Radio RF scope (CI-V)', scopeStart: 'Start scope', scopeStop: 'Stop scope',
@@ -455,6 +477,17 @@ const en: Record<Message, string> = {
   hostNotice:'Remote TLS host with verified agent link. Set distinct BRICOHAM_ADMIN_TOKEN and BRICOHAM_STATION_AGENT_TOKEN in the local environment. No secrets included; the host is not started.',
 }
 const fr: Record<Message, string> = {
+  speechProcessor: 'Processeur de voix',
+  speechThreshold: 'Seuil du compresseur',
+  speechRatio: 'Rapport du compresseur',
+  speechPresence: 'Renfort de présence',
+  voxArm: 'Armer le VOX',
+  voxArmed: 'VOX ARMÉ',
+  voxThreshold: 'Seuil du VOX',
+  voxHold: 'Maintien du VOX',
+  voxHint: 'Le VOX ne s\'arme que par une action explicite, n\'est jamais enregistré et utilise la même session PTT. Appuyer sur PTT, perdre le focus, masquer le client, perdre le canal vocal ou toute coupure de l\'agent le désarme.',
+  voxUnavailable: 'VOX indisponible : préparez le microphone et activez TX sur ce client.',
+  voxDisarmed: 'VOX désarmé : l\'émission, le canal ou le focus a été perdu.',
   rxTitle: 'Audio RX expérimental', rxListen: 'Écouter RX', rxStop: 'Arrêter',
   rxSafety: 'Réception seule ; sans microphone ni transmission. Acceptation matérielle en attente.',
   scopeTitle: 'Échelle RF de la radio (CI-V)', scopeStart: 'Démarrer l’échelle', scopeStop: 'Arrêter l’échelle',
@@ -677,6 +710,17 @@ const fr: Record<Message, string> = {
   hostNotice:"Hôte TLS distant et lien agent vérifié. Configurez BRICOHAM_ADMIN_TOKEN et BRICOHAM_STATION_AGENT_TOKEN distincts dans l'environnement local. Aucun secret inclus, aucun démarrage.",
 }
 const pt: Record<Message, string> = {
+  speechProcessor: 'Processador de voz',
+  speechThreshold: 'Limiar do compressor',
+  speechRatio: 'Razão do compressor',
+  speechPresence: 'Realce de presença',
+  voxArm: 'Armar VOX',
+  voxArmed: 'VOX ARMADO',
+  voxThreshold: 'Limiar do VOX',
+  voxHold: 'Retenção do VOX',
+  voxHint: 'O VOX só é armado por uma ação explícita, nunca é guardado e usa a mesma sessão de PTT. Premir PTT, perder o foco, ocultar o cliente, perder o canal de voz ou qualquer corte do agente desarma-o.',
+  voxUnavailable: 'VOX indisponível: prepare o microfone e ative o TX neste cliente.',
+  voxDisarmed: 'VOX desarmado: perdeu-se a transmissão, o canal ou o foco.',
   rxTitle: 'Áudio RX experimental', rxListen: 'Ouvir RX', rxStop: 'Parar',
   rxSafety: 'Apenas receção; sem microfone nem transmissão. A aceitação física está pendente.',
   scopeTitle: 'Escala RF do rádio (CI-V)', scopeStart: 'Iniciar escala', scopeStop: 'Parar escala',

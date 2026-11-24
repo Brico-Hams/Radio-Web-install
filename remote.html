@@ -13,6 +13,8 @@
   <script src="ui-translations.js" defer></script>
   <script src="ui-i18n.js" defer></script>
   <script src="remote-audio-core.js" defer></script>
+  <script src="remote-speech-proc.js" defer></script>
+  <script src="remote-vox.js" defer></script>
   <script src="remote-digital.js" defer></script>
   <script src="spectrum-core.js" defer></script>
   <script src="remote-rotor-ui.js" defer></script>
@@ -148,6 +150,24 @@
         <span id="mic-meter-label">Nivel del micrófono</span>
         <div id="mic-meter" class="level-meter" role="meter" aria-labelledby="mic-meter-label" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div id="mic-meter-fill" class="level-fill"></div></div>
       </div>
+      <div id="gr-row" class="meter-row" hidden>
+        <span id="gr-meter-label">Reducción de ganancia</span>
+        <div id="gr-meter" class="level-meter" role="meter" aria-labelledby="gr-meter-label" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div id="gr-meter-fill" class="level-fill"></div></div>
+      </div>
+      <button id="sp-toggle" type="button" aria-pressed="false">Procesador de voz</button>
+      <label class="slider" for="sp-threshold"><span>Umbral del compresor</span><output id="out-sp-threshold">-18 dB</output></label>
+      <input id="sp-threshold" type="range" min="-40" max="-6" step="1" value="-18">
+      <label class="slider" for="sp-ratio"><span>Relación del compresor</span><output id="out-sp-ratio">3:1</output></label>
+      <input id="sp-ratio" type="range" min="1" max="8" step="0.5" value="3">
+      <label class="slider" for="sp-presence"><span>Realce de presencia</span><output id="out-sp-presence">6 dB</output></label>
+      <input id="sp-presence" type="range" min="0" max="9" step="1" value="6">
+      <button id="vox-toggle" type="button" aria-pressed="false" disabled>Armar VOX</button>
+      <label class="slider" for="vox-threshold"><span>Umbral de VOX</span><output id="out-vox-threshold">10 %</output></label>
+      <input id="vox-threshold" type="range" min="2" max="50" step="1" value="10">
+      <label class="slider" for="vox-hold"><span>Retención de VOX</span><output id="out-vox-hold">500 ms</output></label>
+      <input id="vox-hold" type="range" min="250" max="2000" step="50" value="500">
+      <p id="vox-note" class="hint" role="status"></p>
+      <p class="hint">El procesador de voz y VOX solo actúan sobre el audio de este navegador. VOX nunca se guarda y transmite por la misma vía que PTT.</p>
       </div>
     </section>
 

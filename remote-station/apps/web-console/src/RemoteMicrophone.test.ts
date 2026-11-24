@@ -1,5 +1,6 @@
 import { afterEach, expect, it, vi } from 'vitest'
 import { RemoteMicrophone } from './RemoteMicrophone'
+import { speechModule } from './txProcessing'
 
 class Graph {
   connect = vi.fn(() => this)
@@ -105,4 +106,31 @@ it('stops a late permission result after cancellation instead of leaving capture
   resolve?.(stream)
   await expect(pending).rejects.toThrow('cancelada')
   expect(track.stop).toHaveBeenCalledOnce()
+})
+
+it('runs the speech processor and level tap on the PCM before sending; off leaves bytes identical', async () => {
+  const { client } = setup()
+  client.stop()
+  const levels: number[] = []
+  const processor = speechModule.createSpeechProcessor()
+  const tapped = new RemoteMicrophone('wss://station.example/api/v1/audio/tx', 'secret', vi.fn(), vi.fn(), {
+    processor, onLevel: (level) => levels.push(level),
+  })
+  try {
+    await tapped.start()
+    const socket = FakeSocket.current
+    socket.reply({ event: 'prepared', audio_session_id: 'a'.repeat(43) })
+    const samples = new Int16Array(960).map((_, index) => Math.round(Math.sin(index / 5) * 20000))
+    const send = () => {
+      const pcm = samples.slice().buffer
+      FakeNode.current.port.onmessage?.(new MessageEvent('message', { data: { pcm, capturedAt: 0 } }))
+      return new Int16Array(socket.send.mock.calls.at(-1)?.[0] as ArrayBuffer)
+    }
+    expect(Array.from(send())).toEqual(Array.from(samples))
+    expect(levels.at(-1)).toBeGreaterThan(0.3)
+    processor.configure({ enabled: true })
+    const processed = send()
+    expect(Array.from(processed)).not.toEqual(Array.from(samples))
+    expect(Math.max(...processed.map(Math.abs))).toBeLessThanOrEqual(Math.ceil(0.891 * 32768))
+  } finally { tapped.stop() }
 })

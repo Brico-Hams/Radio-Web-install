@@ -2465,6 +2465,25 @@ Backend Hamlib con split completo, pero beta o sin prueba fisica.|Hamlib backend
 Backend Hamlib con PO, ROE y ALC, pero beta o sin prueba fisica.|Hamlib backend with PO, SWR and ALC, but beta or without a physical test.|Backend Hamlib avec PO, ROS et ALC, mais bêta ou sans essai physique.|Hamlib-Backend mit PO, SWR und ALC, aber Beta oder ohne physischen Test.
 Backend Hamlib con TUNE, pero beta o sin prueba fisica; siempre explicito, con limite de tiempo y corte por ROE.|Hamlib backend with TUNE, but beta or without a physical test; always explicit, time-limited and cut by SWR.|Backend Hamlib avec TUNE, mais bêta ou sans essai physique ; toujours explicite, limité dans le temps et coupé par le ROS.|Hamlib-Backend mit TUNE, aber Beta oder ohne physischen Test; immer ausdrücklich, zeitbegrenzt und per SWR abgeschaltet.
 Backend Hamlib con todos los ajustes, pero beta o sin prueba fisica.|Hamlib backend with all settings, but beta or without a physical test.|Backend Hamlib avec tous les réglages, mais bêta ou sans essai physique.|Hamlib-Backend mit allen Einstellungen, aber Beta oder ohne physischen Test.
+Reducción de ganancia|Gain reduction|Réduction de gain|Verstärkungsreduktion
+Procesador de voz|Speech processor|Processeur de voix|Sprachprozessor
+Umbral del compresor|Compressor threshold|Seuil du compresseur|Kompressor-Schwelle
+Relación del compresor|Compressor ratio|Rapport du compresseur|Kompressor-Verhältnis
+Realce de presencia|Presence boost|Renfort de présence|Präsenzanhebung
+Armar VOX|Arm VOX|Armer le VOX|VOX scharfschalten
+VOX ARMADO|VOX ARMED|VOX ARMÉ|VOX SCHARF
+Umbral de VOX|VOX threshold|Seuil du VOX|VOX-Schwelle
+Retención de VOX|VOX hold time|Maintien du VOX|VOX-Haltezeit
+El procesador de voz y VOX solo actúan sobre el audio de este navegador. VOX nunca se guarda y transmite por la misma vía que PTT.|The speech processor and VOX only act on this browser's audio. VOX is never saved and transmits through the same path as PTT.|Le processeur de voix et le VOX n'agissent que sur l'audio de ce navigateur. Le VOX n'est jamais enregistré et émet par la même voie que le PTT.|Sprachprozessor und VOX wirken nur auf den Ton dieses Browsers. VOX wird nie gespeichert und sendet über denselben Weg wie PTT.
+VOX desactivado: el agente cortó la transmisión.|VOX disarmed: the agent cut the transmission.|VOX désarmé : l'agent a coupé l'émission.|VOX deaktiviert: der Agent hat die Übertragung beendet.
+VOX desactivado: el agente rechazó la transmisión.|VOX disarmed: the agent refused the transmission.|VOX désarmé : l'agent a refusé l'émission.|VOX deaktiviert: der Agent hat die Übertragung abgelehnt.
+VOX desactivado: has pulsado PTT.|VOX disarmed: you pressed PTT.|VOX désarmé : vous avez appuyé sur PTT.|VOX deaktiviert: PTT wurde gedrückt.
+VOX desactivado: la página dejó de estar visible.|VOX disarmed: the page is no longer visible.|VOX désarmé : la page n'est plus visible.|VOX deaktiviert: die Seite ist nicht mehr sichtbar.
+VOX desactivado: se perdió el control o el enlace.|VOX disarmed: control or the link was lost.|VOX désarmé : le contrôle ou la liaison a été perdu.|VOX deaktiviert: Kontrolle oder Verbindung verloren.
+VOX desactivado: el panel está bloqueado.|VOX disarmed: the panel is locked.|VOX désarmé : le panneau est verrouillé.|VOX deaktiviert: das Bedienfeld ist gesperrt.
+VOX desactivado: se cortó la transmisión.|VOX disarmed: the transmission was released.|VOX désarmé : l'émission a été coupée.|VOX deaktiviert: die Übertragung wurde beendet.
+Activa el audio para usar VOX.|Turn on audio to use VOX.|Activez l'audio pour utiliser le VOX.|Schalte den Ton ein, um VOX zu nutzen.
+VOX no disponible: no tienes permiso de transmisión o el control.|VOX unavailable: you have no transmit permission or no control.|VOX indisponible : vous n'avez ni l'autorisation d'émettre ni le contrôle.|VOX nicht verfügbar: keine Sendeberechtigung oder keine Kontrolle.
 `.trim().split("\n").map(line => line.split("|")));
   root.BricohamsUITranslations = entries;
   if (typeof module === "object" && module.exports) module.exports = entries;

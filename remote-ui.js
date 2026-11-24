@@ -491,6 +491,7 @@
     renderExtraMeters(state);
     if (state.notice && state.notice.id !== view.noticeId) {
       view.noticeId = state.notice.id;
+      if (vox.isArmed()) vox.agentCut();
       notify(state.notice.text);
     }
   }
@@ -630,6 +631,7 @@
     $("rig-tune").hidden = !tuning;
     setText($("rig-trx"), state.ptt ? "TX" : "RX");
     $("rig-trx").classList.toggle("tx", Boolean(state.ptt));
+    voxSync(state);
     setText($("operator"), state.operator === "me" ? "Tienes el control" : state.operator === "other" ? "Otro operador tiene el control" : "Sin operador");
 
     const modeButton = tuning ? null : MODE_BUTTON[state.mode];
@@ -701,12 +703,15 @@
     if (view.state) refreshControls();
   }
 
-  async function pttDown() {
-    if (view.wantPtt || $("ptt").disabled || view.locked) return;
+  // Returns true when the line is keyed. `viaVox` marks the request VOX makes through this very same path.
+  async function pttDown(viaVox) {
+    // The PTT button pre-empts VOX: it disarms it and releases the line; that press is then consumed.
+    if (viaVox !== true && vox.isArmed() && vox.buttonPressed()) return false;
+    if (view.wantPtt || $("ptt").disabled || view.locked) return false;
     view.wantPtt = true;
     try {
       await command({ cmd: "ptt", value: true });
-      if (!view.wantPtt) { pttSendOff(); return; }
+      if (!view.wantPtt) { pttSendOff(); return false; }
       setPttUi(true);
       startTx();
       notify("");
@@ -714,9 +719,11 @@
       view.heartbeat = setInterval(() => {
         api("api/heartbeat", { method: "POST", body: "{}" }).catch(() => {});
       }, 250);
+      return true;
     } catch (error) {
       view.wantPtt = false;
       notify(error.status === 409 ? "Otro operador tiene el control." : error.message);
+      return false;
     }
   }
 
@@ -732,6 +739,8 @@
 
   function pttUp() {
     if (!view.wantPtt && !view.ptt) return;
+    // Any release that VOX did not ask for (blur, hidden page, link loss...) also disarms it.
+    if (!view.voxRelease && (vox.isKeyed() || vox.isPending())) { vox.disarm("release"); return; }
     view.wantPtt = false;
     setPttUi(false);
     stopTx(false);
@@ -925,6 +934,7 @@
     } else if (message.type === "level") {
       setMeter("rx", Core.rmsToPercent(Number(message.rms)));
     } else if (message.type === "tx_refused") {
+      vox.agentCut();
       audioNote("La transmisión de audio no está permitida.");
     }
   }
@@ -1013,6 +1023,8 @@
       if (audio.micFill === audio.micBuffer.length) {
         const pcm = audio.micBuffer.slice();
         audio.micFill = 0;
+        // Untouched while the speech processor is off.
+        speech.process(pcm);
         const data = new AudioData({ format: "f32-planar", sampleRate: 48000, numberOfFrames: pcm.length, numberOfChannels: 1, timestamp: audio.micTimestamp, data: pcm });
         audio.micTimestamp += 20000;
         try { encoder.encode(data); } catch { /* encoder closed */ }
@@ -1024,7 +1036,17 @@
       audio.micMeterAt = now;
       const rms = Math.sqrt(sum / Math.max(1, frames.length));
       setMeter("mic", Core.rmsToPercent(20 * Math.log10(rms || 1e-6)));
+      renderGainReduction();
     }
+  }
+
+  // Gain reduction is shown only while the speech processor is active (0..20 dB over the bar).
+  function renderGainReduction() {
+    const active = speech.isEnabled() && audio.txActive;
+    $("gr-row").hidden = !active;
+    const percent = active ? Math.min(100, Math.round(speech.gainReductionDb() * 5)) : 0;
+    $("gr-meter-fill").style.width = `${percent}%`;
+    $("gr-meter").setAttribute("aria-valuenow", String(percent));
   }
 
   async function ensureMic() {
@@ -1032,7 +1054,10 @@
     const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
     const source = audio.ctx.createMediaStreamSource(stream);
     const node = new AudioWorkletNode(audio.ctx, "radio-mic", { numberOfInputs: 1, numberOfOutputs: 0, channelCount: 1, channelCountMode: "explicit" });
-    node.port.onmessage = event => { if (audio.txActive) sendMicBlock(event.data); };
+    node.port.onmessage = event => {
+      if (vox.isArmed()) voxFeed(event.data);
+      if (audio.txActive) sendMicBlock(event.data);
+    };
     source.connect(node);
     audio.mic = { stream, source, node };
     return audio.mic;
@@ -1081,9 +1106,11 @@
   // `release` also closes the microphone (tab hidden, page hidden, audio stopped).
   function stopTx(release) {
     audio.txActive = false;
-    audio.mic?.node.port.postMessage({ on: false });
+    // While VOX is armed the microphone keeps listening (for level only) between transmissions.
+    if (!vox.isArmed() || release) audio.mic?.node.port.postMessage({ on: false });
     audio.micFill = 0;
-    $("mic-row").hidden = true;
+    $("mic-row").hidden = !vox.isArmed() || release;
+    renderGainReduction();
     setMeter("mic", 0);
     if (audio.encoder && audio.encoder.state !== "closed") { try { audio.encoder.close(); } catch { /* closed */ } }
     audio.encoder = null;
@@ -1112,9 +1139,144 @@
       if (audio.gain) audio.gain.gain.value = Number(event.target.value) / 100;
     });
     document.addEventListener("visibilitychange", () => {
-      if (document.hidden) { stopTx(true); stopScope(); } else if (audio.on) updateScopeVisibility();
+      if (document.hidden) { vox.disarm("hidden"); stopTx(true); stopScope(); } else if (audio.on) updateScopeVisibility();
     });
-    addEventListener("pagehide", () => stopTx(true));
+    addEventListener("pagehide", () => { vox.disarm("hidden"); stopTx(true); });
+    // Dispatched by the Android shell before it freezes the WebView.
+    addEventListener("radicodex-release", () => { vox.disarm("hidden"); stopTx(true); });
+    bindVoice();
+  }
+
+  // Speech processor: local UI preference only (no credentials). It runs on the capture path before the Opus encoder.
+  const SpeechProc = window.RadicodexSpeechProc;
+  const speech = SpeechProc.createSpeechProcessor(SpeechProc.parseStored(read(localStorage, SpeechProc.STORAGE_KEY)));
+
+  // VOX uses the same PTT request, heartbeat and lease path as the button (pttDown/pttUp). It is never stored: the module
+  // is created disarmed on every page load and only an explicit click arms it.
+  const voxAdapter = {
+    down: () => pttDown(true),
+    up: () => { view.voxRelease = true; try { pttUp(); } finally { view.voxRelease = false; } }
+  };
+  const vox = window.RadicodexVox.createVox({ ptt: voxAdapter, now: () => performance.now(), onChange: onVoxChange });
+  const VOX_NOTES = {
+    cut: "VOX desactivado: el agente cortó la transmisión.",
+    refused: "VOX desactivado: el agente rechazó la transmisión.",
+    button: "VOX desactivado: has pulsado PTT.",
+    hidden: "VOX desactivado: la página dejó de estar visible.",
+    link: "VOX desactivado: se perdió el control o el enlace.",
+    context: "VOX desactivado: se perdió el control o el enlace.",
+    locked: "VOX desactivado: el panel está bloqueado.",
+    release: "VOX desactivado: se cortó la transmisión.",
+    mic: "No se pudo acceder al micrófono."
+  };
+
+  function voxContext() {
+    const state = view.state;
+    return {
+      guest: Boolean(audio.hello) && !audio.hello.tx?.allowed,
+      transmit: txAllowed() && audio.txSupported,
+      linkUp: view.linkUp && Boolean(state?.connected),
+      controlLost: state?.operator === "other",
+      locked: view.locked,
+      hidden: document.hidden
+    };
+  }
+
+  function onVoxChange(status) {
+    const button = $("vox-toggle");
+    setPressed(button, status.armed);
+    setText(button, status.armed ? "VOX ARMADO" : "Armar VOX");
+    if (!status.armed) {
+      if (!audio.txActive) {
+        audio.mic?.node.port.postMessage({ on: false });
+        $("mic-row").hidden = true;
+        releaseMic();
+      }
+      view.voxSeen = false;
+      setText($("vox-note"), VOX_NOTES[status.reason] || "");
+    } else setText($("vox-note"), "");
+  }
+
+  // Re-evaluated on every agent state: lost control or link disarms; a cut after VOX keyed also disarms.
+  function voxSync(state) {
+    if (vox.isArmed()) {
+      vox.check(voxContext());
+      if (vox.isArmed() && state.txAlert) vox.agentCut();
+      if (vox.isArmed() && vox.isKeyed()) {
+        if (state.ptt) view.voxSeen = true;
+        else if (view.voxSeen) vox.agentCut();
+      } else view.voxSeen = false;
+    }
+    const button = $("vox-toggle");
+    if (!vox.isArmed()) button.disabled = !window.RadicodexVox.allowed(voxContext());
+    else button.disabled = false;
+  }
+
+  let voxBlock = new Float32Array(128);
+  function voxFeed(frames) {
+    if (voxBlock.length !== frames.length) voxBlock = new Float32Array(frames.length);
+    for (let index = 0; index < frames.length; index++) voxBlock[index] = Math.max(-1, Math.min(1, frames[index] * audio.micGain));
+    vox.process(voxBlock);
+  }
+
+  async function voxToggle() {
+    if (vox.isArmed()) { vox.disarm("operator"); return; }
+    if (!audio.on) { setText($("vox-note"), "Activa el audio para usar VOX."); return; }
+    if (!vox.arm(voxContext())) { setText($("vox-note"), "VOX no disponible: no tienes permiso de transmisión o el control."); return; }
+    try {
+      const mic = await ensureMic();
+      if (!vox.isArmed()) { if (!audio.txActive) releaseMic(); return; }
+      $("mic-row").hidden = false;
+      mic.node.port.postMessage({ on: true });
+    } catch {
+      vox.disarm("mic");
+    }
+  }
+
+  function bindVoice() {
+    const settings = speech.settings();
+    const sync = () => {
+      speech.configure({ ...speech.settings(), enabled: speech.isEnabled() });
+      write(localStorage, SpeechProc.STORAGE_KEY, SpeechProc.serialize(speech.settings()));
+      setPressed($("sp-toggle"), speech.isEnabled());
+      renderGainReduction();
+    };
+    $("sp-threshold").value = String(settings.thresholdDb);
+    $("sp-ratio").value = String(settings.ratio);
+    $("sp-presence").value = String(settings.presenceDb);
+    setText($("out-sp-threshold"), `${settings.thresholdDb} dB`);
+    setText($("out-sp-ratio"), `${settings.ratio}:1`);
+    setText($("out-sp-presence"), `${settings.presenceDb} dB`);
+    setPressed($("sp-toggle"), speech.isEnabled());
+    $("sp-toggle").addEventListener("click", () => {
+      speech.configure({ ...speech.settings(), enabled: !speech.isEnabled() });
+      sync();
+    });
+    const slider = (id, key, out, format) => $(id).addEventListener("input", event => {
+      const value = Number(event.target.value);
+      speech.configure({ ...speech.settings(), [key]: value });
+      const applied = speech.settings()[key];
+      setText($(out), format(applied));
+      sync();
+    });
+    slider("sp-threshold", "thresholdDb", "out-sp-threshold", value => `${value} dB`);
+    slider("sp-ratio", "ratio", "out-sp-ratio", value => `${value}:1`);
+    slider("sp-presence", "presenceDb", "out-sp-presence", value => `${value} dB`);
+
+    const voxSettings = vox.settings();
+    $("vox-threshold").value = String(Math.round(voxSettings.threshold * 100));
+    $("vox-hold").value = String(voxSettings.holdMs);
+    setText($("out-vox-threshold"), `${Math.round(voxSettings.threshold * 100)} %`);
+    setText($("out-vox-hold"), `${voxSettings.holdMs} ms`);
+    $("vox-threshold").addEventListener("input", event => {
+      vox.configure({ threshold: Number(event.target.value) / 100 });
+      setText($("out-vox-threshold"), `${Math.round(vox.settings().threshold * 100)} %`);
+    });
+    $("vox-hold").addEventListener("input", event => {
+      vox.configure({ holdMs: Number(event.target.value) });
+      setText($("out-vox-hold"), `${vox.settings().holdMs} ms`);
+    });
+    $("vox-toggle").addEventListener("click", voxToggle);
   }
 
   // RTTY / BPSK31 receive-only decoding of the RX audio, in this browser. It only reads the decoded PCM: it never keys,
@@ -1335,6 +1497,7 @@
     const button = $("lock");
     setPressed(button, on);
     setText(button, on ? "Bloqueado" : "Bloquear");
+    if (on) vox.disarm("locked");
     if (on && (view.wantPtt || view.ptt)) pttUp();
     if (view.state) { updatePttUi(); refreshControls(); }
   }
@@ -1427,6 +1590,7 @@
       view.linkUp = false;
       setText($("status"), "Reconectando...");
       $("status").classList.remove("on");
+      vox.disarm("link");
       if (view.wantPtt || view.ptt) pttUp();
       if (view.state) refreshControls(); else $("ptt").disabled = true;
     };

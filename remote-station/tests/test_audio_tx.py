@@ -114,6 +114,47 @@ class AudioTxTests(unittest.TestCase):
         with self.assertRaisesRegex(AudioError, "audio_tx_busy"):
             self.audio.open()
 
+    def test_single_talker_only_the_claimed_session_plays_across_a_hand_over(self):
+        first = self.prepare()
+        self.audio.claim(first.identifier)
+        first.unmute()
+        self.assertEqual(self.sd.tick(), b"\0\0\x34\x12" * BLOCK_SAMPLES)
+        # A second talker cannot open a parallel path while the first holds the DAC.
+        with self.assertRaisesRegex(AudioError, "audio_tx_busy"):
+            self.audio.open()
+        first.close()
+        self.assertEqual(self.sd.tick(), bytes(BLOCK_BYTES * 2))
+        with self.assertRaisesRegex(AudioError, "audio_tx_stopped"):
+            first.push(b"\x34\x12" * BLOCK_SAMPLES)
+        second = self.audio.open()
+        self.addCleanup(second.close)
+        second.push(b"\x78\x56" * BLOCK_SAMPLES)
+        second.push(b"\x78\x56" * BLOCK_SAMPLES)
+        # The former talker's identifier is useless and nothing plays before the new lease owner claims.
+        with self.assertRaisesRegex(AudioError, "session_invalid"):
+            self.audio.claim(first.identifier)
+        self.assertEqual(self.sd.tick(), bytes(BLOCK_BYTES * 2))
+        self.audio.claim(second.identifier)
+        second.unmute()
+        self.assertEqual(self.sd.tick(), b"\0\0\x78\x56" * BLOCK_SAMPLES)
+        with self.assertRaisesRegex(AudioError, "audio_tx_stopped"):
+            first.push(b"\x34\x12" * BLOCK_SAMPLES)
+        self.assertEqual(self.sd.tick(), b"\0\0\x78\x56" * BLOCK_SAMPLES)
+
+    def test_audio_pushed_after_release_stays_silent_for_the_following_200_ms(self):
+        session = self.prepare()
+        self.audio.claim(session.identifier)
+        session.unmute()
+        self.assertEqual(self.sd.tick(), b"\0\0\x34\x12" * BLOCK_SAMPLES)
+        session.mute()
+        for _ in range(10):
+            session.push(b"\x55\x05" * BLOCK_SAMPLES)
+            self.assertEqual(self.sd.tick(), bytes(BLOCK_BYTES * 2))
+        # Without a new claim the queued audio cannot be unmuted either.
+        with self.assertRaisesRegex(AudioError, "audio_tx_not_ready"):
+            session.unmute()
+        self.assertEqual(self.sd.tick(), bytes(BLOCK_BYTES * 2))
+
     def test_bounded_prebuffer_drops_old_muted_samples_and_underflow_fails_closed(self):
         session = self.prepare()
         for level in range(10):
