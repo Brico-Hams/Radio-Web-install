@@ -114,7 +114,7 @@ const CAPS_LINES = [
 ];
 
 async function fakeRigctld() {
-  const rig = { freq: 7_100_000, mode: "USB", passband: 2400, ptt: 0, modeFails: false, log: [], sockets: new Set() };
+  const rig = { freq: 7_100_000, mode: "USB", passband: 2400, ptt: 0, modeFails: false, delays: {}, log: [], sockets: new Set() };
   const server = net.createServer(socket => {
     rig.sockets.add(socket);
     socket.on("close", () => rig.sockets.delete(socket));
@@ -137,7 +137,8 @@ async function fakeRigctld() {
         else if (command === "\\dump_caps") reply = `${CAPS_LINES.join("\n")}\nRPRT 0\n`;
         else if (command === "v") reply = "VFOA\n";
         else if (command === "s") reply = "0\nVFOA\n";
-        socket.write(reply);
+        const delay = rig.delays[command] || 0;
+        if (delay) { const timer = setTimeout(() => { if (!socket.destroyed) socket.write(reply); }, delay); timer.unref(); } else socket.write(reply);
       }
     });
   });
@@ -280,6 +281,51 @@ test("orphaned TX: the agent unkeys once when the lease is gone even if the hear
     await sleep(500);
     assert.equal(count(rig, "T 0"), 1);
     assert.equal((await state()).ptt, false);
+  } finally { await cleanup(); await rig.close(); }
+});
+
+test("close() right after a heartbeat cut lets the in-flight stop finish: no 'client stopped' failure, rig unkeyed", async () => {
+  const rig = await fakeRigctld();
+  const clock = { t: Date.now() };
+  const logs = [];
+  const { agent, cmd, cleanup } = await startAgent(rig, { now: () => clock.t, heartbeatTimeoutMs: 3_600_000, txLimitSeconds: 3600, log: message => logs.push(String(message)) });
+  try {
+    assert.equal((await cmd({ cmd: "ptt", value: true })).status, 200);
+    await sleep(350);
+    rig.delays.T = 400;
+    clock.t += 31_000;
+    await waitFor(() => rig.ptt === 0);
+    await agent.close();
+    assert.equal(rig.ptt, 0);
+    assert.equal(logs.filter(line => /client stopped/.test(line)).length, 0);
+  } finally { await cleanup(); await rig.close(); }
+});
+
+test("close() with a hanging stop step finishes within its bound, retries the stop once and then stops the client", async () => {
+  const rig = await fakeRigctld();
+  const clock = { t: Date.now() };
+  const logs = [];
+  const { agent, cmd, cleanup } = await startAgent(rig, { now: () => clock.t, heartbeatTimeoutMs: 3_600_000, txLimitSeconds: 3600, stopStepMs: 100, log: message => logs.push(String(message)) });
+  try {
+    assert.equal((await cmd({ cmd: "ptt", value: true })).status, 200);
+    await sleep(350);
+    rig.delays.T = 10_000;
+    clock.t += 31_000;
+    await waitFor(() => rig.ptt === 0);
+    const started = Date.now();
+    await agent.close();
+    assert.ok(Date.now() - started < 3000);
+    assert.equal(logs.filter(line => /close: final stop sequence \(/.test(line)).length, 1);
+  } finally { await cleanup(); await rig.close(); }
+});
+
+test("close() with nothing keyed and nothing in flight sends no stop commands", async () => {
+  const rig = await fakeRigctld();
+  const { agent, cleanup } = await startAgent(rig);
+  try {
+    const mark = rig.log.length;
+    await agent.close();
+    assert.equal(rig.log.slice(mark).filter(line => line === "T 0").length, 0);
   } finally { await cleanup(); await rig.close(); }
 });
 
