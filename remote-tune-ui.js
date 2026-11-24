@@ -4,7 +4,7 @@
 // is the agent's final record (remote-agent.cjs endTune). Texts are Spanish sources translated by ui-translations.js.
 (function (root) {
   const OUTCOME_LABEL = Object.freeze({
-    success: "Sintonía correcta", fail: "Sintonía fallida", timeout: "Sintonía cortada por tiempo"
+    success: "Sintonía correcta", fail: "Sintonía fallida", timeout: "Sintonía cortada por tiempo", unverified: "Sintonía sin verificar"
   });
   const REASON_LABEL = Object.freeze({
     "time-cap": "Tiempo máximo de ajuste alcanzado",
@@ -16,6 +16,7 @@
     "not-started": "La radio no entró en modo de ajuste",
     unconfirmed: "La radio no confirmó la sintonía",
     "tx-stuck": "La radio seguía en TX: parada reintentada",
+    "no-tune-evidence": "La radio no indicó que el sintonizador trabajara",
     closing: "Cierre del agente",
     operator: "Parada por el operador",
     other: "Motivo no indicado"

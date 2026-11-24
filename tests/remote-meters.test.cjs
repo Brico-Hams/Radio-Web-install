@@ -127,4 +127,13 @@ test("tune check reports high SWR, timeout, not-started and stuck TX; first cut 
   const stuck = new TuneCheck();
   stuck.confirming(); stuck.entered(); stuck.finished(); stuck.stopping(); stuck.verified(false);
   assert.deepEqual([stuck.result().outcome, stuck.result().reason, stuck.result().txOff], ["fail", "tx-stuck", false]);
+
+  const blind = new TuneCheck();
+  blind.confirming(); blind.entered(); blind.evidence(false); blind.finished(); blind.finalSwr(1); blind.stopping(); blind.verified(true);
+  assert.deepEqual([blind.result().outcome, blind.result().reason], ["unverified", "no-tune-evidence"]);
+  assert.equal(new TuneCheck().cut("unverified", "x"), false);
+
+  const blindHigh = new TuneCheck({ swrLimit: 3 });
+  blindHigh.confirming(); blindHigh.entered(); blindHigh.evidence(false); blindHigh.finished(); blindHigh.finalSwr(9); blindHigh.stopping(); blindHigh.verified(true);
+  assert.deepEqual([blindHigh.result().outcome, blindHigh.result().reason], ["fail", "swr-high"]);
 });

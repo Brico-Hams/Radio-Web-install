@@ -11,7 +11,7 @@ from __future__ import annotations
 import math
 
 STATES = ("requested", "confirming", "tuning", "reading", "stopping", "verifying", "done")
-OUTCOMES = ("success", "fail", "timeout")
+OUTCOMES = ("success", "fail", "timeout", "unverified")
 
 
 class TuneCheck:
@@ -25,7 +25,11 @@ class TuneCheck:
         self.swr: float | None = None
         self.tx_off: bool | None = None
         self.seconds = 0
+        self.evidenced: bool | None = None
 
+    def evidence(self, seen: bool) -> None:
+        """Whether the radio showed it ran a tune; False turns a would-be success into 'unverified'."""
+        self.evidenced = bool(seen)
     def _move(self, source: str, target: str) -> bool:
         if self.state != source:
             return False
@@ -51,7 +55,7 @@ class TuneCheck:
     def cut(self, outcome: str, reason: str | None = None) -> bool:
         if self.state in ("done", "stopping", "verifying"):
             return False
-        if self.outcome or outcome not in OUTCOMES:
+        if self.outcome or outcome not in OUTCOMES or outcome == "unverified":
             return False
         self.outcome = outcome
         self.reason = reason or "other"
@@ -78,9 +82,10 @@ class TuneCheck:
         self.tx_off = bool(tx_off)
         if not self.outcome:
             high = self.swr is not None and self.swr >= self.swr_limit
-            self.outcome = "fail" if high else "success"
-            self.reason = "swr-high" if high else None
-        if not self.tx_off and self.outcome == "success":
+            unverified = not high and self.evidenced is False
+            self.outcome = "fail" if high else "unverified" if unverified else "success"
+            self.reason = "swr-high" if high else "no-tune-evidence" if unverified else None
+        if not self.tx_off and self.outcome in ("success", "unverified"):
             self.outcome = "fail"
             self.reason = "tx-stuck"
         self.state = "done"

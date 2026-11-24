@@ -703,6 +703,8 @@ function createRemoteAgent(options = {}) {
       const check = run.check;
       if (outcome) check.cut(outcome, reason);
       else if (!check.finished()) check.cut("fail", "other");
+      // Natural ATAS end without the tuner busy bit ever seen: nothing proves a tune ran (2 m / 70 cm bench, 1 s).
+      else if (run.kind === "atas") check.evidence(run.tuningSeen);
       check.tick(Math.max(0, Math.round((now() - run.startedAt) / 1000)));
       // Any cut stops the transmitter first: only the last SWR already read while keyed is used, never a new read.
       const settled = !outcome;
@@ -732,6 +734,7 @@ function createRemoteAgent(options = {}) {
       else if (result.reason === "unconfirmed") text = "La radio no ha confirmado la sintonía (Hamlib no informa del estado del sintonizador)";
       else if (result.reason === "tx-stuck") text = "Sintonía terminada pero la radio sigue en TX: se reintenta la parada";
       else if (result.reason === "swr-high") text = `Sintonía terminada con ROE alta${swrText}`;
+      else if (result.reason === "no-tune-evidence") text = `Sintonía sin verificar: la radio no indicó que el sintonizador trabajara${swrText}`;
       else if (!outcome) text = TUNE_DONE + swrText;
       else if (reason === "time-cap" && run.kind === "atas") text = `Sintonía cortada a los ${result.seconds} s${swrText}: la antena no ha sintonizado`;
       else text = `Sintonía abortada: ${detail || reason}${swrText}`;
@@ -939,8 +942,9 @@ function createRemoteAgent(options = {}) {
   async function checkSwr() {
     const limit = cat ? swrRawLimit : swrLimit;
     const tuning = tune !== null;
-    // An ATAS starts mismatched and the radio reports high SWR while the motor searches.
-    if (tuning && tunerKind === "atas") { swrSince = 0; return; }
+    // An ATAS starts mismatched and the radio reports high SWR while the motor searches. The exemption ends once the radio
+    // reported the tuner busy bit and then dropped it: with TX still on, a high SWR is a plain mismatch and trips as usual.
+    if (tuning && tunerKind === "atas" && !(tune.tuningSeen && tune.tunerBusy === false)) { swrSince = 0; return; }
     const over = tx && tx.swr !== null && (tuning ? tx.swr >= limit : tx.swr > limit);
     if (!over) { swrSince = 0; return; }
     const time = now();
@@ -1020,6 +1024,8 @@ function createRemoteAgent(options = {}) {
         if (tune !== run || run.ending) return;
         if (info) {
           if (info.tuning || info.tx > 0) run.seen = true;
+          if (info.tuning) run.tuningSeen = true;
+          run.tunerBusy = info.tuning;
           run.hiSwrSince = info.hiSwr ? run.hiSwrSince || now() : 0;
           if (run.seen && !info.tuning && info.tx === 0) { await endTune(run, null); return; }
         }
@@ -1030,7 +1036,7 @@ function createRemoteAgent(options = {}) {
   }
 
   const newTuneRun = (clientId, kind) => ({
-    owner: clientId, startedAt: now(), hiSwrSince: 0, seen: false, kind, lastSwr: null, ending: null,
+    owner: clientId, startedAt: now(), hiSwrSince: 0, seen: false, tuningSeen: false, tunerBusy: null, kind, lastSwr: null, ending: null,
     check: new TuneCheck({ kind, swrLimit, maxSeconds: Math.round(tuneMaxMs / 1000) })
   });
 

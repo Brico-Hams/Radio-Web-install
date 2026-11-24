@@ -1,9 +1,10 @@
 # Diagnóstico: sintonía ATAS-120 del FTX-1 por CAT a 28,450 MHz (tune-28)
 
 Estado: **causa NO demostrada**. Ninguna fuente del repo prueba una secuencia CAT
-distinta de `AC123;` / `AC120;`, así que **no se cambia ningún comportamiento**
-(ni catálogo, ni agente, ni menús del radio). Este documento solo analiza y
-propone un banco de pruebas. Nada de lo descrito aquí se ha transmitido.
+distinta de `AC123;` / `AC120;`, así que **no se cambia ningún comportamiento de
+sintonía** (ni catálogo, ni menús, ni potencia). Ver las secciones 1b, 3b, 6 y 7
+(mediciones del 2026-11-24, reordenación, correcciones del agente, plan de banco).
+Este documento solo analiza y propone un banco de pruebas. Nada de lo descrito aquí se ha transmitido.
 
 ## 1. Hechos medidos (aportados por el mantenedor)
 
@@ -18,6 +19,78 @@ propone un banco de pruebas. Nada de lo descrito aquí se ha transmitido.
 - Menús: EX030701=3 (ANT1 ATAS), EX030702=0, EX030704=0 (ANT1),
   EX030104=0 (TUNER SELECT = INT). AC previo: AC100.
 - PC antes de CAT: PC2010; el panel partió de PC2100.
+
+### 1b. Mediciones 2026-11-24 (FTX-1 + ATAS-120 reales, agente `cmd tune` = `AC123;`)
+
+Configuración: `tuneMaxSeconds` 45; el agente pone `PC2010` por banda tras `FA`/`MD`; el
+radio baja solo a `PC2005` durante la sintonía. Una tanda previa con `txLimitSeconds` 10
+cortó todas las sintonías HF a 10 s («tx-limit»): fue configuración de la prueba, no un
+fallo del radio, y se descarta.
+
+| Banda | Frec./modo | Resultado | RM6 raw final | ROE aprox. | s |
+|---|---|---|---|---|---|
+| 40 m | 7,150 LSB | tope de tiempo | 132 | ~3,1 | 45 |
+| 20 m | 14,250 USB | agente: «swr-high» | 199 | ~7,4 | 22 |
+| 15 m | 21,300 USB | tope de tiempo | 255 | — | 45 |
+| 10 m | 28,450 USB | tope de tiempo | 255 | — | 45 |
+| 6 m | 50,150 USB | éxito | 62 | ~1,5 | 33 |
+| 2 m | 144,300 USB | «éxito» | 0 | — | 1 |
+| 70 cm | 432,200 USB | «éxito» | 0 | — | 1 |
+
+Lectura: el fallo **ya no es solo de 28 MHz**: ocurre en 40, 20, 15 y 10 m (todo HF
+probado). 6 m sintoniza a 10 W (PC2010→PC2005) en 33 s con ROE ~1,5, y antes a
+50,2161 MHz en ~10 s. En 2 m y 70 cm el «éxito» a 1 s con raw 0 no es una sintonía
+demostrada (ver sección 6).
+
+## 6. Análisis del agente (2026-11-24)
+
+**Cuándo puede acabar un `AC123;` con «swr-high».** El motivo `swr-high` solo se pone en
+`TuneCheck.verified()` (`remote-meters.cjs`), es decir, **después** de un fin natural
+(`tuneLoop` vio `RI0` con tuning=0 y TX=0, `endTune(run, null)`) cuando la última ROE leída
+con TX activo es ≥ `swrLimit`. No es un disparo por ROE: ese es `swr-trip` (`checkSwr`),
+que para ATAS estaba exento mientras `tune !== null`. Por tanto los 22 s del 20 m
+significan que el radio declaró el fin (tuning=0, TX0) con raw 199: **el radio abandonó
+con mal acople**, no que el agente cortara la búsqueda. Con `RI0` tuning=1 no puede salir
+`swr-high` (el código no contradice el diseño en ese punto).
+
+**Fallo real encontrado (corregido).** La exención ATAS de `checkSwr` valía para toda la
+duración de la sintonía: si el radio soltaba el bit de sintonizador (`RI0` P6=0) pero
+seguía transmitiendo con ROE alta, solo el tope de tiempo (45 s) lo cortaba. Ahora la
+exención termina cuando `RI0` mostró tuning=1 y luego tuning=0 con la sintonía aún
+activa: desde ahí vale el disparo normal (`tuneSwrMs`, 3 s sostenidos). Se mantienen el
+tope de tiempo, PTT off prioritario y la protección post-sintonía. Si `RI0` no se lee, se
+usa el estado TX (comportamiento previo, exento).
+
+**¿Falso positivo con raw 0 en 2 m / 70 cm?** `startCatTune` exigía solo ver TX1/TX2
+(`tuneKeyed`) y que `tuneLoop` viera luego tuning=0 y TX=0; ni el bit tuning=1 ni una ROE
+leída con TX activa eran necesarios, y la lectura final tras RX (raw 0, ROE 1:1) daba
+«éxito». Eso podía declararse sin evidencia de que el sintonizador trabajara. Ahora, en
+ATAS, un fin natural sin haber visto nunca el bit de sintonizador es **«unverified»**
+(motivo `no-tune-evidence`), no éxito; con ROE alta sigue siendo `swr-high` y con TX
+atascado `tx-stuck`. HF y 6 m (bit visto) no cambian. Sin fuente en el repo sobre el
+comportamiento del ATAS en VHF/UHF: no se afirma si es un pase real; el resultado queda
+«sin verificar» hasta medir. Nota: en el panel bueno a 50,003723 el bit P6 seguía en 1
+hasta TX0 (`RI00010100`), así que el estado «tuning=0 con TX activo» puede no darse
+nunca en el FTX-1; la corrección es una red de seguridad conforme al diseño, no una
+hipótesis sobre el radio.
+
+## 7. Plan de banco mínimo (operador; no se ejecuta nada desde el software)
+
+Cada paso TX lo inicia el operador, ≤ 10 W salvo autorización expresa, corte con `TX0;` +
+`AC120;` (`docs/FTX1-KNOWLEDGE.md` l.875-913 para `AC123;`/`AC120;`).
+Fase 0 de la sección 4 (lecturas sin TX) antes de empezar. Parada común: 45 s o RM6 > 200
+sostenido 10 s tras soltar el bit de sintonizador.
+
+1. **Panel TUNE a 28,450 MHz con PC2010.** Anotar RM6 cada 1 s, `RI0;`, `TX;`, segundos.
+2. **Panel TUNE a 28,450 MHz con PC2100.** Solo con autorización del operador para la
+   potencia (el panel parte de PC2100 en la medida del mantenedor; baja a PC2005 solo).
+3. **CAT `AC123;` a 28,450 MHz partiendo de PC2100.** La puerta de potencia del agente
+   (≤ `TUNE_POWER_MAX_W`, 10 W) lo rechaza y no se debe saltar: el operador lo hace por
+   su cuenta, fuera del software, con `AC123;` (fuente: `docs/FTX1-KNOWLEDGE.md`) y su
+   propia supervisión; el radio baja a PC2005 por sí mismo. Comparar con 1 y 2.
+Interpretación: 1 bueno / 2 bueno → la potencia no importa (hipótesis 1 descartada); 1
+malo y 2 bueno → potencia; 2 y 3 igual (bueno) → el camino CAT no es la causa; 2 bueno y
+3 malo → diferencia entre panel y CAT (hipótesis 4/2).
 
 ## 2. Qué dice cada fuente sobre arrancar una sintonía ATAS
 
@@ -101,6 +174,29 @@ ATAS, el disparo por ROE alta se ignora mientras el motor busca, fin cuando
 
 Conclusión: ninguna hipótesis está probada; 1, 2 y 3 son las únicas comprobables sin
 inventar comandos.
+
+### 3b. Reordenación con las mediciones del 2026-11-24 (ver 1b)
+
+Orden nuevo, de más a menos apoyada:
+
+1. **(antes 3) Criterio de parada/convergencia del ATAS dependiente de banda e
+   instalación.** Fortalecida: falla en 40/20/15/10 m y funciona en 6 m; 40 m y 20 m
+   llegaron a RM6 132 y 199, 15/10 m se quedan en 255. Encaja con un ATAS-120 que no
+   alcanza el mínimo en HF con esta antena, no con un problema de sintaxis.
+2. **(antes 2) Posición inicial/memoria del mástil por banda.** Se mantiene: el panel
+   parte de otro punto; 6 m (más cerca de la posición de reposo) converge. Sin fuente.
+3. **(antes 1) Potencia PC2010 vs PC2100.** **Debilitada**: 6 m converge con PC2010, y
+   40/20 m con PC2010 pasan cerca (RM6 132) sin quedarse. Sigue siendo la única
+   diferencia medida con el panel, y es la comprobación más barata (plan 7, pasos 1-2).
+4. **(antes 4) Camino interno del panel distinto de `AC123;`.** Sin cambio; sin fuente.
+5. **(antes 5, 6, 7) Menús, estado AC previo, reconocimiento inicial.** Debilitadas: el
+   ATAS ya sintonizó en 6 m y en el panel, así que está reconocido.
+6. **(antes 8) Sintaxis.** Descartada en la práctica: `AC123;` funciona en 6 m.
+
+Observaciones nuevas, no hipótesis: (a) 2 m/70 cm acaban en 1 s con raw 0: sin evidencia
+de sintonía (sección 6), no pueden usarse como prueba de que el CAT funcione en VHF/UHF;
+(b) el «swr-high» de 20 m a 22 s es un fin declarado por el radio, no un corte del agente
+(sección 6); (c) los topes de 10 s eran configuración de la prueba.
 
 ## 4. Plan de banco con el mínimo de transmisiones
 
