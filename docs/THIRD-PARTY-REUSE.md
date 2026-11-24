@@ -22,7 +22,7 @@ Licences are those stated in the collection catalogue (inventory 2026-11-23); "t
 | RadioFoundry | MIT | REUSE | Driver layering, tests and documentation patterns; keep LICENSE, SPDX and NOTICE of third-party parts |
 | RadioFoundry-SoapyLR20xx | MIT with Semtech BSD notices | REUSE | Only useful for LR20xx hardware; snapshot is partial (symlinks missing) |
 | RadioFoundryGateway | MIT upstream (not downloaded) | FACTS | Nothing until downloaded and pinned to a commit |
-| Radtel-RT950-Hertzz | GPL-3.0 | REUSE | Main reference for the RT-950 Pro (AT32F403A) bring-up, drivers and tools; hardware revision must match |
+| Radtel-RT950-Hertzz | GPL-3.0 | REUSE | Main reference for the RT-950 Pro (AT32F403A) bring-up, drivers and tools; hardware revision must match. Candidate build only (Beta, TX inhibited, `firmware-candidates.yml`, see docs/FIRMWARE-ACTUALIZACIONES.md); no source adapted into this repository |
 | Radtel-RT950-Ferrite | PolyForm Noncommercial 1.0.0 | FACTS | Architecture, TX safety and persistence ideas only |
 | Radtel-RT950-APRS-KISS | No licence found | FACTS | APRS/KISS behaviour and test ideas |
 | Radtel-Web-Flasher-nicsure | No licence found | FACTS | Protocol and backup procedure observations; no OEM binaries, keys or dumps |

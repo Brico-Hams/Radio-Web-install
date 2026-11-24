@@ -1,0 +1,59 @@
+name: Firmware candidates
+
+# Manual, reference-only builds of candidate firmware. Never attached to a release and never touches
+# precompiled/ or catalog.json. Recipes: firmware/candidates/candidates.json, docs/FIRMWARE-ACTUALIZACIONES.md.
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+
+env:
+  ARM_GCC: arm-gnu-toolchain-13.3.rel1-x86_64-arm-none-eabi
+  ARM_GCC_SHA256: 95c011cee430e64dd6087c75c800f04b9c49832cc1000127a92a97f9c8d83af4
+
+jobs:
+  rt950-pro-hertzz:
+    runs-on: ubuntu-latest
+    env:
+      # Must match the rt950-pro-hertzz entry of firmware/candidates/candidates.json.
+      UPSTREAM_REPO: Hertzz58/Radtel-RT950-Pro-Firmware
+      UPSTREAM_COMMIT: 6c4d419b71eba8e227d9c0de322a51bbb1b755fc
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ env.UPSTREAM_REPO }}
+          ref: ${{ env.UPSTREAM_COMMIT }}
+          path: upstream
+          persist-credentials: false
+          # Sources only: binary/ (OEM images), assembly/ and tools/ are never checked out.
+          sparse-checkout: |
+            Makefile
+            linker.ld
+            src
+            include
+            LICENSE
+            README.md
+            CHANGELOG.md
+          sparse-checkout-cone-mode: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      - name: Install the pinned ARM toolchain
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/$ARM_GCC.tar.xz" \
+            "https://developer.arm.com/-/media/Files/downloads/gnu/13.3.rel1/binrel/$ARM_GCC.tar.xz"
+          echo "$ARM_GCC_SHA256  $RUNNER_TEMP/$ARM_GCC.tar.xz" | sha256sum --check
+          tar -xf "$RUNNER_TEMP/$ARM_GCC.tar.xz" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/$ARM_GCC/bin" >> "$GITHUB_PATH"
+      - name: Build (TX inhibited, .bin/.hex only, no OEM .BTF)
+        run: |
+          node scripts/build-candidate.cjs --id rt950-pro-hertzz --source upstream --output "$RUNNER_TEMP/out"
+          cd "$RUNNER_TEMP/out/artifacts" && sha256sum --check --quiet SHA256SUMS && ls -l
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: firmware-candidate-rt950-pro-hertzz
+          path: ${{ runner.temp }}/out/artifacts/
+          if-no-files-found: error
