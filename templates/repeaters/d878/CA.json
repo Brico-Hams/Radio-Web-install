@@ -1071,21 +1071,6 @@
       "notes": "RX only; nominal TX and published tone are reference information, not enabled. Verify local activity, restrictions and licence."
     },
     {
-      "name": "VE7RBH",
-      "rx": "147.30000",
-      "tx": "147.30000",
-      "mode": "FM",
-      "colorCode": 0,
-      "timeslot": 1,
-      "talkgroup": 0,
-      "bandwidth": "pending",
-      "broadcastOnly": false,
-      "rxOnly": true,
-      "source": "https://hearham.com/repeaters/20",
-      "zone": "British Columbia",
-      "notes": "RX only; nominal TX and published tone are reference information, not enabled. Verify local activity, restrictions and licence."
-    },
-    {
       "name": "VE7RCK",
       "rx": "147.10000",
       "tx": "147.70000",
@@ -6246,21 +6231,6 @@
       "notes": "RX only; nominal TX and published tone are reference information, not enabled. Verify local activity, restrictions and licence."
     },
     {
-      "name": "VE5DTM",
-      "rx": "146.58000",
-      "tx": "146.58000",
-      "mode": "FM",
-      "colorCode": 0,
-      "timeslot": 1,
-      "talkgroup": 0,
-      "bandwidth": "pending",
-      "broadcastOnly": false,
-      "rxOnly": true,
-      "source": "https://hearham.com/repeaters/18601",
-      "zone": "Saskatchewan",
-      "notes": "RX only; nominal TX and published tone are reference information, not enabled. Verify local activity, restrictions and licence."
-    },
-    {
       "name": "VE5FUN",
       "rx": "147.61000",
       "tx": "147.01000",
@@ -6317,6 +6287,21 @@
       "broadcastOnly": false,
       "rxOnly": true,
       "source": "https://hearham.com/repeaters/42",
+      "zone": "Saskatchewan",
+      "notes": "RX only; nominal TX and published tone are reference information, not enabled. Verify local activity, restrictions and licence."
+    },
+    {
+      "name": "VE5LAR",
+      "rx": "146.42000",
+      "tx": "146.42000",
+      "mode": "FM",
+      "colorCode": 0,
+      "timeslot": 1,
+      "talkgroup": 0,
+      "bandwidth": "pending",
+      "broadcastOnly": false,
+      "rxOnly": true,
+      "source": "https://hearham.com/repeaters/12091",
       "zone": "Saskatchewan",
       "notes": "RX only; nominal TX and published tone are reference information, not enabled. Verify local activity, restrictions and licence."
     },

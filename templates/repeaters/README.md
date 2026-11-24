@@ -3,7 +3,7 @@
 Archivos generados por `npm run templates:build` (sin red) a partir de `data/channel-templates/<CC>.json`. No editar a mano.
 
 - Radios: RadiCodex (`radicodex`, .csv); Radtel RT-950 Pro (`rt950pro`, .csv); Quansheng UV-K5 V3 (`uvk5v3`, .csv); AnyTone AT-D878 (`d878`, .json); Yaesu FTX-1 (`ftx1`, .csv).
-- Paises con datos: 45 de 80. Archivos: 225. Generado: 2026-11-23T15:10:33.609Z.
+- Paises con datos: 45 de 80. Archivos: 225. Generado: 2026-11-24T15:08:32.594Z.
 - Ruta: `templates/repeaters/<radio>/<CC>.<ext>`. `index.json` lista cada archivo con canales, descartados y SHA-256 (`path` es relativo a esta carpeta).
 
 ## Formato
