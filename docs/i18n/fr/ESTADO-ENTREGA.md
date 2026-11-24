@@ -5,6 +5,8 @@ les fonctions implémentées des essais physiques et objectifs en attente.
 Une compilation réussie ne prouve pas qu’une radio a démarré avec celle-ci.
 **Livraison incomplète :** des exigences restent à implémenter et à valider.
 
+Tests automatiques et sur matériel, avec résultats : [Tests et résultats](../../PRUEBAS-Y-RESULTADOS.md).
+
 ## Revue complémentaire du 26-10-2026
 
 La matrice et les chiffres du 25-10 ci-dessous sont historiques. Pour l’audit

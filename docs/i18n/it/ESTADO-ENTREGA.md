@@ -5,6 +5,8 @@ le funzioni implementate dai test fisici e dagli obiettivi in sospeso.
 Una compilazione riuscita non dimostra che una radio sia stata avviata con essa.
 **Consegna incompleta:** restano requisiti da implementare e convalidare.
 
+Test automatici e su hardware, con i risultati: [Test e risultati](../../PRUEBAS-Y-RESULTADOS.md).
+
 ## Revisione complementare del 26-10-2026
 
 La matrice e i dati seguenti del 25-10 sono storici. Per la verifica attuale,

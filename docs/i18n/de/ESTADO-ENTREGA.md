@@ -6,6 +6,8 @@ Zielen. Eine erfolgreiche Kompilierung beweist nicht, dass ein Funkgerät damit
 gestartet ist. **Lieferung unvollständig:** Anforderungen müssen noch
 implementiert und validiert werden.
 
+Automatische Tests und Hardwaretests mit Ergebnissen: [Tests und Ergebnisse](../../PRUEBAS-Y-RESULTADOS.md).
+
 ## Ergänzende Revision vom 26-10-2026
 
 Die Matrix und Zahlen vom 25-10 weiter unten sind historisch. Für das aktuelle

@@ -5,6 +5,8 @@ implemented features from physical tests and outstanding goals.
 A successful build does not prove that a radio has booted it.
 **Incomplete delivery:** requirements remain to be implemented and validated.
 
+Automated and hardware tests with results: [Tests and results](../../PRUEBAS-Y-RESULTADOS.md).
+
 ## Supplemental review of 26-10-2026
 
 The matrix and figures below dated 25-10 are historical. For the current
