@@ -116,5 +116,40 @@ class ConnectionPoolTests(unittest.TestCase):
         self.assertEqual(self.request("GET", "/other"), 503)
 
 
+class RejectingHandler(SecureRequestHandler):
+    protocol_version = "HTTP/1.1"
+
+    def do_POST(self):
+        self.close_connection = True
+        self.send_response(HTTPStatus.UNAUTHORIZED)
+        self.send_header("Content-Length", "2")
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.wfile.write(b"no")
+
+
+class EarlyRejectionTests(unittest.TestCase):
+    def test_body_arriving_after_early_rejection_does_not_reset_the_connection(self):
+        server = SecureHTTPServer(("127.0.0.1", 0), RejectingHandler)
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        serve(server)
+        sock = socket.create_connection(server.server_address, timeout=5)
+        self.addCleanup(sock.close)
+        sock.sendall(
+            b"POST /x HTTP/1.1\r\nHost: t\r\nContent-Type: application/json\r\n"
+            b"Content-Length: 64\r\n\r\n"
+        )
+        reply = b""
+        while not reply.endswith(b"no"):
+            chunk = sock.recv(4096)
+            self.assertTrue(chunk)
+            reply += chunk
+        self.assertTrue(reply.startswith(b"HTTP/1.1 401"))
+        # The body reaches the server only after it answered; closing over it must not RST.
+        sock.sendall(b"x" * 64)
+        self.assertEqual(sock.recv(4096), b"")
+
+
 if __name__ == "__main__":
     unittest.main()

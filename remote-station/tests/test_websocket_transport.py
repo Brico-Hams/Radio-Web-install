@@ -1,4 +1,5 @@
 import socket
+import threading
 import unittest
 
 from wsproto import Connection, ConnectionType
@@ -7,6 +8,7 @@ from wsproto.events import BytesMessage, Ping, TextMessage
 from bricoham_remote_station.websocket_transport import (
     WebSocketError,
     WebSocketPeer,
+    connect_websocket,
     read_auth_token,
 )
 
@@ -37,6 +39,21 @@ class WebSocketTransportTests(unittest.TestCase):
         self.client.sendall(b"".join(self.encoder.send(Ping(payload=b"")) for _ in range(17)))
         with self.assertRaisesRegex(WebSocketError, "control_limit"):
             self.peer.receive()
+
+    def test_peer_closing_before_upgrade_reply_is_a_connection_error(self):
+        listener = socket.create_server(("127.0.0.1", 0))
+        self.addCleanup(listener.close)
+
+        def close_after_request():
+            connection, _ = listener.accept()
+            connection.recv(4096)
+            connection.close()
+
+        thread = threading.Thread(target=close_after_request)
+        thread.start()
+        self.addCleanup(thread.join, 5)
+        with self.assertRaises(OSError):
+            connect_websocket(*listener.getsockname())
 
     def test_pending_sees_frames_already_buffered_by_the_handler_reader(self):
         reader = self.peer.sock.makefile("rb")

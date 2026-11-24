@@ -226,7 +226,11 @@ def connect_websocket(
             sock.settimeout(max(0.001, deadline - time.monotonic()))
             data = sock.recv(4096)
             count += len(data)
-            if not data or count > 16384:
+            if not data:
+                # A close before any reply (e.g. TLS 1.3 client-certificate rejection that
+                # arrives after the client handshake) is a transport failure, not a protocol one.
+                raise ConnectionResetError("audio_tx_upgrade_closed")
+            if count > 16384:
                 raise WebSocketError("audio_tx_upgrade_failed")
             handshake.receive_data(data)
             for event in handshake.events():
