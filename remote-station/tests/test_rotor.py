@@ -117,7 +117,16 @@ class RotorTests(unittest.TestCase):
         while time.monotonic() < deadline and "+S" not in self.broker.commands:
             time.sleep(0.03)
         self.assertIn("+S", self.broker.commands)
-        self.assertFalse(self.rotor.snapshot()["lease_active"])
+        # The watchdog still holds the non-blocking lock right after it sends "+S".
+        snapshot = None
+        while snapshot is None:
+            try:
+                snapshot = self.rotor.snapshot()
+            except RotorError as error:
+                self.assertEqual(str(error), "rotor_busy")
+                self.assertLess(time.monotonic(), deadline + 2)
+                time.sleep(0.01)
+        self.assertFalse(snapshot["lease_active"])
 
     def test_renewal_cannot_extend_absolute_motion_deadline(self):
         lease = self.move()["lease_id"]

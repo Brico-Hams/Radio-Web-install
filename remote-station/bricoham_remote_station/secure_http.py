@@ -4,6 +4,7 @@ import socket
 import ssl
 import sys
 import threading
+import time
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -12,6 +13,9 @@ NORMAL_CONNECTIONS = 28
 RESERVED_CONNECTIONS = 4
 MAX_CONNECTIONS_PER_IP = 8
 RESERVED_TIMEOUT_SECONDS = 2
+LINGER_MAX_BYTES = 65536
+LINGER_IDLE_SECONDS = 0.5
+LINGER_TOTAL_SECONDS = 2
 
 
 class RequestJsonError(Exception):
@@ -173,6 +177,41 @@ class SecureRequestHandler(BaseHTTPRequestHandler):
         if isinstance(self.request, ssl.SSLSocket):
             self.request.do_handshake()
         super().setup()
+
+    def finish(self) -> None:
+        super().finish()
+        if self.close_connection and self._request_declares_body():
+            self._drain_unread_body()
+
+    def _request_declares_body(self) -> bool:
+        headers = getattr(self, "headers", None)
+        if headers is None:
+            return False
+        length = headers.get("Content-Length", "")
+        return headers.get("Transfer-Encoding") is not None or (length.isdigit() and int(length) > 0)
+
+    def _drain_unread_body(self) -> None:
+        # Early rejections (401/403/400) answer before the body is read. Closing a socket
+        # with unread inbound bytes makes Windows (and Linux) send a RST that can destroy the
+        # response the client has not read yet (WinError 10053/10054). The response is already
+        # flushed here, so drain a bounded amount and let the client close first.
+        sock = self.request
+        deadline = time.monotonic() + LINGER_TOTAL_SECONDS
+        remaining = LINGER_MAX_BYTES
+        try:
+            if not isinstance(sock, ssl.SSLSocket):
+                sock.shutdown(socket.SHUT_WR)
+            while remaining > 0:
+                left = deadline - time.monotonic()
+                if left <= 0:
+                    break
+                sock.settimeout(min(left, LINGER_IDLE_SECONDS))
+                chunk = sock.recv(min(4096, remaining))
+                if not chunk:
+                    break
+                remaining -= len(chunk)
+        except (OSError, ValueError):
+            LOGGER.debug("Unread request body drain ended early")
 
     def log_request(self, code: int | str = "-", size: int | str = "-") -> None:
         path = self.path.partition("?")[0].partition("#")[0][:256]
