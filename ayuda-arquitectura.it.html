@@ -24,9 +24,9 @@
       <nav aria-label="Aiuto"><a href="ayuda-referencias.it.html">Documentazione e riferimenti</a> · <a href="ayuda-firmwares.it.html">Libreria firmware</a> · <a href="ayuda-atlas-uv-k5-v3.it.html">Atlas UV-K5 V3</a> · <a href="quansheng.html">Quansheng</a> · <a href="opengd77.html">OpenGD77</a></nav>
       <nav class="languages" aria-label="Lingua"><a href="ayuda-arquitectura.html" hreflang="es" lang="es">Español</a> · <a href="ayuda-arquitectura.en.html" hreflang="en-US" lang="en-US">English (US)</a> · <a href="ayuda-arquitectura.de.html" hreflang="de" lang="de">Deutsch</a> · <a href="ayuda-arquitectura.it.html" hreflang="it" lang="it" aria-current="page">Italiano</a> · <a href="ayuda-arquitectura.fr.html" hreflang="fr" lang="fr">Français</a></nav>
     </header>
-    <nav class="panel" aria-label="Contenuto di questa guida"><h2>In questa guida</h2><ul><li><a href="#modos-de-ejecucion">Modalità di esecuzione</a></li><li><a href="#vista-de-componentes">Vista dei componenti</a></li><li><a href="#modulos">Moduli</a></li><li><a href="#flujo-de-conexion-y-copia-automatica">Flusso di connessione e backup automatico</a></li><li><a href="#capas-de-seguridad">Livelli di sicurezza</a></li><li><a href="#limitaciones-conocidas">Limitazioni note</a></li><li><a href="#security-review-sonarqube-2026-11-13">Revisione di sicurezza (SonarQube 2026-11-13)</a></li></ul></nav>
+    <nav class="panel" aria-label="Contenuto di questa guida"><h2>In questa guida</h2><ul><li><a href="#modos-de-ejecucion">Modalità di esecuzione</a></li><li><a href="#vista-de-componentes">Vista dei componenti</a></li><li><a href="#modulos">Moduli</a></li><li><a href="#flujo-de-conexion-y-copia-automatica">Flusso di connessione e backup automatico</a></li><li><a href="#estacion-remota-y-seguridad-de-tx">Stazione remota e sicurezza TX</a></li><li><a href="#capas-de-seguridad">Livelli di sicurezza</a></li><li><a href="#documentacion-del-codigo">Documentazione del codice</a></li><li><a href="#limitaciones-conocidas">Limitazioni note</a></li><li><a href="#security-review-sonarqube-2026-11-13">Revisione di sicurezza (SonarQube 2026-11-13)</a></li></ul></nav>
     <article class="panel"><h1 id="arquitectura-de-bricohams-radio-workspace">Architettura di Bricohams Radio Workspace</h1>
-<p>Bricohams Radio Workspace è un&#39;applicazione web <strong>locale</strong>. Un piccolo server Node.js serve un elenco chiuso di file statici e poche API di sola lettura. Tutta la comunicazione con la radio avviene nel browser tramite WebUSB o Web Serial.</p>
+<p>Bricohams Radio Workspace è un&#39;applicazione web <strong>locale</strong>. Un piccolo server Node.js serve un elenco chiuso di file statici e poche API di sola lettura. La comunicazione con la radio per i connettori di firmware, codeplug e backup avviene nel browser tramite WebUSB o Web Serial. Il controllo remoto via CAT è un componente a parte (vedi <a href="#estacion-remota-y-seguridad-de-tx">Stazione remota</a>): un agente accanto alla radio e una console che si collega ad esso.</p>
 <p>&lt;a id=&quot;modos-de-ejecución&quot;&gt;&lt;/a&gt;</p>
 <h2 id="modos-de-ejecucion">Modalità di esecuzione</h2>
 <p>All&#39;avvio, <code>runtime-mode.js</code> richiede <code>runtime.json</code> (percorso relativo, senza cache). Solo <code>{&quot;mode&quot;:&quot;local&quot;}</code> attiva la modalità locale; se manca, restituisce 404, non è JSON o la pagina viene aperta come <code>file://</code>, l&#39;applicazione parte in <strong>modalità web</strong> senza errori. <code>server.cjs</code> lo serve come <code>{&quot;mode&quot;:&quot;local&quot;}</code> e <code>scripts/build-pages.cjs</code> genera <code>{&quot;mode&quot;:&quot;web&quot;}</code> in <code>dist/</code>. Il badge superiore indica «Web · GitHub Pages» o «Locale · installato».</p>
@@ -83,6 +83,9 @@
 <tr><td><code>radioid-csv.js</code></td><td>Browser / Node</td><td>Lettura filtrata di <code>user.csv</code> e profilo locale facoltativo.</td></tr>
 <tr><td><code>scripts/build-pages.cjs</code>, <code>scripts/fetch-satellites.cjs</code></td><td>Node</td><td>Generano <code>dist/</code> e <code>data/satellites.json</code> per Pages.</td></tr>
 <tr><td><code>data-service.cjs</code></td><td>Node</td><td>Proxy di sola lettura verso RadioID, RepeaterBook (credenziali solo sul server), SatNOGS e CelesTrak.</td></tr>
+<tr><td><code>remote-station.cjs</code>, <code>remote-agent.cjs</code></td><td>Node</td><td>Supervisore di <code>rigctld</code>/<code>rotctld</code> (usato da <code>server.cjs</code> per <code>/api/remote/*</code> e dalla modalità headless) e agente del Remote shack. Vedi la sezione seguente.</td></tr>
+<tr><td><code>remote-txsafety.cjs</code>, <code>remote-meters.cjs</code>, <code>station-amplifier-drivers.cjs</code></td><td>Node</td><td>Protezioni TX (<code>OrphanWatch</code>, blocco fuori banda), <code>TuneCheck</code> e driver di amplificatore.</td></tr>
+<tr><td><code>remote-speech-proc.js</code>, <code>remote-vox.js</code></td><td>Browser / Node</td><td>Processore vocale e VOX del percorso TX remoto (script classici che esportano anche in CommonJS).</td></tr>
 </tbody></table></div>
 <h2 id="flujo-de-conexion-y-copia-automatica">Flusso di connessione e backup automatico</h2>
 <pre><code>sequenceDiagram
@@ -103,6 +106,53 @@
   UI--&gt;&gt;U: Permiso de escritura solo si la copia es completa
   UI-&gt;&gt;U: Descarga automática del .rwb.json</code></pre>
 <p>Prima di ogni scrittura, il backup viene riletto e confrontato con gli hash del permesso. Scollegare la radio, sostituirla o eliminare il backup revoca il permesso.</p>
+<h2 id="estacion-remota-y-seguridad-de-tx">Stazione remota e sicurezza TX</h2>
+<p>Il <strong>Remote shack</strong> (<code>remote-agent.cjs</code>, console <code>remote.html</code> / <code>remoto.html</code>) controlla una radio tramite Hamlib <code>rigctld</code> ed è indipendente dalla stazione Python di <code>remote-station/</code> (vedi <a href="ayuda-estacion-remota.it.html">REMOTE_STATION.md</a>). <code>server.cjs</code> non cambia: continua ad ascoltare solo su <code>127.0.0.1</code> e delega <code>/api/remote/*</code> a <code>remote-station.cjs</code>. La mappa completa dei moduli è nella <a href="https://github.com/Brico-Hams/Radio-Web-install/blob/main/docs/MAPA-TECNICO-PROYECTO.md#mapa-de-módulos-diagrama-de-dependencias" target="_blank" rel="noopener noreferrer">mappa tecnica</a>.</p>
+<pre><code>flowchart LR
+  subgraph Cliente[&quot;Navegador / WebView&quot;]
+    UI[&quot;remote-ui.js&quot;]
+    SP[&quot;remote-speech-proc.js&lt;br/&gt;procesador de voz&quot;]
+    VX[&quot;remote-vox.js&lt;br/&gt;VOX&quot;]
+    TUI[&quot;remote-tune-ui.js&quot;]
+  end
+  subgraph Agente[&quot;Agente Node junto a la radio&quot;]
+    RA[&quot;remote-agent.cjs&lt;br/&gt;lease, latido, topes&quot;]
+    TXS[&quot;remote-txsafety.cjs&lt;br/&gt;OrphanWatch, fuera de banda&quot;]
+    MET[&quot;remote-meters.cjs&lt;br/&gt;TuneCheck&quot;]
+    RC[&quot;rigctld-client.cjs&lt;br/&gt;stopSequence&quot;]
+    ACC[&quot;station-accessories.cjs&quot;]
+    AMP[&quot;station-amplifier-drivers.cjs&quot;]
+  end
+  RIG[(&quot;rigctld → radio&quot;)]
+  AMPHW[(&quot;Amplificador&quot;)]
+  UI --&gt; SP
+  UI --&gt; VX
+  UI -- &quot;API autenticada, SSE, audio&quot; --&gt; RA
+  UI --&gt; TUI
+  RA --&gt; TXS
+  RA --&gt; MET
+  RA --&gt; RC --&gt; RIG
+  RA --&gt; ACC --&gt; AMP --&gt; AMPHW</code></pre>
+<p>La console React della stazione Python riutilizza gli stessi <code>remote-speech-proc.js</code> e <code>remote-vox.js</code> tramite <code>remote-station/apps/web-console/src/txProcessing.ts</code>; l&#39;agente Python ha il proprio blocco fuori banda in <code>remote-station/bricoham_station_agent/txsafety.py</code>.</p>
+<h3 id="garantias-de-tx">Garanzie TX</h3>
+<p>Il software non trasmette mai da solo: ogni passaggio in TX è un comando esplicito dell&#39;operatore. Le protezioni dell&#39;agente, verificate in <code>remote-agent.cjs</code>:</p>
+<div class="table-scroll"><table><thead><tr><th scope="col">Protezione</th><th scope="col">Comportamento</th></tr></thead><tbody>
+<tr><td>PTT off</td><td><code>pttOff()</code> ha la precedenza su tutto: termina una sintonia in corso, ferma il CW ed esegue <code>stopSequence</code> (arresto del sintonizzatore, <code>txOff</code> grezzo e <code>T 0</code> di Hamlib, con priorità nella coda).</td></tr>
+<tr><td>Heartbeat</td><td>Senza heartbeat per <code>HEARTBEAT_TIMEOUT_MS</code> (1000 ms) l&#39;agente rilascia il PTT e mette l&#39;amplificatore in STANDBY.</td></tr>
+<tr><td>Limiti di tempo</td><td>Limite di TX (<code>txLimitSeconds</code>, 180 s per impostazione predefinita) e di sintonia (<code>TUNE_MAX_SECONDS</code>: interno 20 s predefiniti e 30 s massimi; ATAS 45 s e 60 s).</td></tr>
+<tr><td>SWR</td><td>Intervento con SWR sostenuto sopra <code>swrLimit</code> (3 per impostazione predefinita) o il limite grezzo del profilo CAT; durante la sintonia si usa <code>TUNE_SWR_MS</code>.</td></tr>
+<tr><td>Amplificatore</td><td><code>accessories.standby(&quot;lease&quot;)</code> a ogni perdita di lease o heartbeat; parte in STANDBY e non passa a OPERATE senza condizioni sicure.</td></tr>
+<tr><td>Fuori banda</td><td><code>remote-txsafety.cjs</code>: solo con <code>txRanges</code> configurati; una frequenza o un modo sconosciuti bloccano anch&#39;essi un nuovo passaggio in TX. Un errore di lettura isolato non interrompe una emissione in corso.</td></tr>
+<tr><td>TX orfano</td><td><code>OrphanWatch</code>: un&#39;emissione dell&#39;agente senza titolare del lease viene rilasciata dopo due osservazioni consecutive.</td></tr>
+<tr><td>Blocco operatore</td><td>Un solo operatore alla volta (lease); nella console, <code>view.locked</code> impedisce le azioni e disarma il VOX.</td></tr>
+</tbody></table></div>
+<p>Il VOX (<code>remote-vox.js</code>) non aggiunge alcun percorso di TX: usa gli stessi <code>pttDown</code>/<code>pttUp</code> del pulsante, non viene mai salvato e si disarma in caso di rifiuto, caduta dell&#39;agente, perdita di controllo o di collegamento, blocco e pagina nascosta. Il processore vocale (<code>remote-speech-proc.js</code>) è disattivato per impostazione predefinita e limita l&#39;uscita a un tetto fisso di −1 dBFS.</p>
+<h3 id="comprobacion-de-sintonia-y-parada-al-cerrar">Verifica della sintonia e arresto alla chiusura</h3>
+<ul>
+<li><code>TuneCheck</code> (<code>remote-meters.cjs</code>; specchio Python in <code>remote-station/bricoham_remote_station/tune_check.py</code>) percorre <code>requested → confirming → tuning → reading → stopping → verifying → done</code> con gli esiti <code>success</code>, <code>fail</code>, <code>timeout</code> e <strong><code>unverified</code></strong>. In una sintonia ATAS, se <code>evidence(false)</code> indica che la radio non ha mostrato il lavoro del sintonizzatore e l&#39;SWR non è alto, l&#39;esito è <code>unverified</code> con il motivo <code>no-tune-evidence</code> (nella console: «Sintonia non verificata»); se TX0 non è confermato dalla lettura, diventa <code>fail</code> (<code>tx-stuck</code>). Un <code>cut()</code> non produce mai <code>unverified</code>.</li>
+<li><code>close()</code> dell&#39;agente spegne prima il PTT e chiama <code>settleStopBeforeClose</code>: attende (con tetto <code>stopStepMs * 5 + 500</code> ms) la fine di un arresto in corso e, se non confermato, ripete <code>stopSequence</code> una volta prima di rilasciare il client <code>rigctld</code>. Poi ferma il CW, esegue <code>accessories.emergencyStop(&quot;close&quot;)</code>, chiude il driver dell&#39;amplificatore e mette in sicurezza i dispositivi della stazione.</li>
+</ul>
+<p>I test deterministici (orologi e trasporti simulati) si trovano in <code>tests/remote-txsafety.test.cjs</code>, <code>tests/remote-txaudio.test.cjs</code>, <code>tests/remote-amplifier-drivers.test.cjs</code>, <code>tests/remote-meters.test.cjs</code>, <code>tests/remote-agent.test.cjs</code> e, in Python, <code>remote-station/tests/test_tx_inhibit.py</code> e <code>test_tune_check.py</code>. I driver degli amplificatori sono «implementati da fonte, non provati su hardware»: nel repository non esiste una cattura di un amplificatore reale.</p>
 <h2 id="capas-de-seguridad">Livelli di sicurezza</h2>
 <ol>
 <li><strong>Rete:</strong> il server ascolta solo su <code>127.0.0.1</code>, richiede <code>Host: 127.0.0.1:&lt;puerto&gt;</code> e serve un elenco fisso di file.</li>
@@ -110,7 +160,18 @@
 <li><strong>Apparato:</strong> le scritture usano un permesso *fail-closed* legato a un backup verificato. Main non è mai una destinazione. Cancellazione o ripristino richiedono una conferma digitata.</li>
 <li><strong>Fonti esterne:</strong> solo fornitori ufficiali, reindirizzamenti a host consentiti, limiti di dimensione e SHA-256 visibile. Le credenziali RepeaterBook non vengono mai inviate al browser.</li>
 <li><strong>Dati:</strong> niente telemetria né caricamenti verso server. I backup rimangono nell&#39;IndexedDB del profilo locale e vengono esportati in file dell&#39;utente.</li>
+<li><strong>Trasmissione remota:</strong> TX disattivato per impostazione predefinita, solo su comando esplicito dell&#39;operatore, con le protezioni di <a href="#garantias-de-tx">Garanzie TX</a>. Le credenziali del relay restano nell&#39;agente (<code>~/.radicodex/remote-agent.json</code>, 0600) e non vengono stampate; il token di accesso viaggia solo nel frammento dell&#39;URL e la console lo rimuove dalla barra degli indirizzi. Le protezioni software non sostituiscono gli interblocchi fisici.</li>
 </ol>
+<h2 id="documentacion-del-codigo">Documentazione del codice</h2>
+<p>La documentazione dettagliata del codice e dei test è conservata in file separati:</p>
+<ul>
+<li>[Node: agente e desktop][codigo-node]: server locale, agente Remote shack e console della radice.</li>
+<li>[Python: stazione remota][codigo-python]: host coordinatore e agente di <code>remote-station/</code>.</li>
+<li>[Android e console web][codigo-android]: app native e console React/Capacitor.</li>
+<li>[Test e risultati][pruebas]: cosa copre ogni suite e i risultati registrati.</li>
+</ul>
+<p>Questi quattro documenti sono scritti in parallelo; se un link non si risolve in una copia specifica del repository, il documento non è ancora stato integrato in quel ramo.</p>
+<p>[codigo-node]: ../../codigo/NODE-AGENTE-Y-ESCRITORIO.md [codigo-python]: ../../codigo/PYTHON-ESTACION-REMOTA.md [codigo-android]: ../../codigo/ANDROID-Y-CONSOLA-WEB.md [pruebas]: ../../PRUEBAS-Y-RESULTADOS.md</p>
 <h2 id="limitaciones-conocidas">Limitazioni note</h2>
 <ul>
 <li><strong>OpenGD77:</strong> qui non esiste un protocollo verificato per estrarre l&#39;intero firmware del MCU. Il backup è contrassegnato come <strong>parziale</strong> e la scrittura sulla radio rimane bloccata.</li>
