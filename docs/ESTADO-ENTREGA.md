@@ -5,6 +5,8 @@ funciones implementadas de pruebas fisicas y objetivos pendientes.
 Una compilacion correcta no demuestra que una radio haya arrancado con ella.
 **Entrega incompleta:** quedan requisitos por implementar y validar.
 
+Pruebas automaticas y con hardware, con resultados: [Pruebas y resultados](PRUEBAS-Y-RESULTADOS.md).
+
 ## Revision complementaria del 26-10-2026
 
 La matriz y cifras del 25-10 siguientes son historicas. Para la auditoria
