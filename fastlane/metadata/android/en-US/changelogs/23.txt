@@ -1,0 +1,1 @@
+Remote station: single talker, speech processor and VOX off by default. Safer transmit handling (orphan TX stop, out-of-band inhibit off by default). Clearer ATAS tune results (unverified, SWR trip after the tuner ends). FlexRadio items without a source stay disabled. Pairing status fix. Shared UI polish.

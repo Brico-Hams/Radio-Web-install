@@ -7,6 +7,15 @@ Una compilazione riuscita non dimostra che una radio sia stata avviata con essa.
 
 Test automatici e su hardware, con i risultati: [Test e risultati](../../PRUEBAS-Y-RESULTADOS.md).
 
+## Versione 0.10.0 (desktop, web e agenti) e Android 1.6.0
+
+- Sicurezza TX: arresto della TX orfana, inibizione fuori banda disattivata per impostazione predefinita, lo spegnimento attende l'arresto.
+- Audio remoto: un solo parlante; processore vocale e VOX disattivati per impostazione predefinita.
+- Sintonia ATAS: risultato non verificato e intervento SWR dopo la fine del sintonizzatore.
+- FlexRadio: integrazione, elementi in attesa di fonte disattivati.
+- Registro del riuso di terze parti, correzione dello stato mTLS, documentazione completa di codice e test, analisi dell'aggiornamento firmware (nessun nuovo firmware pubblicato).
+- Prove hardware: solo quelle di [Prove e risultati](../../PRUEBAS-Y-RESULTADOS.md).
+
 ## Revisione complementare del 26-10-2026
 
 La matrice e i dati seguenti del 25-10 sono storici. Per la verifica attuale,

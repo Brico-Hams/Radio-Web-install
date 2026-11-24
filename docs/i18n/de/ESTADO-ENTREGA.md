@@ -8,6 +8,15 @@ implementiert und validiert werden.
 
 Automatische Tests und Hardwaretests mit Ergebnissen: [Tests und Ergebnisse](../../PRUEBAS-Y-RESULTADOS.md).
 
+## Version 0.10.0 (Desktop, Web und Agenten) und Android 1.6.0
+
+- TX-Sicherheit: Stopp verwaister TX, Sperre außerhalb des Bandes standardmäßig aus, das Herunterfahren wartet auf den Stopp.
+- Remote-Audio: ein Sprecher; Sprachprozessor und VOX standardmäßig aus.
+- ATAS-Abstimmung: nicht verifiziertes Ergebnis und SWR-Auslösung nach Ende des Tuners.
+- FlexRadio: Integration, quellenpendente Elemente deaktiviert.
+- Register der Drittnutzung, Korrektur des mTLS-Status, vollständige Dokumentation von Code und Tests, Analyse des Firmware-Updates (keine neue Firmware veröffentlicht).
+- Hardwaretests: nur die in [Tests und Ergebnisse](../../PRUEBAS-Y-RESULTADOS.md).
+
 ## Ergänzende Revision vom 26-10-2026
 
 Die Matrix und Zahlen vom 25-10 weiter unten sind historisch. Für das aktuelle

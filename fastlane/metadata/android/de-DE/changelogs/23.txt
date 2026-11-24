@@ -1,0 +1,1 @@
+Fernstation: ein einziger Sprecher; Sprachprozessor und VOX standardmäßig aus. Sicherere Sendesteuerung (verwaiste TX wird beendet, Außerband-Sperre standardmäßig aus). Klarere ATAS-Abstimmergebnisse (nicht verifiziert, SWR-Auslösung nach Ende des Tuners). FlexRadio-Punkte ohne Quelle bleiben deaktiviert. Korrektur des Kopplungsstatus. Überarbeitete gemeinsame Oberfläche.

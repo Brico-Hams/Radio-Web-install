@@ -11,7 +11,7 @@ async function createDiagnostics(options = {}) {
   await fs.mkdir(directory, { recursive: true, mode: 0o700 });
   const filename = path.join(directory, "workspace-host.jsonl");
   const buffer = new DiagnosticBuffer({
-    component: "workspace-host", version: "0.9.0",
+    component: "workspace-host", version: "0.10.0",
     platform: { win32: "windows", linux: "linux", darwin: "macos" }[process.platform] || "unknown"
   });
   let closed = false, failed = false, timer = null, writing = null, dirty = false;
