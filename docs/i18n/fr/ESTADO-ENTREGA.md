@@ -7,6 +7,15 @@ Une compilation réussie ne prouve pas qu’une radio a démarré avec celle-ci.
 
 Tests automatiques et sur matériel, avec résultats : [Tests et résultats](../../PRUEBAS-Y-RESULTADOS.md).
 
+## Version 0.10.0 (bureau, web et agents) et Android 1.6.0
+
+- Sécurité TX : arrêt des TX orphelines, inhibition hors bande désactivée par défaut, l'arrêt attend la fin de la transmission.
+- Audio distant : un seul locuteur ; processeur de parole et VOX désactivés par défaut.
+- Accord ATAS : résultat non vérifié et déclenchement du SWR après la fin de l'accordeur.
+- FlexRadio : intégration, éléments en attente de source désactivés.
+- Registre de réutilisation de tiers, correction du statut mTLS, documentation complète du code et des tests, analyse de mise à jour du firmware (aucun nouveau firmware publié).
+- Essais matériels : uniquement ceux de [Tests et résultats](../../PRUEBAS-Y-RESULTADOS.md).
+
 ## Revue complémentaire du 26-10-2026
 
 La matrice et les chiffres du 25-10 ci-dessous sont historiques. Pour l’audit

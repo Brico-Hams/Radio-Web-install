@@ -7,6 +7,15 @@ A successful build does not prove that a radio has booted it.
 
 Automated and hardware tests with results: [Tests and results](../../PRUEBAS-Y-RESULTADOS.md).
 
+## Version 0.10.0 (desktop, web and agents) and Android 1.6.0
+
+- TX safety: orphan TX stop, out-of-band inhibit off by default, shutdown waits for the stop.
+- Remote audio: single talker; speech processor and VOX off by default.
+- ATAS tune: unverified result and SWR trip after the tuner ends.
+- FlexRadio: integration with source-pending items disabled.
+- Third-party reuse ledger, mTLS status fix, full documentation of code and tests, and firmware update analysis (no new firmware published).
+- Hardware tests: only those in [Tests and results](../../PRUEBAS-Y-RESULTADOS.md).
+
 ## Supplemental review of 26-10-2026
 
 The matrix and figures below dated 25-10 are historical. For the current
