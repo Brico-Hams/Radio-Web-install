@@ -323,7 +323,10 @@ function fakeNet() {
   };
 }
 
-test("the TCP transport connects lazily, round-trips bytes and times out silently", async () => {
+test("the TCP transport connects lazily, round-trips bytes and times out silently", async t => {
+  // The transport unrefs its read timer and the fake net holds no handle; keep the loop alive or Node cancels the test.
+  const keepAlive = setInterval(() => {}, 1000);
+  t.after(() => clearInterval(keepAlive));
   const net = fakeNet();
   const transport = drivers.createTcpTransport({ host: "192.168.1.50", port: 4001 }, net);
   assert.equal(net.sockets.length, 0);
