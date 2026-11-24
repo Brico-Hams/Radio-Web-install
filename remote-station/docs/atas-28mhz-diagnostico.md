@@ -92,6 +92,45 @@ Interpretación: 1 bueno / 2 bueno → la potencia no importa (hipótesis 1 desc
 malo y 2 bueno → potencia; 2 y 3 igual (bueno) → el camino CAT no es la causa; 2 bueno y
 3 malo → diferencia entre panel y CAT (hipótesis 4/2).
 
+## 7b. Banco del panel 2026-11-24
+
+Lecturas CAT solo de lectura (monitor); el operador pulsó TUNE en el panel. Ambas
+pruebas a 28,450000 MHz USB y con arranque a 10 W.
+
+**Prueba A** (arranque PC2010, TUNE del panel):
+
+- 0-4 s: TX2, RM6 255, `RI0` = `RI01010100`.
+- 4,5-6,0 s: RM6 209, 147, 117, 123; `RI0` = `RI00010100` (el bit de sintonizador
+  ocupado cayó brevemente).
+- Desde 6,5 s: `RI01010100` otra vez y RM6 vuelve a 255 y se queda ahí.
+- 45 s: el monitor envió `TX0`; `AC120`; el radio volvió a TX0.
+
+**Prueba B** (el operador bajó el mando de potencia de PC2100 a PC2010 antes de pulsar
+TUNE; es también un arranque a 10 W: **no** se probó un arranque a PC2100):
+
+- Durante toda la sintonía: TX2, MD07, PC2005, AC100.
+- Hacia 35,9-37,7 s: RM6 172, 111, 174, con `RI00010100` en la muestra de 111.
+- Después RM6 255 otra vez; se observaron al menos 45 s de sintonía; el monitor envió
+  `TX0`; `AC120`; estado final TX0, MD02, PC2010, AC100.
+
+**Conclusiones** (solo estas):
+
+1. El TUNE del panel a 10 W falla igual que `AC123;` por CAT a 28,450: el camino CAT no
+   es la causa (hipótesis 4 debilitada con fuerza).
+2. El radio sintoniza a PC2005 sea cual sea la potencia de arranque (medido aquí y en la
+   sección 1), así que es poco probable que la potencia de arranque importe; la hipótesis
+   1 queda aún más debilitada. Un arranque a PC2100 sigue sin probarse.
+3. El ATAS pasa por un mejor punto hacia RM6 111-117 y no se detiene ahí, en todos los
+   intentos a 28,450 de hoy. Las hipótesis de instalación/convergencia (tierra, soporte,
+   contrapeso, posición inicial del mástil) pasan a ser las principales. Son inferencias,
+   no están probadas.
+4. El segundo campo de `RI0` baja a 0 durante una muestra en el mejor punto y luego
+   vuelve a 1: se anota solo como observación.
+5. Nota de monitorización: un primer monitor de solo lectura se desincronizó de las
+   respuestas del radio y su parada de seguridad se envió cuando el radio ya estaba en RX
+   (sin efecto, AC siguió en AC100). Los monitores futuros deben vaciar la entrada antes
+   de cada consulta.
+
 ## 2. Qué dice cada fuente sobre arrancar una sintonía ATAS
 
 | Fuente (ruta exacta) | Inicio | Parada | Prerrequisitos / notas |
@@ -192,6 +231,17 @@ Orden nuevo, de más a menos apoyada:
 5. **(antes 5, 6, 7) Menús, estado AC previo, reconocimiento inicial.** Debilitadas: el
    ATAS ya sintonizó en 6 m y en el panel, así que está reconocido.
 6. **(antes 8) Sintaxis.** Descartada en la práctica: `AC123;` funciona en 6 m.
+
+**Reordenación con el banco del panel (ver 7b), de más a menos apoyada:**
+
+1. **Instalación/convergencia (tierra, soporte, contrapeso, posición inicial del mástil;
+   antes 1 y 2).** Pasa a ser la principal: el panel falla igual que el CAT y el ATAS
+   pasa por RM6 111-117 sin detenerse. Inferencia, no probada.
+2. **Potencia PC2010 vs PC2100 (antes 3).** Debilitada más: el radio sintoniza a PC2005
+   con cualquier arranque; un arranque a PC2100 sigue sin probarse.
+3. **Camino interno del panel distinto de `AC123;` (antes 4).** Debilitada con fuerza:
+   el TUNE del panel a 10 W falla igual que `AC123;`.
+4. **Menús, estado AC previo, reconocimiento inicial, sintaxis (antes 5-8).** Sin cambio.
 
 Observaciones nuevas, no hipótesis: (a) 2 m/70 cm acaban en 1 s con raw 0: sin evidencia
 de sintonía (sección 6), no pueden usarse como prueba de que el CAT funcione en VHF/UHF;
