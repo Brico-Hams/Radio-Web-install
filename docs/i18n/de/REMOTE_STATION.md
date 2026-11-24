@@ -409,11 +409,40 @@ Android (`MeterModel.kt`) und Python (`ftx1_cat.py`). FTX-1-Skalen stammen aus d
 (`PC1`); mit dem SPA-1 (`PC2`) bleibt es „pendiente de fuente“. Für die Temperatur gibt es keine Quelle.
 
 Die Abstimmung (internes AC 20 s, ATAS 45 s) nutzt einen Zustandsautomaten: Bedienerwunsch, Bestätigung per Rücklesen,
-zeitbegrenztes Warten, End-SWR und per Rücklesen geprüftes TX0. Das Ergebnis (Erfolg/Fehler/Zeitüberschreitung) wird
-in der Konsole angezeigt. Sie wird abgelehnt, wenn die konfigurierte Leistung 10 W überschreitet (`TUNE_POWER_MAX_W`): der Bediener
+zeitbegrenztes Warten, End-SWR und per Rücklesen geprüftes TX0. Das Ergebnis (Erfolg/Fehler/Zeitüberschreitung/nicht verifiziert) wird
+in der Konsole angezeigt. Bei ATAS lautet das Ergebnis `unverified` (Grund `no-tune-evidence`, Text „Abstimmung nicht verifiziert“), wenn das Funkgerät nicht angezeigt hat, dass der Tuner arbeitete (`evidence(false)`), und das SWR nicht hoch ist; nie ein Erfolg. Wird TX0 nicht
+durch Rücklesen bestätigt, wird das Ergebnis zum Fehler (`tx-stuck`). `bricoham_remote_station/tune_check.py` ist
+der Python-Spiegel von `TuneCheck`; heute übt nur sein Test (`test_tune_check.py`) ihn aus. Sie wird abgelehnt, wenn die konfigurierte Leistung 10 W überschreitet (`TUNE_POWER_MAX_W`): der Bediener
 muss sie senken; sie wird nie automatisch gesenkt. Auch Hamlib G TUNE ist zeitbegrenzt.
 Niemals ohne angepasste Last oder angeschlossene Antenne senden.
 Die Tests dieser Erweiterung wurden in dieser Umgebung nicht ausgeführt.
+
+## TX-Sicherheit des Remote shack (Node)
+
+Die Schicht ist in [ARCHITECTURE.md](ARCHITECTURE.md#remote-station-und-tx-sicherheit) und
+[MAPA-TECNICO-PROYECTO.md](../../MAPA-TECNICO-PROYECTO.md#mapa-de-módulos-diagrama-de-dependencias) dokumentiert.
+Die Software sendet nie von selbst; PTT off hat Vorrang vor jeder anderen Aktion.
+
+- **Außerhalb des Bands** (`remote-txsafety.cjs`, `txRanges` in `~/.radicodex/remote-agent.json`, eine Liste von
+  `{ startHz, endHz }`): Das belegte Spektrum (`occupiedSpan`, Bandbreite des Funkgeräts oder je nach
+  Modus eine Standardbreite) muss innerhalb eines Bereichs liegen. Ohne konfigurierte Bereiche greift es nicht ein (`not-configured`). Unbekannte Frequenz oder unbekannter
+  Modus lehnen ein neues Umschalten auf TX ab (HTTP 409, `tx-range-unknown`/`tx-out-of-band`); das Verlassen des
+  Bands unterbricht eine Aussendung des Agenten. Beim Abstimmen wird der vom Funkgerät gemeldete Modus nicht bewertet.
+  Der Python-Agent hat sein Gegenstück in `bricoham_station_agent/txsafety.py` (`tx_ranges`, von `ptt.py` genutzt).
+- **Verwaistes TX**: `OrphanWatch` gibt eine Aussendung des Agenten ohne Lease-Inhaber nach zwei
+  aufeinanderfolgenden Beobachtungen frei, zusätzlich zu Heartbeat (1 s) sowie TX- und Abstimmlimits.
+- **VOX** (`remote-vox.js`): wird nur durch eine ausdrückliche Aktion in der Sitzung scharf, nutzt denselben
+  PTT-, Heartbeat- und Lease-Pfad wie die Taste und wird bei Ablehnung, Abbruch, Verlust von Kontrolle oder Verbindung, Sperre oder
+  verborgener Seite entschärft. Er wird nicht gespeichert. Schwelle und Verzögerung sind begrenzt (0,02-0,5 und 250-2000 ms).
+- **Sprachprozessor** (`remote-speech-proc.js`, `txProcessing.ts` in der React-Konsole): standardmäßig
+  aus, begrenzte Einstellungen und feste Obergrenze von −1 dBFS; Einstellungen werden nur als lokale Präferenz gespeichert.
+- **Verstärker** (`station-amplifier-drivers.cjs`, Spiegel `amplifier_drivers.py`): KPA, Expert, ACOM und
+  Gemini aus Quellen implementiert und nicht auf Hardware getestet. Sie senden nie und schalten das Gerät nie aus; jeder
+  Wechsel auf STANDBY wird zurückgelesen und, falls unbestätigt, bleibt OPERATE gesperrt.
+- **Schließen des Agenten**: `close()` wartet (Limit `stopStepMs * 5 + 500` ms) auf einen laufenden Stopp und wiederholt
+  einmal die vollständige Stoppsequenz, bevor `rigctld` freigegeben wird.
+
+Softwareschutz ersetzt keine physischen Verriegelungen. Prüfe RX immer am Funkgerät.
 
 ## Remote-Wasserfall des Empfangssignals
 

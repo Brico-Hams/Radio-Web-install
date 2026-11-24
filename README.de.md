@@ -12,6 +12,8 @@ dokumentiert und gelten nicht als bestaetigte Kompatibilitaet.
 
 [Technische Übersicht, Komponentendiagramm und mehrsprachige Entwicklung](docs/MAPA-TECNICO-PROYECTO.md) (auf Spanisch).
 
+**Architektur (spanische Dokumente):** [Komponenten, Sicherheitsschichten und Remote-TX](docs/i18n/de/ARCHITECTURE.md), [Modulübersicht](docs/MAPA-TECNICO-PROYECTO.md#mapa-de-módulos-diagrama-de-dependencias) und [Remote Shack](docs/i18n/de/REMOTE_STATION.md#tx-sicherheit-des-remote-shack-node). Remote-TX wird nie von selbst aktiviert: Heartbeat, Zeitlimits für TX und Abstimmung, SWR-Abschaltung, Sperre außerhalb des Bandes und Endstufe im STANDBY; die Endstufentreiber sind aus Quellen implementiert und nicht an Hardware getestet.
+
 Zwei Bereiche mit jeweils eigenen Anschlüssen WebUSB/Web Serial, lokale Vorgänge und automatische Sicherung, bevor Schreibvorgänge zugelassen werden.
 
 ## Projektstruktur und Distributionstests
