@@ -233,7 +233,7 @@ test("static files are limited to the console allow-list and carry security head
   const rig = await fakeRigctld();
   const { call, cleanup } = await startAgent(rig, { radioScope: "audio" });
   try {
-    for (const file of ["/remote.html", "/remote-ui.js", "/remote-audio-core.js", "/remote-digital.js", "/digital-code-tables.json", "/spectrum-core.js", "/remote-audio-worklet.js", "/remote.css"]) {
+    for (const file of ["/remote.html", "/remote-ui.js", "/remote-audio-core.js", "/remote-speech-proc.js", "/remote-vox.js", "/remote-digital.js", "/digital-code-tables.json", "/spectrum-core.js", "/remote-audio-worklet.js", "/remote.css"]) {
       const response = await call("GET", file, { token: "" });
       assert.equal(response.status, 200, file);
       assert.equal(response.headers["x-content-type-options"], "nosniff");
@@ -718,6 +718,45 @@ test("TX frames are dropped unless the client owns control AND the PTT is on", a
     assert.equal(audio.writes.length, 1);
     owner.close();
     other.close();
+  } finally { await cleanup(); await rig.close(); }
+});
+
+test("single talker: audio from a former or foreign owner never reaches the sink, in the 200 ms after release or after a hand-over", async () => {
+  const rig = await fakeRigctld();
+  let time = 1_000_000;
+  const audio = fakeAudio();
+  audio.begins = 0;
+  audio.txBegin = () => { audio.begins += 1; };
+  const { agent, call, cleanup } = await startAgent(rig, { audioService: audio, now: () => time });
+  const as = id => ({ headers: { "X-Client-Id": id } });
+  try {
+    const first = await audioClient(agent, "client-a");
+    const second = await audioClient(agent, "client-b");
+    await first.next(m => m.text);
+    await second.next(m => m.text);
+    await call("POST", "/api/cmd", { body: { cmd: "ptt", value: true }, ...as("client-a") });
+    assert.equal(audio.begins, 1);
+    first.send(txFrame(1, [1]));
+    await waitFor(() => audio.writes.length === 1);
+    await call("POST", "/api/cmd", { body: { cmd: "ptt", value: false }, ...as("client-a") });
+    // 200 ms after release: the former owner and the other client are both dropped.
+    time += 200;
+    first.send(txFrame(2, [2]));
+    second.send(txFrame(1, [3]));
+    await sleep(150);
+    assert.equal(audio.writes.length, 1);
+
+    // Control changes hands once the previous owner is idle.
+    time += 31_000;
+    assert.equal((await call("POST", "/api/cmd", { body: { cmd: "ptt", value: true }, ...as("client-b") })).status, 200);
+    assert.equal(audio.begins, 2);
+    first.send(txFrame(3, [4]));
+    second.send(txFrame(2, [5]));
+    await waitFor(() => audio.writes.length === 2);
+    await sleep(100);
+    assert.deepEqual(audio.writes.map(packet => [...packet]), [[1], [5]]);
+    first.close();
+    second.close();
   } finally { await cleanup(); await rig.close(); }
 });
 

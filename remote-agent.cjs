@@ -68,6 +68,8 @@ const STATIC_FILES = Object.freeze({
   "/remote.html": ["remote.html", "text/html; charset=utf-8"],
   "/remote-ui.js": ["remote-ui.js", "text/javascript; charset=utf-8"],
   "/remote-audio-core.js": ["remote-audio-core.js", "text/javascript; charset=utf-8"],
+  "/remote-speech-proc.js": ["remote-speech-proc.js", "text/javascript; charset=utf-8"],
+  "/remote-vox.js": ["remote-vox.js", "text/javascript; charset=utf-8"],
   "/remote-digital.js": ["remote-digital.js", "text/javascript; charset=utf-8"],
   "/digital-code-tables.json": ["data/digital-code-tables.json", "application/json; charset=utf-8"],
   "/remote-rotor-ui.js": ["remote-rotor-ui.js", "text/javascript; charset=utf-8"],
@@ -378,6 +380,7 @@ function createRemoteAgent(options = {}) {
   const relayConfig = config.relay;
   const audio = options.audioService || remoteAudio.createAudio({ ...options.audio, log });
   const audioSockets = new Set();
+  let audioTalkerSeq = 0;
   // Receive-only FT8 decoder (remote-ftx.cjs): off until the owner enables it; it only lists decodes and never keys the radio.
   const ftx = createFtx({ audio, now, log, workerFactory: options.ftxWorkerFactory, setInterval: options.ftxSetInterval, clearInterval: options.ftxClearInterval });
   // Optional rotctld rotor (options.rotor = { port, motionEnabled, park, ... }); no rotor commands are sent at startup.
@@ -571,6 +574,7 @@ function createRemoteAgent(options = {}) {
     // Any PTT edge starts a fresh meter generation so a read left over from the previous transmission cannot block or pollute this one.
     if (on !== rig.ptt) { pttEpoch += 1; meterGen += 1; meterBusy = false; for (const key of Object.keys(extraMeters)) delete extraMeters[key]; }
     if (on && !rig.ptt) {
+      audio.txBegin?.();
       txStart = now();
       tx = { po: null, swr: null, alc: null, powerSetW: null, source: cat ? "raw" : "hamlib", fraction: { po: null, swr: null, alc: null } };
       swrSince = 0;
@@ -1638,6 +1642,7 @@ function createRemoteAgent(options = {}) {
   const wsPingMs = options.wsPingMs ?? 10_000;
 
   function handleAudioSocket(ws, request) {
+    const talker = `audio-${++audioTalkerSeq}`;
     const state = { cid: "", authed: false, rxOn: true, seq: 0, unsubscribe: null, txTimes: [], lastRefusal: 0, lastSeen: now() };
     const fallbackId = `ip:${request.socket.radicodexTunnel ? String(request.headers["x-forwarded-for"] || "").split(",").pop().trim() || request.socket.remoteAddress : request.socket.remoteAddress}`;
     audioSockets.add(ws);
@@ -1725,7 +1730,7 @@ function createRemoteAgent(options = {}) {
       if (!rig.ptt || !agentTx) { refuse("PTT apagado."); return; }
       lastBeat = time;
       ownerSeen = time;
-      audio.txWrite(data.subarray(5));
+      audio.txWrite(data.subarray(5), talker);
     }
 
     ws.on("message", (data, binary) => {

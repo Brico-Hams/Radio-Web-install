@@ -158,7 +158,8 @@ input[type=range]{width:100%;min-height:48px;accent-color:var(--accent)}
 .setting-reason{flex:1 1 100%;margin:0}
 
 .scope{display:grid;gap:8px;margin-top:8px}
-.scope[hidden],.audio-panel[hidden],#mic-row[hidden]{display:none}
+.scope[hidden],.audio-panel[hidden],#mic-row[hidden],#gr-row[hidden]{display:none}
+.audio-panel button{margin-top:12px;display:block;width:100%}
 .scope canvas{width:100%;display:block;background:var(--canvas);border:1px solid var(--control-border);border-radius:6px}
 .audio-title{margin:16px 0 0;font-size:1rem}
 .scope-line{height:90px}

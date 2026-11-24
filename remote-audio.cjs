@@ -9,6 +9,10 @@
 const childProcess = require("node:child_process");
 const path = require("node:path");
 
+// Single-talker idea adapted from remoteAudio audio/nodes/doorman/doorman.go (MIT, Copyright (c) 2016 Tobias Wellnitz,
+// DH1TW; SPDX-License-Identifier: MIT). Changes: JavaScript, injectable clock, per-packet source id, hard reset on every
+// new transmission and the queued audio of the previous talker is killed instead of played. See docs/THIRD-PARTY-REUSE.md.
+const TX_TALKER_HOLD_MS = 200;
 const SAMPLE_RATE = 48000;
 const PCM_RATE = 12000;
 const FRAME_SAMPLES = 960;
@@ -384,11 +388,16 @@ function createAudio(options = {}) {
   const txSupported = platform !== "darwin";
   const rx = input !== "";
   const tx = output !== "" && txSupported;
+  const clock = options.now || Date.now;
   const subscribers = new Set();
   let capture = null;
   let idleTimer = null;
   let sink = null;
   let txTimer = null;
+  // Single talker ("doorman"): only one source feeds the sink; another one is dropped until the current one has been
+  // silent for TX_TALKER_HOLD_MS.
+  let talker = null;
+  let talkerHeard = 0;
 
   const emitPacket = packet => { for (const entry of [...subscribers]) entry.onPacket?.(packet); };
   const emitLevel = rms => { for (const entry of [...subscribers]) entry.onLevel?.(rms); };
@@ -422,8 +431,19 @@ function createAudio(options = {}) {
     };
   }
 
-  function txWrite(packet) {
+  // `source` identifies who sent the packet; without it the doorman is bypassed (single caller).
+  function txWrite(packet, source) {
     if (!tx) return false;
+    if (source !== undefined) {
+      const time = clock();
+      if (talker !== null && talker !== source) {
+        if (time - talkerHeard < TX_TALKER_HOLD_MS) return false;
+        // The previous talker's queued audio must never reach the radio under the new talker.
+        endSink({ kill: true });
+      }
+      talker = source;
+      talkerHeard = time;
+    }
     clearTimeout(txTimer);
     txTimer = null;
     if (!sink) {
@@ -439,6 +459,14 @@ function createAudio(options = {}) {
     const current = sink;
     sink = null;
     current?.end(options);
+  }
+
+  // A new transmission starts: audio still queued from an earlier one (any talker) is discarded, never transmitted.
+  function txBegin() {
+    clearTimeout(txTimer);
+    txTimer = null;
+    talker = null;
+    endSink({ kill: true });
   }
 
   // PTT released: keep the pipeline briefly so the tail of the audio is played, then stop it.
@@ -461,7 +489,7 @@ function createAudio(options = {}) {
   return {
     rx, tx,
     txReason: output !== "" && !txSupported ? "TX de audio no disponible en este sistema." : "",
-    subscribe, txWrite, txRelease, close
+    subscribe, txWrite, txBegin, txRelease, close
   };
 }
 

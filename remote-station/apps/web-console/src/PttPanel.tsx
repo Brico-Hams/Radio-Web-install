@@ -2,6 +2,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createControlRequest, getApiData, getTxAudioUrl, isRecord } from './api'
 import { RemoteMicrophone } from './RemoteMicrophone'
 import { useStableTranslation } from './i18n'
+import {
+  loadSpeechProcessor, saveSpeechSettings, speechModule, voxModule,
+  type SpeechSettings, type Vox, type VoxContext, type VoxStatus,
+} from './txProcessing'
 
 type PttState = {
   api_version: 'v1'; model: 'FTX-1'; status: 'experimental'
@@ -55,8 +59,33 @@ export function PttPanel({ token }: { token: string }) {
   const held = useRef(false)
   const generation = useRef(0)
   const mounted = useRef(true)
+  const stopping = useRef<Promise<void>>(Promise.resolve())
+  const stopRef = useRef<(announce?: boolean) => Promise<void>>(async () => {})
+  const processor = useRef(loadSpeechProcessor())
+  const [speech, setSpeech] = useState<SpeechSettings>(() => processor.current.settings())
+  const [voxState, setVoxState] = useState<VoxStatus>({ armed: false, keyed: false, pending: false, reason: '' })
+  const [voxConfig, setVoxConfig] = useState(() => ({
+    threshold: voxModule.RANGES.threshold[2], holdMs: voxModule.RANGES.holdMs[2],
+  }))
+  const voxContext = useRef<VoxContext>({
+    guest: false, transmit: false, linkUp: false, controlLost: false, locked: false, hidden: false,
+  })
+  const actions = useRef<{ start: (viaVox: boolean) => Promise<boolean> }>({ start: async () => false })
+  // VOX is never persisted: it lives only in this ref and starts disarmed on every load.
+  const vox = useRef<Vox | null>(null)
+  if (!vox.current) {
+    vox.current = voxModule.createVox({
+      ptt: {
+        // Same start/stop path (request, lease renew, heartbeat) as the PTT button.
+        down: async () => { await stopping.current; return actions.current.start(true) },
+        up: () => { stopping.current = stopRef.current(true) },
+      },
+      onChange: (status) => setVoxState(status),
+    })
+  }
 
   const closeMicrophone = useCallback(() => {
+    vox.current?.disarm('mic')
     microphone.current?.stop()
     microphone.current = null
     setAudioSession(null)
@@ -86,10 +115,16 @@ export function PttPanel({ token }: { token: string }) {
     }
   }, [send, translate])
 
+  useEffect(() => { stopRef.current = stop }, [stop])
+
   useEffect(() => {
     mounted.current = true
-    const cancel = () => { if (held.current || active.current) void stop() }
-    const leave = () => { cancel(); closeMicrophone() }
+    // A lease held by VOX is released by VOX itself, never by a stray pointer or key release.
+    const cancel = () => {
+      if (vox.current?.isKeyed() || vox.current?.isPending()) return
+      if (held.current || active.current) void stop()
+    }
+    const leave = () => { vox.current?.disarm('hidden'); cancel(); closeMicrophone() }
     const visibility = () => { if (document.visibilityState === 'hidden') leave() }
     const keyup = (event: KeyboardEvent) => {
       if (event.key === ' ' || event.key === 'Enter') cancel()
@@ -102,6 +137,7 @@ export function PttPanel({ token }: { token: string }) {
     document.addEventListener('visibilitychange', visibility)
     return () => {
       mounted.current = false
+      vox.current?.disarm('unmount')
       window.removeEventListener('blur', leave)
       window.removeEventListener('pagehide', leave)
       window.removeEventListener('pointerup', cancel)
@@ -130,6 +166,7 @@ export function PttPanel({ token }: { token: string }) {
       } catch (failure) {
         if (active.current === lease) {
           setError(`${translate('pttSessionLost')} ${message(failure, translate('pttError'))}`)
+          vox.current?.agentCut()
           void stop()
         }
       } finally {
@@ -153,8 +190,16 @@ export function PttPanel({ token }: { token: string }) {
     finally { setBusy(false) }
   }
 
-  const canStart = enabledHere && data?.enabled && data.rx_confirmed &&
-    !data.stop_failed && !data.lease_active && (!data.tx_audio_required || !!audioSession)
+  const ready = enabledHere && !!data?.enabled && data.rx_confirmed &&
+    !data.stop_failed && (!data.tx_audio_required || !!audioSession)
+  const canStart = ready && !data?.lease_active
+  voxContext.current = { ...voxContext.current, transmit: ready, linkUp: !!audioSession }
+  useEffect(() => { stopRef.current = stop; vox.current?.check(voxContext.current) }, [ready, audioSession, stop])
+  useEffect(() => { vox.current?.configure(voxConfig) }, [voxConfig])
+  useEffect(() => {
+    processor.current.configure(speech)
+    saveSpeechSettings(processor.current.settings())
+  }, [speech])
 
   async function prepareMicrophone() {
     if (microphone.current) return
@@ -167,6 +212,9 @@ export function PttPanel({ token }: { token: string }) {
       closeMicrophone()
       setError(text)
       if (held.current || active.current) void stop()
+    }, {
+      processor: processor.current,
+      onLevel: (level) => { vox.current?.processLevel(level) },
     })
     microphone.current = client
     try { await client.start() }
@@ -179,10 +227,11 @@ export function PttPanel({ token }: { token: string }) {
     }
   }
 
-  async function start() {
-    if (held.current || busy || !canStart) return
+  async function start(viaVox = false): Promise<boolean> {
+    // VOX re-keys after its own release, when the lease flag of the last render may still be stale.
+    if (held.current || !ready || (!viaVox && (busy || !canStart))) return false
     const audioId = microphone.current?.sessionId
-    if (data?.tx_audio_required && !audioId) return
+    if (data?.tx_audio_required && !audioId) return false
     held.current = true
     setHolding(true)
     setBusy(true)
@@ -196,7 +245,7 @@ export function PttPanel({ token }: { token: string }) {
       }, isPtt)
       if (generation.current !== epoch || !held.current) {
         await stop()
-        return
+        return false
       }
       if (!state.lease_active || !state.lease_id) {
         throw new Error(t('pttExclusiveMissing'))
@@ -204,10 +253,20 @@ export function PttPanel({ token }: { token: string }) {
       active.current = state.lease_id
       setLease(state.lease_id)
       setData(state)
+      return true
     } catch (failure) {
       setError(`${t('pttUnconfirmed')} ${message(failure, t('pttError'))}`)
+      vox.current?.agentCut()
       await stop()
+      return false
     } finally { setBusy(false) }
+  }
+  actions.current = { start }
+
+  // The PTT button pre-empts VOX: it disarms it and releases the line, and that press is consumed.
+  function pressPtt() {
+    if (vox.current?.isArmed() && vox.current.buttonPressed()) return
+    void start()
   }
 
   return (
@@ -245,15 +304,52 @@ export function PttPanel({ token }: { token: string }) {
         <button className={`button button-danger button-ptt${holding ? ' is-transmitting' : ''}`} type="button"
           disabled={!holding && (busy || !canStart)}
           onPointerDown={(event) => {
-            if (event.button === 0 && event.isPrimary) void start()
+            if (event.button === 0 && event.isPrimary) pressPtt()
           }}
           onKeyDown={(event) => {
             if ((event.key === ' ' || event.key === 'Enter') && !event.repeat) {
               event.preventDefault()
-              void start()
+              pressPtt()
             }
           }}>{t('pttHold')}</button>
         <p>{t('pttLeaseNotice')}</p>
+        <fieldset className="tx-audio-options">
+          <legend>{t('speechProcessor')}</legend>
+          <label><input type="checkbox" checked={speech.enabled}
+            onChange={(event) => setSpeech({ ...speech, enabled: event.target.checked })} />
+            {t('speechProcessor')}
+          </label>
+          {([
+            ['thresholdDb', 'speechThreshold'], ['ratio', 'speechRatio'], ['presenceDb', 'speechPresence'],
+          ] as const).map(([key, label]) => {
+            const [min, max] = speechModule.RANGES[key]
+            return <label key={key}>{t(label)}: {speech[key]}
+              <input type="range" min={min} max={max} step={key === 'ratio' ? 0.5 : 1} value={speech[key]}
+                onChange={(event) => setSpeech({ ...speech, [key]: Number(event.target.value) })} />
+            </label>
+          })}
+        </fieldset>
+        <fieldset className="tx-audio-options">
+          <legend>VOX</legend>
+          <button className="button button-secondary" type="button" aria-pressed={voxState.armed}
+            disabled={!voxState.armed && !(ready && !!audioSession)}
+            onClick={() => {
+              if (voxState.armed) vox.current?.disarm('operator')
+              else vox.current?.arm(voxContext.current)
+            }}>{voxState.armed ? t('voxArmed') : t('voxArm')}</button>
+          <label>{t('voxThreshold')}: {voxConfig.threshold}
+            <input type="range" min={voxModule.RANGES.threshold[0]} max={voxModule.RANGES.threshold[1]} step={0.01}
+              value={voxConfig.threshold}
+              onChange={(event) => setVoxConfig({ ...voxConfig, threshold: Number(event.target.value) })} />
+          </label>
+          <label>{t('voxHold')}: {voxConfig.holdMs} ms
+            <input type="range" min={voxModule.RANGES.holdMs[0]} max={voxModule.RANGES.holdMs[1]} step={50}
+              value={voxConfig.holdMs}
+              onChange={(event) => setVoxConfig({ ...voxConfig, holdMs: Number(event.target.value) })} />
+          </label>
+          <p>{!voxState.armed && voxState.reason && voxState.reason !== 'operator' ? t('voxDisarmed')
+            : !(ready && !!audioSession) ? t('voxUnavailable') : t('voxHint')}</p>
+        </fieldset>
       </> : null}
     </section>
   )
