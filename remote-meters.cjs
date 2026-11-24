@@ -162,7 +162,7 @@ function tunePowerCheck(watts) {
 }
 
 const STATES = ["requested", "confirming", "tuning", "reading", "stopping", "verifying", "done"];
-const OUTCOMES = ["success", "fail", "timeout"];
+const OUTCOMES = ["success", "fail", "timeout", "unverified"];
 
 // requested -> confirming -> tuning -> reading -> stopping -> verifying -> done. Methods return false and never throw
 // when called out of order; the first cut/outcome wins so a later reset cannot erase a lost alert.
@@ -177,7 +177,12 @@ class TuneCheck {
     this.swr = null;
     this.txOff = null;
     this.seconds = 0;
+    this.evidenced = null;
   }
+
+  // Whether the radio showed it ran a tune (tuner busy bit seen). Never set = not judged (success as before);
+  // false turns a would-be success into "unverified".
+  evidence(seen) { this.evidenced = Boolean(seen); }
 
   confirming() { return this.#move("requested", "confirming"); }
 
@@ -196,7 +201,7 @@ class TuneCheck {
   // Abort or end for a reason (time cap, SWR trip, heartbeat, operator...). First outcome wins.
   cut(outcome, reason) {
     if (this.state === "done" || this.state === "stopping" || this.state === "verifying") return false;
-    if (this.outcome || !OUTCOMES.includes(outcome)) return false;
+    if (this.outcome || !OUTCOMES.includes(outcome) || outcome === "unverified") return false;
     this.outcome = outcome;
     this.reason = reason || "other";
     this.state = "reading";
@@ -224,10 +229,11 @@ class TuneCheck {
     this.txOff = Boolean(txOff);
     if (!this.outcome) {
       const high = this.swr !== null && this.swr >= this.swrLimit;
-      this.outcome = high ? "fail" : "success";
-      this.reason = high ? "swr-high" : null;
+      const unverified = !high && this.evidenced === false;
+      this.outcome = high ? "fail" : unverified ? "unverified" : "success";
+      this.reason = high ? "swr-high" : unverified ? "no-tune-evidence" : null;
     }
-    if (!this.txOff && this.outcome === "success") { this.outcome = "fail"; this.reason = "tx-stuck"; }
+    if (!this.txOff && (this.outcome === "success" || this.outcome === "unverified")) { this.outcome = "fail"; this.reason = "tx-stuck"; }
     this.state = "done";
     return true;
   }

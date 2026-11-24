@@ -1948,6 +1948,11 @@ Nunca transmitas sin una carga adaptada o una antena conectada.|Never transmit w
 Sintonía correcta|Tuning succeeded|Accord réussi|Abstimmung erfolgreich
 Sintonía fallida|Tuning failed|Accord échoué|Abstimmung fehlgeschlagen
 Sintonía cortada por tiempo|Tuning cut at the time limit|Accord coupé à la limite de temps|Abstimmung am Zeitlimit abgebrochen
+Sintonía sin verificar|Tuning not verified|Accord non vérifié|Abstimmung nicht verifiziert
+La radio no indicó que el sintonizador trabajara|The radio did not report the tuner working|La radio n’a pas signalé le travail du coupleur|Das Funkgerät hat keine Tunerarbeit gemeldet
+Sintonía sin verificar: la radio no indicó que el sintonizador trabajara (ROE bruta {0}/255)|Tuning not verified: the radio did not report the tuner working (raw SWR {0}/255)|Accord non vérifié : la radio n’a pas signalé le travail du coupleur (ROS brut {0}/255)|Abstimmung nicht verifiziert: Das Funkgerät hat keine Tunerarbeit gemeldet (SWR roh {0}/255)
+Sintonía sin verificar: la radio no indicó que el sintonizador trabajara (ROE {0}:1)|Tuning not verified: the radio did not report the tuner working (SWR {0}:1)|Accord non vérifié : la radio n’a pas signalé le travail du coupleur (ROS {0}:1)|Abstimmung nicht verifiziert: Das Funkgerät hat keine Tunerarbeit gemeldet (SWR {0}:1)
+Sintonía sin verificar: la radio no indicó que el sintonizador trabajara|Tuning not verified: the radio did not report the tuner working|Accord non vérifié : la radio n’a pas signalé le travail du coupleur|Abstimmung nicht verifiziert: Das Funkgerät hat keine Tunerarbeit gemeldet
 ROE {0}:1|SWR {0}:1|ROS {0}:1|SWR {0}:1
 TX apagado verificado|TX off verified|Émission coupée vérifiée|Senden aus bestätigt
 TX sin verificar: la radio puede seguir transmitiendo|TX not verified: the radio may still be transmitting|Émission non vérifiée : la radio peut encore émettre|Senden nicht bestätigt: Das Funkgerät sendet möglicherweise noch

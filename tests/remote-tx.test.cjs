@@ -497,6 +497,43 @@ test("a tune that never ends keeps raw SWR 255 bounded by the time cap on a real
   } finally { stopBeat(); await cleanup(); await rig.close(); }
 });
 
+test("ATAS: raw SWR 255 while RI0 reports the tuner busy never trips for 30 s; once the tuner stops with TX still on, the SWR trip fires", async () => {
+  const rig = await atasRig();
+  Object.assign(rig.raw, { AC: "AC100;", PC: "PC2005;", RI0: "RI01010100;", RM6: "RM6255000;" });
+  let offset = 0;
+  const base = Date.now();
+  const { cmd, call, state, cleanup } = await startAgent(rig, atasOptions({ now: () => base + offset, tuneMaxSeconds: 45, meterMs: 50 }));
+  let stopBeat = () => {};
+  try {
+    assert.equal((await cmd({ cmd: "tune" })).status, 200);
+    for (let second = 0; second < 30; second += 1) { offset += 1000; await call("POST", "/api/heartbeat", {}); await sleep(40); }
+    assert.ok((await state()).tune, JSON.stringify((await state()).tuneResult));
+    assert.ok(!afterTune(rig).includes("T 0"));
+    // The radio drops the tuner busy bit but stays keyed with the SWR still high.
+    rig.raw.RI0 = "RI00010000;";
+    await sleep(300);
+    for (let second = 0; second < 5 && !(await state()).tuneResult; second += 1) { offset += 1000; await call("POST", "/api/heartbeat", {}); await sleep(150); }
+    await waitFor(async () => (await state()).tuneResult, 5000);
+    const { tuneResult } = await state();
+    assert.deepEqual([tuneResult.outcome, tuneResult.reason, tuneResult.txOff], ["fail", "swr-trip", true]);
+    assert.ok(tuneResult.seconds < 45);
+  } finally { stopBeat(); await cleanup(); await rig.close(); }
+});
+
+test("ATAS tune that ends by itself without the tuner busy bit ever seen is unverified, not a success", async () => {
+  const rig = await atasRig();
+  rig.raw.RI0 = "RI00000000;";
+  const { cmd, call, state, cleanup } = await startAgent(rig, atasOptions({ meterMs: 50 }));
+  let stopBeat = () => {};
+  try {
+    stopBeat = keepAlive(call);
+    assert.equal((await cmd({ cmd: "tune" })).status, 200);
+    await waitFor(async () => (await state()).tuneResult, 5000);
+    const { tuneResult } = await state();
+    assert.deepEqual([tuneResult.outcome, tuneResult.reason, tuneResult.txOff], ["unverified", "no-tune-evidence", true]);
+  } finally { stopBeat(); await cleanup(); await rig.close(); }
+});
+
 test("ATAS tune sends AC123 and completes by itself with AC120", async () => {
   const rig = await atasRig();
   const logs = [];
@@ -508,6 +545,7 @@ test("ATAS tune sends AC123 and completes by itself with AC120", async () => {
     assert.ok(rig.log.includes("W AC123; 0"));
     assert.ok(!rig.log.includes("W AC103; 0"));
     assert.ok((await state()).tune);
+    await sleep(300);
     rig.tuning = false;
     await waitFor(() => rig.log.includes("W AC120; 0"));
     await waitFor(async () => !(await state()).tune);
