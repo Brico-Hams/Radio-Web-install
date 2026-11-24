@@ -439,6 +439,8 @@ function createRemoteAgent(options = {}) {
     now, log
   });
   let stopping = 0;
+  const stopRuns = new Set();
+  let lastStopOk = null;
   let emergency = false;
   let retryTimer = null;
   let meterBusy = false;
@@ -595,8 +597,42 @@ function createRemoteAgent(options = {}) {
   // `guarded` stops (PTT off, tune end) are watched by the hang watchdog; the connect-time one is not.
   async function runStop({ tuner = false, guarded = true } = {}) {
     if (guarded) stopping += 1;
-    try { return await stopSequence(client, { cat, tunerKind, tuner, stepMs, log }); }
-    finally { if (guarded) stopping -= 1; }
+    const run = stopSequence(client, { cat, tunerKind, tuner, stepMs, log });
+    stopRuns.add(run);
+    try {
+      const ok = await run;
+      lastStopOk = ok === true;
+      return ok;
+    } catch (error) {
+      lastStopOk = false;
+      throw error;
+    } finally {
+      stopRuns.delete(run);
+      if (guarded) stopping -= 1;
+    }
+  }
+
+  // close() must not drop the client under an in-flight stop: wait for it (bounded) and retry once if it did not take.
+  async function settleStopBeforeClose(wasEmergency) {
+    if (!client.connected || (stopRuns.size === 0 && !wasEmergency)) return;
+    let timer;
+    let timedOut = false;
+    if (stopRuns.size > 0) {
+      const settled = Promise.allSettled([...stopRuns]);
+      await Promise.race([settled, new Promise(resolve => { timer = setTimeout(() => { timedOut = true; resolve(); }, stepMs * 5 + 500); })]);
+      clearTimeout(timer);
+    }
+    if (!client.connected) return;
+    if (!timedOut && lastStopOk === true) { log("close: in-flight stop completed"); return; }
+    log(`close: final stop sequence (${timedOut ? "in-flight stop timed out" : wasEmergency ? "pending stop retry" : "in-flight stop failed"})`);
+    try {
+      const ok = await Promise.race([
+        runStop({ tuner: true, guarded: false }),
+        new Promise(resolve => { timer = setTimeout(() => resolve(false), stepMs * 5 + 500); })
+      ]);
+      log(`close: final stop sequence ${ok ? "acknowledged" : "failed"}`);
+    } catch (error) { log(`close: final stop sequence failed: ${error.message}`); }
+    finally { clearTimeout(timer); }
   }
 
   function endEmergency() {
@@ -1951,10 +1987,12 @@ function createRemoteAgent(options = {}) {
     clearInterval(sseTimer);
     clearInterval(keepAliveTimer);
     clearInterval(updateTimer);
+    const wasEmergency = emergency;
     endEmergency();
     // PTT off first; CW, accessories and station devices are made safe even if it fails.
     try {
       if (client.connected && (rig.ptt || agentTx || tune || hamlibRun)) await pttOff("cierre del agente");
+      await settleStopBeforeClose(wasEmergency);
     } finally {
       try { if (cwGuard.active()) await cwHalt(); } catch { /* CW stop is best effort */ }
       clearTimeout(cwTimer);
