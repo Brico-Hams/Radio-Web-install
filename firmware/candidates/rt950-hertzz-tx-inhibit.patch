@@ -1,0 +1,14 @@
+diff --git a/src/app/radio.c b/src/app/radio.c
+index d5499d5..9dc659d 100644
+--- a/src/app/radio.c
++++ b/src/app/radio.c
+@@ -410,6 +410,9 @@ void radio_ptt_on(void)
+ {
+     if (transmitting) return;
+ 
++    /* BricoHams candidate: TX stays inhibited until RF validation on hardware. */
++    return;
++
+     const vfo_state_t *vs = vfo_get_state(vfo_get_active());
+     uint32_t tx_freq = vfo_get_tx_freq(vfo_get_active());
+ 

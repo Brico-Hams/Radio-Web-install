@@ -1,0 +1,28 @@
+{
+  "format": "bricohams-firmware-candidates",
+  "version": 1,
+  "toolchain": {
+    "name": "arm-gnu-toolchain-13.3.rel1-x86_64-arm-none-eabi",
+    "url": "https://developer.arm.com/-/media/Files/downloads/gnu/13.3.rel1/binrel/arm-gnu-toolchain-13.3.rel1-x86_64-arm-none-eabi.tar.xz",
+    "sha256": "95c011cee430e64dd6087c75c800f04b9c49832cc1000127a92a97f9c8d83af4"
+  },
+  "candidates": [
+    {
+      "id": "rt950-pro-hertzz",
+      "radio": "Radtel RT-950 Pro (Artery AT32F403A)",
+      "upstream": "https://github.com/Hertzz58/Radtel-RT950-Pro-Firmware.git",
+      "commit": "6c4d419b71eba8e227d9c0de322a51bbb1b755fc",
+      "licence": "GPL-3.0",
+      "licenceSource": "LICENSE in the upstream repository root",
+      "sparsePaths": ["Makefile", "linker.ld", "src", "include", "LICENSE", "README.md", "CHANGELOG.md"],
+      "forbiddenPaths": ["binary", "assembly", "tools"],
+      "patches": ["firmware/candidates/rt950-hertzz-tx-inhibit.patch"],
+      "buildCommand": ["make", "all"],
+      "artifacts": ["build/rt950-custom.bin", "build/rt950-custom.hex"],
+      "stability": "beta",
+      "hardwareBootTested": false,
+      "txInhibited": true,
+      "installPath": "pendiente de fuente"
+    }
+  ]
+}
