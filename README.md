@@ -16,6 +16,8 @@ sin elevarlas a compatibilidad verificada.
 
 [Mapa técnico, gráfico de componentes y desarrollo multilingüe](docs/MAPA-TECNICO-PROYECTO.md).
 
+**Arquitectura:** [componentes, capas de seguridad y TX remoto](docs/ARCHITECTURE.md), [mapa de módulos](docs/MAPA-TECNICO-PROYECTO.md#mapa-de-módulos-diagrama-de-dependencias) y [Remote shack](docs/REMOTE_STATION.md#seguridad-de-tx-del-remote-shack-node). El TX remoto nunca se activa solo: latido, topes de TX y sintonía, ROE, bloqueo fuera de banda y amplificador en STANDBY; los drivers de amplificador están implementados desde fuente, sin probar en hardware.
+
 Dos espacios con conectores propios WebUSB/Web Serial, operaciones locales y respaldo automatico antes de habilitar escrituras.
 
 ## Organización y pruebas de distribución

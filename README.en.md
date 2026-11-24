@@ -12,6 +12,8 @@ not promoted to verified compatibility.
 
 [Technical map, component diagram and multilingual development](docs/MAPA-TECNICO-PROYECTO.md) (Spanish).
 
+**Architecture (Spanish docs):** [components, security layers and remote TX](docs/i18n/en/ARCHITECTURE.md), [module map](docs/MAPA-TECNICO-PROYECTO.md#mapa-de-módulos-diagrama-de-dependencias) and [Remote shack](docs/i18n/en/REMOTE_STATION.md#tx-safety-of-the-remote-shack-node). Remote TX is never enabled by itself: heartbeat, TX and tune time caps, SWR trip, out-of-band inhibit and amplifier STANDBY; the amplifier drivers are implemented from source and not tested on hardware.
+
 Two workspaces with their own WebUSB/Web Serial connectors, local operations, and automatic backup before enabling writes.
 
 ## Project layout and distribution testing

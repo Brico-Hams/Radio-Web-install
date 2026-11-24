@@ -411,10 +411,41 @@ Android (`MeterModel.kt`) y Python (`ftx1_cat.py`). Escalas FTX-1 citadas del ma
 
 La sintonia (AC interno 20 s, ATAS 45 s) usa una maquina de estados: peticion del operador,
 confirmacion por lectura, espera con tope, ROE final y TX0 verificado por lectura. Resultado
-(exito/fallo/tiempo) visible en la consola. Se rechaza si la potencia configurada supera 10 W
+(exito/fallo/tiempo/sin verificar) visible en la consola. En ATAS, si la radio no indico que el
+sintonizador trabajara (`evidence(false)`) y la ROE no es alta, el resultado es `unverified`
+(razon `no-tune-evidence`, texto «Sintonia sin verificar»), nunca un exito. Si TX0 no se confirma
+por lectura el resultado pasa a fallo (`tx-stuck`). `bricoham_remote_station/tune_check.py` es
+el espejo Python de `TuneCheck`; hoy solo lo ejercita su prueba (`test_tune_check.py`). Se rechaza si la potencia configurada supera 10 W
 (`TUNE_POWER_MAX_W`): el operador debe bajarla; nunca se baja automaticamente. El G TUNE de
 Hamlib tambien tiene tope. Nunca transmitas sin una carga adaptada o una antena conectada.
 No se ejecutaron pruebas de esta ampliacion en este entorno.
+
+## Seguridad de TX del Remote shack (Node)
+
+Capa documentada en [ARCHITECTURE.md](ARCHITECTURE.md#estación-remota-y-seguridad-de-tx) y
+[MAPA-TECNICO-PROYECTO.md](MAPA-TECNICO-PROYECTO.md#mapa-de-módulos-diagrama-de-dependencias).
+El software nunca transmite por si mismo; PTT off tiene prioridad sobre cualquier otra accion.
+
+- **Fuera de banda** (`remote-txsafety.cjs`, `txRanges` en `~/.radicodex/remote-agent.json`, lista de
+  `{ startHz, endHz }`): el espectro ocupado (`occupiedSpan`, ancho de la radio o uno por defecto segun
+  el modo) debe quedar dentro de un rango. Sin rangos configurados no actua (`not-configured`). Frecuencia o
+  modo desconocidos rechazan una nueva puesta en TX (HTTP 409, `tx-range-unknown`/`tx-out-of-band`); salir de
+  banda corta una emision del agente. Durante una sintonia no se evalua el modo que informa la radio.
+  El agente Python tiene su equivalente en `bricoham_station_agent/txsafety.py` (`tx_ranges`, usado por `ptt.py`).
+- **TX huerfano**: `OrphanWatch` libera una emision del agente sin titular del lease tras dos
+  observaciones consecutivas, ademas del latido (1 s) y los topes de TX y sintonia.
+- **VOX** (`remote-vox.js`): se arma solo por una accion explicita en la sesion, usa el mismo camino de
+  PTT, latido y lease que el boton y se desarma ante rechazo, corte, perdida de control o enlace, bloqueo o
+  pagina oculta. No se guarda. Umbral y retardo acotados (0,02-0,5 y 250-2000 ms).
+- **Procesador de voz** (`remote-speech-proc.js`, `txProcessing.ts` en la consola React): apagado por
+  defecto, ajustes acotados y techo fijo de -1 dBFS; los ajustes se guardan solo como preferencia local.
+- **Amplificadores** (`station-amplifier-drivers.cjs`, espejo `amplifier_drivers.py`): KPA, Expert, ACOM y
+  Gemini implementados desde fuente y sin probar en hardware. Nunca transmiten ni apagan el equipo; cada
+  paso a STANDBY se relee y, si no se confirma, OPERATE sigue bloqueado.
+- **Cierre del agente**: `close()` espera (tope `stopStepMs * 5 + 500` ms) a una parada en vuelo y repite
+  una vez la secuencia de parada completa antes de soltar `rigctld`.
+
+Las guardas por software no sustituyen enclavamientos fisicos. Comprueba siempre RX en la radio.
 
 ## Cascada remota de la senal recibida
 

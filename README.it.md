@@ -12,6 +12,8 @@ rimangono documentati, senza dichiarare compatibilita convalidata.
 
 [Mappa tecnica, diagramma dei componenti e sviluppo multilingue](docs/MAPA-TECNICO-PROYECTO.md) (in spagnolo).
 
+**Architettura (documenti in spagnolo):** [componenti, livelli di sicurezza e TX remoto](docs/i18n/it/ARCHITECTURE.md), [mappa dei moduli](docs/MAPA-TECNICO-PROYECTO.md#mapa-de-módulos-diagrama-de-dependencias) e [Remote shack](docs/i18n/it/REMOTE_STATION.md#sicurezza-tx-del-remote-shack-node). Il TX remoto non si attiva mai da solo: heartbeat, limiti di tempo per TX e accordo, intervento per ROS, blocco fuori banda e amplificatore in STANDBY; i driver degli amplificatori sono implementati dalle fonti e non testati su hardware.
+
 Due ambienti con connettori proprietari WebUSB/Web Serial, operazioni locali e backup automatico prima di abilitare le scritture.
 
 ## Organizzazione e prove di distribuzione

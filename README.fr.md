@@ -12,6 +12,8 @@ restent documentes, sans devenir une compatibilite validee.
 
 [Carte technique, diagramme des composants et développement multilingue](docs/MAPA-TECNICO-PROYECTO.md) (en espagnol).
 
+**Architecture (documents en espagnol) :** [composants, couches de sécurité et TX distant](docs/i18n/fr/ARCHITECTURE.md), [carte des modules](docs/MAPA-TECNICO-PROYECTO.md#mapa-de-módulos-diagrama-de-dependencias) et [Remote shack](docs/i18n/fr/REMOTE_STATION.md#sécurité-tx-du-remote-shack-node). Le TX distant ne s’active jamais seul : battement, limites de durée de TX et d’accord, déclenchement ROS, blocage hors bande et amplificateur en STANDBY ; les pilotes d’amplificateur sont implémentés à partir des sources et non testés sur matériel.
+
 Deux espaces de travail avec leurs propres connecteurs WebUSB/Web Serial, des opérations locales et une sauvegarde automatique avant toute écriture.
 
 ## Organisation et essais de distribution

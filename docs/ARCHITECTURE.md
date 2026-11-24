@@ -1,6 +1,6 @@
 # Arquitectura de Bricohams Radio Workspace
 
-Bricohams Radio Workspace es una aplicación web **local**. Un pequeño servidor Node.js sirve una lista cerrada de archivos estáticos y unas pocas API de solo lectura. Toda la comunicación con la radio ocurre en el navegador mediante WebUSB o Web Serial.
+Bricohams Radio Workspace es una aplicación web **local**. Un pequeño servidor Node.js sirve una lista cerrada de archivos estáticos y unas pocas API de solo lectura. La comunicación con la radio de los conectores de firmware, codeplug y copias ocurre en el navegador mediante WebUSB o Web Serial. El control remoto por CAT es un componente aparte (ver [Estación remota](#estación-remota-y-seguridad-de-tx)): un agente junto a la radio y una consola que se conecta a él.
 
 ## Modos de ejecución
 
@@ -67,6 +67,9 @@ flowchart LR
 | `radioid-csv.js` | Navegador / Node | Lectura filtrada de `user.csv` y perfil local opcional. |
 | `scripts/build-pages.cjs`, `scripts/fetch-satellites.cjs` | Node | Generan `dist/` y `data/satellites.json` para Pages. |
 | `data-service.cjs` | Node | Proxy de solo lectura hacia RadioID, RepeaterBook (credenciales solo en el servidor), SatNOGS y CelesTrak. |
+| `remote-station.cjs`, `remote-agent.cjs` | Node | Supervisor de `rigctld`/`rotctld` (lo usa `server.cjs` para `/api/remote/*` y el modo headless) y agente del Remote shack. Ver la sección siguiente. |
+| `remote-txsafety.cjs`, `remote-meters.cjs`, `station-amplifier-drivers.cjs` | Node | Guardas de TX (`OrphanWatch`, bloqueo fuera de banda), `TuneCheck` y drivers de amplificador. |
+| `remote-speech-proc.js`, `remote-vox.js` | Navegador / Node | Procesador de voz y VOX de la ruta TX remota (scripts clásicos que también exportan en CommonJS). |
 
 ## Flujo de conexión y copia automática
 
@@ -92,6 +95,64 @@ sequenceDiagram
 
 Antes de cualquier escritura se relee la copia y se compara con los hashes del permiso. Desconectar la radio, cambiarla por otra o borrar la copia revoca el permiso.
 
+## Estación remota y seguridad de TX
+
+El **Remote shack** (`remote-agent.cjs`, consola `remote.html` / `remoto.html`) controla una radio por Hamlib `rigctld` y es independiente de la estación Python de `remote-station/` (ver [REMOTE_STATION.md](REMOTE_STATION.md)). `server.cjs` no cambia: sigue escuchando solo en `127.0.0.1` y delega `/api/remote/*` en `remote-station.cjs`. El mapa completo de módulos está en el [mapa técnico](MAPA-TECNICO-PROYECTO.md#mapa-de-módulos-diagrama-de-dependencias).
+
+```mermaid
+flowchart LR
+  subgraph Cliente["Navegador / WebView"]
+    UI["remote-ui.js"]
+    SP["remote-speech-proc.js<br/>procesador de voz"]
+    VX["remote-vox.js<br/>VOX"]
+    TUI["remote-tune-ui.js"]
+  end
+  subgraph Agente["Agente Node junto a la radio"]
+    RA["remote-agent.cjs<br/>lease, latido, topes"]
+    TXS["remote-txsafety.cjs<br/>OrphanWatch, fuera de banda"]
+    MET["remote-meters.cjs<br/>TuneCheck"]
+    RC["rigctld-client.cjs<br/>stopSequence"]
+    ACC["station-accessories.cjs"]
+    AMP["station-amplifier-drivers.cjs"]
+  end
+  RIG[("rigctld → radio")]
+  AMPHW[("Amplificador")]
+  UI --> SP
+  UI --> VX
+  UI -- "API autenticada, SSE, audio" --> RA
+  UI --> TUI
+  RA --> TXS
+  RA --> MET
+  RA --> RC --> RIG
+  RA --> ACC --> AMP --> AMPHW
+```
+
+La consola React de la estación Python reutiliza los mismos `remote-speech-proc.js` y `remote-vox.js` a través de `remote-station/apps/web-console/src/txProcessing.ts`; el agente Python tiene su propio bloqueo fuera de banda en `remote-station/bricoham_station_agent/txsafety.py`.
+
+### Garantías de TX
+
+El software nunca transmite por sí mismo: toda puesta en TX es una orden explícita del operador. Las guardas del agente, comprobadas en `remote-agent.cjs`:
+
+| Guarda | Comportamiento |
+| --- | --- |
+| PTT off | `pttOff()` tiene prioridad sobre todo: termina una sintonía en curso, detiene el CW y ejecuta `stopSequence` (parada del sintonizador, `txOff` crudo y `T 0` de Hamlib, con prioridad en la cola). |
+| Latido | Sin latido durante `HEARTBEAT_TIMEOUT_MS` (1000 ms) el agente suelta PTT y pone el amplificador en STANDBY. |
+| Topes de tiempo | Límite de TX (`txLimitSeconds`, 180 s por defecto) y de sintonía (`TUNE_MAX_SECONDS`: interno 20 s por defecto y 30 s máximo; ATAS 45 s y 60 s). |
+| ROE | Disparo por ROE sostenida sobre `swrLimit` (3 por defecto) o el límite en bruto del perfil CAT; durante la sintonía se usa `TUNE_SWR_MS`. |
+| Amplificador | `accessories.standby("lease")` en cada pérdida de lease o latido; arranca en STANDBY y no pasa a OPERATE sin condiciones seguras. |
+| Fuera de banda | `remote-txsafety.cjs`: solo con `txRanges` configurados; frecuencia o modo desconocidos también bloquean una nueva puesta en TX. Un fallo de lectura aislado no corta una emisión en curso. |
+| TX huérfano | `OrphanWatch`: una emisión del agente sin titular del lease se libera tras dos observaciones consecutivas. |
+| Bloqueo del operador | Un solo operador a la vez (lease); en la consola, `view.locked` impide acciones y desarma VOX. |
+
+VOX (`remote-vox.js`) no añade ningún camino de TX: usa el mismo `pttDown`/`pttUp` que el botón, nunca se persiste y se desarma ante rechazo, corte del agente, pérdida de control o de enlace, bloqueo y página oculta. El procesador de voz (`remote-speech-proc.js`) está apagado por defecto y limita la salida a un techo fijo de −1 dBFS.
+
+### Comprobación de sintonía y parada al cerrar
+
+- `TuneCheck` (`remote-meters.cjs`; espejo Python en `remote-station/bricoham_remote_station/tune_check.py`) recorre `requested → confirming → tuning → reading → stopping → verifying → done` con resultados `success`, `fail`, `timeout` y **`unverified`**. En una sintonía ATAS, si `evidence(false)` indica que la radio no mostró que el sintonizador trabajara y la ROE no es alta, el resultado es `unverified` con razón `no-tune-evidence` (en la consola: «Sintonía sin verificar»); si TX0 no se confirma por lectura, pasa a `fail` (`tx-stuck`). Un `cut()` nunca produce `unverified`.
+- `close()` del agente apaga PTT primero y llama a `settleStopBeforeClose`: espera (con tope `stopStepMs * 5 + 500` ms) a que termine una parada en vuelo y, si no se confirmó, repite `stopSequence` una vez antes de soltar el cliente `rigctld`. Después detiene el CW, ejecuta `accessories.emergencyStop("close")`, cierra el driver del amplificador y pone a salvo los dispositivos de estación.
+
+Las pruebas deterministas (relojes y transportes simulados) están en `tests/remote-txsafety.test.cjs`, `tests/remote-txaudio.test.cjs`, `tests/remote-amplifier-drivers.test.cjs`, `tests/remote-meters.test.cjs`, `tests/remote-agent.test.cjs` y, en Python, `remote-station/tests/test_tx_inhibit.py` y `test_tune_check.py`. Los drivers de amplificador están «implementados desde fuente, sin probar en hardware»: no existe captura de un amplificador real en el repositorio.
+
 ## Capas de seguridad
 
 1. **Red:** el servidor solo escucha en `127.0.0.1`, exige `Host: 127.0.0.1:<puerto>` y sirve una lista fija de archivos.
@@ -99,6 +160,23 @@ Antes de cualquier escritura se relee la copia y se compara con los hashes del p
 3. **Equipo:** las escrituras usan un permiso *fail-closed* ligado a una copia verificada. Main nunca es destino. Borrar o restablecer exige confirmación escrita.
 4. **Fuentes externas:** solo proveedores oficiales, redirecciones a hosts permitidos, límites de tamaño y SHA-256 visible. Las credenciales de RepeaterBook nunca se envían al navegador.
 5. **Datos:** sin telemetría ni subidas. Las copias quedan en el IndexedDB del perfil local y se exportan a archivos del usuario.
+6. **Transmisión remota:** TX desactivado por defecto, solo por orden explícita del operador, con las guardas de [Garantías de TX](#garantías-de-tx). Las credenciales del relé se guardan en el agente (`~/.radicodex/remote-agent.json`, 0600) y no se imprimen; el token de acceso viaja solo en el fragmento de la URL y la consola lo retira de la barra de direcciones. Las guardas por software no sustituyen enclavamientos físicos.
+
+## Documentación del código
+
+La documentación detallada del código y de las pruebas se mantiene en archivos aparte:
+
+- [Node: agente y escritorio][codigo-node]: servidor local, agente Remote shack y consolas de la raíz.
+- [Python: estación remota][codigo-python]: host coordinador y agente de `remote-station/`.
+- [Android y consola web][codigo-android]: aplicaciones nativas y consola React/Capacitor.
+- [Pruebas y resultados][pruebas]: qué cubre cada suite y los resultados registrados.
+
+Estos cuatro documentos se redactan en paralelo; si un enlace no resuelve en una copia concreta del repositorio, el documento aún no se ha incorporado a esa rama.
+
+[codigo-node]: codigo/NODE-AGENTE-Y-ESCRITORIO.md
+[codigo-python]: codigo/PYTHON-ESTACION-REMOTA.md
+[codigo-android]: codigo/ANDROID-Y-CONSOLA-WEB.md
+[pruebas]: PRUEBAS-Y-RESULTADOS.md
 
 ## Limitaciones conocidas
 
