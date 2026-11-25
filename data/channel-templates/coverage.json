@@ -1,7 +1,7 @@
 {
   "format": "bricohams-template-coverage",
   "version": 1,
-  "generatedAt": "2026-11-23T15:10:27.416Z",
+  "generatedAt": "2026-11-24T15:08:26.905Z",
   "countries": [
     {
       "code": "ES",
@@ -11,27 +11,27 @@
       "regions": 52,
       "rejected": 0,
       "source": "https://hearham.com/api/repeaters/v1",
-      "fetchedAt": "2026-11-23T15:10:26.728Z"
+      "fetchedAt": "2026-11-24T15:08:26.293Z"
     },
     {
       "code": "GB",
       "name": "UK",
       "status": "ok",
-      "channels": 1276,
+      "channels": 1278,
       "regions": 232,
-      "rejected": 164,
+      "rejected": 165,
       "source": "https://hearham.com/api/repeaters/v1",
-      "fetchedAt": "2026-11-23T15:10:26.728Z"
+      "fetchedAt": "2026-11-24T15:08:26.293Z"
     },
     {
       "code": "US",
       "name": "Estados Unidos",
       "status": "ok",
-      "channels": 8349,
+      "channels": 8351,
       "regions": 51,
       "rejected": 1369,
       "source": "https://hearham.com/api/repeaters/v1",
-      "fetchedAt": "2026-11-23T15:10:26.728Z"
+      "fetchedAt": "2026-11-24T15:08:26.293Z"
     },
     {
       "code": "DE",
@@ -41,7 +41,7 @@
       "regions": 16,
       "rejected": 3,
       "source": "https://hearham.com/api/repeaters/v1",
-      "fetchedAt": "2026-11-23T15:10:26.728Z"
+      "fetchedAt": "2026-11-24T15:08:26.293Z"
     },
     {
       "code": "FR",
@@ -51,7 +51,7 @@
       "regions": 101,
       "rejected": 14,
       "source": "https://hearham.com/api/repeaters/v1",
-      "fetchedAt": "2026-11-23T15:10:26.728Z"
+      "fetchedAt": "2026-11-24T15:08:26.293Z"
     },
     {
       "code": "HU",
@@ -61,7 +61,7 @@
       "regions": 43,
       "rejected": 0,
       "source": "https://hearham.com/api/repeaters/v1",
-      "fetchedAt": "2026-11-23T15:10:26.728Z"
+      "fetchedAt": "2026-11-24T15:08:26.293Z"
     },
     {
       "code": "IT",
@@ -71,7 +71,7 @@
       "regions": 110,
       "rejected": 44,
       "source": "https://hearham.com/api/repeaters/v1",
-      "fetchedAt": "2026-11-23T15:10:26.728Z"
+      "fetchedAt": "2026-11-24T15:08:26.293Z"
     },
     {
       "code": "AL",
@@ -93,7 +93,7 @@
       "regions": 9,
       "rejected": 11,
       "source": "https://hearham.com/api/repeaters/v1",
-      "fetchedAt": "2026-11-23T15:10:26.728Z"
+      "fetchedAt": "2026-11-24T15:08:26.293Z"
     },
     {
       "code": "BY",
@@ -109,7 +109,7 @@
       "regions": 11,
       "rejected": 0,
       "source": "https://hearham.com/api/repeaters/v1",
-      "fetchedAt": "2026-11-23T15:10:26.728Z"
+      "fetchedAt": "2026-11-24T15:08:26.293Z"
     },
     {
       "code": "BA",
@@ -131,7 +131,7 @@
       "regions": 20,
       "rejected": 0,
       "source": "https://hearham.com/api/repeaters/v1",
-      "fetchedAt": "2026-11-23T15:10:26.728Z"
+      "fetchedAt": "2026-11-24T15:08:26.293Z"
     },
     {
       "code": "CY",
@@ -141,7 +141,7 @@
       "regions": 5,
       "rejected": 0,
       "source": "https://hearham.com/api/repeaters/v1",
-      "fetchedAt": "2026-11-23T15:10:26.728Z"
+      "fetchedAt": "2026-11-24T15:08:26.293Z"
     },
     {
       "code": "CZ",
@@ -151,7 +151,7 @@
       "regions": 14,
       "rejected": 0,
       "source": "https://hearham.com/api/repeaters/v1",
-      "fetchedAt": "2026-11-23T15:10:26.728Z"
+      "fetchedAt": "2026-11-24T15:08:26.293Z"
     },
     {
       "code": "DK",
@@ -161,7 +161,7 @@
       "regions": 5,
       "rejected": 0,
       "source": "https://hearham.com/api/repeaters/v1",
-      "fetchedAt": "2026-11-23T15:10:26.728Z"
+      "fetchedAt": "2026-11-24T15:08:26.293Z"
     },
     {
       "code": "EE",
@@ -171,7 +171,7 @@
       "regions": 15,
       "rejected": 0,
       "source": "https://hearham.com/api/repeaters/v1",
-      "fetchedAt": "2026-11-23T15:10:26.728Z"
+      "fetchedAt": "2026-11-24T15:08:26.293Z"
     },
     {
       "code": "FI",
@@ -193,7 +193,7 @@
       "regions": 26,
       "rejected": 3,
       "source": "https://hearham.com/api/repeaters/v1",
-      "fetchedAt": "2026-11-23T15:10:26.728Z"
+      "fetchedAt": "2026-11-24T15:08:26.293Z"
     },
     {
       "code": "IS",
@@ -239,7 +239,7 @@
       "regions": 68,
       "rejected": 0,
       "source": "https://hearham.com/api/repeaters/v1",
-      "fetchedAt": "2026-11-23T15:10:26.728Z"
+      "fetchedAt": "2026-11-24T15:08:26.293Z"
     },
     {
       "code": "MD",
@@ -261,7 +261,7 @@
       "regions": 21,
       "rejected": 2,
       "source": "https://hearham.com/api/repeaters/v1",
-      "fetchedAt": "2026-11-23T15:10:26.728Z"
+      "fetchedAt": "2026-11-24T15:08:26.293Z"
     },
     {
       "code": "NL",
@@ -271,7 +271,7 @@
       "regions": 15,
       "rejected": 0,
       "source": "https://hearham.com/api/repeaters/v1",
-      "fetchedAt": "2026-11-23T15:10:26.728Z"
+      "fetchedAt": "2026-11-24T15:08:26.293Z"
     },
     {
       "code": "MK",
@@ -281,7 +281,7 @@
       "regions": 84,
       "rejected": 0,
       "source": "https://hearham.com/api/repeaters/v1",
-      "fetchedAt": "2026-11-23T15:10:26.728Z"
+      "fetchedAt": "2026-11-24T15:08:26.293Z"
     },
     {
       "code": "NO",
@@ -291,7 +291,7 @@
       "regions": 21,
       "rejected": 0,
       "source": "https://hearham.com/api/repeaters/v1",
-      "fetchedAt": "2026-11-23T15:10:26.728Z"
+      "fetchedAt": "2026-11-24T15:08:26.293Z"
     },
     {
       "code": "PL",
@@ -301,7 +301,7 @@
       "regions": 16,
       "rejected": 2,
       "source": "https://hearham.com/api/repeaters/v1",
-      "fetchedAt": "2026-11-23T15:10:26.728Z"
+      "fetchedAt": "2026-11-24T15:08:26.293Z"
     },
     {
       "code": "PT",
@@ -311,7 +311,7 @@
       "regions": 20,
       "rejected": 0,
       "source": "https://hearham.com/api/repeaters/v1",
-      "fetchedAt": "2026-11-23T15:10:26.728Z"
+      "fetchedAt": "2026-11-24T15:08:26.293Z"
     },
     {
       "code": "RO",
@@ -327,7 +327,7 @@
       "regions": 9,
       "rejected": 0,
       "source": "https://hearham.com/api/repeaters/v1",
-      "fetchedAt": "2026-11-23T15:10:26.728Z"
+      "fetchedAt": "2026-11-24T15:08:26.293Z"
     },
     {
       "code": "RS",
@@ -337,7 +337,7 @@
       "regions": 25,
       "rejected": 0,
       "source": "https://hearham.com/api/repeaters/v1",
-      "fetchedAt": "2026-11-23T15:10:26.728Z"
+      "fetchedAt": "2026-11-24T15:08:26.293Z"
     },
     {
       "code": "SK",
@@ -353,7 +353,7 @@
       "regions": 192,
       "rejected": 0,
       "source": "https://hearham.com/api/repeaters/v1",
-      "fetchedAt": "2026-11-23T15:10:26.728Z"
+      "fetchedAt": "2026-11-24T15:08:26.293Z"
     },
     {
       "code": "SE",
@@ -363,7 +363,7 @@
       "regions": 21,
       "rejected": 0,
       "source": "https://hearham.com/api/repeaters/v1",
-      "fetchedAt": "2026-11-23T15:10:26.728Z"
+      "fetchedAt": "2026-11-24T15:08:26.293Z"
     },
     {
       "code": "CH",
@@ -373,7 +373,7 @@
       "regions": 26,
       "rejected": 3,
       "source": "https://hearham.com/api/repeaters/v1",
-      "fetchedAt": "2026-11-23T15:10:26.728Z"
+      "fetchedAt": "2026-11-24T15:08:26.293Z"
     },
     {
       "code": "UA",
@@ -391,21 +391,21 @@
       "code": "CA",
       "name": "Canadá",
       "status": "ok",
-      "channels": 427,
+      "channels": 426,
       "regions": 13,
       "rejected": 18,
       "source": "https://hearham.com/api/repeaters/v1",
-      "fetchedAt": "2026-11-23T15:10:26.728Z"
+      "fetchedAt": "2026-11-24T15:08:26.293Z"
     },
     {
       "code": "MX",
       "name": "México",
       "status": "ok",
-      "channels": 96,
+      "channels": 95,
       "regions": 33,
       "rejected": 4,
       "source": "https://hearham.com/api/repeaters/v1",
-      "fetchedAt": "2026-11-23T15:10:26.728Z"
+      "fetchedAt": "2026-11-24T15:08:26.293Z"
     },
     {
       "code": "BZ",
@@ -415,7 +415,7 @@
       "regions": 6,
       "rejected": 0,
       "source": "https://hearham.com/api/repeaters/v1",
-      "fetchedAt": "2026-11-23T15:10:26.728Z"
+      "fetchedAt": "2026-11-24T15:08:26.293Z"
     },
     {
       "code": "CR",
@@ -443,7 +443,7 @@
       "regions": 18,
       "rejected": 0,
       "source": "https://hearham.com/api/repeaters/v1",
-      "fetchedAt": "2026-11-23T15:10:26.728Z"
+      "fetchedAt": "2026-11-24T15:08:26.293Z"
     },
     {
       "code": "NI",
@@ -459,7 +459,7 @@
       "regions": 12,
       "rejected": 0,
       "source": "https://hearham.com/api/repeaters/v1",
-      "fetchedAt": "2026-11-23T15:10:26.728Z"
+      "fetchedAt": "2026-11-24T15:08:26.293Z"
     },
     {
       "code": "AG",
@@ -469,7 +469,7 @@
       "regions": 8,
       "rejected": 0,
       "source": "https://hearham.com/api/repeaters/v1",
-      "fetchedAt": "2026-11-23T15:10:26.728Z"
+      "fetchedAt": "2026-11-24T15:08:26.293Z"
     },
     {
       "code": "BS",
@@ -485,7 +485,7 @@
       "regions": 11,
       "rejected": 0,
       "source": "https://hearham.com/api/repeaters/v1",
-      "fetchedAt": "2026-11-23T15:10:26.728Z"
+      "fetchedAt": "2026-11-24T15:08:26.293Z"
     },
     {
       "code": "CU",
@@ -501,7 +501,7 @@
       "regions": 10,
       "rejected": 1,
       "source": "https://hearham.com/api/repeaters/v1",
-      "fetchedAt": "2026-11-23T15:10:26.728Z"
+      "fetchedAt": "2026-11-24T15:08:26.293Z"
     },
     {
       "code": "DO",
@@ -511,7 +511,7 @@
       "regions": 32,
       "rejected": 0,
       "source": "https://hearham.com/api/repeaters/v1",
-      "fetchedAt": "2026-11-23T15:10:26.728Z"
+      "fetchedAt": "2026-11-24T15:08:26.293Z"
     },
     {
       "code": "GD",
@@ -533,7 +533,7 @@
       "regions": 14,
       "rejected": 0,
       "source": "https://hearham.com/api/repeaters/v1",
-      "fetchedAt": "2026-11-23T15:10:26.728Z"
+      "fetchedAt": "2026-11-24T15:08:26.293Z"
     },
     {
       "code": "KN",
@@ -543,7 +543,7 @@
       "regions": 14,
       "rejected": 0,
       "source": "https://hearham.com/api/repeaters/v1",
-      "fetchedAt": "2026-11-23T15:10:26.728Z"
+      "fetchedAt": "2026-11-24T15:08:26.293Z"
     },
     {
       "code": "LC",
@@ -559,7 +559,7 @@
       "regions": 6,
       "rejected": 0,
       "source": "https://hearham.com/api/repeaters/v1",
-      "fetchedAt": "2026-11-23T15:10:26.728Z"
+      "fetchedAt": "2026-11-24T15:08:26.293Z"
     },
     {
       "code": "TT",
@@ -569,7 +569,7 @@
       "regions": 16,
       "rejected": 0,
       "source": "https://hearham.com/api/repeaters/v1",
-      "fetchedAt": "2026-11-23T15:10:26.728Z"
+      "fetchedAt": "2026-11-24T15:08:26.293Z"
     },
     {
       "code": "AR",
@@ -579,7 +579,7 @@
       "regions": 24,
       "rejected": 0,
       "source": "https://hearham.com/api/repeaters/v1",
-      "fetchedAt": "2026-11-23T15:10:26.728Z"
+      "fetchedAt": "2026-11-24T15:08:26.293Z"
     },
     {
       "code": "BO",
@@ -595,7 +595,7 @@
       "regions": 27,
       "rejected": 0,
       "source": "https://hearham.com/api/repeaters/v1",
-      "fetchedAt": "2026-11-23T15:10:26.728Z"
+      "fetchedAt": "2026-11-24T15:08:26.293Z"
     },
     {
       "code": "CL",
@@ -605,7 +605,7 @@
       "regions": 16,
       "rejected": 0,
       "source": "https://hearham.com/api/repeaters/v1",
-      "fetchedAt": "2026-11-23T15:10:26.728Z"
+      "fetchedAt": "2026-11-24T15:08:26.293Z"
     },
     {
       "code": "CO",
@@ -615,7 +615,7 @@
       "regions": 33,
       "rejected": 0,
       "source": "https://hearham.com/api/repeaters/v1",
-      "fetchedAt": "2026-11-23T15:10:26.728Z"
+      "fetchedAt": "2026-11-24T15:08:26.293Z"
     },
     {
       "code": "EC",
@@ -625,7 +625,7 @@
       "regions": 24,
       "rejected": 0,
       "source": "https://hearham.com/api/repeaters/v1",
-      "fetchedAt": "2026-11-23T15:10:26.728Z"
+      "fetchedAt": "2026-11-24T15:08:26.293Z"
     },
     {
       "code": "GY",
