@@ -8,6 +8,7 @@ const { OP, STATE, encodeRequest, decodeReply, uploadPackage } = require("../scr
 const { crc32 } = require("../radio-core.js");
 const { patchBackupReadSource, integrateBackupRead } = require("../scripts/firmware-backup-read.cjs");
 const { patchFastRetuneSource, integrateFastRetune } = require("../scripts/firmware-fast-retune.cjs");
+const { patchAmateurGuardSource, integrateAmateurGuard } = require("../scripts/firmware-amateur-guard.cjs");
 
 function fastRetuneSources() {
   return {
@@ -205,6 +206,84 @@ test("fast retune integration writes all files with matching hashes and stages b
   }
 });
 
+// Excerpt of App/frequencies.c identical on F4HWN v6.1.0 and v7.0.0 (Apache-2.0, armel/uv-k1-k5v3-firmware-custom).
+const FREQUENCIES_EXCERPT = [
+  "int32_t TX_freq_check(const uint32_t Frequency)",
+  "{   // return '0' if TX frequency is allowed",
+  "    if (RX_freq_check(Frequency))",
+  "        return -1;",
+  "",
+  "    switch (gSetting_F_LOCK)",
+  "    {",
+  "        case F_LOCK_CE:",
+  "            if (Frequency >= 14400000 && Frequency < 14600000)",
+  "                return 0;",
+  "            if (Frequency >= 43000000 && Frequency < 44000000)",
+  "                return 0;",
+  "            break;",
+  "        case F_LOCK_NONE:",
+  "            return 0;",
+  "    }",
+  "    return -1;",
+  "}"
+].join("\n");
+
+test("amateur guard patch is opt-in, only denies TX and rejects unexpected sources", () => {
+  const patched = patchAmateurGuardSource("App/frequencies.c", FREQUENCIES_EXCERPT);
+  assert.match(patched, /^\/\* BRICOHAMS_AMATEUR_GUARD:/);
+  assert.ok(patched.indexOf("static bool BH_InAmateurTxBand") < patched.indexOf("int32_t TX_freq_check"));
+  assert.ok(patched.indexOf("BH_InAmateurTxBand(Frequency)") < patched.indexOf("switch (gSetting_F_LOCK)"));
+  assert.equal(patchAmateurGuardSource("App/frequencies.c", FREQUENCIES_EXCERPT.replace(/\n/g, "\r\n")), patched);
+  assert.throws(() => patchAmateurGuardSource("App/frequencies.c", patched), /ya aplicada/);
+  assert.throws(() => patchAmateurGuardSource("App/frequencies.c", `${FREQUENCIES_EXCERPT}\n${FREQUENCIES_EXCERPT}`), /ambiguo/);
+  assert.throws(() => patchAmateurGuardSource("App/frequencies.c", "changed upstream"), /ausente/);
+  assert.throws(() => patchAmateurGuardSource("App/radio.c", ""), /no admitida/);
+});
+
+test("amateur guard compiled on the host: default build is unchanged, opt-in build denies out-of-band TX", t => {
+  const { spawnSync } = require("node:child_process");
+  if (spawnSync("gcc", ["--version"]).status !== 0) return t.skip("gcc not available");
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const dir = fs.mkdtempSync(path.join(require("node:os").tmpdir(), "bh-amateur-guard-"));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const program = `#include <stdint.h>
+#include <stdbool.h>
+#include <stdio.h>
+enum { F_LOCK_CE, F_LOCK_NONE };
+static int gSetting_F_LOCK = F_LOCK_NONE;
+static int RX_freq_check(uint32_t f) { return f < 1800000 ? -1 : 0; }
+${patchAmateurGuardSource("App/frequencies.c", FREQUENCIES_EXCERPT)}
+int main(void) { printf("%d %d %d", TX_freq_check(14500000), TX_freq_check(43500000), TX_freq_check(14700000)); return 0; }
+`;
+  fs.writeFileSync(path.join(dir, "t.c"), program);
+  const run = (flags, exe) => {
+    const build = spawnSync("gcc", [...flags, "-Wall", "-Werror", path.join(dir, "t.c"), "-o", path.join(dir, exe)], { encoding: "utf8" });
+    assert.equal(build.status, 0, build.stderr);
+    return spawnSync(path.join(dir, exe), { encoding: "utf8" }).stdout;
+  };
+  assert.equal(run([], "off"), "0 0 0");
+  assert.equal(run(["-DENABLE_BRICOHAMS_AMATEUR_BAND_ONLY"], "on"), "0 0 -1");
+});
+
+test("amateur guard integration stages before writing and records hashes", t => {
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const { createHash } = require("node:crypto");
+  const work = fs.mkdtempSync(path.join(require("node:os").tmpdir(), "bh-amateur-int-"));
+  t.after(() => fs.rmSync(work, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(work, "App"), { recursive: true });
+  fs.writeFileSync(path.join(work, "App/frequencies.c"), "unexpected upstream");
+  assert.throws(() => integrateAmateurGuard(work), /ausente/);
+  assert.equal(fs.readFileSync(path.join(work, "App/frequencies.c"), "utf8"), "unexpected upstream");
+  fs.writeFileSync(path.join(work, "App/frequencies.c"), FREQUENCIES_EXCERPT);
+  const info = integrateAmateurGuard(work);
+  assert.equal(info.enabledByDefault, false);
+  assert.equal(info.onlyDeniesTx, true);
+  assert.equal(info.hardwareValidated, false);
+  const bytes = fs.readFileSync(path.join(work, "App/frequencies.c"));
+  assert.equal(info.sources[0].sha256, createHash("sha256").update(bytes).digest("hex"));
+});
 test("informe de memoria incluye reservas, huecos y solapamiento del restaurador sin contarlo dos veces", () => {
   const report = [
     ".isr_vector 192 134227968", ".text 102368 134228160", ".rodata 10360 134330528",
