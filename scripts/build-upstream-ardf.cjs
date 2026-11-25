@@ -53,12 +53,15 @@ function markerFor(id) {
   return `BHFW1:${id}:${TARGETS[id].version}`;
 }
 
-// A global kept by the linker: gc-sections and LTO must not drop the identity string.
+// "used" keeps the symbol in the object; the volatile read in BRANDED_BLOCK references it from code
+// that is always linked, so --gc-sections keeps it. The "retain" attribute is not supported by the
+// pinned GCC 13.3 for this target (-Werror=attributes), so it is not used.
 function markerDefinition(id) {
-  return `const char bh_fw_id[] __attribute__((used, retain)) = "${markerFor(id)}";`;
+  return `const char bh_fw_id[] __attribute__((used)) = "${markerFor(id)}";`;
 }
 
 const BRANDED_BLOCK = indent => [
+  "(void)*(const volatile char *)bh_fw_id;",
   "memcpy(gFrameBuffer, BH_BOOTLOGO, sizeof(BH_BOOTLOGO));",
   'UI_PrintStringSmallNormal("Bricohams", 0, 127, 6);',
   "ST7565_BlitFullScreen();",

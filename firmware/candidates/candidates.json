@@ -14,7 +14,7 @@
       "commit": "6c4d419b71eba8e227d9c0de322a51bbb1b755fc",
       "licence": "GPL-3.0",
       "licenceSource": "LICENSE in the upstream repository root",
-      "sparsePaths": ["Makefile", "linker.ld", "src", "include", "LICENSE", "README.md", "CHANGELOG.md"],
+      "sparsePaths": ["/Makefile", "/linker.ld", "/src/", "/include/", "/LICENSE", "/README.md", "/CHANGELOG.md", "!/binary/", "!/assembly/", "!/tools/"],
       "forbiddenPaths": ["binary", "assembly", "tools"],
       "patches": ["firmware/candidates/rt950-hertzz-tx-inhibit.patch"],
       "buildCommand": ["make", "all"],

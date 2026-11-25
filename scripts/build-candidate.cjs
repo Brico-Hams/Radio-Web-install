@@ -24,10 +24,14 @@ function validateCandidate(candidate) {
   for (const artifact of candidate.artifacts || []) {
     if (!/\.(bin|hex)$/i.test(artifact)) problems.push(`artifact ${artifact} must be a .bin or .hex`);
   }
-  for (const forbidden of ["binary", "assembly"]) {
-    if ((candidate.sparsePaths || []).some(item => item === forbidden || item.startsWith(`${forbidden}/`))) {
+  const sparse = candidate.sparsePaths || [];
+  // Non-cone patterns without a leading slash also match nested paths.
+  if (sparse.some(item => !item.startsWith("/") && !item.startsWith("!/"))) problems.push("sparsePaths must be anchored with a leading slash");
+  for (const forbidden of ["binary", "assembly", "tools"]) {
+    if (sparse.some(item => !item.startsWith("!") && item.replace(/^\/+|\/+$/g, "").split("/")[0] === forbidden)) {
       problems.push(`${forbidden} must not be checked out`);
     }
+    if (!sparse.includes(`!/${forbidden}/`)) problems.push(`${forbidden} must be excluded explicitly`);
   }
   return problems;
 }

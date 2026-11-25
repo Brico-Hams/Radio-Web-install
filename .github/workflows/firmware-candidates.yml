@@ -30,13 +30,16 @@ jobs:
           persist-credentials: false
           # Sources only: binary/ (OEM images), assembly/ and tools/ are never checked out.
           sparse-checkout: |
-            Makefile
-            linker.ld
-            src
-            include
-            LICENSE
-            README.md
-            CHANGELOG.md
+            /Makefile
+            /linker.ld
+            /src/
+            /include/
+            /LICENSE
+            /README.md
+            /CHANGELOG.md
+            !/binary/
+            !/assembly/
+            !/tools/
           sparse-checkout-cone-mode: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:

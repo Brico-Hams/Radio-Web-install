@@ -20,7 +20,9 @@ const miliWelcome = ['#include "bitmaps.h"', "    } else {", "        memset(Wel
 test("Scout: boot screen is Bricohams only, with the marker kept by the linker", () => {
   const result = brandScoutWelcome(scoutWelcome.replace(/\n/g, "\r\n"));
   assert(result.includes('#include "bricohams/bootlogo.h"'));
-  assert(result.includes(`"${markerFor("scout-ardf")}"`) && result.includes("used, retain"));
+  assert(result.includes(`"${markerFor("scout-ardf")}"`) && result.includes("__attribute__((used))"));
+  assert(!result.includes("retain"), "retain is rejected by GCC 13.3 with -Werror=attributes");
+  assert(result.includes("(void)*(const volatile char *)bh_fw_id;"), "marker referenced from linked code");
   const body = result.slice(result.indexOf("void UI_DisplayWelcome"));
   assert(body.indexOf("BH_BOOTLOGO") < body.indexOf("AGGER MARTINI") && body.indexOf("return;") < body.indexOf("AGGER MARTINI"));
   assert.throws(() => brandScoutWelcome(scoutWelcome.replace("UI_DisplayClear", "changed")), /ausente/);
@@ -38,7 +40,8 @@ test("Scout: the PIN never unlocks TX and radio_tx_start is unreachable", () => 
 test("MILI: Bricohams logo returns before the upstream text screen", () => {
   const result = brandMiliWelcome(miliWelcome);
   assert(result.indexOf("BH_BOOTLOGO") < result.indexOf("return;") && result.indexOf("return;") < result.indexOf("memset(WelcomeString0"));
-  assert(result.includes(markerFor("mili-admin-user")));
+  assert(result.includes(markerFor("mili-admin-user")) && !result.includes("retain"));
+  assert(result.indexOf("(void)*(const volatile char *)bh_fw_id;") > result.indexOf("} else {"));
   assert.throws(() => brandMiliWelcome(miliWelcome.replace("} else {", "} else if (x) {")), /ausente/);
 });
 
