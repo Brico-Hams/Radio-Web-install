@@ -111,3 +111,98 @@ jobs:
           name: firmware-candidate-bricohams-v7-${{ matrix.variant }}
           path: ${{ runner.temp }}/out/artifacts/
           if-no-files-found: error
+  # Scout ARDF v1.3 (Apache-2.0, own core, not F4HWN). Beta, hardwareBootTested false, TX inhibited.
+  scout-ardf:
+    runs-on: ubuntu-latest
+    env:
+      # Must match TARGETS["scout-ardf"] in scripts/build-upstream-ardf.cjs.
+      UPSTREAM_REPO: DeDuben7/quansheng-uvk5-ardf
+      UPSTREAM_COMMIT: 52c12b6b7fd86007a906d3fc997822a88b1fcafe
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ env.UPSTREAM_REPO }}
+          ref: ${{ env.UPSTREAM_COMMIT }}
+          path: upstream
+          persist-credentials: false
+          # Sources only: platform tools (flasher binaries) are never checked out.
+          sparse-checkout: |
+            /core/
+            /platform/uv-k5-v3-py32f071/
+            !/platform/uv-k5-v3-py32f071/tools/
+            /LICENSE
+            /NOTICE
+            /README.md
+            /CHANGELOG.md
+          sparse-checkout-cone-mode: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      - name: Install the pinned ARM toolchain
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/$ARM_GCC.tar.xz" \
+            "https://developer.arm.com/-/media/Files/downloads/gnu/13.3.rel1/binrel/$ARM_GCC.tar.xz"
+          echo "$ARM_GCC_SHA256  $RUNNER_TEMP/$ARM_GCC.tar.xz" | sha256sum --check
+          tar -xf "$RUNNER_TEMP/$ARM_GCC.tar.xz" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/$ARM_GCC/bin" >> "$GITHUB_PATH"
+      - name: Build (Bricohams boot logo, TX inhibited, no binary patching)
+        run: |
+          node scripts/build-upstream-ardf.cjs --id scout-ardf --source upstream --output "$RUNNER_TEMP/out"
+          cd "$RUNNER_TEMP/out/artifacts" && sha256sum --check --quiet SHA256SUMS && ls -l
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: firmware-candidate-scout-ardf
+          path: ${{ runner.temp }}/out/artifacts/
+          if-no-files-found: error
+  # Admin/User "MILI" v0.4.3 RX-only preset (Apache-2.0). Beta, hardwareBootTested false.
+  mili-admin-user:
+    runs-on: ubuntu-latest
+    env:
+      # Must match TARGETS["mili-admin-user"] in scripts/build-upstream-ardf.cjs.
+      UPSTREAM_REPO: jewelux/quansheng-k5-v3-admin-user
+      UPSTREAM_COMMIT: dc8c1767b1e1228015bdea7608f3e52b12258899
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ env.UPSTREAM_REPO }}
+          ref: ${{ env.UPSTREAM_COMMIT }}
+          path: upstream
+          persist-credentials: false
+          # Sources only: flashers, tools, images and CMSIS PDFs are never checked out.
+          sparse-checkout: |
+            /firmware-v3/
+            !/firmware-v3/tools/
+            !/firmware-v3/images/
+            !/firmware-v3/Dockerfile*
+            !/firmware-v3/App/external/CMSIS_5/**/*.pdf
+            /LICENSE
+            /README.md
+            /CHANGELOG.md
+          sparse-checkout-cone-mode: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      - name: Install CMake and Ninja
+        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build
+      - name: Install the pinned ARM toolchain
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/$ARM_GCC.tar.xz" \
+            "https://developer.arm.com/-/media/Files/downloads/gnu/13.3.rel1/binrel/$ARM_GCC.tar.xz"
+          echo "$ARM_GCC_SHA256  $RUNNER_TEMP/$ARM_GCC.tar.xz" | sha256sum --check
+          tar -xf "$RUNNER_TEMP/$ARM_GCC.tar.xz" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/$ARM_GCC/bin" >> "$GITHUB_PATH"
+      - name: Build (RX-only preset asserted, Bricohams edition, no binary patching)
+        run: |
+          node scripts/build-upstream-ardf.cjs --id mili-admin-user --source upstream --output "$RUNNER_TEMP/out"
+          cd "$RUNNER_TEMP/out/artifacts" && sha256sum --check --quiet SHA256SUMS && ls -l
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: firmware-candidate-mili-admin-user
+          path: ${{ runner.temp }}/out/artifacts/
+          if-no-files-found: error

@@ -99,6 +99,30 @@ La receta del DM-32UV queda **pendiente de fuente** (digest de la imagen csky y 
 |---|---|---|---|---|
 | `rt950-pro-hertzz` | `rt950-pro-hertzz` en `firmware-candidates.yml` (solo `workflow_dispatch`) | Beta, `hardwareBootTested: false` | Inhibido por parche | `bricohams-candidate.rt950-pro-hertzz.{bin,hex}`, `build-info.json`, `SHA256SUMS` |
 
+| `scout-ardf` | `scout-ardf` en `firmware-candidates.yml` | Beta, `hardwareBootTested: false` | Inhibido por transformacion de fuente | `bricohams.scout-ardf.v1.3.bin`, `LICENSE`, `NOTICE`, `ATTRIBUTION.txt`, `build-info.json`, `SHA256SUMS` |
+| `mili-admin-user` | `mili-admin-user` en `firmware-candidates.yml` | Beta, `hardwareBootTested: false` | Solo RX (preset `AdminUser-SAM-RXOnly`, `ENABLE_PREVENT_TX` verificado) | `bricohams.mili-admin-user.v0.4.3.bin`, licencias, `ATTRIBUTION.txt`, `build-info.json`, `SHA256SUMS` |
+
+### 5.1 Scout ARDF v1.3 y Admin/User "MILI" (2026-11-26)
+
+Se construyen con `scripts/build-upstream-ardf.cjs` desde commits fijados (Scout `52c12b6b7fd8`, release v1.3;
+MILI `dc8c1767b1e1`, release v0.4.3-rxonly-experimental), ambos Apache-2.0 con su `LICENSE` (Scout ademas `NOTICE`).
+
+| Aspecto | Scout ARDF | MILI Admin/User |
+|---|---|---|
+| Base | Nucleo propio (`core/` + `platform/uv-k5-v3-py32f071`), no F4HWN; el NOTICE acredita a Dual Tachyon, egzumer/reald, armel y Arm CMSIS | Firmware propio con `firmware-v3/App` y presets CMake |
+| Hardware | UV-K5 V3 y UV-K1 (PY32F071) | UV-K5 V3 y UV-K1 |
+| Compilacion | `make` con `arm-none-eabi-gcc` (`-Werror`) | CMake + Ninja, preset `AdminUser-SAM-RXOnly` |
+| TX | El upstream permite TX tras un PIN fijo; el candidato lo anula (`s_unlocked = false`) | Solo RX segun el preset; el constructor lo comprueba y rechaza cualquier otro preset |
+| Multiboot | Misma geometria de slot (FLASH 0x08002800, 118K); el retorno al selector F4HWN **no esta verificado** | Imagen para slot igual; retorno al selector **no verificado** |
+
+Decision: **no se fusionan** con nuestro modulo `ardf` (F4HWN): no comparten codigo ni arbol de fuentes, asi que portar piezas
+(barra S cruda, tiempos de lectura, menu de retroiluminacion) seria reescribir sobre otra base; nuestro foxhunt ya tiene S-meter
+suavizado y retroiluminacion propia. Cada uno es un candidato independiente en slot multiboot. La imagen lleva el marcador
+`BHFW1:<id>:<version>` que el instalador web reconoce (`inspectSlotImage`), con respaldo verificado y confirmacion como cualquier slot.
+Pantalla de arranque: solo logo/edicion Bricohams (transformacion de `welcome.c`, sin parche binario); la atribucion Apache-2.0 se
+cumple conservando LICENSE/NOTICE y `ATTRIBUTION.txt`, no con el logo. Estado: BETA hasta una prueba real de arranque por el mantenedor.
+La compilacion real solo corre en CI (aqui no hay toolchain ARM): los puntos de integracion se validan contra los fuentes fijados con tests.
+
 El workflow tiene `permissions: contents: read`, acciones fijadas por SHA, toolchain con SHA-256, commit upstream fijado,
 no adjunta nada a releases y no toca `precompiled/` ni `catalog.json` (lo comprueba `tests/firmware-candidates.test.cjs`).
 El firmware de satelite half-duplex sigue sin publicar.

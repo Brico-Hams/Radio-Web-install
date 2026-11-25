@@ -1523,6 +1523,12 @@ remain pending. The previous USB error is not claimed to be resolved.
 These binaries are not published or flashed automatically.
 ## Boot Branding Implemented
 
+**Update 2026-11-26.** Every F4HWN variant (v6.1 and v7) shows only the Bricohams logo and edition: `brandVersion()` in
+`scripts/build-bricohams.cjs` replaces `DisplayVersion` with `Edition` in `welcome.c` at build time (the `Version` string is
+kept because the installer reads it). The Scout ARDF v1.3 and MILI candidates (`scripts/build-upstream-ardf.cjs`, see
+`docs/FIRMWARE-ACTUALIZACIONES.md` section 5.1) apply the same to their `welcome.c`. The Apache-2.0 attribution is kept with
+LICENSE/NOTICE and `ATTRIBUTION.txt` next to each image and in `docs/THIRD-PARTY-REUSE.md`.
+
 The builder applies the Bricohams welcome to all new editions, with or without
 an adapter. It retains upstream license notices and does not alter the reference
 repository. Integration points are validated once: a different source or duplicate

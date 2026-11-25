@@ -506,7 +506,7 @@
             <label for="slot-name">Nombre (ASCII, maximo 15 caracteres)</label><input id="slot-name" maxlength="15" value="F4HWN">
             <label for="slot-library-folder">Biblioteca local: selecciona tu carpeta Multiboot (no se sube a ningun servidor)</label><input id="slot-library-folder" type="file" webkitdirectory multiple>
             <label for="slot-library-entry">Imagen de la biblioteca</label><select id="slot-library-entry"><option value="">Selecciona primero una carpeta</option></select>
-            <p id="slot-library-info" class="card-note" role="status">Solo se preparan imagenes F4HWN v6.x con vectores PY32 validos. Karina V1, ARDF sin compatibilidad verificada, stock y versiones antiguas no se habilitan para slots. La validacion estructural no acredita autenticidad ni compatibilidad fisica.</p>
+            <p id="slot-library-info" class="card-note" role="status">Solo se preparan imagenes F4HWN v6.x o candidatas Bricohams (Scout ARDF, MILI Admin/User) con vectores PY32 validos. Karina V1, stock y versiones antiguas no se habilitan para slots. Las candidatas son BETA sin prueba de arranque en radio. La validacion estructural no acredita autenticidad ni compatibilidad fisica.</p>
             <button id="slot-library-use" class="button secondary" type="button">Preparar imagen local (sin escribir)</button>
             <label for="slot-number">Slot / banco de destino (Main protegido)</label><select id="slot-number"><option value="1">1 / CFG 1</option><option value="2">2 / CFG 2</option><option value="3">3 / CFG 3</option><option value="4">4 / CFG 4</option></select>
             <div class="operation-buttons"><button id="bank-reset" data-write class="button secondary" type="button" disabled>Restablecer banco CFG</button></div>
@@ -807,15 +807,16 @@
         setSlotImage(null);
         R.assert(file.size >= 256 && file.size <= 0x1d800 + 0x4000 + 16, "Selecciona una imagen de 256 bytes a 118 KiB o un paquete v7 completo.");
         const bytes = new Uint8Array(await file.arrayBuffer());
+        let edition = "F4HWN";
         if (isFirmwarePackage(bytes)) {
           const parsed = R.inspectQuanshengFirmwarePackage(bytes);
           R.assert(parsed.version.startsWith("7.") && parsed.bound && /\.bin$/i.test(file.name),
             "Paquete v7 no verificable: el Build ID de la imagen no coincide con los recursos FWA1.");
         } else {
           R.assert(bytes.length <= 0x1d800, "Selecciona una imagen de 256 bytes a 118 KiB.");
-          R.inspectQuanshengSlotImage(bytes, file.name);
+          edition = R.inspectQuanshengSlotImage(bytes, file.name).edition || edition;
         }
-        setSlotImage(bytes, "F4HWN", file.name, "file");
+        setSlotImage(bytes, edition, file.name, "file");
         $("slot-file-name").textContent = file.name;
         log(`Archivo local: ${file.name}; SHA-256 ${await R.sha256(bytes)}. Aun no escrito.`);
       }));
@@ -894,14 +895,16 @@
       $("slot-library-entry").addEventListener("change", () => {
         const entry = library[$("slot-library-entry").value];
         $("slot-library-info").textContent = entry
-          ? `${entry.name}: ${entry.reason || `F4HWN v${entry.info.version}, ${entry.info.size} bytes. SHA-256 local ${entry.sha256}. No acredita autenticidad ni compatibilidad fisica.`}`
+          ? (entry.info?.edition
+            ? `${entry.name}: Candidata Bricohams ${entry.info.edition} v${entry.info.version}, ${entry.info.size} bytes (BETA, sin prueba de arranque en radio). SHA-256 local ${entry.sha256}. No acredita autenticidad ni compatibilidad fisica.`
+            : `${entry.name}: ${entry.reason || `F4HWN v${entry.info.version}, ${entry.info.size} bytes. SHA-256 local ${entry.sha256}. No acredita autenticidad ni compatibilidad fisica.`}`)
           : "Selecciona una imagen.";
       });
       attach("slot-library-use", "Preparar imagen de la biblioteca", async () => {
         const entry = library[$("slot-library-entry").value];
         R.assert(entry?.bytes, entry?.reason || "Selecciona una imagen local admitida.");
         R.inspectQuanshengSlotImage(entry.bytes, entry.name.split(/[\\/]/).pop());
-        setSlotImage(entry.bytes.slice(), "F4HWN", entry.name.split(/[\\/]/).pop());
+        setSlotImage(entry.bytes.slice(), entry.info.edition || "F4HWN", entry.name.split(/[\\/]/).pop());
         log(`Imagen local preparada: ${entry.name}; SHA-256 ${entry.sha256}. Sin escritura; exige respaldo completo y confirmacion para instalar.`);
       });
       attach("bank-reset", "Restablecer banco", async () => {

@@ -1606,6 +1606,12 @@ No se publican ni flashean automaticamente estos binarios.
 
 ## Branding de arranque implementado
 
+**Actualizacion 2026-11-26.** Todas las variantes F4HWN (v6.1 y v7) muestran solo el logo y la edicion Bricohams:
+`brandVersion()` en `scripts/build-bricohams.cjs` sustituye `DisplayVersion` por `Edition` en `welcome.c` durante la
+compilacion (la cadena `Version` se conserva porque el instalador la lee). Los candidatos Scout ARDF v1.3 y MILI
+(`scripts/build-upstream-ardf.cjs`, ver `docs/FIRMWARE-ACTUALIZACIONES.md` seccion 5.1) aplican lo mismo a su `welcome.c`.
+La atribucion Apache-2.0 se mantiene con LICENSE/NOTICE y `ATTRIBUTION.txt` junto a cada imagen y en `docs/THIRD-PARTY-REUSE.md`.
+
 El constructor aplica la bienvenida Bricohams a todas las nuevas ediciones,
 con o sin adaptador. Conserva los avisos de licencia upstream y no altera
 el repositorio de referencia. Los puntos de integracion se validan una sola
