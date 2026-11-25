@@ -89,6 +89,8 @@ Cette base ouverte est retenue pour poursuivre le développement sur le matérie
 et ses slots. Les limitations qui empêchent de dériver Karina sont documentées dans
 [KARINA.md](KARINA.md). Ses algorithmes, menus et pilotes n'ont pas été portés.
 
+Archive Telegram des sources (2026-11-25) : les paquets ont été classés et comparés à v6.1/v7. Seul nouveau correctif : `scripts/firmware-amateur-guard.cjs` (marqueur `BRICOHAMS_AMATEUR_GUARD`, `build-info.amateurGuardIntegration`), une porte TX optionnelle bande amateur seule (`-DENABLE_BRICOHAMS_AMATEUR_BAND_ONLY`, désactivée par défaut, elle ne peut que refuser la TX, avec les plages CE déjà dans `F_LOCK_CE`). Bêta, non testée sur radio ; le binaire publié ne change pas.
+
 ## Compiler à la demande
 
 ### Ligne indépendante : plateforme d'applications Bricohams

@@ -87,6 +87,8 @@ This open base was chosen to continue on the V3 hardware and its slots.
 The limitations that prevent deriving Karina are documented in [KARINA.md](KARINA.md).
 Its algorithms, menus, and drivers have not been ported.
 
+Telegram source archive (2026-11-25): packages were classified and compared with v6.1/v7. The only new patch is `scripts/firmware-amateur-guard.cjs` (marker `BRICOHAMS_AMATEUR_GUARD`, `build-info.amateurGuardIntegration`), an optional amateur-band-only TX gate (`-DENABLE_BRICOHAMS_AMATEUR_BAND_ONLY`, off by default, it can only deny TX, using the CE ranges already in `F_LOCK_CE`). Beta, not tested on a radio; the published binary does not change.
+
 ## Build on Demand
 
 ### Independent Line: Bricohams App Platform

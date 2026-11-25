@@ -138,9 +138,11 @@ El firmware de satelite half-duplex sigue sin publicar.
 
 ## 5.3 Archivo Telegram de fuentes (2026-11-25)
 
-Revisado: no trae fuentes de firmware Quansheng utilizables (solo controladores CHIRP y apps), por lo que no hay
-mejoras nuevas para V3/K1 respaldadas por codigo. Candidatas ordenadas y la hipotesis de retune BK4819 (sin
-validar, no implementada) en `docs/ARCHIVO-TELEGRAM-ANALISIS.md`. Sin cambios en `precompiled/` ni `catalog.json`.
+Revisados los 224 paquetes de firmware: la linea F4HWN K1/V3 del archivo (4.3, Calypso) es anterior a v6.1 y las ramas
+V1 no son portables, asi que no hay correcciones de `radio.c`/`app.c`/`main.c` que aplicar. Se anade
+`scripts/firmware-amateur-guard.cjs` (anclas OK en v6.1 y v7, `App/frequencies.c` es identico), una puerta de TX opcional
+y apagada por defecto. Ranking, Calypso AM (origen OEM, prohibido) y la hipotesis de retune BK4819 (sin validar, no
+implementada) en `docs/ARCHIVO-TELEGRAM-ANALISIS.md`. Sin cambios en `precompiled/` ni `catalog.json`.
 
 ## 6. Fuentes consultadas
 

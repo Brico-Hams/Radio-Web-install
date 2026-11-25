@@ -88,9 +88,11 @@ slots multiboot y comprobar que los textos (activos) siguen presentes; 4) retroc
 verificado o volver al slot v6.1. Todas las compilaciones nuevas son Beta con `hardwareBootTested: false` y no
 estan en `precompiled/` ni en `catalog.json`.
 
-Archivo Telegram de fuentes (2026-11-25): la copia local no incluye el codigo de firmware (solo controladores CHIRP
-y otras apps), asi que no se anadio ningun parche nuevo. Analisis, clasificacion y comparacion con nuestra
-correccion de retune rapido en el documento de desarrollo ARCHIVO-TELEGRAM-ANALISIS.
+Archivo Telegram de fuentes (2026-11-25): se clasificaron los paquetes y se comparo con v6.1/v7 (documento de
+desarrollo ARCHIVO-TELEGRAM-ANALISIS). Unico parche nuevo: `scripts/firmware-amateur-guard.cjs` (marcador
+`BRICOHAMS_AMATEUR_GUARD`, `build-info.amateurGuardIntegration`), una puerta de TX opcional «solo banda de aficionado»
+(`-DENABLE_BRICOHAMS_AMATEUR_BAND_ONLY`, apagada por defecto, solo puede denegar TX, rangos CE ya presentes en
+`F_LOCK_CE`). Beta, sin prueba en radio; el binario publicado no cambia.
 
 ## Identidad y alcance
 

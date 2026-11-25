@@ -89,6 +89,8 @@ Diese offene Basis wurde ausgewählt, um auf der V3-Hardware und ihren Slots wei
 Die Einschränkungen, die eine Ableitung von Karina verhindern, sind dokumentiert in [KARINA.md](KARINA.md).
 Ihre Algorithmen, Menüs und Treiber wurden nicht portiert.
 
+Telegram-Quellarchiv (2026-11-25): Die Pakete wurden klassifiziert und mit v6.1/v7 verglichen. Einziger neuer Patch ist `scripts/firmware-amateur-guard.cjs` (Marker `BRICOHAMS_AMATEUR_GUARD`, `build-info.amateurGuardIntegration`), ein optionales TX-Gate nur für Amateurbänder (`-DENABLE_BRICOHAMS_AMATEUR_BAND_ONLY`, standardmäßig aus, kann TX nur verweigern, mit den CE-Bereichen aus `F_LOCK_CE`). Beta, nicht am Funkgerät getestet; die veröffentlichte Binärdatei ändert sich nicht.
+
 ## Bei Bedarf kompilieren
 
 ### Eigenständige Linie: Bricohams-Anwendungsplattform
