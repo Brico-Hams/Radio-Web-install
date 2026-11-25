@@ -38,6 +38,7 @@ Licences are those stated in the collection catalogue (inventory 2026-11-23); "t
 | U8g2_Arduino, Goertzel, DTMF, Time | To verify | FACTS | Tone detection and display facts; measure rates and timing on real audio |
 | RadioLib, Heltec boards, ESP OLED driver | To verify | FACTS | Only for compatible LoRa/ESP hardware |
 | Other Arduino libraries (Firmata, Keyboard, Ethernet, SD, Servo, WaveHC, HotButton, EspUsbHost) | To verify | FACTS | Not included automatically |
+| IJV (UV-K5 V1 firmware, N3.60) | Freeware, modification/reverse engineering forbidden by default; express author permission for analysis reported by the owner 2026-11-25, written document pending | FACTS | Behavioural analysis of the retune path only (docs/IJV-ANALISIS-RETUNE.md); no IJV code, bytes, listings or tables are committed |
 | Yaesu / Icom reference material | Not firmware | FACTS | CAT/CI-V facts only, from `docs/FTX1-KNOWLEDGE.md` and `data/third-party/IC-705_ENG_CI-V_6.txt`; one adapter per model |
 
 ## Adapted files
