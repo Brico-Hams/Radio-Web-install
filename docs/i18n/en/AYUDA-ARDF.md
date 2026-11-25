@@ -98,6 +98,18 @@ to the procedure for that version, not every clock menu on another radio. It is
 not an RF oscillator correction and does not require changing RF calibration.
 After changing it, repeat a measurement and check synchronization.
 
+## Temperature correction (reald v0.6) and the Bricohams module
+
+Release `ARDF-K5v3_K1-v0.6` (commit `bfdf068f3c78`, `App/app/ardf.h`) extends
+ClkCor with K1 (offset) and K2 (temperature factor), both -500 to 500 ticks per
+minute, applied to the mean temperature of the fox cycle; a positive value means
+a fast clock. Our `ardf` module (Beta, v6.1 base and v7 port) ports that model
+into its core, converted to ppm and clamped to +-50000. In Fox Hunt, key 0 steps
+K1 from -60 to 60 in steps of 10 (session only, no EEPROM; the line shows
+`C+10`). K2 and the temperature sensor remain **pending a source**: v6.1/v7 have
+no ADC temperature reading and nothing is invented. reald's persistence is not
+ported either (sector 0x00D000, which is the boot logo in v7).
+
 ## Verifiable historical differences
 
 - The document says that before v0.4, SetNav was in a hidden menu; do not assume

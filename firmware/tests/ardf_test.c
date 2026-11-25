@@ -48,8 +48,49 @@ static int check_timer_equivalence(void)
     return EXIT_SUCCESS;
 }
 
+static int check_clock_model(void)
+{
+    int32_t ppm = 7;
+    /* Values follow reald's formula: k = k1 + k2 * T10 / 1000, ppm = -k * 1e6 / (6000 + k). */
+    CHECK(bh_ardf_clock_ppm(0, 0, 0, &ppm) == BH_ARDF_OK && ppm == 0);
+    CHECK(bh_ardf_clock_ppm(40, 0, 0, &ppm) == BH_ARDF_OK && ppm == -6622);
+    CHECK(bh_ardf_clock_ppm(-40, 0, 0, &ppm) == BH_ARDF_OK && ppm == 6711);
+    CHECK(bh_ardf_clock_ppm(0, 100, 250, &ppm) == BH_ARDF_OK && ppm == -4149);
+    CHECK(bh_ardf_clock_ppm(500, 500, 1250, &ppm) == BH_ARDF_OK && ppm == -50000);
+    CHECK(bh_ardf_clock_ppm(-500, 500, -400, &ppm) == BH_ARDF_OK && ppm == 50000);
+    ppm = 5;
+    CHECK(bh_ardf_clock_ppm(501, 0, 0, &ppm) == BH_ARDF_INVALID_CONFIG && ppm == 5);
+    CHECK(bh_ardf_clock_ppm(0, -501, 0, &ppm) == BH_ARDF_INVALID_CONFIG);
+    CHECK(bh_ardf_clock_ppm(0, 0, 1251, &ppm) == BH_ARDF_INVALID_CONFIG);
+    CHECK(bh_ardf_clock_ppm(0, 0, -401, &ppm) == BH_ARDF_INVALID_CONFIG);
+    CHECK(bh_ardf_clock_ppm(0, 0, 0, NULL) == BH_ARDF_INVALID_CONFIG);
+
+    bh_ardf state = {0};
+    bh_ardf_view view;
+    const bh_ardf_config base = {5, 60000, 5000, 0, 1, 31};
+    CHECK(bh_ardf_set_correction(&state, 0) == BH_ARDF_NOT_INITIALIZED);
+    CHECK(bh_ardf_init(&state, &base, 0) == BH_ARDF_OK);
+    CHECK(bh_ardf_update(&state, 2000, &view) == BH_ARDF_OK && view.elapsed_ms == 2000);
+    CHECK(bh_ardf_set_correction(&state, 50001) == BH_ARDF_INVALID_CONFIG);
+    CHECK(bh_ardf_set_correction(&state, -6622) == BH_ARDF_OK);
+    /* The phase is kept and the new rate applies to later ticks only. */
+    CHECK(bh_ardf_update(&state, 3000, &view) == BH_ARDF_OK && view.elapsed_ms == 2993);
+    CHECK(bh_ardf_set_correction(NULL, 0) == BH_ARDF_NOT_INITIALIZED);
+
+    bh_ardf_temp acc = {0, 0};
+    int16_t mean = 0;
+    CHECK(bh_ardf_temp_take(&acc, 250, &mean) == BH_ARDF_OK && mean == 250);
+    CHECK(bh_ardf_temp_add(&acc, 200) == BH_ARDF_OK && bh_ardf_temp_add(&acc, 301) == BH_ARDF_OK);
+    CHECK(bh_ardf_temp_add(&acc, 1251) == BH_ARDF_INVALID_CONFIG && acc.count == 2);
+    CHECK(bh_ardf_temp_take(&acc, 0, &mean) == BH_ARDF_OK && mean == 250 && acc.count == 0 && acc.sum == 0);
+    CHECK(bh_ardf_temp_add(NULL, 0) == BH_ARDF_INVALID_CONFIG);
+    CHECK(bh_ardf_temp_take(&acc, 0, NULL) == BH_ARDF_INVALID_CONFIG);
+    return EXIT_SUCCESS;
+}
+
 int main(void)
 {
+    CHECK(check_clock_model() == EXIT_SUCCESS);
     CHECK(check_timer_equivalence() == EXIT_SUCCESS);
     bh_ardf state = {0};
     bh_ardf_view view;

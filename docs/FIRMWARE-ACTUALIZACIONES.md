@@ -102,6 +102,15 @@ La receta del DM-32UV queda **pendiente de fuente** (digest de la imagen csky y 
 | `scout-ardf` | `scout-ardf` en `firmware-candidates.yml` | Beta, `hardwareBootTested: false` | Inhibido por transformacion de fuente | `bricohams.scout-ardf.v1.3.bin`, `LICENSE`, `NOTICE`, `ATTRIBUTION.txt`, `build-info.json`, `SHA256SUMS` |
 | `mili-admin-user` | `mili-admin-user` en `firmware-candidates.yml` | Beta, `hardwareBootTested: false` | Solo RX (preset `AdminUser-SAM-RXOnly`, `ENABLE_PREVENT_TX` verificado) | `bricohams.mili-admin-user.v0.4.3.bin`, licencias, `ATTRIBUTION.txt`, `build-info.json`, `SHA256SUMS` |
 
+### 5.2 reald ARDF v0.6 (2026-11-26)
+
+El catalogo ya identifica `ARDF-K5v3_K1-v0.6` (assets `UV_K5v3_K1_ARDF.bin`, `chirp_module_ARDF.py`) como `reald / ARDF`:
+solo descarga verificada, nunca imagen de slot (test en `tests/firmware.test.cjs`). No se anade candidato compilado en
+`firmware-candidates.yml`: el binario oficial sirve para comparar en banco, y reconstruirlo exigiria transformaciones de
+bienvenida/TX sobre una base F4HWN 5.2.0 sin toolchain ARM para validarlas. Del v0.6 se porto a nuestro modulo `ardf` el modelo de
+correccion de reloj K1/K2 (ver `docs/BRICOHAMS-FIRMWARE.md`, Apache-2.0 en `docs/THIRD-PARTY-REUSE.md`); K2 con temperatura queda
+pendiente de fuente en v6.1/v7. El snapshot `data/firmware-catalog-fallback.json` (2026-11-09) es anterior a v0.6 y se regenera con red.
+
 ### 5.1 Scout ARDF v1.3 y Admin/User "MILI" (2026-11-26)
 
 Se construyen con `scripts/build-upstream-ardf.cjs` desde commits fijados (Scout `52c12b6b7fd8`, release v1.3;

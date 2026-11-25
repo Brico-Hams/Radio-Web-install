@@ -65,6 +65,61 @@ bh_ardf_result bh_ardf_update(bh_ardf *state, uint32_t tick_ms, bh_ardf_view *vi
     return BH_ARDF_OK;
 }
 
+/*
+ * Clock correction model adapted from reald's uv-k1-k5v3-firmware-custom
+ * (App/app/ardf.h, tag ARDF-K5v3_K1-v0.6, commit bfdf068f3c78e12e8daa07a48f273d36b38f5816).
+ * Copyright 2024 Dennis Real (reald). Licensed under the Apache License 2.0.
+ * SPDX-License-Identifier: Apache-2.0
+ * Changed: integer-only pure function, ppm output with this module's sign and clamp,
+ * input validation, no EEPROM persistence.
+ */
+bh_ardf_result bh_ardf_clock_ppm(int16_t k1, int16_t k2, int16_t temp_deci_c, int32_t *ppm)
+{
+    if (ppm == NULL || k1 < -BH_ARDF_K_LIMIT || k1 > BH_ARDF_K_LIMIT ||
+        k2 < -BH_ARDF_K_LIMIT || k2 > BH_ARDF_K_LIMIT || temp_deci_c < -400 || temp_deci_c > 1250)
+        return BH_ARDF_INVALID_CONFIG;
+
+    /* reald: ticks/minute = k1 + k2 * T10 / (K2_RES * TEMP_RES), nominal minute = 6000 ticks. */
+    const int64_t k = (int64_t)k1 + (int64_t)k2 * temp_deci_c / 1000;
+    int64_t value = -(k * 1000000) / (6000 + k);
+    if (value > 50000)
+        value = 50000;
+    else if (value < -50000)
+        value = -50000;
+    *ppm = (int32_t)value;
+    return BH_ARDF_OK;
+}
+
+bh_ardf_result bh_ardf_set_correction(bh_ardf *state, int32_t ppm)
+{
+    if (state == NULL || !state->initialized)
+        return BH_ARDF_NOT_INITIALIZED;
+    if (ppm < -50000 || ppm > 50000)
+        return BH_ARDF_INVALID_CONFIG;
+    /* The phase is kept: only the rate of later updates changes. */
+    state->config.correction_ppm = ppm;
+    return BH_ARDF_OK;
+}
+
+bh_ardf_result bh_ardf_temp_add(bh_ardf_temp *acc, int16_t temp_deci_c)
+{
+    if (acc == NULL || temp_deci_c < -400 || temp_deci_c > 1250 || acc->count == UINT32_MAX)
+        return BH_ARDF_INVALID_CONFIG;
+    acc->sum += temp_deci_c;
+    acc->count++;
+    return BH_ARDF_OK;
+}
+
+bh_ardf_result bh_ardf_temp_take(bh_ardf_temp *acc, int16_t fallback_deci_c, int16_t *mean_deci_c)
+{
+    if (acc == NULL || mean_deci_c == NULL)
+        return BH_ARDF_INVALID_CONFIG;
+    *mean_deci_c = acc->count != 0 ? (int16_t)(acc->sum / (int32_t)acc->count) : fallback_deci_c;
+    acc->sum = 0;
+    acc->count = 0;
+    return BH_ARDF_OK;
+}
+
 static bool valid_gain_slot(const bh_ardf *state, uint8_t vfo, uint8_t fox)
 {
     return vfo < BH_ARDF_VFOS && fox > 0 && fox <= state->config.fox_count;

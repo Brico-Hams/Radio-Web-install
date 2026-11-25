@@ -1294,6 +1294,7 @@ Dans Fox Hunt, clavier déverrouillé :
 | 7 | Synchroniser le début de l'émetteur sélectionné avec l'événement réel |
 | 8 | Enregistrer l'atténuation actuelle et noter une observation manuelle de l'émetteur en cours |
 | 9 | Récupérer manuellement l'atténuation enregistrée de l'émetteur en cours, si elle existe |
+| 0 | Décalage d'horloge K1 (modèle reald v0.6) : -60...60 ticks/minute par pas de 10, session seulement ; la ligne affiche `C+10`. La phase n'est pas réinitialisée |
 | EXIT | Quitter Fox Hunt en conservant le comportement upstream |
 
 La ligne de contexte indique le numéro/la durée/la sélection avant la synchronisation,
@@ -1303,6 +1304,33 @@ nombre/la durée le réinitialise. F n'inverse pas les nouvelles actions 4-9. Le
 verrouillage existant du clavier empêche toujours ces touches. Chaque entrée dans le
 mode commence sur OFF ; il n'y a ni restauration persistante ni mémoire pour deux VFO
 dans ce premier adaptateur (le noyau prend bien en charge deux banques).
+
+### Comparaison avec reald ARDF v0.6 et périmètre du portage (2026-11-26)
+
+Référence : `reald/uv-k1-k5v3-firmware-custom`, tag `ARDF-K5v3_K1-v0.6`, commit
+`bfdf068f3c78e12e8daa07a48f273d36b38f5816` (Apache-2.0, cloné en lecture seule dans
+`data/third-party/refs/reald/`, ignoré par git). Base F4HWN commune
+`8a8752f80c58` (5.2.0) : reald a 47 commits d'avance et 841 de retard sur armel
+main ; nos bases sont v6.1.0 et v7.0.0.
+
+| Fonction de reald (fichier) | Notre `ardf` | État |
+|---|---|---|
+| 1-10 balises, durée, préavis de fin 0-30 s (`App/app/ardf.c`, `ardf.h`) | Équivalent (noyau `bh_ardf`, 15-120 s) | Déjà présent |
+| Correction d'horloge K1 + K2 avec la température moyenne du cycle (`ardf.h`, `ARDF_DURATION_CORR`) | K1 porté dans le noyau (`bh_ardf_clock_ppm`, ppm, plafond +-50000 ; touche 0, session seulement) ; accumulateur de température prêt | **K2 en attente de source** : v6.1/v7 n'ont pas `BOARD_ADC_GetTemperature` (reald l'ajoute dans `App/board.c` avec des changements ADC PY32F071 invérifiables sans radio) |
+| Gain manuel par balise et mémoire par VFO | Mémoire d'atténuation de Fox Hunt (6 pas upstream) dans l'adaptateur | Échelle différente ; les tables ne sont pas mélangées |
+| Astuces de gain (LNA coupé, retune harmonique) | Non | Non porté : elles pilotent les GPIO LNA du BK4819 sur une autre base ; aucune source pour notre échelle |
+| Prédiction de distance par RSSI (`App/ui/ardf.c`) | Non | Non porté : dépend de sa table de gain et de sa calibration RSSI0 |
+| Mode Draussenfuchs / DF Simple (sans chronométrage) | Fox Hunt avec ARDF OFF (touche 4) est le mode sans chronométrage | Fonctionnellement équivalent |
+| TX désactivée en mode ARDF | Le module ne touche ni la TX ni le PTT | Inchangé (non porté) |
+| Persistance ARDF dans le secteur EEPROM 0x00D000 (`App/settings.c`) | Session en RAM seulement | **Conflit** : en v7, 0x00D000 est le logo de démarrage (`eeprom_compat.c`) ; les cartes mémoire ne sont pas déplacées |
+| Écran/menu ARDF propres (NumFox, FoxDur, ClkCor...) sur F4HWN 5.2.0 | Hooks de `foxhunt.c` v6.1/v7 | **Code non portable** : architecture et base différentes |
+
+L'outil de calibration `ardf_clk_drift_tool` n'existe que sur reald `main`, 4 commits après le tag ; il n'est pas figé et n'est pas utilisé. Conservés : retune
+rapide, lecture de sauvegarde, identité de slot multiboot et logo Bricohams. Toujours Bêta,
+`hardwareBootTested: false` ; `precompiled/` est intact. reald v0.6 n'est pas ajouté
+comme candidat compilé : son binaire officiel est déjà identifié par le catalogue
+(`reald / ARDF`, téléchargement seul) et sert à la comparaison sur banc sans reconstruire
+une autre base sans chaîne ARM ni source vérifiable.
 
 Compilation structurelle du 25-10-2026 : image de 112672 octets, RAM 12448/16384,
 Flash liée 111784/120832, stub Multiboot de 888 octets avec 83 branches vérifiées.

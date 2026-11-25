@@ -97,6 +97,19 @@ procédure de cette version, pas à tout menu d’horloge d’une autre radio.
 Ce n’est pas une correction de l’oscillateur RF et elle ne nécessite pas de modifier l’étalonnage RF.
 Après modification, refaire une mesure et vérifier la synchronisation.
 
+## Correction en température (reald v0.6) et module Bricohams
+
+La release `ARDF-K5v3_K1-v0.6` (commit `bfdf068f3c78`, `App/app/ardf.h`) étend
+ClkCor avec K1 (décalage) et K2 (facteur de température), tous deux de -500 à 500
+ticks par minute, sur la température moyenne du cycle des balises ; une valeur
+positive indique une horloge rapide. Notre module `ardf` (Bêta, base v6.1 et
+port v7) reprend ce modèle dans son noyau, converti en ppm et limité à +-50000.
+Dans Fox Hunt, la touche 0 fait défiler K1 de -60 à 60 par pas de 10 (session
+seulement, sans EEPROM ; la ligne affiche `C+10`). K2 et le capteur de
+température restent **en attente de source** : v6.1/v7 n’ont pas de lecture ADC
+de température et rien n’est inventé. La persistance de reald n’est pas reprise
+non plus (secteur 0x00D000, qui est le logo de démarrage en v7).
+
 ## Différences historiques vérifiables
 
 - Le document indique qu’avant v0.4, SetNav se trouvait dans un menu caché ;

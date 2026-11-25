@@ -10,6 +10,7 @@ static bool bhArdfSynced;
 static bool bhArdfError;
 static bool bhArdfActive;
 static bool bhArdfStatsSaturated;
+static int16_t bhArdfK1;
 static uint32_t bhArdfSession;
 static uint32_t bhArdfSessionStart;
 static uint32_t bhArdfSessionElapsed;
@@ -25,8 +26,18 @@ static uint32_t BH_ARDF_Now(void)
     return SCHEDULER_GetTick10ms() * UINT32_C(10);
 }
 
+static void BH_ARDF_ApplyClock(void)
+{
+    int32_t ppm = 0;
+    /* Without a temperature source in this base, k2 stays 0 and only the k1 offset applies. */
+    if (bh_ardf_clock_ppm(bhArdfK1, 0, 0, &ppm) != BH_ARDF_OK)
+        bhArdfError = true;
+    bhArdfConfig.correction_ppm = ppm;
+}
+
 static void BH_ARDF_Reset(void)
 {
+    BH_ARDF_ApplyClock();
     memset(bhArdfStats, 0, sizeof(bhArdfStats));
     bhArdfStatsSaturated = false;
     bhArdfSession++;
@@ -43,6 +54,7 @@ static void BH_ARDF_Reset(void)
 static void BH_ARDF_Start(void)
 {
     bhArdfActive = true;
+    bhArdfK1 = 0;
     bhArdfConfig = (bh_ardf_config){0, 60000, 5000, 0, 1, FOXHUNT_ATT_COUNT - 1};
     BH_ARDF_Reset();
 }
@@ -57,6 +69,14 @@ static void BH_ARDF_Update(void)
 
 static bool BH_ARDF_Key(KEY_Code_t key)
 {
+    if (key == KEY_0) {
+        /* Session-only k1 clock offset in ticks/minute (reald model), stepped by 10. */
+        bhArdfK1 = bhArdfK1 >= 60 ? -60 : (int16_t)(bhArdfK1 + 10);
+        BH_ARDF_ApplyClock();
+        if (bhArdf.initialized && bh_ardf_set_correction(&bhArdf, bhArdfConfig.correction_ppm) != BH_ARDF_OK)
+            bhArdfError = true;
+        return true;
+    }
     if (key < KEY_4 || key > KEY_9)
         return false;
     if (key == KEY_4) {
@@ -164,6 +184,8 @@ static void BH_ARDF_Draw(void)
     else
         sprintf(line, "F%u/%u %lus%s", (unsigned)bhArdfView.fox, (unsigned)bhArdfConfig.fox_count,
             (unsigned long)((bhArdfView.remaining_ms + 999) / 1000), bhArdfView.end_notice ? " !" : "");
+    if (bhArdfK1 != 0 && !bhArdfError && strlen(line) < 16)
+        sprintf(line + strlen(line), " C%+d", (int)bhArdfK1);
     memset(gFrameBuffer[2], 0, sizeof(gFrameBuffer[2]));
     UI_PrintStringSmallNormal(line, 0, 127, 2);
 }

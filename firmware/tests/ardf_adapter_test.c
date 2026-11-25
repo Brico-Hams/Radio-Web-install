@@ -78,6 +78,12 @@ int main(void)
     CHECK(gain_writes == 1);
     BH_ARDF_Key(KEY_5);
     CHECK(bhArdfConfig.duration_ms == 75000 && !bhArdfSynced);
+    BH_ARDF_Key(KEY_0);
+    CHECK(bhArdfK1 == 10 && bhArdfConfig.correction_ppm == -1663 && bhArdf.config.correction_ppm == -1663);
+    BH_ARDF_Draw();
+    CHECK(strcmp(last_line, "N5 75s S1 K7 C+10") == 0);
+    for (unsigned i = 0; i < 12; ++i) BH_ARDF_Key(KEY_0);
+    CHECK(bhArdfK1 == 0 && bhArdf.config.correction_ppm == 0 && !bhArdfError);
     for (unsigned i = 0; i < 4; ++i) BH_ARDF_Key(KEY_5);
     CHECK(bhArdfConfig.duration_ms == 15000);
     for (unsigned i = 0; i < 5; ++i) BH_ARDF_Key(KEY_4);
