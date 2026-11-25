@@ -31,6 +31,8 @@
   }
   const SLOT_MAGIC = 0x31424d46;
   const SLOT_MAX = 0x1d800;
+  const isFirmwarePackage = bytes => bytes.length >= 272 &&
+    new DataView(bytes.buffer, bytes.byteOffset, bytes.length).getUint32(bytes.length - 16, true) === 0x54415746;
   const EMPTY_CELL = "\u2014";
   // Presentation model of one row of the firmware-slot table; slot 0 (Main) is read-only.
   function slotRowModel(item) {
@@ -758,7 +760,8 @@
           slotOperation = true;
           showSlotStatus("Borrando la ranura", null);
           try {
-            await connector.writeSlot(number, image, $("slot-name").value, permit);
+            if (isFirmwarePackage(image)) await connector.writeSlotPackage(number, image, $("slot-name").value, permit);
+            else await connector.writeSlot(number, image, $("slot-name").value, permit);
           } finally { slotOperation = false; }
           await refreshSlots();
           markSlotTarget(number);
@@ -802,9 +805,16 @@
         const file = $("slot-file").files[0];
         if (!file) { setSlotImage(null); return; }
         setSlotImage(null);
-        R.assert(file.size >= 256 && file.size <= 0x1d800, "Selecciona una imagen de 256 bytes a 118 KiB.");
+        R.assert(file.size >= 256 && file.size <= 0x1d800 + 0x4000 + 16, "Selecciona una imagen de 256 bytes a 118 KiB o un paquete v7 completo.");
         const bytes = new Uint8Array(await file.arrayBuffer());
-        R.inspectQuanshengSlotImage(bytes, file.name);
+        if (isFirmwarePackage(bytes)) {
+          const parsed = R.inspectQuanshengFirmwarePackage(bytes);
+          R.assert(parsed.version.startsWith("7.") && parsed.bound && /\.bin$/i.test(file.name),
+            "Paquete v7 no verificable: el Build ID de la imagen no coincide con los recursos FWA1.");
+        } else {
+          R.assert(bytes.length <= 0x1d800, "Selecciona una imagen de 256 bytes a 118 KiB.");
+          R.inspectQuanshengSlotImage(bytes, file.name);
+        }
         setSlotImage(bytes, "F4HWN", file.name, "file");
         $("slot-file-name").textContent = file.name;
         log(`Archivo local: ${file.name}; SHA-256 ${await R.sha256(bytes)}. Aun no escrito.`);

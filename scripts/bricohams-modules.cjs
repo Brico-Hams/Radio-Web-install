@@ -21,8 +21,15 @@ function replaceOnce(text, before, after, file) {
   return text.replace(before, after);
 }
 
-function integrateModule(work, module) {
+// Scheduler guard per pinned upstream: v6.1.0 uses OVERLAY_APPS alone, v7.0.0 adds K5VIEWER.
+const SCHEDULER_GUARDS = Object.freeze({
+  v6: "#ifdef ENABLE_FEAT_F4HWN_OVERLAY_APPS",
+  v7: "#if defined(ENABLE_FEAT_F4HWN_OVERLAY_APPS) || defined(ENABLE_FEAT_F4HWN_K5VIEWER)"
+});
+
+function integrateModule(work, module, target = "v6") {
   assert(["ardf", "satellite", "spectrum"].includes(module), "Modulo sin integracion.");
+  assert(Object.hasOwn(SCHEDULER_GUARDS, target), "Objetivo upstream no admitido.");
   const ardf = module === "ardf";
   const spectrum = module === "spectrum";
   const prefix = ardf ? "ARDF" : spectrum ? "SPEC" : "SAT";
@@ -40,7 +47,9 @@ function integrateModule(work, module) {
   };
   change("CMakeLists.txt", "add_library(App INTERFACE)", `add_library(App INTERFACE)\ntarget_compile_definitions(App INTERFACE ${define})\ntarget_sources(App INTERFACE bricohams/${core}.c${spectrum ? " bricohams/presets.c bricohams/bands.c bricohams/loot.c" : module === "satellite" ? " bricohams/cat_rx.c bricohams/cat_tx.c bricohams/passes.c" : ""})`);
   for (const name of ["scheduler.c", "scheduler.h"])
-    change(name, "#ifdef ENABLE_FEAT_F4HWN_OVERLAY_APPS", `#if defined(ENABLE_FEAT_F4HWN_OVERLAY_APPS) || defined(${define})`);
+    change(name, SCHEDULER_GUARDS[target], target === "v7"
+      ? `#if defined(ENABLE_FEAT_F4HWN_OVERLAY_APPS) || defined(ENABLE_FEAT_F4HWN_K5VIEWER) || defined(${define})`
+      : `#if defined(ENABLE_FEAT_F4HWN_OVERLAY_APPS) || defined(${define})`);
   change("app/foxhunt.c", '#include "app/foxhunt.h"', `#include "app/foxhunt.h"\n\n#ifdef ${define}\nstatic void BH_${prefix}_Draw(void);\nstatic bool BH_${prefix}_Key(KEY_Code_t key);\n#endif`);
   change("app/foxhunt.c", "    FOXHUNT_DrawFreqBR(gRxVfo->pRX->Frequency);", `    FOXHUNT_DrawFreqBR(gRxVfo->pRX->Frequency);\n#ifdef ${define}\n    BH_${prefix}_Draw();\n#endif`);
   if (!ardf) change("app/foxhunt.c",

@@ -1914,6 +1914,86 @@ test("v7 assets enforce identity, consent, header-last ordering and explicit pro
     await connector.disconnect();
   }
 });
+function v7PackageFixture({ buildIdOfImage = 19 } = {}) {
+  const image = baseFlash().slice(0x21000, 0x21400);
+  image[71] = 55;
+  image.set([4, 0, 0, 0, 16, 0, 0, 0, 3, 0, 0, 0, 0x47, 0x4e, 0x55, 0], 400);
+  image.fill(buildIdOfImage, 416, 432);
+  const pack = assetFixture();
+  const file = new Uint8Array(image.length + pack.length + 16);
+  file.set(image); file.set(pack, image.length);
+  const tail = file.length - 16;
+  le(file).setUint32(tail, 0x54415746, true);
+  le(file).setUint32(tail + 4, image.length, true);
+  le(file).setUint32(tail + 8, pack.length, true);
+  le(file).setUint32(tail + 12, R.crc32(file.subarray(0, tail)), true);
+  return { file, image, pack };
+}
+test("v7 package slot install: image, header-last asset zone, validation, and fail-closed refusals", async () => {
+  const good = v7PackageFixture();
+  assert.equal(R.inspectQuanshengFirmwarePackage(good.file).bound, true);
+  assert.equal(R.inspectQuanshengFirmwarePackage(v7PackageFixture({ buildIdOfImage: 20 }).file).bound, false);
+  for (const scenario of ["success", "unbound", "raw-image", "running-slot", "no-permit", "asset-invalid"]) {
+    const device = new QuanshengDevice();
+    device.version = "F4HWN v7.0.0";
+    const connector = new R.QuanshengConnector(device);
+    await connector.connect("UV-K5-V3");
+    const { permit } = await new R.BackupManager(new MemoryStore()).create(connector);
+    connector.info.firmware = "F4HWN v7.0.0";
+    const input = scenario === "unbound" ? v7PackageFixture({ buildIdOfImage: 20 }).file
+      : scenario === "raw-image" ? good.image : good.file;
+    const operations = [];
+    const sequence = [];
+    const zone = new Uint8Array(good.pack.length).fill(255);
+    let validated = false;
+    const original = device.write.bind(device);
+    device.write = async frame => {
+      const { type, data } = R.decodeQuanshengPacket(frame);
+      sequence.push(type);
+      if (type < 0x0750 || type > 0x0756) return original(frame);
+      operations.push({ type, data: data.slice() });
+      if (type === 0x0750) {
+        const result = new Uint8Array(52);
+        result[0] = data[0]; result[1] = scenario === "asset-invalid" && validated ? 5 : 0;
+        result[2] = scenario === "running-slot" ? 2 : 1;
+        result.set(zone.subarray(0, 32), 4);
+        device.push(response(0x0751, result));
+        return;
+      }
+      assert.equal(data[0], 2);
+      if (type === 0x0754) zone.set(data.subarray(12), le(data).getUint32(2, true));
+      if (type === 0x0756) validated = true;
+      device.push(response(type + 1, Uint8Array.of(2, 0)));
+    };
+    const use = scenario === "no-permit" ? {} : permit;
+    if (["success", "asset-invalid"].includes(scenario)) {
+      const run = connector.writeSlotPackage(2, input, "BH Fusion7", use);
+      if (scenario === "success") {
+        const result = await run;
+        assert.equal(result.firmwareValidated, true);
+        assert.equal(result.physicalBootTested, false);
+        assert.deepEqual(device.flash.slice(0x61000, 0x61400), good.image);
+        assert.deepEqual(zone, good.pack);
+        const types = sequence.filter(type => [0x0722, 0x0724, 0x0752, 0x0754, 0x0756].includes(type));
+        assert(types.lastIndexOf(0x0724) < types.indexOf(0x0752), "image before asset zone");
+        const assetWrites = operations.filter(item => item.type === 0x0754);
+        assert.equal(le(assetWrites[0].data).getUint32(2, true), 32);
+        assert.equal(le(assetWrites.at(-1).data).getUint32(2, true), 0);
+        assert.equal(R.hasBackup(connector, permit), false);
+      } else {
+        await assert.rejects(run, /recursos del slot/);
+        assert.equal(R.hasBackup(connector, permit), false);
+      }
+    } else {
+      await assert.rejects(connector.writeSlotPackage(2, input, "BH Fusion7", use),
+        scenario === "no-permit" ? /respaldo/ : scenario === "running-slot" ? /ejecucion/ : /verificable|paquete v7|FWAT/);
+      assert(!device.commands.some(item => [0x0722, 0x0724].includes(item.type)));
+      assert(!operations.some(item => item.type >= 0x0752));
+    }
+    await assert.rejects(connector.writeSlotPackage(0, good.file, "Main", permit), /Main|respaldo/);
+    await connector.disconnect();
+  }
+});
 test("Apps Labs: el archivo .app se valida antes de tocar la radio", () => {
   const app = R.parseQuanshengApp(overlayApp({ assets: Uint8Array.of(9, 9, 9) }));
   assert.equal(app.header.name, "FoxHunt"); assert.equal(app.header.apiMin, 3); assert.equal(app.assets.length, 3);

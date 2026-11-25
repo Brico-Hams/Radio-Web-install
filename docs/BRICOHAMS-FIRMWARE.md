@@ -40,6 +40,53 @@ Estado: compilado en GitHub Actions (toolchain fijada 13.3.rel1), publicado
 como estable sin "BETA" y probado en radio fisica por EA5KGV en una UV-K5 V3
 el 17-11-2026 (prueba declarada por el autor, no certificacion independiente).
 
+## Audio continuo en F4HWN v7.0.0 y variantes v7 (2026-11-25)
+
+Causa confirmada en v7.0.0 (`f6f34cbc3e10dd688f8348cc7f4300a859064621`), misma ruta que en v6.1:
+`App/app/main.c:1033-1037` (paso VFO: `BK4819_SetFrequency`, `BK4819_RX_TurnOn`,
+`gRequestSaveChannel = 1`) -> `App/app/app.c:2809-2854` (`SETTINGS_SaveChannel`,
+`RADIO_ConfigureChannel`, `gFlagReconfigureVfos`) -> `App/radio.c:792-971`
+(`RADIO_SetupRegisters(true)`: `AUDIO_AudioPathOff()` en 803, `gEnableSpeaker=false` en 805,
+`RADIO_SetModulation` en 858, `FUNCTION_Select(FUNCTION_FOREGROUND)` en 970). No hay otra fuente de mute.
+Correccion: `scripts/firmware-fast-retune.cjs` se aplica sin cambios (marcador `BRICOHAMS_FAST_RETUNE`,
+mismas semanticas; los simbolos que usa existen en v7). Prueba offline: `tests/firmware-v7.test.cjs`
+(extractos literales Apache-2.0 de v7.0.0, sin red).
+Comparacion con IJV: solo conductual (el firmware IJV es freeware cerrado cuya licencia prohibe modificar,
+descompilar y desensamblar; apunta a UV-K5 V1 DP32G030 con EEPROM, no a la V3 PY32). No se analizo ningun binario IJV.
+
+Portado a v7: fast retune, lectura de respaldo 0x0738 / CRC 0x073E sin ampliar borrado 0x073A ni escritura
+0x073C, nombre de edicion y arranque Bricohams, presets Fusion y Service (`build-bricohams.cjs --target v7`),
+multiboot con la identidad de slot de upstream (no se anade bootloader). Modulos ardf/satellite/spectrum:
+anclas re-encontradas (guarda de `scheduler.c` con `K5VIEWER`; base Service + `FOXHUNT=ON`,
+`OVERLAY_APPS=OFF`, `BEACON=OFF`), compilacion **sin verificar**.
+
+| Variante | Base | Estado |
+|---|---|---|
+| fusion, service (v7) | v7.0.0 Fusion/Service | Beta, no compilada aqui (sin ARM toolchain local), `hardwareBootTested: false` |
+| ardf, satellite, spectrum (v7) | v7.0.0 Service + FOXHUNT | Beta, anclas OK, compilacion pendiente |
+| labs, f4hwn-fieldops, f4hwn-labs, f4hwn-transfer | v6.1.0 | Se quedan en v6.1: v7 retiro los presets Labs, FieldOps y Transfer |
+
+Auditoria del catalogo publicado: las 9 variantes de `precompiled/catalog.json` (v6.1.0) llevan
+`fastRetuneIntegration` y `backupReadIntegration` en su `build.build-info`; ninguna requiere aviso.
+No se recompilo ni se toco `precompiled/` ni `catalog.json`.
+
+Instalador web: paquete v7 = imagen + pack FWA1 (cabecera de 32 bytes, CRC32 de payload, build ID de 16 bytes) +
+trailer FWAT de 16 bytes (`cmake/pack_fw_assets.py`, `App/fw_assets.h`, `App/driver/mb_flash.h:127-149`,
+`CMakeLists.txt:175-199`). El pack va a la zona de activos de la flash externa del slot (16 KiB por slot desde
+0x1CA000), con la imagen en el slot (stride 0x20000, +0x1000). `proto.writeSlotPackage` exige copia de
+seguridad completa verificada, paquete v7 con pack ligado al build ID de la imagen, firmware activo v7, slot no
+en ejecucion y confirmacion; escribe imagen, luego la zona de activos (0x0752 borrar, 0x0754 escribir,
+cabecera al final, 0x0756 validar) y relee 0x0750. Cualquier paquete que no pueda verificar se rechaza.
+Pruebas: `tests/connectors.test.cjs` (radio falsa, sin serie real).
+
+Candidatos: `.github/workflows/firmware-candidates.yml`, job `bricohams-v7` (manual, toolchain y commit fijados,
+`build-info.json` + SHA-256, nunca se adjunta a una release).
+
+Plan de prueba en radio real (pendiente): 1) arranque de cada slot v7; 2) con squelch abierto, pasos de 1 kHz
+en VFO sin corte de audio, y cambio de modulacion/ancho de banda con reconfiguracion completa; 3) cambio entre
+slots multiboot y comprobar que los textos (activos) siguen presentes; 4) retroceso: reinstalar el respaldo
+verificado o volver al slot v6.1. Todas las compilaciones nuevas son Beta con `hardwareBootTested: false` y no
+estan en `precompiled/` ni en `catalog.json`.
 ## Identidad y alcance
 
 **BETA, en validacion y pruebas.** Las nuevas compilaciones declaran

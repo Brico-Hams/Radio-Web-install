@@ -41,6 +41,26 @@ Stato: compilato in GitHub Actions (toolchain fissata 13.3.rel1), pubblicato com
 stabile senza "BETA" e provato su radio fisica da EA5KGV su una UV-K5 V3 il
 17-11-2026 (prova dichiarata dall'autore, non certificazione indipendente).
 
+## Audio continuo su F4HWN v7.0.0 e varianti v7 (2026-11-25)
+
+Causa confermata su v7.0.0 (`f6f34cbc3e10dd688f8348cc7f4300a859064621`), stesso percorso di v6.1: `App/app/main.c:1033-1037` (passo VFO: `BK4819_SetFrequency`, `BK4819_RX_TurnOn`, `gRequestSaveChannel = 1`) -> `App/app/app.c:2809-2854` -> `App/radio.c:792-971` (`RADIO_SetupRegisters(true)`: `AUDIO_AudioPathOff()` a riga 803, `gEnableSpeaker=false` a 805, `FUNCTION_Select(FUNCTION_FOREGROUND)` a 970). Correzione: `scripts/firmware-fast-retune.cjs` si applica senza modifiche (marcatore `BRICOHAMS_FAST_RETUNE`); test offline `tests/firmware-v7.test.cjs`. Il confronto con IJV è solo comportamentale (freeware chiuso la cui licenza vieta modifica, decompilazione e disassemblaggio; destinato a UV-K5 V1 DP32G030, non V3 PY32); nessun binario IJV è stato analizzato.
+
+Portato su v7: retune rapido, lettura backup 0x0738 / CRC 0x073E senza ampliare cancellazione 0x073A o scrittura 0x073C, nome edizione, preset Fusion e Service (`build-bricohams.cjs --target v7`), identità multiboot upstream (nessun bootloader). Moduli: ancore ritrovate, compilazione non verificata.
+
+Audit del catalogo: tutte le 9 varianti di `catalog.json` hanno `fastRetuneIntegration` e `backupReadIntegration` in `build.build-info` (`build-info.json`). Catena di chiamate v7 aggiuntiva: `SETTINGS_SaveChannel`, `RADIO_ConfigureChannel`, `RADIO_SetModulation`. `gFlagReconfigureVfos` attiva la configurazione completa. Nulla in `precompiled/` né `precompiled/catalog.json` è stato ricompilato o modificato; test dell'installer: `tests/connectors.test.cjs`. Tutte le nuove compilazioni sono Beta con `hardwareBootTested: false`, fuori da `precompiled/` e `catalog.json`.
+
+| Variante | Base | Stato |
+|---|---|---|
+| fusion, service (v7) | v7.0.0 Fusion/Service | Beta, non compilata qui (nessuna toolchain ARM locale), `hardwareBootTested: false` |
+| ardf, satellite, spectrum (v7) | v7.0.0 Service + FOXHUNT | Beta, ancore OK, compilazione in sospeso |
+| labs, f4hwn-fieldops, f4hwn-labs, f4hwn-transfer | v6.1.0 | Restano su v6.1: v7 ha rimosso i preset Labs, FieldOps e Transfer |
+
+Base di compilazione delle varianti con moduli: Service più `FOXHUNT=ON`, `OVERLAY_APPS=OFF` e `BEACON=OFF`; la guardia di `scheduler.c` accetta anche `K5VIEWER`.
+
+Installer: un pacchetto v7 è immagine più pack FWA1 più trailer FWAT (`cmake/pack_fw_assets.py`, `App/fw_assets.h`, `App/driver/mb_flash.h:127-149`, `CMakeLists.txt:175-199`); `proto.writeSlotPackage` richiede un backup completo verificato, un pack legato al build ID dell'immagine e uno slot non in esecuzione, e rifiuta ciò che non può verificare.
+
+Candidati: job manuale `bricohams-v7` in `.github/workflows/firmware-candidates.yml`, mai allegato a una release. Piano di prova su radio reale (in sospeso): avvio, controllo audio del passo VFO con squelch aperto, cambio slot multiboot, rollback al backup verificato.
+
 ## Identità e ambito
 
 **BETA, in fase di convalida e test.** Le nuove compilazioni dichiarano

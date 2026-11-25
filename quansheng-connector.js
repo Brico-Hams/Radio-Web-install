@@ -1099,7 +1099,11 @@
       const { version } = inspectSlotImage(image);
       R.assert(/^[\x20-\x7e]{1,15}$/.test(name), "Nombre de slot: 1-15 caracteres ASCII.");
       await R.verifySlotReplacement(this, permit, slot, image, name);
-      return this.run("Instalar firmware en slot", async () => {
+      return this.run("Instalar firmware en slot", () => this.writeSlotImage(slot, image, name, version));
+    }
+    // Body of writeSlot without run(), so the v7 package flow can chain the asset zone in one operation.
+    async writeSlotImage(slot, image, name, version) {
+      {
         const checksum = R.crc32(image);
         await this.slotMutation(0x0722, slot, this.authSlot(slot));
         const chunk = async (offset, source) => {
@@ -1132,7 +1136,7 @@
         const written = await this.infoRaw(slot);
         R.assert(written.status === 0 && written.magic === 0x31424d46 && written.size === image.length && written.crc === checksum,
           "CRC verificado, pero el slot no informa una cabecera valida. No arranques el slot sin comprobarlo.");
-      });
+      }
     }
     async appInfoRaw(slot) {
       const data = await this.exchange(0x0730, Uint8Array.of(slot), 0x0731, 3000);

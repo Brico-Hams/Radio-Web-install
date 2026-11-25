@@ -13,15 +13,25 @@ const UPSTREAM = Object.freeze({
   commit: "f556a96e73c3e423a00cf473aeb37f827cac05a5",
   tag: "v6.1.0"
 });
+// v7 targets: packages (image + FWA1 asset pack + FWAT trailer), presets Fusion/Service. Beta until a radio boot test.
+const UPSTREAM_V7 = Object.freeze({
+  repository: "https://github.com/armel/uv-k1-k5v3-firmware-custom",
+  commit: "f6f34cbc3e10dd688f8348cc7f4300a859064621",
+  tag: "v7.0.0"
+});
+const TARGETS = Object.freeze({
+  v6: { upstream: UPSTREAM, presets: ["Fusion", "Labs", "FieldOps", "Transfer"], required: [] },
+  v7: { upstream: UPSTREAM_V7, presets: ["Fusion", "Service"], required: ["ENABLE_FEAT_F4HWN_FW_ASSETS"] }
+});
 const REQUIRED = ["ENABLE_FEAT_F4HWN", "ENABLE_UART", "ENABLE_USB",
   "ENABLE_FEAT_F4HWN_MULTIBOOT", "ENABLE_FEAT_F4HWN_MULTIBOOT_OVERLAY"];
 
 function readArguments(args) {
-  const result = { preset: "Fusion", options: [] };
+  const result = { preset: "Fusion", options: [], target: "v6" };
   const seen = new Set();
   for (let i = 0; i < args.length; i++) {
     const key = args[i];
-    assert(["--source", "--output", "--preset", "--option", "--module"].includes(key), `Argumento desconocido: ${key}`);
+    assert(["--source", "--output", "--preset", "--option", "--module", "--target"].includes(key), `Argumento desconocido: ${key}`);
     const value = args[++i];
     assert(value && !value.startsWith("--"), `Falta valor para ${key}`);
     if (key === "--module") (result.modules ??= []).push(value);
@@ -33,12 +43,14 @@ function readArguments(args) {
       result[name] = value;
     }
   }
-  assert(result.source && result.output, "Uso: node scripts/build-bricohams.cjs --source <Fusion61> --output <directorio nuevo> [--preset Fusion|Labs|FieldOps|Transfer] [--option ENABLE_XXX=OFF] [--module ardf|satellite|spectrum]");
+  assert(result.source && result.output, "Uso: node scripts/build-bricohams.cjs --source <Fusion61|Fusion70> --output <directorio nuevo> [--target v6|v7] [--preset Fusion|Labs|FieldOps|Transfer (v7: Fusion|Service)] [--option ENABLE_XXX=OFF] [--module ardf|satellite|spectrum]");
+  assert(Object.hasOwn(TARGETS, result.target), "Objetivo desconocido: usa v6 o v7.");
   return result;
 }
 
-function resolvePlan(catalog, preset, changes) {
-  assert(["Fusion", "Labs", "FieldOps", "Transfer"].includes(preset), "Edicion no admitida para Bricohams Multiboot.");
+function resolvePlan(catalog, preset, changes, target = "v6") {
+  const { upstream, presets, required } = TARGETS[target];
+  assert(presets.includes(preset), "Edicion no admitida para Bricohams Multiboot.");
   const visiting = new Set();
   function inherit(name) {
     assert(!visiting.has(name), `Herencia circular: ${name}`);
@@ -53,7 +65,7 @@ function resolvePlan(catalog, preset, changes) {
     return values;
   }
   const defaults = inherit(preset);
-  assert.equal(defaults.VERSION_STRING_2, UPSTREAM.tag, "Version de fuentes distinta de la fijada.");
+  assert.equal(defaults.VERSION_STRING_2, upstream.tag, "Version de fuentes distinta de la fijada.");
   const options = Object.fromEntries(Object.entries(defaults).filter(([, value]) => typeof value === "boolean"));
   const requested = new Set();
   for (const change of changes) {
@@ -64,17 +76,25 @@ function resolvePlan(catalog, preset, changes) {
     options[match[1]] = match[2] === "ON";
   }
   assert(!options.DEV, "No se admiten builds de desarrollo.");
-  for (const name of REQUIRED) assert(options[name], `${name} debe estar ON para este perfil Multiboot.`);
+  for (const name of [...REQUIRED, ...required]) assert(options[name], `${name} debe estar ON para este perfil Multiboot.`);
   const delta = Object.keys(options).filter(name => options[name] !== defaults[name])
     .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)).map(name => `${name}=${options[name] ? "ON" : "OFF"}`);
   return { options, delta };
 }
 
-function inspectFirmware(bytes) {
+function inspectFirmware(bytes, target = "v6") {
   require("../radio-core.js");
   const R = require("../quansheng-connector.js");
-  const result = R.inspectQuanshengSlotImage(new Uint8Array(bytes));
-  assert.equal(`v${result.version}`, UPSTREAM.tag, "Version del binario distinta de la fijada.");
+  const { upstream } = TARGETS[target];
+  let result;
+  if (target === "v7") {
+    require("../quansheng-tools.js");
+    const parsed = R.inspectQuanshengFirmwarePackage(new Uint8Array(bytes));
+    assert(parsed.pack && parsed.bound, "El paquete v7 debe llevar FWAT/FWA1 con Build ID igual al de la imagen.");
+    result = { version: parsed.version, size: parsed.image.length, packageBytes: bytes.length,
+      assetBytes: parsed.pack.length, buildId: parsed.assets.buildId };
+  } else result = R.inspectQuanshengSlotImage(new Uint8Array(bytes));
+  assert.equal(`v${result.version}`, upstream.tag, "Version del binario distinta de la fijada.");
   assert(bytes.includes(Buffer.from("Bricohams")), "El binario no contiene la identidad de la edicion Bricohams.");
   return result;
 }
@@ -126,13 +146,14 @@ function build(args) {
   assert(!fs.existsSync(output), `El destino ya existe; usa un directorio nuevo: ${output}`);
   const capture = (command, argv, cwd = source, env = process.env) =>
     execFileSync(command, argv, { cwd, env, encoding: "utf8", maxBuffer: 16 * 1024 * 1024 }).trim();
-  assert.equal(capture("git", ["rev-parse", `${UPSTREAM.commit}^{commit}`]), UPSTREAM.commit);
-  const catalog = JSON.parse(capture("git", ["show", `${UPSTREAM.commit}:CMakePresets.json`]));
-  const plan = resolvePlan(catalog, args.preset, args.options);
+  const upstream = TARGETS[args.target].upstream;
+  assert.equal(capture("git", ["rev-parse", `${upstream.commit}^{commit}`]), upstream.commit);
+  const catalog = JSON.parse(capture("git", ["show", `${upstream.commit}:CMakePresets.json`]));
+  const plan = resolvePlan(catalog, args.preset, args.options, args.target);
   const modules = modulePlan(args.modules ?? [], plan.options);
   const dirty = capture("git", ["status", "--porcelain"]);
   if (dirty) console.warn("AVISO: hay cambios locales en las fuentes; NO se incluyen. Se compila exclusivamente el commit fijado.");
-  const epoch = capture("git", ["show", "-s", "--format=%ct", UPSTREAM.commit]);
+  const epoch = capture("git", ["show", "-s", "--format=%ct", upstream.commit]);
   assert(/^\d+$/.test(epoch), "Fecha del commit no valida.");
   const env = { ...process.env, SOURCE_DATE_EPOCH: epoch, TZ: "UTC", LC_ALL: "C" };
   const compiler = capture("arm-none-eabi-gcc", ["--version"], source, env);
@@ -146,8 +167,8 @@ function build(args) {
     execFileSync(command, argv, { cwd, env, stdio: "inherit" });
   };
   run("git", ["clone", "--local", "--no-hardlinks", "--no-checkout", source, work]);
-  run("git", ["-C", work, "checkout", "--detach", UPSTREAM.commit]);
-  const moduleSources = modules.length ? integrateModule(work, modules[0]) : [];
+  run("git", ["-C", work, "checkout", "--detach", upstream.commit]);
+  const moduleSources = modules.length ? integrateModule(work, modules[0], args.target) : [];
   const backupReadIntegration = integrateBackupRead(work);
   const fastRetuneIntegration = integrateFastRetune(work);
   for (const item of moduleSources)
@@ -167,13 +188,17 @@ function build(args) {
     ...Object.entries(plan.options).map(([name, value]) => `-D${name}=${value ? "ON" : "OFF"}`)], work);
   run("cmake", ["--build", binary, "--parallel", "2"], work);
   const bytes = fs.readFileSync(path.join(binary, "bricohams.bin"));
-  const inspected = inspectFirmware(bytes);
+  const inspected = inspectFirmware(bytes, args.target);
   const sizeReport = capture("arm-none-eabi-size", ["-A", path.join(binary, "bricohams.elf")], work, env);
   const memory = inspectMemoryUsage(sizeReport, inspected.size);
-  const firmware = `bricohams.${args.preset.toLowerCase()}${modules.length ? `.${modules.join(".")}` : ""}.${UPSTREAM.tag}.bin`;
+  const v7 = args.target === "v7";
+  const firmware = `bricohams.${args.preset.toLowerCase()}${modules.length ? `.${modules.join(".")}` : ""}.${upstream.tag}.bin`;
   const info = {
     format: "bricohams-firmware-build", version: 1, firmware, preset: args.preset,
-    edition: "Bricohams", hardware: ["UV-K5 V3", "UV-K1"], upstream: UPSTREAM,
+    edition: "Bricohams", hardware: ["UV-K5 V3", "UV-K1"], upstream,
+    target: args.target,
+    ...(v7 ? { package: { format: "FWAT/FWA1", packageBytes: inspected.packageBytes, assetBytes: inspected.assetBytes,
+      buildId: inspected.buildId }, hardwareBootTested: false } : {}),
     options: plan.delta, effectiveOptions: plan.options,
     sourceDateEpoch: Number(epoch), toolchain: { compiler, cmake, ninja },
     imageBytes: inspected.size, memory, sourceChangesIncluded: false,
@@ -194,10 +219,12 @@ function build(args) {
     ...(modules.includes("ardf") ? { ardfStatistics: { version: 1, command: 0x7b20,
       reply: 0x7b21, snapshotBytes: 140, manualObservationKey: "8",
       persistentWrites: false, hardwareValidated: false } } : {}),
-    stability: "stable", validation: "Structural checks only; physical validation pending"
+    stability: v7 ? "beta" : "stable", validation: "Structural checks only; physical validation pending"
   };
   fs.mkdirSync(artifacts);
   fs.writeFileSync(path.join(artifacts, firmware), bytes);
+  if (v7) for (const part of ["image", "assets"])
+    fs.copyFileSync(path.join(binary, `bricohams.${part}.bin`), path.join(artifacts, firmware.replace(/\.bin$/, `.${part}.bin`)));
   fs.copyFileSync(path.join(binary, "bricohams.elf"), path.join(artifacts, "bricohams.elf"));
   fs.copyFileSync(path.join(binary, "bricohams.map"), path.join(artifacts, "bricohams.map"));
   for (const name of ["LICENSE", "NOTICE"]) fs.copyFileSync(path.join(work, name), path.join(artifacts, name));
@@ -220,4 +247,4 @@ if (require.main === module) {
     process.exitCode = 1;
   }
 }
-module.exports = { UPSTREAM, readArguments, resolvePlan, inspectFirmware, inspectMemoryUsage, brandWelcome, brandLogo, build };
+module.exports = { UPSTREAM, UPSTREAM_V7, TARGETS, readArguments, resolvePlan, inspectFirmware, inspectMemoryUsage, brandWelcome, brandLogo, build };

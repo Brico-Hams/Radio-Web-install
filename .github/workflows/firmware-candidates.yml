@@ -57,3 +57,57 @@ jobs:
           name: firmware-candidate-rt950-pro-hertzz
           path: ${{ runner.temp }}/out/artifacts/
           if-no-files-found: error
+  # F4HWN v7.0.0 + BricoHams patches (fast retune, backup read, edition name, modules). Beta, hardwareBootTested false.
+  bricohams-v7:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - variant: fusion
+            args: --preset Fusion --option ENABLE_VOX=OFF
+          - variant: service
+            args: --preset Service --option ENABLE_VOX=OFF
+          - variant: ardf
+            args: --preset Service --option ENABLE_FEAT_F4HWN_FOXHUNT=ON --option ENABLE_FEAT_F4HWN_OVERLAY_APPS=OFF --option ENABLE_FEAT_F4HWN_BEACON=OFF --option ENABLE_VOX=OFF --module ardf
+          - variant: satellite
+            args: --preset Service --option ENABLE_FEAT_F4HWN_FOXHUNT=ON --option ENABLE_FEAT_F4HWN_OVERLAY_APPS=OFF --option ENABLE_FEAT_F4HWN_BEACON=OFF --option ENABLE_VOX=OFF --module satellite
+          - variant: spectrum
+            args: --preset Service --option ENABLE_FEAT_F4HWN_FOXHUNT=ON --option ENABLE_FEAT_F4HWN_OVERLAY_APPS=OFF --option ENABLE_FEAT_F4HWN_BEACON=OFF --option ENABLE_VOX=OFF --module spectrum
+    env:
+      # Must match UPSTREAM_V7 in scripts/build-bricohams.cjs (v7.0.0).
+      UPSTREAM_REPO: armel/uv-k1-k5v3-firmware-custom
+      UPSTREAM_COMMIT: f6f34cbc3e10dd688f8348cc7f4300a859064621
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ env.UPSTREAM_REPO }}
+          ref: ${{ env.UPSTREAM_COMMIT }}
+          path: upstream
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      - name: Install build tools and the pinned ARM toolchain
+        run: |
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends cmake ninja-build python3
+          curl -fsSL -o "$RUNNER_TEMP/$ARM_GCC.tar.xz" \
+            "https://developer.arm.com/-/media/Files/downloads/gnu/13.3.rel1/binrel/$ARM_GCC.tar.xz"
+          echo "$ARM_GCC_SHA256  $RUNNER_TEMP/$ARM_GCC.tar.xz" | sha256sum --check
+          tar -xf "$RUNNER_TEMP/$ARM_GCC.tar.xz" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/$ARM_GCC/bin" >> "$GITHUB_PATH"
+      - name: Build v7 ${{ matrix.variant }} (package = image + FWA1 asset pack + FWAT trailer)
+        env:
+          ARGS: ${{ matrix.args }}
+        run: |
+          # ARGS is a fixed matrix value, never user input; word splitting is intended.
+          node scripts/build-bricohams.cjs --target v7 --source upstream --output "$RUNNER_TEMP/out" $ARGS
+          cd "$RUNNER_TEMP/out/artifacts" && sha256sum --check --quiet SHA256SUMS && ls -l
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: firmware-candidate-bricohams-v7-${{ matrix.variant }}
+          path: ${{ runner.temp }}/out/artifacts/
+          if-no-files-found: error

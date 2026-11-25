@@ -45,14 +45,85 @@
     R.assert(!/SA818/i.test(text), "Variante SA818 no admitida para esta radio.");
     if (version[1].startsWith("6.")) R.inspectQuanshengSlotImage(image);
     return { image: image.slice(), pack: pack?.slice() || null, version: version[1],
-      assets: pack ? inspectAssetPack(pack) : null };
+      assets: pack ? inspectAssetPack(pack) : null, imageBuildId: imageBuildId(image),
+      bound: Boolean(pack) && imageBuildId(image) === inspectAssetPack(pack).buildId };
   }
-  proto.assetInfoRaw = async function () {
-    const response = await this.exchange(0x0750, Uint8Array.of(255), 0x0751, 5000);
-    R.assert(response.length >= 52 && response[0] <= 4 && response[2] === response[0] &&
+  const hex = bytes => [...bytes].map(value => value.toString(16).padStart(2, "0")).join("");
+  // GNU build-id note (App/fw_assets.h binds the pack to it): namesz 4, descsz 16, type 3, "GNU\0", 16 bytes.
+  function imageBuildId(image) {
+    const note = Uint8Array.of(4, 0, 0, 0, 16, 0, 0, 0, 3, 0, 0, 0, 0x47, 0x4e, 0x55, 0);
+    const found = [];
+    for (let offset = 0; offset + 32 <= image.length; offset += 4) {
+      if (R.equal(image.subarray(offset, offset + 16), note)) found.push(hex(image.subarray(offset + 16, offset + 32)));
+    }
+    return found.length === 1 ? found[0] : null;
+  }
+  // Slot 0xFF is the running firmware; any other slot is reported for integrity only (App/app/uart.c, case 0x0750).
+  proto.assetInfoRaw = async function (slot = 255) {
+    const response = await this.exchange(0x0750, Uint8Array.of(slot), 0x0751, 5000);
+    R.assert(response.length >= 52 && response[0] <= 4 && response[2] <= 4 &&
+      (slot === 255 ? response[2] === response[0] : response[0] === slot) &&
       response[3] <= 1, "Respuesta de recursos v7 no valida o slot activo desconocido.");
-    return { slot: response[0], status: response[1], loaded: response[3] === 1,
-      buildId: [...response.subarray(36, 52)].map(value => value.toString(16).padStart(2, "0")).join("") };
+    return { slot: response[0], status: response[1], running: response[2], loaded: response[3] === 1,
+      header: response.slice(4, 36), buildId: hex(response.subarray(36, 52)) };
+  };
+  // Erase, write payload, write the 32-byte header LAST, then validate (App/app/uart.c 0x0752-0x0756).
+  async function programAssetZone(connector, slot, pack) {
+    const authorize = () => {
+      const data = new Uint8Array(6); data[0] = slot;
+      R.view(data).setUint32(2, connector.timestamp, true);
+      return data;
+    };
+    const check = response => R.assert(response.length === 2 && response[0] === slot &&
+      response[1] === 0, "Operacion de recursos rechazada por firmware.");
+    check(await connector.exchange(0x0752, authorize(), 0x0753, 35000));
+    const write = async (offset, bytes) => {
+      const data = new Uint8Array(12 + bytes.length);
+      data[0] = slot;
+      R.view(data).setUint32(2, offset, true);
+      R.view(data).setUint16(6, bytes.length, true);
+      R.view(data).setUint32(8, connector.timestamp, true);
+      data.set(bytes, 12);
+      for (let attempt = 0; ; attempt++) {
+        try { check(await connector.exchange(0x0754, data, 0x0755, 5000, true)); break; }
+        catch (error) {
+          if (error.code !== "READ_TIMEOUT" || connector.transport.error || attempt >= 4) throw error;
+          connector.progress(offset / pack.length, `Reintentando bloque de recursos identico (${attempt + 1}/4).`);
+        }
+      }
+    };
+    for (let offset = 32; offset < pack.length; offset += 128) {
+      await write(offset, pack.subarray(offset, offset + 128));
+      connector.progress(Math.min(offset + 128, pack.length) / pack.length, "Escribiendo recursos; cabecera pendiente");
+    }
+    await write(0, pack.subarray(0, 32));
+    check(await connector.exchange(0x0756, Uint8Array.of(slot), 0x0757, 10000));
+  }
+  // Installs a complete v7 package into multiboot slot 1-4: image first, then its bound asset zone.
+  proto.writeSlotPackage = async function (slot, input, name, permit) {
+    R.assert(R.hasBackup(this, permit), "Paquete v7 en slot: requiere respaldo completo verificado de esta sesion.");
+    this.authSlot(slot);
+    const bytes = R.bytes(input).slice();
+    const parsed = inspectFirmwarePackage(bytes);
+    R.assert(parsed.version.startsWith("7.") && parsed.pack && parsed.bound,
+      "Paquete v7 no verificable: falta trailer FWAT, FWA1 o el Build ID de la imagen no coincide.");
+    R.assert(/^[\x20-\x7e]{1,15}$/.test(name), "Nombre de slot: 1-15 caracteres ASCII.");
+    R.assert(/F4HWN.*v7\./i.test(this.info?.firmware || ""),
+      "Los recursos de otro slot requieren firmware v7 activo en la radio.");
+    await R.verifyBackup(this, permit);
+    return this.run("Instalar paquete v7 en slot", async () => {
+      try {
+        const before = await this.assetInfoRaw(slot);
+        R.assert(before.running !== slot, "El slot esta en ejecucion; arranca otro slot antes de reemplazarlo.");
+        await this.writeSlotImage(slot, parsed.image, name, parsed.version);
+        await programAssetZone(this, slot, parsed.pack);
+        const after = await this.assetInfoRaw(slot);
+        R.assert(after.status === 0 && R.equal(after.header, parsed.pack.subarray(0, 32)),
+          "Los recursos del slot no aparecen validos tras verificar. No arranques el slot sin comprobarlo.");
+        return { slot, version: parsed.version, buildId: parsed.assets.buildId, imageBytes: parsed.image.length,
+          assetBytes: parsed.pack.length, firmwareValidated: true, physicalBootTested: false };
+      } finally { R.revokeBackup(this); }
+    });
   };
   proto.installFirmwareAssets = async function (input, permit, acknowledgement) {
     R.assertBackup(this, permit);
@@ -64,36 +135,8 @@
     return this.run("Instalar recursos de firmware v7", async () => {
       const info = await this.assetInfoRaw();
       R.assert(info.buildId === manifest.buildId, "Build ID distinto al firmware activo; no se borran recursos.");
-      const authorize = () => {
-        const data = new Uint8Array(6); data[0] = info.slot;
-        R.view(data).setUint32(2, this.timestamp, true);
-        return data;
-      };
-      const check = response => R.assert(response.length === 2 && response[0] === info.slot &&
-        response[1] === 0, "Operacion de recursos rechazada por firmware.");
       try {
-        check(await this.exchange(0x0752, authorize(), 0x0753, 35000));
-        const write = async (offset, bytes) => {
-          const data = new Uint8Array(12 + bytes.length);
-          data[0] = info.slot;
-          R.view(data).setUint32(2, offset, true);
-          R.view(data).setUint16(6, bytes.length, true);
-          R.view(data).setUint32(8, this.timestamp, true);
-          data.set(bytes, 12);
-          for (let attempt = 0; ; attempt++) {
-            try { check(await this.exchange(0x0754, data, 0x0755, 5000, true)); break; }
-            catch (error) {
-              if (error.code !== "READ_TIMEOUT" || this.transport.error || attempt >= 4) throw error;
-              this.progress(offset / pack.length, `Reintentando bloque de recursos identico (${attempt + 1}/4).`);
-            }
-          }
-        };
-        for (let offset = 32; offset < pack.length; offset += 128) {
-          await write(offset, pack.subarray(offset, offset + 128));
-          this.progress(Math.min(offset + 128, pack.length) / pack.length, "Escribiendo recursos; cabecera pendiente");
-        }
-        await write(0, pack.subarray(0, 32));
-        check(await this.exchange(0x0756, Uint8Array.of(info.slot), 0x0757, 10000));
+        await programAssetZone(this, info.slot, pack);
         const after = await this.assetInfoRaw();
         R.assert(after.slot === info.slot && after.buildId === manifest.buildId && after.status === 0 && after.loaded,
           "Recursos no aparecen validos y cargados despues de verificar.");
