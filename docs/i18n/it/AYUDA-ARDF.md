@@ -102,6 +102,19 @@ di un'altra radio. Non corregge l'oscillatore RF e non richiede modifiche alla
 calibrazione RF. Dopo la modifica, ripeti una misurazione e verifica la
 sincronizzazione.
 
+## Correzione con la temperatura (reald v0.6) e modulo Bricohams
+
+La release `ARDF-K5v3_K1-v0.6` (commit `bfdf068f3c78`, `App/app/ardf.h`) estende
+ClkCor con K1 (offset) e K2 (fattore di temperatura), entrambi da -500 a 500
+tick al minuto, sulla temperatura media del ciclo delle volpi; un valore
+positivo indica un orologio veloce. Il nostro modulo `ardf` (Beta, base v6.1 e
+port v7) porta questo modello nel nucleo, convertito in ppm e limitato a
++-50000. In Fox Hunt il tasto 0 scorre K1 da -60 a 60 a passi di 10 (solo
+sessione, senza EEPROM; la riga mostra `C+10`). K2 e il sensore di temperatura
+restano **in attesa di fonte**: v6.1/v7 non hanno lettura ADC della temperatura
+e nulla viene inventato. Non si porta nemmeno la persistenza di reald (settore
+0x00D000, che in v7 è il logo di avvio).
+
 ## Differenze storiche verificabili
 
 - Il documento indica che prima della v0.4 SetNav si trovava nel menu nascosto;

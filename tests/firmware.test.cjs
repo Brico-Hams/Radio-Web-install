@@ -60,7 +60,8 @@ test("F4 catalog accepts only stable same-repository releases and known matching
   assert.throws(() => parseF4Release({ ...metadata, assets: [{ ...metadata.assets[0], name: "f4hwn.labs.v6.1.0.bin" }] }, "UV-K1"));
 });
 test("ARDF stable releases are verified downloads, never slot images", () => {
-  for (const metadata of [ardfRelease(), ardfRelease("ARDF-K5v3_K1-v0.5.1", "UV_K5v3_K1_ARDF.bin")]) {
+  for (const metadata of [ardfRelease(), ardfRelease("ARDF-K5v3_K1-v0.5.1", "UV_K5v3_K1_ARDF.bin"),
+     ardfRelease("ARDF-K5v3_K1-v0.6", "UV_K5v3_K1_ARDF.bin")]) {
     for (const target of ["UV-K1", "UV-K5-V3"]) {
       const [entry] = parseQuanshengRelease(metadata, target, "reald/uv-k1-k5v3-firmware-custom");
       assert.equal(entry.edition, "ARDF");

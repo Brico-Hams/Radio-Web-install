@@ -68,6 +68,19 @@ correccion = 6000 - (segundos_reales * 100 / 60)
 
 Das Dokument nennt für ClkCor den Bereich -500 bis 500. Diese Formel gilt nur für das Verfahren dieser Version, nicht für ein beliebiges Uhrmenü eines anderen Funkgeräts. Sie korrigiert nicht den RF-Oszillator und erfordert keine Änderung der RF-Kalibrierung. Nach einer Änderung erneut messen und Synchronisierung prüfen.
 
+## Temperaturkorrektur (reald v0.6) und Bricohams-Modul
+
+Das Release `ARDF-K5v3_K1-v0.6` (Commit `bfdf068f3c78`, `App/app/ardf.h`)
+erweitert ClkCor um K1 (Offset) und K2 (Temperaturfaktor), beide -500 bis 500
+Ticks pro Minute, bezogen auf die mittlere Temperatur des Fuchszyklus; ein
+positiver Wert bedeutet eine schnelle Uhr. Unser Modul `ardf` (Beta, Basis v6.1
+und v7-Port) übernimmt dieses Modell im Kern, in ppm umgerechnet und auf +-50000
+begrenzt. In Fox Hunt schaltet Taste 0 K1 von -60 bis 60 in Schritten von 10
+weiter (nur Sitzung, kein EEPROM; die Zeile zeigt `C+10`). K2 und der
+Temperatursensor bleiben **quellenpflichtig offen**: v6.1/v7 haben keine
+ADC-Temperaturmessung und es wird nichts erfunden. Auch die Speicherung von reald wird
+nicht übernommen (Sektor 0x00D000, in v7 das Startlogo).
+
 ## Überprüfbare historische Unterschiede
 
 - Laut Dokument befand sich SetNav vor v0.4 in einem versteckten Menü; setze denselben Ort nicht für alle Versionen voraus.

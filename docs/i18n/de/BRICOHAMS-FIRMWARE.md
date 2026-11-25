@@ -1239,6 +1239,7 @@ In Fox Hunt bei entsperrter Tastatur:
 | 7 | Beginn des ausgewählten Senders mit dem tatsächlichen Ereignis synchronisieren |
 | 8 | Aktuelle Dämpfung speichern und eine manuelle Beobachtung des aktuellen Senders aufzeichnen |
 | 9 | Gespeicherte Dämpfung des aktuellen Senders manuell wiederherstellen, sofern vorhanden |
+| 0 | Uhr-Offset K1 (Modell reald v0.6): -60...60 Ticks/Minute in Schritten von 10, nur Sitzung; die Zeile zeigt `C+10`. Die Phase wird nicht zurückgesetzt |
 | EXIT | Fox Hunt beenden; Upstream-Verhalten bleibt erhalten |
 
 Die Kontextzeile zeigt vor der Synchronisierung Nummer/Dauer/Auswahl
@@ -1248,6 +1249,33 @@ Nummer/Dauer initialisiert ihn neu. F kehrt die neuen Aktionen 4–9 nicht um.
 Die vorhandene Tastensperre verhindert weiterhin diese Tastenaktionen. Bei jedem Eintritt
 beginnt der Modus mit OFF; es gibt keine persistente Wiederherstellung und in diesem ersten Adapter
 keinen Speicher für zwei VFOs (der Kern unterstützt zwei Bänke).
+
+### Vergleich mit reald ARDF v0.6 und Umfang des Ports (2026-11-26)
+
+Referenz: `reald/uv-k1-k5v3-firmware-custom`, Tag `ARDF-K5v3_K1-v0.6`, Commit
+`bfdf068f3c78e12e8daa07a48f273d36b38f5816` (Apache-2.0, schreibgeschützt geklont nach
+`data/third-party/refs/reald/`, von Git ignoriert). Gemeinsame F4HWN-Basis
+`8a8752f80c58` (5.2.0): reald liegt 47 Commits vor und 841 hinter armel
+main; unsere Basen sind v6.1.0 und v7.0.0.
+
+| reald-Funktion (Datei) | Unser `ardf` | Status |
+|---|---|---|
+| 1-10 Füchse, Dauer, Endhinweis 0-30 s (`App/app/ardf.c`, `ardf.h`) | Gleichwertig (Kern `bh_ardf`, 15-120 s) | Bereits vorhanden |
+| Uhrkorrektur K1 + K2 mit mittlerer Zyklustemperatur (`ardf.h`, `ARDF_DURATION_CORR`) | K1 im Kern portiert (`bh_ardf_clock_ppm`, ppm, Grenze +-50000; Taste 0, nur Sitzung); Temperaturakkumulator bereit | **K2 quellenpflichtig offen**: v6.1/v7 haben kein `BOARD_ADC_GetTemperature` (reald ergänzt es in `App/board.c` mit PY32F071-ADC-Änderungen, ohne Funkgerät nicht prüfbar) |
+| Manuelle Verstärkung je Fuchs und Speicher je VFO | Fox-Hunt-Dämpfungsspeicher (6 Upstream-Stufen) im Adapter | Andere Skala; Tabellen werden nicht gemischt |
+| Verstärkungstricks (LNA aus, Oberwellen-Retune) | Nein | Nicht portiert: steuern die BK4819-LNA-GPIOs auf anderer Basis; keine Quelle für unsere Skala |
+| RSSI-Entfernungsschätzung (`App/ui/ardf.c`) | Nein | Nicht portiert: hängt von seiner Verstärkungstabelle und eigenen RSSI0-Kalibrierung ab |
+| Draussenfuchs-/DF-Simple-Modus (ohne Zeitsteuerung) | Fox Hunt mit ARDF OFF (Taste 4) ist der Modus ohne Zeitsteuerung | Funktional gleichwertig |
+| TX im ARDF-Modus deaktiviert | Das Modul berührt weder TX noch PTT | Unverändert (nicht portiert) |
+| ARDF-Speicherung im EEPROM-Sektor 0x00D000 (`App/settings.c`) | Sitzung nur im RAM | **Konflikt**: in v7 ist 0x00D000 das Startlogo (`eeprom_compat.c`); Speicherkarten werden nicht verschoben |
+| Eigener ARDF-Bildschirm/Menü (NumFox, FoxDur, ClkCor...) auf F4HWN 5.2.0 | Hooks in `foxhunt.c` von v6.1/v7 | **Code nicht portierbar**: andere Architektur und Basis |
+
+Das Kalibrierwerkzeug `ardf_clk_drift_tool` existiert nur auf reald `main`, 4 Commits nach dem Tag; es ist nicht fixiert und wird nicht verwendet. Erhalten bleiben:
+Schnell-Retune, Backup-Lesen, Multiboot-Slot-Identität und das Bricohams-Logo. Weiterhin Beta,
+`hardwareBootTested: false`; `precompiled/` bleibt unberührt. reald v0.6 wird nicht als gebauter
+Kandidat aufgenommen: Das offizielle Binary erkennt der Katalog bereits
+(`reald / ARDF`, nur Download) und es dient dem Bankvergleich, ohne eine weitere
+Basis ohne ARM-Toolchain oder prüfbare Quelle neu zu bauen.
 
 Struktureller Build vom 25.10.2026:
 Imagegröße 112672 Bytes, RAM 12448/16384, gelinkter Flash 111784/120832,
