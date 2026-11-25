@@ -206,6 +206,8 @@ test("agent with ranges refuses a key-up whose emission leaves them and allows t
     assert.ok(!rig.log.includes("T 1"));
     await waitFor(async () => (await state()).txInhibit.state === "outside");
     assert.equal((await cmd({ cmd: "mode", value: "LSB", passband: 2700 })).status, 200);
+        rig.mode = "LSB"; // the fake rig does not apply M; mirror the radio's new mode
+        await waitFor(async () => (await state()).txInhibit.state === "inside");
     assert.equal((await cmd({ cmd: "ptt", value: true })).status, 200);
     assert.equal(rig.ptt, 1);
     assert.equal((await cmd({ cmd: "ptt", value: false })).status, 200);

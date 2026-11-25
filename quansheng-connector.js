@@ -86,6 +86,9 @@
       (reset & 1) === 1 && reset >= 0x08002801 && reset < 0x08002800 + image.length,
     "Vectores de aplicacion PY32 no validos. No uses firmware UV-K5 V1 en V3/UV-K1.");
     const content = new TextDecoder("ascii").decode(image);
+    // Bricohams candidate builds of other upstream firmware carry a build-time marker (scripts/build-upstream-ardf.cjs).
+    const candidate = content.match(/BHFW1:(scout-ardf|mili-admin-user):([0-9][0-9A-Za-z.+_-]{0,11})\0/);
+    if (candidate) return { version: candidate[2], size: image.length, edition: candidate[1] };
     const version = content.match(/F4HWN[^\0\r\n]{0,12}?v(6\.\d+\.\d+)(?![-\w.])/i);
     R.assert(version && !/dev|rolling/i.test(version[0]),
       "Solo se admiten imagenes F4HWN estables v6.x reconocibles. No Karina V1, stock, v5 ni desarrollo.");

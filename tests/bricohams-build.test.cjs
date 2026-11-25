@@ -1,7 +1,7 @@
 "use strict";
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { readArguments, resolvePlan, inspectFirmware, inspectMemoryUsage, brandWelcome, brandLogo, UPSTREAM } = require("../scripts/build-bricohams.cjs");
+const { readArguments, resolvePlan, inspectFirmware, inspectMemoryUsage, brandWelcome, brandLogo, brandVersion, UPSTREAM } = require("../scripts/build-bricohams.cjs");
 const { modulePlan, replaceOnce } = require("../scripts/bricohams-modules.cjs");
 const { inspectResident } = require("../scripts/build-platform-resident.cjs");
 const { OP, STATE, encodeRequest, decodeReply, uploadPackage } = require("../scripts/platform-transfer.cjs");
@@ -368,6 +368,19 @@ test("bootlogo embebido usa 768 bytes originales sin leer ni escribir el logo ex
   assert(!result.includes("PY25Q16_"));
   assert.throws(() => brandLogo(source.replace("LOGO_BITMAP_ADDR,", "changed,")), /ausente/);
   assert.throws(() => brandLogo(`${source}\n${source}`), /ambiguo/);
+});
+test("builder: la capsula de arranque muestra la edicion, no la etiqueta F4HWN", () => {
+  const source = [
+    "        const size_t version_width = strlen(DisplayVersion) * (FONT_SMALL_WIDTH + 1u);",
+    "        UI_PrintStringSmallNormal(DisplayVersion, version_x, 0, 4);"
+  ].join("\r\n");
+  const result = brandVersion(source);
+  assert(result.includes("strlen(Edition) * (FONT_SMALL_WIDTH + 1u)"));
+  assert(result.includes("UI_PrintStringSmallNormal(Edition, version_x, 0, 4);"));
+  assert(!result.includes("DisplayVersion"));
+  assert.throws(() => brandVersion(source.replace("(DisplayVersion, version_x", "(changed, version_x")), /ausente/);
+  assert.throws(() => brandVersion(`${source}\n${source}`), /ambiguo/);
+  assert.throws(() => brandVersion(result), /ausente/);
 });
 test("builder local: argumentos explicitos sin opciones desconocidas", () => {
   assert.deepEqual(readArguments(["--source", "src", "--output", "out", "--option", "ENABLE_VOX=OFF"]),

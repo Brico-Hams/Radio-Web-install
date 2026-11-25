@@ -1223,6 +1223,38 @@ test("Instalar slot escribe imagen antes de cabecera y verifica CRC", async () =
   assert.equal(le(writes.at(-1).data).getUint32(2, true), 0);
   assert.deepEqual(device.commands.slice(-2).map(item => item.type), [0x0726, 0x0720], "CRC en la radio y relectura de cabecera del slot");
 });
+test("candidatas Scout ARDF y MILI se instalan en ranura con respaldo verificado, marcador y CRC", () => {
+  const candidate = (id, version, vectors = true) => {
+    const image = new Uint8Array(2048);
+    const view = new DataView(image.buffer);
+    if (vectors) { view.setUint32(0, 0x20004000, true); view.setUint32(4, 0x08002c01, true); }
+    image.set(new TextEncoder().encode(`BHFW1:${id}:${version}\0`), 64);
+    return image;
+  };
+  const scout = candidate("scout-ardf", "1.3"), mili = candidate("mili-admin-user", "0.4.3");
+  assert.deepEqual(R.inspectQuanshengSlotImage(scout, "bricohams.scout-ardf.v1.3.bin"),
+    { version: "1.3", size: 2048, edition: "scout-ardf" });
+  assert.equal(R.inspectQuanshengSlotImage(mili).edition, "mili-admin-user");
+  assert.throws(() => R.inspectQuanshengSlotImage(scout, "bricohams.scout-ardf.beta.bin"), /Variante/);
+  assert.throws(() => R.inspectQuanshengSlotImage(candidate("scout-ardf", "1.3", false)), /Vectores/);
+  assert.throws(() => R.inspectQuanshengSlotImage(candidate("other-fw", "1.0")), /F4HWN/);
+  assert.throws(() => R.inspectQuanshengSlotImage(candidate("scout-ardf", "1.3.0.0.0.0.0.0")), /F4HWN/);
+  return (async () => {
+    for (const [slot, image, name, tag] of [[1, scout, "scout-ardf", "v1.3"], [2, mili, "mili-admin-user", "v0.4.3"]]) {
+      const device = new QuanshengDevice(); const connector = new R.QuanshengConnector(device);
+      await connector.connect("UV-K1");
+      await assert.rejects(connector.writeSlot(slot, image, name), /bloqueada/);
+      const { permit } = await new R.BackupManager(new MemoryStore()).create(connector);
+      device.commands = [];
+      await connector.writeSlot(slot, image, name, permit);
+      const base = 0x20000 + slot * 0x20000;
+      assert.deepEqual(device.flash.slice(base + 0x1000, base + 0x1000 + image.length), image);
+      assert.equal(new TextDecoder().decode(device.flash.slice(base + 32, base + 32 + tag.length)), tag);
+      assert.equal(await connector.validateSlot(slot), R.crc32(image));
+      await assert.rejects(connector.writeSlot(0, image, name, permit), /Main/);
+    }
+  })();
+});
 test("Main, imagenes invalidas, versiones v5 y nombres invalidos no se borran", async () => {
   const device = new QuanshengDevice(); const connector = new R.QuanshengConnector(device);
   await connector.connect("UV-K1");

@@ -140,6 +140,16 @@ function brandLogo(text) {
     "    // Embedded branding leaves the external-flash custom logo untouched.", "App/ui/welcome.c");
 }
 
+// The boot capsule shows the edition instead of the upstream "F4HWN vX" label.
+// Version/UART identity strings elsewhere stay untouched: the installer reads them.
+function brandVersion(text) {
+  const file = "App/ui/welcome.c";
+  const result = replaceOnce(text.replace(/\r\n/g, "\n"),
+    "strlen(DisplayVersion) * (FONT_SMALL_WIDTH + 1u)", "strlen(Edition) * (FONT_SMALL_WIDTH + 1u)", file);
+  return replaceOnce(result, "UI_PrintStringSmallNormal(DisplayVersion, version_x, 0, 4);",
+    "UI_PrintStringSmallNormal(Edition, version_x, 0, 4);", file);
+}
+
 function build(args) {
   const source = path.resolve(args.source);
   const output = path.resolve(args.output);
@@ -174,7 +184,7 @@ function build(args) {
   for (const item of moduleSources)
     item.sha256 = createHash("sha256").update(fs.readFileSync(path.join(work, item.file))).digest("hex");
   const welcomeFile = path.join(work, "App", "ui", "welcome.c");
-  const welcome = brandLogo(brandWelcome(fs.readFileSync(welcomeFile, "utf8")));
+  const welcome = brandVersion(brandLogo(brandWelcome(fs.readFileSync(welcomeFile, "utf8"))));
   fs.writeFileSync(welcomeFile, welcome);
   const bootlogoFile = path.join(work, "App", "bricohams", "bootlogo.h");
   const bootlogo = fs.readFileSync(path.join(__dirname, "..", "firmware", "bricohams", "bootlogo.h"));
@@ -247,4 +257,4 @@ if (require.main === module) {
     process.exitCode = 1;
   }
 }
-module.exports = { UPSTREAM, UPSTREAM_V7, TARGETS, readArguments, resolvePlan, inspectFirmware, inspectMemoryUsage, brandWelcome, brandLogo, build };
+module.exports = { UPSTREAM, UPSTREAM_V7, TARGETS, readArguments, resolvePlan, inspectFirmware, inspectMemoryUsage, brandWelcome, brandLogo, brandVersion, build };
