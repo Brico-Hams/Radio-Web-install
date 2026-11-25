@@ -40,7 +40,7 @@ Comprobacion de **anclas** (no es una compilacion) ejecutando `scripts/build-bri
 | Referencia | Presets que usamos | Lectura de backup / retune rapido / bienvenida | Modulos ardf / satelite / espectro |
 |---|---|---|---|
 | v6.2.0 y v6.3.0 | Fusion, FieldOps, Labs, Transfer presentes | Anclas OK | Anclas OK |
-| v7.0.0 y `main` | Solo `default`, `Custom`, `Fusion`, `Service` (FieldOps/Labs/Transfer retirados) | Anclas OK | **Falla**: ancla `#ifdef ENABLE_FEAT_F4HWN_OVERLAY_APPS` de `scheduler.c` ausente o ambigua; los modulos ademas dependen del preset FieldOps |
+| v7.0.0 y `main` | Solo `default`, `Custom`, `Fusion`, `Service` (FieldOps/Labs/Transfer retirados) | Anclas OK | Anclas OK con guarda `K5VIEWER` en `scheduler.c` (corregido en `bricohams-modules.cjs`); base Service + FOXHUNT; compilacion sin verificar |
 
 Conclusiones:
 
@@ -48,9 +48,8 @@ Conclusiones:
   efectivas de cada preset, revisar las constantes de `inspectMemoryUsage` y el supuesto de flash externa
   (`slotCapacityBytes 0x1d800`) frente al nuevo mapa, compatibilidad ABI de los `.app` y prueba en radio. v6.2.0 trae
   correcciones de S-metro y teclado que merecen la subida; el cambio de mapa del registro exige aviso a usuarios.
-- **v7.0.0 / main: no rebasables hoy**: hay que reescribir la integracion de modulos y las variantes (sin FieldOps) y
-  asumir el paquete con pack de activos y el segundo paso de UV Studio (cambia instalador y flujo web).
-- Esta tarea no cambia `UPSTREAM`, el workflow ni el catalogo.
+- **v7.0.0: portado (Beta, sin compilar)**: fast retune, backup, edicion y modulos con anclas; instalador y workflow `bricohams-v7` listos. Labs/FieldOps/Transfer se quedan en v6.1. Detalle y plan de prueba en `docs/BRICOHAMS-FIRMWARE.md` (seccion v7.0.0).
+- No cambia `UPSTREAM` (v6.1.0), el workflow publicado ni el catalogo.
 
 ## 2. Radtel RT-950 Pro (AT32F403A)
 

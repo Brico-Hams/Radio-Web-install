@@ -42,6 +42,26 @@ Status: In GitHub Actions gebaut (fixierte Toolchain 13.3.rel1), als stabil ohne
 "BETA" veroeffentlicht und am 17.11.2026 von EA5KGV an einem UV-K5 V3 am echten
 Funkgeraet getestet (Angabe des Autors, keine unabhaengige Zertifizierung).
 
+## Durchgehendes Audio bei F4HWN v7.0.0 und v7-Varianten (2026-11-25)
+
+Ursache bestätigt auf v7.0.0 (`f6f34cbc3e10dd688f8348cc7f4300a859064621`), gleicher Pfad wie v6.1: `App/app/main.c:1033-1037` (VFO-Schritt: `BK4819_SetFrequency`, `BK4819_RX_TurnOn`, `gRequestSaveChannel = 1`) -> `App/app/app.c:2809-2854` -> `App/radio.c:792-971` (`RADIO_SetupRegisters(true)`: `AUDIO_AudioPathOff()` in Zeile 803, `gEnableSpeaker=false` in 805, `FUNCTION_Select(FUNCTION_FOREGROUND)` in 970). Korrektur: `scripts/firmware-fast-retune.cjs` greift unverändert (Marker `BRICOHAMS_FAST_RETUNE`); Offline-Test `tests/firmware-v7.test.cjs`. Der IJV-Vergleich ist nur verhaltensbezogen (geschlossene Freeware, deren Lizenz Änderung, Dekompilierung und Disassemblierung verbietet; Ziel UV-K5 V1 DP32G030, nicht V3 PY32); kein IJV-Binary wurde analysiert.
+
+Nach v7 portiert: Fast-Retune, Backup-Lesen 0x0738 / CRC 0x073E ohne Erweiterung von Löschen 0x073A oder Schreiben 0x073C, Editionsname, Presets Fusion und Service (`build-bricohams.cjs --target v7`), Upstream-Multiboot-Identität (kein Bootloader). Module: Anker wiedergefunden, Build ungeprüft.
+
+Katalogprüfung: alle 9 Varianten in `catalog.json` tragen `fastRetuneIntegration` und `backupReadIntegration` in `build.build-info` (`build-info.json`). Zusätzliche v7-Aufrufkette: `SETTINGS_SaveChannel`, `RADIO_ConfigureChannel`, `RADIO_SetModulation`. `gFlagReconfigureVfos` löst das vollständige Setup aus. Nichts unter `precompiled/` oder `precompiled/catalog.json` wurde neu gebaut oder geändert; Installer-Tests: `tests/connectors.test.cjs`. Alle neuen Builds sind Beta mit `hardwareBootTested: false`, außerhalb von `precompiled/` und `catalog.json`.
+
+| Variante | Basis | Status |
+|---|---|---|
+| fusion, service (v7) | v7.0.0 Fusion/Service | Beta, hier nicht gebaut (keine lokale ARM-Toolchain), `hardwareBootTested: false` |
+| ardf, satellite, spectrum (v7) | v7.0.0 Service + FOXHUNT | Beta, Anker OK, Build offen |
+| labs, f4hwn-fieldops, f4hwn-labs, f4hwn-transfer | v6.1.0 | Bleiben auf v6.1: v7 hat die Presets Labs, FieldOps und Transfer entfernt |
+
+Build-Basis der Modulvarianten: Service plus `FOXHUNT=ON`, `OVERLAY_APPS=OFF` und `BEACON=OFF`; der `scheduler.c`-Guard akzeptiert jetzt auch `K5VIEWER`.
+
+Installer: ein v7-Paket ist Image plus FWA1-Pack plus FWAT-Trailer (`cmake/pack_fw_assets.py`, `App/fw_assets.h`, `App/driver/mb_flash.h:127-149`, `CMakeLists.txt:175-199`); `proto.writeSlotPackage` verlangt ein verifiziertes Vollbackup, ein an die Build-ID des Images gebundenes Pack und einen nicht laufenden Slot und lehnt alles ab, was es nicht prüfen kann.
+
+Kandidaten: manueller Job `bricohams-v7` in `.github/workflows/firmware-candidates.yml`, nie an ein Release angehängt. Praxistestplan (offen): Boot, Audioprüfung beim VFO-Schritt mit offenem Squelch, Multiboot-Slotwechsel, Rollback auf das verifizierte Backup.
+
 ## Identität und Geltungsbereich
 
 **BETA, in Validierung und Erprobung.** Neue Builds geben

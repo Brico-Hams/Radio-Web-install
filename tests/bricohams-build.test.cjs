@@ -371,7 +371,7 @@ test("bootlogo embebido usa 768 bytes originales sin leer ni escribir el logo ex
 });
 test("builder local: argumentos explicitos sin opciones desconocidas", () => {
   assert.deepEqual(readArguments(["--source", "src", "--output", "out", "--option", "ENABLE_VOX=OFF"]),
-    { source: "src", output: "out", preset: "Fusion", options: ["ENABLE_VOX=OFF"] });
+    { source: "src", output: "out", preset: "Fusion", options: ["ENABLE_VOX=OFF"], target: "v6" });
   assert.throws(() => readArguments([]), /Uso:/);
   assert.throws(() => readArguments(["--source"]), /Falta valor/);
   assert.throws(() => readArguments(["--exec", "cmd"]), /desconocido/);
