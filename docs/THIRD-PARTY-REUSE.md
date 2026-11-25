@@ -73,7 +73,7 @@ Licences are those stated in the collection catalogue (inventory 2026-11-23); "t
 | remoteAudio | `audiocodec/opus/encoder.go` | none | MIT | Compared only (Opus options); the existing encoder settings were kept. |
 | ATU-100-EXT-YAF-2E0UMK | whole repo reviewed | nothing | MIT, DG4SN / 2E0UMK | Reviewed: only a debug bit-banged UART TX, no host command set, so no driver. Catalog entry `atu-100-ext` stays `pendiente de fuente`. |
 | POTACAT | `lib/smartsdr.js` | facts only (own implementation) | GPL-3.0 | Facts only: `xmit 1\|0` syntax; implemented in our own words behind `allow_tx`, time cap and SWR trip. |
-
+| Telegram-Radio-Source-Archive | `source-files/loose/*.py` (CHIRP drivers), `docs/REVERSE_ENGINEERING.md` | nothing (`docs/ARCHIVO-TELEGRAM-ANALISIS.md` only) | GPL-2.0-or-later | Reviewed for classification: the local copy holds no firmware C source (`source-packages/` is empty), so no code was adapted. Drivers without a licence header (Robzyl, GOGUFW) and Karina are FACTS. The BK4819 retune sequence there is an unvalidated reconstruction and was not implemented. |
 ## Engineering method for new radios
 
 Short version of the method in the collection notes, in our own words. See also [MAPA-TECNICO-PROYECTO.md](MAPA-TECNICO-PROYECTO.md).

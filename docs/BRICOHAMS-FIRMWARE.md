@@ -87,6 +87,11 @@ en VFO sin corte de audio, y cambio de modulacion/ancho de banda con reconfigura
 slots multiboot y comprobar que los textos (activos) siguen presentes; 4) retroceso: reinstalar el respaldo
 verificado o volver al slot v6.1. Todas las compilaciones nuevas son Beta con `hardwareBootTested: false` y no
 estan en `precompiled/` ni en `catalog.json`.
+
+Archivo Telegram de fuentes (2026-11-25): la copia local no incluye el codigo de firmware (solo controladores CHIRP
+y otras apps), asi que no se anadio ningun parche nuevo. Analisis, clasificacion y comparacion con nuestra
+correccion de retune rapido en el documento de desarrollo ARCHIVO-TELEGRAM-ANALISIS.
+
 ## Identidad y alcance
 
 **BETA, en validacion y pruebas.** Las nuevas compilaciones declaran

@@ -136,6 +136,12 @@ El workflow tiene `permissions: contents: read`, acciones fijadas por SHA, toolc
 no adjunta nada a releases y no toca `precompiled/` ni `catalog.json` (lo comprueba `tests/firmware-candidates.test.cjs`).
 El firmware de satelite half-duplex sigue sin publicar.
 
+## 5.3 Archivo Telegram de fuentes (2026-11-25)
+
+Revisado: no trae fuentes de firmware Quansheng utilizables (solo controladores CHIRP y apps), por lo que no hay
+mejoras nuevas para V3/K1 respaldadas por codigo. Candidatas ordenadas y la hipotesis de retune BK4819 (sin
+validar, no implementada) en `docs/ARCHIVO-TELEGRAM-ANALISIS.md`. Sin cambios en `precompiled/` ni `catalog.json`.
+
 ## 6. Fuentes consultadas
 
 - `data/third-party/refs/_catalog/*.md` y las referencias locales citadas arriba (licencias leidas en `LICENSE`,
