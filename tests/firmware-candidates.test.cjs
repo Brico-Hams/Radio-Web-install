@@ -29,6 +29,26 @@ test("the candidates workflow is manual only, read only, pinned and never publis
   }
 });
 
+test("sparse checkout is anchored and excludes binary/, assembly/ and tools/ (manifest and workflow)", () => {
+  for (const candidate of manifest.candidates) {
+    assert(candidate.sparsePaths.every(item => item.startsWith("/") || item.startsWith("!/")));
+    for (const dir of ["binary", "assembly", "tools"]) assert(candidate.sparsePaths.includes(`!/${dir}/`));
+    const lines = workflow.split("\n").map(line => line.trim());
+    for (const item of candidate.sparsePaths) assert(lines.includes(item), `workflow lists ${item}`);
+    const bad = { ...candidate, sparsePaths: ["Makefile", "assembly"] };
+    assert(validateCandidate(bad).some(item => /anchored/.test(item)));
+    assert(validateCandidate({ ...candidate, sparsePaths: ["/assembly/"] }).some(item => /assembly must not/.test(item)));
+  }
+});
+
+test("a source tree containing a forbidden path is refused", () => {
+  const candidate = manifest.candidates[0];
+  const source = fs.mkdtempSync(path.join(os.tmpdir(), "cand-forbid-"));
+  fs.mkdirSync(path.join(source, "assembly"));
+  const run = (command, args) => (args[0] === "rev-parse" ? candidate.commit : "");
+  assert.throws(() => buildCandidate({ manifest, id: candidate.id, source, output: source, run }), /Forbidden path present in source: assembly/);
+});
+
 test("the TX inhibit patch of each candidate exists and blocks the keying entry point", () => {
   for (const candidate of manifest.candidates) {
     for (const patch of candidate.patches) {
