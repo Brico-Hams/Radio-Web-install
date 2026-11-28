@@ -441,21 +441,6 @@
       "notes": "RX only; nominal TX and published tone are reference information, not enabled. Verify local activity, restrictions and licence."
     },
     {
-      "name": "VE6RNC",
-      "rx": "146.52000",
-      "tx": "146.52000",
-      "mode": "FM",
-      "colorCode": 0,
-      "timeslot": 1,
-      "talkgroup": 0,
-      "bandwidth": "pending",
-      "broadcastOnly": false,
-      "rxOnly": true,
-      "source": "https://hearham.com/repeaters/25364",
-      "zone": "Alberta",
-      "notes": "RX only; nominal TX and published tone are reference information, not enabled. Verify local activity, restrictions and licence."
-    },
-    {
       "name": "VE6SSM",
       "rx": "446.97500",
       "tx": "441.97500",
@@ -2661,6 +2646,36 @@
       "notes": "RX only; nominal TX and published tone are reference information, not enabled. Verify local activity, restrictions and licence."
     },
     {
+      "name": "VA3SDG",
+      "rx": "443.65000",
+      "tx": "448.65000",
+      "mode": "FM",
+      "colorCode": 0,
+      "timeslot": 1,
+      "talkgroup": 0,
+      "bandwidth": "pending",
+      "broadcastOnly": false,
+      "rxOnly": true,
+      "source": "https://hearham.com/repeaters/27308",
+      "zone": "Ontario",
+      "notes": "RX only; nominal TX and published tone are reference information, not enabled. Verify local activity, restrictions and licence."
+    },
+    {
+      "name": "VA3SDG",
+      "rx": "442.10000",
+      "tx": "447.10000",
+      "mode": "FM",
+      "colorCode": 0,
+      "timeslot": 1,
+      "talkgroup": 0,
+      "bandwidth": "pending",
+      "broadcastOnly": false,
+      "rxOnly": true,
+      "source": "https://hearham.com/repeaters/27309",
+      "zone": "Ontario",
+      "notes": "RX only; nominal TX and published tone are reference information, not enabled. Verify local activity, restrictions and licence."
+    },
+    {
       "name": "VA3SLU",
       "rx": "442.41250",
       "tx": "447.41250",
@@ -3426,9 +3441,9 @@
       "notes": "RX only; nominal TX and published tone are reference information, not enabled. Verify local activity, restrictions and licence."
     },
     {
-      "name": "VE3MUS",
-      "rx": "145.27000",
-      "tx": "139.27000",
+      "name": "VE3MGQ",
+      "rx": "446.40000",
+      "tx": "446.40000",
       "mode": "FM",
       "colorCode": 0,
       "timeslot": 1,
@@ -3436,7 +3451,7 @@
       "bandwidth": "pending",
       "broadcastOnly": false,
       "rxOnly": true,
-      "source": "https://hearham.com/repeaters/116",
+      "source": "https://hearham.com/repeaters/171",
       "zone": "Ontario",
       "notes": "RX only; nominal TX and published tone are reference information, not enabled. Verify local activity, restrictions and licence."
     },

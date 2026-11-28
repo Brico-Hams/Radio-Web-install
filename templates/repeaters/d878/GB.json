@@ -2271,6 +2271,21 @@
       "notes": "RX only; nominal TX and published tone are reference information, not enabled. Verify local activity, restrictions and licence."
     },
     {
+      "name": "GB7ON",
+      "rx": "430.30000",
+      "tx": "439.30000",
+      "mode": "FM",
+      "colorCode": 0,
+      "timeslot": 1,
+      "talkgroup": 0,
+      "bandwidth": "pending",
+      "broadcastOnly": false,
+      "rxOnly": true,
+      "source": "https://hearham.com/repeaters/25382",
+      "zone": "Cambridgeshire",
+      "notes": "RX only; nominal TX and published tone are reference information, not enabled. Verify local activity, restrictions and licence."
+    },
+    {
       "name": "GB7TQ-L",
       "rx": "438.48750",
       "tx": "430.88750",
@@ -3723,6 +3738,21 @@
       "rxOnly": true,
       "source": "https://hearham.com/repeaters/16064",
       "zone": "Derby",
+      "notes": "RX only; nominal TX and published tone are reference information, not enabled. Verify local activity, restrictions and licence."
+    },
+    {
+      "name": "GB3DJ",
+      "rx": "433.23750",
+      "tx": "438.23750",
+      "mode": "FM",
+      "colorCode": 0,
+      "timeslot": 1,
+      "talkgroup": 0,
+      "bandwidth": "pending",
+      "broadcastOnly": false,
+      "rxOnly": true,
+      "source": "https://hearham.com/repeaters/25408",
+      "zone": "Derbyshire",
       "notes": "RX only; nominal TX and published tone are reference information, not enabled. Verify local activity, restrictions and licence."
     },
     {
@@ -9213,6 +9243,21 @@
       "rxOnly": true,
       "source": "https://hearham.com/repeaters/16041",
       "zone": "Kent",
+      "notes": "RX only; nominal TX and published tone are reference information, not enabled. Verify local activity, restrictions and licence."
+    },
+    {
+      "name": "MB7IKK",
+      "rx": "430.07500",
+      "tx": "430.07500",
+      "mode": "FM",
+      "colorCode": 0,
+      "timeslot": 1,
+      "talkgroup": 0,
+      "bandwidth": "pending",
+      "broadcastOnly": false,
+      "rxOnly": true,
+      "source": "https://hearham.com/repeaters/14956",
+      "zone": "Kingston upon Thames",
       "notes": "RX only; nominal TX and published tone are reference information, not enabled. Verify local activity, restrictions and licence."
     },
     {

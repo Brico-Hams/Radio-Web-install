@@ -1,0 +1,2 @@
+"Location","Name","Frequency","Duplex","Offset","Tone","rToneFreq","cToneFreq","DtcsCode","DtcsPolarity","RxDtcsCode","CrossMode","Mode","TStep","Skip","Comment"
+"0","8R1RR","145.45000","off","0.000000","","88.5","88.5","023","NN","023","Tone->Tone","FM","5.00","","RX ONLY. Zone: East Berbice-Corentyne. TX nominal 144.85000; tono de proveedor 233.6. https://hearham.com/repeaters/27291 RX only; nominal TX and published tone are reference information, not enabled. Verify local activity, restrictions and licence.  "
